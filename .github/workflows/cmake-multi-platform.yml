@@ -1,0 +1,42 @@
+name: CMake CI
+
+on:
+  push:
+    branches: [ "develop", "release" ]
+  pull_request:
+    branches: [ "develop" ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        build_type: [Release]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # DEPENDENCIAS LINUX
+    - name: Install dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt update
+        sudo apt install -y libssl-dev
+
+    # CONFIGURAR CMAKE
+    - name: Configure CMake
+      run: >
+        cmake -B build
+        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -S .
+
+    # BUILD
+    - name: Build
+      run: cmake --build build --config ${{ matrix.build_type }}
+
+    # TEST
+    - name: Test
+      working-directory: build
+      run: ctest --output-on-failure
