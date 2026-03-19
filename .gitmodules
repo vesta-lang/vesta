@@ -10,3 +10,6 @@
 [submodule "libs/SourceCode/DistanciaLevenshtein"]
 	path = libs/SourceCode/DistanciaLevenshtein
 	url = https://github.com/desmonHak/DistanciaLevenshtein.git
+[submodule "doc/VMdoc"]
+	path = doc/VMdoc
+	url = https://github.com/desmonHak/VMdoc.git
