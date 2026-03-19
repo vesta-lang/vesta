@@ -13,6 +13,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+        compiler: [gcc, clang]
         build_type: [Release]
 
     steps:
@@ -23,13 +24,22 @@ jobs:
     - name: Update submodules explicitly
       run: git submodule update --init --recursive
 
+    # DEPENDENCIAS WINDOWS
+    - name: Install MinGW (Windows)
+      if: matrix.os == 'windows-latest' && matrix.compiler == 'gcc'
+      shell: powershell
+      run: |
+        choco install mingw -y
+        $Env:PATH += ";C:\tools\mingw64\bin"
+
     # DEPENDENCIAS LINUX
     - name: Install dependencies (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt update
-        sudo apt install -y libssl-dev
+        sudo apt install -y libssl-dev clang
 
+    # FIX LINE ENDINGS LINUX
     - name: Fix line endings (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
@@ -38,10 +48,12 @@ jobs:
 
     # CONFIGURAR CMAKE
     - name: Configure CMake
-      run: >
-        cmake -B build
-        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-        -S .
+      run: |
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          cmake -B build -G "MinGW Makefiles" -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}++ -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -S .
+        else
+          cmake -B build -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_COMPILER=${{ matrix.compiler }}++ -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -S .
+        fi
 
     # BUILD
     - name: Build
