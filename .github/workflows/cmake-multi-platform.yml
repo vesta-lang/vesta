@@ -17,6 +17,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Update submodules explicitly
+      run: git submodule update --init --recursive
 
     # DEPENDENCIAS LINUX
     - name: Install dependencies (Linux)
@@ -24,6 +29,12 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y libssl-dev
+
+    - name: Fix line endings (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt install -y dos2unix
+        find libs/SourceCode -type f -exec dos2unix {} \;
 
     # CONFIGURAR CMAKE
     - name: Configure CMake
