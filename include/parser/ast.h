@@ -1,5 +1,15 @@
-/**
-* @file ast.h
+/** 
+ * VestaVM - Máquina Virtual Distribuida
+ * 
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ * 
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ * 
+ * Descargo: Autor no responsable por modificaciones.
+ *
+ * @file ast.h
  * @brief Árboles de Sintaxis Abstracta (AST) para el lenguaje VMProject.
  *
  * Define la estructura jerárquica del AST que representa el código parseado.

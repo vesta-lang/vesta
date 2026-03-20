@@ -1,21 +1,52 @@
-Licencia MIT
+# VMProject - Licencia de Uso
 
-Copyright (c) 2026 David Lopez.T
+**Copyright © 2026 David López T. (Castilla y León, España)**  
+**Todos los derechos reservados para uso comercial.**
 
-Por la presente se concede permiso, sin cargo, a cualquier persona que obtenga una copia
-de este software y los archivos de documentacion asociados (el "Software"), para usar
-el Software sin restricciones, incluyendo sin limitacion los derechos a usar, copiar,
-modificar, fusionar, publicar, distribuir, sublicenciar y/o vender copias del Software,
-y para permitir a las personas a las que se les proporcione el Software hacer lo mismo,
-sujeto a las siguientes condiciones:
+## Términos de Licencia
 
-El aviso de copyright anterior y este aviso de permiso deberan incluirse en todas las
-copias o partes sustanciales del Software.
+### **PERMITIDO (Libre para uso no comercial):**
 
-EL SOFTWARE SE PROPORCIONA "TAL CUAL", SIN GARANTiA DE NINGuN TIPO, EXPRESA O
-IMPLiCITA, INCLUYENDO PERO NO LIMITADO A GARANTiAS DE COMERCIALIZACIoN, IDONEIDAD
-PARA UN PROPoSITO PARTICULAR Y NO INFRACCIoN. EN NINGuN CASO LOS AUTORES O
-TITULARES DEL COPYRIGHT SERaN RESPONSABLES DE NINGUNA RECLAMACIoN, DAÑO O OTRA
-RESPONSABILIDAD, YA SEA EN UNA ACCIoN DE CONTRATO, AGRAVIO O DE OTRO TIPO,
-DERIVADA DE, FUERA DE O EN CONEXIoN CON EL SOFTWARE O EL USO U OTRO TIPO DE
-OPERACIONES EN EL SOFTWARE.
+- Descargar, estudiar y usar el código fuente
+- Modificar el código para uso **PERSONAL o EDUCATIVO**
+- Distribuir modificaciones **GRATUITAS** con atribución
+- Crear derivados para **proyectos no comerciales**
+
+### **PROHIBIDO (Requiere permiso escrito):**
+
+- **Uso comercial o lucro** de cualquier tipo
+- Venta de binarios, servicios SaaS, o licencias
+- Distribución con fines de lucro
+
+### **REQUERIMIENTOS OBLIGATORIOS:**
+
+1. **Atribución completa** en TODOS los archivos modificados:
+
+```c
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ * 
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ * 
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ * 
+ * Descargo: Autor no responsable por modificaciones.
+ */
+```
+
+Este proyecto utiliza VMProject
+Arquitectura original © 2026 David López T.
+
+### DESCARGO DE RESPONSABILIDAD
+
+1. EL AUTOR NO SE RESPONSABILIZA POR:
+- Errores, bugs o fallos en modificaciones
+- Daños causados por uso indebido
+- Pérdida de datos o interrupciones
+- Resultados de código modificado
+
+**USO BAJO TU RESPONSABILIDAD EXCLUSIVA.**
+
+----
