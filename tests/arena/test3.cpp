@@ -37,6 +37,6 @@ int main() {
     val.set(vm::PageLevel::PT2, 0x12);
     val.set(vm::PageLevel::OFFSET, 0x123);
     lazy.dump_tree(val.raw);
- 
+
     return 0;
 }

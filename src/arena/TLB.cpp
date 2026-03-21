@@ -69,7 +69,7 @@ namespace tlb {
                 if (pt < n1.children.size() && n1.children[pt]) {
                     const TLBNode& data_node = *n1.children[pt];
                     std::cout << "PT[" << pt << "]: " << (int)data_node.type << std::endl;
-                    std::cout << "  DATA: " << data_node.data.to_string() << std::endl;  // ✅ data_node.data
+                    std::cout << "  DATA: " << data_node.data.to_string() << std::endl;  // data_node.data
                 }
             }
         }
@@ -114,9 +114,7 @@ namespace tlb {
         uint16_t pt1 = GET_PT1(ptr_);
         uint16_t pt  = GET_PT(ptr_);
 
-        std::cout << "DEBUG: PT2=" << pt2 << ", root.size()=" << root.size() << std::endl;
         if (pt2 >= root.size()) {
-            std::cout << "RESIZE root to " << (pt2 + 1) << std::endl;
             root.resize(pt2 + 1);
         }
 
@@ -141,6 +139,11 @@ namespace tlb {
         pt_node.data = TLBEntryData{type, ptr_mapped};
     }
 
+    void LazyHybridTLB::clear_tlb_entry(uint64_t page_vaddr) {
+        // Resetear a estado inválido (simplificado)
+        this->translate(page_vaddr, vm::MAPPED_PTR_VM,
+                         vm::ptr_mapped{.ptr_vm = vm::vm_map_ptr{0}});
+    }
 
 
     TLBEntryData* LazyHybridTLB::get_entry(uint64_t ptr_) const {
@@ -165,5 +168,14 @@ namespace tlb {
         return const_cast<TLBEntryData*>(&pt_node.data);
     }
 
+    void* LazyHybridTLB::get_real_host_ptr_of_vptr(uint64_t vptr_) const {
+        const TLBEntryData* entry = get_entry(vptr_);
+        if (entry == nullptr) return nullptr;
+
+        // si el puntero obtenido no es un puntero mapeado de host, entonces no se devuelve
+        if (vm::MAPPED_PTR_HOST != entry->type_address) return nullptr;
+
+        return entry->address.ptr_host;
+    }
 
 } // namespace tlb

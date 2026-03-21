@@ -31,6 +31,9 @@
 #define ALIGN_4K(x) (((x) + 4095) & ~4095ULL)
 
 namespace vm {
+
+
+
     /**
      * @enum MemPerm
      * @brief Permisos de memoria para buffers ejecutables o mapeos.
@@ -178,7 +181,7 @@ namespace vm {
     typedef struct Arena {
         void*       ptr;   //< puntero al bloque
         size_t      size;  //< tamaño del bloque
-        vm::MemPerm perms; //< permisos
+        MemPerm perms; //< permisos
     } Arena;
 
 

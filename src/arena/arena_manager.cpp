@@ -29,20 +29,20 @@ namespace vm {
     }
 
 
-    int ArenaManager::create_arena(size_t size, MemPerm perms) {
+    uint64_t ArenaManager::create_arena(size_t size, MemPerm perms) {
         void *mem = allocate_memory(size, perms);
         if (!mem) {
             std::cerr << "[ArenaManager] Error al asignar memoria\n";
             return 0;
         }
 
-        int id     = next_id++;
+        uint64_t id     = next_id++;
         arenas[id] = Arena{mem, size, perms};
         total_allocated_bytes_ += size; // +4KB
         return id;
     }
 
-    bool ArenaManager::free_arena(int id) {
+    bool ArenaManager::free_arena(uint64_t id) {
         auto it = arenas.find(id);
         if (it == arenas.end())
             return false;
@@ -53,7 +53,7 @@ namespace vm {
         return true;
     }
 
-    const Arena *ArenaManager::get_arena(int id) const {
+    const Arena *ArenaManager::get_arena(uint64_t id) const {
         auto it = arenas.find(id);
         if (it == arenas.end()) return nullptr;
         return &it->second;
@@ -65,7 +65,6 @@ namespace vm {
         if (arenas.empty()) return;
 
         for (const auto &[id, arena]: arenas) {
-            printf("Size: %zu\n", this->arenas.size());
             ids.push_back(id);
         }
 
@@ -73,4 +72,15 @@ namespace vm {
             free_arena(id);
         }
     }
+
+    // debebo añadir un sistema de cacheado a funciones de este tipo, que su coste es O(N)
+    int ArenaManager::find_arena_id_for_ptr(void* host_ptr) {
+        for (const auto& [id, arena] : this->arenas) {
+            if (arena.ptr == host_ptr) {
+                return static_cast<int>(id);  // Cast para compatibilidad
+            }
+        }
+        return -1;
+    }
+
 }

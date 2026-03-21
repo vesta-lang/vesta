@@ -94,7 +94,7 @@ cmake --build build
 release:
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 

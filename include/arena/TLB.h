@@ -66,7 +66,7 @@ namespace tlb {
          */
         vm::ptr_mapped address;
 
-        std::string to_string() const {
+        [[nodiscard]] std::string to_string() const {
             std::ostringstream oss;
 
             // TIPO HUMANO
@@ -144,7 +144,12 @@ namespace tlb {
         ~LazyHybridTLB();
 
         void translate(uint64_t ptr, vm::type_ptr_mapped type, vm::ptr_mapped ptr_mapped);
-        TLBEntryData* get_entry(uint64_t ptr) const;
+
+        void clear_tlb_entry(uint64_t page_vaddr);
+
+        [[nodiscard]] TLBEntryData*get_entry(uint64_t ptr) const;
+
+        void *get_real_host_ptr_of_vptr(uint64_t vptr_) const;
 
         void dump_tree(uint64_t vpn_) const;
 
