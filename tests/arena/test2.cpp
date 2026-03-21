@@ -13,9 +13,10 @@
 #include <cassert>
 #include <cstring> // memcpy
 #include "arena/arena.h"
+#include "arena/arena_manager.h"
 
 int main() {
-    vm::ArenaManager manager;
+    vm::ArenaManager manager{};
 
     std::cout << "[ArenaManager Test] Iniciando tests...\n";
 

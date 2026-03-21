@@ -1,6 +1,7 @@
-#ifndef LOADER_H
-#define LOADER_H
+#include "loader/loader.h"
 
-#include "runtime/vm_address_space.h"
+namespace loader {
+    Loader::Loader(const vm::ArenaManager& arena_manager): arena_manager(arena_manager) {
 
-#endif
+    }
+}

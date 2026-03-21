@@ -12,62 +12,72 @@
 
 #include "runtime/manager_runtime.h"
 
-ManageVM::~ManageVM() {
-    destroy_all_vms();
-}
+#include <algorithm>
 
-uint64_t ManageVM::create_vm() {
-    uint64_t new_id = ++counter_vm;
+#include "runtime/runtime.h"
 
-    VM new_vm;
-    new_vm.id.id = new_id;
+namespace runtime {
+    ManageVM::ManageVM(): loader(this->manager_mem),
+                          counter_vm(0) {}
 
-    vms.emplace_back(std::move(new_vm));
-    return new_id;
-}
-
-bool ManageVM::destroy_vm(uint64_t vm_id) {
-    for (auto it = vms.begin(); it != vms.end(); ++it) {
-        if (it->id.id == vm_id) {
-            vms.erase(it);
-            return true;
-        }
+    ManageVM::~ManageVM() {
+        destroy_all_vms();
     }
-    return false;
-}
 
-VM &ManageVM::get_vm(uint64_t vm_id) {
-    for (auto &vm: vms) {
-        if (vm.id.id == vm_id) {
-            return vm;
-        }
+    uint64_t ManageVM::create_vm() {
+        uint64_t new_id = counter_vm++;
+
+        // cada instancia tiene un manager publica de instancia y de carga
+        VM *vm = new VM(*this, new_id);
+        vms.emplace_back(vm);
+        return new_id;
     }
-    throw std::runtime_error("VM not found");
-}
 
-const VM &ManageVM::get_vm(uint64_t vm_id) const {
-    for (const auto &vm: vms) {
-        if (vm.id.id == vm_id) {
-            return vm;
+    bool ManageVM::destroy_vm(uint64_t vm_id) {
+        for (auto it = vms.begin(); it != vms.end(); ++it) {
+            if ((*it)->id.id == vm_id) {
+                delete *it;       // Liberar memoria
+                vms.erase(it);    // QUITAR de vector
+                return true;
+            }
         }
+        return false;
     }
-    throw std::runtime_error("VM not found");
-}
 
-bool ManageVM::has_vm(uint64_t vm_id) const {
-    for (const auto &vm: vms) {
-        if (vm.id.id == vm_id) {
-            return true;
+
+
+    VM *ManageVM::get_vm(uint64_t vm_id) {
+        for (auto ptr: vms) {
+            if (ptr->id.id == vm_id) {
+                return ptr;
+            }
         }
+        return nullptr;
     }
-    return false;
-}
 
-size_t ManageVM::vm_count() const {
-    return vms.size();
-}
 
-void ManageVM::destroy_all_vms() {
-    vms.clear();
-    counter_vm = 0;
+    bool ManageVM::has_vm(uint64_t vm_id) const {
+        for (const auto &vm: vms) {
+            if (vm->id.id == vm_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    size_t ManageVM::vm_count() const {
+        return vms.size();
+    }
+
+    void ManageVM::destroy_all_vms() {
+        for (auto *vm: vms) {
+            if (vm != nullptr) {
+                printf("[DEBUG] Deleting VM ID=%llu\n", vm->id.id);
+                destroy_vm(vm->id.id);
+                vm = nullptr;
+            }
+        }
+        vms.clear();
+        counter_vm = 0;
+    }
 }

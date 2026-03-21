@@ -15,10 +15,6 @@
 #include <iomanip>
 #include "arena/arena.h"
 #include "arena/TLB.h"
-#include "arena/TLB.h"
-#include "parser/ast.h"
-
-
 
 
 int main() {
@@ -41,9 +37,6 @@ int main() {
     val.set(vm::PageLevel::PT2, 0x12);
     val.set(vm::PageLevel::OFFSET, 0x123);
     lazy.dump_tree(val.raw);
-
-
-
-    getchar();
+ 
     return 0;
 }

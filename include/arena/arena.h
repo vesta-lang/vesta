@@ -175,53 +175,12 @@ namespace vm {
 #endif
     }
 
-    struct Arena {
-        void *      ptr;   //< puntero al bloque
+    typedef struct Arena {
+        void*       ptr;   //< puntero al bloque
         size_t      size;  //< tamaño del bloque
         vm::MemPerm perms; //< permisos
-    };
+    } Arena;
 
-    class ArenaManager {
-    public:
-        ArenaManager() = default;
-
-        ~ArenaManager();
-
-
-        /**
-         * @brief Crea un nuevo arenero de memoria
-         * @param size Tamaño en bytes
-         * @param perms Permisos de la memoria
-         * @return ID unico del arenero
-         */
-        int create_arena(size_t size, vm::MemPerm perms);
-
-        /**
-         * @brief Libera un arenero previamente creado
-         * @param id ID del arenero
-         * @return true si se libero correctamente
-         */
-        bool free_arena(int id);
-
-        /**
-         * @brief Obtiene informacion del arenero
-         * @param id ID del arenero
-         * @return puntero a Arena, nullptr si no existe
-         */
-        const Arena *get_arena(int id) const;
-
-        /**
-         * @brief Libera todos los areneros
-         */
-        void free_all();
-
-        size_t total_allocated_bytes_{0};
-
-    protected: // Para que hereden, y TLB pueda usarlo
-        std::unordered_map<int, Arena> arenas;
-        int                            next_id{1}; ///< para generar IDs unicos
-
-    };
 
     /**
      * tipo de dato para punteros reales a mapear a la VM
@@ -241,7 +200,7 @@ namespace vm {
     struct vm_map_ptr {
         uint64_t raw;
 
-        uint64_t get(PageLevel level) const {
+        [[nodiscard]] uint64_t get(PageLevel level) const {
             switch(level) {
                 case PageLevel::OFFSET: return raw & 0xFFF;
                 case PageLevel::PT:     return (raw>>12) & 0xFFF;
@@ -299,6 +258,14 @@ namespace vm {
     typedef struct MappedPtrHost {
         vm_map_ptr ptr_vm; // direccion virtual de la memoria
         ptr_mapped mapped; // direccion mapeada
+
+        void print() const {
+            printf("MappedPtrHost {\n");
+            printf("  Virtual:  0x%016llx\n", (uint64_t)ptr_vm.raw);
+            printf("  Mapped:   0x%016llx\n", (uint64_t)mapped.ptr_vm.raw);
+            printf("  Host:     0x%016llx\n", (uint64_t)mapped.ptr_host);
+            printf("}");
+        }
     } MappedPtr;
 
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv4 {

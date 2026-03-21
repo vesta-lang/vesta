@@ -10,19 +10,24 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#include "arena/arena.h"
+#include "arena/arena_manager.h"
 
 #include <vector>
 
 namespace vm {
     ArenaManager::ArenaManager()
-        : arenas(),                 // unordered_map vacía
-          total_allocated_bytes_(0) // Contador cero
-    {}
+        :
+        total_allocated_bytes_(0),
+        next_id(0), // Contador cero
+        arenas() // unordered_map vacía
+    {
+
+    }
 
     ArenaManager::~ArenaManager() {
         free_all();
     }
+
 
     int ArenaManager::create_arena(size_t size, MemPerm perms) {
         void *mem = allocate_memory(size, perms);
@@ -57,7 +62,10 @@ namespace vm {
     void ArenaManager::free_all() {
         // Copia claves para evitar invalidación
         std::vector<int> ids;
+        if (arenas.empty()) return;
+
         for (const auto &[id, arena]: arenas) {
+            printf("Size: %zu\n", this->arenas.size());
             ids.push_back(id);
         }
 

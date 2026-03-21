@@ -15,213 +15,296 @@
 #include <cstdint>
 #include <vector>
 
+#include "runtime/manager_runtime.h"
+
 #include "arena/arena.h"
 #include "runtime/rflags.h"
+#include "loader/loader.h"
 
-typedef struct VM_ID {
-    uint32_t id;
-} VM_ID;
-
-/**
- * representa los posibles estados de los hilos de la VM
- */
-typedef enum state {
-    /**
-     * Significado: El hilo esta listo para ejecutarse, pero actualmente no esta corriendo.
-     *    Cuando se usa:
-     *          Despues de ser creado y preparado (inicializado su stack, IP, etc.).
-     *          Despues de ceder la CPU (por ejemplo, tras un yield o cambio de contexto).
-     *          Lo que implica: El planificador puede seleccionarlo para ejecutarse.
-     */
-    READY,
+namespace runtime {
+    typedef struct VM_ID {
+        uint64_t id;
+    } VM_ID;
 
     /**
-     * Significado: Es el hilo que esta actualmente ejecutandose.
-     *      Cuando se usa:
-     *          Al ser elegido por el planificador (por scheduler_tick() lo selecciona).
-     *          Lo que implica: El hilo tiene el control de la CPU (de la VM).
+     * representa los posibles estados de los hilos de la VM
      */
-    RUNNING,
+    typedef enum state {
+        /**
+         * Significado: El hilo esta listo para ejecutarse, pero actualmente no esta corriendo.
+         *    Cuando se usa:
+         *          Despues de ser creado y preparado (inicializado su stack, IP, etc.).
+         *          Despues de ceder la CPU (por ejemplo, tras un yield o cambio de contexto).
+         *          Lo que implica: El planificador puede seleccionarlo para ejecutarse.
+         */
+        READY,
+
+        /**
+         * Significado: Es el hilo que esta actualmente ejecutandose.
+         *      Cuando se usa:
+         *          Al ser elegido por el planificador (por scheduler_tick() lo selecciona).
+         *          Lo que implica: El hilo tiene el control de la CPU (de la VM).
+         */
+        RUNNING,
+
+        /**
+         * Significado: El hilo esta bloqueado, hasta que se de un tiempo determinado, ocurra
+         * un evento de activacion, o sea activado por un hilo externo.
+         *      Cuando se usa:
+         *          Todo los hilos que se crean, pasan a estar bloqueados, hasta que se
+         *          indiquen que estan listos (READY), esto supone que el hilo se alla
+         *          configurado correctamente, para luego proceder a la ejcucion.
+         *
+         */
+        BLOCKED,
+
+        /**
+         * Significado: El hilo ha terminado su ejecucion.
+         *      Cuando se usa:
+         *          Cuando el hilo termina su funcion (retorna).
+         *          Cuando ocurre un error fatal o sale explicitamente.
+         *      Lo que implica:
+         *          El hilo ya no volvera a ejecutarse.
+         *          Su espacio de stack puede ser liberado o reciclado.
+         */
+        DEAD
+    } state;
 
     /**
-     * Significado: El hilo esta bloqueado, hasta que se de un tiempo determinado, ocurra
-     * un evento de activacion, o sea activado por un hilo externo.
-     *      Cuando se usa:
-     *          Todo los hilos que se crean, pasan a estar bloqueados, hasta que se
-     *          indiquen que estan listos (READY), esto supone que el hilo se alla
-     *          configurado correctamente, para luego proceder a la ejcucion.
-     *
+     * Estados de error de los hilos
      */
-    BLOCKED,
+    typedef enum state_err_thread {
+        THREAD_NO_ERROR = 0,        /** Sin error */
+        THREAD_UNKNOWN_ERROR,       /** Error no clasificado */
+        THREAD_SEGMENTATION_FAULT,  /** Un hilo intento acceder a memoria a la cual no tiene permisos */
+        THREAD_ILLEGAL_INSTRUCTION, /** Instruccion no reconocida o prohibida */
+        THREAD_DIVISION_BY_ZERO,    /** Division por cero */
 
-    /**
-     * Significado: El hilo ha terminado su ejecucion.
-     *      Cuando se usa:
-     *          Cuando el hilo termina su funcion (retorna).
-     *          Cuando ocurre un error fatal o sale explicitamente.
-     *      Lo que implica:
-     *          El hilo ya no volvera a ejecutarse.
-     *          Su espacio de stack puede ser liberado o reciclado.
-     */
-    DEAD
-} state;
-
-/**
- * Estados de error de los hilos
- */
-typedef enum state_err_thread {
-    THREAD_NO_ERROR = 0,        /** Sin error */
-    THREAD_UNKNOWN_ERROR,       /** Error no clasificado */
-    THREAD_SEGMENTATION_FAULT,  /** Un hilo intento acceder a memoria a la cual no tiene permisos */
-    THREAD_ILLEGAL_INSTRUCTION, /** Instruccion no reconocida o prohibida */
-    THREAD_DIVISION_BY_ZERO,    /** Division por cero */
-
-    THREAD_STACK_OVERFLOW, /** Stack del hilo se desbordo:
-                                     * El tope de pila(sp) se encontro con el limite de pila del hilo.
-                                     * Push mas alla del limite de stack
-                                     */
-
-    THREAD_STACK_UNDERFLOW, /**
-                                     * Stack se leyo cuando estaba vacio( Pop de stack vacio ),
-                                     *  SP se intento decrementar a un valor inferios a BP,
-                                     *  el tope de pila siempre debe de ser superior o igual a
-                                     *  el puntero de la base de pila
-                                     */
-    THREAD_INVALID_SYSCALL, /** Llamada al sistema invalida o no soportada */
-} state_err_thread;
-
-typedef enum err_shellcode {
-    NO_ERROR_SC,
-    REALLOC_ERROR,
-    EmitIndirect_ERROR,
-    EmitIndirectByteDisplaced_ERROR,
-    EmitIndirectDisplaced_ERROR,
-    EmitIndirectIndexed_ERROR,
-    EmitIndirectIndexedDisplaced_ERROR,
-    EmitIndirectIndexedByteDisplaced_ERROR
-} err_shellcode;
-
-typedef struct shellcode_t {
-    size_t capacity;
-    size_t size;
-
-    uint8_t *     code;
-    err_shellcode err;
-
-    void (*Emit8)(struct shellcode_t *code, uint8_t byte);
-
-    void (*Emit32)(struct shellcode_t *code, uint32_t bytes);
-
-    void (*Emit64)(struct shellcode_t *code, uint64_t bytes);
-
-    void (*expand)(struct shellcode_t *code);
-
-    void (*free)(struct shellcode_t *code);
-
-    void (*dump)(const struct shellcode_t *shell);
-} shellcode_t;
-
-/**
- * Estructura para llamar a funciones nativas/externas a la VM.
- */
-typedef struct PendingCall_t {
-    void * (*    func)(void *arg); /** funcion nativa que llamar  */
-    shellcode_t *arg;              /** argumentos para la funcion, formando un shellcode */
-    void *       result;           /** valor de retorno */
-    bool         finished;         /** indica si la funcion fue ejecutada*/
-
-    pthread_mutex_t lock; /** Proteccion de acceso para finished/result */
-} PendingCall_t;
-
-class GeneralRegister {
-private:
-    uint64_t data = 0;
-
-public:
-    // Lectura segura (zero-extend)
-    [[nodiscard]] uint8_t  byte_lo()    const { return uint8_t (data & 0xFF); }
-    [[nodiscard]] uint8_t  byte_hi()    const { return uint8_t((data >> 8) & 0xFF); }
-    [[nodiscard]] uint16_t word_lo()    const { return uint16_t(data & 0xFFFF); }
-    [[nodiscard]] uint16_t word_hi()    const { return uint16_t((data >> 48) & 0xFFFF); }
-    [[nodiscard]] uint32_t dword_lo()   const { return uint32_t(data & 0xFFFFFFFF); }
-    [[nodiscard]] uint32_t dword_hi()   const { return uint32_t((data >> 32) & 0xFFFFFFFF); }
-    [[nodiscard]] uint64_t qword() const { return data; }
-
-    // Escritura segura (zero-extend automático)
-    GeneralRegister& byte_lo(uint8_t  v) { data = (data & ~0xFFULL) | v; return *this; }
-    GeneralRegister& byte_hi(uint8_t  v) { data = (data & ~0xFF00ULL) | (static_cast<uint64_t>(v) << 8); return *this; }
-    GeneralRegister& word_lo(uint16_t v) { data = (data & ~0xFFFFULL) | v; return *this; }
-    GeneralRegister& word_hi(uint16_t v) { data = (data & ~0xFFFF000000000000ULL) | (static_cast<uint64_t>(v) << 48); return *this; }
-    GeneralRegister& dword_lo(uint32_t v) { data = (data & 0xFFFFFFFF00000000ULL) | v; return *this; }
-    GeneralRegister& dword_hi(uint32_t v) { data = (data & 0xFFFFFFFFULL) | (static_cast<uint64_t>(v) << 32); return *this; }
-    GeneralRegister& qword(uint64_t v) { data = v; return *this; }
-
-    // Acceso directo al raw
-    [[nodiscard]] uint64_t raw() const { return data; }
-    void raw(uint64_t v) { data = v; }
-};
-
-
-/**
- * Esta clase representa una instancia de VM.
- * Cada instancia de VM usa un hilo real para ejecutar el codigo dado.
- * Por cada instancia de VM tendremos un hilo por tanto tendremos tantos
- * hilos como instancias, ademas de un hilo principal que sera el que envie y reciba
- * datos a maquina externas e internas.
- *
- * El hilo principal puede crear nuevas instancias o el usuario podra crear nuevas
- */
-class VM {
-public:
-    /**
-     * Cada Instancia gestiona su propio memoria (memoria aislada)
-     */
-    vm::ArenaManager manager_mem;
-
-    state     state;
-    pthread_t thread_for_vm;
-    VM_ID     id;
-
-    // registros
-    // -----------------------------------------------------------
-    vm::MappedPtrHost stack_pointer; // puntero tope de la pila
-    vm::MappedPtrHost base_pointer;  // puntero base de la pila
-
-    vm::MappedPtrHost rip; // puntero de instruccion
-    RFlags_t      flags;
-
-    GeneralRegister r00;
-    GeneralRegister r01;
-    GeneralRegister r02;
-    GeneralRegister r03;
-    GeneralRegister r04;
-    GeneralRegister r05;
-    GeneralRegister r06;
-    GeneralRegister r07;
-    GeneralRegister r08;
-    GeneralRegister r09;
-    GeneralRegister r10;
-    GeneralRegister r11;
-    GeneralRegister r12;
-    GeneralRegister r13;
-    GeneralRegister r14;
-    GeneralRegister r15;
-
-    uint64_t tsc; // cantidad de instrucciones ejecutadas
-    // -----------------------------------------------------------
-
-
-    uint64_t         time_sleep; /** usado para almacenar un valor numerico, el cual es en ns, la hora
-                                 *  a la que despertar el hilo.
-                                 *  Al dormir el hilo, se indica que su estado es BLOCK
-                                 */
-    state_err_thread err_thread; /**
-                                         * Almcane el ultimo error ocurrido en el hilo.
+        THREAD_STACK_OVERFLOW, /** Stack del hilo se desbordo:
+                                         * El tope de pila(sp) se encontro con el limite de pila del hilo.
+                                         * Push mas alla del limite de stack
                                          */
 
-    PendingCall_t *pending_call; /** Llamada nativa en curso, si hay alguna */
-};
+        THREAD_STACK_UNDERFLOW, /**
+                                         * Stack se leyo cuando estaba vacio( Pop de stack vacio ),
+                                         *  SP se intento decrementar a un valor inferios a BP,
+                                         *  el tope de pila siempre debe de ser superior o igual a
+                                         *  el puntero de la base de pila
+                                         */
+        THREAD_INVALID_SYSCALL, /** Llamada al sistema invalida o no soportada */
+    } state_err_thread;
+
+    typedef enum err_shellcode {
+        NO_ERROR_SC,
+        REALLOC_ERROR,
+        EmitIndirect_ERROR,
+        EmitIndirectByteDisplaced_ERROR,
+        EmitIndirectDisplaced_ERROR,
+        EmitIndirectIndexed_ERROR,
+        EmitIndirectIndexedDisplaced_ERROR,
+        EmitIndirectIndexedByteDisplaced_ERROR
+    } err_shellcode;
+
+    typedef struct shellcode_t {
+        size_t capacity;
+        size_t size;
+
+        uint8_t *     code;
+        err_shellcode err;
+
+        void (*Emit8)(struct shellcode_t *code, uint8_t byte);
+
+        void (*Emit32)(struct shellcode_t *code, uint32_t bytes);
+
+        void (*Emit64)(struct shellcode_t *code, uint64_t bytes);
+
+        void (*expand)(struct shellcode_t *code);
+
+        void (*free)(struct shellcode_t *code);
+
+        void (*dump)(const struct shellcode_t *shell);
+    } shellcode_t;
+
+    /**
+     * Estructura para llamar a funciones nativas/externas a la VM.
+     */
+    typedef struct PendingCall_t {
+        void * (*    func)(void *arg); /** funcion nativa que llamar  */
+        shellcode_t *arg;              /** argumentos para la funcion, formando un shellcode */
+        void *       result;           /** valor de retorno */
+        bool         finished;         /** indica si la funcion fue ejecutada*/
+
+        pthread_mutex_t lock; /** Proteccion de acceso para finished/result */
+    } PendingCall_t;
+
+    class GeneralRegister {
+    private:
+        uint64_t data = 0;
+
+    public:
+        // Lectura segura (zero-extend)
+        [[nodiscard]] uint8_t byte_lo() const {
+            return uint8_t(data & 0xFF);
+        }
+
+        [[nodiscard]] uint8_t byte_hi() const {
+            return uint8_t((data >> 8) & 0xFF);
+        }
+
+        [[nodiscard]] uint16_t word_lo() const {
+            return uint16_t(data & 0xFFFF);
+        }
+
+        [[nodiscard]] uint16_t word_hi() const {
+            return uint16_t((data >> 48) & 0xFFFF);
+        }
+
+        [[nodiscard]] uint32_t dword_lo() const {
+            return uint32_t(data & 0xFFFFFFFF);
+        }
+
+        [[nodiscard]] uint32_t dword_hi() const {
+            return uint32_t((data >> 32) & 0xFFFFFFFF);
+        }
+
+        [[nodiscard]] uint64_t qword() const {
+            return data;
+        }
+
+        // Escritura segura (zero-extend automático)
+        GeneralRegister &byte_lo(uint8_t v) {
+            data = (data & ~0xFFULL) | v;
+            return *this;
+        }
+
+        GeneralRegister &byte_hi(uint8_t v) {
+            data = (data & ~0xFF00ULL) | (static_cast<uint64_t>(v) << 8);
+            return *this;
+        }
+
+        GeneralRegister &word_lo(uint16_t v) {
+            data = (data & ~0xFFFFULL) | v;
+            return *this;
+        }
+
+        GeneralRegister &word_hi(uint16_t v) {
+            data = (data & ~0xFFFF000000000000ULL) | (static_cast<uint64_t>(v) << 48);
+            return *this;
+        }
+
+        GeneralRegister &dword_lo(uint32_t v) {
+            data = (data & 0xFFFFFFFF00000000ULL) | v;
+            return *this;
+        }
+
+        GeneralRegister &dword_hi(uint32_t v) {
+            data = (data & 0xFFFFFFFFULL) | (static_cast<uint64_t>(v) << 32);
+            return *this;
+        }
+
+        GeneralRegister &qword(uint64_t v) {
+            data = v;
+            return *this;
+        }
+
+        // Acceso directo al raw
+        [[nodiscard]] uint64_t raw() const {
+            return data;
+        }
+
+        void raw(uint64_t v) {
+            data = v;
+        }
+    };
 
 
+    /**
+     * Esta clase representa una instancia de VM.
+     * Cada instancia de VM usa un hilo real para ejecutar el codigo dado.
+     * Por cada instancia de VM tendremos un hilo por tanto tendremos tantos
+     * hilos como instancias, ademas de un hilo principal que sera el que envie y reciba
+     * datos a maquina externas e internas.
+     *
+     * El hilo principal puede crear nuevas instancias o el usuario podra crear nuevas
+     */
+    class VM {
+    public:
+        /**
+         * Cada Instancia gestiona su propio memoria (memoria aislada)
+         */
+        vm::ArenaManager manager_mem_priv;
+
+        /**
+         * Manager de memoria "publico" del manager de instancias
+         */
+        vm::ArenaManager &manager_mem_public;
+
+        /**
+         * Cada instancia de loader permite manejar sus propias cargas
+         */
+        loader::Loader loader_priv;
+
+        /**
+         * Loader "publico" del manager de instancias.
+         */
+        loader::Loader &loader_public;
+
+        state     state;
+        pthread_t thread_for_vm{};
+        VM_ID     id{};
+
+        // registros
+        // -----------------------------------------------------------
+        vm::MappedPtrHost stack_pointer{}; // puntero tope de la pila
+        vm::MappedPtrHost base_pointer{};  // puntero base de la pila
+
+        vm::MappedPtrHost rip{}; // puntero de instruccion
+        RFlags_t          flags{};
+
+        GeneralRegister r00;
+        GeneralRegister r01;
+        GeneralRegister r02;
+        GeneralRegister r03;
+        GeneralRegister r04;
+        GeneralRegister r05;
+        GeneralRegister r06;
+        GeneralRegister r07;
+        GeneralRegister r08;
+        GeneralRegister r09;
+        GeneralRegister r10;
+        GeneralRegister r11;
+        GeneralRegister r12;
+        GeneralRegister r13;
+        GeneralRegister r14;
+        GeneralRegister r15;
+
+        /**
+         * Cada instancia tiene asignada un manager general de instancias
+         */
+        ManageVM &mgr_vm;
+
+        uint64_t tsc{}; // cantidad de instrucciones ejecutadas
+        // -----------------------------------------------------------
+
+
+        uint64_t         time_sleep{}; /** usado para almacenar un valor numerico, el cual es en ns, la hora
+                                     *  a la que despertar el hilo.
+                                     *  Al dormir el hilo, se indica que su estado es BLOCK
+                                     */
+        state_err_thread err_thread;   /**
+                                             * Almcane el ultimo error ocurrido en el hilo.
+                                             */
+
+        PendingCall_t *pending_call{}; /** Llamada nativa en curso, si hay alguna */
+
+
+        VM(ManageVM &mgr_vm, uint64_t id_vm);
+
+        /**
+         * @brief Imprime estado completo de la VM (debug)
+         */
+        void print() const;
+    };
+}
 
 #endif //RUNTIME_H

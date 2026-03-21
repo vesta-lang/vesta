@@ -15,17 +15,30 @@
 #include <pthread.h>
 #include <cstdio>  // printf
 
+#include "runtime/runtime.h"
+
 int main() {
-    ManageVM manager = ManageVM();
+    runtime::ManageVM manager = runtime::ManageVM();
 
     uint64_t vm1_id = manager.create_vm(); // ID=1
     uint64_t vm2_id = manager.create_vm(); // ID=2
 
-    VM &vm1 = manager.get_vm(vm1_id);
-    printf("VM %llu tiene %zu maquinas\n", vm1_id, manager.vm_count());
+    printf("VM Manager %llu tiene %zu maquinas\n", vm1_id, manager.vm_count());
+
+    for (int i = 0; i < manager.vm_count(); i++) {
+        if (auto vm = manager.get_vm(i)) {
+            vm->print();
+            printf("VMs: %zu | Arenas VM1: %zu\n", manager.vms.size(), vm->manager_mem_priv.arenas.size());
+
+        } else {
+            printf("VM no encontrada\n");
+        }
+
+    }
 
     manager.destroy_vm(vm1_id);
     bool exists = manager.has_vm(vm1_id); // false
+    printf("VM %llu existe: %s\n", vm1_id, exists ? "SI" : "NO");
 
     return 0;
 }
