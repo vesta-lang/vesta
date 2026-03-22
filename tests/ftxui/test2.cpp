@@ -1,3 +1,11 @@
-//
-// Created by desmon0xff on 22/03/2026.
-//
+#include "cli/cli.h"
+#include "ftxui/component/screen_interactive.hpp"
+
+int main() {
+    runtime::ManageVM manager;
+    manager.create_vm();
+    manager.create_vm();
+
+    cli::VestaViewManager debugger(manager);
+    debugger.run();
+}
