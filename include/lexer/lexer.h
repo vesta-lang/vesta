@@ -21,36 +21,35 @@
 #include <vector>
 
 namespace vm {
-
     /**
      *
      * @param lexeme un lexerma que tenga formato de registro
      * @return si no es un registro, entonces devuelve false
      */
-    inline bool is_register(const std::string& lexeme) {
+    inline bool is_register(const std::string &lexeme) {
         if (lexeme.size() < 2) return false;
 
         // Registros generales: r[0-15][b|w|d]?
         if (lexeme[0] == 'r') {
             // Extraer número después de 'r'
             size_t num_start = 1;
-            while (num_start < lexeme.size() && isdigit(lexeme[num_start])) {
+            while (num_start < lexeme.size() && isdigit(static_cast<unsigned char>(lexeme[num_start]))) {
                 ++num_start;
             }
 
             // Verificar número válido (0-15)
             if (num_start > 1) {
                 std::string num_str = lexeme.substr(1, num_start - 1);
-                int reg_num = std::stoi(num_str);
+                int         reg_num = std::stoi(num_str);
                 if (reg_num >= 0 && reg_num <= 15) {
                     // Suffix opcional: b=8bit, w=16bit, d=32bit (64bit sin suffix)
                     if (num_start == lexeme.size() ||
                         (num_start + 1 == lexeme.size() &&
-                         (lexeme[num_start] == 'b' ||
-                          lexeme[num_start] == 'w' ||
-                          lexeme[num_start] == 'd'))) {
+                            (lexeme[num_start] == 'b' ||
+                                lexeme[num_start] == 'w' ||
+                                lexeme[num_start] == 'd'))) {
                         return true;
-                          }
+                    }
                 }
             }
         }
@@ -69,12 +68,12 @@ namespace vm {
      * @param lexeme espera un lexema
      * @return devuelve si es una directiva de datos valida o invalida
      */
-    inline bool is_data_directive(const std::string& lexeme) {
+    inline bool is_data_directive(const std::string &lexeme) {
         return lexeme == "db" ||
-               lexeme == "dw" ||
-               lexeme == "dd" ||
-               lexeme == "dq"||
-               lexeme == "ptr";
+                lexeme == "dw" ||
+                lexeme == "dd" ||
+                lexeme == "dq" ||
+                lexeme == "ptr";
     }
 
     /**
@@ -90,9 +89,9 @@ namespace vm {
         NUMBER_DEC,   ///< Numero decimal: 12345
 
         // --- IDENTIFIERS ---
-        IDENTIFIER, ///< Identificador: variable, label, etc.
+        IDENTIFIER,     ///< Identificador: variable, label, etc.
         DATA_DIRECTIVE, ///< Directiva de datos: db, dq, dw, dd, ptr
-        REGISTER,   ///< Registro: rax, r1, sp, etc.
+        REGISTER,       ///< Registro: rax, r1, sp, etc.
 
         // --- STRINGS ---
         CHAR,   ///< Literal de caracter: 'a', '\n'
@@ -133,7 +132,7 @@ namespace vm {
         COMMENT, ///< Comentario
         NEWLINE, ///< Salto de linea \n
 
-        SYMBOL,    ///< Simbolo generico no reconocido
+        SYMBOL,   ///< Simbolo generico no reconocido
         EndOfFile ///< Fin de archivo (EOF)
     };
 
@@ -142,10 +141,10 @@ namespace vm {
      * @brief Representa un token identificado por el lexer.
      */
     struct Token {
-        TokenType   type = TokenType::EndOfFile;    ///< Tipo de token
-        std::string lexeme;                         ///< Texto original del token
-        int         line = 0;                       ///< Linea donde se encuentra
-        int         column = 0;                     ///< Columna donde empieza
+        TokenType   type = TokenType::EndOfFile; ///< Tipo de token
+        std::string lexeme;                      ///< Texto original del token
+        int         line   = 0;                  ///< Linea donde se encuentra
+        int         column = 0;                  ///< Columna donde empieza
 
         /**
          * @brief Constructor de Token
@@ -164,7 +163,7 @@ namespace vm {
      */
     class Lexer {
     private:
-        std::string source; ///< Código fuente completo
+        std::string source;     ///< Código fuente completo
         size_t      pos    = 0; ///< Posición actual en source
         int         line   = 1; ///< Linea actual
         int         column = 1; ///< Columna actual
@@ -195,7 +194,7 @@ namespace vm {
         void error(const Token &tok, const std::string &msg);
 
         // Constructor privado para peek_token (copia estado)
-        Lexer(std::string  src, size_t p, int ln, int col)
+        Lexer(std::string src, size_t p, int ln, int col)
             : source(std::move(src)), pos(p), line(ln), column(col) {}
 
     public:
@@ -217,11 +216,10 @@ namespace vm {
          * @brief Retorna el SIGUIENTE token SIN consumirlo.
          * @return Token que estaría en next_token() sin avanzar pos
          */
-            [[nodiscard]] Token peek_token() const;
+        [[nodiscard]] Token peek_token() const;
     };
 
     std::string token_type_to_string(vm::TokenType type);
-
 } // namespace vm
 
 #endif //LEXER_H

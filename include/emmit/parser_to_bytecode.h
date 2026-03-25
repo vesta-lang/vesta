@@ -13,6 +13,8 @@
 #ifndef PARSER_TO_BYTECODE_H
 #define PARSER_TO_BYTECODE_H
 
+#include "emmit_decl.h"
+
 /**
  * La conversion de AST generado por al parser a bytecode usa 3 etapas:
  *      - Primera pasada: recolectar símbolos (labels, offsets, tamaños)
@@ -20,46 +22,9 @@
  *      - Tercera pasada: generar instrucciones y resolver saltos
  */
 
-#include <unordered_set>
 
-#include "runtime/vm_address_space.h" // necesitamos los espacios de direciones por defecto
-#include "parser/parser.h"
 
 namespace Assembly::Bytecode {
-    /**
-     * Metadatos de la instruccion
-     */
-    enum class InstrSizeMode {
-        /**
-         * La instrucción siempre ocupa 1 byte.
-         */
-        FIXED_1,
-
-        /**
-         * La instrucción siempre ocupa 2 bytes.
-         */
-        FIXED_2,
-
-        /**
-         * La instrucción siempre ocupa 4 bytes.
-         */
-        FIXED_4,
-
-        /**
-         * La instrucción siempre ocupa 8 bytes.
-         */
-        FIXED_8,
-    };
-
-    typedef struct InstrInfo {
-        /**
-         * En caso de este campo ser 0, se usa como extension de operacion
-         */
-        uint8_t opcode1;
-        uint8_t opcode2; // solo se usa si opcode1 = 0x0
-
-        InstrSizeMode sizeMode;
-    } InstrInfo;
 
 
     /**
@@ -77,11 +42,16 @@ namespace Assembly::Bytecode {
      * Tabla de instrucciones con metadatos correspondientes
      */
     static const std::unordered_map<std::string, std::vector<InstrInfo> > InstrTable = {
-        {"vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2}}},
+        {
+            "vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2}
+            }
+        },
         {"vminfomanager", {{0x02, 0x00, InstrSizeMode::FIXED_2}}},
 
-        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2}}},
-        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2}}},
+        // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
+        // segundo byte
+        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, .emit = emit_inc}}},
+        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, .emit = emit_inc}}},
 
 
         {

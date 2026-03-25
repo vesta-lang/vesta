@@ -174,14 +174,15 @@ namespace vm {
                 int size_bits = 64; // Default 64-bit
                 if (reg.size() > 2) {
                     char suffix = reg.back();
-                    reg.pop_back();
-                    switch (suffix) {
-                        case 'b': size_bits = 8;
-                            break;
-                        case 'w': size_bits = 16;
-                            break;
-                        case 'd': size_bits = 32;
-                            break;
+
+                    // Solo quitar el sufijo si realmente es un sufijo válido
+                    if (suffix == 'b' || suffix == 'w' || suffix == 'd') {
+                        reg.pop_back();
+                        switch (suffix) {
+                            case 'b': size_bits = 8; break;
+                            case 'w': size_bits = 16; break;
+                            case 'd': size_bits = 32; break;
+                        }
                     }
                 }
 

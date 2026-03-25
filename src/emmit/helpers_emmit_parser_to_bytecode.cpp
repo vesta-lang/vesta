@@ -103,7 +103,8 @@ namespace Assembly::Bytecode {
             output.push_back(info.opcode2);
 
         // 3 resto de campos según la instrucción (flags, reg, SIB, addr, etc.)
-        //    aquí ya mirar los operandos y generas el encoding real.
+        //    aquí ya mirar los operandos y generar el encoding real.
+        info.emit(instr, output, &info);
     }
 
 

@@ -10,3 +10,4 @@ libs/Windows/OpenSSL-Win64/bin
 libs/Windows/OpenSSL-Win64/exp
 libssl*
 libcrypto*
+_pdf
