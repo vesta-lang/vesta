@@ -40,11 +40,53 @@ namespace Assembly::Bytecode {
          * La instrucción siempre ocupa 8 bytes.
          */
         FIXED_8,
-
     };
 
+    /**
+     * Modos de direccionamiento de la instruccion
+     */
+    enum class AddressingMode {
+        /**
+         * Permtie codificar instrucciones y variantes que usan unicamente un registro o varios,
+         * en caso de ser varios, suelen permitir la codifacion del tipo "reg1, reg2" y "reg2, reg1"
+         * con un bit que indica la direccionalidad de la operacion.
+         */
+        REG,
+
+        /**
+         * Permite operaciones unicamente con memoria, o de registro a memoria y al reves:
+         *      adds reg1, [mem]
+         *      adds [mem], reg1
+         *  normalmente un campo indica la direccionalidad de la operacion
+         */
+        MEM,
+
+        /**
+         * Permite operaciones o variantes que usan sib con memoria o registros y al reves:
+         *      adds reg, [reg1 * reg2 + reg3]
+         */
+        SIB,
+
+        /**
+         * Se usa para indicar que la isntruccion usa inmediatos o es una variante que lo hace. Una direccion de memoria
+         * constante o un valor se considera inmediato:
+         *      adds r00, 0x1234
+         */
+        INMED,
+
+        /**
+         * Sin modos de direccionamiento
+         */
+        NONE
+    };
+
+    static std::string AddressingMode_str(AddressingMode mode) {
+        static const std::string table[] = {"REG", "MEM", "SIB", "INMED", "NONE"};
+        return table[static_cast<uint8_t>(mode)];
+    }
+
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[] = {1, 2, 4, 8};
+        constexpr size_t table[] = {};
         return table[static_cast<uint8_t>(mode)];
     }
 
@@ -67,10 +109,43 @@ namespace Assembly::Bytecode {
 
         InstrSizeMode sizeMode;
 
+        AddressingMode mode;
+
         emitInstr emit;
     } InstrInfo;
 
+    static const std::unordered_set<std::string> signed_ops = {
+        "adds", "subs", "muls", "divs", "cmps"
+    };
+
+    /**
+     * Coste O(1) para busqueda de isntrucciones con signo
+     * @param opcode nombre de la isntruccion a comprobar si es con signo
+     * @return true si fue una instruccion contemplada con signo.
+     */
+    static bool is_signed(const std::string& opcode) {
+        return signed_ops.count(opcode) > 0;
+    }
+
     void emit_inc(
+        const vm::Instruction *instruction_parser,
+        std::vector<uint8_t> & code_final,
+        const InstrInfo *      now_instr
+    );
+
+    void emit_instr_reg(
+        const vm::Instruction *instruction_parser,
+        std::vector<uint8_t> & code_final,
+        const InstrInfo *      now_instr
+    );
+
+    void emit_instr_mem(
+        const vm::Instruction *instruction_parser,
+        std::vector<uint8_t> & code_final,
+        const InstrInfo *      now_instr
+    );
+
+    void emit_instr_sib(
         const vm::Instruction *instruction_parser,
         std::vector<uint8_t> & code_final,
         const InstrInfo *      now_instr

@@ -440,7 +440,7 @@ namespace vm {
         }
 
         // instrucciones de identificador unico sin operandos:
-        if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret") {
+        if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret" || current.lexeme == "hlt") {
             return parse_instruction();
         }
 

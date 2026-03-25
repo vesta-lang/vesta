@@ -74,9 +74,60 @@ namespace Assembly::Bytecode {
 
         const auto& variants = it->second;
 
-        // De momento, como sizeMode es FIXED_x en todas,
-        // puedes devolver directamente la primera variante.
-        return variants.front();
+        // si es un registro el primero
+        AddressingMode mode = AddressingMode::NONE;
+        if (auto s = dynamic_cast<vm::RegisterOperand*>(ops[0].get())) {
+            mode = AddressingMode::REG;
+        }
+
+        // si hay mas de dos operandos, entonces, el primer operando si es un registro
+        // no se puede usar para averiguar el direccionamiento de la isntruccion.
+        if (ops.size() >= 2) {
+            // si el segundo operando es de tipo memoria, el modo de direccionamiento es este u SIB
+            if (auto s = dynamic_cast<vm::MemoryOperand*>(ops[1].get())) {
+                mode = AddressingMode::MEM;
+
+                if (auto bin = dynamic_cast<vm::BinaryExpr*>(s->expr.get())) {
+                    if (bin->op == '-' || bin->op == '+' || bin->op == '*') {
+                        mode = AddressingMode::SIB;
+                    }
+                }
+            }
+
+            // si el op2 es un registro, el modo de direcionamiento confirmado es registro
+            else if (auto s = dynamic_cast<vm::RegisterOperand*>(ops[1].get())) {
+                mode = AddressingMode::REG;
+            }
+
+            // es de tipo memoria, pero del que usa solo un inmed tipo [0x1000]
+            else if (auto s = dynamic_cast<vm::NumberOperand*>(ops[1].get())) {
+                mode = AddressingMode::MEM;
+            }
+
+            // error?
+
+        } else {
+            // si solo hay un operando, y fue un registro, entonces, es correcto
+
+            // si no hubo registro, y solo hay un operando, debe ser un inmediato
+            if (auto s = dynamic_cast<vm::NumberOperand*>(ops[0].get())) {
+                mode = AddressingMode::INMED;
+            }
+        }
+
+        int idx = -1;
+        for (int i = 0; i < variants.size(); ++i) {
+            if (variants[i].mode == mode) {
+                idx = i; // indice obtenido, sabemos cual es la variante
+                break;
+            }
+        }
+
+        if (idx != -1) {
+            return variants[idx]; // devolvemos la variante
+        }
+
+        throw std::runtime_error("Unknown instruction: " + mnemonic);
     }
 
     size_t Assembler::size_of_instruction(const vm::Instruction* instr) const {
