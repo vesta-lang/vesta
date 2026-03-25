@@ -363,7 +363,10 @@ namespace vm {
             return parse_instruction();
         }
 
-
+        // instrucciones de identificador unico sin operandos:
+        if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret") {
+            return parse_instruction();
+        }
 
         error(current, "Token no esperado: " + current.lexeme);
         advance(); // Skip

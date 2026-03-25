@@ -43,10 +43,10 @@ namespace Assembly::Bytecode {
      */
     static const std::unordered_map<std::string, std::vector<InstrInfo> > InstrTable = {
         {
-            "vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2}
+            "vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}
             }
         },
-        {"vminfomanager", {{0x02, 0x00, InstrSizeMode::FIXED_2}}},
+        {"vminfomanager", {{0x02, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}}},
 
         // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
         // segundo byte
@@ -56,28 +56,28 @@ namespace Assembly::Bytecode {
 
         {
             "callvm", {
-                {0x10, 0x00, InstrSizeMode::FIXED_8}, // CALLVM   <addr56bits>
-                {0x00, 0x22, InstrSizeMode::FIXED_4}, // CALLVM   <reg>
+                {0x10, 0x00, InstrSizeMode::FIXED_8, .emit = nullptr}, // CALLVM   <addr56bits>
+                {0x00, 0x22, InstrSizeMode::FIXED_4, .emit = nullptr}, // CALLVM   <reg>
             }
         },
         {
             "jmp", {
-                {0x11, 0x00, InstrSizeMode::FIXED_8}, // jmp   <addr56bits>
-                {0x00, 0x22, InstrSizeMode::FIXED_4}, // jmp   <reg>
+                {0x11, 0x00, InstrSizeMode::FIXED_8, .emit = nullptr}, // jmp   <addr56bits>
+                {0x00, 0x22, InstrSizeMode::FIXED_4, .emit = nullptr}, // jmp   <reg>
             }
         },
-        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2}}},
-        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2}}},
+        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}}},
+        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2 , .emit = nullptr}}},
 
-        {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1}}},
-        {"nop2", {{0x33, 0x00, InstrSizeMode::FIXED_2}}},
-        {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1}}},
+        {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, .emit = nullptr}}},
+        {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, .emit = nullptr}}},
+        {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1, .emit = nullptr}}},
 
         // Extensión (opcode1 = 0x00)
-        {"edmw4", {{0x00, 0x00, InstrSizeMode::FIXED_4}}},
-        {"edmw6", {{0x00, 0x01, InstrSizeMode::FIXED_4}}},
-        {"edm", {{0x00, 0x02, InstrSizeMode::FIXED_2}}},
-        {"hlt", {{0x00, 0x03, InstrSizeMode::FIXED_2}}},
+        {"edmw4", {{0x00, 0x00, InstrSizeMode::FIXED_4, .emit = nullptr}}},
+        {"edmw6", {{0x00, 0x01, InstrSizeMode::FIXED_4, .emit = nullptr}}},
+        {"edm", {{0x00, 0x02, InstrSizeMode::FIXED_2, .emit = nullptr}}},
+        {"hlt", {{0x00, 0x03, InstrSizeMode::FIXED_2, .emit = nullptr}}},
 
 
         /**
@@ -94,26 +94,26 @@ namespace Assembly::Bytecode {
             "adds", {
                 // addu/adds
                 // reg, reg
-                {0x00, 0x05, InstrSizeMode::FIXED_4},
+                {0x00, 0x05, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8},
+                {0x00, 0x06, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_4}
+                {0x00, 0x07, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "addu", {
                 // addu
                 // reg, reg
-                {0x00, 0x05, InstrSizeMode::FIXED_4},
+                {0x00, 0x05, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8},
+                {0x00, 0x06, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_4}
+                {0x00, 0x07, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
 
@@ -121,104 +121,104 @@ namespace Assembly::Bytecode {
             "subu", {
                 // subu/subs
                 // reg, reg
-                {0x00, 0x08, InstrSizeMode::FIXED_4},
+                {0x00, 0x08, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8},
+                {0x00, 0x09, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_4}
+                {0x00, 0x0A, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "subs", {
                 // subu/subs
                 // reg, reg
-                {0x00, 0x08, InstrSizeMode::FIXED_4},
+                {0x00, 0x08, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8},
+                {0x00, 0x09, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_4}
+                {0x00, 0x0A, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "muls", {
                 // mulu/muls
                 // reg, reg
-                {0x00, 0x0B, InstrSizeMode::FIXED_4},
+                {0x00, 0x0B, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8},
+                {0x00, 0x0C, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_4}
+                {0x00, 0x0D, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "mulu", {
                 // mulu/muls
                 // reg, reg
-                {0x00, 0x0B, InstrSizeMode::FIXED_4},
+                {0x00, 0x0B, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8},
+                {0x00, 0x0C, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_4}
+                {0x00, 0x0D, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "divu", {
                 // divu/divs
                 // reg, reg
-                {0x00, 0x0E, InstrSizeMode::FIXED_4},
+                {0x00, 0x0E, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8},
+                {0x00, 0x0F, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_4}
+                {0x00, 0x10, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "divs", {
                 // divu/divs
                 // reg, reg
-                {0x00, 0x0E, InstrSizeMode::FIXED_4},
+                {0x00, 0x0E, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8},
+                {0x00, 0x0F, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_4}
+                {0x00, 0x10, InstrSizeMode::FIXED_4, .emit = nullptr}
             }
         },
         {
             "cmpu", {
                 // cmpu/cmps
                 // reg, reg
-                {0x00, 0x11, InstrSizeMode::FIXED_4},
+                {0x00, 0x11, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8},
+                {0x00, 0x12, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_4},
+                {0x00, 0x13, InstrSizeMode::FIXED_4, .emit = nullptr},
             },
         },
         {
             "cmps", {
                 // cmpu/cmps
                 // reg, reg
-                {0x00, 0x11, InstrSizeMode::FIXED_4},
+                {0x00, 0x11, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8},
+                {0x00, 0x12, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_4},
+                {0x00, 0x13, InstrSizeMode::FIXED_4, .emit = nullptr},
             },
         },
 
@@ -227,18 +227,18 @@ namespace Assembly::Bytecode {
                 // por definir
                 // mov
                 // reg, reg
-                {0x00, 0x14, InstrSizeMode::FIXED_4},
+                {0x00, 0x14, InstrSizeMode::FIXED_4, .emit = nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x15, InstrSizeMode::FIXED_8},
+                {0x00, 0x15, InstrSizeMode::FIXED_8, .emit = nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x16, InstrSizeMode::FIXED_4},
+                {0x00, 0x16, InstrSizeMode::FIXED_4, .emit = nullptr},
             },
         },
         {
             "loop", {
-                {0x00, 0x31, InstrSizeMode::FIXED_8},
+                {0x00, 0x31, InstrSizeMode::FIXED_8, .emit = nullptr},
             },
         },
 

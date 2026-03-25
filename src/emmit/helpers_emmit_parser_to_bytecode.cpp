@@ -104,7 +104,9 @@ namespace Assembly::Bytecode {
 
         // 3 resto de campos según la instrucción (flags, reg, SIB, addr, etc.)
         //    aquí ya mirar los operandos y generar el encoding real.
-        info.emit(instr, output, &info);
+        if (info.emit != nullptr) {
+            info.emit(instr, output, &info);
+        }
     }
 
 
