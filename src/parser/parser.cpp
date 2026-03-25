@@ -146,6 +146,63 @@ namespace vm {
         return program;
     }
 
+    std::unique_ptr<ASTNode> Parser::parse_mem_term() {
+        auto node = parse_mem_factor();
+
+        while (current.type == TokenType::STAR) {
+            Token op = current;
+            advance();
+            auto right = parse_mem_factor();
+            node = std::make_unique<BinaryExpr>(op.lexeme[0],
+                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(node.release())),
+                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(right.release())));
+        }
+
+        return node;
+    }
+
+    std::unique_ptr<ASTNode> Parser::parse_mem_expression() {
+        auto node = parse_mem_term();
+
+        while (current.type == TokenType::PLUS || current.type == TokenType::MINUS) {
+            Token op = current;
+            advance();
+            auto right = parse_mem_term();
+            node = std::make_unique<BinaryExpr>(op.lexeme[0],
+                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(node.release())),
+                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(right.release())));
+        }
+
+        return node;
+    }
+
+    std::unique_ptr<ASTNode> Parser::parse_mem_factor() {
+        // ( expr )
+        if (match(TokenType::LPAREN)) {
+            auto expr = parse_mem_expression();
+            expect(TokenType::RPAREN, "Falta ')'");
+            return expr;
+        }
+
+        // REGISTRO
+        if (current.type == TokenType::REGISTER) {
+            return parse_operand(); // ya devuelve RegisterOperand
+        }
+
+        // NÚMERO
+        if (is_number_token(current.type)) {
+            return parse_operand(); // devuelve NumberOperand
+        }
+
+        // LABEL
+        if (current.type == TokenType::IDENTIFIER) {
+            return parse_operand(); // devuelve LabelOperand
+        }
+
+        error(current, "Expresión de memoria inválida");
+        return nullptr;
+    }
+
 
     std::unique_ptr<ASTNode> Parser::parse_section() {
         if (current.type != TokenType::IDENTIFIER) {
@@ -179,9 +236,12 @@ namespace vm {
                     if (suffix == 'b' || suffix == 'w' || suffix == 'd') {
                         reg.pop_back();
                         switch (suffix) {
-                            case 'b': size_bits = 8; break;
-                            case 'w': size_bits = 16; break;
-                            case 'd': size_bits = 32; break;
+                            case 'b': size_bits = 8;
+                                break;
+                            case 'w': size_bits = 16;
+                                break;
+                            case 'd': size_bits = 32;
+                                break;
                         }
                     }
                 }
@@ -212,8 +272,24 @@ namespace vm {
                 return std::move(label);
             }
 
+            case TokenType::LBRACKET: {
+                // '['
+                advance(); // consumir '['
+
+                // Parsear la expresión dentro de los corchetes
+                auto expr = parse_mem_expression();
+
+                if (current.type != TokenType::RBRACKET)
+                    error(current, "Falta ']' en operando de memoria");
+
+                advance(); // consumir ']'
+
+                return std::make_unique<MemoryOperand>(std::move(expr));
+            }
+
+
             default:
-                error(current, "Operando inválido");
+                error(current, "Operando invalido");
                 advance(); // Skip
                 return nullptr;
         }

@@ -321,17 +321,29 @@ namespace vm {
         }
     };
 
-    struct MemoryOperand : Operand {
-        std::string base_reg; // "r0"
-        std::string offset;   // "8", "[r0+4]"
+    /**
+     * Un operando de tipo Memoria puede ser:
+     * -> [0x20000]
+     * -> [r0 + r1 * r12]
+     * -> [r3 + 8]
+     * -> [r4 * 2]
+     * -> [r1 + r2 * 4 + 0x100]
+     */
+    struct MemoryOperand : ASTNode {
+        std::unique_ptr<ASTNode> expr; // expresión dentro de los corchetes
+
+        MemoryOperand(std::unique_ptr<ASTNode> e)
+            : expr(std::move(e)) {}
 
         void print(int indent) const override {
-            std::cout << std::string(indent, ' ')
-                    << "MEMORY: \"" << "[" << base_reg << "+" << offset << "]" << "\"";
+            std::cout << std::string(indent, ' ') << "MEMORY: ";
+            expr->print(indent);
         }
     };
 
-    struct LabelOperand : public Operand {
+
+
+    struct LabelOperand : Operand {
         std::string name;
 
         LabelOperand(std::string n) : name(std::move(n)) {}

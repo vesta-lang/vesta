@@ -25,8 +25,6 @@
 
 
 namespace Assembly::Bytecode {
-
-
     /**
      * Tabla de directivas, estas deben ir siempre en el inicio del programa
      */
@@ -43,7 +41,8 @@ namespace Assembly::Bytecode {
      */
     static const std::unordered_map<std::string, std::vector<InstrInfo> > InstrTable = {
         {
-            "vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}
+            "vminfo", {
+                {0x01, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}
             }
         },
         {"vminfomanager", {{0x02, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}}},
@@ -67,8 +66,9 @@ namespace Assembly::Bytecode {
             }
         },
         {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}}},
-        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2 , .emit = nullptr}}},
+        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, .emit = nullptr}}},
 
+        // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, .emit = nullptr}}},
         {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, .emit = nullptr}}},
         {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1, .emit = nullptr}}},
