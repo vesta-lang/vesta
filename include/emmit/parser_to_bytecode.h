@@ -284,10 +284,20 @@ namespace Assembly::Bytecode {
          *  2. Emisión de datos.
          *  3. Emisión de instrucciones.
          *
+         *  la 2 y 3 ahora se han fusionado
+         *
          * @param ast Lista de nodos raíz del AST.
          * @return Vector de bytes con el bytecode final.
          */
         std::vector<uint8_t> assemble(const std::vector<std::unique_ptr<vm::ASTNode> > &ast);
+
+        /**
+         * Aqui se han fusionado la segunda y tercera fase. La primera debe
+         * hacerse aparte ya que primero hay que saber el tamaño de las cosas
+         * para poder calcular los desplazamientos y offsets
+         * @param node Nodo actual del AST.
+         */
+        void emit_pass(const vm::ASTNode *node);
 
         /**
          * @brief Obtiene el tamaño en bytes de una directiva de datos.
@@ -377,24 +387,6 @@ namespace Assembly::Bytecode {
         void first_pass(const vm::ASTNode *node, uint64_t &offset);
 
         void apply_directive(const vm::Instruction *instr);
-
-        /**
-         * @brief Segunda pasada: emisión de datos.
-         *
-         * Recorre el AST y emite todas las declaraciones de datos.
-         *
-         * @param node Nodo actual del AST.
-         */
-        void second_pass_data(const vm::ASTNode *node);
-
-        /**
-         * @brief Tercera pasada: emisión de instrucciones.
-         *
-         * Recorre el AST y emite todas las instrucciones.
-         *
-         * @param node Nodo actual del AST.
-         */
-        void third_pass_code(const vm::ASTNode *node);
 
 
 

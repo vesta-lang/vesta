@@ -74,50 +74,38 @@ namespace Assembly::Bytecode {
             first_pass(node.get(), offset);
 
         current_offset = 0;
+        for (auto &node : ast)
+            emit_pass(node.get());
+
 
         // 2 Segunda pasada (datos)
-        for (auto &node: ast)
+        /*for (auto &node: ast)
             second_pass_data(node.get());
 
         current_offset = 0;
 
         // 3 Tercera pasada (código)
         for (auto &node: ast)
-            third_pass_code(node.get());
+            third_pass_code(node.get());*/
 
         return output;
     }
 
 
-    void Assembler::second_pass_data(const vm::ASTNode *node) {
-        if (auto sec = dynamic_cast<const vm::SectionNode *>(node)) {
-            for (auto &child: sec->body)
-                second_pass_data(child.get());
-        } else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
+    void Assembler::emit_pass(const vm::ASTNode *node) {
+        if (auto sec = dynamic_cast<const vm::SectionNode*>(node)) {
+            for (auto &child : sec->body)
+                emit_pass(child.get());
+        }
+        else if (auto data = dynamic_cast<const vm::DataDecl*>(node)) {
             emit_data(data);
         }
-    }
-
-    void Assembler::third_pass_code(const vm::ASTNode *node) {
-        if (auto sec = dynamic_cast<const vm::SectionNode *>(node)) {
-            for (auto &child: sec->body)
-                third_pass_code(child.get());
-        } else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
-            // Es directiva?
+        else if (auto instr = dynamic_cast<const vm::Instruction*>(node)) {
             if (PseudoInstructions.count(instr->opcode)) {
-                apply_directive(instr); // la volvemos a aplicar?
-                return;
-            }
-
-            // Es instrucción real?
-            if (InstrTable.find(instr->opcode) != InstrTable.end()) {
+                apply_directive(instr);
+            } else {
                 emit_instruction(instr);
-                return;
             }
-
-            throw std::runtime_error(
-                "Error: instrucción o directiva desconocida en tercera pasada: " + instr->opcode
-            );
         }
     }
 
