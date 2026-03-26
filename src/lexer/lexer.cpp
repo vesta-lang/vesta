@@ -161,6 +161,10 @@ namespace vm {
                 return {TokenType::DATA_DIRECTIVE, lexeme, line, start_column};
             }
 
+            if (lexeme == "end") {
+                return {TokenType::END_LABEL, lexeme, line, start_column};
+            }
+
             return {TokenType::IDENTIFIER, lexeme, line, start_column};
         }
 
@@ -291,7 +295,7 @@ namespace vm {
 
         "COMMENT", "NEWLINE",
 
-        "SYMBOL", "EndOfFile"
+        "SYMBOL", "END_LABEL", "EndOfFile"
     };
 
     std::string token_type_to_string(vm::TokenType type) {

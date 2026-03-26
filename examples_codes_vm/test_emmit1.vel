@@ -1,0 +1,50 @@
+adds r03b,  r01b
+adds r03w,  r01w
+adds r03d,  r01d
+adds r03,   r01
+
+addu r02b,  r00b
+addu r02w,  r00w
+addu r02d,  r00d
+addu r02,   r00
+
+subs r15b,  r10b
+subs r15w,  r10w
+subs r15d,  r10d
+subs r15,   r10
+
+subu r10b,  r15b
+subu r10w,  r15w
+subu r10d,  r15d
+subu r10,   r15
+
+divs r03b,  r01b
+divs r03w,  r01w
+divs r03d,  r01d
+divs r03,   r01
+
+divu r02b,  r00b
+divu r02w,  r00w
+divu r02d,  r00d
+divu r02,   r00
+
+muls r03b,  r01b
+muls r03w,  r01w
+muls r03d,  r01d
+muls r03,   r01
+
+mulu r02b,  r00b
+mulu r02w,  r00w
+mulu r02d,  r00d
+mulu r02,   r00
+
+cmps r03b,  r01b
+cmps r03w,  r01w
+cmps r03d,  r01d
+cmps r03,   r01
+
+cmpu r02b,  r00b
+cmpu r02w,  r00w
+cmpu r02d,  r00d
+cmpu r02,   r00
+

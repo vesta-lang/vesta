@@ -131,6 +131,10 @@ namespace vm {
                 node = parse_annotation();
             }
 
+            /*else if (current.type == TokenType::END_LABEL) {
+                return ;
+            }*/
+
             // Skip tokens inválidos
             else {
                 std::cerr << "linea: " << current.line << ":" << current.column <<
@@ -203,6 +207,52 @@ namespace vm {
         return nullptr;
     }
 
+    /**
+     * No pude usar el metodo principal parse en parse_section, ya que hacerlo hacia que todas
+     * las secciones se unieran en un unico arbol como si fuera una unica seccion, cosa que no se quiere.
+     * Para evitar esto usamos el mismo codigo, pero cuando se encuentre una seccion dentro de otra, ya no
+     * se sigue analizando en la seccion anterior, sino que vuelve al parse principal y lo analiza desde ahi
+     * @return seccion parseada
+     */
+    std::vector<std::unique_ptr<ASTNode> > Parser::parse_in_label() {
+        std::vector<std::unique_ptr<ASTNode> > program;
+
+        while (current.type != TokenType::EndOfFile) {
+            std::unique_ptr<ASTNode> node = nullptr;
+            Token                    next = peek();
+            // IDENTIFIER + COLON? -> SECCIÓN
+            if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
+                //node = parse_section();
+                break;
+            }
+            // IDENTIFIER solo? -> INSTRUCCIÓN
+            // IDENTIFIER IDENTIFIER? -> posible instruccion de dos identificadores
+            if (
+                (current.type == TokenType::IDENTIFIER) ||
+                (current.type == TokenType::IDENTIFIER) && peek().type == TokenType::IDENTIFIER
+            ) {
+                node = parse_statement();
+            }
+
+            // se encontro una o varias anotaciones
+            else if (current.type == TokenType::AT) {
+                node = parse_annotation();
+            }
+
+            // Skip tokens inválidos
+            else {
+                std::cerr << "linea: " << current.line << ":" << current.column <<
+                        " Parser ERROR: " << "Skipping invalid token: " + token_type_to_string(current.type) +
+                        " [" + current.lexeme + "]" << std::endl;
+                advance();
+                continue;
+            }
+
+            if (node) program.push_back(std::move(node));
+        }
+
+        return program;
+    }
 
     std::unique_ptr<ASTNode> Parser::parse_section() {
         if (current.type != TokenType::IDENTIFIER) {
@@ -216,7 +266,7 @@ namespace vm {
         // esperamos q haya dos puntos despues del ID de una section.
         expect(TokenType::COLON, "Expected COLON");
 
-        std::vector<std::unique_ptr<ASTNode> > body = parse();
+        std::vector<std::unique_ptr<ASTNode> > body = parse_in_label();
 
         return std::make_unique<SectionNode>(section_name, std::move(body));
     }

@@ -133,6 +133,7 @@ namespace vm {
         NEWLINE, ///< Salto de linea \n
 
         SYMBOL,   ///< Simbolo generico no reconocido
+        END_LABEL,
         EndOfFile ///< Fin de archivo (EOF)
     };
 
