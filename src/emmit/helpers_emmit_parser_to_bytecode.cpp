@@ -76,6 +76,10 @@ namespace Assembly::Bytecode {
 
         // si es un registro el primero
         AddressingMode mode = AddressingMode::NONE;
+
+        // si no tiene operandos, suponemos que es una instruccion sin tal
+        if (ops.size() == 0) goto search_variante_None;
+
         if (auto s = dynamic_cast<vm::RegisterOperand*>(ops[0].get())) {
             mode = AddressingMode::REG;
         }
@@ -115,6 +119,9 @@ namespace Assembly::Bytecode {
             }
         }
 
+        // alguna instrucciones como los NOP no tiene operandos,
+        // por lo que todoo el analisis anterior se puede saltar
+        search_variante_None:
         int idx = -1;
         for (int i = 0; i < variants.size(); ++i) {
             if (variants[i].mode == mode) {
