@@ -73,7 +73,7 @@ namespace runtime {
 
         // Flags
         printf("Flags: ZF=%u CF=%u OF=%u SF=%u\n",
-               flags.ZF, flags.CF, flags.OF, flags.SF);
+               flags.bits.ZF, flags.bits.CF, flags.bits.OF, flags.bits.SF);
 
         printf("R00: 0x%016llx | R01: 0x%016llx | R02: 0x%016llx | R03: 0x%016llx\n",
                r00.qword(), r01.qword(), r02.qword(), r03.qword());

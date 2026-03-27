@@ -40,6 +40,8 @@ namespace Assembly::Bytecode {
          * La instrucción siempre ocupa 8 bytes.
          */
         FIXED_8,
+
+        COUNT
     };
 
     /**
@@ -77,16 +79,21 @@ namespace Assembly::Bytecode {
         /**
          * Sin modos de direccionamiento
          */
-        NONE
+        NONE,
+
+        /**
+         * Solo se usa para contar la cantidad
+         */
+        COUNT
     };
 
     static std::string AddressingMode_str(AddressingMode mode) {
-        static const std::string table[] = {"REG", "MEM", "SIB", "INMED", "NONE"};
+        static const std::string table[(size_t)AddressingMode::COUNT] = {"REG", "MEM", "SIB", "INMED", "NONE"};
         return table[static_cast<uint8_t>(mode)];
     }
 
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[] = {};
+        constexpr size_t table[(size_t)InstrSizeMode::COUNT] = {};
         return table[static_cast<uint8_t>(mode)];
     }
 

@@ -86,6 +86,6 @@ namespace runtime {
         // que una instancia ya creada o muerta en el mismo manager.
         uint64_t counter_vm;
     };
-};
+}
 
 #endif //MANAGER_RUNTIME_H

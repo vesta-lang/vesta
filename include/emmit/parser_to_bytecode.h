@@ -42,48 +42,48 @@ namespace Assembly::Bytecode {
     static const std::unordered_map<std::string, std::vector<InstrInfo> > InstrTable = {
         {
             "vminfo", {
-                {0x01, 0x00, InstrSizeMode::FIXED_2, .mode = AddressingMode::NONE, .emit = nullptr}
+                {0x01, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}
             }
         },
         {
             "vminfomanager", {
-                {0x02, 0x00, InstrSizeMode::FIXED_2, .mode = AddressingMode::NONE, .emit = nullptr}
+                {0x02, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}
             }
         },
 
         // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
         // segundo byte
-        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, .mode = AddressingMode::REG, .emit = emit_inc}}},
-        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, .mode = AddressingMode::REG, .emit = emit_inc}}},
+        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc}}},
+        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc}}},
 
 
         {
             "callvm", {
-                {0x10, 0x00, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr},
+                {0x10, 0x00, InstrSizeMode::FIXED_8, AddressingMode::INMED, nullptr},
                 // CALLVM   <addr56bits>
-                {0x00, 0x22, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = nullptr}, // CALLVM   <reg>
+                {0x00, 0x22, InstrSizeMode::FIXED_4, AddressingMode::REG, nullptr}, // CALLVM   <reg>
             }
         },
         {
             "jmp", {
-                {0x11, 0x00, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr},
+                {0x11, 0x00, InstrSizeMode::FIXED_8, AddressingMode::INMED, nullptr},
                 // jmp   <addr56bits>
-                {0x00, 0x22, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = nullptr}, // jmp   <reg>
+                {0x00, 0x22, InstrSizeMode::FIXED_4, AddressingMode::REG, nullptr}, // jmp   <reg>
             }
         },
-        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, .mode = AddressingMode::REG, .emit = nullptr}}},
-        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, .mode = AddressingMode::REG, .emit = nullptr}}},
+        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, nullptr}}},
+        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, nullptr}}},
 
         // estas instrucciones no necesitan emitir mas que sus opcodes
-        {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, .mode = AddressingMode::NONE, .emit = nullptr}}},
-        {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, .mode = AddressingMode::NONE, .emit = nullptr}}},
-        {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1, .mode = AddressingMode::NONE, .emit = nullptr}}},
+        {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
+        {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
 
         // Extensión (opcode1 = 0x00)
-        {"edmw4", {{0x00, 0x00, InstrSizeMode::FIXED_4, .mode = AddressingMode::NONE, .emit = nullptr}}},
-        {"edmw6", {{0x00, 0x01, InstrSizeMode::FIXED_4, .mode = AddressingMode::NONE, .emit = nullptr}}},
-        {"edm", {{0x00, 0x02, InstrSizeMode::FIXED_2, .mode = AddressingMode::NONE, .emit = nullptr}}},
-        {"hlt", {{0x00, 0x03, InstrSizeMode::FIXED_2, .mode = AddressingMode::NONE, .emit = nullptr}}},
+        {"edmw4", {{0x00, 0x00, InstrSizeMode::FIXED_4, AddressingMode::NONE, nullptr}}},
+        {"edmw6", {{0x00, 0x01, InstrSizeMode::FIXED_4, AddressingMode::NONE, nullptr}}},
+        {"edm", {{0x00, 0x02, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"hlt", {{0x00, 0x03, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
 
         /**
@@ -100,26 +100,26 @@ namespace Assembly::Bytecode {
             "adds", {
                 // addu/adds
                 // reg, reg
-                {0x00, 0x05, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = emit_instr_mem},
+                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = emit_instr_sib}
+                {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
             "addu", {
                 // addu
                 // reg, reg
-                {0x00, 0x05, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
 
@@ -127,104 +127,104 @@ namespace Assembly::Bytecode {
             "subu", {
                 // subu/subs
                 // reg, reg
-                {0x00, 0x08, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
         {
             "subs", {
                 // subu/subs
                 // reg, reg
-                {0x00, 0x08, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
         {
             "muls", {
                 // mulu/muls
                 // reg, reg
-                {0x00, 0x0B, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
         {
             "mulu", {
                 // mulu/muls
                 // reg, reg
-                {0x00, 0x0B, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
         {
             "divu", {
                 // divu/divs
                 // reg, reg
-                {0x00, 0x0E, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
         {
             "divs", {
                 // divu/divs
                 // reg, reg
-                {0x00, 0x0E, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr}
+                {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
             }
         },
         {
             "cmpu", {
                 // cmpu/cmps
                 // reg, reg
-                {0x00, 0x11, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr},
+                {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr},
             },
         },
         {
             "cmps", {
                 // cmpu/cmps
                 // reg, reg
-                {0x00, 0x11, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = emit_instr_reg},
+                {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr},
+                {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr},
             },
         },
 
@@ -233,18 +233,18 @@ namespace Assembly::Bytecode {
                 // por definir
                 // mov
                 // reg, reg
-                {0x00, 0x14, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = nullptr},
+                {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, nullptr},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x15, InstrSizeMode::FIXED_8, .mode = AddressingMode::MEM, .emit = nullptr},
+                {0x00, 0x15, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x16, InstrSizeMode::FIXED_4, .mode = AddressingMode::SIB, .emit = nullptr},
+                {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr},
             },
         },
         {
             "loop", {
-                {0x00, 0x31, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr},
+                {0x00, 0x31, InstrSizeMode::FIXED_8, AddressingMode::INMED, nullptr},
             },
         },
 

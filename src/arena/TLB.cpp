@@ -141,8 +141,9 @@ namespace tlb {
 
     void LazyHybridTLB::clear_tlb_entry(uint64_t page_vaddr) {
         // Resetear a estado inválido (simplificado)
-        this->translate(page_vaddr, vm::MAPPED_PTR_VM,
-                         vm::ptr_mapped{.ptr_vm = vm::vm_map_ptr{0}});
+        vm::ptr_mapped pm{};
+        pm.ptr_vm =  vm::vm_map_ptr{0};
+        this->translate(page_vaddr, vm::MAPPED_PTR_VM, pm);
     }
 
 

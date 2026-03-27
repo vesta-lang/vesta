@@ -52,7 +52,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     endif()
     
     target_compile_options(${FINAL_NAME} PRIVATE
-            -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE
+            -pedantic-errors -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE
     )
 endfunction()
 

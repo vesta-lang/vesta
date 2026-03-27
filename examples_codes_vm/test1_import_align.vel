@@ -1,0 +1,10 @@
+import "import_file.vel"
+
+align 16
+msg db 1, 2, 3
+
+align 16
+msg1 dw 0x1234
+
+align 16
+

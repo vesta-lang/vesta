@@ -49,11 +49,13 @@ namespace vm {
                 void *       host_mem   = get_ptr_arena(
                         arena_mgr, arena_mgr.create_arena(page_size, permsDefault));
 
-                tlb.translate(page_vaddr, MAPPED_PTR_HOST,
-                              ptr_mapped{.ptr_host = host_mem});
+                ptr_mapped pm{};
+                pm.ptr_host = host_mem;
+                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm);
                 entry = tlb.get_entry(vaddr);
             }
-            return *((uint8_t *) (entry->address.ptr_host + (vaddr & 0xFFF)));
+            uint8_t* base = static_cast<uint8_t*>(entry->address.ptr_host);
+            return base[vaddr & 0xFFF];
         }
     };
 }

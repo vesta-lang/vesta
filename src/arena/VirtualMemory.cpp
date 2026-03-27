@@ -10,10 +10,13 @@ namespace vm {
         for (uint64_t page = vaddr & ~0xFFFULL; page < end; page += 0x1000) {
             void* host_mem = get_ptr_arena(
                     arena_mgr, arena_mgr.create_arena(page, permsDefault));
-            tlb.translate(page, vm::MAPPED_PTR_HOST,
-                         vm::ptr_mapped{.ptr_host = host_mem});
+            ptr_mapped pm{};
+            pm.ptr_host = host_mem;
+            tlb.translate(page, MAPPED_PTR_HOST, pm);
         }
-        return vm_map_ptr{.raw = (vaddr & ~0xFFFULL)};
+        vm_map_ptr result{};
+        result.raw = (vaddr & ~0xFFFULL);
+        return result;
     }
 
 
