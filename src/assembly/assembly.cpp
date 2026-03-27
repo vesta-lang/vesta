@@ -26,7 +26,7 @@ const ArchSupport& get_available_architectures() {
             {CS_ARCH_MIPS, CS_MODE_MIPS32, "MIPS"},
             {CS_ARCH_PPC, CS_MODE_32, "PPC"},
             {CS_ARCH_SPARC, CS_MODE_BIG_ENDIAN, "SPARC"},
-            {CS_ARCH_SYSTEMZ, CS_MODE_BIG_ENDIAN, "SYSTEMZ"},
+            {CS_ARCH_SYSZ, CS_MODE_BIG_ENDIAN, "SYSTEMZ"},
             {CS_ARCH_RISCV, CS_MODE_RISCV32, "RISCV"}
         };
 
