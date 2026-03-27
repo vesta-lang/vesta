@@ -198,9 +198,8 @@ namespace Assembly::Bytecode {
             if (instr->operands.size() != 1)
                 throw std::runtime_error("Error: align requiere 1 operando.");
 
-            uint64_t align = eval_operand(
-                dynamic_cast<vm::ExprNode *>(instr->operands[0].get())
-            );
+            vm::NumberOperand *number = dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
+            uint64_t align = eval_operand(number);
 
             if (align == 0 || (align & (align - 1)) != 0)
                 throw std::runtime_error("Error: align debe ser potencia de 2.");

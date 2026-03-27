@@ -88,15 +88,15 @@ namespace vm {
          * @brief **Aridad** - Número de operandos requeridos.
          *
          * Controla parsing automático:
-         * - `OpArity::ZERO` → `nop`, `hlt` (sin operandos)
-         * - `OpArity::ONE` → `jmp label`, `push r0` (1 operando)
-         * - `OpArity::TWO` → `mov r0, 1` (2 operandos)
+         * - `OpArity::ZERO` -> `nop`, `hlt` (sin operandos)
+         * - `OpArity::ONE` -> `jmp label`, `push r0` (1 operando)
+         * - `OpArity::TWO` -> `mov r0, 1` (2 operandos)
          *
          * **Codegen bytes:**
          * ```
-         * ZERO → 1 byte opcode
-         * ONE  → 1 + 4 bytes (addr/label)
-         * TWO  → 1 + 4 reg + 4 imm
+         * ZERO -> 1 byte opcode
+         * ONE  -> 1 + 4 bytes (addr/label)
+         * TWO  -> 1 + 4 reg + 4 imm
          * ```
          */
         OpArity arity;
@@ -109,9 +109,9 @@ namespace vm {
          *
          * **Ejemplos:**
          * ```
-         * mov: ["move", "MOV", "Move"] → mov r0,1 / MOVE r0,1
-         * add: ["sum", "ADD"] → add r0,1 / SUM r0,1
-         * jmp: [] → SOLO jmp label
+         * mov: ["move", "MOV", "Move"] -> mov r0,1 / MOVE r0,1
+         * add: ["sum", "ADD"] -> add r0,1 / SUM r0,1
+         * jmp: [] -> SOLO jmp label
          * ```
          */
         std::vector<std::string> aliases; // "mov", "move"

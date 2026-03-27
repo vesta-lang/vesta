@@ -48,6 +48,7 @@ namespace vm {
 
         // aunque no es una instruccion, se detectara como una
         {"org", {"org", OpArity::ONE}},
+        {"align", {"align", OpArity::ONE}},
 
         {"jmp", {"jmp", OpArity::ONE}},
         {"call", {"call", OpArity::ONE}},
@@ -157,9 +158,11 @@ namespace vm {
             Token op = current;
             advance();
             auto right = parse_mem_factor();
-            node = std::make_unique<BinaryExpr>(op.lexeme[0],
-                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(node.release())),
-                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(right.release())));
+            node       = std::make_unique<BinaryExpr>(op.lexeme[0],
+                                                      std::unique_ptr<
+                                                          ExprNode>(static_cast<ExprNode *>(node.release())),
+                                                      std::unique_ptr<ExprNode>(
+                                                          static_cast<ExprNode *>(right.release())));
         }
 
         return node;
@@ -172,9 +175,11 @@ namespace vm {
             Token op = current;
             advance();
             auto right = parse_mem_term();
-            node = std::make_unique<BinaryExpr>(op.lexeme[0],
-                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(node.release())),
-                                                std::unique_ptr<ExprNode>(static_cast<ExprNode*>(right.release())));
+            node       = std::make_unique<BinaryExpr>(op.lexeme[0],
+                                                      std::unique_ptr<
+                                                          ExprNode>(static_cast<ExprNode *>(node.release())),
+                                                      std::unique_ptr<ExprNode>(
+                                                          static_cast<ExprNode *>(right.release())));
         }
 
         return node;
@@ -490,7 +495,8 @@ namespace vm {
         }
 
         // instrucciones de identificador unico sin operandos:
-        if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret" || current.lexeme == "hlt") {
+        if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret" || current.lexeme ==
+            "hlt") {
             return parse_instruction();
         }
 

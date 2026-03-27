@@ -17,6 +17,7 @@
 #include "emmit/parser_to_bytecode.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
+#include "profiler/timer.h"
 
 void print_program(const std::vector<std::unique_ptr<vm::ASTNode> > &program, int indent = 0) {
     std::cout << "=== PROGRAM AST ===" << std::endl;
@@ -66,23 +67,25 @@ void print_doc_ast(const std::vector<std::unique_ptr<vm::ASTNode> > &program, in
 }
 
 int main() {
+    Timer global;
+
+    Timer t_read;
     const std::string name_file("test.vel");
     std::ifstream     file(name_file); // o "codigo.txt", "programa.vm", etc.
     if (!file.is_open()) {
         std::cerr << "ERROR: No se pudo abrir: " << name_file << std::endl;
         return 1;
     }
-
     // Leer todo el archivo en un string
     std::string code((std::istreambuf_iterator<char>(file)),
                      std::istreambuf_iterator<char>());
+    std::cout << "[Tiempo lectura archivo] " << t_read.us() << " us " << t_read.ms() << " ms\n";
 
 
     if (code.empty()) {
         std::cerr << "ERROR: Archivo vacío\n";
         return 1;
     }
-
     vm::Lexer lexer(code);
 
     /*while (true) {
@@ -100,15 +103,18 @@ int main() {
 
 
     try {
+        Timer t_parser;
         vm::Parser parser(lexer);
-
         auto program = parser.parse();
+        std::cout << "[Tiempo parser] " << t_parser.us() << " us "  << t_parser.ms() << " ms\n";
+
         print_program(program);
         print_doc_ast(program);
 
-
+        Timer t_asm;
         Assembly::Bytecode::Assembler MyAsm{};
         auto                          bytes = MyAsm.assemble(program);
+        std::cout << "\n[Tiempo de ensamblado] " << t_asm.us() << " us "  << t_asm.ms() << " ms\n";
 
         const size_t BYTES_PER_LINE = 16;
         size_t       count          = 0;
@@ -124,7 +130,7 @@ int main() {
             std::cout << std::setw(2) << std::setfill('0') << std::hex << (int) b << " ";
 
             count++;
-        }
+        } std::cout << std::dec; // restaurar a modo decimal
 
         std::cout << std::endl;
     } catch (const vm::ParseError &e) {
@@ -135,5 +141,7 @@ int main() {
     }
 
     std::cout << "\n[Lexer Test] Finalizado\n";
+
+    std::cout << "\n[Tiempo total] " << global.us() << " us "  << global.ms() << " ms\n";
     return 0;
 }

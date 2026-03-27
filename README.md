@@ -1,8 +1,13 @@
 # VestaVM
 
-Vesta es una VM de bajo nivel y distrbuida que esta siendo desarollada para un lenguaje de programacion. Esta VM se basa en el concepto de registros y memoria. Puede encontrar mas informacion y documentacion en el repositorio que contiene dicha documentacion:
-
-- [https://github.com/desmonHak/VMdoc](https://github.com/desmonHak/VMdoc)
+<div style="display: flex; align-items: center; gap: 20px;">
+  <img src="./Component 1.svg" width="250" height="250" />
+  <p>
+    Vesta es una VM de bajo nivel y distribuida que está siendo desarrollada para un lenguaje de programación.
+    Esta VM se basa en el concepto de registros y memoria. Puede encontrar más información y documentación en el repositorio:<br><br>
+    <a href="https://github.com/desmonHak/VMdoc">https://github.com/desmonHak/VMdoc</a>
+  </p>
+</div>
 
 ----
 
