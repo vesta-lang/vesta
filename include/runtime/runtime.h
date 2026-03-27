@@ -29,7 +29,7 @@ namespace runtime {
     /**
      * representa los posibles estados de los hilos de la VM
      */
-    typedef enum state {
+    typedef enum vm_state {
         /**
          * Significado: El hilo esta listo para ejecutarse, pero actualmente no esta corriendo.
          *    Cuando se usa:
@@ -68,7 +68,7 @@ namespace runtime {
          *          Su espacio de stack puede ser liberado o reciclado.
          */
         DEAD
-    } state;
+    } vm_state;
 
     /**
      * Estados de error de los hilos
@@ -249,7 +249,7 @@ namespace runtime {
          */
         loader::Loader &loader_public;
 
-        state     state;
+        vm_state     state;
         pthread_t thread_for_vm{};
         VM_ID     id{};
 

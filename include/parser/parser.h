@@ -25,6 +25,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <cstdint>
 
 #include "ast.h"
 #include "lexer/lexer.h"
