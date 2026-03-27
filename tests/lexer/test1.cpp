@@ -111,6 +111,10 @@ int main() {
         print_program(program);
         print_doc_ast(program);
 
+        // resolver dependencias
+        std::unordered_set<std::string> imported_files;
+        Assembly::Bytecode::resolve_imports(program, imported_files);
+
         Timer t_asm;
         Assembly::Bytecode::Assembler MyAsm{};
         auto                          bytes = MyAsm.assemble(program);

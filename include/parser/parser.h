@@ -270,6 +270,12 @@ namespace vm {
         std::unique_ptr<ASTNode> parse_instruction();
 
         /**
+         * Al encontrar un import, el lexer y parser analizaran este por otra parte
+         * @return nodo de timpo importacion que indica el archivo importado
+         */
+        std::unique_ptr<ASTNode> parse_import();
+
+        /**
          *
          * @param type tipo de token esperado, si es el token esperado, avanza, sino, muestra error sin avanzar.
          * @param msg mensaje de error

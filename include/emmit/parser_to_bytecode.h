@@ -59,13 +59,15 @@ namespace Assembly::Bytecode {
 
         {
             "callvm", {
-                {0x10, 0x00, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr}, // CALLVM   <addr56bits>
+                {0x10, 0x00, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr},
+                // CALLVM   <addr56bits>
                 {0x00, 0x22, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = nullptr}, // CALLVM   <reg>
             }
         },
         {
             "jmp", {
-                {0x11, 0x00, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr}, // jmp   <addr56bits>
+                {0x11, 0x00, InstrSizeMode::FIXED_8, .mode = AddressingMode::INMED, .emit = nullptr},
+                // jmp   <addr56bits>
                 {0x00, 0x22, InstrSizeMode::FIXED_4, .mode = AddressingMode::REG, .emit = nullptr}, // jmp   <reg>
             }
         },
@@ -375,7 +377,6 @@ namespace Assembly::Bytecode {
          */
         uint64_t eval_expr(vm::ExprNode *expr);
 
-    private:
         /**
          * @brief Primera pasada: recolección de símbolos.
          *
@@ -388,8 +389,7 @@ namespace Assembly::Bytecode {
 
         void apply_directive(const vm::Instruction *instr);
 
-
-
+    private:
         /// Tabla de símbolos generada en la primera pasada.
         std::unordered_map<std::string, uint64_t> symbol_table;
 
@@ -399,6 +399,44 @@ namespace Assembly::Bytecode {
         /// Offset actual dentro del buffer de salida.
         uint64_t current_offset = 0;
     };
+
+    static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
+                                std::unordered_set<std::string> &           imported) {
+        std::vector<std::unique_ptr<vm::ASTNode> > result;
+
+        for (auto &node: ast) {
+            if (auto imp = dynamic_cast<vm::ImportNode *>(node.get())) {
+                std::string file = imp->filename;
+
+                // mirar si ya se añadio
+                if (imported.find(file) != imported.end())
+                    continue; // evitar múltiples inclusiones
+
+                imported.insert(file);
+
+                // Leer archivo
+                std::ifstream f(file);
+                std::string   code((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+
+                // Lex + parse
+                vm::Lexer  lx(code);
+                vm::Parser px(lx);
+                auto       imported_ast = px.parse();
+
+                // Expandir imports recursivamente
+                resolve_imports(imported_ast, imported);
+
+                // Insertar nodos importados
+                for (auto &n: imported_ast)
+                    result.push_back(std::move(n));
+            } else {
+                result.push_back(std::move(node));
+            }
+        }
+
+        ast = std::move(result);
+    }
 }
 
 #endif //PARSER_TO_BYTECODE_H

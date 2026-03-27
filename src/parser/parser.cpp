@@ -49,6 +49,8 @@ namespace vm {
         // aunque no es una instruccion, se detectara como una
         {"org", {"org", OpArity::ONE}},
         {"align", {"align", OpArity::ONE}},
+        {"import", {"import", OpArity::ONE}},
+
 
         {"jmp", {"jmp", OpArity::ONE}},
         {"call", {"call", OpArity::ONE}},
@@ -159,10 +161,10 @@ namespace vm {
             advance();
             auto right = parse_mem_factor();
             node       = std::make_unique<BinaryExpr>(op.lexeme[0],
-                                                      std::unique_ptr<
-                                                          ExprNode>(static_cast<ExprNode *>(node.release())),
-                                                      std::unique_ptr<ExprNode>(
-                                                          static_cast<ExprNode *>(right.release())));
+                                                std::unique_ptr<
+                                                    ExprNode>(static_cast<ExprNode *>(node.release())),
+                                                std::unique_ptr<ExprNode>(
+                                                    static_cast<ExprNode *>(right.release())));
         }
 
         return node;
@@ -176,10 +178,10 @@ namespace vm {
             advance();
             auto right = parse_mem_term();
             node       = std::make_unique<BinaryExpr>(op.lexeme[0],
-                                                      std::unique_ptr<
-                                                          ExprNode>(static_cast<ExprNode *>(node.release())),
-                                                      std::unique_ptr<ExprNode>(
-                                                          static_cast<ExprNode *>(right.release())));
+                                                std::unique_ptr<
+                                                    ExprNode>(static_cast<ExprNode *>(node.release())),
+                                                std::unique_ptr<ExprNode>(
+                                                    static_cast<ExprNode *>(right.release())));
         }
 
         return node;
@@ -471,6 +473,19 @@ namespace vm {
         return std::make_unique<Instruction>(pattern.opcode, std::move(operands));
     }
 
+    std::unique_ptr<ASTNode> Parser::parse_import() {
+        // current == "import"
+        advance(); // consumir 'import'
+
+        if (current.type != TokenType::STRING) {
+            error(current, "Se esperaba un nombre de archivo entre comillas");
+        }
+
+        std::string filename = current.lexeme;
+        advance(); // consumir STRING
+
+        return std::make_unique<ImportNode>(filename);
+    }
 
     std::unique_ptr<ASTNode> Parser::parse_statement() {
         // Si es un registro y un identificador, se trata de una instruccion.
@@ -498,6 +513,10 @@ namespace vm {
         if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret" || current.lexeme ==
             "hlt") {
             return parse_instruction();
+        }
+
+        if (current.lexeme == "import") {
+            return parse_import();
         }
 
         error(current, "Token no esperado: " + current.lexeme);

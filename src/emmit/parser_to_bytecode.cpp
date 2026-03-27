@@ -211,6 +211,17 @@ namespace Assembly::Bytecode {
             return;
         }
 
+        if (op == "import") {
+            if (instr->operands.size() != 1)
+                throw std::runtime_error("Error: import requiere un string don el archivo a incluir.");
+        }
+
         throw std::runtime_error("Error: directiva desconocida: " + op);
     }
+
+
+    static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode>>&ast,
+                     std::unordered_set<std::string>&              imported);
+
+
 }

@@ -111,7 +111,19 @@ namespace vm {
         }
     };
 
+    /**
+     * Nodo que indica la importacion de un archivo
+     */
+    struct ImportNode : ASTNode {
+        std::string filename;
 
+        ImportNode(const std::string& f) : filename(f) {}
+
+        void print(int indent = 0) const override {
+            std::string pad(indent, ' ');
+            std::cout << pad << "IMPORT: " << filename << "\n";
+        }
+    };
 
 
     /**
