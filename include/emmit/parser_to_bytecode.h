@@ -14,6 +14,7 @@
 #define PARSER_TO_BYTECODE_H
 
 #include "emmit_decl.h"
+#include "annotations.h"
 
 /**
  * La conversion de AST generado por al parser a bytecode usa 3 etapas:
@@ -263,6 +264,16 @@ namespace Assembly::Bytecode {
     class Assembler {
     public:
         /**
+         * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
+         */
+        Section* current_section = nullptr;
+
+        /**
+         * Contexto del ensamblador
+         */
+        Context ctx{};
+
+        /**
          * @brief Dirección base por defecto donde se ensamblará el código.
          *
          * Puede inicializarse con la dirección base del espacio de direcciones
@@ -386,6 +397,8 @@ namespace Assembly::Bytecode {
          * @param offset Offset acumulado.
          */
         void first_pass(const vm::ASTNode *node, uint64_t &offset);
+
+        void apply_annotation(const vm::AnnotationNode *annotation);
 
         void apply_directive(const vm::Instruction *instr);
 

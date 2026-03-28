@@ -11,6 +11,8 @@
  */
 
 #include "assembly/assembly.h"
+#include <capstone/capstone.h>
+#include <keystone/keystone.h>
 
 const ArchSupport& get_available_architectures() {
     // static hace que la detección se ejecute solo una vez

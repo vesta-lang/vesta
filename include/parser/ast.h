@@ -266,15 +266,15 @@ namespace vm {
         }
     };
 
-    struct SectionNode : ASTNode {
+    struct LabelNode : ASTNode {
         std::string                            name;
         std::vector<std::unique_ptr<ASTNode> > body;
 
-        SectionNode(std::string n, std::vector<std::unique_ptr<ASTNode> > b)
+        LabelNode(std::string n, std::vector<std::unique_ptr<ASTNode> > b)
             : name(std::move(n)), body(std::move(b)) {}
 
         void print(int indent) const override {
-            std::cout << std::string(indent, ' ') << "SECTION: " << name << std::endl;
+            std::cout << std::string(indent, ' ') << "LABEL: " << name << std::endl;
             for (const auto &child: body) {
                 if (child) child->print(indent + 4);
             }

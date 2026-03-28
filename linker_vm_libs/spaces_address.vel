@@ -1,0 +1,47 @@
+@SpaceAddress {
+    @Name("libre"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0x00000000FFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("stack"),
+    @IniAddress(0x0000000100000000),
+    @EndAddress(0x00000FFFFFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("codigo"),
+    @IniAddress(0x0000100000000000),
+    @EndAddress(0x00001FFFFFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("metadatos de codigo"),
+    @IniAddress(0x0000200000000000),
+    @EndAddress(0x00002FFFFFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("zona de codigo JIT"),
+    @IniAddress(0x0000300000000000),
+    @EndAddress(0x00003FFFFFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("ptrHostLocal a ptrVirtualLocal"),
+    @IniAddress(0x1000000000000000),
+    @EndAddress(0x1FFFFFFFFFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("ptrManager a ptrVirtualLocal"),
+    @IniAddress(0x2000000000000000),
+    @EndAddress(0x2FFFFFFFFFFFFFFF)
+}
+
+@SpaceAddress {
+    @Name("ptrVirtualHostRemoto a ptrVirtualLocal"),
+    @IniAddress(0x3000000000000000),
+    @EndAddress(0x3FFFFFFFFFFFFFFF)
+}

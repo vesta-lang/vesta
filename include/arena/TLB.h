@@ -33,9 +33,7 @@
 #define GET_PT2(address)     ((address >> 40) & 0xFFFFFF)
 
 namespace tlb {
-    struct TLBEntry;
-    class LazyHybridTLB;
-    struct PageNode;
+    struct TLBTable;
 
     inline std::ostream& operator<<(std::ostream& os, const vm::vm_map_ptr& ptr) {
         os << "0x" << std::hex << ptr.raw << std::dec;
@@ -103,11 +101,6 @@ namespace tlb {
 
 
     typedef enum levelEntry { DATA, PT, PT1, PT2 } level;
-    typedef struct TLBTable {
-        std::vector<TLBEntry> entry;
-        TLBTable() : entry(1) {}
-    } TLBTable;
-
     typedef struct TLBEntry {
         levelEntry level;
         union {
@@ -123,6 +116,11 @@ namespace tlb {
             }
         }
     } TLBEntry;
+
+    typedef struct TLBTable {
+        std::vector<TLBEntry> entry;
+        TLBTable() : entry(1) {}
+    } TLBTable;
 
     typedef struct TLBNode {
         levelEntry type = DATA;

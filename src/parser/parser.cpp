@@ -275,7 +275,7 @@ namespace vm {
 
         std::vector<std::unique_ptr<ASTNode> > body = parse_in_label();
 
-        return std::make_unique<SectionNode>(section_name, std::move(body));
+        return std::make_unique<LabelNode>(section_name, std::move(body));
     }
 
     std::unique_ptr<ASTNode> Parser::parse_operand() {

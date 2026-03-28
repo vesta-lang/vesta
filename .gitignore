@@ -11,3 +11,4 @@ libs/Windows/OpenSSL-Win64/exp
 libssl*
 libcrypto*
 _pdf
+*.hexpat

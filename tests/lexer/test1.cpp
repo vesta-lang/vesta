@@ -55,11 +55,11 @@ void print_doc_ast(const std::vector<std::unique_ptr<vm::ASTNode> > &program, in
         if (auto annoNode = dynamic_cast<vm::AnnotationNode *>(basePtr)) {
             std::cout << "=== PROGRAM DOC ===" << std::endl;
             print_AnnotationNode(annoNode, indent);
-        } else if (auto sectionNode = dynamic_cast<vm::SectionNode *>(basePtr)) {
-            //sectionNode->print(indent);
+        } else if (auto LabelNode = dynamic_cast<vm::LabelNode *>(basePtr)) {
+            //LabelNode->print(indent);
 
             // Recursión sobre el cuerpo de la sección
-            print_doc_ast(sectionNode->body, indent + 2);
+            print_doc_ast(LabelNode->body, indent + 2);
         }
         // Otros tipos de nodos base
         //else basePtr->print(indent);

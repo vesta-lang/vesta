@@ -74,7 +74,7 @@ namespace Assembly::Bytecode {
             first_pass(node.get(), offset);
 
         current_offset = 0;
-        for (auto &node : ast)
+        for (auto &node: ast)
             emit_pass(node.get());
 
 
@@ -93,14 +93,12 @@ namespace Assembly::Bytecode {
 
 
     void Assembler::emit_pass(const vm::ASTNode *node) {
-        if (auto sec = dynamic_cast<const vm::SectionNode*>(node)) {
-            for (auto &child : sec->body)
+        if (auto sec = dynamic_cast<const vm::LabelNode *>(node)) {
+            for (auto &child: sec->body)
                 emit_pass(child.get());
-        }
-        else if (auto data = dynamic_cast<const vm::DataDecl*>(node)) {
+        } else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
             emit_data(data);
-        }
-        else if (auto instr = dynamic_cast<const vm::Instruction*>(node)) {
+        } else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
             if (PseudoInstructions.count(instr->opcode)) {
                 apply_directive(instr);
             } else {
@@ -111,16 +109,30 @@ namespace Assembly::Bytecode {
 
 
     void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
-        // --- SECCIONES ---
-        if (auto sec = dynamic_cast<const vm::SectionNode *>(node)) {
-            symbol_table[sec->name] = offset;
+        // --- LABELS ---
+        if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
+            if (!current_section)
+                throw std::runtime_error("Label fuera de una seccion");
 
-            for (auto &child: sec->body)
+            symbol_table[lab->name] = offset;
+
+            // añadir a la sección actual el nuevo label
+            current_section->add_label(lab->name, offset);
+
+            for (auto &child: lab->body)
                 first_pass(child.get(), offset);
+        }
+
+        // para nodos de tipo anotacion, no todos los nodos de este tipo, se tienen en cuenta.
+        else if (auto data = dynamic_cast<const vm::AnnotationNode *>(node)) {
+            apply_annotation(data);
         }
 
         // --- DECLARACION DE DATOS CON SUS DIRECTIVAS ---
         else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
+            if (!current_section)
+                throw std::runtime_error("Label fuera de una seccion");
+
             // Validar que el label no esté vacío
             if (data->label.empty()) {
                 throw std::runtime_error("Error: declaración de datos sin label.");
@@ -134,6 +146,8 @@ namespace Assembly::Bytecode {
             }
 
             symbol_table[data->label] = offset;
+            // añadir a la sección actual el nuevo label
+            current_section->add_label(data->label, offset);
 
             size_t elem_size = size_of_directive(data->directive);
 
@@ -173,6 +187,24 @@ namespace Assembly::Bytecode {
         }
     }
 
+    void Assembler::apply_annotation(const vm::AnnotationNode *annotation) {
+        // si la notacion esta permitida por el ensamblador entonces tiene efecto y describe alguna informacion
+        // necesaria para este ensamblador.
+        auto it = annotation_handlers.find(annotation->key);
+        if (it != annotation_handlers.end()) {
+            it->second(annotation, *this);   // Ejecuta la función asociada
+            return;
+        }
+
+        // si no era una notacion permitida por el ensamblador, se mira si es una notacion de tipo documentacion,
+        // estas notaciones no tienen ningun efecto en el ensamblador en primer lugar
+        if (annotation_allow_doc.find(annotation->key) != annotation_allow_doc.end()) {
+            // mas adeltante, generar secciones de documentacion + metadatos con esta informacion.
+            return;
+        }
+
+        throw std::runtime_error("Error: la notacion: " + annotation->key + " no es una notacion valida");
+    }
 
     void Assembler::apply_directive(const vm::Instruction *instr) {
         const std::string &op = instr->opcode;
@@ -199,7 +231,7 @@ namespace Assembly::Bytecode {
                 throw std::runtime_error("Error: align requiere 1 operando.");
 
             vm::NumberOperand *number = dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
-            uint64_t align = eval_operand(number);
+            uint64_t           align  = eval_operand(number);
 
             if (align == 0 || (align & (align - 1)) != 0)
                 throw std::runtime_error("Error: align debe ser potencia de 2.");
@@ -220,8 +252,6 @@ namespace Assembly::Bytecode {
     }
 
 
-    static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode>>&ast,
-                     std::unordered_set<std::string>&              imported);
-
-
+    static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
+                                std::unordered_set<std::string> &           imported);
 }
