@@ -112,7 +112,7 @@ namespace Assembly::Bytecode {
         }
 
         // obtener una sección por nombre
-        Section* Context::get_section(const std::string& name) {
+        Section* get_section(const std::string& name) {
             for (auto& [spaceName, space] : space_address) {
                 auto it = space.table_section.find(name);
                 if (it != space.table_section.end())

@@ -50,11 +50,19 @@ sudo pacman -S openssl
 
 ## Compilacion en linux
 
+compilacion con CMAKE:
 ```bash
 mkdir build
 cd build
 cmake -Wno-dev ..
 cmake --build .
+```
+
+Si prefiere usar XMAKE:
+```bash
+curl -fsSL https://xmake.io/shget.text | bash
+xmake f --toolchain=clang -m debug -v
+xmake run
 ```
 
 En caso de un error similar a este en linux:

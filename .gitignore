@@ -12,3 +12,4 @@ libssl*
 libcrypto*
 _pdf
 *.hexpat
+.xmake
