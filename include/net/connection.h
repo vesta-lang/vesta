@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <vector>
 
+
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -29,6 +31,14 @@ typedef SOCKET socket_t;
 #include <arpa/inet.h>
 typedef int socket_t;
 #endif
+
+#ifdef _WIN32
+#include <winsock2.h>
+#define SOCKET_INVALID INVALID_SOCKET
+#else
+#define SOCKET_INVALID -1
+#endif
+
 
 class Connection {
 protected:

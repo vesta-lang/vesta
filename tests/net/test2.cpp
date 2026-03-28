@@ -85,7 +85,7 @@ bool run_client(const std::string& host, int port, int id) {
     if (!ctx) return false;
 
     socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) { SSL_CTX_free(ctx); return false; }
+    if (sock == SOCKET_INVALID) { SSL_CTX_free(ctx); return false; }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
