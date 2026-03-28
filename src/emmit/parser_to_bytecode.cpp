@@ -93,8 +93,8 @@ namespace Assembly::Bytecode {
 
 
     void Assembler::emit_pass(const vm::ASTNode *node) {
-        if (auto sec = dynamic_cast<const vm::LabelNode *>(node)) {
-            for (auto &child: sec->body)
+        if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
+            for (auto &child: lab->body)
                 emit_pass(child.get());
         } else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
             emit_data(data);
