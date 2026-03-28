@@ -282,7 +282,7 @@ namespace vm {
          * @param msg mensaje de error
          * @return devuelve el token esperado, o el que se encontro
          */
-        inline Token Parser::expectToken(TokenType type, const std::string &msg) {
+        inline Token expectToken(TokenType type, const std::string &msg) {
             if (current.type == type) {
                 return current;
             }

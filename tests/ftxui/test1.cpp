@@ -11,6 +11,19 @@
 #include <utility>                  // for ignore
 #include <vector>                   // for vector
 
+#include "ftxui/component/component.hpp"
+#include "ftxui/component/loop.hpp"
+#include "ftxui/component/screen_interactive.hpp"
+#include "ftxui/dom/elements.hpp"  /* graph, operator|, separator,
+color, Element, vbox, flex, inverted, operator|=, Fit, hbox, size,
+border, GREATER_THAN, HEIGHT
+*/
+#include "ftxui/screen/screen.hpp"  // for Full, Screen
+#include "ftxui/dom/node.hpp"  // for Render
+#include "ftxui/screen/color.hpp"  // for Color, Color::BlueLight, Color::RedLight, Color::YellowLight, ftxui
+#include "ftxui/component/component.hpp"                // for App
+#include "ftxui/component/captured_mouse.hpp"     // for ftxui
+#include "ftxui/component/component_options.hpp"  // for MenuOption
 
 class Graph {
  public:

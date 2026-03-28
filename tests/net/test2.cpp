@@ -10,7 +10,10 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
+#ifdef _WIN32
+// solo para windows
 #include <openssl/applink.c> // necesario si no se usa Visual para compilar
+#endif
 #include "net/tcp_server.h"
 #include "controller/tls_context.h"
 #include "controller/tls_connection.h"

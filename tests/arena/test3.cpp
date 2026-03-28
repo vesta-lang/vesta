@@ -19,21 +19,19 @@
 
 int main() {
     tlb::LazyHybridTLB lazy{};
-    for (uint64_t i = 0x1000; i < 0xfffffff; i+=0x10000 + (i % 0x1000)) {
-        lazy.translate(
-                i,
-                vm::MAPPED_PTR_VM,
-                vm::ptr_mapped{.ptr_host = reinterpret_cast<vm::host_ptr>(i)}
-                );
+    for (uint64_t i = 0x1000; i < 0xfffffff; i += 0x10000 + (i % 0x1000)) {
+        vm::ptr_mapped pm{};
+        pm.ptr_host = reinterpret_cast<vm::host_ptr>(i);
 
+        lazy.translate(i, vm::MAPPED_PTR_VM, pm);
 
         std::cout << lazy.get_entry(i)->to_string()
-            << std::endl;
+                << std::endl;
 
         lazy.dump_stats();
     }
 
-    vm::vm_map_ptr val = {.raw = 0xfff1000};
+    vm::vm_map_ptr val = {0xfff1000};
     val.set(vm::PageLevel::PT2, 0x12);
     val.set(vm::PageLevel::OFFSET, 0x123);
     lazy.dump_tree(val.raw);

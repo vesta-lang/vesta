@@ -66,7 +66,7 @@ namespace Assembly::Bytecode {
 
     const InstrInfo& Assembler::select_variant(
         const std::string&                              mnemonic,
-        const std::vector<std::unique_ptr<vm::ASTNode>>&ops)
+        const std::vector<std::unique_ptr<vm::ASTNode>>&ops) const
     {
         auto it = InstrTable.find(mnemonic);
         if (it == InstrTable.end())

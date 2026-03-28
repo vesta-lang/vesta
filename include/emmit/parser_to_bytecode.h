@@ -339,8 +339,8 @@ namespace Assembly::Bytecode {
          * @param ops Lista de operandos de la instrucción.
          * @return Referencia a la variante seleccionada.
          */
-        const InstrInfo &select_variant(const std::string &                               mnemonic,
-                                        const std::vector<std::unique_ptr<vm::ASTNode> > &ops);
+        const InstrInfo &select_variant(const std::string &mnemonic,
+                                        const std::vector<std::unique_ptr<vm::ASTNode> > &ops) const;
 
         /**
          * @brief Calcula el tamaño en bytes de una instrucción.
