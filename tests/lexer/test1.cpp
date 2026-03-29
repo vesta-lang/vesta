@@ -120,6 +120,9 @@ int main() {
         auto                          bytes = MyAsm.assemble(program);
         std::cout << "\n[Tiempo de ensamblado] " << t_asm.us() << " us "  << t_asm.ms() << " ms\n";
 
+        // imprimir el contexto que el ensamblador genero
+        print_context(MyAsm.ctx);
+
         const size_t BYTES_PER_LINE = 16;
         size_t       count          = 0;
 
@@ -137,12 +140,17 @@ int main() {
         } std::cout << std::dec; // restaurar a modo decimal
 
         std::cout << std::endl;
+
+
+        Assembly::Bytecode::print_context_with_bytes(MyAsm.ctx, bytes);
+
     } catch (const vm::ParseError &e) {
         std::cerr << "\nPARSE ERROR\n"
                 << "Linea " << e.line << ":" << e.column << "\n"
                 << "  " << e.what() << "\n";
         return 1; // Exit code 1 (error)
     }
+
 
     std::cout << "\n[Lexer Test] Finalizado\n";
 

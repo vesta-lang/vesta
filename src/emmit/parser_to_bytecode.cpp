@@ -88,6 +88,10 @@ namespace Assembly::Bytecode {
         for (auto &node: ast)
             third_pass_code(node.get());*/
 
+        // una vez realizado todas las fases de analisis de etiquetas
+        // y emision de codigo, se puede computar las direcciones de inicio
+        // y final de cada seccion.
+        ctx.compute_all_ranges();
         return output;
     }
 

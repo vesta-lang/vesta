@@ -16,20 +16,45 @@
 
 
 namespace Assembly::Bytecode {
+
+    const vm::AnnotationNode* find_child_raw(
+        const vm::AnnotationNode* node,
+        const std::string& key
+    ) {
+        for (const auto& child : node->children) {
+            if (child->key == key)
+                return child.get();
+        }
+        return nullptr;
+    }
+
+
     /**
-     * Función auxiliar para buscar un hijo por nombre
+     * Función auxiliar para buscar un hijo por nombre. No es obligatorio que exista
      * @param node Nodo padre
      * @param key nombre del nodo hijo
      * @return nodo hijo que coindice
      */
-    const vm::AnnotationNode *find_child(
+    const vm::AnnotationNode *optional_find_child(
         const vm::AnnotationNode *node,
         const std::string &key
     ) {
-        for (const auto &child: node->children) {
-            if (child->key == key)
-                return child.get();
-        }
+        return find_child_raw(node, key);
+    }
+
+    /**
+     * Función auxiliar para buscar un hijo por nombre, este debe existir o genera
+     * una excepcion.
+     * @param node Nodo padre
+     * @param key nombre del nodo hijo
+     * @return nodo hijo que coindice
+     */
+    const vm::AnnotationNode *expect_find_child(
+        const vm::AnnotationNode *node,
+        const std::string &key
+    ) {
+        if (auto* found = find_child_raw(node, key))
+            return found;
 
         throw std::runtime_error(
             "La anotacion '" + node->key +
@@ -40,13 +65,13 @@ namespace Assembly::Bytecode {
     void apply_space_address(const vm::AnnotationNode *node, Assembler &assembler) {
         // Buscar los operandos por nombre
         const vm::AnnotationNode *nameNode =
-                find_child(node, "Name");
+                expect_find_child(node, "Name");
 
         const vm::AnnotationNode *iniNode =
-                find_child(node, "IniAddress");
+                expect_find_child(node, "IniAddress");
 
         const vm::AnnotationNode *endNode =
-                find_child(node, "EndAddress");
+                expect_find_child(node, "EndAddress");
 
         // Extraer valores
         std::string string_space = nameNode->value;
@@ -59,12 +84,15 @@ namespace Assembly::Bytecode {
 
     void apply_section(const vm::AnnotationNode *node, Assembler &assembler) {
         // Obtener el nombre de la sección
-        const vm::AnnotationNode *nameNode = find_child(node, "Name");
+        const vm::AnnotationNode *nameNode = expect_find_child(node, "Name");
         std::string section_name = nameNode->value;
 
         // Obtener el SpaceAddress asociado
-        const vm::AnnotationNode *spaceNode = find_child(node, "SpaceAddress");
+        const vm::AnnotationNode *spaceNode = expect_find_child(node, "SpaceAddress");
         std::string space_name = spaceNode->value;
+
+        // miramos si el usuario introdujo un nodo de tipo alineacion
+        const vm::AnnotationNode *alignNode = optional_find_child(node, "Align");
 
         // Buscar el espacio en el contexto
         Space *sp = assembler.ctx.get_space(space_name);
@@ -80,7 +108,14 @@ namespace Assembly::Bytecode {
         Section sec;
         sec.name = section_name;
 
+        // la alineacion para esta seccion sera la alineacion configurada globalmente
+        // si no se definio una notacion Align dentro de la notacion de seccion.
+        if (alignNode == nullptr) {
+            sec.size_align_section = assembler.ctx.bytes_aligned;
+        } else sec.size_align_section = vm::parse_number(alignNode->value);
 
+        sec.memory.address_final = 0;
+        sec.memory.address_init = 0;
         //  hereda el rango del espacio
         //sec.memory = sp->range;
 

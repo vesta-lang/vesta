@@ -26,6 +26,9 @@
 
 
 namespace Assembly::Bytecode {
+
+
+
     /**
      * Tabla de directivas, estas deben ir siempre en el inicio del programa
      */

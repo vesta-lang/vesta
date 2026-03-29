@@ -27,6 +27,14 @@ namespace vm {
 namespace Assembly::Bytecode {
     class Assembler;
 
+    static inline uint64_t align_down(uint64_t value, uint64_t alignment) {
+        return value & ~(alignment - 1);
+    }
+
+    static inline uint64_t align_up(uint64_t value, uint64_t alignment) {
+        return (value + alignment - 1) & ~(alignment - 1);
+    }
+
     typedef struct range_memory {
         uint64_t address_init;
         uint64_t address_final;
@@ -42,6 +50,11 @@ namespace Assembly::Bytecode {
         range_memory memory;
 
         /**
+         * tamaño al que alinear la seccion
+         */
+        uint32_t size_align_section;
+
+        /**
          * Las secciones contienen labels
          */
         std::unordered_map<std::string, Label> table_label;
@@ -53,6 +66,45 @@ namespace Assembly::Bytecode {
 
         void add_label(const std::string &name, uint64_t address) {
             table_label[name] = Label{name, address};
+        }
+
+        /**
+         * Permite computar el rango de inicio y final de una seccion, para
+         * esta tarea, se debe haber mapeado antes todos los labels, luego obtenemos
+         * el offset mas pequeño y el mas grande y al sumarlo a la direccion base,
+         * obtenemos el rango de memoria virutal.
+         * @param base_address direccion base del espacio de memoria o de la ultima seccion
+         * @param bytes_aligned bytes a alinear, normalmente 4096 para el formato VELB
+         */
+        void compute_range(uint64_t base_address, uint64_t bytes_aligned) {
+            // Si no hay labels, la sección está vacía
+            if (table_label.empty()) {
+                memory.address_init = base_address;
+                memory.address_final = base_address;
+                return;
+            }
+
+            // El inicio REAL de la sección es SIEMPRE base_address
+            uint64_t start = base_address;
+
+            // El final REAL es el mayor offset relativo
+            uint64_t max_off = 0;
+            for (const auto &[name, lbl]: table_label) {
+                if (lbl.address > max_off)
+                    max_off = lbl.address;
+            }
+
+            uint64_t end = base_address + max_off;
+
+            // Alinear inicio y fin
+            uint64_t aligned_init = align_down(start, bytes_aligned);
+            if (aligned_init < base_address)
+                aligned_init = base_address;
+
+            uint64_t aligned_end = align_up(end, size_align_section);
+
+            memory.address_init = aligned_init;
+            memory.address_final = aligned_end;
         }
     } Section;
 
@@ -90,6 +142,17 @@ namespace Assembly::Bytecode {
         void clear() {
             table_section.clear();
         }
+
+        /**
+         * Computar el rango de direcciones de cada seccion del espacio de direcciones.
+         *
+         * @param bytes_aligned cantidad de bytes a usar para alinear la seccion
+         */
+        void compute_sections_ranges(uint64_t bytes_aligned) {
+            for (auto &[name, sec]: table_section) {
+                sec.compute_range(range.address_init, bytes_aligned);
+            }
+        }
     } Space;
 
     typedef struct Context {
@@ -103,6 +166,12 @@ namespace Assembly::Bytecode {
          * en una misma unidad de traducion.
          */
         std::string format_output = "raw";
+
+        /**
+         * Tamnaño al que alinear cada seccion, si es el formato VELB,
+         * debe ser 4096
+         */
+        uint32_t bytes_aligned = 0x1;
 
         // Crear y añadir un espacio por parámetros
         void add_space(const std::string &name,
@@ -138,6 +207,15 @@ namespace Assembly::Bytecode {
                     return &it->second;
             }
             return nullptr;
+        }
+
+        /**
+         * Computar todos los rangos de direcciones de cada seccion
+         */
+        void compute_all_ranges() {
+            for (auto &[name, sp]: space_address) {
+                sp.compute_sections_ranges(bytes_aligned);
+            }
         }
     } Context;
 
@@ -215,6 +293,123 @@ namespace Assembly::Bytecode {
         "Size"
         "Warning"
     };
+
+    /**
+     * Permite imprimir el contexto generado por el ensamblador
+     * @param ctx contexto del ensamblador
+     */
+    static void print_context(const Context &ctx) {
+        std::cout << "=== CONTEXT ===\n";
+        std::cout << "Formato de salida: " << ctx.format_output << "\n\n";
+
+        for (const auto &[spaceName, space]: ctx.space_address) {
+            std::cout << "== Space: " << spaceName << " ==\n";
+            std::cout << "  Rango: [0x"
+                    << std::hex << space.range.address_init
+                    << ", 0x" << space.range.address_final << "]\n";
+
+            std::cout << "  Nombre seccion (16 bytes): ";
+            for (int i = 0; i < 16; i++) {
+                if (space.name_section[i] == 0) break;
+                std::cout << space.name_section[i];
+            }
+            std::cout << "\n";
+
+
+            // Recorrer secciones
+            for (const auto &[secName, sec]: space.table_section) {
+                std::cout << "  -- Section: " << secName << " Alineacion: 0x" << sec.size_align_section << " --\n";
+                std::cout << "     Rango: [0x"
+                        << std::hex << sec.memory.address_init
+                        << ", 0x" << sec.memory.address_final << "]\n";
+
+                // Recorrer labels
+                if (sec.table_label.empty()) {
+                    std::cout << "     (sin labels)\n";
+                } else {
+                    std::cout << "     Labels:\n";
+                    for (const auto &[labelName, label]: sec.table_label) {
+                        std::cout << "       * " << labelName
+                                << " @ offset 0x" << std::hex << label.address
+                                << "\n";
+                    }
+                }
+            }
+
+            std::cout << "\n";
+        }
+    }
+
+    static void print_context_with_bytes(const Context &ctx,
+                                         const std::vector<uint8_t> &bytes) {
+        std::cout << "=== CONTEXT + BYTES ===\n";
+        std::cout << "Formato de salida: " << ctx.format_output << "\n\n";
+
+        for (const auto &[spaceName, space]: ctx.space_address) {
+            std::cout << "== Space: " << spaceName << " ==\n";
+            std::cout << "  Rango: [0x"
+                    << std::hex << space.range.address_init
+                    << ", 0x" << space.range.address_final << "]\n";
+
+            std::cout << "  Nombre seccion (16 bytes): ";
+            for (int i = 0; i < 16; i++) {
+                if (space.name_section[i] == 0) break;
+                std::cout << space.name_section[i];
+            }
+            std::cout << "\n";
+
+            // Recorrer secciones
+            for (const auto &[secName, sec]: space.table_section) {
+                std::cout << "  -- Section: " << secName
+                        << " (align 0x" << std::hex << sec.size_align_section << ") --\n";
+
+                std::cout << "     Rango virtual: [0x"
+                        << std::hex << sec.memory.address_init
+                        << ", 0x" << sec.memory.address_final << "]\n";
+
+                // Mostrar labels
+                if (sec.table_label.empty()) {
+                    std::cout << "     (sin labels)\n";
+                } else {
+                    std::cout << "     Labels:\n";
+                    for (const auto &[labelName, label]: sec.table_label) {
+                        std::cout << "       * " << labelName
+                                << " @ offset 0x" << std::hex << label.address << "\n";
+                    }
+                }
+
+                // Mostrar bytes reales de la sección
+                std::cout << "     Bytes:\n";
+
+                uint64_t start = sec.memory.address_init - space.range.address_init;
+                uint64_t end = sec.memory.address_final - space.range.address_init;
+
+                if (start >= bytes.size()) {
+                    std::cout << "       (fuera del rango del binario)\n";
+                    continue;
+                }
+
+                end = std::min<uint64_t>(end, bytes.size());
+
+                const size_t BYTES_PER_LINE = 16;
+
+                for (uint64_t i = start; i < end; i++) {
+                    if ((i - start) % BYTES_PER_LINE == 0) {
+                        std::cout << "\n       "
+                                << std::setw(8) << std::setfill('0') << std::hex << i
+                                << ": ";
+                    }
+
+                    std::cout << std::setw(2) << std::setfill('0')
+                            << std::hex << (int) bytes[i] << " ";
+                }
+
+                std::cout << "\n\n";
+            }
+
+            std::cout << "\n";
+        }
+    }
 }
 
 #endif //ANNOTATIONS_H
