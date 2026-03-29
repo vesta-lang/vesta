@@ -1,3 +1,17 @@
-//
-// Created by desmon0xff on 29/03/2026.
-//
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+#include "linker/velb_linker_bytecode.h"
+
+int main() {
+    return 0;
+}
