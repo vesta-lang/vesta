@@ -84,6 +84,13 @@ typedef struct PACKED HeaderVELB {
     range_memory address_spaces[8]; // tabla de espacios de direcciones
 } HeaderVELB;
 
+typedef struct PACKED HeaderVELA {
+    char magic[4]; // "VELA"
+    uint32_t version; // versión del formato
+    uint32_t module_count; // número de módulos
+    uint64_t module_table_offset;
+} HeaderVELA;
+
 typedef struct PACKED name_section {
     union {
         struct {
@@ -101,6 +108,28 @@ typedef struct PACKED section_range_memory {
     // nombre de la seccion, maximo 16 bytes.
     name_section name;
 } section_range_memory;
+
+typedef struct PACKED VELA_ModuleEntry {
+    uint64_t offset; // offset al módulo
+    uint64_t size; // tamaño del módulo
+    uint32_t symbol_count;
+    uint64_t symbol_table_offset;
+    uint32_t relocation_count;
+    uint64_t relocation_table_offset;
+} VELA_ModuleEntry;
+
+typedef struct PACKED VELA_Symbol {
+    uint64_t offset; // offset dentro del módulo
+    uint8_t type; // FUNC, DATA, GLOBAL, LOCAL
+    char name[32];
+} VELA_Symbol;
+
+typedef struct PACKED VELA_Relocation {
+    uint64_t offset; // dónde aplicar la relocación
+    uint8_t type; // ABS64, REL32, REL64
+    char symbol[32]; // símbolo a resolver
+} VELA_Relocation;
+
 
 #ifdef __cplusplus
 }
@@ -128,6 +157,7 @@ namespace Assembly::Bytecode::Linker {
         bool verbose = false; // logs detallados
 
         std::string output_path; // ruta del ejecutable final
+        std::string map_file_path;  // donde generar el map
     };
 
     /**
@@ -210,35 +240,188 @@ namespace Assembly::Bytecode::Linker {
      * - Builder de ejecutables VELB
      *      Recibe un bytecode crudo + contexto generado por
      *      ensamblador y produce un ejecutable final VELB.
+     *
+     * Linker tiene 3 fases:
+     *      1. Entrada
+     *          - Cargar módulos objeto (.velo)
+     *          - Cargar librerías estáticas (.vela)
+     *          - Cargar ensamblados crudos (bytecode + contexto)
+     *
+     *      2. Proceso
+     *          - Resolver símbolos
+     *          - Seleccionar módulos necesarios
+     *          - Aplicar relocaciones
+     *          - Optimizar bytecode
+     *          - Fusionar secciones y espacios de direcciones
+     *
+     *      3. Salida
+     *          - Construir ejecutable VELB
+     *          - Escribir archivo final
+     *          - Escribir archivo .velb-map
+     *
      */
     class Linker {
     public:
-        explicit Linker(const LinkerOptions& opts = {})
-        : options(opts) {}
+        explicit Linker(const LinkerOptions &opts = {})
+            : options(opts) {
+        }
 
-        // Cargar archivos objeto o ejecutables parciales
+        /**
+         * Carga un archivo .velo o .velb parcial.
+         *  Responsabilidades
+         *      - Abrir archivo
+         *      - Validar formato
+         *      - Leer header
+         *      - Leer secciones
+         *      - Leer tabla de símbolos
+         *      - Leer relocaciones
+         *      - Convertirlo en un Module
+         *      - Añadirlo a modules
+         *
+         *  Errores posibles
+         *      - Archivo no encontrado
+         *      - Formato inválido
+         *      - Símbolos duplicados dentro del módulo
+         *
+         * @param path path donde se encuentra el archivo
+         */
         void add_object_file(const std::string &path);
 
+        /**
+         * Igual que add_object_file pero desde memoria.
+         *      Responsabilidades
+         *          - Interpretar el buffer como un módulo objeto
+         *          - Validar header
+         *          - Extraer símbolos y relocaciones
+         *          - Añadir a modules
+         *
+         * @param data buffer del archivo
+         */
         void add_object_memory(const std::vector<uint8_t> &data);
 
-        // Cargar un ensamblado crudo (bytecode + contexto)
+        /**
+         * Recibe el resultado del ensamblador.
+         * Responsabilidades:
+         *      Crear un Module con:
+         *         - bytecode crudo
+         *         - contexto (secciones, labels, espacios)
+         *         - símbolos locales
+         *         - relocaciones generadas por el ensamblador
+         *     Marcarlo como is_object = false (es un ensamblado directo)
+         * @param bytecode
+         * @param ctx
+         */
         void add_assembly_unit(const std::vector<uint8_t> &bytecode,
                                const Context &ctx);
 
+        /**
+          * Carga un archivo .vela.
+          * Responsabilidades
+          *     - Leer header VELA
+          *     - Leer tabla de módulos
+          *     - NO cargar todos los módulos todavía
+          *     - Guardar la librería en libraries
+          *     - Los módulos se cargarán solo si se necesitan para resolver símbolos
+          *
+          * Comportamiento tipo ar/ld
+          *     - Si un símbolo requerido está en la librería -> se extrae ese módulo
+          *     - Si no -> se ignora
+         * @param path archivo vela a cargar
+         */
         void add_static_library(const std::string &path);
 
-        // Resolver símbolos entre módulos
+        /**
+         * Responsabilidades
+         *     - Construir la tabla global de símbolos
+         *     - Detectar símbolos duplicados
+         *     - Detectar símbolos indefinidos
+         *     - Extraer módulos necesarios de librerías .vela
+         *     - Repetir hasta que no falten símbolos
+         *
+         * Algoritmo (como ld/LLD)
+         *     - Insertar símbolos de módulos ya cargados
+         *     - Mientras existan símbolos indefinidos:
+         *         * Buscar en librerías .vela
+         *         * Si un módulo contiene el símbolo -> cargarlo
+         *         * Añadir sus símbolos
+         *
+         *     - Si al final quedan símbolos indefinidos:
+         *         * Error (a menos que allow_undefined_symbols = true)
+         */
         void resolve_symbols();
+
+        /**
+         * Aplica las relocaciones de cada módulo.
+         *
+         * Responsabilidades
+         *     Para cada relocación:
+         *         - Buscar el símbolo en global_symbols
+         *         - Calcular la dirección final
+         *         - Escribir el valor en el bytecode
+         *
+         *     Tipos soportados:
+         *         - ABS64
+         *         - REL32
+         *         - REL64
+         *
+         * Errores
+         *     Símbolo no encontrado
+         *     Offset fuera de rango
+         */
         void apply_relocations();
+
+        /**
+         * Si options.optimize_bytecode == true.
+         * Responsabilidades
+         *     - Eliminar NOPs
+         *     - Fusionar instrucciones triviales
+         *     - Eliminar bloques muertos
+         *     - Compactar saltos
+         *     - Reordenar instrucciones si es seguro
+         *
+         * Resultado
+         *     - Bytecode más pequeño
+         *     - Mejor rendimiento en la VM
+         */
         void optimize_modules();
 
-        // Construir el ejecutable final VELB
+        /**
+         * Orquesta todo el proceso.
+         * Responsabilidades
+         *     - resolve_symbols()
+         *     - apply_relocations()
+         *     - optimize_modules()
+         *     - merge_address_spaces()
+         *     - merge_sections()
+         *     - build_header()
+         *     - build_section_table()
+         *     - concatenar bytecode final
+         *
+         * @return Devuelve un std::vector<uint8_t> con el ejecutable completo.
+         */
         std::vector<uint8_t> build_executable();
 
-        // Guardar a archivo
+        /**
+         * Escribe el ejecutable final en disco.
+         * @param path donde guardar el ejecutable
+         */
         void write_to_file(const std::string &path);
 
-        const LinkerReport& get_report() const { return report; }
+        /**
+         * Permite generar un archivo velb-map:
+         * Y dentro:
+         *   - listar módulos incluidos
+         *   - listar símbolos globales
+         *   - listar relocaciones aplicadas
+         *   - listar secciones finales
+         *   - listar espacios de direcciones
+         *   - listar optimizaciones aplicadas
+         *   - Escribir tamaño final del ejecutable
+         * @param path
+         */
+        void write_map_file(const std::string &path);
+
+        const LinkerReport &get_report() const { return report; }
 
     private:
         LinkerOptions options;
@@ -261,10 +444,51 @@ namespace Assembly::Bytecode::Linker {
 
         std::vector<uint8_t> final_executable;
 
-        // Internos
+        /**
+         * Fusiona los espacios de direcciones de todos los módulos.
+         * Responsabilidades
+         *     - Unir rangos de memoria
+         *     - Detectar solapamientos
+         *     - Reasignar offsets si es necesario
+         *     - Preparar el layout final del ejecutable
+         */
         void merge_address_spaces();
+
+        /**
+         * Fusiona secciones de todos los módulos.
+         *
+         * Responsabilidades
+         *     - Concatenar .code
+         *     - Concatenar .data
+         *     - Alinear secciones según reglas
+         *     - Actualizar offsets de símbolos
+         */
         void merge_sections();
+
+        /**
+          * Construye el header VELB final.
+          * Responsabilidades
+          *     Escribir:
+          *         - magic "VELB"
+          *         - versión
+          *         - checksum
+          *         - timestamp
+          *         - arquitectura
+          *         - número de secciones
+          *         - tabla de espacios de direcciones
+          *     Calcular checksum del ejecutable
+         */
         void build_header();
+
+        /**
+         * Construye la tabla de secciones del ejecutable.
+         * Responsabilidades
+         *     Escribir:
+         *         - nombre de sección (16 bytes)
+         *         - rango de memoria
+         *         - offset en el archivo
+         *         - tamaño
+         */
         void build_section_table();
     };
 };
