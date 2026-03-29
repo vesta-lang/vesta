@@ -423,12 +423,17 @@ namespace Assembly::Bytecode::Linker {
 
         const LinkerReport &get_report() const { return report; }
 
+        void log_warning(const std::string &msg);
+
+        void log_error(const std::string &msg);
+
     private:
         LinkerOptions options;
         LinkerReport report;
 
         // Interno: lista de módulos cargados
         struct Module {
+            std::string name;
             std::vector<uint8_t> bytecode;
             Context ctx;
             bool is_object = false;
@@ -443,6 +448,8 @@ namespace Assembly::Bytecode::Linker {
         std::unordered_map<std::string, uint64_t> global_symbols;
 
         std::vector<uint8_t> final_executable;
+        HeaderVELB final_header{};
+        std::vector<section_range_memory> final_sections;
 
         /**
          * Fusiona los espacios de direcciones de todos los módulos.
