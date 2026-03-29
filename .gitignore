@@ -11,5 +11,5 @@ libs/Windows/OpenSSL-Win64/exp
 libssl*
 libcrypto*
 _pdf
-*.hexpat
+read_bytecode.hexpat
 .xmake
