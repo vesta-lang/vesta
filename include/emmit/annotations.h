@@ -1,3 +1,15 @@
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
 #ifndef ANNOTATIONS_H
 #define ANNOTATIONS_H
 #include <cstring>
@@ -22,11 +34,11 @@ namespace Assembly::Bytecode {
 
     struct Label {
         std::string name;
-        uint64_t address;   // offset relativo dentro de la sección
+        uint64_t address; // offset relativo dentro de la sección
     };
 
     typedef struct Section {
-        std::string  name; // nombre de la seccion
+        std::string name; // nombre de la seccion
         range_memory memory;
 
         /**
@@ -35,14 +47,13 @@ namespace Assembly::Bytecode {
         std::unordered_map<std::string, Label> table_label;
 
         void set_range(uint64_t init, uint64_t final) {
-            memory.address_init  = init;
+            memory.address_init = init;
             memory.address_final = final;
         }
 
-        void add_label(const std::string& name, uint64_t address) {
+        void add_label(const std::string &name, uint64_t address) {
             table_label[name] = Label{name, address};
         }
-
     } Section;
 
     typedef struct Space {
@@ -62,10 +73,10 @@ namespace Assembly::Bytecode {
         // Añadir sección por parámetros
         void add_section(const std::string &name, uint64_t init, uint64_t final) {
             Section sec;
-            sec.name                 = name;
-            sec.memory.address_init  = init;
+            sec.name = name;
+            sec.memory.address_init = init;
             sec.memory.address_final = final;
-            table_section[name]      = sec;
+            table_section[name] = sec;
         }
 
         // Establecer nombre de sección (máx 16 bytes)
@@ -85,11 +96,19 @@ namespace Assembly::Bytecode {
         // espacio de direcciones key(nombre): valor(espacio)
         std::unordered_map<std::string, Space> space_address;
 
+        /**
+         * Formato de salida, por defecto el fortmato es plano o crudo.
+         * Este variable puede ser alterada usando la notacion "Format",
+         * pero solo surge efecto la ultima anotacion definida de este tipo
+         * en una misma unidad de traducion.
+         */
+        std::string format_output = "raw";
+
         // Crear y añadir un espacio por parámetros
         void add_space(const std::string &name,
-                       uint64_t           init, uint64_t final) {
+                       uint64_t init, uint64_t final) {
             Space sp;
-            sp.range.address_init  = init;
+            sp.range.address_init = init;
             sp.range.address_final = final;
             sp.set_name(name);
             space_address[name] = sp;
@@ -112,8 +131,8 @@ namespace Assembly::Bytecode {
         }
 
         // obtener una sección por nombre
-        Section* get_section(const std::string& name) {
-            for (auto& [spaceName, space] : space_address) {
+        Section *get_section(const std::string &name) {
+            for (auto &[spaceName, space]: space_address) {
                 auto it = space.table_section.find(name);
                 if (it != space.table_section.end())
                     return &it->second;
@@ -127,12 +146,38 @@ namespace Assembly::Bytecode {
      */
     using AnnotationHandler = std::function<void(const vm::AnnotationNode *, Assembler &)>;
 
+    /**
+     * Permite aplicar una anotacion de tipo "SpaceAddress" que permite definir un espacio
+     * de direcciones para las secciones.
+     * @param node nodo padre
+     * @param ctx contexto global del ensamblador
+     */
     void apply_space_address(const vm::AnnotationNode *node, Assembler &ctx);
+
+    /**
+     * Permite crear una seccion asociada a un espacio de direcciones. Las secciones
+     * pueden contener cualquier tipo de informacion, ya sea codigo datos u otro.
+     * @param node nodo padre
+     * @param ctx contexto global del ensamblador
+     */
     void apply_section(const vm::AnnotationNode *node, Assembler &ctx);
+
+    /**
+     * Permite indicar al ensamblador el formato final del archivo que se quiere
+     * ensamblar. No es estrictamente necesario definir el formato, pero todo dependera
+     * del objetivo, sino se define formato, el codigo generado final sera plano, sin secciones
+     * ni otro tipo de informacion que no sea el dispuesto por el usuario.
+     * @param node nodo padre
+     * @param ctx contexto global del ensamblador
+     */
+    void apply_format(const vm::AnnotationNode *node, Assembler &ctx);
 
     static std::unordered_map<std::string, AnnotationHandler> annotation_handlers = {
         {
             "SpaceAddress", apply_space_address
+        },
+        {
+            "Format", apply_format
         },
         {
             "Section", apply_section

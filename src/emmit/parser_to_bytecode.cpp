@@ -111,13 +111,16 @@ namespace Assembly::Bytecode {
     void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         // --- LABELS ---
         if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
-            if (!current_section)
+
+            // solo aplicar si el formato es velb
+            if (!current_section && ctx.format_output == "velb")
                 throw std::runtime_error("Label fuera de una seccion");
 
             symbol_table[lab->name] = offset;
 
             // añadir a la sección actual el nuevo label
-            current_section->add_label(lab->name, offset);
+            if (current_section != nullptr)
+                current_section->add_label(lab->name, offset);
 
             for (auto &child: lab->body)
                 first_pass(child.get(), offset);
@@ -130,7 +133,7 @@ namespace Assembly::Bytecode {
 
         // --- DECLARACION DE DATOS CON SUS DIRECTIVAS ---
         else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
-            if (!current_section)
+            if (!current_section && ctx.format_output == "velb")
                 throw std::runtime_error("Label fuera de una seccion");
 
             // Validar que el label no esté vacío
