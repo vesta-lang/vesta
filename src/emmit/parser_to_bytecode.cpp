@@ -65,6 +65,37 @@ namespace Assembly::Bytecode {
         symbol_table.clear();
     }
 
+    void Assembler::compute_label_sizes() {
+        for (auto &[spaceName, space]: ctx.space_address) {
+            for (auto &[sectionName, section]: space.table_section) {
+                // Obtener labels ordenados por offset
+                std::vector<Label *> ordered;
+                ordered.reserve(section.table_label.size());
+
+                for (auto &[name, lbl]: section.table_label)
+                    ordered.push_back(&lbl);
+
+                std::sort(ordered.begin(), ordered.end(),
+                          [](Label *a, Label *b) {
+                              return a->address < b->address;
+                          });
+
+                // Calcular tamaños
+                for (size_t i = 0; i < ordered.size(); ++i) {
+                    uint64_t start = ordered[i]->address;
+                    uint64_t end;
+
+                    if (i + 1 < ordered.size())
+                        end = ordered[i + 1]->address;
+                    else
+                        end = section.size_real; // último label
+
+                    ordered[i]->size = end - start;
+                }
+            }
+        }
+    }
+
     std::vector<uint8_t> Assembler::assemble(
         const std::vector<std::unique_ptr<vm::ASTNode> > &ast) {
         uint64_t offset = 0;
@@ -73,7 +104,10 @@ namespace Assembly::Bytecode {
         for (auto &node: ast)
             first_pass(node.get(), offset);
 
-        current_offset = 0;
+        // conociendo el offset de cada seccion y label, se puede
+        // calcular el tamaño de cada label
+        //compute_label_sizes();
+
         for (auto &node: ast)
             emit_pass(node.get());
 
@@ -97,15 +131,26 @@ namespace Assembly::Bytecode {
 
 
     void Assembler::emit_pass(const vm::ASTNode *node) {
+        // Si el nodo es una etiqueta (LabelNode)
         if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
+            // Recorre todos los nodos dentro del cuerpo de la etiqueta
+            // y vuelve a llamar a emit_pass recursivamente.
             for (auto &child: lab->body)
                 emit_pass(child.get());
-        } else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
-            emit_data(data);
-        } else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
+        }
+
+        // Si el nodo es una declaración de datos
+        else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
+            emit_data(data); // Llama al manejador específico para datos
+        }
+
+        // Si el nodo es una instrucción
+        else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
+            // Si la instrucción es una pseudo-instrucción (directiva)
             if (PseudoInstructions.count(instr->opcode)) {
-                apply_directive(instr);
+                apply_directive(instr); // Aplica la directiva correspondiente
             } else {
+                // Si es una instrucción real, emite su código máquina
                 emit_instruction(instr);
             }
         }
@@ -115,19 +160,35 @@ namespace Assembly::Bytecode {
     void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         // --- LABELS ---
         if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
-
             // solo aplicar si el formato es velb
             if (!current_section && ctx.format_output == "velb")
                 throw std::runtime_error("Label fuera de una seccion");
 
-            symbol_table[lab->name] = offset;
+            // offset inicial de la label
+            uint64_t start = offset;
 
-            // añadir a la sección actual el nuevo label
-            if (current_section != nullptr)
-                current_section->add_label(lab->name, offset);
+            // registrar la label en la sección, tamaño temporal = 0
+            if (current_section != nullptr) {
+                current_section->add_label(lab->name, offset, 0);
+                current_label = current_section->get_label(lab->name);
+            }
 
+            symbol_table[lab->name] = current_label;
+
+            // Guardar sección actual, al usar first_pass puede cambiar
+            // si hay un label vacio con una notacion section despues
+            Section *saved_section = current_section;
+
+            // procesar el cuerpo de la label
             for (auto &child: lab->body)
                 first_pass(child.get(), offset);
+
+            // ahora offset ha avanzado -> calcular tamaño real
+            uint64_t size = offset - start;
+
+            // actualizar tamaño real en la sección
+            if (saved_section)
+                saved_section->update_label_size(lab->name, size);
         }
 
         // para nodos de tipo anotacion, no todos los nodos de este tipo, se tienen en cuenta.
@@ -152,19 +213,33 @@ namespace Assembly::Bytecode {
                 );
             }
 
-            symbol_table[data->label] = offset;
-            // añadir a la sección actual el nuevo label
-            current_section->add_label(data->label, offset);
-
             size_t elem_size = size_of_directive(data->directive);
+            size_t offset_label = offset; // debemos guardar el offset de la label,
+            // ya que se modificara en el for el offset global y se perdera la referencia
 
+            // guarda el tamaño real de la label
+            size_t size_of_label = 0;
             for (auto &expr: data->values) {
                 if (auto s = dynamic_cast<vm::StringExpr *>(expr.get())) {
+                    size_of_label += s->value.size();
                     offset += s->value.size();
                 } else {
+                    size_of_label += elem_size;
                     offset += elem_size;
                 }
+
+                // guardamos el tamaño real de la seccion
+                if (current_section) {
+                    current_section->size_real = offset;
+                }
             }
+
+
+            // añadir a la sección actual el nuevo label
+            current_section->add_label(data->label, offset_label, size_of_label);
+
+            // añadimos la label a la seccion, una vez obtenida su tamaño real
+            symbol_table[data->label] = current_section->get_label(data->label);
         }
 
         // --- INSTRUCCIONES Y DIRECTIVAS ---
@@ -178,8 +253,20 @@ namespace Assembly::Bytecode {
                     // o un error del usuario.
 
                     if (PseudoInstructions.count(instr->opcode)) {
-                        // No ocupan espacio, configuran el entorno / emisor
-                        apply_directive(instr);
+                        if (instr->opcode == "align") {
+                            /* si es align, en la primera fase se debe aplicar aqui, ya que
+                                                       * sino offset y current_offset se desincronizaran.
+                                                       */
+                            // No ocupan espacio, configuran el entorno / emisor
+                            vm::NumberOperand *number = dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
+                            uint64_t align = eval_operand(number);
+
+                            if (align == 0 || (align & (align - 1)) != 0)
+                                throw std::runtime_error("Error: align debe ser potencia de 2.");
+
+                            // alineamos el offset local al tamaño indicado.
+                            offset = (offset + align - 1) & ~(align - 1);
+                        } else apply_directive(instr);
                         return;
                     }
 
@@ -199,7 +286,7 @@ namespace Assembly::Bytecode {
         // necesaria para este ensamblador.
         auto it = annotation_handlers.find(annotation->key);
         if (it != annotation_handlers.end()) {
-            it->second(annotation, *this);   // Ejecuta la función asociada
+            it->second(annotation, *this); // Ejecuta la función asociada
             return;
         }
 
@@ -223,7 +310,7 @@ namespace Assembly::Bytecode {
 
             if (true) {
                 uint64_t new_addr = eval_operand(instr->operands[0].get());
-                current_offset    = default_address = new_addr;
+                current_offset = default_address = new_addr;
             } else {
                 instr->operands[0]->print(4);
                 throw std::runtime_error("Error: org requiere 2 operando.");
@@ -238,7 +325,7 @@ namespace Assembly::Bytecode {
                 throw std::runtime_error("Error: align requiere 1 operando.");
 
             vm::NumberOperand *number = dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
-            uint64_t           align  = eval_operand(number);
+            uint64_t align = eval_operand(number);
 
             if (align == 0 || (align & (align - 1)) != 0)
                 throw std::runtime_error("Error: align debe ser potencia de 2.");
@@ -257,8 +344,4 @@ namespace Assembly::Bytecode {
 
         throw std::runtime_error("Error: directiva desconocida: " + op);
     }
-
-
-    static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
-                                std::unordered_set<std::string> &           imported);
 }

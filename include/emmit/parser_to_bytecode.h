@@ -269,7 +269,8 @@ namespace Assembly::Bytecode {
         /**
          * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
          */
-        Section* current_section = nullptr;
+        Section* current_section    = nullptr;
+        Label*  current_label       = nullptr;
 
         /**
          * Contexto del ensamblador
@@ -291,6 +292,8 @@ namespace Assembly::Bytecode {
          * la dirección base por defecto.
          */
         Assembler();
+
+        void compute_label_sizes();
 
         /**
          * @brief Ensambla un AST completo en un buffer de bytecode.
@@ -407,7 +410,7 @@ namespace Assembly::Bytecode {
 
     private:
         /// Tabla de símbolos generada en la primera pasada.
-        std::unordered_map<std::string, uint64_t> symbol_table;
+        std::unordered_map<std::string, Label*> symbol_table;
 
         /// Buffer de salida donde se escribe el bytecode final.
         std::vector<uint8_t> output;

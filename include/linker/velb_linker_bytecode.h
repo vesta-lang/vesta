@@ -107,6 +107,7 @@ typedef struct PACKED section_range_memory {
 
     // nombre de la seccion, maximo 16 bytes.
     name_section name;
+    uint64_t offset; // donde empieza el bytecode o los datos dentro del archivo
 } section_range_memory;
 
 typedef struct PACKED VELA_ModuleEntry {
@@ -142,6 +143,7 @@ typedef struct PACKED VELA_Relocation {
 #include <unordered_map>
 #include <vector>
 #include <c++/string>
+#include "emmit/struct_context.h"
 
 #include "optimizer/optimizer.h"
 #include "emmit/annotations.h"
@@ -157,7 +159,7 @@ namespace Assembly::Bytecode::Linker {
         bool verbose = false; // logs detallados
 
         std::string output_path; // ruta del ejecutable final
-        std::string map_file_path;  // donde generar el map
+        std::string map_file_path; // donde generar el map
     };
 
     /**
@@ -221,14 +223,26 @@ namespace Assembly::Bytecode::Linker {
      * Cada Module tiene su contexto, su bytecode, sys simbolos, sus relocalizaciones.
      */
     struct Module {
+        std::string name;
         std::vector<uint8_t> bytecode;
-        Context ctx;
+        Context *ctx;
         bool is_object = false;
-
         std::vector<Relocation> relocations;
         std::unordered_map<std::string, uint64_t> local_symbols;
     };
 
+    /**
+     * Tabla para simbolos, los simbolos globales usan otra tabla aparte
+     */
+    struct SymbolInfo {
+        std::string space;
+        std::string section;
+        uint64_t relative; // offset dentro de la sección
+        uint64_t absolute; // dirección virtual absoluta
+        uint64_t file_offset; // se rellena después en build_section_table()
+        std::string module; // módulo donde se definió
+        uint64_t size; // tamaño del label, algunas no tienen
+    };
 
     /**
      * clase Linker va a cumplir dos roles muy distintos:
@@ -312,7 +326,7 @@ namespace Assembly::Bytecode::Linker {
          * @param ctx
          */
         void add_assembly_unit(const std::vector<uint8_t> &bytecode,
-                               const Context &ctx);
+                               const Assembly::Bytecode::Context *ctx);
 
         /**
           * Carga un archivo .vela.
@@ -445,7 +459,15 @@ namespace Assembly::Bytecode::Linker {
         std::vector<Module> modules;
         std::vector<StaticLibrary> libraries;
 
+        /**
+         * Simbolos globales
+         */
         std::unordered_map<std::string, uint64_t> global_symbols;
+
+        /**
+         * Simbolos no globales
+         */
+        std::unordered_map<std::string, SymbolInfo> symbol_info;
 
         std::vector<uint8_t> final_executable;
         HeaderVELB final_header{};
@@ -486,6 +508,12 @@ namespace Assembly::Bytecode::Linker {
           *     Calcular checksum del ejecutable
          */
         void build_header();
+
+        uint64_t compute_sections_base_offset() const;
+
+        uint64_t assign_section_offsets(uint64_t start_offset);
+
+        void compute_symbol_file_offsets();
 
         /**
          * Construye la tabla de secciones del ejecutable.

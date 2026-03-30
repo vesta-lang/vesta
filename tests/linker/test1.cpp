@@ -9,22 +9,43 @@
  *
  * Descargo: Autor no responsable por modificaciones.
  */
+
+
 #include <iostream>
 #include <fstream>
 #include <iomanip>
 #include <vector>
 #include <string>
 
+size_t total_allocated = 0;
+size_t peak_memory = 0;
+
+void *operator new(std::size_t size) {
+    total_allocated += size;
+    peak_memory = std::max(peak_memory, total_allocated);
+    return malloc(size);
+}
+
+void operator delete(void *ptr) noexcept {
+    // no saber el tamaño aquí
+    free(ptr);
+}
+
+void print_memory_stats() {
+    std::cout << "Memoria actual: " << total_allocated
+            << " bytes, maximo: " << peak_memory << " bytes\n";
+}
+
+#include "emmit/parser_to_bytecode.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
-#include "emmit/parser_to_bytecode.h"
 #include "profiler/timer.h"
 #include "linker/velb_linker_bytecode.h"
 
 using namespace Assembly::Bytecode;
 
 int main() {
-Timer global;
+    Timer global;
 
     // Leer archivo fuente
     const std::string name_file("test.vel");
@@ -46,10 +67,10 @@ Timer global;
     vm::Lexer lexer(code);
     vm::Parser parser(lexer);
 
-    std::vector<std::unique_ptr<vm::ASTNode>> program;
+    std::vector<std::unique_ptr<vm::ASTNode> > program;
     try {
         program = parser.parse();
-    } catch (const vm::ParseError& e) {
+    } catch (const vm::ParseError &e) {
         std::cerr << "Parse error: " << e.what() << "\n";
         return 1;
     }
@@ -67,10 +88,11 @@ Timer global;
 
     std::cout << "\n=== BYTES GENERADOS ===\n";
     for (size_t i = 0; i < bytecode.size(); ++i) {
-        if (i % 16 == 0) std::cout << "\n" << std::setw(8) << std::setfill('0')
-                                   << std::hex << i << ": ";
+        if (i % 16 == 0)
+            std::cout << "\n" << std::setw(8) << std::setfill('0')
+                    << std::hex << i << ": ";
         std::cout << std::setw(2) << std::setfill('0')
-                  << std::hex << (int)bytecode[i] << " ";
+                << std::hex << (int) bytecode[i] << " ";
     }
     std::cout << std::dec << "\n\n";
 
@@ -87,7 +109,7 @@ Timer global;
     Linker::Linker linker(opts);
 
     // Añadir el ensamblado crudo
-    linker.add_assembly_unit(bytecode, asmblr.ctx);
+    linker.add_assembly_unit(bytecode, &asmblr.ctx);
 
     // añadir objetos externos
     // linker.add_object_file("libmath.velo");
@@ -101,7 +123,7 @@ Timer global;
         linker.write_map_file(opts.map_file_path);
 
     // Reporte
-    const auto& report = linker.get_report();
+    const auto &report = linker.get_report();
 
     std::cout << "\n=== LINKER REPORT ===\n";
     std::cout << "Modulos enlazados: " << report.modules_linked << "\n";
@@ -111,17 +133,19 @@ Timer global;
 
     if (!report.errors.empty()) {
         std::cout << "\n=== ERRORES ===\n";
-        for (auto& e : report.errors) std::cout << " - " << e << "\n";
+        for (auto &e: report.errors) std::cout << " - " << e << "\n";
     }
 
     if (!report.warnings.empty()) {
         std::cout << "\n=== WARNINGS ===\n";
-        for (auto& w : report.warnings) std::cout << " - " << w << "\n";
+        for (auto &w: report.warnings) std::cout << " - " << w << "\n";
     }
 
     std::cout << std::dec;
     std::cout << "\n[Tiempo total] " << global.us() << " us "
-              << global.ms() << " ms\n";
+            << global.ms() << " ms\n";
+
+    print_memory_stats();
 
     return 0;
 }

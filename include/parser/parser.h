@@ -258,6 +258,8 @@ namespace vm {
 
         std::vector<std::unique_ptr<ASTNode>> parse_in_label();
 
+        std::unique_ptr<ASTNode> parser_end_label();
+
         /**
          * @brief Parsea una sección (`code:`, `data:`, etc.).
          * @return Nodo AST de la sección o `nullptr` si no es sección válida

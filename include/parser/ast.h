@@ -125,6 +125,16 @@ namespace vm {
         }
     };
 
+    struct EndLabelNode : ASTNode {
+        std::string label ;
+
+        EndLabelNode(const std::string& label) : label(label) {}
+
+        void print(int indent = 0) const override {
+            std::string pad(indent, ' ');
+            std::cout << pad << "END: " << label << "\n";
+        }
+    };
 
     /**
      * @struct ExprNode
