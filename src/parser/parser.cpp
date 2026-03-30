@@ -512,11 +512,14 @@ namespace vm {
         if (
             (current.type == TokenType::IDENTIFIER && next.type == TokenType::REGISTER) ||
             (current.type == TokenType::IDENTIFIER && is_number_token(next.type)) ||
-            (current.type == TokenType::IDENTIFIER && next.type == TokenType::IDENTIFIER)
+            (current.type == TokenType::IDENTIFIER && next.type == TokenType::IDENTIFIER) ||
+            (current.type == TokenType::IDENTIFIER && next.type == TokenType::LBRACKET)
         ) {
             /**
-             * Si es identificador + registro ||
-             * Si es identificador + numero
+             * Si es identificador + registro       ||
+             * Si es identificador + numero         ||
+             * Si es identificador + identificador  ||
+             * Si es identificador + [ + identificador
              */
             return parse_instruction();
         }

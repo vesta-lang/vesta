@@ -120,7 +120,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
@@ -252,6 +252,54 @@ namespace Assembly::Bytecode {
             },
         },
 
+    };
+
+
+    /**
+     * Permite un controlo de emision de bytes mas seguro con auto-incremento del offset
+     */
+    struct ByteWriter {
+        /**
+         * Buffer de bytes emitidos, normalmente aqui ira codigo o datos
+         */
+        std::vector<uint8_t> output;
+
+        /**
+         * Offset actual
+         */
+        uint64_t offset = 0;
+
+        /**
+         * Emitir un byte
+         * @param value byte a emitir
+         */
+        void emit8(uint8_t value) {
+            output.push_back(value);
+            offset += 1;
+        }
+
+        /**
+         * emitir una cantidad arbitraria de bytes
+         * @param data buffer de bytes a emitir
+         * @param size cantidad de bytes a emitir de este buffer.
+         */
+        void emit_bytes(const uint8_t* data, size_t size) {
+            output.insert(output.end(), data, data + size);
+            offset += size;
+        }
+
+        /**
+         * Emitir solo 5 bytes usando un valor de 8 bytes
+         * @param value valor de 5 bytes
+         */
+        void emit40(uint64_t value) {
+            // escribe 5 bytes (40 bits)
+            emit8((value >>  0) & 0xFF);
+            emit8((value >>  8) & 0xFF);
+            emit8((value >> 16) & 0xFF);
+            emit8((value >> 24) & 0xFF);
+            emit8((value >> 32) & 0xFF);
+        }
     };
 
 
@@ -413,10 +461,7 @@ namespace Assembly::Bytecode {
         std::unordered_map<std::string, Label*> symbol_table;
 
         /// Buffer de salida donde se escribe el bytecode final.
-        std::vector<uint8_t> output;
-
-        /// Offset actual dentro del buffer de salida.
-        uint64_t current_offset = 0;
+        ByteWriter output;
     };
 
     static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,

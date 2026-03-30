@@ -21,10 +21,25 @@ namespace Assembly::Bytecode {
         return (value + alignment - 1) & ~(alignment - 1);
     }
 
+    struct Relocation {
+        enum class Type {
+            Absolute40, // dirección absoluta de 40 bits, para sub, add y etc
+            Relative40, // desplazamiento relativo de 40 bits
+            Absolute64,
+            Relative32
+        };
+
+        std::string symbol; // símbolo a resolver
+        std::string section; // sección donde ocurre
+        uint64_t offset; // offset dentro de la sección
+        Type type; // tipo de relocación
+    };
+
+
     typedef struct Label {
         std::string name;
-        uint64_t address;   // offset relativo dentro de la sección
-        uint64_t size;      // tamaño de la etiqueta
+        uint64_t address; // offset relativo dentro de la sección
+        uint64_t size; // tamaño de la etiqueta
     } Label;
 
     typedef struct Section {
@@ -52,7 +67,7 @@ namespace Assembly::Bytecode {
             table_label[name] = Label{name, address, size};
         }
 
-        Label* get_label(const std::string &name) {
+        Label *get_label(const std::string &name) {
             auto it = table_label.find(name);
             if (it == table_label.end())
                 return nullptr;
@@ -93,7 +108,6 @@ namespace Assembly::Bytecode {
             }
             it->second.size = size;
         }
-
     } Section;
 
     typedef struct Space {
@@ -146,6 +160,59 @@ namespace Assembly::Bytecode {
     typedef struct Context {
         // espacio de direcciones key(nombre): valor(espacio)
         std::unordered_map<std::string, Space> space_address;
+
+        // tabla de tipo vector que contiene las tablas de relocalizaciones
+        std::vector<Relocation> relocations; // todas las relocaciones del módulo
+
+        // relocalizacion por "nombre simbolo": "indice en la tabla de relocalizaciones (relocations)"
+        std::unordered_map<std::string, std::vector<size_t> > reloc_by_symbol;
+
+        void add_relocation(const Relocation &rel) {
+            // Guardar índice
+            size_t index = relocations.size();
+
+            // Añadir al vector principal
+            relocations.push_back(rel);
+
+            // Añadir al índice por símbolo
+            reloc_by_symbol[rel.symbol].push_back(index);
+        }
+
+        /**
+         * Permite obtener todas las relocaciones de un símbolo
+         * @param symbol nombre del simbolo del que obtener todas las relocalizaciones
+         * @return tabla de relocalizaciones para ese simbolo
+         */
+        std::vector<const Relocation *> get_relocations_for(const std::string &symbol) const {
+            std::vector<const Relocation *> result;
+
+            auto it = reloc_by_symbol.find(symbol);
+            if (it == reloc_by_symbol.end())
+                return result;
+
+            for (size_t idx: it->second) {
+                result.push_back(&relocations[idx]);
+            }
+
+            return result;
+        }
+
+        /**
+         * Metodo para limpiar relocaciones
+         */
+        void clear_relocations() {
+            relocations.clear();
+            reloc_by_symbol.clear();
+        }
+
+        /**
+         * Permite saber si un simbolo tiene relocalizaciones
+         * @param symbol simbolo del que averiguar si tiene relocalizaciones
+         * @return true si hay relocalizaciones.
+         */
+        bool has_relocations(const std::string &symbol) const {
+            return reloc_by_symbol.count(symbol) > 0;
+        }
 
         /**
          * Formato de salida, por defecto el fortmato es plano o crudo.

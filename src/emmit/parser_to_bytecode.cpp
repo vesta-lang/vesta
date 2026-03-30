@@ -24,7 +24,7 @@ namespace Assembly::Bytecode {
             auto it = symbol_table.find(lab->name);
             if (it == symbol_table.end())
                 throw std::runtime_error("Label no definido: " + lab->name);
-            return it->second;
+            return it->second->address;
         }
 
         // si algún día permitir expresiones como operando:
@@ -41,7 +41,7 @@ namespace Assembly::Bytecode {
             return vm::parse_number(n->value);
 
         if (auto l = dynamic_cast<vm::LabelExpr *>(expr))
-            return symbol_table[l->name];
+            return symbol_table[l->name]->address;
 
         if (auto b = dynamic_cast<vm::BinaryExpr *>(expr)) {
             uint64_t L = eval_expr(b->left.get());
@@ -58,10 +58,8 @@ namespace Assembly::Bytecode {
     }
 
     Assembler::Assembler()
-        : default_address(vm::mem::CODE_BEGIN),
-          current_offset(0) // dirección base
+        : default_address(vm::mem::CODE_BEGIN) // dirección base
     {
-        output.clear();
         symbol_table.clear();
     }
 
@@ -104,6 +102,9 @@ namespace Assembly::Bytecode {
         for (auto &node: ast)
             first_pass(node.get(), offset);
 
+        current_section = nullptr;
+        current_label = nullptr;
+
         // conociendo el offset de cada seccion y label, se puede
         // calcular el tamaño de cada label
         //compute_label_sizes();
@@ -126,13 +127,15 @@ namespace Assembly::Bytecode {
         // y emision de codigo, se puede computar las direcciones de inicio
         // y final de cada seccion.
         ctx.compute_all_ranges();
-        return output;
+        return output.output;
     }
 
 
     void Assembler::emit_pass(const vm::ASTNode *node) {
         // Si el nodo es una etiqueta (LabelNode)
         if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
+            if (current_section == nullptr) throw std::runtime_error("Label no definido: " + lab->name);
+            current_label = current_section->get_label(lab->name);
             // Recorre todos los nodos dentro del cuerpo de la etiqueta
             // y vuelve a llamar a emit_pass recursivamente.
             for (auto &child: lab->body)
@@ -144,13 +147,30 @@ namespace Assembly::Bytecode {
             emit_data(data); // Llama al manejador específico para datos
         }
 
+        // debemos evaluar las notaciones section, para poder averiguar en que seccion
+        // y label se encuentra el codigo.
+        else if (auto annotation = dynamic_cast<const vm::AnnotationNode *>(node)) {
+            if (annotation->key == "Section") {
+                std::string section_name;
+                for (const auto &child
+                     : annotation->children) {
+                    if (child->key == "Name") {
+                        section_name = child->value;
+                        break;
+                    }
+                }
+
+                this->current_section = this->ctx.get_section(section_name);
+            }
+        }
         // Si el nodo es una instrucción
         else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
             // Si la instrucción es una pseudo-instrucción (directiva)
             if (PseudoInstructions.count(instr->opcode)) {
                 apply_directive(instr); // Aplica la directiva correspondiente
             } else {
-                // Si es una instrucción real, emite su código máquina
+                // Si es una instrucción real, emite su código máquina,
+                // se debe conocer la seccion y label
                 emit_instruction(instr);
             }
         }
@@ -304,7 +324,7 @@ namespace Assembly::Bytecode {
         const std::string &op = instr->opcode;
 
         // --- org ---
-        if (op == "org") {
+        /*if (op == "org") {
             if (instr->operands.size() != 1)
                 throw std::runtime_error("Error: org requiere 1 operando.");
 
@@ -317,7 +337,7 @@ namespace Assembly::Bytecode {
             }
 
             return;
-        }
+        }*/
 
         // --- align ---
         if (op == "align") {
@@ -330,8 +350,8 @@ namespace Assembly::Bytecode {
             if (align == 0 || (align & (align - 1)) != 0)
                 throw std::runtime_error("Error: align debe ser potencia de 2.");
 
-            while (current_offset % align != 0) {
-                output.push_back(0x00), current_offset++;
+            while (output.offset % align != 0) {
+                output.emit8(0x00);
             }
 
             return;
