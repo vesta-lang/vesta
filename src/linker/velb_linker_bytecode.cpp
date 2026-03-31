@@ -12,6 +12,8 @@
 
 #include "linker/velb_linker_bytecode.h"
 
+#include "emmit/parser_to_bytecode.h"
+
 namespace Assembly::Bytecode::Linker {
     // cambiar en un futuro, por ahora para pruebas me vale
     static uint64_t simple_checksum(const std::vector<uint8_t> &data) {
@@ -92,19 +94,114 @@ namespace Assembly::Bytecode::Linker {
         libraries.push_back(std::move(lib));
     }
 
+    /**
+     * - calcular el offset base donde se añadirá la nueva sección
+     * - desplazar labels
+     * - desplazar relocaciones
+     * - concatenar bytecode
+     * @param dest
+     * @param src
+     */
+    /*void Linker::merge_section(Section &dest, const Section &src) {
+        uint64_t base = dest.size_real;
+
+        // Copiar labels con offset ajustado
+        for (const auto &[labelName, lbl]: src.table_label) {
+            Label newLbl = lbl;
+            newLbl.address += base;
+            dest.table_label[labelName] = newLbl;
+        }
+
+        // Copiar bytecode
+        dest.bytecode.insert(dest.bytecode.end(),
+                             src.bytecode.begin(),
+                             src.bytecode.end());
+
+        // Actualizar tamaño
+        dest.size_real += src.size_real;
+    }*/
+
+    /**
+     * - concatenar secciones
+     * - recalcular offsets
+     * - actualizar labels
+     * - desplazar bytecode
+     * - ajustar relocaciones
+     * @param dest
+     * @param src
+     */
+    void Linker::merge_space_address(Space &dest, const Space &src) {
+        for (const auto &[secName, sec]: src.table_section) {
+            auto it = dest.table_section.find(secName);
+
+            if (it == dest.table_section.end()) {
+                // No existe, copiar sección completa
+                dest.table_section[secName] = sec;
+            } else {
+                // Ya existe, fusionar secciones
+                //merge_section(it->second, sec);
+            }
+        }
+    }
+
     void Linker::add_assembly_unit(const std::vector<uint8_t> &bytecode,
                                    const Context *ctx) {
+        /**
+         * Problemas resueltos:
+         *      - 1 espacio de direcciones solapados, si se solapan se emite un error.
+         *      - 2 La posibilidad de que dos archivos (modulos) contengan el mismo espacio de direcciones
+         *          con un mismo nombre, si ese caso se da, fusionamos los espacios de direcciones.
+         *      - 3 Este problema es causado por la solucion del segundo problema, al fusionar espacios de
+         *          direcciones, estamos espandiendo el tamaño del espacio en uno de los modulos, donde
+         *          otras secciones de este podria esperar existir en ese rango de direcciones, lo que causara
+         *          un solapamiento de los espacios de direcciones.
+         *          La solucion a este problema puede ser reubicar el siguiente espacio de direcciones, pero
+         *          debo emitir un warning de esto. Mientras todos los modulos usen los mismos espacios de
+         *          direcciones o no use espacios de direcciones muy solapados entre ellos, no deberia haber
+         *          problema.
+         */
         Module m;
         m.name = "<assembly-unit>";
         m.bytecode = bytecode;
-
         m.ctx = *ctx; // copia del contexto
-
         m.is_object = false;
 
-        // NO extraemos símbolos aquí
-        // NO aplanamos nada
-        // NO destruimos la jerarquía
+        // Fusionar espacios del módulo en el linker
+        for (const auto &[spaceName, space]: ctx->space_address) {
+            // Comprobar si se solapa con otros espacios ya existentes
+            for (const auto &[existingName, existingSpace]: spaces_address) {
+                /**
+                 * Si el espacio que estamos revisando (existingName)
+                 * tiene el mismo nombre que el espacio que estamos añadiendo (spaceName),
+                 * entonces NO debemos comprobar solapamiento entre ellos.
+                 * Porque:
+                 *   - Si tienen el mismo nombre, no son espacios distintos.
+                 *   - Son dos partes del mismo espacio lógico (por ejemplo, ambos son "code").
+                 *   - Esos espacios no deben compararse entre sí, sino fusionarse.
+                 */
+                if (existingName == spaceName)
+                    continue; // este se fusiona, no se compara
+
+                if (ranges_overlap(&existingSpace.range, &space.range)) {
+                    throw std::runtime_error(
+                        "Error: el espacio '" + spaceName +
+                        "' del modulo se solapa con el espacio '" +
+                        existingName + "' ya existente."
+                    );
+                }
+            }
+
+            // Existe ya este espacio en el linker?
+            auto it = spaces_address.find(spaceName);
+
+            if (it == spaces_address.end()) {
+                // No existe -> copiarlo tal cual
+                spaces_address[spaceName] = space;
+            } else {
+                // Ya existe -> fusionar
+                merge_space_address(it->second, space);
+            }
+        }
 
         modules.push_back(std::move(m));
         report.modules_linked++;
@@ -291,7 +388,7 @@ namespace Assembly::Bytecode::Linker {
         final_sections.clear();
 
 
-        // Concatenar bytecode de todos los módulos (igual que antes)
+        // Concatenar bytecode de todos los módulos
         for (auto &mod: modules) {
             final_executable.insert(final_executable.end(),
                                     mod.bytecode.begin(),
@@ -300,19 +397,18 @@ namespace Assembly::Bytecode::Linker {
 
         // Construir final_sections a partir de los Context de cada módulo
         for (auto &mod: modules) {
+            // para cada espacio de direcciones del modulo
             for (const auto &[spaceName, space]: mod.ctx.space_address) {
+                // cada cada seccion dentro del espacio de direcciones del modulo
                 for (const auto &[sectionName, section]: space.table_section) {
-                    section_range_memory sec{};
-                    sec.address = section.memory;
-
-                    std::memset(sec.name.name, 0, sizeof(sec.name.name));
-                    std::memcpy(sec.name.name,
-                                section.name.c_str(),
-                                std::min(section.name.size(), sizeof(sec.name.name)));
-
-                    // De momento NO sabemos aún el offset real en el archivo.
-                    // Lo rellenamos luego en build_executable().
-                    sec.offset = 0;
+                    section_info_linker sec{};
+                    sec.memory.address = section.memory; // aqui se esta almacenando la direccion virtual de inicio y final
+                    sec.memory.address.address_final = section.size_real; // debemos cambiar la direccion final para usar
+                    // la direccion real dentro del archivo, y no usar la direccion final virtual.
+                    // la seccion puede ocupar 49 bytes realmente en el archivo, pero al cargarse demandar 1kB de
+                    // memoria.
+                    sec.name = section.name;
+                    // tal vez deba calcular el offset al nombre de la seccion aqui tambien?
 
                     final_sections.push_back(sec);
                 }
@@ -339,49 +435,161 @@ namespace Assembly::Bytecode::Linker {
 
         final_header.count = static_cast<section_count>(final_sections.size());
 
-        // La tabla de secciones irá justo después del header
-        final_header.table_offset = sizeof(HeaderVELB);
+        // cantidad de espacios de direcciones
+        final_header.n_spaces = spaces_address.size();
 
-        // Espacios de direcciones: por ahora, uno solo que cubre todo
-        for (int i = 0; i < 8; ++i) {
-            final_header.address_spaces[i].address_init = 0;
-            final_header.address_spaces[i].address_final = 0;
+        // Extraer espacios a un vector temporal
+        std::vector<std::pair<std::string, Space> > ordered_spaces;
+        ordered_spaces.reserve(spaces_address.size());
+
+        for (auto &kv: spaces_address) {
+            ordered_spaces.push_back(kv);
         }
 
-        if (!final_sections.empty()) {
-            final_header.address_spaces[0].address_init = final_sections[0].address.address_init;
-            final_header.address_spaces[0].address_final = final_sections[0].address.address_final;
+        // Ordenar por address_init
+        std::sort(ordered_spaces.begin(), ordered_spaces.end(),
+                  [](auto &a, auto &b) {
+                      return a.second.range.address_init < b.second.range.address_init;
+                  });
+
+        // Copiar al header en orden de direcciones
+        final_header.address_spaces = new table_spaces_address[final_header.n_spaces];
+
+        // La tabla de secciones irá justo después del header, es necesario
+        // haber asignado primero final_header.n_spaces, o esta funcion fallara,
+        // ya que para calcular el offset de la tabla, es necesario conocercuantas entradas
+        // de espacio de direcciones hay
+        final_header.table_offset = compute_sections_base_offset();
+
+        // donde esta la seccion de strings
+        final_header.offset_section_strings = final_header.table_offset;
+
+        build_section_strings(final_header.table_offset);
+
+        // los strings va antes que la tabla de secciones
+        final_header.table_offset += spaces_address["MetaSpace"].table_section["strings"].size_real;
+
+        for (int i = 0; i < final_header.n_spaces; ++i) {
+            table_spaces_address *const space = &final_header.address_spaces[i];
+
+            // al macenar las direcciones
+            space->address = ordered_spaces[i].second.range;
+
+            // por ahora los offset a los nombres de la seccion de strings no se calculara aqui.
+            space->offset_section_strings = string_offsets[
+                ordered_spaces[i].second.name_section
+            ];
         }
+
+        // añadir a cada seccion el offset al nombre de su stirng
+        for (auto & final_section : final_sections) {
+            final_section.memory.offset_string = string_offsets[final_section.name];
+        }
+
+    }
+
+    void Linker::build_section_strings(uint64_t offset_init) {
+        string_pool.clear();
+        string_offsets.clear();
+        string_blob.clear();
+
+        // Recoger strings de espacios de direcciones
+        for (const auto &[name, space]: spaces_address) {
+            string_pool.push_back(name);
+        }
+
+        // Recoger strings de secciones
+        for (const auto &[spaceName, space]: spaces_address) {
+            for (const auto &[secName, sec]: space.table_section) {
+                string_pool.push_back(secName);
+            }
+        }
+
+        // Recoger strings de labels
+        for (const auto &[spaceName, space]: spaces_address) {
+            for (const auto &[secName, sec]: space.table_section) {
+                for (const auto &[labName, lab]: sec.table_label) {
+                    string_pool.push_back(labName);
+                }
+            }
+        }
+
+        // Eliminar duplicados
+        std::sort(string_pool.begin(), string_pool.end());
+        string_pool.erase(std::unique(string_pool.begin(), string_pool.end()),
+                          string_pool.end());
+
+        // Construir blob y mapa de offsets
+        uint64_t offset = offset_init; // depende del offset de inicio, todo_ se calcula en base a este
+
+        for (const auto &s: string_pool) {
+            string_offsets[s] = offset;
+
+            // copiar caracteres
+            for (char c: s)
+                string_blob.push_back(static_cast<uint8_t>(c));
+
+            // terminador nulo
+            string_blob.push_back(0);
+
+            offset += s.size() + 1;
+        }
+
+        // Crear sección especial "strings"
+        //sec.bytecode = string_blob;
+        Section *sec = &spaces_address["MetaSpace"].table_section["strings"];
+        // Insertar en el espacio "meta"
+        sec->size_align_section = 1;
+        sec->size_real = align_up(
+            string_blob.size(), 16);
     }
 
     uint64_t Linker::compute_sections_base_offset() const {
-        return sizeof(HeaderVELB) +
-               final_sections.size() * sizeof(section_range_memory);
-    }
+        // el espacio real de todo_ el header es la cantidad de espacios de direcciones
+        // po el tamaño de una entrada de rango de memoria (16 bytes para inicio y fin)
+        const uint64_t size_table_space_address = (final_header.n_spaces * sizeof(table_spaces_address));
 
-    uint64_t Linker::assign_section_offsets(uint64_t start_offset) {
-        uint64_t current_offset = start_offset;
+        // se resta el tamaño del puntero de table_spaces_address, ya que en el archivo,
+        // la tabla va espacio de direcciones va direcamente incrustado, en lugar de
+        // ser un puntero.
+        const uint32_t relative_size_header = sizeof(HeaderVELB) - sizeof(table_spaces_address *);
 
-        for (auto &sec: final_sections) {
-            uint64_t size = sec.address.address_final - sec.address.address_init;
-            sec.offset = current_offset;
-            current_offset += size;
-        }
+        const uint64_t size_table_sections = final_sections.size() * sizeof(section_range_memory);
 
-        return current_offset;
+        // el hader siempre esta alineado a 16 bytes
+        return align_up((relative_size_header +
+                         size_table_space_address) /*+ size_table_sections*/, 16);
     }
 
     void Linker::compute_symbol_file_offsets() {
         for (auto &[name, info]: symbol_info) {
             for (const auto &sec: final_sections) {
-                if (info.absolute >= sec.address.address_init &&
-                    info.absolute < sec.address.address_final) {
-                    uint64_t delta = info.absolute - sec.address.address_init;
-                    info.file_offset = sec.offset + delta;
+                if (info.absolute >= sec.memory.address.address_init &&
+                    info.absolute < sec.memory.address.address_final) {
+                    uint64_t delta = info.absolute - sec.memory.address.address_init;
+                    info.file_offset = sec.memory.offset_string + delta;
                     break;
                 }
             }
         }
+    }
+
+    /**
+     * Obtener el string de un offset en especifico
+     * @param offset offset del string a buscar
+     * @return string si existe en ese offset
+     */
+    std::string Linker::get_string_from_offset(uint64_t offset) const {
+        if (offset >= string_blob.size())
+            return "<invalid-offset>";
+
+        const char *start = reinterpret_cast<const char *>(&string_blob[offset]);
+
+        // Buscar el terminador nulo sin salirnos del buffer
+        size_t max_len = string_blob.size() - offset;
+        size_t len = strnlen(start, max_len);
+
+        return std::string(start, len);
     }
 
     void Linker::build_section_table() {
@@ -392,55 +600,116 @@ namespace Assembly::Bytecode::Linker {
 
         // Ordenar por dirección virtual
         std::sort(final_sections.begin(), final_sections.end(),
-                  [](const section_range_memory &a,
-                     const section_range_memory &b) {
-                      return a.address.address_init < b.address.address_init;
+                  [](const section_info_linker &a,
+                     const section_info_linker &b) {
+                      return a.memory.address.address_init < b.memory.address.address_init;
                   });
 
-        // Validar que no se solapan
+        // debemos restar el tamaño de la seccion de cadenas.
+        compute_symbol_file_offsets();
+
+        // Validar que no se solapan, primero debemos a ver calculado los offset de cada string anteriormente
         for (size_t i = 1; i < final_sections.size(); ++i) {
-            if (final_sections[i].address.address_init <
-                final_sections[i - 1].address.address_final) {
-                throw std::runtime_error("Secciones solapadas en memoria virtual.");
+            std::string n1 = final_sections[i - 1].name;
+            std::string n2 = final_sections[i].name;
+            if (final_sections[i].memory.address.address_init <
+                final_sections[i - 1].memory.address.address_final) {
+                // si es el espacio de direcciones especiales, entonces, lo ignoramos aunque
+                // se solape siempre y cuando sus direcciones tengas tamaño 0 (no se usa dentro
+                // de la VM) por el codigo
+                if ((
+                        (n2 == "strings") &&
+                        (
+                            final_sections[i].memory.address.address_final -
+                            final_sections[i].memory.address.address_init) == 0
+                    ) || (n1 == "strings")
+                        // si lo agrego el ensamblador, entonces el espacio deberia ser 0,
+                        // si lo añadio el usuario, y no asigno
+                        // estos espacios, se debera analizar
+                ) continue;
+
+                throw std::runtime_error(
+                    "Secciones solapadas en memoria virtual. seccion: " + n1 + " y seccion: " + n2);
             }
         }
 
-        uint64_t current_offset = compute_sections_base_offset();
-        assign_section_offsets(current_offset);
-        compute_symbol_file_offsets();
+
         //    NO asignamos offsets aquí (eso lo hace build_executable)
         //    porque depende del tamaño del header y de la tabla misma.
     }
 
 
     std::vector<uint8_t> Linker::build_executable() {
+        result->output.reserve(4096); // evita realocaciones
         resolve_symbols();
         apply_relocations();
         optimize_modules();
         merge_address_spaces();
         merge_sections();
+
         build_header();
         build_section_table();
 
-        // construir el binario final
-        std::vector<uint8_t> result;
+        // escribir tabla de espacio de direcciones
+        auto write_space_address = [&](HeaderVELB &v) {
+            for (int i = 0; i < final_header.n_spaces; ++i) {
+                result->emit64(final_header.address_spaces[i].address.address_init);
+                result->emit64(final_header.address_spaces[i].address.address_final);
 
-        // Header
-        result.insert(result.end(),
-                      reinterpret_cast<const uint8_t *>(&final_header),
-                      reinterpret_cast<const uint8_t *>(&final_header) + sizeof(final_header));
+                // offset a la tabla de strings
+                result->emit64(final_header.address_spaces[i].offset_section_strings);
+                result->emit64(0);
+            }
+        };
 
-        // Tabla de secciones
-        for (const auto &sec: final_sections) {
-            result.insert(result.end(),
-                          reinterpret_cast<const uint8_t *>(&sec),
-                          reinterpret_cast<const uint8_t *>(&sec) + sizeof(sec));
+        result->emit32(final_header.magic.firma);
+        result->emit32(final_header.format_v);
+
+        result->emit32(final_header.max_v);
+        result->emit32(final_header.min_v);
+
+        result->emit64(final_header.checksum);
+
+        result->emit64(final_header.flags);
+        result->emit64(final_header.timestamp);
+        result->emit32(final_header.arch);
+
+        result->emit32(final_header.count);
+
+        result->emit64(final_header.table_offset);
+
+        result->emit64(final_header.n_spaces);
+
+        // indicar offset la seccion de cadenas espaciales.
+        result->emit64(final_header.offset_section_strings);
+
+        // Indicar el valor de PC al cargar el programa
+        result->emit64(final_header.start_pc);
+
+        // el header siempre debe estar alineado a 16 bytes
+        while (result->offset % 16 != 0) {
+            result->emit8(0x00);
         }
 
-        // Bytecode final
-        result.insert(result.end(), final_executable.begin(), final_executable.end());
+        // escribir tabla de espacios
+        write_space_address(final_header);
 
-        return result;
+        for (uint64_t i = 0; i < string_blob.size(); ++i) {
+            result->emit8(string_blob[i]);
+        }
+
+        // escribir tabla se secciones, supondre que el offset de la tabla este
+        // bien calculada y se este apuntando a este sitio.
+        for (auto &sec: final_sections) {
+            result->emit64(sec.memory.address.address_init);
+            result->emit64(sec.memory.address.address_final);
+            result->emit64(sec.memory.offset_string);
+        }
+
+        // añadir el bytecode al final
+        result->output.insert(result->output.end(), final_executable.begin(), final_executable.end());
+
+        return result->output;
     }
 
     void Linker::write_to_file(const std::string &path) {
@@ -469,12 +738,38 @@ namespace Assembly::Bytecode::Linker {
             return;
         }
 
+
         f << "VELB MAP FILE\n";
         f << "Executable: " << options.output_path << "\n";
 
         std::time_t t = std::time(nullptr);
         f << "Generated: " << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S") << "\n";
         f << "Linker Version: 1.0\n\n";
+
+        if (result->output.size() >= sizeof(HeaderVELB)) {
+            HeaderVELB hdr{};
+            std::memcpy(&hdr, result->output.data(), sizeof(HeaderVELB));
+
+            f << "=== VELB HEADER ===\n";
+            f << "Magic: "
+                    << (char) hdr.magic.firma_byte[0]
+                    << (char) hdr.magic.firma_byte[1]
+                    << (char) hdr.magic.firma_byte[2]
+                    << (char) hdr.magic.firma_byte[3] << "\n";
+
+            f << "Format version: " << hdr.format_v << "\n";
+            f << "VM version: min=" << hdr.min_v << " max=" << hdr.max_v << "\n";
+            f << "Checksum: 0x" << std::hex << hdr.checksum << std::dec << "\n";
+            f << "Flags: 0x" << std::hex << hdr.flags << std::dec << "\n";
+            f << "Timestamp: " << hdr.timestamp << "\n";
+            f << "Target arch: " << hdr.arch << "\n";
+            f << "Section count: " << hdr.count << "\n";
+            f << "Section table offset: 0x" << std::hex << hdr.table_offset << std::dec << "\n";
+            f << "Spaces count: " << hdr.n_spaces << "\n";
+            f << "Strings table offset: 0x" << std::hex << hdr.offset_section_strings << std::dec << "\n";
+            f << "Start PC: 0x" << std::hex << hdr.start_pc << std::dec << "\n\n";
+        }
+
 
         f << "=== MODULES INCLUDED ===\n";
         for (size_t i = 0; i < modules.size(); ++i)
@@ -490,6 +785,23 @@ namespace Assembly::Bytecode::Linker {
                   [](auto &a, auto &b) {
                       return a.second.absolute < b.second.absolute;
                   });
+
+        if (final_executable.size() >= sizeof(HeaderVELB) +
+            sizeof(table_spaces_address) * final_header.n_spaces) {
+            auto *spaces = reinterpret_cast<const table_spaces_address *>(
+                final_executable.data() + sizeof(HeaderVELB)
+            );
+
+            f << "=== ADDRESS SPACES ===\n";
+            for (uint64_t i = 0; i < final_header.n_spaces; ++i) {
+                const auto &sp = spaces[i];
+                f << "[" << i << "]\n";
+                f << "  VA Range: 0x" << std::hex << sp.address.address_init
+                        << " - 0x" << sp.address.address_final << std::dec << "\n";
+                f << "  String offset: 0x" << std::hex << sp.offset_section_strings
+                        << " (" << std::dec << sp.offset_section_strings << ")\n\n";
+            }
+        }
 
         f << "=== SYMBOLS BY SECTION ===\n";
 
@@ -526,17 +838,22 @@ namespace Assembly::Bytecode::Linker {
 
         f << "\n=== SECTIONS ===\n";
         for (const auto &sec: final_sections) {
-            f << "[" << std::string(sec.name.name,
-                                    strnlen(sec.name.name, 16)) << "]\n";
+            const size_t size = compute_sections_base_offset();
 
-            f << "  VA Range: 0x" << std::hex << sec.address.address_init
-                    << " - 0x" << sec.address.address_final << "\n";
+            f << "[" << get_string_from_offset(sec.memory.offset_string - size) << "]\n";
 
-            f << "  FILE Off: 0x" << sec.offset << "\n";
+            f << "  VA Range: 0x" << std::hex << sec.memory.address.address_init
+                    << " - 0x" << sec.memory.address.address_final << "\n";
+
+            f << "  FILE Off: 0x" << sec.memory.offset_string << "\n";
 
             f << "  Size: " << std::dec
-                    << (sec.address.address_final - sec.address.address_init)
-                    << " bytes\n\n";
+                    << (sec.memory.address.address_final - sec.memory.address.address_init)
+                    << " bytes\n";
+
+            f << "  OffsetString table: " << std::hex << sec.memory.offset_string << " "
+                    << std::dec << sec.memory.offset_string
+                    << "\n\n";
         }
 
         f << "=== FINAL SIZE ===\n";

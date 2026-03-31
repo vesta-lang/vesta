@@ -114,7 +114,7 @@ namespace Assembly::Bytecode {
         range_memory range;
 
         // nombre de la seccion, maximo 16 bytes.
-        uint8_t name_section[16];
+        std::string name_section;
 
         // tabla de secciones key(nombre): valor(seccion)
         std::unordered_map<std::string, Section> table_section;
@@ -135,9 +135,7 @@ namespace Assembly::Bytecode {
 
         // Establecer nombre de sección (máx 16 bytes)
         void set_name(const std::string &name) {
-            std::memset(name_section, 0, sizeof(name_section));
-            std::memcpy(name_section, name.c_str(),
-                        std::min(name.size(), sizeof(name_section)));
+            name_section = name;
         }
 
         // Liberar memoria interna

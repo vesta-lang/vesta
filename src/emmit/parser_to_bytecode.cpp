@@ -98,6 +98,11 @@ namespace Assembly::Bytecode {
         const std::vector<std::unique_ptr<vm::ASTNode> > &ast) {
         uint64_t offset = 0;
 
+        // por ahora esta seccion y espacio contendra la meta informacion y la añade
+        // el ensamblador
+        ctx.add_space("MetaSpace", 0x0, 0x0);
+        ctx.get_space("MetaSpace")->add_section("strings", 0x0, 0x0);
+
         // 1 Primera pasada
         for (auto &node: ast)
             first_pass(node.get(), offset);

@@ -27,6 +27,9 @@
 
 #include <stdint.h>
 
+#include "emmit/bytewriter.h"
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,44 +47,104 @@ typedef union velb_magic {
     uint8_t firma_byte[4];
 } velb_magic;
 
+/**
+ * ``4 bytes`` para la versión del formato.
+ */
 typedef uint32_t velb_version_format;
 
+/**
+ * ``4 bytes`` con la máxima versión compatible en la
+ * que el código puede ser ejecutado en una VM.
+ */
 typedef uint32_t max_vm_version;
+
+/**
+ *  ``4 bytes`` con la mínima versión
+ *  compatible en la que el código puede ser ejecutado en una VM.
+ */
 typedef uint32_t min_vm_version;
 
+/**
+ * ``8 bytes`` para indicar un checksum del código, sino
+ * coincide, no se ejecuta.
+ */
 typedef uint64_t velb_checksum;
 
+/**
+ * para indicar características del ejecutable
+ * (meta-información adicional del ejecutable).
+ */
 typedef uint64_t velb_flags;
+
+/**
+ * ``8 bytes`` de marca de tiempo para indicar la fecha de compilación.
+ */
 typedef uint64_t build_timestamp;
+
+/**
+ * ``4 bytes`` para indicar la
+ * arquitectura en la que se realizo la compilación del ejecutable.
+ */
 typedef uint32_t target_arch;
 
+/**
+ * ``4 bytes`` para el numero de secciones en la tabla de secciones.
+ */
 typedef uint32_t section_count;
 
+/**
+ * ``8 bytes`` de desplazamiento respecto a la
+ * dirección base para indicar la tabla de secciones.
+ */
 typedef uint64_t section_table_offset;
+
+/**
+ * 8 bytes para indicar la cantidad de espacio de
+ * direcciones de la tabla que viene a continuación.
+ */
+typedef uint64_t number_spaces_address;
 
 typedef struct PACKED range_memory {
     uint64_t address_init;
     uint64_t address_final;
 } range_memory;
 
+typedef struct PACKED table_spaces_address {
+    range_memory address; // 16 bytes
+
+    // contiene el offset a la tabla de strings,
+    // en caso de estar el ejecutable cargado en la VM,
+    // este campo contendra la direccion virtual con el offset
+    // aplicado.
+    uint64_t offset_section_strings;
+    uint64_t padding;
+} table_spaces_address;
+
 typedef struct PACKED HeaderVELB {
-    velb_magic magic;
-    velb_version_format format_v;
+    velb_magic magic; // 4, 4
+    velb_version_format format_v; // 4, 8
 
-    max_vm_version max_v;
-    min_vm_version min_v;
+    max_vm_version max_v; // 4, 12
+    min_vm_version min_v; // 4, 16
 
-    velb_checksum checksum;
+    velb_checksum checksum; // 8, 24
 
-    velb_flags flags;
-    build_timestamp timestamp;
-    target_arch arch;
+    velb_flags flags; // 8, 32
+    build_timestamp timestamp; // 8, 40
+    target_arch arch; // 4, 44
 
-    section_count count;
+    section_count count; // 4, 48
 
-    section_table_offset table_offset;
+    section_table_offset table_offset; // 8, 56
 
-    range_memory address_spaces[8]; // tabla de espacios de direcciones
+    number_spaces_address n_spaces; // 8, 64
+
+    // seccion con cadenas espaciales que pone el linker.
+    // "code\0data\0stack\0main\0foo\0bar\0"
+    uint64_t offset_section_strings; // 8, 72
+    uint64_t start_pc; // 8, 80
+
+    table_spaces_address *address_spaces; // tabla de espacios de direcciones
 } HeaderVELB;
 
 typedef struct PACKED HeaderVELA {
@@ -91,23 +154,13 @@ typedef struct PACKED HeaderVELA {
     uint64_t module_table_offset;
 } HeaderVELA;
 
-typedef struct PACKED name_section {
-    union {
-        struct {
-            uint64_t hi;
-            uint64_t lo;
-        } as_u64;
-
-        char name[16];
-    };
-} name_section;
-
 typedef struct PACKED section_range_memory {
-    range_memory address;
+    range_memory address;   // aqui deberia contener offsets a los
+                            // espacios de direcciones, al cargar el ejecutable,
+                            // se indica la direccion real,
 
     // nombre de la seccion, maximo 16 bytes.
-    name_section name;
-    uint64_t offset; // donde empieza el bytecode o los datos dentro del archivo
+    uint64_t offset_string; // donde empieza el bytecode o los datos dentro del archivo
 } section_range_memory;
 
 typedef struct PACKED VELA_ModuleEntry {
@@ -131,6 +184,17 @@ typedef struct PACKED VELA_Relocation {
     char symbol[32]; // símbolo a resolver
 } VELA_Relocation;
 
+/**
+ * Nos permite comprobar si dos rangos de memoria se solapan ("se pisan")
+ * @param a rango de memoria 1
+ * @param b rango de memoria 2
+ * @return si hay solapacion entonces devuelve true.
+ */
+static bool ranges_overlap(const range_memory *a, const range_memory *b) {
+    return !(a->address_final <= b->address_init ||
+             b->address_final <= a->address_init);
+}
+
 
 #ifdef __cplusplus
 }
@@ -144,7 +208,6 @@ typedef struct PACKED VELA_Relocation {
 #include <vector>
 #include <c++/string>
 #include "emmit/struct_context.h"
-
 #include "optimizer/optimizer.h"
 #include "emmit/annotations.h"
 
@@ -244,6 +307,11 @@ namespace Assembly::Bytecode::Linker {
         uint64_t size; // tamaño del label, algunas no tienen
     };
 
+    typedef struct section_info_linker{
+        section_range_memory memory;
+        std::string name;
+    } section_info_linker;
+
     /**
      * clase Linker va a cumplir dos roles muy distintos:
      *
@@ -278,6 +346,7 @@ namespace Assembly::Bytecode::Linker {
     public:
         explicit Linker(const LinkerOptions &opts = {})
             : options(opts) {
+            this->result = new ByteWriter;
         }
 
         /**
@@ -313,6 +382,8 @@ namespace Assembly::Bytecode::Linker {
          */
         void add_object_memory(const std::vector<uint8_t> &data);
 
+        void merge_space_address(Space &dest, const Space &src);
+
         /**
          * Recibe el resultado del ensamblador.
          * Responsabilidades:
@@ -343,6 +414,8 @@ namespace Assembly::Bytecode::Linker {
          * @param path archivo vela a cargar
          */
         void add_static_library(const std::string &path);
+
+        void merge_section(Section &dest, const Section &src);
 
         /**
          * Responsabilidades
@@ -445,6 +518,9 @@ namespace Assembly::Bytecode::Linker {
         LinkerOptions options;
         LinkerReport report;
 
+        // para construir el binario final, buffer de salida
+        ByteWriter *result;
+
         // Interno: lista de módulos cargados
         struct Module {
             std::string name;
@@ -469,9 +545,50 @@ namespace Assembly::Bytecode::Linker {
          */
         std::unordered_map<std::string, SymbolInfo> symbol_info;
 
+        /**
+         * bytecode final que plasmar, esto esta generado por una unidad de ensamblado
+         */
         std::vector<uint8_t> final_executable;
+
+        /**
+         * Header que escribir en el archivo final
+         */
         HeaderVELB final_header{};
-        std::vector<section_range_memory> final_sections;
+
+
+        /**
+         * Tabla de secciones finales
+         */
+        std::vector<section_info_linker> final_sections;
+
+        /**
+         * Pool de cadenas, estas son las que iran en la seccion "strings"
+         */
+        std::vector<std::string> string_pool;
+
+        /**
+         * Segun el nombre instroducido, devuelve un offset u otro, este offset
+         * es donde esta la cadena si se suma la direccion base.
+         */
+        std::unordered_map<std::string, uint64_t> string_offsets;
+
+        /**
+         * contenido final de la sección "strings"
+         * "code\0data\0stack\0main\0foo\0bar\0"
+         */
+        std::vector<uint8_t> string_blob;
+
+        /**
+         * Vector de espacios de direcciones, cuando se junta varios modulos,
+         * cada modulo puede contener los mismos espacios de direcciones o
+         * tener mas o menos, en cualquiera de los casos, al generar un binario
+         * final debe existir todos los espacios de direcciones descritos por
+         * los modulos, en caso de que los espacios de direcciones ya existan
+         * con un mismo nombre, se aplicara una relocalizacion a todo_ el codigo
+         * de un modulo bajo ese espacio de direcciones, para que los
+         * codigos de distintos modulos coexistan en el mismo espacio de direcciones
+         */
+        std::unordered_map<std::string, Space> spaces_address;
 
         /**
          * Fusiona los espacios de direcciones de todos los módulos.
@@ -509,11 +626,24 @@ namespace Assembly::Bytecode::Linker {
          */
         void build_header();
 
+        /**
+         * Permite la construccion de la seccion especial "strings",
+         * esta seccion contiene strings especiales que solo el linker usara,
+         * normalmente son strings contantes con el nombre de los espacios de direcciones,
+         * nombre de los labels y otros. Cada string debe tener un terminador nulo.
+         *
+         * Es necesario conocer el offset en el que comienda dicha seccion para poder
+         * calcular el offset a esta tabla
+         *
+         * @param offset_init offset donde inicial la seccion de cadena.
+         */
+        void build_section_strings(uint64_t offset_init);
+
         uint64_t compute_sections_base_offset() const;
 
-        uint64_t assign_section_offsets(uint64_t start_offset);
-
         void compute_symbol_file_offsets();
+
+        std::string get_string_from_offset(uint64_t offset) const;
 
         /**
          * Construye la tabla de secciones del ejecutable.

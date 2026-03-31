@@ -13,6 +13,7 @@
 #ifndef PARSER_TO_BYTECODE_H
 #define PARSER_TO_BYTECODE_H
 
+
 #include "emmit_decl.h"
 #include "annotations.h"
 
@@ -24,11 +25,7 @@
  */
 
 
-
 namespace Assembly::Bytecode {
-
-
-
     /**
      * Tabla de directivas, estas deben ir siempre en el inicio del programa
      */
@@ -256,54 +253,6 @@ namespace Assembly::Bytecode {
 
 
     /**
-     * Permite un controlo de emision de bytes mas seguro con auto-incremento del offset
-     */
-    struct ByteWriter {
-        /**
-         * Buffer de bytes emitidos, normalmente aqui ira codigo o datos
-         */
-        std::vector<uint8_t> output;
-
-        /**
-         * Offset actual
-         */
-        uint64_t offset = 0;
-
-        /**
-         * Emitir un byte
-         * @param value byte a emitir
-         */
-        void emit8(uint8_t value) {
-            output.push_back(value);
-            offset += 1;
-        }
-
-        /**
-         * emitir una cantidad arbitraria de bytes
-         * @param data buffer de bytes a emitir
-         * @param size cantidad de bytes a emitir de este buffer.
-         */
-        void emit_bytes(const uint8_t* data, size_t size) {
-            output.insert(output.end(), data, data + size);
-            offset += size;
-        }
-
-        /**
-         * Emitir solo 5 bytes usando un valor de 8 bytes
-         * @param value valor de 5 bytes
-         */
-        void emit40(uint64_t value) {
-            // escribe 5 bytes (40 bits)
-            emit8((value >>  0) & 0xFF);
-            emit8((value >>  8) & 0xFF);
-            emit8((value >> 16) & 0xFF);
-            emit8((value >> 24) & 0xFF);
-            emit8((value >> 32) & 0xFF);
-        }
-    };
-
-
-    /**
      * @class Assembler
      * @brief Convierte un AST generado por el parser en bytecode ejecutable para la VM.
      *
@@ -317,8 +266,8 @@ namespace Assembly::Bytecode {
         /**
          * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
          */
-        Section* current_section    = nullptr;
-        Label*  current_label       = nullptr;
+        Section *current_section = nullptr;
+        Label *current_label = nullptr;
 
         /**
          * Contexto del ensamblador
@@ -458,17 +407,48 @@ namespace Assembly::Bytecode {
 
     private:
         /// Tabla de símbolos generada en la primera pasada.
-        std::unordered_map<std::string, Label*> symbol_table;
+        std::unordered_map<std::string, Label *> symbol_table;
 
         /// Buffer de salida donde se escribe el bytecode final.
         ByteWriter output;
     };
 
+    /**
+     * Crea una ast nuevo, combinando el ast original y el de los archivos importados. Para
+     * esto
+     *    - Solo movimientos.
+     *    - No se duplica memoria, no se duplican nodos, solo se mueven.
+     *    - Los imports desaparecen y son reemplazados por los nodos reales
+     *          del archivo importado.
+     *
+     *  Significa:
+     *      - Toma el AST original.
+     *      - Toma el AST importado.
+     *      - Los fusiona en un nuevo vector result.
+     *      - Mueve todos los nodos al nuevo AST.
+     *      - Reemplaza el AST original por el nuevo.
+     *
+     *      AST original:
+     *          [A, B, import C, D]
+     *
+     *      AST de C:
+     *          [X, Y, Z]
+     *
+     *      AST final:
+     *          [A, B, X, Y, Z, D]
+     *
+     * Si algún nodo del AST guarda punteros a otros nodos, este metodo rompe esas referencias.
+     * Pero si el AST es puramente jerárquico (cada nodo solo conoce a sus hijos), entonces no hay problema
+     *
+     * @param ast archivo original que import
+     * @param imported
+     */
     static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
-                                std::unordered_set<std::string> &           imported) {
+                                std::unordered_set<std::string> &imported) {
         std::vector<std::unique_ptr<vm::ASTNode> > result;
 
         for (auto &node: ast) {
+            // si se encontro un nodo de tipo Import
             if (auto imp = dynamic_cast<vm::ImportNode *>(node.get())) {
                 std::string file = imp->filename;
 
@@ -480,13 +460,13 @@ namespace Assembly::Bytecode {
 
                 // Leer archivo
                 std::ifstream f(file);
-                std::string   code((std::istreambuf_iterator<char>(f)),
-                                   std::istreambuf_iterator<char>());
+                std::string code((std::istreambuf_iterator<char>(f)),
+                                 std::istreambuf_iterator<char>());
 
-                // Lex + parse
-                vm::Lexer  lx(code);
+                // Lex + parse del codigo importado
+                vm::Lexer lx(code);
                 vm::Parser px(lx);
-                auto       imported_ast = px.parse();
+                auto imported_ast = px.parse();
 
                 // Expandir imports recursivamente
                 resolve_imports(imported_ast, imported);
@@ -494,11 +474,14 @@ namespace Assembly::Bytecode {
                 // Insertar nodos importados
                 for (auto &n: imported_ast)
                     result.push_back(std::move(n));
-            } else {
+            }
+            // Si el nodo NO es un import, lo copia al AST final.
+            else {
                 result.push_back(std::move(node));
             }
         }
 
+        // Reemplazar AST original
         ast = std::move(result);
     }
 }

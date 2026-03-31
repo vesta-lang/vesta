@@ -32,8 +32,9 @@ struct HeaderVELB {
 
     u32 count;
     u64 table_offset;
+    u64 n_spaces;
 
-    range_memory address_spaces[8];
+    range_memory address_spaces[n_spaces];
 
     // Aquí calculamos el offset y tamaño del bytecode
     u64 sections_end = table_offset + count * 32;

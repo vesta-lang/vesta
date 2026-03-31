@@ -78,6 +78,9 @@ namespace Assembly::Bytecode {
         uint64_t IniAddress = vm::parse_number(iniNode->value);
         uint64_t EndAddress = vm::parse_number(endNode->value);
 
+        // indicar el final del nombre en el caracter 16
+        //string_space[15] = 0;
+
         // Crear el espacio
         assembler.ctx.add_space(string_space, IniAddress, EndAddress);
     }
