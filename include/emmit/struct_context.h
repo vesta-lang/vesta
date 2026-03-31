@@ -130,6 +130,8 @@ namespace Assembly::Bytecode {
             sec.name = name;
             sec.memory.address_init = init;
             sec.memory.address_final = final;
+            sec.size_real = 0;
+            sec.size_align_section = 1;
             table_section[name] = sec;
         }
 

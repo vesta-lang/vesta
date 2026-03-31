@@ -403,7 +403,7 @@ namespace Assembly::Bytecode::Linker {
                 for (const auto &[sectionName, section]: space.table_section) {
                     section_info_linker sec{};
                     sec.memory.address = section.memory; // aqui se esta almacenando la direccion virtual de inicio y final
-                    sec.memory.address.address_final = section.size_real; // debemos cambiar la direccion final para usar
+                    //sec.memory.address.address_final = section.size_real; // debemos cambiar la direccion final para usar
                     // la direccion real dentro del archivo, y no usar la direccion final virtual.
                     // la seccion puede ocupar 49 bytes realmente en el archivo, pero al cargarse demandar 1kB de
                     // memoria.
@@ -698,6 +698,11 @@ namespace Assembly::Bytecode::Linker {
             result->emit8(string_blob[i]);
         }
 
+        // la tabla de strings alineado a 16 bytes
+        while (result->offset % 16 != 0) {
+            result->emit8(0x00);
+        }
+
         // escribir tabla se secciones, supondre que el offset de la tabla este
         // bien calculada y se este apuntando a este sitio.
         for (auto &sec: final_sections) {
@@ -845,7 +850,7 @@ namespace Assembly::Bytecode::Linker {
             f << "  VA Range: 0x" << std::hex << sec.memory.address.address_init
                     << " - 0x" << sec.memory.address.address_final << "\n";
 
-            f << "  FILE Off: 0x" << sec.memory.offset_string << "\n";
+            f << "  FILE Off String: 0x" << sec.memory.offset_string << "\n";
 
             f << "  Size: " << std::dec
                     << (sec.memory.address.address_final - sec.memory.address.address_init)
