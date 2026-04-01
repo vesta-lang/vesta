@@ -21,8 +21,6 @@
 #pragma comment(lib, "Ws2_32.lib")
 #endif
 
-
-
 TCPServer::TCPServer(uint16_t port) : port(port) {}
 TCPServer::TCPServer(uint16_t port, TLSContext* ctx)
     : port(port), tls_enabled(true), tls_ctx(ctx) {}

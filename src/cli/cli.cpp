@@ -14,9 +14,12 @@
 
 #include <cstdio>
 
+#include "cli/cli_init_manager_and_server.h"
 #include "cli/sync_io.h"
 
 namespace cli {
+    static ManagerOfManagersAndServer mgr = ManagerOfManagersAndServer();
+
     struct Impl {
         Config cfg;
 
@@ -47,7 +50,30 @@ namespace cli {
     };
 
     static void command_run(std::string cmd) {
+        // Construcción del manager
+        runtime::ManageVM vm{nullptr};
 
+        // Añadir moviendo la instancia
+        size_t id = mgr.add_manager(std::move(vm));
+
+        // Obtener copia segura del manager
+        auto maybe = mgr.get_manager_copy(id);
+        if (!maybe) {
+            std::lock_guard lk(vesta::cout_mutex);
+            vesta::scout() << "No se pudo obtener copia del manager\n";
+            return;
+        }
+
+        // Construir la representación textual fuera del mutex,
+        // espero que esto no de problemas en el futuro
+        std::string info = maybe->to_string_vm_manager_info();
+
+        // Imprimir bajo mutex (bloque corto)
+        //{
+            //std::lock_guard lk(vesta::cout_mutex);
+            vesta::scout() << "Manager creado con ID: " << id << "\n";
+            vesta::scout() << info;
+        //}
     }
 
 

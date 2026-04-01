@@ -18,7 +18,7 @@
 #include "runtime/runtime.h"
 
 int main() {
-    runtime::ManageVM manager = runtime::ManageVM();
+    runtime::ManageVM manager = runtime::ManageVM(nullptr);
 
     uint64_t vm1_id = manager.create_vm(); // ID=1
     uint64_t vm2_id = manager.create_vm(); // ID=2
@@ -35,6 +35,8 @@ int main() {
         }
 
     }
+
+    manager.print_vm_manager_info();
 
     manager.destroy_vm(vm1_id);
     bool exists = manager.has_vm(vm1_id); // false

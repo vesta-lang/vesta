@@ -18,10 +18,9 @@
 
 namespace runtime {
     ManageVM::ManageVM(
-        ManagerTCPListener &listener,
-        Sqlite::SqliteSingleton &db
+        ManagerTCPListener *listener
     ): listener(listener),
-                                                      loader(this->manager_mem), db(db), counter_vm(0) {
+       loader(this->manager_mem), counter_vm(0) {
     }
 
     ManageVM::~ManageVM() {
@@ -40,14 +39,13 @@ namespace runtime {
     bool ManageVM::destroy_vm(uint64_t vm_id) {
         for (auto it = vms.begin(); it != vms.end(); ++it) {
             if ((*it)->id.id == vm_id) {
-                delete *it;       // Liberar memoria
-                vms.erase(it);    // QUITAR de vector
+                delete *it; // Liberar memoria
+                vms.erase(it); // QUITAR de vector
                 return true;
             }
         }
         return false;
     }
-
 
 
     VM *ManageVM::get_vm(uint64_t vm_id) {
@@ -84,4 +82,41 @@ namespace runtime {
         vms.clear();
         counter_vm = 0;
     }
+
+    void ManageVM::print_vm_manager_info() {
+        std::ostringstream ss;
+
+        ss << "=== ManageVM info ===\n";
+        ss << "name_manager : " << name_manager << "\n";
+        ss << "counter_vm   : " << counter_vm << "\n";
+        ss << "vm_count     : " << vms.size() << "\n";
+
+        ss << "listener     : " << (listener
+                                        ? ("ptr=" + std::to_string(reinterpret_cast<uintptr_t>(listener)))
+                                        : std::string("<null>")) << "\n";
+        // Si ManagerTCPListener tiene un metodo para obtener puerto, debo añadir aquí.
+        ss << "loader       : ptr=" << reinterpret_cast<uintptr_t>(&loader) << "\n";
+        ss << "manager_mem  : ptr=" << reinterpret_cast<uintptr_t>(&manager_mem) << "\n";
+
+        ss << "\nVM list:\n";
+        // imprimimos la tabla de VMs
+        print_vm_list_table(ss, vms);
+
+        // finalmente volcamos a cout
+        std::cout << ss.str();
+    }
+    std::string ManageVM::to_string_vm_manager_info() const {
+        std::ostringstream ss;
+        ss << "=== ManageVM info ===\n";
+        ss << "name_manager : " << name_manager << "\n";
+        ss << "counter_vm   : " << counter_vm << "\n";
+        ss << "vm_count     : " << vms.size() << "\n";
+        ss << "listener     : " << (listener ? ("ptr=" + std::to_string(reinterpret_cast<uintptr_t>(listener))) : std::string("<null>")) << "\n";
+        ss << "loader       : ptr=" << reinterpret_cast<uintptr_t>(&loader) << "\n";
+        ss << "manager_mem  : ptr=" << reinterpret_cast<uintptr_t>(&manager_mem) << "\n";
+        ss << "\nVM list:\n";
+        print_vm_list_table(ss, vms);
+        return ss.str();
+    }
+
 }

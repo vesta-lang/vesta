@@ -24,6 +24,47 @@
 namespace runtime {
     class VM;
 
+    // Helper: convierte un puntero a VM en string (por defecto muestra la dirección).
+    // Si tiene métodos públicos (p.ej. id(), name(), to_string()), adaptar aquí.
+    static std::string vm_summary(runtime::VM *vm) {
+        if (!vm) return "<null>";
+        std::ostringstream ss;
+        ss << "ptr=" << vm;
+        // Ejemplo: si VM tuviera un metodo id(): ss << " id=" << vm->id();
+        // Ejemplo: si VM tuviera to_string(): ss << " " << vm->to_string();
+        return ss.str();
+    }
+
+    // Helper: imprime una tabla simple con índice y resumen de VM
+    static void print_vm_list_table(std::ostream &out, const std::vector<runtime::VM *> &vms) {
+        // calcular ancho de columnas
+        size_t idx_width = 3; // mínimo
+        size_t info_width = 4;
+        for (size_t i = 0; i < vms.size(); ++i) {
+            idx_width = std::max(idx_width, std::to_string(i).size());
+            info_width = std::max(info_width, vm_summary(vms[i]).size());
+        }
+
+        auto sep = [&](char left, char mid, char right) {
+            out << left;
+            out << std::string(idx_width + 2, '-') << mid;
+            out << std::string(info_width + 2, '-') << right << "\n";
+        };
+
+        sep('+', '+', '+');
+        out << "| " << std::left << std::setw((int) idx_width) << "idx" << " | "
+                << std::left << std::setw((int) info_width) << "vm" << " |\n";
+        sep('+', '+', '+');
+
+        for (size_t i = 0; i < vms.size(); ++i) {
+            out << "| " << std::right << std::setw((int) idx_width) << i << " | "
+                    << std::left << std::setw((int) info_width) << vm_summary(vms[i]) << " |\n";
+        }
+
+        sep('+', '+', '+');
+    }
+
+
     class ManagerTLSConnection : public TLSConnection {
     public:
         ManagerTLSConnection(socket_t fd, SSL *ssl) : TLSConnection(fd, ssl) {
@@ -83,7 +124,7 @@ namespace runtime {
          * No todas las instancias tienen por que ser un servicio de red,
          * pueden ejecutarse unicamente a nivel local.
          */
-        ManagerTCPListener &listener;
+        ManagerTCPListener *listener;
 
         /**
          * El manager puede tener un loader publico
@@ -94,11 +135,10 @@ namespace runtime {
          * Base de datos para consultar usuario y credenciales.
          * Tambien se puede hacer registro de logs.
          */
-        Sqlite::SqliteSingleton &db;
+        // Sqlite::SqliteSingleton &db; // no hace falta añadirlo por que es un singleton con metodos estaticos
 
         // Constructor por defecto
-        ManageVM(ManagerTCPListener &listener,
-                 Sqlite::SqliteSingleton &db);
+        ManageVM(ManagerTCPListener *listener);
 
         // Destructor - libera recursos
         ~ManageVM();
@@ -143,6 +183,10 @@ namespace runtime {
 
         // contiene todas las instancias de maquinas
         std::vector<VM *> vms;
+
+        void print_vm_manager_info();
+
+        std::string to_string_vm_manager_info() const;
 
     private:
         // se usa para generar los ID's de la VM, las VM nuevas no tendran un mismo ID
