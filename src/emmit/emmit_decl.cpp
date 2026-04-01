@@ -1,7 +1,6 @@
 #include "emmit/emmit_decl.h"
 
 #include "emmit/parser_to_bytecode.h"
-#include "ftxui/component/event.hpp"
 
 #define DEBUG_EMIT
 

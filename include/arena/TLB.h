@@ -25,7 +25,6 @@
 #include <memory_resource>
 
 #include "arena/arena.h"
-#include "ftxui/component/component_base.hpp"
 
 #define GET_OFFSET(address)  (address & 0xFFF)
 #define GET_PT(address)      ((address >> 12) & 0xFFF)

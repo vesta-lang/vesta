@@ -70,4 +70,20 @@ private:
     std::atomic<bool> stopping_{false};
 };
 
+template<typename F, typename... Args>
+auto ThreadPool::submit(F&& f, Args&&... args) -> std::future<typename std::invoke_result_t<F, Args...>> {
+    using R = typename std::invoke_result_t<F, Args...>;
+    auto task_ptr = std::make_shared<std::packaged_task<R()>>(
+        std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+    );
+    std::future<R> fut = task_ptr->get_future();
+    {
+        std::lock_guard<std::mutex> lk(tasks_m_);
+        if (stopping_.load()) throw std::runtime_error("ThreadPool is stopping, cannot submit new tasks");
+        tasks_.emplace([task_ptr](){ (*task_ptr)(); });
+    }
+    tasks_cv_.notify_one();
+    return fut;
+}
+
 #endif //THREADPOOL_H
