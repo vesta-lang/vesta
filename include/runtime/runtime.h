@@ -15,13 +15,14 @@
 #include <cstdint>
 #include <vector>
 
-#include "runtime/manager_runtime.h"
-
 #include "arena/arena.h"
+#include "cli/sync_io.h"
 #include "runtime/rflags.h"
 #include "loader/loader.h"
 
 namespace runtime {
+    class ManageVM;
+
     typedef struct VM_ID {
         uint64_t id;
     } VM_ID;
@@ -70,15 +71,26 @@ namespace runtime {
         DEAD
     } vm_state;
 
+    static const char *vm_state_to_str(vm_state state) {
+        // Ajusta según tu enum real
+        switch (state) {
+            case READY: return "READY";
+            case RUNNING: return "RUNNING";
+            case BLOCKED: return "BLOCKED";
+            case DEAD: return "DEAD";
+            default: return "UNKNOWN";
+        }
+    }
+
     /**
      * Estados de error de los hilos
      */
     typedef enum state_err_thread {
-        THREAD_NO_ERROR = 0,        /** Sin error */
-        THREAD_UNKNOWN_ERROR,       /** Error no clasificado */
-        THREAD_SEGMENTATION_FAULT,  /** Un hilo intento acceder a memoria a la cual no tiene permisos */
+        THREAD_NO_ERROR = 0, /** Sin error */
+        THREAD_UNKNOWN_ERROR, /** Error no clasificado */
+        THREAD_SEGMENTATION_FAULT, /** Un hilo intento acceder a memoria a la cual no tiene permisos */
         THREAD_ILLEGAL_INSTRUCTION, /** Instruccion no reconocida o prohibida */
-        THREAD_DIVISION_BY_ZERO,    /** Division por cero */
+        THREAD_DIVISION_BY_ZERO, /** Division por cero */
 
         THREAD_STACK_OVERFLOW, /** Stack del hilo se desbordo:
                                          * El tope de pila(sp) se encontro con el limite de pila del hilo.
@@ -109,7 +121,7 @@ namespace runtime {
         size_t capacity;
         size_t size;
 
-        uint8_t *     code;
+        uint8_t *code;
         err_shellcode err;
 
         void (*Emit8)(struct shellcode_t *code, uint8_t byte);
@@ -129,10 +141,10 @@ namespace runtime {
      * Estructura para llamar a funciones nativas/externas a la VM.
      */
     typedef struct PendingCall_t {
-        void * (*    func)(void *arg); /** funcion nativa que llamar  */
-        shellcode_t *arg;              /** argumentos para la funcion, formando un shellcode */
-        void *       result;           /** valor de retorno */
-        bool         finished;         /** indica si la funcion fue ejecutada*/
+        void * (*func)(void *arg); /** funcion nativa que llamar  */
+        shellcode_t *arg; /** argumentos para la funcion, formando un shellcode */
+        void *result; /** valor de retorno */
+        bool finished; /** indica si la funcion fue ejecutada*/
 
         pthread_mutex_t lock; /** Proteccion de acceso para finished/result */
     } PendingCall_t;
@@ -227,6 +239,7 @@ namespace runtime {
      *
      * El hilo principal puede crear nuevas instancias o el usuario podra crear nuevas
      */
+
     class VM {
     public:
         /**
@@ -249,17 +262,17 @@ namespace runtime {
          */
         loader::Loader &loader_public;
 
-        vm_state     state;
+        vm_state state;
         pthread_t thread_for_vm{};
-        VM_ID     id{};
+        VM_ID id{};
 
         // registros
         // -----------------------------------------------------------
         vm::MappedPtrHost stack_pointer{}; // puntero tope de la pila
-        vm::MappedPtrHost base_pointer{};  // puntero base de la pila
+        vm::MappedPtrHost base_pointer{}; // puntero base de la pila
 
         vm::MappedPtrHost rip{}; // puntero de instruccion
-        RFlags_t          flags{};
+        RFlags_t flags{};
 
         GeneralRegister r00;
         GeneralRegister r01;
@@ -287,11 +300,11 @@ namespace runtime {
         // -----------------------------------------------------------
 
 
-        uint64_t         time_sleep{}; /** usado para almacenar un valor numerico, el cual es en ns, la hora
+        uint64_t time_sleep{}; /** usado para almacenar un valor numerico, el cual es en ns, la hora
                                      *  a la que despertar el hilo.
                                      *  Al dormir el hilo, se indica que su estado es BLOCK
                                      */
-        state_err_thread err_thread;   /**
+        state_err_thread err_thread; /**
                                              * Almcane el ultimo error ocurrido en el hilo.
                                              */
 
@@ -300,11 +313,64 @@ namespace runtime {
 
         VM(ManageVM &mgr_vm, uint64_t id_vm);
 
+        std::string to_string() const;
+
         /**
          * @brief Imprime estado completo de la VM (debug)
          */
         void print() const;
     };
+
+    static std::string vm_summary(const runtime::VM *vm) {
+        if (!vm) return "<null>";
+
+        std::ostringstream ss;
+        // ID
+        ss << "ID=" << vesta::hex64(static_cast<uint64_t>(vm->id.id));
+
+        // Estado
+        ss << " st=" << vm_state_to_str(vm->state);
+        ss << std::endl;
+
+        ss << " R00=" << vesta::hex64(vm->r00.qword());
+        ss << " R01=" << vesta::hex64(vm->r01.qword());
+        ss << " R02=" << vesta::hex64(vm->r02.qword());
+        ss << " R03=" << vesta::hex64(vm->r03.qword()); ss << std::endl;
+
+        ss << " R04=" << vesta::hex64(vm->r04.qword());
+        ss << " R05=" << vesta::hex64(vm->r05.qword());
+        ss << " R06=" << vesta::hex64(vm->r06.qword());
+        ss << " R07=" << vesta::hex64(vm->r07.qword()); ss << std::endl;
+
+        ss << " R08=" << vesta::hex64(vm->r08.qword());
+        ss << " R09=" << vesta::hex64(vm->r09.qword());
+        ss << " R10=" << vesta::hex64(vm->r10.qword());
+        ss << " R11=" << vesta::hex64(vm->r11.qword()); ss << std::endl;
+
+        ss << " R12=" << vesta::hex64(vm->r12.qword());
+        ss << " R13=" << vesta::hex64(vm->r13.qword());
+        ss << " R14=" << vesta::hex64(vm->r14.qword());
+        ss << " R15=" << vesta::hex64(vm->r15.qword()); ss << std::endl;
+
+        // IP/SP/BP (usar component_to_string para capturar representación)
+        ss << " IP=" << vesta::component_to_string(vm->rip);
+        ss << " SP=" << vesta::component_to_string(vm->stack_pointer);
+        ss << " BP=" << vesta::component_to_string(vm->base_pointer);
+
+        // Flags compactas
+        ss << " FLAGS="
+                << static_cast<unsigned>(vm->flags.bits.DM)
+                << static_cast<unsigned>(vm->flags.bits.CF)
+                << static_cast<unsigned>(vm->flags.bits.OF)
+                << static_cast<unsigned>(vm->flags.bits.SF)
+                << static_cast<unsigned>(vm->flags.bits.ZF);
+
+        // Thread / sleep
+        ss << " Th=" << reinterpret_cast<void *>(vm->thread_for_vm)
+                << " Sleep=" << vm->time_sleep;
+
+        return ss.str();
+    }
 }
 
 #endif //RUNTIME_H

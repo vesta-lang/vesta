@@ -83,35 +83,15 @@ namespace runtime {
         counter_vm = 0;
     }
 
-    void ManageVM::print_vm_manager_info() {
-        std::ostringstream ss;
-
-        ss << "=== ManageVM info ===\n";
-        ss << "name_manager : " << name_manager << "\n";
-        ss << "counter_vm   : " << counter_vm << "\n";
-        ss << "vm_count     : " << vms.size() << "\n";
-
-        ss << "listener     : " << (listener
-                                        ? ("ptr=" + std::to_string(reinterpret_cast<uintptr_t>(listener)))
-                                        : std::string("<null>")) << "\n";
-        // Si ManagerTCPListener tiene un metodo para obtener puerto, debo añadir aquí.
-        ss << "loader       : ptr=" << reinterpret_cast<uintptr_t>(&loader) << "\n";
-        ss << "manager_mem  : ptr=" << reinterpret_cast<uintptr_t>(&manager_mem) << "\n";
-
-        ss << "\nVM list:\n";
-        // imprimimos la tabla de VMs
-        print_vm_list_table(ss, vms);
-
-        // finalmente volcamos a cout
-        std::cout << ss.str();
-    }
     std::string ManageVM::to_string_vm_manager_info() const {
         std::ostringstream ss;
         ss << "=== ManageVM info ===\n";
         ss << "name_manager : " << name_manager << "\n";
         ss << "counter_vm   : " << counter_vm << "\n";
         ss << "vm_count     : " << vms.size() << "\n";
-        ss << "listener     : " << (listener ? ("ptr=" + std::to_string(reinterpret_cast<uintptr_t>(listener))) : std::string("<null>")) << "\n";
+        ss << "listener     : " << (listener
+                                        ? ("ptr=" + std::to_string(reinterpret_cast<uintptr_t>(listener)))
+                                        : std::string("<null>")) << "\n";
         ss << "loader       : ptr=" << reinterpret_cast<uintptr_t>(&loader) << "\n";
         ss << "manager_mem  : ptr=" << reinterpret_cast<uintptr_t>(&manager_mem) << "\n";
         ss << "\nVM list:\n";
@@ -119,4 +99,7 @@ namespace runtime {
         return ss.str();
     }
 
+    void ManageVM::print_vm_manager_info() {
+        std::cout << to_string_vm_manager_info();
+    }
 }

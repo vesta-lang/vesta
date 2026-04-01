@@ -16,6 +16,8 @@
 #include <memory>
 #include <vector>
 
+#include "runtime.h"
+#include "cli/sync_io.h"
 #include "loader/loader.h"
 #include "net/tcp_server.h"
 #include "openssl/ssl.h"
@@ -26,7 +28,7 @@ namespace runtime {
 
     // Helper: convierte un puntero a VM en string (por defecto muestra la dirección).
     // Si tiene métodos públicos (p.ej. id(), name(), to_string()), adaptar aquí.
-    static std::string vm_summary(runtime::VM *vm) {
+    static std::string vm_summary(VM *vm) {
         if (!vm) return "<null>";
         std::ostringstream ss;
         ss << "ptr=" << vm;
@@ -37,33 +39,11 @@ namespace runtime {
 
     // Helper: imprime una tabla simple con índice y resumen de VM
     static void print_vm_list_table(std::ostream &out, const std::vector<runtime::VM *> &vms) {
-        // calcular ancho de columnas
-        size_t idx_width = 3; // mínimo
-        size_t info_width = 4;
         for (size_t i = 0; i < vms.size(); ++i) {
-            idx_width = std::max(idx_width, std::to_string(i).size());
-            info_width = std::max(info_width, vm_summary(vms[i]).size());
+            const VM *vm = vms[i];
+            out << vm->to_string() << std::endl;
         }
-
-        auto sep = [&](char left, char mid, char right) {
-            out << left;
-            out << std::string(idx_width + 2, '-') << mid;
-            out << std::string(info_width + 2, '-') << right << "\n";
-        };
-
-        sep('+', '+', '+');
-        out << "| " << std::left << std::setw((int) idx_width) << "idx" << " | "
-                << std::left << std::setw((int) info_width) << "vm" << " |\n";
-        sep('+', '+', '+');
-
-        for (size_t i = 0; i < vms.size(); ++i) {
-            out << "| " << std::right << std::setw((int) idx_width) << i << " | "
-                    << std::left << std::setw((int) info_width) << vm_summary(vms[i]) << " |\n";
-        }
-
-        sep('+', '+', '+');
     }
-
 
     class ManagerTLSConnection : public TLSConnection {
     public:

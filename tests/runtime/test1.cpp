@@ -27,7 +27,7 @@ int main() {
 
     for (int i = 0; i < manager.vm_count(); i++) {
         if (auto vm = manager.get_vm(i)) {
-            vm->print();
+            std::cout << vm->to_string();
             printf("VMs: %zu | Arenas VM1: %zu\n", manager.vms.size(), vm->manager_mem_priv.arenas.size());
 
         } else {
