@@ -206,7 +206,6 @@ static bool ranges_overlap(const range_memory *a, const range_memory *b) {
 
 #include <unordered_map>
 #include <vector>
-#include <c++/string>
 #include "emmit/struct_context.h"
 #include "optimizer/optimizer.h"
 #include "emmit/annotations.h"

@@ -9,7 +9,14 @@
  *
  * Descargo: Autor no responsable por modificaciones.
  */
-#ifndef CLI_INIT_MANAGER_AND_SERVER_H
-#define CLI_INIT_MANAGER_AND_SERVER_H
+#include "cli/cli_init_manager_and_server.h"
 
-#endif //CLI_INIT_MANAGER_AND_SERVER_H
+/**
+ * Añadir la nueva VM al manager CLI
+ * @param vm manager de instancias inicializado
+ * @return posicion del manager de instancias en el manager CLI
+ */
+size_t ManagerOfManagersAndServer::add_manager(const runtime::ManageVM &vm) {
+    managers.push_back(vm);
+    return managers.size() - 1;           // índice del elemento recién añadido
+}

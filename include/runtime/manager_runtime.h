@@ -17,12 +17,61 @@
 #include <vector>
 
 #include "loader/loader.h"
+#include "net/tcp_server.h"
+#include "openssl/ssl.h"
+#include "util/sqlite_singleton.h"
 
 namespace runtime {
     class VM;
 
+    class ManagerTLSConnection : public TLSConnection {
+    public:
+        ManagerTLSConnection(socket_t fd, SSL *ssl) : TLSConnection(fd, ssl) {
+        }
+
+        void start() override {
+            // Enviar mensaje
+            std::string msg = "Hola Mundo desde TLS!\n";
+            std::vector<uint8_t> buf(msg.begin(), msg.end());
+            write_data(buf);
+
+            // Cierre TLS seguro
+            int ret = 0;
+            do { ret = SSL_shutdown(get_ssl()); } while (ret == 0);
+
+            stop();
+        }
+    };
+
+    class ManagerTCPListener : public TCPServer {
+    public:
+        ManagerTCPListener(uint16_t port, TLSContext *ctx) : TCPServer(port, ctx) {
+        }
+
+    protected:
+        Connection *create_connection(socket_t client_fd, TLSContext *ctx) override {
+            SSL *ssl = nullptr;
+            if (tls_enabled && ctx) {
+                ssl = SSL_new(ctx->get());
+                SSL_set_fd(ssl, (int) client_fd);
+                if (SSL_accept(ssl) <= 0) {
+                    ERR_print_errors_fp(stderr);
+                    SSL_free(ssl);
+                    return nullptr;
+                }
+            }
+
+            // devolvemos una conexion de tipo manager.
+            return new ManagerTLSConnection(client_fd, ssl);
+        }
+    };
+
     class ManageVM {
     public:
+        /**
+         * Nombre del manager
+         */
+        std::string name_manager;
 
         /**
          * El manager puede gestionar memoria compartida entre instancias.
@@ -30,12 +79,26 @@ namespace runtime {
         vm::ArenaManager manager_mem;
 
         /**
+         * Cada instancia de VM puede escuchar en un puerto distinto.
+         * No todas las instancias tienen por que ser un servicio de red,
+         * pueden ejecutarse unicamente a nivel local.
+         */
+        ManagerTCPListener &listener;
+
+        /**
          * El manager puede tener un loader publico
          */
         loader::Loader loader;
 
+        /**
+         * Base de datos para consultar usuario y credenciales.
+         * Tambien se puede hacer registro de logs.
+         */
+        Sqlite::SqliteSingleton &db;
+
         // Constructor por defecto
-        ManageVM();
+        ManageVM(ManagerTCPListener &listener,
+                 Sqlite::SqliteSingleton &db);
 
         // Destructor - libera recursos
         ~ManageVM();
@@ -58,7 +121,7 @@ namespace runtime {
          * @param vm_id ID de la VM
          * @return Referencia const a VM (undefined si no existe)
          */
-        VM* get_vm(uint64_t vm_id);
+        VM *get_vm(uint64_t vm_id);
 
         /**
          * @brief Verifica si existe una VM con el ID dado
@@ -79,7 +142,7 @@ namespace runtime {
         void destroy_all_vms();
 
         // contiene todas las instancias de maquinas
-        std::vector<VM*> vms;
+        std::vector<VM *> vms;
 
     private:
         // se usa para generar los ID's de la VM, las VM nuevas no tendran un mismo ID

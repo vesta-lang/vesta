@@ -17,8 +17,12 @@
 #include "runtime/runtime.h"
 
 namespace runtime {
-    ManageVM::ManageVM(): loader(this->manager_mem),
-                          counter_vm(0) {}
+    ManageVM::ManageVM(
+        ManagerTCPListener &listener,
+        Sqlite::SqliteSingleton &db
+    ): listener(listener),
+                                                      loader(this->manager_mem), db(db), counter_vm(0) {
+    }
 
     ManageVM::~ManageVM() {
         destroy_all_vms();

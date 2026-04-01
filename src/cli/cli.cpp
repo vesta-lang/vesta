@@ -46,6 +46,10 @@ namespace cli {
         }
     };
 
+    static void command_run(std::string cmd) {
+
+    }
+
 
     // Señal global para Ctrl+C. Se usa para notificar la instancia activa.
     static std::atomic<bool> *global_interrupt_ptr = nullptr;
@@ -579,6 +583,11 @@ namespace cli {
                 continue;
             }
 
+            if (cmd.rfind("run", 0) == 0) {
+                std::string shell = cmd.substr(3);
+                std::cout << "Ejecutando: " << shell << std::endl;
+                command_run(shell);
+            }
 
             // complete <pref>
             {

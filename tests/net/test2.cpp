@@ -22,20 +22,7 @@
 #include <thread>
 #include <vector>
 #include <chrono>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#pragma comment(lib, "Ws2_32.lib")
-typedef SOCKET socket_t;
-#else
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
-typedef int socket_t;
-#endif
 
 // ---------------- Conexión TLS personalizada ----------------
 class HelloTLSConnection : public TLSConnection {
