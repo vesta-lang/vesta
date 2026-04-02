@@ -172,11 +172,12 @@ namespace Assembly::Bytecode::Linker {
                     continue; // este se fusiona, no se compara
 
                 if (ranges_overlap(&existingSpace.range, &space.range)) {
-                    throw std::runtime_error(
+                    std::cout <<
                         "Error: el espacio '" + spaceName +
                         "' del modulo se solapa con el espacio '" +
                         existingName + "' ya existente."
-                    );
+                    << std::endl;
+                    exit(EXIT_FAILURE);
                 }
             }
 

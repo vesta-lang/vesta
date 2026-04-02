@@ -27,6 +27,9 @@
 #include <fstream>
 #include <system_error>
 
+#ifdef _WIN32
+#include "windows.h"
+#endif
 namespace fs {
     /// Alias al namespace de la librería estándar para evitar colisiones de nombre.
     namespace fs = std::filesystem;
@@ -64,7 +67,7 @@ namespace fs {
     static std::vector<std::string> split_path_env(const std::string &s) {
         char sep =
 #ifdef _WIN32
-            ';';
+                ';';
 #else
                 ':';
 #endif
@@ -210,13 +213,13 @@ namespace fs {
         if (!pathext_c) {
             // valor por defecto razonable
             static const std::vector<std::string> default_ext = {".COM", ".EXE", ".BAT", ".CMD"};
-            for (auto &e : default_ext) if (e == ext) return true;
+            for (auto &e: default_ext) if (e == ext) return true;
             return false;
         }
         std::string pathext(pathext_c);
         std::transform(pathext.begin(), pathext.end(), pathext.begin(), ::toupper);
         auto parts = split_path_env(pathext); // reutiliza split (usa ; en Windows)
-        for (auto &pe : parts) {
+        for (auto &pe: parts) {
             if (pe == ext) return true;
         }
         return false;
@@ -242,7 +245,7 @@ namespace fs {
      */
     static bool contains_dir_separator(const std::string &s) {
 #ifdef _WIN32
-    return s.find('\\') != std::string::npos || s.find('/') != std::string::npos;
+        return s.find('\\') != std::string::npos || s.find('/') != std::string::npos;
 #else
         return s.find('/') != std::string::npos;
 #endif
@@ -261,20 +264,20 @@ namespace fs {
         if (contains_dir_separator(cmd)) {
             fs::path p = normalize_path_safe(cmd);
 #ifdef _WIN32
-        // En Windows, si el usuario pasó una ruta sin extensión, pruebe con PATHEXT.
-        if (path_exists_and_executable(p)) return p;
-        if (!p.has_extension()) {
-            const char *pathext_c = std::getenv("PATHEXT");
-            std::string pathext = pathext_c ? pathext_c : ".COM;.EXE;.BAT;.CMD";
-            std::transform(pathext.begin(), pathext.end(), pathext.begin(), ::toupper);
-            auto exts = split_path_env(pathext);
-            for (auto &e : exts) {
-                fs::path cand = p;
-                cand += e; // append extension
-                if (path_exists_and_executable(cand)) return cand;
+            // En Windows, si el usuario pasó una ruta sin extensión, pruebe con PATHEXT.
+            if (path_exists_and_executable(p)) return p;
+            if (!p.has_extension()) {
+                const char *pathext_c = std::getenv("PATHEXT");
+                std::string pathext = pathext_c ? pathext_c : ".COM;.EXE;.BAT;.CMD";
+                std::transform(pathext.begin(), pathext.end(), pathext.begin(), ::toupper);
+                auto exts = split_path_env(pathext);
+                for (auto &e: exts) {
+                    fs::path cand = p;
+                    cand += e; // append extension
+                    if (path_exists_and_executable(cand)) return cand;
+                }
             }
-        }
-        return std::nullopt;
+            return std::nullopt;
 #else
             return path_exists_and_executable(p) ? std::optional<fs::path>(p) : std::nullopt;
 #endif
@@ -286,25 +289,25 @@ namespace fs {
         std::string path_env(path_c);
         auto dirs = split_path_env(path_env);
 #ifdef _WIN32
-    // Windows: Considera PATHEXT
-    const char *pathext_c = std::getenv("PATHEXT");
-    std::string pathext = pathext_c ? pathext_c : ".COM;.EXE;.BAT;.CMD";
-    std::transform(pathext.begin(), pathext.end(), pathext.begin(), ::toupper);
-    auto exts = split_path_env(pathext);
-    for (auto &d : dirs) {
-        if (d.empty()) continue;
-        fs::path base = fs::path(d) / cmd;
-        // if cmd already has extension, check directly
-        if (base.has_extension()) {
-            if (path_exists_and_executable(base)) return normalize_path_safe(base);
-        } else {
-            for (auto &e : exts) {
-                fs::path cand = base;
-                cand += e;
-                if (path_exists_and_executable(cand)) return normalize_path_safe(cand);
+        // Windows: Considera PATHEXT
+        const char *pathext_c = std::getenv("PATHEXT");
+        std::string pathext = pathext_c ? pathext_c : ".COM;.EXE;.BAT;.CMD";
+        std::transform(pathext.begin(), pathext.end(), pathext.begin(), ::toupper);
+        auto exts = split_path_env(pathext);
+        for (auto &d: dirs) {
+            if (d.empty()) continue;
+            fs::path base = fs::path(d) / cmd;
+            // if cmd already has extension, check directly
+            if (base.has_extension()) {
+                if (path_exists_and_executable(base)) return normalize_path_safe(base);
+            } else {
+                for (auto &e: exts) {
+                    fs::path cand = base;
+                    cand += e;
+                    if (path_exists_and_executable(cand)) return normalize_path_safe(cand);
+                }
             }
         }
-    }
 #else
         for (auto &d: dirs) {
             if (d.empty()) continue;
@@ -431,6 +434,37 @@ namespace fs {
      */
     static bool is_directory_str(const std::string &s) {
         return fs::is_directory(normalize_path_safe(fs::path(s)));
+    }
+
+    /**
+     * Obtener la ruta del ejecutable actual con el nombre del ejecutable includo
+     * @return
+     */
+    static std::string get_executable_path() {
+#ifdef _WIN32
+        char buffer[MAX_PATH];
+        DWORD len = GetModuleFileNameA(NULL, buffer, MAX_PATH);
+        return std::string(buffer, len);
+#elif __APPLE__
+        char buffer[4096];
+        uint32_t size = sizeof(buffer);
+        _NSGetExecutablePath(buffer, &size);
+        return std::string(buffer);
+#else
+        char buffer[4096];
+        ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer)-1);
+        buffer[len] = '\0';
+        return std::string(buffer);
+#endif
+    }
+
+    /**
+     * obtener nombre del ejecutable unicamente
+     * @return nombre del ejecutable
+     */
+    static std::string get_executable_name() {
+        std::string path = get_executable_path();
+        return std::filesystem::path(path).filename().string();
     }
 } // namespace vfs
 
