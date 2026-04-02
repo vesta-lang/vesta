@@ -2,12 +2,10 @@
 
 #include "emmit/parser_to_bytecode.h"
 
-#define DEBUG_EMIT
-
 #ifdef DEBUG_EMIT
 #define DEBUG_PRINT(...) printf(__VA_ARGS__)
 #else
-#define DEBUG_PRINT(...) if (0) {printf(__VA_ARGS__)}
+#define DEBUG_PRINT(...) if (0) {printf(__VA_ARGS__);}
 #endif
 
 

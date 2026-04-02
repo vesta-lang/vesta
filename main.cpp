@@ -1,5 +1,5 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Máquina Virtual Distribuida
  *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
@@ -10,7 +10,11 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#include "assembly/assembly.h"
+#ifdef _WIN32
+// solo para windows
+#include <openssl/applink.c> // necesario si no se usa Visual para compilar
+#endif
+
 
 #include <cstdlib>
 #include <iostream>
@@ -21,23 +25,27 @@
 #include <thread>
 #include <openssl/sha.h>
 
-#include "json.hpp"
 #include "cxxopts.hpp"
+
 #include "cli/cli.h"
 #include "cli/runtime_api_commands.h"
+#include "util/assembler_multiprocess.h"
 #include "util/sqlite_singleton.h"
 
-using json = nlohmann::json;
 
 int main(int argc, char *argv[]) {
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
-    system("chcp 65001");
+    asm_multi_process::run_and_capture("chcp 65001");
 #endif
 
     cxxopts::Options options("VMProject", "Virtual Machine Example");
 
     options.add_options()
             ("h,help", "Mostrar ayuda")
+            ("o,output", "Archivo de salida (sin extensión o completo)", cxxopts::value<std::string>())
+            ("driver", "Compilar un directorio completo en paralelo", cxxopts::value<std::string>())
+            ("worker", "Compilar un único archivo (modo interno)", cxxopts::value<std::string>())
+            ("j,threads", "Número de hilos para el driver", cxxopts::value<int>()->default_value("0"))
             ("v,version", "Mostrar versión")
             ("m,mode", "Modo de ejecución (vm/jit)", cxxopts::value<std::string>()->default_value("vm"))
             ("list-arch", "Imprimir arquitecturas soportadas")
@@ -51,37 +59,64 @@ int main(int argc, char *argv[]) {
     auto result = options.parse(argc, argv);
 
     if (result.count("help")) {
-        std::cout << options.help() << std::endl;
+        vesta::scout() << options.help() << std::endl;
         return 0;
     }
 
+    std::string out_prefix;
+    if (result.count("output")) {
+        out_prefix = result["output"].as<std::string>();
+    } else {
+        out_prefix = result["output-prefix"].as<std::string>();
+    }
+
     if (result.count("version")) {
-        std::cout << "Vesta v0.1.0" << std::endl;
+        vesta::scout() << "Vesta v0.1.0" << std::endl;
         return 0;
     }
 
     if (result.count("list-arch")) {
         const ArchSupport &archs = get_available_architectures();
-        std::cout << "Capstone supported architectures:\n";
-        for (auto &a: archs.capstone) std::cout << "  " << a << "\n";
-        std::cout << "Keystone supported architectures:\n";
-        for (auto &a: archs.keystone) std::cout << "  " << a << "\n";
+        vesta::scout() << "Capstone supported architectures:\n";
+        for (auto &a: archs.capstone) vesta::scout() << "  " << a << "\n";
+        vesta::scout() << "Keystone supported architectures:\n";
+        for (auto &a: archs.keystone) vesta::scout() << "  " << a << "\n";
         return 0;
     }
 
-    bool save_output = result.count("save-output") > 0;
-    std::string prefix = result["output-prefix"].as<std::string>();
+    // Compilar un archivo como worker
+    // vm.exe --worker src/main.vel -o main.velb
+    if (result.count("worker")) {
+        return asm_multi_process::run_worker(
+            result["worker"].as<std::string>(),
+            out_prefix
+        );
+    }
 
+    // Compilar un proyecto entero en paralelo
+    // vm.exe --driver src/ -j 8 -o program.velb
+    // Compilar con número automático de hilos
+    // vm.exe --driver src/ -j 0 -o program.velb
+    if (result.count("driver")) {
+        int threads = result["threads"].as<int>();
+        return asm_multi_process::run_driver(
+            result["driver"].as<std::string>(),
+            threads,
+            out_prefix
+        );
+    }
+
+
+    bool save_output = result.count("save-output") > 0;
+
+    // ensamblar un solo archivo (modo clásico)
+    // vm.exe --asm-file src/main.asm --arch x86_64
     if (result.count("asm-file")) {
-        if (!result.count("arch")) {
-            std::cerr << "--arch es requerido para ensamblar\n";
-            return EXIT_FAILURE;
-        }
         return assemble_file(
                    result["asm-file"].as<std::string>(),
                    result["arch"].as<std::string>(),
                    save_output,
-                   prefix
+                   out_prefix
                )
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
@@ -96,7 +131,7 @@ int main(int argc, char *argv[]) {
                    result["disasm-file"].as<std::string>(),
                    result["arch"].as<std::string>(),
                    save_output,
-                   prefix
+                   out_prefix
                )
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
@@ -116,7 +151,7 @@ int main(int argc, char *argv[]) {
         std::thread([f = std::move(fut)]() mutable {
             try {
                 auto out = f.get();
-                if (!out.empty()) std::cout << out << std::endl;
+                if (!out.empty()) vesta::scout() << out << std::endl;
             } catch (const std::exception &e) {
                 std::cerr << "Runtime error: " << e.what() << std::endl;
             }
