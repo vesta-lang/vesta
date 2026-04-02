@@ -7,6 +7,8 @@
 #include <cstddef>   // size_t
 
 #include "arena/arena_manager.h"
+#include "emmit/struct_context.h"
+#include "runtime/manager_runtime.h"
 
 namespace loader {
     /**
@@ -85,11 +87,141 @@ namespace loader {
         // después de esto, en memoria, irían locals, operand stack, etc.
     } FrameHeader;
 
+    /**
+     * @struct Executable
+     * @brief Representa un ejecutable VELB completamente enlazado y listo para cargar en la VM.
+     *
+     * Esta estructura es el resultado final del linker y la entrada principal del loader.
+     * Contiene toda la información necesaria para:
+     *  - reservar espacios de memoria
+     *  - copiar secciones ensambladas
+     *  - resolver símbolos y labels
+     *  - inicializar el PC
+     *  - cargar metadatos y relocaciones
+     *
+     * Es equivalente a un "ELF ejecutable" pero adaptado al formato VELB.
+     */
+    typedef struct Executable {
+        /**
+         * @brief Identificador del formato del ejecutable.
+         *
+         * Siempre debe ser `"velb"`. Permite validar que el archivo cargado
+         * corresponde al formato correcto.
+         */
+        std::string format = "velb";
+
+        /**
+         * @brief Versión del formato VELB.
+         *
+         * Permite compatibilidad futura entre versiones del loader y del linker.
+         */
+        velb_version_format version = 1;
+
+        /**
+         * @brief Espacios de direcciones definidos en el ejecutable.
+         *
+         * Cada `Space` representa un rango de direcciones virtuales:
+         *  - `anonymous`
+         *  - `stack`
+         *  - `heap`
+         *  - `data`
+         *  - etc.
+         *
+         * El loader debe reservar memoria para cada uno. Se puede indicar si reservar el rango completo o
+         * realizar reserva lazy.
+         */
+        std::vector<Assembly::Bytecode::Space> spaces;
+
+        /**
+         * @brief Secciones ensambladas del ejecutable.
+         *
+         * Cada `Section` contiene bytecode ya resuelto y listo para copiarse
+         * en el espacio correspondiente. Equivalente a `.text`, `.data`, `.rodata` en ELF.
+         */
+        std::vector<Assembly::Bytecode::Section> sections;
+
+        /**
+         * @brief Símbolos globales con dirección absoluta.
+         *
+         * Cada `Label` contiene:
+         *  - nombre del símbolo
+         *  - dirección absoluta final tras el linking
+         *
+         * El loader los registra en la tabla de símbolos de la VM.
+         */
+        std::vector<Assembly::Bytecode::Label> labels;
+
+        /**
+         * @brief Bytecode final concatenado.
+         *
+         * Opcional: algunos loaders prefieren trabajar con `sections`,
+         * otros con un buffer plano. Se mantiene por compatibilidad.
+         */
+        std::vector<uint8_t> bytecode;
+
+        /**
+         * @brief Dirección inicial del PC.
+         *
+         * Determinada por la directiva `@InitPc` o por el linker.
+         * El loader debe asignarla al registro PC de la VM.
+         */
+        uint64_t init_pc = 0;
+
+        /**
+         * @brief Cabecera del ejecutable VELB.
+         *
+         * Contiene información adicional como:
+         *  - tamaño del ejecutable
+         *  - checksum
+         *  - flags
+         *  - versión del linker
+         *  - punto de entrada
+         *
+         * Es redundante con algunos campos, pero útil para validación.
+         */
+        HeaderVELB header;
+
+        /**
+         * @brief Relocaciones aplicadas durante el linking.
+         *
+         * Normalmente solo se usa para debugging o herramientas de análisis.
+         * El ejecutable final ya tiene todas las direcciones resueltas. En teoria, aunque
+         * se puede llamar al linker dinamico.
+         */
+        std::vector<Assembly::Bytecode::Relocation> relocations;
+
+        /**
+         * @brief Metadatos arbitrarios en formato JSON.
+         *
+         * Puede incluir:
+         *  - autor
+         *  - timestamp
+         *  - flags de compilación
+         *  - información de build
+         *  - dependencias
+         */
+        //Sqlite::json metadata;
+
+        // Opciones del linker
+        // Assembly::Bytecode::Linker::LinkerOptions options; ///< Opciones usadas para generar este ejecutable
+    } Executable;
+
     class Loader {
     public:
-        vm::ArenaManager arena_manager;
+        runtime::ManageVM &instance_manager;
 
-        explicit Loader(const vm::ArenaManager &arena_manager);
+        explicit Loader(
+            runtime::ManageVM &instance_manager);
+
+        void resolve_labels(Assembly::Bytecode::Section &section);
+
+        void load_sections(Assembly::Bytecode::Label &label);
+
+        void load_spaces(Assembly::Bytecode::Space &space);
+
+        void build_runtime_context();
+
+        void create_vm_instance();
     };
 }
 

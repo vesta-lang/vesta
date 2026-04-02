@@ -19,8 +19,8 @@
 namespace runtime {
     ManageVM::ManageVM(
         ManagerTCPListener *listener
-    ): listener(listener),
-       loader(this->manager_mem), counter_vm(0) {
+    ): listener(listener), loader(this), counter_vm(0) {
+
     }
 
     ManageVM::~ManageVM() {
