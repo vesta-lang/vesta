@@ -262,13 +262,11 @@ namespace vm {
         vm_map_ptr ptr_vm; // direccion virtual de la memoria
         ptr_mapped mapped; // direccion mapeada
 
-        void print() const {
-            printf("MappedPtrHost {\n");
-            printf("  Virtual:  0x%016llx\n", (uint64_t)ptr_vm.raw);
-            printf("  Mapped:   0x%016llx\n", (uint64_t)mapped.ptr_vm.raw);
-            printf("  Host:     0x%016llx\n", (uint64_t)mapped.ptr_host);
-            printf("}");
-        }
+        // devuelve representación textual
+        std::string to_string() const;
+
+        // imprime en un ostream (útil para integración con SyncOStream)
+        void print(std::ostream &os) const;
     } MappedPtr;
 
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv4 {

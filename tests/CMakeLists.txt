@@ -5,7 +5,6 @@ project(VMTests)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
-
 message(STATUS "Fuentes para ${FINAL_NAME}: ${ALL_PROJECT_SOURCES}")
 
 # Helper function para crear tests individuales
@@ -20,7 +19,6 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             ${CMAKE_SOURCE_DIR}/src
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/json
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/cxxopts
-            ${CMAKE_SOURCE_DIR}/libs/SourceCode/ftxui/include
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/capstone/include
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/keystone/include
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein
@@ -31,9 +29,6 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             PRIVATE sqlite3
             PRIVATE capstone
             PRIVATE keystone
-            PRIVATE ftxui::screen
-            PRIVATE ftxui::dom
-            PRIVATE ftxui::component
     )
     
     # OpenSSL
@@ -52,7 +47,8 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     endif()
     
     target_compile_options(${FINAL_NAME} PRIVATE
-            -pedantic-errors -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE
+            -pedantic-errors
+            -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE
     )
 endfunction()
 

@@ -21,11 +21,16 @@
 #ifndef PARSER_H
 #define PARSER_H
 
-#include <memory>
-#include <vector>
 #include <string>
+#include <optional>
+#include <charconv>
+#include <cctype>
+#include <algorithm>
+#include <limits>
+#include <system_error>
 #include <unordered_map>
 #include <cstdint>
+
 
 #include "ast.h"
 #include "lexer/lexer.h"
@@ -37,6 +42,152 @@
  * Contiene lexer, parser, AST y componentes
  */
 namespace vm {
+    /**
+     * @brief Elimina '_' de la cadena (se usan como separadores visuales).
+     */
+    static std::string remove_underscores(std::string s) {
+        s.erase(std::remove(s.begin(), s.end(), '_'), s.end());
+        return s;
+    }
+
+    /**
+     * @brief Comprueba si la cadena s es un número válido en los formatos soportados.
+     *
+     * Soporta:
+     *  - Hexadecimal: 0x... o 0X...
+     *  - Binario: 0b... o 0B...
+     *  - Octal: empieza por 0 (y no es 0x/0b)
+     *  - Decimal: por defecto
+     *
+     * Acepta '+' inicial; no acepta '-' (devuelve false).
+     * Permite '_' como separador de dígitos (se ignoran).
+     */
+    static bool is_valid_number(const std::string &s_in) {
+        if (s_in.empty()) return false;
+        std::string s = remove_underscores(s_in);
+
+        size_t pos = 0;
+        // '+' inicial opcional
+        if (s[pos] == '+') ++pos;
+        if (pos >= s.size()) return false;
+        if (s[pos] == '-') return false; // no negativos para uint
+
+        // detect prefix
+        if (s.size() - pos >= 2 && s[pos] == '0' && (s[pos + 1] == 'x' || s[pos + 1] == 'X')) {
+            // hexadecimal: debe tener al menos un dígito hexadecimal después del prefijo.
+            if (pos + 2 >= s.size()) return false;
+            for (size_t i = pos + 2; i < s.size(); ++i) {
+                char c = s[i];
+                if (!std::isxdigit(static_cast<unsigned char>(c))) return false;
+            }
+            return true;
+        }
+        if (s.size() - pos >= 2 && s[pos] == '0' && (s[pos + 1] == 'b' || s[pos + 1] == 'B')) {
+            // binary
+            if (pos + 2 >= s.size()) return false;
+            for (size_t i = pos + 2; i < s.size(); ++i) {
+                char c = s[i];
+                if (c != '0' && c != '1') return false;
+            }
+            return true;
+        }
+        // octal si comienza con '0' y longitud > 1 (y no hexadecimal/binario)
+        if (s[pos] == '0' && (s.size() - pos) > 1) {
+            for (size_t i = pos + 1; i < s.size(); ++i) {
+                char c = s[i];
+                if (c < '0' || c > '7') return false;
+            }
+            return true;
+        }
+        // decimal: all digits
+        for (size_t i = pos; i < s.size(); ++i) {
+            char c = s[i];
+            if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief Parsea la cadena y devuelve uint64_t si es válida y no desborda.
+     *
+     * @code{.cpp}
+     * auto v1 = parse_number_safe("0xFF");        // 255
+     * auto v2 = parse_number_safe("0b1010");      // 10
+     * auto v3 = parse_number_safe("0755");        // octal -> 493
+     * auto v4 = parse_number_safe("12345");       // decimal -> 12345
+     * auto v5 = parse_number_safe("+1_000_000");  // 1000000 (guiones permitidos)
+     * auto v6 = parse_number_safe("-10");         // std::nullopt (negativo no permitido)
+     * auto ok = is_valid_number("0x1G");          // false (G no es hex)
+     * @endcode
+     *
+     * @return std::optional<uint64_t> con el valor o std::nullopt en caso de error.
+     */
+    static std::optional<uint64_t> parse_number_safe(const std::string &s_in) {
+        if (s_in.empty()) return std::nullopt;
+        std::string s = remove_underscores(s_in);
+
+        size_t pos = 0;
+        bool has_plus = false;
+        if (s[pos] == '+') {
+            has_plus = true;
+            ++pos;
+        }
+        if (pos >= s.size()) return std::nullopt;
+        if (s[pos] == '-') return std::nullopt; // no negativos
+
+        // hex
+        if (s.size() - pos >= 2 && s[pos] == '0' && (s[pos + 1] == 'x' || s[pos + 1] == 'X')) {
+            std::string body = s.substr(pos + 2);
+            if (body.empty()) return std::nullopt;
+            // use from_chars for hex (C++17/20)
+            uint64_t val = 0;
+            auto [ptr, ec] = std::from_chars(body.data(), body.data() + body.size(), val, 16);
+            if (ec == std::errc() && ptr == body.data() + body.size()) return val;
+            return std::nullopt;
+        }
+
+        // binario (sin from_chars base 2), analizar manualmente con comprobación de desbordamiento
+        if (s.size() - pos >= 2 && s[pos] == '0' && (s[pos + 1] == 'b' || s[pos + 1] == 'B')) {
+            std::string body = s.substr(pos + 2);
+            if (body.empty()) return std::nullopt;
+            uint64_t val = 0;
+            for (char c: body) {
+                if (c != '0' && c != '1') return std::nullopt;
+                int bit = c - '0';
+                if (val > (std::numeric_limits<uint64_t>::max() >> 1)) return std::nullopt; // overflow on shift
+                val = (val << 1) | bit;
+            }
+            return val;
+        }
+
+        // octal (cero inicial y longitud > 1)
+        if (s[pos] == '0' && (s.size() - pos) > 1) {
+            std::string body = s.substr(pos + 1);
+            uint64_t val = 0;
+            for (char c: body) {
+                if (c < '0' || c > '7') return std::nullopt;
+                int d = c - '0';
+                if (val > (std::numeric_limits<uint64_t>::max() >> 3)) return std::nullopt;
+                val = (val << 3) + d;
+            }
+            return val;
+        }
+
+        // decimal
+        {
+            std::string body = s.substr(pos);
+            if (body.empty()) return std::nullopt;
+            uint64_t val = 0;
+            for (char c: body) {
+                if (!std::isdigit(static_cast<unsigned char>(c))) return std::nullopt;
+                int d = c - '0';
+                if (val > (std::numeric_limits<uint64_t>::max() - d) / 10) return std::nullopt;
+                val = val * 10 + d;
+            }
+            return val;
+        }
+    }
+
     static uint64_t parse_number(const std::string &s) {
         // Hexadecimal
         if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0)
@@ -119,7 +270,6 @@ namespace vm {
     };
 
 
-
     /**
      *
      * @param type espera un token de tipo decimal, hexadecimal, octal o binario
@@ -127,33 +277,35 @@ namespace vm {
      */
     inline bool is_number_token(TokenType type) {
         return type == TokenType::NUMBER_DEC || type == TokenType::NUMBER_HEX ||
-                type == TokenType::NUMBER_BIN || type == TokenType::NUMBER_OCT;
+               type == TokenType::NUMBER_BIN || type == TokenType::NUMBER_OCT;
     }
 
     class ParseError : public std::runtime_error {
     public:
-        int         line,     column;
-        TokenType   expected, found;
+        int line, column;
+        TokenType expected, found;
         std::string token_info;
 
         ParseError(int l, int c, const std::string &msg)
-            : std::runtime_error(msg), line(l), column(c) {}
+            : std::runtime_error(msg), line(l), column(c) {
+        }
 
         ParseError(int l, int c, TokenType exp, TokenType f, const std::string &tok)
             : std::runtime_error("Expected " + token_type_to_string(exp) +
-                  ", found " + token_type_to_string(f)),
-              line(l), column(c), expected(exp), found(f), token_info(tok) {}
+                                 ", found " + token_type_to_string(f)),
+              line(l), column(c), expected(exp), found(f), token_info(tok) {
+        }
     };
 
     class ParseWarning : public std::runtime_error {
     public:
-        int         line, column;
+        int line, column;
         std::string suggestion;
 
         ParseWarning(int l, int c, const std::string &msg, const std::string &sugg = "")
-            : std::runtime_error(msg), line(l), column(c), suggestion(sugg) {}
+            : std::runtime_error(msg), line(l), column(c), suggestion(sugg) {
+        }
     };
-
 
 
     /**
@@ -178,8 +330,8 @@ namespace vm {
      */
     class Parser {
     private:
-        vm::Lexer &lexer;                                       ///< Lexer fuente de tokens
-        vm::Token  current{vm::TokenType::EndOfFile, "", 0, 0}; ///< Token actual (lookahead)
+        vm::Lexer &lexer; ///< Lexer fuente de tokens
+        vm::Token current{vm::TokenType::EndOfFile, "", 0, 0}; ///< Token actual (lookahead)
 
         /**
          * @brief Avanza al siguiente token del lexer.
@@ -256,7 +408,9 @@ namespace vm {
 
         std::unique_ptr<ASTNode> parse_mem_factor();
 
-        std::vector<std::unique_ptr<ASTNode>> parse_in_label();
+        std::vector<std::unique_ptr<ASTNode> > parse_in_label();
+
+        std::unique_ptr<ASTNode> parser_end_label();
 
         /**
          * @brief Parsea una sección (`code:`, `data:`, etc.).

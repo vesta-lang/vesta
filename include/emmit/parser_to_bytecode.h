@@ -13,7 +13,9 @@
 #ifndef PARSER_TO_BYTECODE_H
 #define PARSER_TO_BYTECODE_H
 
+
 #include "emmit_decl.h"
+#include "annotations.h"
 
 /**
  * La conversion de AST generado por al parser a bytecode usa 3 etapas:
@@ -21,7 +23,6 @@
  *      - Segunda pasada: evaluar expresiones y generar datos (expresiones es 2+3 Por ejemplo)
  *      - Tercera pasada: generar instrucciones y resolver saltos
  */
-
 
 
 namespace Assembly::Bytecode {
@@ -116,7 +117,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
@@ -262,13 +263,27 @@ namespace Assembly::Bytecode {
      */
     class Assembler {
     public:
+        /// Tabla de símbolos generada en la primera pasada.
+        std::unordered_map<std::string, Label *> symbol_table;
+
+        /// Buffer de salida donde se escribe el bytecode final.
+        ByteWriter output;
+
         /**
-         * @brief Dirección base por defecto donde se ensamblará el código.
-         *
-         * Puede inicializarse con la dirección base del espacio de direcciones
-         * de la VM
+         * Contexto del ensamblador
          */
-        uint64_t default_address;
+        Context ctx{};
+
+        /**
+         * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
+         */
+        Section *current_section = nullptr;
+
+        /**
+         * Label analizada actualmente por el ensamblador, esta variable va cambiando a lo largo de la ejecuccion
+         * del ensamblador y solo se uso de cursor interno
+         */
+        Label *current_label = nullptr;
 
         /**
          * @brief Constructor del ensamblador.
@@ -277,6 +292,8 @@ namespace Assembly::Bytecode {
          * la dirección base por defecto.
          */
         Assembler();
+
+        void compute_label_sizes();
 
         /**
          * @brief Ensambla un AST completo en un buffer de bytecode.
@@ -387,24 +404,49 @@ namespace Assembly::Bytecode {
          */
         void first_pass(const vm::ASTNode *node, uint64_t &offset);
 
+        void apply_annotation(const vm::AnnotationNode *annotation);
+
         void apply_directive(const vm::Instruction *instr);
 
     private:
-        /// Tabla de símbolos generada en la primera pasada.
-        std::unordered_map<std::string, uint64_t> symbol_table;
-
-        /// Buffer de salida donde se escribe el bytecode final.
-        std::vector<uint8_t> output;
-
-        /// Offset actual dentro del buffer de salida.
-        uint64_t current_offset = 0;
     };
 
+    /**
+     * Crea una ast nuevo, combinando el ast original y el de los archivos importados. Para
+     * esto
+     *    - Solo movimientos.
+     *    - No se duplica memoria, no se duplican nodos, solo se mueven.
+     *    - Los imports desaparecen y son reemplazados por los nodos reales
+     *          del archivo importado.
+     *
+     *  Significa:
+     *      - Toma el AST original.
+     *      - Toma el AST importado.
+     *      - Los fusiona en un nuevo vector result.
+     *      - Mueve todos los nodos al nuevo AST.
+     *      - Reemplaza el AST original por el nuevo.
+     *
+     *      AST original:
+     *          [A, B, import C, D]
+     *
+     *      AST de C:
+     *          [X, Y, Z]
+     *
+     *      AST final:
+     *          [A, B, X, Y, Z, D]
+     *
+     * Si algún nodo del AST guarda punteros a otros nodos, este metodo rompe esas referencias.
+     * Pero si el AST es puramente jerárquico (cada nodo solo conoce a sus hijos), entonces no hay problema
+     *
+     * @param ast archivo original que import
+     * @param imported
+     */
     static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
-                                std::unordered_set<std::string> &           imported) {
+                                std::unordered_set<std::string> &imported) {
         std::vector<std::unique_ptr<vm::ASTNode> > result;
 
         for (auto &node: ast) {
+            // si se encontro un nodo de tipo Import
             if (auto imp = dynamic_cast<vm::ImportNode *>(node.get())) {
                 std::string file = imp->filename;
 
@@ -416,13 +458,13 @@ namespace Assembly::Bytecode {
 
                 // Leer archivo
                 std::ifstream f(file);
-                std::string   code((std::istreambuf_iterator<char>(f)),
-                                   std::istreambuf_iterator<char>());
+                std::string code((std::istreambuf_iterator<char>(f)),
+                                 std::istreambuf_iterator<char>());
 
-                // Lex + parse
-                vm::Lexer  lx(code);
+                // Lex + parse del codigo importado
+                vm::Lexer lx(code);
                 vm::Parser px(lx);
-                auto       imported_ast = px.parse();
+                auto imported_ast = px.parse();
 
                 // Expandir imports recursivamente
                 resolve_imports(imported_ast, imported);
@@ -430,11 +472,14 @@ namespace Assembly::Bytecode {
                 // Insertar nodos importados
                 for (auto &n: imported_ast)
                     result.push_back(std::move(n));
-            } else {
+            }
+            // Si el nodo NO es un import, lo copia al AST final.
+            else {
                 result.push_back(std::move(node));
             }
         }
 
+        // Reemplazar AST original
         ast = std::move(result);
     }
 }

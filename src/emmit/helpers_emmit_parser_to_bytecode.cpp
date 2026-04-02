@@ -13,7 +13,7 @@
 #include "emmit/parser_to_bytecode.h"
 
 namespace Assembly::Bytecode {
-    size_t Assembler::size_of_directive(const std::string& dir) const {
+    size_t Assembler::size_of_directive(const std::string &dir) const {
         if (dir == "db") return 1;
         if (dir == "dw") return 2;
         if (dir == "dd") return 4;
@@ -33,28 +33,22 @@ namespace Assembly::Bytecode {
      * @param dir
      * @param value
      */
-    void Assembler::emit_directive(const std::string& dir, uint64_t value) {
+    void Assembler::emit_directive(const std::string &dir, uint64_t value) {
         size_t size = size_of_directive(dir);
 
         for (size_t i = 0; i < size; ++i) {
-            output.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFF));
-        }
-
-        current_offset += size;
-    }
+            output.emit8(static_cast<uint8_t>((value >> (i * 8)) & 0xFF));
+        }}
 
     /**
      * Las cadenas deben emitirse caracter a caracter
      * @param data datos de la cadena
      */
-    void Assembler::emit_data(const vm::DataDecl* data) {
-        for (auto& expr : data->values) {
-
-            if (auto s = dynamic_cast<vm::StringExpr*>(expr.get())) {
-                for (char c : s->value)
-                    output.push_back(static_cast<uint8_t>(c));
-
-                current_offset += s->value.size();
+    void Assembler::emit_data(const vm::DataDecl *data) {
+        for (auto &expr: data->values) {
+            if (auto s = dynamic_cast<vm::StringExpr *>(expr.get())) {
+                for (char c: s->value)
+                    output.emit8(static_cast<uint8_t>(c));
                 continue;
             }
 
@@ -64,15 +58,14 @@ namespace Assembly::Bytecode {
         }
     }
 
-    const InstrInfo& Assembler::select_variant(
-        const std::string&                              mnemonic,
-        const std::vector<std::unique_ptr<vm::ASTNode>>&ops) const
-    {
+    const InstrInfo &Assembler::select_variant(
+        const std::string &mnemonic,
+        const std::vector<std::unique_ptr<vm::ASTNode> > &ops) const {
         auto it = InstrTable.find(mnemonic);
         if (it == InstrTable.end())
-            throw std::runtime_error("Unknown instruction: " + mnemonic);
+            throw std::runtime_error("select_variant(): Unknown instruction in InstrTable: " + mnemonic);
 
-        const auto& variants = it->second;
+        const auto &variants = it->second;
 
         // si es un registro el primero
         AddressingMode mode = AddressingMode::NONE;
@@ -80,7 +73,7 @@ namespace Assembly::Bytecode {
         // si no tiene operandos, suponemos que es una instruccion sin tal
         if (ops.size() == 0) goto search_variante_None;
 
-        if (auto s = dynamic_cast<vm::RegisterOperand*>(ops[0].get())) {
+        if (auto s = dynamic_cast<vm::RegisterOperand *>(ops[0].get())) {
             mode = AddressingMode::REG;
         }
 
@@ -88,10 +81,10 @@ namespace Assembly::Bytecode {
         // no se puede usar para averiguar el direccionamiento de la isntruccion.
         if (ops.size() >= 2) {
             // si el segundo operando es de tipo memoria, el modo de direccionamiento es este u SIB
-            if (auto s = dynamic_cast<vm::MemoryOperand*>(ops[1].get())) {
+            if (auto s = dynamic_cast<vm::MemoryOperand *>(ops[1].get())) {
                 mode = AddressingMode::MEM;
 
-                if (auto bin = dynamic_cast<vm::BinaryExpr*>(s->expr.get())) {
+                if (auto bin = dynamic_cast<vm::BinaryExpr *>(s->expr.get())) {
                     if (bin->op == '-' || bin->op == '+' || bin->op == '*') {
                         mode = AddressingMode::SIB;
                     }
@@ -99,29 +92,40 @@ namespace Assembly::Bytecode {
             }
 
             // si el op2 es un registro, el modo de direcionamiento confirmado es registro
-            else if (auto s = dynamic_cast<vm::RegisterOperand*>(ops[1].get())) {
+            else if (auto s = dynamic_cast<vm::RegisterOperand *>(ops[1].get())) {
                 mode = AddressingMode::REG;
             }
 
             // es de tipo memoria, pero del que usa solo un inmed tipo [0x1000]
-            else if (auto s = dynamic_cast<vm::NumberOperand*>(ops[1].get())) {
+            else if (auto s = dynamic_cast<vm::NumberOperand *>(ops[1].get())) {
                 mode = AddressingMode::MEM;
             }
 
-            // error?
+            // si el operando 1 es de tipo memoria, el resto de operandos da igual de que tipo sea,
+            // ya que siempre sera memoria. por eso usar if y no else if aqui
+             if (auto s = dynamic_cast<vm::MemoryOperand *>(ops[0].get())) {
+                mode = AddressingMode::MEM;
 
+                if (auto bin = dynamic_cast<vm::BinaryExpr *>(s->expr.get())) {
+                    if (bin->op == '-' || bin->op == '+' || bin->op == '*') {
+                        mode = AddressingMode::SIB;
+                    }
+                }
+            }
+
+            // error?
         } else {
             // si solo hay un operando, y fue un registro, entonces, es correcto
 
             // si no hubo registro, y solo hay un operando, debe ser un inmediato
-            if (auto s = dynamic_cast<vm::NumberOperand*>(ops[0].get())) {
+            if (auto s = dynamic_cast<vm::NumberOperand *>(ops[0].get())) {
                 mode = AddressingMode::INMED;
             }
         }
 
         // alguna instrucciones como los NOP no tiene operandos,
         // por lo que todoo el analisis anterior se puede saltar
-        search_variante_None:
+    search_variante_None:
         int idx = -1;
         for (int i = 0; i < variants.size(); ++i) {
             if (variants[i].mode == mode) {
@@ -134,11 +138,11 @@ namespace Assembly::Bytecode {
             return variants[idx]; // devolvemos la variante
         }
 
-        throw std::runtime_error("Unknown instruction: " + mnemonic);
+        throw std::runtime_error("select_variant(): Unknown instruction variants: " + mnemonic);
     }
 
-    size_t Assembler::size_of_instruction(const vm::Instruction* instr) const {
-        const auto& info = select_variant(instr->opcode, instr->operands);
+    size_t Assembler::size_of_instruction(const vm::Instruction *instr) const {
+        const auto &info = select_variant(instr->opcode, instr->operands);
 
         switch (info.sizeMode) {
             case InstrSizeMode::FIXED_1: return 1;
@@ -150,23 +154,19 @@ namespace Assembly::Bytecode {
     }
 
     void Assembler::emit_instruction(const vm::Instruction *instr) {
-
-        const auto& info = select_variant(instr->opcode, instr->operands);
+        const auto &info = select_variant(instr->opcode, instr->operands);
 
         // 1 opcode1
-        output.push_back(info.opcode1);
+        output.emit8(info.opcode1);
 
         // 2 si opcode1 == 0x00, emito opcode2
         if (info.opcode1 == 0x00)
-            output.push_back(info.opcode2);
+            output.emit8(info.opcode2);
 
         // 3 resto de campos según la instrucción (flags, reg, SIB, addr, etc.)
         //    aquí ya mirar los operandos y generar el encoding real.
         if (info.emit != nullptr) {
-            info.emit(instr, output, &info);
+            info.emit(instr, output, &info, this);
         }
     }
-
-
-
 }

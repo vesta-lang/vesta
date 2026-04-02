@@ -50,11 +50,22 @@ sudo pacman -S openssl
 
 ## Compilacion en linux
 
+compilacion con CMAKE:
 ```bash
 mkdir build
 cd build
 cmake -Wno-dev ..
 cmake --build .
+```
+> En caso de que CMAKE le de error por usar una version no compatible con la version CMAKE de Keystone, puede intentar forzar el uso
+> de la version que usted use añadiendo la flag ``-DCMAKE_POLICY_VERSION_MINIMUM=3.5`` para cambiar la version minima.
+> Si compila en Windows, debe Mingw32/64 o TDM-GCC, y usar la flag ``-G "MinGW Makefiles"``
+
+Si prefiere usar XMAKE:
+```bash
+curl -fsSL https://xmake.io/shget.text | bash
+xmake f --toolchain=clang -m debug -v
+xmake run
 ```
 
 En caso de un error similar a este en linux:

@@ -20,7 +20,7 @@
  */
 typedef struct RFlags_t {
     union {
-        struct Bits {
+        struct {
             uint8_t SF: 1; // Negative flag/Bandera de signo
             uint8_t ZF: 1; // Zero flag
             uint8_t CF: 1; // Carry flag

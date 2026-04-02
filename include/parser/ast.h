@@ -125,6 +125,16 @@ namespace vm {
         }
     };
 
+    struct EndLabelNode : ASTNode {
+        std::string label ;
+
+        EndLabelNode(const std::string& label) : label(label) {}
+
+        void print(int indent = 0) const override {
+            std::string pad(indent, ' ');
+            std::cout << pad << "END: " << label << "\n";
+        }
+    };
 
     /**
      * @struct ExprNode
@@ -266,15 +276,15 @@ namespace vm {
         }
     };
 
-    struct SectionNode : ASTNode {
+    struct LabelNode : ASTNode {
         std::string                            name;
         std::vector<std::unique_ptr<ASTNode> > body;
 
-        SectionNode(std::string n, std::vector<std::unique_ptr<ASTNode> > b)
+        LabelNode(std::string n, std::vector<std::unique_ptr<ASTNode> > b)
             : name(std::move(n)), body(std::move(b)) {}
 
         void print(int indent) const override {
-            std::cout << std::string(indent, ' ') << "SECTION: " << name << std::endl;
+            std::cout << std::string(indent, ' ') << "LABEL: " << name << std::endl;
             for (const auto &child: body) {
                 if (child) child->print(indent + 4);
             }

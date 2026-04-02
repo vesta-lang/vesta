@@ -13,10 +13,12 @@
 #define EMMIT_DECL_H
 #include <unordered_set>
 
+#include "bytewriter.h"
 #include "runtime/vm_address_space.h" // necesitamos los espacios de direciones por defecto
 #include "parser/parser.h"
 
 namespace Assembly::Bytecode {
+    class Assembler;
     /**
      * Metadatos de la instruccion
      */
@@ -88,12 +90,12 @@ namespace Assembly::Bytecode {
     };
 
     static std::string AddressingMode_str(AddressingMode mode) {
-        static const std::string table[(size_t)AddressingMode::COUNT] = {"REG", "MEM", "SIB", "INMED", "NONE"};
+        static const std::string table[(size_t) AddressingMode::COUNT] = {"REG", "MEM", "SIB", "INMED", "NONE"};
         return table[static_cast<uint8_t>(mode)];
     }
 
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[(size_t)InstrSizeMode::COUNT] = {};
+        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {};
         return table[static_cast<uint8_t>(mode)];
     }
 
@@ -102,9 +104,10 @@ namespace Assembly::Bytecode {
     */
     typedef void (*emitInstr)(
         const vm::Instruction *, // instruccion analizar por el parser
-        std::vector<uint8_t> &,  // lugar donde emitir la instruccion
-        const struct InstrInfo * // la propia estructura que contiene la informacion de la
+        ByteWriter &, // lugar donde emitir la instruccion
+        const struct InstrInfo *, // la propia estructura que contiene la informacion de la
         // instruccion codificada
+        Assembler *assembly_ctx
     );
 
     typedef struct InstrInfo {
@@ -130,32 +133,36 @@ namespace Assembly::Bytecode {
      * @param opcode nombre de la isntruccion a comprobar si es con signo
      * @return true si fue una instruccion contemplada con signo.
      */
-    static bool is_signed(const std::string& opcode) {
+    static bool is_signed(const std::string &opcode) {
         return signed_ops.count(opcode) > 0;
     }
 
     void emit_inc(
         const vm::Instruction *instruction_parser,
-        std::vector<uint8_t> & code_final,
-        const InstrInfo *      now_instr
+        ByteWriter &code_final,
+        const InstrInfo *now_instr,
+        Assembler *assembly_ctx
     );
 
     void emit_instr_reg(
         const vm::Instruction *instruction_parser,
-        std::vector<uint8_t> & code_final,
-        const InstrInfo *      now_instr
+        ByteWriter &code_final,
+        const InstrInfo *now_instr,
+        Assembler *assembly_ctx
     );
 
     void emit_instr_mem(
         const vm::Instruction *instruction_parser,
-        std::vector<uint8_t> & code_final,
-        const InstrInfo *      now_instr
+        ByteWriter &code_final,
+        const InstrInfo *now_instr,
+        Assembler *assembly_ctx
     );
 
     void emit_instr_sib(
         const vm::Instruction *instruction_parser,
-        std::vector<uint8_t> & code_final,
-        const InstrInfo *      now_instr
+        ByteWriter &code_final,
+        const InstrInfo *now_instr,
+        Assembler *assembly_ctx
     );
 }
 #endif //EMMIT_DECL_H

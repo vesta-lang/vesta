@@ -1,0 +1,68 @@
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+// indicar que el formato es crudo, aunque de por si el ensamblador
+// lo define asi por defecto
+@Format("raw")
+
+// creamos nuestro espacio de direcciones, como el formato es crudo, no se
+// usara para nada, pero el ensamblador necesita un espacio y una
+// seccion para que tu codigo se pueda generar
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+// creamos la seccion minima para hacer que nuestro codigo se genere,
+// esta bien se podria llamar de cualquier manera
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+}
+code:
+    moveee r0, 1
+
+    jmp r4
+    jmp 0x100000
+
+    adds r15b, r13b
+    adds r15w, r13w
+    addu r15d, r13d
+    addu r15, r13
+
+    subu r15b, r13b
+    subu r15w, r13w
+    subs r15d, r13d
+    subs r15, r13
+
+    muls r15b, r13b
+    muls r15w, r13w
+    mulu r15d, r13d
+    mulu r15, r13
+
+    divs r15b, r13b
+    divs r15w, r13w
+    divu r15d, r13d
+    divu r15, r13
+
+    cmpu r15b, r13b
+    cmpu r15w, r13w
+    cmps r15d, r13d
+    cmps r15, r13
+
+end_code:
+
+data:
+    msg db "Hola mundo"
+    msg1 dq 0x123456789abcdef
+end_data:

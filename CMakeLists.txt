@@ -5,6 +5,26 @@ if(POLICY CMP0063)
     cmake_policy(SET CMP0063 NEW)
 endif()
 
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+
+set(CMAKE_VERBOSE_MAKEFILE ON CACHE BOOL "Enable verbose build output" FORCE)
+
+# helper para imprimir propiedades relevantes de un target
+function(print_target_flags tgt)
+    get_target_property(_inc_dirs ${tgt} INCLUDE_DIRECTORIES)
+    get_target_property(_compile_opts ${tgt} COMPILE_OPTIONS)
+    get_target_property(_compile_defs ${tgt} COMPILE_DEFINITIONS)
+    get_target_property(_link_opts ${tgt} LINK_OPTIONS)
+    get_target_property(_link_libs ${tgt} LINK_LIBRARIES)
+
+    message(STATUS "---- Target: ${tgt} ----")
+    message(STATUS "INCLUDE_DIRECTORIES: ${_inc_dirs}")
+    message(STATUS "COMPILE_OPTIONS: ${_compile_opts}")
+    message(STATUS "COMPILE_DEFINITIONS: ${_compile_defs}")
+    message(STATUS "LINK_OPTIONS: ${_link_opts}")
+    message(STATUS "LINK_LIBRARIES: ${_link_libs}")
+endfunction()
+
 # no necesitas los ejecutables de fuzzing,
 # deshabilitarlos usando opciones de Keystone/LLVM
 set(ENABLE_FUZZING OFF CACHE BOOL "" FORCE)
@@ -101,9 +121,6 @@ file(GLOB_RECURSE VM_SOURCES
         libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
 
-# ftxui
-add_subdirectory(libs/SourceCode/ftxui)
-
 # Capstone (desensamblador)
 add_subdirectory(libs/SourceCode/capstone)
 
@@ -119,9 +136,6 @@ target_link_libraries(vm
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone
-        PRIVATE ftxui::screen
-        PRIVATE ftxui::dom
-        PRIVATE ftxui::component
 )
 
 # OpenSSL
@@ -148,6 +162,8 @@ target_compile_options(vm PRIVATE
         -std=c++17
         -D__STDC_LIMIT_MACROS
         -D__STDC_CONSTANT_MACROS
+        -static
+        -static-libgcc -static-libstdc++
 )
 
 target_compile_options(vm PRIVATE
@@ -159,7 +175,7 @@ target_link_options(vm PRIVATE
 
 # Opciones por configuracion
 target_compile_options(vm PRIVATE
-        $<$<CONFIG:Debug>:-fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE>
+        $<$<CONFIG:Debug>:-fno-omit-frame-pointer -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE>
         $<$<CONFIG:Release>:-fpermissive -O3 -DNDEBUG>
         $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
 )

@@ -19,6 +19,26 @@
 #include "parser/parser.h"
 #include "profiler/timer.h"
 
+size_t total_allocated = 0;
+size_t peak_memory = 0;
+
+void *operator new(std::size_t size) {
+    total_allocated += size;
+    peak_memory = std::max(peak_memory, total_allocated);
+    return malloc(size);
+}
+
+void operator delete(void *ptr) noexcept {
+    // no saber el tamaño aquí
+    free(ptr);
+}
+
+void print_memory_stats() {
+    std::cout << "Memoria actual: " << total_allocated
+            << " bytes, maximo: " << peak_memory << " bytes\n";
+}
+
+
 void print_program(const std::vector<std::unique_ptr<vm::ASTNode> > &program, int indent = 0) {
     std::cout << "=== PROGRAM AST ===" << std::endl;
     for (const auto &node: program) {
@@ -55,11 +75,11 @@ void print_doc_ast(const std::vector<std::unique_ptr<vm::ASTNode> > &program, in
         if (auto annoNode = dynamic_cast<vm::AnnotationNode *>(basePtr)) {
             std::cout << "=== PROGRAM DOC ===" << std::endl;
             print_AnnotationNode(annoNode, indent);
-        } else if (auto sectionNode = dynamic_cast<vm::SectionNode *>(basePtr)) {
-            //sectionNode->print(indent);
+        } else if (auto LabelNode = dynamic_cast<vm::LabelNode *>(basePtr)) {
+            //LabelNode->print(indent);
 
             // Recursión sobre el cuerpo de la sección
-            print_doc_ast(sectionNode->body, indent + 2);
+            print_doc_ast(LabelNode->body, indent + 2);
         }
         // Otros tipos de nodos base
         //else basePtr->print(indent);
@@ -120,6 +140,9 @@ int main() {
         auto                          bytes = MyAsm.assemble(program);
         std::cout << "\n[Tiempo de ensamblado] " << t_asm.us() << " us "  << t_asm.ms() << " ms\n";
 
+        // imprimir el contexto que el ensamblador genero
+        print_context(MyAsm.ctx);
+
         const size_t BYTES_PER_LINE = 16;
         size_t       count          = 0;
 
@@ -137,6 +160,10 @@ int main() {
         } std::cout << std::dec; // restaurar a modo decimal
 
         std::cout << std::endl;
+
+
+        Assembly::Bytecode::print_context_with_bytes(MyAsm.ctx, bytes);
+
     } catch (const vm::ParseError &e) {
         std::cerr << "\nPARSE ERROR\n"
                 << "Linea " << e.line << ":" << e.column << "\n"
@@ -144,8 +171,10 @@ int main() {
         return 1; // Exit code 1 (error)
     }
 
+
     std::cout << "\n[Lexer Test] Finalizado\n";
 
+    print_memory_stats();
     std::cout << "\n[Tiempo total] " << global.us() << " us "  << global.ms() << " ms\n";
     return 0;
 }

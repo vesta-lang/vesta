@@ -1,13 +1,29 @@
+# carpetas de configuración de IDEs y entornos virtuales
 .idea
+.xmake
+.vscode
+.venv
+
+# CMake build directories
 cmake-build-debug
 cmake-build-release
-build
+build*
 build-windows
 build-linux
+
+# certificados y claves privadas
 *.pem
-.vscode
+
+# librerias compiladas y archivos de configuración de OpenSSL
 libs/Windows/OpenSSL-Win64/bin
 libs/Windows/OpenSSL-Win64/exp
 libssl*
 libcrypto*
+
 _pdf
+read_bytecode.hexpat
+
+diagramas
+
+# Carpeta de documentación generada por Doxygen
+./doc/doxygen_doc

@@ -15,6 +15,8 @@
 
 #include "net/connection.h"
 #include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 
 class TLSConnection : public Connection {
 private:
