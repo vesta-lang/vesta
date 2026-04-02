@@ -1,0 +1,8 @@
+//
+// Created by desmon0xff on 03/04/2026.
+//
+
+#ifndef ASSEMBLER_MULTIPROCESS_H
+#define ASSEMBLER_MULTIPROCESS_H
+
+#endif //ASSEMBLER_MULTIPROCESS_H
