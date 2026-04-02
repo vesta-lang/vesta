@@ -50,30 +50,57 @@ namespace cli {
     };
 
     static void command_run(std::string cmd) {
-        // Construcción del manager
-        runtime::ManageVM vm{nullptr};
-
-        // Añadir moviendo la instancia
-        size_t id = mgr.add_manager(std::move(vm));
-
-        // Obtener copia segura del manager
-        auto maybe = mgr.get_manager_copy(id);
-        if (!maybe) {
+        // comprobar existencia (soporta rutas relativas y absolutas)
+        auto path = fs::normalize_path_safe(cmd);
+        if (!fs::file_exists(path)) {
             std::lock_guard lk(vesta::cout_mutex);
-            vesta::scout() << "No se pudo obtener copia del manager\n";
+            vesta::scout() << "No existe el archivo: " << path.string() << "\n";
             return;
         }
 
-        // Construir la representación textual fuera del mutex,
-        // espero que esto no de problemas en el futuro
-        std::string info = maybe->to_string_vm_manager_info();
+        if (!fs::is_regular_file(path)) {
+            std::lock_guard lk(vesta::cout_mutex);
+            vesta::scout() << "La ruta no es un archivo regular: " << path.string() << "\n";
+            return;
+        }
 
-        // Imprimir bajo mutex (bloque corto)
-        //{
+        // comprobar permisos
+        if (!fs::can_read(path)) {
+            std::lock_guard lk(vesta::cout_mutex);
+            vesta::scout() << "No se puede leer el archivo: " << path.string() << "\n";
+            return;
+        }
+
+        auto maybe_abs2 = fs::get_existing_absolute_path(cmd);
+        if (maybe_abs2) {
+            std::cout << "Intentando ejecutar: " << maybe_abs2->string() << "\n";
+            // Construcción del manager
+            runtime::ManageVM vm{nullptr};
+
+            // Añadir moviendo la instancia
+            size_t id = mgr.add_manager(std::move(vm));
+
+            // Obtener copia segura del manager
+            auto maybe = mgr.get_manager_copy(id);
+            if (!maybe) {
+                std::lock_guard lk(vesta::cout_mutex);
+                vesta::scout() << "No se pudo obtener copia del manager\n";
+                return;
+            }
+
+            // Construir la representación textual fuera del mutex,
+            // espero que esto no de problemas en el futuro
+            std::string info = maybe->to_string_vm_manager_info();
+
+            // Imprimir bajo mutex (bloque corto)
+            //{
             //std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "Manager creado con ID: " << id << "\n";
             vesta::scout() << info;
-        //}
+            //}
+        } else {
+            std::cout << "No se puedo ejecutar por algun motivo: " << cmd << "\n";
+        }
     }
 
 
@@ -560,7 +587,7 @@ namespace cli {
 #if defined(_WIN32)
                             "USERPROFILE"
 #else
-                "HOME"
+                            "HOME"
 #endif
                         );
                         if (!home) {
@@ -610,7 +637,7 @@ namespace cli {
             }
 
             if (cmd.rfind("run", 0) == 0) {
-                std::string shell = cmd.substr(3);
+                std::string shell = cmd.substr(4);
                 std::cout << "Ejecutando: " << shell << std::endl;
                 command_run(shell);
             }

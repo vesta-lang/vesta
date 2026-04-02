@@ -12,7 +12,6 @@
 #ifndef CLI_H
 #define CLI_H
 
-#include <iostream>
 #include <string>
 #include <vector>
 #include <thread>
@@ -27,10 +26,12 @@
 #include <sstream>
 #include <filesystem>
 #include <cstdlib>   // getenv
+#include <optional>
+#include <iostream>
 
 #include "runtime/manager_runtime.h"
 #include "runtime/runtime.h"
-
+#include "util/fs_utils.h"
 
 namespace cli {
     struct Impl;
@@ -44,7 +45,6 @@ namespace cli {
 
     class VestaViewManager {
     public:
-
         explicit VestaViewManager(Config cfg = Config());
 
         ~VestaViewManager();
@@ -58,7 +58,6 @@ namespace cli {
         // Detiene el manager y espera al worker
         void stop();
 
-
     private:
         // No copiar ni mover
         VestaViewManager(const VestaViewManager &) = delete;
@@ -68,6 +67,8 @@ namespace cli {
         // Implementación interna
         Impl *impl_;
     };
+
+
 }
 
 #endif

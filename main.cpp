@@ -56,7 +56,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (result.count("version")) {
-        std::cout << "VMProject v0.1.0" << std::endl;
+        std::cout << "Vesta v0.1.0" << std::endl;
         return 0;
     }
 

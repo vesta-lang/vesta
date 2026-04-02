@@ -19,6 +19,26 @@
 #include "parser/parser.h"
 #include "profiler/timer.h"
 
+size_t total_allocated = 0;
+size_t peak_memory = 0;
+
+void *operator new(std::size_t size) {
+    total_allocated += size;
+    peak_memory = std::max(peak_memory, total_allocated);
+    return malloc(size);
+}
+
+void operator delete(void *ptr) noexcept {
+    // no saber el tamaño aquí
+    free(ptr);
+}
+
+void print_memory_stats() {
+    std::cout << "Memoria actual: " << total_allocated
+            << " bytes, maximo: " << peak_memory << " bytes\n";
+}
+
+
 void print_program(const std::vector<std::unique_ptr<vm::ASTNode> > &program, int indent = 0) {
     std::cout << "=== PROGRAM AST ===" << std::endl;
     for (const auto &node: program) {
@@ -154,6 +174,7 @@ int main() {
 
     std::cout << "\n[Lexer Test] Finalizado\n";
 
+    print_memory_stats();
     std::cout << "\n[Tiempo total] " << global.us() << " us "  << global.ms() << " ms\n";
     return 0;
 }

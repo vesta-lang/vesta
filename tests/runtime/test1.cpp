@@ -17,6 +17,25 @@
 
 #include "runtime/runtime.h"
 
+size_t total_allocated = 0;
+size_t peak_memory = 0;
+
+void *operator new(std::size_t size) {
+    total_allocated += size;
+    peak_memory = std::max(peak_memory, total_allocated);
+    return malloc(size);
+}
+
+void operator delete(void *ptr) noexcept {
+    // no saber el tamaño aquí
+    free(ptr);
+}
+
+void print_memory_stats() {
+    std::cout << "Memoria actual: " << total_allocated
+            << " bytes, maximo: " << peak_memory << " bytes\n";
+}
+
 int main() {
     runtime::ManageVM manager = runtime::ManageVM(nullptr);
 
@@ -42,5 +61,6 @@ int main() {
     bool exists = manager.has_vm(vm1_id); // false
     printf("VM %llu existe: %s\n", vm1_id, exists ? "SI" : "NO");
 
+    print_memory_stats();
     return 0;
 }

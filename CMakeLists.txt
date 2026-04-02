@@ -175,7 +175,7 @@ target_link_options(vm PRIVATE
 
 # Opciones por configuracion
 target_compile_options(vm PRIVATE
-        $<$<CONFIG:Debug>:-fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE>
+        $<$<CONFIG:Debug>:-fno-omit-frame-pointer -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE>
         $<$<CONFIG:Release>:-fpermissive -O3 -DNDEBUG>
         $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
 )
