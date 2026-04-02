@@ -12,6 +12,8 @@
 
 #include "emmit/parser_to_bytecode.h"
 
+#include "cli/sync_io.h"
+
 namespace Assembly::Bytecode {
     uint64_t Assembler::eval_operand(const vm::ASTNode *op) {
         // número inmediato como operando
@@ -57,9 +59,7 @@ namespace Assembly::Bytecode {
         throw std::runtime_error("Invalid expression");
     }
 
-    Assembler::Assembler()
-        : default_address(vm::mem::CODE_BEGIN) // dirección base
-    {
+    Assembler::Assembler() {
         symbol_table.clear();
     }
 
@@ -259,6 +259,10 @@ namespace Assembly::Bytecode {
                 }
             }
 
+            if (current_section == nullptr) {
+                vesta::scout() << "ERROR: No declaraste ningun seccion en tu codigo" << std::endl;
+                exit(EXIT_FAILURE);
+            }
 
             // añadir a la sección actual el nuevo label
             current_section->add_label(data->label, offset_label, size_of_label);

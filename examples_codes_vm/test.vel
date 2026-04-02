@@ -10,8 +10,19 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-@Anotation {
-    @Name ("hola")
+@Format("velb")
+
+@InitPc(code)
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
 }
 code:
     moveee r0, 1

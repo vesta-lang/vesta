@@ -1,0 +1,41 @@
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+@Format("velb")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000001000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+}
+code:
+    @InitPc(code)
+
+    jmp r4
+    jmp 0x100000
+
+    adds r15b, r13b
+    adds r15w, r13w
+    addu r15d, r13d
+    addu r15, r13
+
+end_code:
+
+data:
+    msg db "Hola mundo"
+    msg1 dq 0x123456789abcdef
+end_data:

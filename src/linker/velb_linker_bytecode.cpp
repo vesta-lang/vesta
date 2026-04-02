@@ -22,21 +22,10 @@ namespace Assembly::Bytecode::Linker {
         return sum;
     }
 
-    void Linker::log_warning(const std::string &msg) {
-        report.warnings.push_back(msg);
-        if (options.verbose)
-            std::cerr << "[Linker][WARN] " << msg << "\n";
-    }
-
-    void Linker::log_error(const std::string &msg) {
-        report.errors.push_back(msg);
-        std::cerr << "[Linker][ERROR] " << msg << "\n";
-    }
-
     void Linker::add_object_file(const std::string &path) {
         std::ifstream f(path, std::ios::binary);
         if (!f) {
-            log_error("No se pudo abrir objeto: " + path);
+            add_errorf(report, LinkerError::Type::IOError,  ("No se pudo abrir objeto: " + path).c_str());
             return;
         }
 
@@ -44,7 +33,7 @@ namespace Assembly::Bytecode::Linker {
                                   std::istreambuf_iterator<char>());
 
         if (data.empty()) {
-            log_warning("Objeto vacio: " + path);
+            add_errorf(report, LinkerError::Type::IOError,  ("Objeto vacio: " + path).c_str());
             return;
         }
 
@@ -64,7 +53,7 @@ namespace Assembly::Bytecode::Linker {
 
     void Linker::add_object_memory(const std::vector<uint8_t> &data) {
         if (data.empty()) {
-            log_warning("add_object_memory: buffer vacio");
+            add_warningf(report, LinkerWarning::Type::IOWarning,  ("add_object_memory: buffer vacio"));
             return;
         }
 
@@ -82,7 +71,7 @@ namespace Assembly::Bytecode::Linker {
     void Linker::add_static_library(const std::string &path) {
         std::ifstream f(path, std::ios::binary);
         if (!f) {
-            log_error("No se pudo abrir libreria estatica: " + path);
+            add_errorf(report, LinkerError::Type::IOError,  ("No se pudo abrir libreria estatica: " + path).c_str());
             return;
         }
 
@@ -203,6 +192,16 @@ namespace Assembly::Bytecode::Linker {
             }
         }
 
+        // configuramos el start_pc indicado el ensamblador
+        final_header.start_pc = ctx->start_pc;
+
+        if (final_header.start_pc == 0) {
+            void *ptr = reinterpret_cast<void *>(static_cast<uintptr_t>(final_header.start_pc));
+
+            add_warningf(report, LinkerWarning::Type::PCDefault, "Estas usando una direccion PC(%p) por defecto?",
+                         ptr);
+        }
+
         modules.push_back(std::move(m));
         report.modules_linked++;
     }
@@ -258,8 +257,8 @@ namespace Assembly::Bytecode::Linker {
                         //
                         // Duplicados
                         if (global_symbols.count(fullName)) {
-                            log_error("Símbolo duplicado: " + fullName +
-                                      " en módulo " + mod.name);
+                            add_errorf(report, LinkerError::Type::DuplicateSymbol, ("Símbolo duplicado: " + fullName +
+                                           " en módulo " + mod.name).c_str());
                             continue;
                         }
 
@@ -307,7 +306,8 @@ namespace Assembly::Bytecode::Linker {
                 // Si no existe, error de símbolo no resuelto.
                 // equivalente a: ld: undefined reference to `foo'
                 if (it == global_symbols.end()) {
-                    log_error("Relocacion: simbolo no resuelto: " + rel.symbol);
+                    add_errorf(report, LinkerError::Type::RelocationError,
+                               ("Relocacion: simbolo no resuelto: " + rel.symbol).c_str());
                     continue;
                 }
 
@@ -320,7 +320,8 @@ namespace Assembly::Bytecode::Linker {
                 uint64_t target_addr = it->second;
 
                 if (rel.offset + sizeof(uint64_t) > mod.bytecode.size()) {
-                    log_error("Relocacion fuera de rango en modulo " + mod.name);
+                    add_errorf(report, LinkerError::Type::RelocationError,
+                               ("Relocacion fuera de rango en modulo " + mod.name).c_str());
                     continue;
                 }
 
@@ -340,7 +341,8 @@ namespace Assembly::Bytecode::Linker {
                         // offset relativo simplificado (suponemos PC en rel.offset + 4)
                         int32_t rel32 = static_cast<int32_t>(target_addr - (rel.offset + 4));
                         if (rel.offset + sizeof(int32_t) > mod.bytecode.size()) {
-                            log_error("Reloc REL32 fuera de rango en modulo " + mod.name);
+                            add_errorf(report, LinkerError::Type::RelocationError,
+                                       ("Reloc REL32 fuera de rango en modulo " + mod.name).c_str());
                             continue;
                         }
                         std::memcpy(&mod.bytecode[rel.offset], &rel32, sizeof(int32_t));
@@ -402,7 +404,8 @@ namespace Assembly::Bytecode::Linker {
                 // cada cada seccion dentro del espacio de direcciones del modulo
                 for (const auto &[sectionName, section]: space.table_section) {
                     section_info_linker sec{};
-                    sec.memory.address = section.memory; // aqui se esta almacenando la direccion virtual de inicio y final
+                    sec.memory.address = section.memory;
+                    // aqui se esta almacenando la direccion virtual de inicio y final
                     //sec.memory.address.address_final = section.size_real; // debemos cambiar la direccion final para usar
                     // la direccion real dentro del archivo, y no usar la direccion final virtual.
                     // la seccion puede ocupar 49 bytes realmente en el archivo, pero al cargarse demandar 1kB de
@@ -418,7 +421,11 @@ namespace Assembly::Bytecode::Linker {
 
 
     void Linker::build_header() {
-        std::memset(&final_header, 0, sizeof(final_header));
+        // std::memset(&final_header, 0, sizeof(final_header));
+        // no poner a 0, por que la funcion add_assembly_unit que agrega una unidad de ensamblado, configura el
+        // campo start_pc segun el contexto que haya procesado en el ensamblado, al llamarse la funcion add_assembly_unit
+        // antes que build_header, si realizamos el memset el campo quedaria a 0 de nuevo eliminando configuraciones
+        // anteriores de funciones previas.
 
         final_header.magic.firma = MAGIC_NUMBER_VELB;
         final_header.format_v = 1;
@@ -482,10 +489,9 @@ namespace Assembly::Bytecode::Linker {
         }
 
         // añadir a cada seccion el offset al nombre de su stirng
-        for (auto & final_section : final_sections) {
+        for (auto &final_section: final_sections) {
             final_section.memory.offset_string = string_offsets[final_section.name];
         }
-
     }
 
     void Linker::build_section_strings(uint64_t offset_init) {
@@ -626,7 +632,8 @@ namespace Assembly::Bytecode::Linker {
                         // si lo agrego el ensamblador, entonces el espacio deberia ser 0,
                         // si lo añadio el usuario, y no asigno
                         // estos espacios, se debera analizar
-                ) continue;
+                )
+                    continue;
 
                 throw std::runtime_error(
                     "Secciones solapadas en memoria virtual. seccion: " + n1 + " y seccion: " + n2);
@@ -722,13 +729,13 @@ namespace Assembly::Bytecode::Linker {
 
         std::ofstream f(path, std::ios::binary);
         if (!f) {
-            log_error("No se pudo abrir para escribir: " + path);
+            add_errorf(report, LinkerError::Type::IOError, ("No se pudo abrir para escribir: " + path).c_str());
             return;
         }
 
         f.write(reinterpret_cast<const char *>(exe.data()), static_cast<std::streamsize>(exe.size()));
         if (!f) {
-            log_error("Error escribiendo ejecutable: " + path);
+            add_errorf(report, LinkerError::Type::IOError, ("Error escribiendo ejecutable: " + path).c_str());
         }
 
         if (options.generate_map_file && !options.map_file_path.empty()) {
@@ -739,7 +746,7 @@ namespace Assembly::Bytecode::Linker {
     void Linker::write_map_file(const std::string &path) {
         std::ofstream f(path);
         if (!f) {
-            log_error("No se pudo escribir map file: " + path);
+            add_errorf(report, LinkerError::Type::IOError, ("No se pudo escribir map file: " + path).c_str());
             return;
         }
 
@@ -749,7 +756,10 @@ namespace Assembly::Bytecode::Linker {
 
         std::time_t t = std::time(nullptr);
         f << "Generated: " << std::put_time(std::localtime(&t), "%Y-%m-%d %H:%M:%S") << "\n";
-        f << "Linker Version: 1.0\n\n";
+        f << "Linker Version: 1.0\n";
+        f << "PC address init: " << final_header.start_pc << "\n\n";
+
+        report.print_report(f);
 
         if (result->output.size() >= sizeof(HeaderVELB)) {
             HeaderVELB hdr{};

@@ -263,11 +263,11 @@ namespace Assembly::Bytecode {
      */
     class Assembler {
     public:
-        /**
-         * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
-         */
-        Section *current_section = nullptr;
-        Label *current_label = nullptr;
+        /// Tabla de símbolos generada en la primera pasada.
+        std::unordered_map<std::string, Label *> symbol_table;
+
+        /// Buffer de salida donde se escribe el bytecode final.
+        ByteWriter output;
 
         /**
          * Contexto del ensamblador
@@ -275,12 +275,15 @@ namespace Assembly::Bytecode {
         Context ctx{};
 
         /**
-         * @brief Dirección base por defecto donde se ensamblará el código.
-         *
-         * Puede inicializarse con la dirección base del espacio de direcciones
-         * de la VM
+         * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
          */
-        uint64_t default_address;
+        Section *current_section = nullptr;
+
+        /**
+         * Label analizada actualmente por el ensamblador, esta variable va cambiando a lo largo de la ejecuccion
+         * del ensamblador y solo se uso de cursor interno
+         */
+        Label *current_label = nullptr;
 
         /**
          * @brief Constructor del ensamblador.
@@ -406,11 +409,6 @@ namespace Assembly::Bytecode {
         void apply_directive(const vm::Instruction *instr);
 
     private:
-        /// Tabla de símbolos generada en la primera pasada.
-        std::unordered_map<std::string, Label *> symbol_table;
-
-        /// Buffer de salida donde se escribe el bytecode final.
-        ByteWriter output;
     };
 
     /**

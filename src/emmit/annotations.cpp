@@ -12,6 +12,7 @@
 
 #include "emmit/annotations.h"
 
+#include "cli/sync_io.h"
 #include "emmit/parser_to_bytecode.h"
 
 
@@ -83,6 +84,41 @@ namespace Assembly::Bytecode {
 
         // Crear el espacio
         assembler.ctx.add_space(string_space, IniAddress, EndAddress);
+    }
+
+
+    void apply_init_pc(const vm::AnnotationNode *node, Assembler &assembler) {
+        std::optional<uint64_t> n = vm::parse_number_safe(node->value);
+        if (n != std::nullopt) { // si es un numero valido
+            assembler.ctx.start_pc = n.value();
+            return;
+        }
+
+        if (assembler.current_section == nullptr) {
+            vesta::scout() << "No se a definido ninguna seccion y por tanto no se puede encontrar la label: " << node->value << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        /**
+         * Buscar la label, en teoria, no deberia haber labels con el mismo nombre en todo_
+         * el codigo. Buscamos en todos los espacios de direcciones, en todas las seccines.
+         */
+        auto res2 = find_label_in_context(assembler.ctx, node->value);
+        if (res2.found()) {
+            // Para poder indicar el PC desde una label, es necesario conocer en que seccion se encuentra la label, y
+            // en que espacio de direcciones, se encuentra la seccion.
+            // una vez se conoce estos 3 datos, el calculo es la suma de la direccion inicial del espacio de direcciones,
+            // mas el offset de la seccion dentro de ese espacio de direcciones mas el offset del label dentro de la
+            // seccion
+            assembler.ctx.start_pc =
+                res2.space->range.address_init +
+                    res2.section->memory.address_init +
+                        res2.label->address;
+            return;
+        }
+
+        vesta::scout() << "No se pudo encontrar la label: " << node->value << ", no fue definida o se declaro despues de la notacion." << std::endl;
+        exit(EXIT_FAILURE);
     }
 
     void apply_section(const vm::AnnotationNode *node, Assembler &assembler) {

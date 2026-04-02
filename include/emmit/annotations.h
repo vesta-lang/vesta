@@ -61,6 +61,26 @@ namespace Assembly::Bytecode {
      */
     void apply_format(const vm::AnnotationNode *node, Assembler &ctx);
 
+    /**
+     * Permite configurar el valor PC de inicio, se recomienda inicializar el valor para indicar donde empezar la
+     * ejecuccion, sino se configura la ejecucion siempre comenzara en la direccion 0x000000.
+     * Esta notacion permite recibir un label donde se calculara la direccion de inicio, o se le puede
+     * especificar una direccion cruda directamente si se conoce.
+     * En caso de especificarle una label, la label debe estar previamente declarada, un ejemplo:
+     *
+     * @code{.cpp}
+     * code:
+     *     @InitPc(code)
+     *     adds r0, 3
+     * @endcode
+     *
+     * En caso de encontrarse varios InitPc, se usara el ultimo definido.
+     *
+     * @param node nodo padre
+     * @param assembler contexto global del ensamblador
+     */
+    void apply_init_pc(const vm::AnnotationNode *node, Assembler &assembler);
+
     static std::unordered_map<std::string, AnnotationHandler> annotation_handlers = {
         {
             "SpaceAddress", apply_space_address
@@ -70,6 +90,9 @@ namespace Assembly::Bytecode {
         },
         {
             "Section", apply_section
+        },
+        {
+            "InitPc", apply_init_pc
         },
         {
             "IniAddress", [](const vm::AnnotationNode *a, Assembler &ctx) {

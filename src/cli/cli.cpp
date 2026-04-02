@@ -49,9 +49,27 @@ namespace cli {
         }
     };
 
-    static void command_run(std::string cmd) {
-        // comprobar existencia (soporta rutas relativas y absolutas)
-        auto path = fs::normalize_path_safe(cmd);
+    /**
+     * Permite listar todos los manager disponibles
+     */
+    static void command_list_vmgr() {
+    }
+
+    /**
+     * Comando que permite ejecutar un bytecode creand un nuevo manager
+     * @param cmd ruta del archivo a ejecutar
+     */
+    static void command_run(const std::string &cmd) {
+        // parsear parámetros: nombre y ruta
+        CmdParams p = parse_cmd_params(cmd);
+        if (!p.valid) {
+            std::lock_guard lk(vesta::cout_mutex);
+            vesta::scout() << "Uso: <name> <ruta_al_bytecode> [opciones]\n";
+            return;
+        }
+
+        // normalizar la ruta (usa tu utilitario vfs::normalize_path_safe)
+        auto path = fs::normalize_path_safe(p.path);
         if (!fs::file_exists(path)) {
             std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "No existe el archivo: " << path.string() << "\n";
@@ -64,43 +82,47 @@ namespace cli {
             return;
         }
 
-        // comprobar permisos
         if (!fs::can_read(path)) {
             std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "No se puede leer el archivo: " << path.string() << "\n";
             return;
         }
 
-        auto maybe_abs2 = fs::get_existing_absolute_path(cmd);
-        if (maybe_abs2) {
-            std::cout << "Intentando ejecutar: " << maybe_abs2->string() << "\n";
-            // Construcción del manager
-            runtime::ManageVM vm{nullptr};
-
-            // Añadir moviendo la instancia
-            size_t id = mgr.add_manager(std::move(vm));
-
-            // Obtener copia segura del manager
-            auto maybe = mgr.get_manager_copy(id);
-            if (!maybe) {
-                std::lock_guard lk(vesta::cout_mutex);
-                vesta::scout() << "No se pudo obtener copia del manager\n";
-                return;
-            }
-
-            // Construir la representación textual fuera del mutex,
-            // espero que esto no de problemas en el futuro
-            std::string info = maybe->to_string_vm_manager_info();
-
-            // Imprimir bajo mutex (bloque corto)
-            //{
-            //std::lock_guard lk(vesta::cout_mutex);
-            vesta::scout() << "Manager creado con ID: " << id << "\n";
-            vesta::scout() << info;
-            //}
-        } else {
-            std::cout << "No se puedo ejecutar por algun motivo: " << cmd << "\n";
+        auto maybe_abs2 = fs::get_existing_absolute_path(path);
+        if (!maybe_abs2) {
+            std::lock_guard lk(vesta::cout_mutex);
+            vesta::scout() << "No se pudo resolver la ruta: " << path.string() << "\n";
+            return;
         }
+
+        std::cout << "Intentando ejecutar: " << maybe_abs2->string() << "\n";
+
+        // p.name identificador y maybe_abs2->string() ruta absoluta
+
+        // Construcción del manager
+        runtime::ManageVM vm{nullptr};
+        vm.name_manager = p.name;
+
+        // Añadir moviendo la instancia
+        size_t id = mgr.add_manager(std::move(vm));
+
+        // Obtener copia segura del manager
+        auto maybe = mgr.get_manager_copy(id);
+        if (!maybe) {
+            vesta::scout() << "No se pudo obtener copia del manager\n";
+            return;
+        }
+
+        // Construir la representación textual fuera del mutex,
+        // espero que esto no de problemas en el futuro
+        std::string info = maybe->to_string_vm_manager_info();
+
+        // Imprimir bajo mutex (bloque corto)
+        //{
+        //std::lock_guard lk(vesta::cout_mutex);
+        vesta::scout() << "Manager creado con ID: " << id << "\n";
+        vesta::scout() << info;
+        //}
     }
 
 
@@ -205,6 +227,24 @@ namespace cli {
                 << "  cmd <comando>        - ejecutar <comando> en el shell (asíncrono)\n"
                 << "    Ejemplo: cmd ls -la\n"
                 << "\n"
+                << "Ejecutar bytecode / crear manager:\n"
+                << "  run <name> <ruta> [opciones]\n"
+                << "    Crea un nuevo manager y carga el bytecode indicado por <ruta>.\n"
+                << "    <name>  : identificador libre para el manager (primer token).\n"
+                << "              Si contiene espacios, debe ir entre comillas.\n"
+                << "    <ruta>  : ruta al fichero del bytecode (absoluta o relativa).\n"
+                << "              Si contiene espacios, debe ir entre comillas.\n"
+                << "    [opciones] : cualquier texto restante se pasa como 'rest' y\n"
+                << "                 puede usarse para flags de la VM.\n"
+                << "\n"
+                << "    Reglas de parseo:\n"
+                << "      - El primer token es el nombre; puede ir entre comillas \"...\" o '...'.\n"
+                << "      - El segundo token es la ruta; también admite comillas y escapes.\n"
+                << "      - Ejemplos:\n"
+                << "         run myvm ./build/code.velb\n"
+                << "         run \"My VM\" \"/home/user/code with spaces.velb\" --debug\n"
+                << "         run name \"C:\\\\Program Files\\\\VM\\\\code.velb\"\n"
+                << "\n"
                 << "Pantalla y visual:\n"
                 << "  cls/clear            - limpiar pantalla (Windows)\n"
                 << "\n"
@@ -212,9 +252,16 @@ namespace cli {
                 << "  Termina con '" << I.cfg.multiline_end << "' para enviar bloque.\n"
                 << "\n"
                 << "Notas de seguridad:\n"
-                << "  Ejecutar comandos de shell puede ser peligroso. Usa cmd/sh solo\n"
-                << "  en entornos de confianza. Para evitar bloqueos, las ejecuciones\n"
-                << "  se lanzan en segundo plano y su salida se muestra cuando termina.\n";
+                << "  Ejecutar comandos de shell o cargar bytecode puede ser peligroso.\n"
+                << "  - Usa cmd/run solo en entornos de confianza.\n"
+                << "  - Las rutas se validan (existencia/lectura) antes de crear el manager.\n"
+                << "  - Para evitar bloqueos, las ejecuciones se lanzan en segundo plano y\n"
+                << "    su salida se muestra cuando terminan.\n"
+                << "\n"
+                << "Consejos:\n"
+                << "  - Si la ruta no se encuentra, verifica comillas y escapes.\n"
+                << "  - Para rutas con ~ o variables de entorno, expándelas antes de usar.\n"
+                << "  - Usa nombres únicos para managers para facilitar su identificación.\n";
     }
 
 

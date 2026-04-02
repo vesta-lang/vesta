@@ -155,9 +155,9 @@ typedef struct PACKED HeaderVELA {
 } HeaderVELA;
 
 typedef struct PACKED section_range_memory {
-    range_memory address;   // aqui deberia contener offsets a los
-                            // espacios de direcciones, al cargar el ejecutable,
-                            // se indica la direccion real,
+    range_memory address; // aqui deberia contener offsets a los
+    // espacios de direcciones, al cargar el ejecutable,
+    // se indica la direccion real,
 
     // nombre de la seccion, maximo 16 bytes.
     uint64_t offset_string; // donde empieza el bytecode o los datos dentro del archivo
@@ -206,6 +206,9 @@ static bool ranges_overlap(const range_memory *a, const range_memory *b) {
 
 #include <unordered_map>
 #include <vector>
+#include <memory>
+#include <inttypes.h>
+
 #include "emmit/struct_context.h"
 #include "optimizer/optimizer.h"
 #include "emmit/annotations.h"
@@ -225,7 +228,7 @@ namespace Assembly::Bytecode::Linker {
     };
 
     /**
-     * Errores estructurados
+     * @brief Errores estructurados
      */
     struct LinkerError {
         enum class Type {
@@ -238,8 +241,79 @@ namespace Assembly::Bytecode::Linker {
             InternalError
         };
 
+        [[nodiscard]] const char *type_to_string() const {
+            switch (type) {
+                case LinkerError::Type::FileNotFound: return "FileNotFound";
+                case LinkerError::Type::InvalidFormat: return "InvalidFormat";
+                case LinkerError::Type::DuplicateSymbol: return "DuplicateSymbol";
+                case LinkerError::Type::UndefinedSymbol: return "UndefinedSymbol";
+                case LinkerError::Type::RelocationError: return "RelocationError";
+                case LinkerError::Type::IOError: return "IOError";
+                default: return "InternalError";
+            }
+        }
+
         Type type;
         std::string message;
+
+        /**
+         * @brief Representación textual del error.
+         * @return string con formato "[Type] message"
+         */
+        [[nodiscard]] std::string to_string() const {
+            return std::string("[") + type_to_string() + "] " + message;
+        }
+
+        friend std::ostream &operator<<(std::ostream &os, const LinkerError &e) {
+            os << e.to_string();
+            return os;
+        }
+    };
+
+    /**
+     * @brief Tipos de warning del linker
+     */
+    struct LinkerWarning {
+        enum class Type {
+            DeprecatedOption,
+            UnusedSymbol,
+            AlignmentAdjusted,
+            ConfigWarning,
+            IOWarning,
+            PCDefault,
+            Other
+        };
+
+        Type type;
+        std::string message;
+
+        [[nodiscard]] const char *type_to_string() const {
+            switch (type) {
+                case LinkerWarning::Type::DeprecatedOption: return "DeprecatedOption";
+                case LinkerWarning::Type::UnusedSymbol: return "UnusedSymbol";
+                case LinkerWarning::Type::AlignmentAdjusted: return "AlignmentAdjusted";
+                case LinkerWarning::Type::ConfigWarning: return "ConfigWarning";
+                case LinkerWarning::Type::IOWarning: return "IOWarning";
+                case LinkerWarning::Type::PCDefault: return "PCDefault";
+                default: return "Other";
+            }
+        }
+
+        LinkerWarning(Type t, std::string m) : type(t), message(std::move(m)) {
+        }
+
+        /**
+         * @brief Representación textual del warning.
+         * @return string con formato "[Type] message"
+         */
+        [[nodiscard]] std::string to_string() const {
+            return std::string("[") + type_to_string() + "] " + message;
+        }
+
+        friend std::ostream &operator<<(std::ostream &os, const LinkerWarning &w) {
+            os << w.to_string();
+            return os;
+        }
     };
 
 
@@ -247,16 +321,168 @@ namespace Assembly::Bytecode::Linker {
      * Un informe final con estadísticas del linking.
      */
     struct LinkerReport {
+        /**
+         * numero de modulos usados para el linkado
+         */
         size_t modules_linked = 0;
+
+        /**
+         * simbolos resueltos en el proceso de linkado
+         */
         size_t symbols_resolved = 0;
+
+        /**
+         * relocalizaciones aplicadas en el proceso de linkado
+         */
         size_t relocations_applied = 0;
+
+        /**
+         * optimizaciones aplicadas en el proceso de linkado.
+         */
         size_t optimizations_applied = 0;
 
-        std::vector<std::string> warnings;
-        std::vector<std::string> errors;
+        /**
+         * Tabla de warnings
+         */
+        std::vector<LinkerWarning> warnings;
 
+        /**
+         * Tabla de errores.
+         */
+        std::vector<LinkerError> errors;
+
+        /**
+         * indica si no ocurrio ningun error.
+         * @return En caso de no haber errores devuelve true.
+         */
         bool success() const { return errors.empty(); }
+
+        /**
+         * @brief Añade un error estructurado al reporte.
+         * @param err datos del error
+         */
+        void add_error(LinkerError err) {
+            errors.push_back(err);
+        }
+
+        /**
+         * @brief Añade un error estructurado al reporte.
+         * @param type Tipo del error (LinkerError::Type).
+         * @param message Mensaje descriptivo.
+         */
+        void add_error(LinkerError::Type type, const std::string &message) {
+            errors.push_back(LinkerError{type, message});
+        }
+
+
+        /**
+         * @brief Añade un warning estructurado al reporte.
+         * @param war datos del warning
+         */
+        void add_warning(LinkerWarning war) {
+            warnings.push_back(war);
+        }
+
+        /**
+         * @brief Añade un warning al reporte.
+         * @param message Mensaje del warning.
+         */
+        void add_warning(LinkerWarning::Type type, const std::string &message) {
+            warnings.emplace_back(type, message);
+        }
+
+
+        /**
+         * @brief Versión con contexto (archivo/clave/valor) para errores no ligados al código.
+         * @param type Tipo del error.
+         * @param message Mensaje principal.
+         * @param context Texto corto con contexto (p.ej. "config:assembler.conf:line 12").
+         */
+        void add_error_with_context(LinkerError::Type type,
+                                    const std::string &message, const std::string &context) {
+            std::string full = message;
+            if (!context.empty()) full += " (" + context + ")";
+            add_error(type, full);
+        }
+
+        /**
+         * @brief Añade un warning con contexto.
+         */
+        void add_warning_with_context(LinkerWarning::Type type,
+                                      const std::string &message, const std::string &context) {
+            std::string full = message;
+            if (!context.empty()) full += " (" + context + ")";
+            add_warning(type, full);
+        }
+
+        /**
+         * @brief Merge sencillo de dos reportes (concatena warnings/errors y suma contadores).
+         */
+        void merge_report(const LinkerReport &src) {
+            modules_linked += src.modules_linked;
+            symbols_resolved += src.symbols_resolved;
+            relocations_applied += src.relocations_applied;
+            optimizations_applied += src.optimizations_applied;
+            warnings.insert(warnings.end(), src.warnings.begin(), src.warnings.end());
+            errors.insert(errors.end(), src.errors.begin(), src.errors.end());
+        }
+
+        /**
+         * @brief Imprime un resumen legible del reporte en el stream dado.
+         */
+        void print_report(std::ostream &os = std::cout) {
+            os << "* LinkerReport: \n"
+                    << "    - modules=" << modules_linked << "\n"
+                    << "    - symbols=" << symbols_resolved << "\n"
+                    << "    - relocations=" << relocations_applied << "\n"
+                    << "    - optimizations=" << optimizations_applied << "\n";
+
+            os << "* Warnings (" << warnings.size() << "):\n";
+            if (!warnings.empty()) {
+                for (const auto &w: warnings) os << "  - " << w << "\n";
+            }
+            os << "* Errors (" << errors.size() << "):\n";
+            if (!errors.empty()) {
+                for (const auto &e: errors) os << "  - " << e << "\n";
+            }
+        }
     };
+
+    /**
+     * @brief Añade un error formateado (printf-like).
+     * @note Implementación simple usando snprintf.
+     */
+    template<typename... Args>
+    static void add_errorf(LinkerReport &rpt, LinkerError::Type type, const char *fmt, Args &&... args) {
+        int size = std::snprintf(nullptr, 0, fmt, std::forward<Args>(args)...) + 1;
+        if (size <= 0) {
+            rpt.add_error(type, std::string(fmt));
+            return;
+        }
+        std::unique_ptr<char[]> buf(new char[size]);
+        std::snprintf(buf.get(), size, fmt, std::forward<Args>(args)...);
+        rpt.add_error(type, std::string(buf.get(), buf.get() + size - 1));
+    }
+
+    /**
+     * @brief Añade un warning formateado (printf-like).
+     * @param rpt reporte destino
+     * @param type tipo de warning (LinkerWarning::Type)
+     * @param fmt formato printf
+     * @param args argumentos
+     */
+    template<typename... Args>
+    static void add_warningf(LinkerReport &rpt, LinkerWarning::Type type, const char *fmt, Args &&... args) {
+        int size = std::snprintf(nullptr, 0, fmt, std::forward<Args>(args)...) + 1;
+        if (size <= 0) {
+            rpt.add_warning(type, std::string(fmt));
+            return;
+        }
+        std::unique_ptr<char[]> buf(new char[size]);
+        std::snprintf(buf.get(), size, fmt, std::forward<Args>(args)...);
+        rpt.add_warning(type, std::string(buf.get(), buf.get() + size - 1));
+    }
+
 
     /**
      * Una librería estática es simplemente un contenedor de módulos.
@@ -306,7 +532,7 @@ namespace Assembly::Bytecode::Linker {
         uint64_t size; // tamaño del label, algunas no tienen
     };
 
-    typedef struct section_info_linker{
+    typedef struct section_info_linker {
         section_range_memory memory;
         std::string name;
     } section_info_linker;
@@ -509,12 +735,34 @@ namespace Assembly::Bytecode::Linker {
 
         const LinkerReport &get_report() const { return report; }
 
-        void log_warning(const std::string &msg);
-
-        void log_error(const std::string &msg);
 
     private:
         LinkerOptions options;
+
+        /**
+         * @brief Permite realizar un reporte del linkado, guarda informacion del proceso del linkado, errores y warnings.
+         *
+         * @code{.cpp}
+         * LinkerReport rpt;
+         *
+         * // error con ruta (usar c_str() para std::string)
+         * std::string path = "/tmp/module.velb";
+         * add_errorf(rpt, LinkerError::Type::FileNotFound,
+         *            "No se encontró el fichero '%s'", path.c_str());
+         *
+         * // error con entero (hex)
+         * uint64_t addr = 0x1000;
+         * add_errorf(rpt, LinkerError::Type::RelocationError,
+         *            "Relocation failed at 0x%llx (section %s)", (unsigned long long)addr, "text");
+         *
+         * // warning con tipo específico
+         * add_warningf(rpt, LinkerWarning::Type::DeprecatedOption,
+         *              "La opción %s está obsoleta y será removida en la próxima versión", "--fast-link");
+         *
+         * // imprimir resultado
+         * rpt.print_report(std::cout);
+         * @endcode
+         */
         LinkerReport report;
 
         // para construir el binario final, buffer de salida
