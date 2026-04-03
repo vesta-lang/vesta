@@ -193,7 +193,7 @@ namespace runtime {
 
     private:
         /**
-         * Protege acceso a vms y counter_vm
+         * Protege acceso a vms
          */
         mutable std::mutex vm_mutex;
 

@@ -26,14 +26,14 @@
  * uint64_t r = h.raw;          // puede enviar como bloque de 8 bytes
  */
 typedef struct __attribute__((packed)) HostIpv4 {
-    uint32_t ipv4; // en network byte order
-    uint16_t port; // en network byte order
+    uint32_t ipv4 = 0; // en network byte order
+    uint16_t port = 0; // en network byte order
 } HostIpv4;
 
 
 typedef struct __attribute__((packed)) HostIpv6 {
-    uint8_t  bytes[16]; // dirección IPv6 (ya en network order)
-    uint16_t port;      // puerto en network order
+    uint8_t  bytes[16] = {}; // dirección IPv6 (ya en network order)
+    uint16_t port = 0;      // puerto en network order
 } HostIpv6;
 
 

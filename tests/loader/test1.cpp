@@ -49,8 +49,7 @@ using namespace Assembly::Bytecode;
 
 int main() {
     Timer global;
-    runtime::ManageVM manager = runtime::ManageVM(nullptr);
-
+    runtime::ManageVM manager = runtime::ManageVM(nullptr, 0);
 
     // Leer archivo fuente
     const std::string name_file("test.vel");
@@ -152,7 +151,7 @@ int main() {
     }
 
     if (!report.warnings.empty()) {
-        std::cout << "\n=== WARNINGS ===\n";
+        vesta::scout() << "\n=== WARNINGS ===\n";
         for (auto &w: report.warnings) std::cout << " - " << w << "\n";
     }
 

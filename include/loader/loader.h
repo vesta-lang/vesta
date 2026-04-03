@@ -339,7 +339,7 @@ namespace loader {
          */
         void parser_table_sections(Executable &exe, ByteReader &reader);
 
-        Executable parse_velb(std::vector<uint8_t> bytecode);
+        std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
 
         void load_executable(std::string path);
 
@@ -353,9 +353,23 @@ namespace loader {
 
         void build_runtime_context();
 
+        /**
+         * Permite obtener el ultimo ejecutable agregado al loader.
+         *
+         * @warning Esta función NO es thread‑safe. Debe llamarse bajo el mutex externo.
+         *
+         * @return referencia al ultimo ejecutable añadido.
+         */
+        Executable &get_last_instance_unlocked();
+
+        /**
+         * Esta es la version thread‑safe de get_last_instance_unlocked, usa un mutex
+         * interno.
+         * @return referencia al ultimo ejecutable añadido.
+         */
         Executable &get_last_instance();
 
-        void create_vm_instance(Executable &exe);
+        void create_vm_instance(std::unique_ptr<Executable> exe);
 
     private:
         /**
