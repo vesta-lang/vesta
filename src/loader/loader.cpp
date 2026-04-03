@@ -143,7 +143,7 @@ namespace loader {
     }
 
     void Loader::parse_table_spaces(Executable &exe, ByteReader &reader) {
-        for (int i = 0; i < exe.header.count; i++) {
+        for (size_t i = 0; i < exe.header.n_spaces; i++) {
             if (exe.header.address_spaces == nullptr) {
                 throw_error_at(ErrorKind::InvalidFormat,
                                "No se a podido encontrar los espacios de direcciones por algun motivo desconocido.",
@@ -175,13 +175,68 @@ namespace loader {
 
             exe.spaces.push_back(space);
         }
+
+        // la tabla de espacios siempre debe estar alineado a 16 bytes para que se pueda encontrar
+        // la tabla de secciones.
+        while (reader.offset % 16 != 0) {
+            (void) reader.read8();
+        }
     }
+
+    Space *Loader::find_space_for_section(Executable &exe, const Section &sec) {
+        for (auto &space: exe.spaces) {
+            if (sec.memory.address_init >= space.range.address_init &&
+                sec.memory.address_final <= space.range.address_final) {
+                return &space;
+            }
+        }
+        return nullptr;
+    }
+
 
     void Loader::parser_table_sections(Executable &exe, ByteReader &reader) {
         // realizamos un punto de control completo para parsear la tabla de secciones.
         ByteReader reader_child = reader.subreader(
             exe.header.count * sizeof(section_range_memory)
         );
+
+        // mover el cursor a la tabla de secciones
+        reader_child.seek(exe.header.table_offset);
+
+        for (size_t i = 0; i < exe.header.count; i++) {
+            Section sec;
+            sec.memory.address_init = reader_child.read64();
+            sec.memory.address_final = reader_child.read64();
+            uint64_t offset_string = reader_child.read64();
+            try {
+                // aqui usamos al padre, por que el offset de la tabla de strings no puede accederse
+                // con el cursor hijo, ya que el cursor hijo solo puede acceder a la tabla de seeciones
+                // mientras que el cursor padre puede acceder a cualquier parte del bytecode
+                sec.name = read_string_at(reader, offset_string);
+            } catch (const ByteReaderError &e) {
+                throw_error_at(
+                    ErrorKind::InvalidFormat,
+                    std::string("Ha ocurrido un error de lectura al leer la tabla de strings: '") + e.what() + "'",
+                    reader_child
+                );
+            }
+            sec.size_real = sec.memory.address_final - sec.memory.address_init;
+
+            // Buscar el espacio al que pertenece
+            Space *space = find_space_for_section(exe, sec);
+
+            if (!space) {
+                throw_error_at(
+                    ErrorKind::InvalidFormat,
+                    "La sección '" + sec.name + "' no pertenece a ningún espacio de direcciones",
+                    reader_child
+                );
+            }
+
+            // Insertar la sección en el espacio correspondiente
+            space->add_section(sec);
+            exe.sections.push_back(&space->table_section[sec.name]);
+        }
     }
 
     Executable Loader::parse_velb(std::vector<uint8_t> bytecode) {
@@ -194,6 +249,9 @@ namespace loader {
         // parseamos la tabla de espacio de direcciones que siempre va despues del header
         parse_table_spaces(exe, reader);
 
+        // parseamos la tabla de secciones, requiere haber parseado previamente la tabla
+        // de espacios de direcciones, ya que se va a añadir a estos.
+        parser_table_sections(exe, reader);
         while (!reader.eof()) {
         }
 

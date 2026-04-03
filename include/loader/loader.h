@@ -178,7 +178,7 @@ namespace loader {
          * El loader debe reservar memoria para cada uno. Se puede indicar si reservar el rango completo o
          * realizar reserva lazy.
          */
-        std::vector<Assembly::Bytecode::Space> spaces{};
+        std::vector<Space> spaces{};
 
         /**
          * @brief Secciones ensambladas del ejecutable.
@@ -186,7 +186,7 @@ namespace loader {
          * Cada `Section` contiene bytecode ya resuelto y listo para copiarse
          * en el espacio correspondiente. Equivalente a `.text`, `.data`, `.rodata` en ELF.
          */
-        std::vector<Assembly::Bytecode::Section> sections{};
+        std::vector<Section*> sections{};
 
         /**
          * @brief Símbolos globales con dirección absoluta.
@@ -197,7 +197,7 @@ namespace loader {
          *
          * El loader los registra en la tabla de símbolos de la VM.
          */
-        std::vector<Assembly::Bytecode::Label> labels{};
+        std::vector<Label*> labels{};
 
         /**
          * @brief Bytecode final concatenado.
@@ -289,6 +289,16 @@ namespace loader {
         void parse_velb_header(Executable &exe, ByteReader &reader);
 
         void parse_table_spaces(Executable &exe, ByteReader &reader);
+
+        /**
+         * Permite buscar a que espacio pertenece una seccion del ejecutable, debe
+         * haberse analizado la tabla de espacios de direcciones previamente para poder
+         * hacer esto.
+         * @param exe datos del ejecutable
+         * @param sec seccion que se quiere usar para buscar el espacio de direcciones
+         * @return espacio de direcciones al que pertenece la seccion
+         */
+        Space *find_space_for_section(Executable &exe, const Section &sec);
 
         /**
          * parsea la tabla de secciones sin modificar el reader. Crea un punto de control

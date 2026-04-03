@@ -135,10 +135,13 @@ typedef struct PACKED HeaderVELB {
     build_timestamp timestamp = 0; // 8, 40
     target_arch arch = 0; // 4, 44
 
+    // cantidad de secciones en la tabla de secciones.
     section_count count = 0; // 4, 48
 
+    // offset a la tabla de secciones
     section_table_offset table_offset = 0; // 8, 56
 
+    // cantidad de espacios de direcciones
     number_spaces_address n_spaces = 0; // 8, 64
 
     // seccion con cadenas espaciales que pone el linker.

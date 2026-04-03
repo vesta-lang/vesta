@@ -15,7 +15,21 @@
 #include <vector>
 
 struct Cursor {
-    uint64_t offset;
+    uint64_t offset = 0;
+};
+
+class ByteReaderError : public std::exception {
+public:
+    explicit ByteReaderError(std::string msg)
+        : message(std::move(msg)) {
+    }
+
+    const char *what() const noexcept override {
+        return message.c_str();
+    }
+
+private:
+    std::string message;
 };
 
 
@@ -55,7 +69,7 @@ typedef struct ByteReader {
      */
     void require(size_t size) const {
         if (offset + size > input.size()) {
-            throw std::runtime_error("ByteReader: lectura fuera de rango");
+            throw ByteReaderError("ByteReader: lectura fuera de rango");
         }
     }
 
@@ -166,7 +180,7 @@ typedef struct ByteReader {
      */
     void restore(const Cursor &c) {
         if (c.offset > input.size()) {
-            throw std::runtime_error("ByteReader: cursor fuera de rango");
+            throw ByteReaderError("ByteReader: cursor fuera de rango");
         }
         offset = c.offset;
     }
@@ -183,7 +197,7 @@ typedef struct ByteReader {
      */
     void pop() {
         if (cursor_stack.empty()) {
-            throw std::runtime_error("ByteReader: pop sin push");
+            throw ByteReaderError("ByteReader: pop sin push");
         }
         restore(cursor_stack.back());
         cursor_stack.pop_back();
@@ -194,7 +208,7 @@ typedef struct ByteReader {
      */
     void drop() {
         if (cursor_stack.empty()) {
-            throw std::runtime_error("ByteReader: drop sin push");
+            throw ByteReaderError("ByteReader: drop sin push");
         }
         cursor_stack.pop_back();
     }
@@ -205,22 +219,25 @@ typedef struct ByteReader {
      */
     void seek(uint64_t new_offset) {
         if (new_offset > input.size()) {
-            throw std::runtime_error("ByteReader: seek fuera de rango");
+            throw ByteReaderError("ByteReader: seek fuera de rango");
         }
         offset = new_offset;
     }
 
     /**
      * metodo para crear un sublector. Esta es funciona bien para leer secciones y datos de los que
-     * se conocen su tamaño, como las secciones o los espacios de direcciones en el bytecode
+     * se conocen su tamaño, como las secciones o los espacios de direcciones en el bytecode.
+     *
+     * El hijo tiene la misma posicion que el padre a la hora de hacer la copia, use seek para cambiar
+     * la posicion a un offset especifico si es lo que quiere.
+     *
      * @param size tamaño del subselecto, si no se conoce no se puede crear un objeto de este tipo
      * @return subselector de lectura
      */
     ByteReader subreader(size_t size) {
         require(size);
         ByteReader r(input);
-        r.offset = offset;
-        offset += size;
+        r.offset = offset; // el hijo empieza donde el padre
         return r;
     }
 } ByteReader;
