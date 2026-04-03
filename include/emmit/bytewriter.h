@@ -14,6 +14,7 @@
 #define BYTEWRITER_H
 #include <vector>
 #include <cstdint>
+#include <stdexcept>
 
 /**
  * Permite un controlo de emision de bytes mas seguro con auto-incremento del offset
@@ -86,6 +87,29 @@ typedef struct ByteWriter {
         emit8((value >> 24) & 0xFF);
         emit8((value >> 32) & 0xFF);
     }
+
+    /**
+     * Se usa para parchear bytecode o datos ya escritos donde se conoce
+     * la posicion del dato
+     * @param value valor del dato nuevo
+     * @param pos posicion para el dato
+     */
+    void write64_at(uint64_t value, uint64_t pos) {
+        if (pos + 8 > output.size()) {
+            throw std::runtime_error("write64_at fuera de rango");
+        }
+
+        output[pos + 0] = (uint8_t) (value & 0xFF);
+        output[pos + 1] = (uint8_t) ((value >> 8) & 0xFF);
+        output[pos + 2] = (uint8_t) ((value >> 16) & 0xFF);
+        output[pos + 3] = (uint8_t) ((value >> 24) & 0xFF);
+        output[pos + 4] = (uint8_t) ((value >> 32) & 0xFF);
+        output[pos + 5] = (uint8_t) ((value >> 40) & 0xFF);
+        output[pos + 6] = (uint8_t) ((value >> 48) & 0xFF);
+        output[pos + 7] = (uint8_t) ((value >> 56) & 0xFF);
+    }
+
+
 } ByteWriter;
 
 

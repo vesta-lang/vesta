@@ -119,7 +119,21 @@ typedef struct PACKED table_spaces_address {
     // este campo contendra la direccion virtual con el offset
     // aplicado.
     uint64_t offset_section_strings = 0;
-    uint64_t padding = 0;
+
+    /**
+     * Offset al bytecode en el archivo. Al estar las secciones de forma lineal y continua, se puede
+     * averiguar donde reside cada seccion en el bytecode usando las direcciones virtuales
+     * de estas:
+     *      space = table_spaces_address[0]
+     *      file_offset_section = space.offset_bytecode + (
+     *           sec.address_init - space.range.address_init
+     *      )
+     * El computo para obtener el offset de la seccion es restar las direcciones virtuales
+     * de inicio de la seccion y del espacio de direcciones, esto nos dara el offset plano
+     * al que si sumamos donde esta el byte code(offset del bytecode) nos dira donde inicia
+     * la seccion.
+     */
+    uint64_t offset_bytecode = 0;
 } table_spaces_address;
 
 typedef struct PACKED HeaderVELB {
