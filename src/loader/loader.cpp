@@ -1,6 +1,8 @@
 #include "loader/loader.h"
 
+#include "emmit/bytereader.h"
 #include "emmit/struct_context.h"
+#include "runtime/runtime.h"
 
 /*
  *  Loader
@@ -15,40 +17,228 @@
 namespace loader {
     Loader::Loader(
         runtime::ManageVM &instance_manager
-    ):
-       instance_manager(instance_manager) {
+    ): instance_manager(instance_manager) {
     }
 
-    void parse_velb_header() {
+    std::string Loader::read_string_at(const std::vector<uint8_t> &blob, uint64_t offset) {
+        std::string result;
 
+        while (offset < blob.size() && blob[offset] != 0) {
+            result.push_back(static_cast<char>(blob[offset]));
+            offset++;
+        }
+
+        return result;
     }
 
-    void load_executable(std::string path) {
 
+    std::vector<std::string> Loader::read_all_strings(const std::vector<uint8_t> &blob) {
+        std::vector<std::string> result;
+        uint64_t i = 0;
+
+        while (i < blob.size()) {
+            std::string s;
+
+            while (i < blob.size() && blob[i] != 0) {
+                s.push_back(static_cast<char>(blob[i]));
+                i++;
+            }
+
+            result.push_back(s);
+
+            // saltar el '\0'
+            i++;
+        }
+
+        return result;
     }
 
-    void load_executable(const Assembly::Bytecode::Executable& exe) {
+    std::string Loader::read_string_at(ByteReader &reader, uint64_t offset) {
+        // Guardamos el offset original
+        uint64_t original = reader.offset;
 
+        // Nos movemos al offset solicitado
+        reader.seek(offset);
+
+        // Leemos la cadena
+        std::string result;
+        while (!reader.eof() && reader.input[reader.offset] != 0) {
+            result.push_back(static_cast<char>(reader.input[reader.offset]));
+            reader.offset++;
+        }
+
+        // Restauramos el offset original
+        reader.offset = original;
+
+        return result;
+    }
+
+
+    void Loader::parse_velb_header(Executable &exe, ByteReader &reader) {
+        if (reader.input.size() < sizeof(HeaderVELB)) {
+            throw_error_at(ErrorKind::TruncatedHeader,
+                           "El ejecutable es demasiado pequeño para contener un header VELB", reader);
+        }
+
+        exe.header.magic.firma = reader.read32();
+        if (exe.header.magic.firma != MAGIC_NUMBER_VELB) {
+            throw_error_at(ErrorKind::InvalidMagic,
+                           "Magic number VELB inválido", reader);
+        }
+
+        exe.header.format_v = reader.read32();
+        if (VERSION_VELB != exe.header.format_v) {
+            throw_error_at(ErrorKind::InvalidVersion,
+                           "Vesrion invalida de bytecode, la version actual es " +
+                           std::to_string(VERSION_VELB) +
+                           " pero la encontrada fue: " + std::to_string(exe.header.format_v),
+                           reader
+            );
+        }
+
+        // La versión de la VM debe estar dentro del rango [min_v, max_v] exigido por el ejecutable.
+        exe.header.max_v = reader.read32();
+        exe.header.min_v = reader.read32();
+        if (exe.header.max_v < VERSION_VM || exe.header.min_v > VERSION_VM) {
+            throw_error_at(ErrorKind::InvalidVersion,
+                           "Vesrion invalida de maquina virtual, la version actual es " +
+                           std::to_string(VERSION_VM) +
+                           " pero la encontrada exigida por el codigo es: " + std::to_string(exe.header.min_v) + " - "
+                           + std::to_string(exe.header.max_v),
+                           reader
+            );
+        }
+
+        exe.header.checksum = reader.read64();
+        exe.header.flags = reader.read64();
+        exe.header.timestamp = reader.read64();
+        exe.header.arch = reader.read32();
+
+        // cantidad de espacios de direcciones
+        exe.header.count = reader.read32();
+
+        // offset a la tabla de secciones
+        exe.header.table_offset = reader.read64();
+
+        // cantidad de espacios de direcciones que viene despues del header.
+        exe.header.n_spaces = reader.read64();
+        if (exe.header.n_spaces == 0) {
+            throw_error_at(ErrorKind::NotFoundSpacesAddress,
+                           "no se a definido la cantidad de espacios de direcciones.",
+                           reader
+            );
+        }
+        exe.header.address_spaces = new table_spaces_address[exe.header.count];
+
+        // offset a la tabla de strings
+        exe.header.offset_section_strings = reader.read64();
+
+        // PC por el que empezar la ejecuccion
+        exe.init_pc = exe.header.start_pc = reader.read64();
+
+        // el header siempre debe estar alineado a 16 bytes
+        while (reader.offset % 16 != 0) {
+            (void) reader.read8();
+        }
+    }
+
+    void Loader::parse_table_spaces(Executable &exe, ByteReader &reader) {
+        for (int i = 0; i < exe.header.count; i++) {
+            if (exe.header.address_spaces == nullptr) {
+                throw_error_at(ErrorKind::InvalidFormat,
+                               "No se a podido encontrar los espacios de direcciones por algun motivo desconocido.",
+                               reader
+                );
+            }
+
+            // direccion de inicio del espacio de direcciones
+            exe.header.address_spaces[i].address.address_init = reader.read64();
+
+            // direccion final del espacio de direcciones
+            exe.header.address_spaces[i].address.address_final = reader.read64();
+
+            // offser a la seccion metada de strings
+            exe.header.address_spaces[i].offset_section_strings = reader.read64();
+
+            // leemos el padding para avanzar el offset, aunque no hagamos nada con el
+            exe.header.address_spaces[i].padding = reader.read64();
+
+
+            Space space{};
+
+            // indicamos el espacio de direcciones
+            space.range.address_init = exe.header.address_spaces[i].address.address_init;
+            space.range.address_final = exe.header.address_spaces[i].address.address_final;
+
+            // obtenemos el nombre del espacio de direcciones:
+            space.name_section = read_string_at(reader, exe.header.address_spaces[i].offset_section_strings);
+
+            exe.spaces.push_back(space);
+        }
+    }
+
+    void Loader::parser_table_sections(Executable &exe, ByteReader &reader) {
+        // realizamos un punto de control completo para parsear la tabla de secciones.
+        ByteReader reader_child = reader.subreader(
+            exe.header.count * sizeof(section_range_memory)
+        );
+    }
+
+    Executable Loader::parse_velb(std::vector<uint8_t> bytecode) {
+        Executable exe;
+        ByteReader reader(bytecode);
+
+        // parseamos el header
+        parse_velb_header(exe, reader);
+
+        // parseamos la tabla de espacio de direcciones que siempre va despues del header
+        parse_table_spaces(exe, reader);
+
+        while (!reader.eof()) {
+        }
+
+        return exe;
+    }
+
+    void Loader::load_executable(std::string path) {
+        // Leer archivo completo
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("No se pudo abrir el ejecutable: " + path);
+        }
+
+        std::vector<uint8_t> bytecode(
+            (std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>()
+        );
+
+        // Delegar en la versión bytecode
+        load_executable(bytecode);
+    }
+
+    void Loader::load_executable(std::vector<uint8_t> bytecode) {
+        // Parsear el formato VELB
+        Executable exe = parse_velb(bytecode);
+
+        // Delegar en la versión estructurada
+        load_executable(exe);
+    }
+
+    void Loader::load_executable(const Executable &exe) {
     }
 
     void Loader::resolve_labels(Assembly::Bytecode::Section &section) {
-
     }
 
     void Loader::load_sections(Assembly::Bytecode::Label &label) {
-
     }
 
     void Loader::load_spaces(Assembly::Bytecode::Space &space) {
-
     }
 
     void Loader::build_runtime_context() {
-
     }
 
     void Loader::create_vm_instance() {
-
     }
-
 }

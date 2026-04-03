@@ -36,6 +36,8 @@ extern "C" {
 
 
 #define MAGIC_NUMBER_VELB 0x424C4556
+#define VERSION_VELB 0x1
+#define VERSION_VELA 0x1
 
 /**
  * A traves del numero magico, se puede conocer el endian de la maquina que
@@ -105,83 +107,83 @@ typedef uint64_t section_table_offset;
 typedef uint64_t number_spaces_address;
 
 typedef struct PACKED range_memory {
-    uint64_t address_init;
-    uint64_t address_final;
+    uint64_t address_init = 0;
+    uint64_t address_final = 0;
 } range_memory;
 
 typedef struct PACKED table_spaces_address {
-    range_memory address; // 16 bytes
+    range_memory address{}; // 16 bytes
 
     // contiene el offset a la tabla de strings,
     // en caso de estar el ejecutable cargado en la VM,
     // este campo contendra la direccion virtual con el offset
     // aplicado.
-    uint64_t offset_section_strings;
-    uint64_t padding;
+    uint64_t offset_section_strings = 0;
+    uint64_t padding = 0;
 } table_spaces_address;
 
 typedef struct PACKED HeaderVELB {
-    velb_magic magic; // 4, 4
-    velb_version_format format_v; // 4, 8
+    velb_magic magic = {MAGIC_NUMBER_VELB}; // 4, 4
+    velb_version_format format_v = VERSION_VELB; // 4, 8
 
-    max_vm_version max_v; // 4, 12
-    min_vm_version min_v; // 4, 16
+    max_vm_version max_v = 0; // 4, 12
+    min_vm_version min_v = 0; // 4, 16
 
-    velb_checksum checksum; // 8, 24
+    velb_checksum checksum = 0; // 8, 24
 
-    velb_flags flags; // 8, 32
-    build_timestamp timestamp; // 8, 40
-    target_arch arch; // 4, 44
+    velb_flags flags = 0; // 8, 32
+    build_timestamp timestamp = 0; // 8, 40
+    target_arch arch = 0; // 4, 44
 
-    section_count count; // 4, 48
+    section_count count = 0; // 4, 48
 
-    section_table_offset table_offset; // 8, 56
+    section_table_offset table_offset = 0; // 8, 56
 
-    number_spaces_address n_spaces; // 8, 64
+    number_spaces_address n_spaces = 0; // 8, 64
 
     // seccion con cadenas espaciales que pone el linker.
     // "code\0data\0stack\0main\0foo\0bar\0"
-    uint64_t offset_section_strings; // 8, 72
-    uint64_t start_pc; // 8, 80
+    uint64_t offset_section_strings = 0; // 8, 72
+    uint64_t start_pc = 0; // 8, 80
 
-    table_spaces_address *address_spaces; // tabla de espacios de direcciones
+    table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;
 
 typedef struct PACKED HeaderVELA {
-    char magic[4]; // "VELA"
-    uint32_t version; // versión del formato
-    uint32_t module_count; // número de módulos
-    uint64_t module_table_offset;
+    char magic[4] = {'V', 'E', 'L', 'A'}; // "VELA"
+    uint32_t version = VERSION_VELA; // versión del formato
+    uint32_t module_count = 0; // número de módulos
+    uint64_t module_table_offset = 0;
 } HeaderVELA;
 
 typedef struct PACKED section_range_memory {
-    range_memory address; // aqui deberia contener offsets a los
+    range_memory address{}; // aqui deberia contener offsets a los
     // espacios de direcciones, al cargar el ejecutable,
     // se indica la direccion real,
 
     // nombre de la seccion, maximo 16 bytes.
-    uint64_t offset_string; // donde empieza el bytecode o los datos dentro del archivo
+    uint64_t offset_string = 0; // donde empieza el bytecode o los datos dentro del archivo
 } section_range_memory;
 
 typedef struct PACKED VELA_ModuleEntry {
-    uint64_t offset; // offset al módulo
-    uint64_t size; // tamaño del módulo
-    uint32_t symbol_count;
-    uint64_t symbol_table_offset;
-    uint32_t relocation_count;
-    uint64_t relocation_table_offset;
+    uint64_t offset = 0; // offset al módulo
+    uint64_t size = 0; // tamaño del módulo
+    uint32_t symbol_count = 0;
+    uint64_t symbol_table_offset = 0;
+    uint32_t relocation_count = 0;
+    uint64_t relocation_table_offset = 0;
 } VELA_ModuleEntry;
 
 typedef struct PACKED VELA_Symbol {
-    uint64_t offset; // offset dentro del módulo
-    uint8_t type; // FUNC, DATA, GLOBAL, LOCAL
-    char name[32];
+    uint64_t offset = 0; // offset dentro del módulo
+    uint8_t type = 0; // FUNC, DATA, GLOBAL, LOCAL
+    char name[32] = {};
 } VELA_Symbol;
 
 typedef struct PACKED VELA_Relocation {
-    uint64_t offset; // dónde aplicar la relocación
-    uint8_t type; // ABS64, REL32, REL64
-    char symbol[32]; // símbolo a resolver
+    uint64_t offset = 0; // dónde aplicar la relocación
+    uint8_t type = 0; // ABS64, REL32, REL64
+    char symbol[32] = {}; // símbolo a resolver
 } VELA_Relocation;
 
 /**
@@ -734,7 +736,6 @@ namespace Assembly::Bytecode::Linker {
         void write_map_file(const std::string &path);
 
         const LinkerReport &get_report() const { return report; }
-
 
     private:
         LinkerOptions options;
