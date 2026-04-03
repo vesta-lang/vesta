@@ -2,6 +2,7 @@
 
 #include "emmit/bytereader.h"
 #include "emmit/struct_context.h"
+#include "runtime/manager_runtime.h"
 #include "runtime/runtime.h"
 
 /*
@@ -170,6 +171,9 @@ namespace loader {
             space.range.address_init = exe.header.address_spaces[i].address.address_init;
             space.range.address_final = exe.header.address_spaces[i].address.address_final;
 
+            // offset en el bytecode
+            space.file_offset = exe.header.address_spaces[i].offset_bytecode;
+
             // obtenemos el nombre del espacio de direcciones:
             space.name_section = read_string_at(reader, exe.header.address_spaces[i].offset_section_strings);
 
@@ -233,6 +237,9 @@ namespace loader {
                 );
             }
 
+            // calcular file offset de la sección
+            sec.file_offset = space->file_offset + (sec.memory.address_init - space->range.address_init);
+
             // Insertar la sección en el espacio correspondiente
             space->add_section(sec);
             exe.sections.push_back(&space->table_section[sec.name]);
@@ -241,7 +248,9 @@ namespace loader {
 
     Executable Loader::parse_velb(std::vector<uint8_t> bytecode) {
         Executable exe;
-        ByteReader reader(bytecode);
+        exe.bytecode = bytecode;
+
+        ByteReader reader(exe.bytecode);
 
         // parseamos el header
         parse_velb_header(exe, reader);
@@ -252,8 +261,6 @@ namespace loader {
         // parseamos la tabla de secciones, requiere haber parseado previamente la tabla
         // de espacios de direcciones, ya que se va a añadir a estos.
         parser_table_sections(exe, reader);
-        while (!reader.eof()) {
-        }
 
         return exe;
     }
@@ -277,13 +284,9 @@ namespace loader {
     void Loader::load_executable(std::vector<uint8_t> bytecode) {
         // Parsear el formato VELB
         Executable exe = parse_velb(bytecode);
-
-        // Delegar en la versión estructurada
-        load_executable(exe);
+        create_vm_instance(exe);
     }
 
-    void Loader::load_executable(const Executable &exe) {
-    }
 
     void Loader::resolve_labels(Assembly::Bytecode::Section &section) {
     }
@@ -297,6 +300,20 @@ namespace loader {
     void Loader::build_runtime_context() {
     }
 
-    void Loader::create_vm_instance() {
+    Executable& Loader::get_last_instance() {
+        std::lock_guard lock(loader_mutex);
+        return *executables.back();
+    }
+
+    void Loader::create_vm_instance(Executable &exe_) {
+        // bloqueamos el acceso si otro hilo intenta entrar
+        std::lock_guard lock(loader_mutex);
+
+        executables.push_back(std::make_unique<Executable>(std::move(exe_)));
+
+        // obtener el ultimo ejecutable agregado
+        Executable& vm_exe = get_last_instance();
+
+        instance_manager.create_vm();
     }
 }

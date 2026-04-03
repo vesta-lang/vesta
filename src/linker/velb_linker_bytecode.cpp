@@ -12,7 +12,9 @@
 
 #include "linker/velb_linker_bytecode.h"
 
+#include "emmit/bytereader.h"
 #include "emmit/parser_to_bytecode.h"
+#include "loader/loader.h"
 
 namespace Assembly::Bytecode::Linker {
     // cambiar en un futuro, por ahora para pruebas me vale
@@ -838,15 +840,14 @@ namespace Assembly::Bytecode::Linker {
                       return a.second.absolute < b.second.absolute;
                   });
 
-        if (final_executable.size() >= sizeof(HeaderVELB) +
-            sizeof(table_spaces_address) * final_header.n_spaces) {
-            auto *spaces = reinterpret_cast<const table_spaces_address *>(
-                final_executable.data() + sizeof(HeaderVELB)
-            );
+        uint64_t offset_space_address = align_up(sizeof(HeaderVELB) - sizeof(table_spaces_address *),16);
+
+        if (final_executable.size() >= (offset_space_address +
+            sizeof(table_spaces_address) * final_header.n_spaces)) {
 
             f << "=== ADDRESS SPACES ===\n";
             for (uint64_t i = 0; i < final_header.n_spaces; ++i) {
-                const auto &sp = spaces[i];
+                auto sp = final_header.address_spaces[i];
                 f << "[" << i << "]\n";
                 f << "  VA Range: 0x" << std::hex << sp.address.address_init
                         << " - 0x" << std::hex << sp.address.address_final << "\n";
