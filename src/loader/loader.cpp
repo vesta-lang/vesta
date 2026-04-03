@@ -246,21 +246,21 @@ namespace loader {
         }
     }
 
-    Executable Loader::parse_velb(std::vector<uint8_t> bytecode) {
-        Executable exe;
-        exe.bytecode = bytecode;
+    std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
+        auto exe = std::make_unique<Executable>();
+        exe->bytecode = bytecode;
 
-        ByteReader reader(exe.bytecode);
+        ByteReader reader(exe->bytecode);
 
         // parseamos el header
-        parse_velb_header(exe, reader);
+        parse_velb_header(*exe, reader);
 
         // parseamos la tabla de espacio de direcciones que siempre va despues del header
-        parse_table_spaces(exe, reader);
+        parse_table_spaces(*exe, reader);
 
         // parseamos la tabla de secciones, requiere haber parseado previamente la tabla
         // de espacios de direcciones, ya que se va a añadir a estos.
-        parser_table_sections(exe, reader);
+        parser_table_sections(*exe, reader);
 
         return exe;
     }
@@ -283,8 +283,8 @@ namespace loader {
 
     void Loader::load_executable(std::vector<uint8_t> bytecode) {
         // Parsear el formato VELB
-        Executable exe = parse_velb(bytecode);
-        create_vm_instance(exe);
+        auto exe = parse_velb(std::move(bytecode));
+        create_vm_instance(std::move(exe));
     }
 
 
@@ -300,20 +300,49 @@ namespace loader {
     void Loader::build_runtime_context() {
     }
 
-    Executable& Loader::get_last_instance() {
-        std::lock_guard lock(loader_mutex);
+    Executable &Loader::get_last_instance_unlocked() {
         return *executables.back();
     }
 
-    void Loader::create_vm_instance(Executable &exe_) {
+    Executable &Loader::get_last_instance() {
+        std::lock_guard lock(loader_mutex);
+        return get_last_instance_unlocked();
+    }
+
+    void Loader::create_vm_instance(std::unique_ptr<Executable> exe_) {
         // bloqueamos el acceso si otro hilo intenta entrar
         std::lock_guard lock(loader_mutex);
 
-        executables.push_back(std::make_unique<Executable>(std::move(exe_)));
+        executables.push_back(std::move(exe_));
 
-        // obtener el ultimo ejecutable agregado
-        Executable& vm_exe = get_last_instance();
+        // obtener el ultimo ejecutable agregado sin volver a alterar el mutex
+        // en el proceso
+        Executable &exe = get_last_instance_unlocked();
 
-        instance_manager.create_vm();
+        // cramos una instancia VM y configuramos el PC
+        uint64_t id = instance_manager.create_vm();
+        runtime::VM *vm = instance_manager.get_vm(id);
+
+        // configuramos RIP (PC tambien llamado)
+        vm->rip.ptr_vm.raw = exe.init_pc;
+
+        // copiamos cada seccion del ejecutable a la memoria virtual
+        // de la VM
+        for (auto *sec: exe.sections) {
+            uint64_t vm_addr = sec->memory.address_init;
+            uint64_t size = sec->size_real;
+            uint64_t offset = sec->file_offset;
+
+            // puntero al bytecode real
+            const uint8_t *src = exe.bytecode.data() + offset;
+
+            // copiar a la memoria virtual de la VM
+            vm->vm_mem.vm_to_host_memcpy(vm_addr, src, size);
+
+            // mostrar datos de la region de memoria reservacada para la seccion.
+            runtime::dump_vm_region(vm, vm_addr, size);
+        }
+
+        //vm->vm_mem[0x10] = 1;
     }
 }

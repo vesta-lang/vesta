@@ -19,7 +19,7 @@ namespace runtime {
     VM::VM(
         ManageVM &mgr_vm,
         uint64_t id_vm
-    ): mgr_vm(mgr_vm), // manager de instancias
+    ): vm_mem(tlb, mgr_vm.manager_mem), mgr_vm(mgr_vm), // manager de instancias
        manager_mem_public(mgr_vm.manager_mem),
        loader_public(mgr_vm.loader),
        id({id_vm}) {

@@ -102,7 +102,6 @@ namespace runtime {
     }
 
     void ManageVM::print_vm_manager_info() {
-        std::lock_guard lock(vm_mutex);
         vesta::scout() << to_string_vm_manager_info();
     }
 }

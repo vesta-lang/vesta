@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "arena/arena.h"
+#include "arena/VirtualMemory.h"
 #include "cli/sync_io.h"
 #include "runtime/rflags.h"
 #include "loader/loader.h"
@@ -248,6 +249,9 @@ namespace runtime {
          */
         vm::ArenaManager manager_mem_priv{};
 
+        tlb::LazyHybridTLB tlb{};
+        vm::VirtualMemory vm_mem;
+
         /**
          * Manager de memoria "publico" del manager de instancias
          */
@@ -336,22 +340,26 @@ namespace runtime {
         ss << " R00=" << vesta::hex64(vm->r00.qword());
         ss << " R01=" << vesta::hex64(vm->r01.qword());
         ss << " R02=" << vesta::hex64(vm->r02.qword());
-        ss << " R03=" << vesta::hex64(vm->r03.qword()); ss << std::endl;
+        ss << " R03=" << vesta::hex64(vm->r03.qword());
+        ss << std::endl;
 
         ss << " R04=" << vesta::hex64(vm->r04.qword());
         ss << " R05=" << vesta::hex64(vm->r05.qword());
         ss << " R06=" << vesta::hex64(vm->r06.qword());
-        ss << " R07=" << vesta::hex64(vm->r07.qword()); ss << std::endl;
+        ss << " R07=" << vesta::hex64(vm->r07.qword());
+        ss << std::endl;
 
         ss << " R08=" << vesta::hex64(vm->r08.qword());
         ss << " R09=" << vesta::hex64(vm->r09.qword());
         ss << " R10=" << vesta::hex64(vm->r10.qword());
-        ss << " R11=" << vesta::hex64(vm->r11.qword()); ss << std::endl;
+        ss << " R11=" << vesta::hex64(vm->r11.qword());
+        ss << std::endl;
 
         ss << " R12=" << vesta::hex64(vm->r12.qword());
         ss << " R13=" << vesta::hex64(vm->r13.qword());
         ss << " R14=" << vesta::hex64(vm->r14.qword());
-        ss << " R15=" << vesta::hex64(vm->r15.qword()); ss << std::endl;
+        ss << " R15=" << vesta::hex64(vm->r15.qword());
+        ss << std::endl;
 
         // IP/SP/BP (usar component_to_string para capturar representación)
         ss << " IP=" << vesta::component_to_string(vm->rip);
@@ -371,6 +379,44 @@ namespace runtime {
                 << " Sleep=" << vm->time_sleep;
 
         return ss.str();
+    }
+
+    static void dump_vm_region(VM *vm, uint64_t vaddr, size_t size) {
+        uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
+        uint64_t end = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
+
+        vesta::SyncOStream out = vesta::scout(); // salida thread-safe
+
+        out << "==================== VM Memory Dump ====================\n";
+        out << "Virtual region: 0x" << std::hex << start
+                << " - 0x" << end
+                << "  (" << std::dec << size << " bytes)\n\n";
+
+        for (uint64_t page = start; page < end; page += 0x1000) {
+            void *host = vm->tlb.get_real_host_ptr_of_vptr(page);
+
+            if (!host) {
+                out << "  [0x" << std::hex << page << "]  ->  <not mapped>\n";
+                continue;
+            }
+
+            out << "  [0x" << std::hex << page << "]  ->  host=" << host << "\n";
+
+            // Mostrar primeros 16 bytes en formato hexdump
+            uint8_t *p = reinterpret_cast<uint8_t *>(host);
+
+            out << "       data: ";
+
+            for (int i = 0; i < 16; i++) {
+                char buf[4];
+                std::snprintf(buf, sizeof(buf), "%02X", p[i]); // formateo manual
+                out << buf << " ";
+            }
+
+            out << "\n";
+        }
+
+        out << "================== End VM Memory Dump ==================\n";
     }
 }
 
