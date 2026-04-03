@@ -160,8 +160,8 @@ namespace loader {
             // offser a la seccion metada de strings
             exe.header.address_spaces[i].offset_section_strings = reader.read64();
 
-            // leemos el padding para avanzar el offset, aunque no hagamos nada con el
-            exe.header.address_spaces[i].padding = reader.read64();
+            // offset al bytecode para el espacio de direcciones
+            exe.header.address_spaces[i].offset_bytecode = reader.read64();
 
 
             Space space{};

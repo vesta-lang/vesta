@@ -169,6 +169,11 @@ namespace Assembly::Bytecode {
 
     typedef struct Space {
         /**
+         * offset en el archivo al usar el linker.
+         */
+        uint64_t file_offset = 0;
+
+        /**
          * Rango de memoria para el espacio de direcciones.
          */
         range_memory range;
@@ -261,6 +266,20 @@ namespace Assembly::Bytecode {
             }
         }
     } Space;
+
+    /**
+     * Permite calcula el tamaño real del espacio de direcciones usando
+     * el bytecode contenido en todas las secciones del espacio de direcciones
+     * @param s un espacio de direcciones con secciones y cada una con su tamaño real.
+     * @return tamaño real del espacio de direcciones.
+     */
+    static uint64_t compute_space_size(const Space& s) {
+        uint64_t total = 0;
+        for (auto& [name, sec] : s.table_section) {
+            total += sec.size_real;
+        }
+        return total;
+    }
 
     typedef struct Context {
         /**
