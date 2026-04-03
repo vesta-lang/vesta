@@ -97,19 +97,19 @@ namespace runtime {
         /**
          * El manager puede gestionar memoria compartida entre instancias.
          */
-        vm::ArenaManager manager_mem;
+        vm::ArenaManager manager_mem{};
 
         /**
          * Cada instancia de VM puede escuchar en un puerto distinto.
          * No todas las instancias tienen por que ser un servicio de red,
          * pueden ejecutarse unicamente a nivel local.
          */
-        ManagerTCPListener *listener;
+        ManagerTCPListener *listener = nullptr;
 
         /**
          * El manager puede tener un loader publico
          */
-        loader::Loader loader;
+        loader::Loader loader{*this};
 
         /**
          * Base de datos para consultar usuario y credenciales.
@@ -171,7 +171,7 @@ namespace runtime {
     private:
         // se usa para generar los ID's de la VM, las VM nuevas no tendran un mismo ID
         // que una instancia ya creada o muerta en el mismo manager.
-        uint64_t counter_vm;
+        uint64_t counter_vm = 0;
     };
 }
 

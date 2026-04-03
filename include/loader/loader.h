@@ -7,10 +7,58 @@
 #include <cstddef>   // size_t
 
 #include "arena/arena_manager.h"
-#include "emmit/struct_context.h"
-#include "runtime/manager_runtime.h"
+#include "emmit/bytereader.h"
+#include "linker/velb_linker_bytecode.h"
+
+namespace runtime {
+    class ManageVM;
+}
+
+#define LOADER_THROW(kind, msg) throw loader::LoaderError(kind, msg)
+#define LOADER_THROW_AT(kind, msg, reader) \
+throw loader::LoaderError(kind, \
+    std::string(msg) + " (offset=" + std::to_string(reader.offset) + ")")
+
 
 namespace loader {
+    using namespace Assembly::Bytecode;
+
+    enum class ErrorKind {
+        TruncatedHeader,
+        InvalidFormat,
+        InvalidMagic,
+        InvalidVersion,
+        CorruptedExecutable,
+        NotFoundSpacesAddress
+    };
+
+    class LoaderError : public std::exception {
+    public:
+        LoaderError(ErrorKind kind, std::string msg)
+            : kind(kind), message(std::move(msg)) {
+        }
+
+        const char *what() const noexcept override {
+            return message.c_str();
+        }
+
+        ErrorKind kind;
+        std::string message;
+    };
+
+    [[noreturn]]
+    inline void throw_error(ErrorKind kind, const std::string& msg) {
+        throw LoaderError(kind, msg);
+    }
+
+    [[noreturn]]
+    inline void throw_error_at(ErrorKind kind, const std::string& msg, const ByteReader& reader) {
+        throw LoaderError(
+            kind,
+            msg + " (offset=" + std::to_string(reader.offset) + ")"
+        );
+    }
+
     /**
      * Modificadores de acceso
      */
@@ -130,7 +178,7 @@ namespace loader {
          * El loader debe reservar memoria para cada uno. Se puede indicar si reservar el rango completo o
          * realizar reserva lazy.
          */
-        std::vector<Assembly::Bytecode::Space> spaces;
+        std::vector<Assembly::Bytecode::Space> spaces{};
 
         /**
          * @brief Secciones ensambladas del ejecutable.
@@ -138,7 +186,7 @@ namespace loader {
          * Cada `Section` contiene bytecode ya resuelto y listo para copiarse
          * en el espacio correspondiente. Equivalente a `.text`, `.data`, `.rodata` en ELF.
          */
-        std::vector<Assembly::Bytecode::Section> sections;
+        std::vector<Assembly::Bytecode::Section> sections{};
 
         /**
          * @brief Símbolos globales con dirección absoluta.
@@ -149,7 +197,7 @@ namespace loader {
          *
          * El loader los registra en la tabla de símbolos de la VM.
          */
-        std::vector<Assembly::Bytecode::Label> labels;
+        std::vector<Assembly::Bytecode::Label> labels{};
 
         /**
          * @brief Bytecode final concatenado.
@@ -157,7 +205,7 @@ namespace loader {
          * Opcional: algunos loaders prefieren trabajar con `sections`,
          * otros con un buffer plano. Se mantiene por compatibilidad.
          */
-        std::vector<uint8_t> bytecode;
+        std::vector<uint8_t> bytecode{};
 
         /**
          * @brief Dirección inicial del PC.
@@ -179,7 +227,7 @@ namespace loader {
          *
          * Es redundante con algunos campos, pero útil para validación.
          */
-        HeaderVELB header;
+        HeaderVELB header{};
 
         /**
          * @brief Relocaciones aplicadas durante el linking.
@@ -188,7 +236,7 @@ namespace loader {
          * El ejecutable final ya tiene todas las direcciones resueltas. En teoria, aunque
          * se puede llamar al linker dinamico.
          */
-        std::vector<Assembly::Bytecode::Relocation> relocations;
+        std::vector<Assembly::Bytecode::Relocation> relocations{};
 
         /**
          * @brief Metadatos arbitrarios en formato JSON.
@@ -212,6 +260,52 @@ namespace loader {
 
         explicit Loader(
             runtime::ManageVM &instance_manager);
+
+        /**
+         * Permite obtener una cadena de la seccion strings, en base a su offset
+         * @param blob contenido de la seccion de cadena que leer.
+         * @param offset offset de la cadena a leer.
+         * @return cadena encontrada en el offset indicado.
+         */
+        std::string read_string_at(const std::vector<uint8_t> &blob, uint64_t offset);
+
+        /**
+         * Permite obtener un string en base a un offset string a traves de un reader.
+         * El reader no se modificara pero indicara los limites de lectura y el contenido del que
+         * se puede leer.
+         * @param reader reader que usar para obtener un string
+         * @param offset offset string que usar para obtener una cadena valida.
+         * @return cadena obtenida a traves del offset
+         */
+        std::string read_string_at(ByteReader &reader, uint64_t offset);
+
+        /**
+         * Permite obtener una tabla de cadenas generada de la seccion de la tabla de strings.
+         * @param blob contenido entero de la seccion de cadenas a cargar
+         * @return tabla de cadenas.
+         */
+        std::vector<std::string> read_all_strings(const std::vector<uint8_t> &blob);
+
+        void parse_velb_header(Executable &exe, ByteReader &reader);
+
+        void parse_table_spaces(Executable &exe, ByteReader &reader);
+
+        /**
+         * parsea la tabla de secciones sin modificar el reader. Crea un punto de control
+         * del reader.
+         * @param exe Datos del ejecutable, debe haberse analizado antes el header, o haberse indicado
+         * el offset a la tabla de secciones
+         * @param reader reader padre del que realiazar un punto de control
+         */
+        void parser_table_sections(Executable &exe, ByteReader &reader);
+
+        Executable parse_velb(std::vector<uint8_t> bytecode);
+
+        void load_executable(std::string path);
+
+        void load_executable(std::vector<uint8_t> bytecode);
+
+        void load_executable(const Executable &exe);
 
         void resolve_labels(Assembly::Bytecode::Section &section);
 

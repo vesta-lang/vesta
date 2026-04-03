@@ -20,11 +20,13 @@
 #include "runtime/rflags.h"
 #include "loader/loader.h"
 
+#define VERSION_VM 0
+
 namespace runtime {
     class ManageVM;
 
     typedef struct VM_ID {
-        uint64_t id;
+        uint64_t id = 0;
     } VM_ID;
 
     /**
@@ -118,11 +120,11 @@ namespace runtime {
     } err_shellcode;
 
     typedef struct shellcode_t {
-        size_t capacity;
-        size_t size;
+        size_t capacity = 0;
+        size_t size = 0;
 
-        uint8_t *code;
-        err_shellcode err;
+        uint8_t *code = nullptr;
+        err_shellcode err = NO_ERROR_SC;
 
         void (*Emit8)(struct shellcode_t *code, uint8_t byte);
 
@@ -141,10 +143,10 @@ namespace runtime {
      * Estructura para llamar a funciones nativas/externas a la VM.
      */
     typedef struct PendingCall_t {
-        void * (*func)(void *arg); /** funcion nativa que llamar  */
-        shellcode_t *arg; /** argumentos para la funcion, formando un shellcode */
-        void *result; /** valor de retorno */
-        bool finished; /** indica si la funcion fue ejecutada*/
+        void * (*func)(void *arg) = nullptr; /** funcion nativa que llamar  */
+        shellcode_t *arg = nullptr; /** argumentos para la funcion, formando un shellcode */
+        void *result = nullptr; /** valor de retorno */
+        bool finished = false; /** indica si la funcion fue ejecutada*/
 
         pthread_mutex_t lock; /** Proteccion de acceso para finished/result */
     } PendingCall_t;
@@ -239,13 +241,12 @@ namespace runtime {
      *
      * El hilo principal puede crear nuevas instancias o el usuario podra crear nuevas
      */
-
     class VM {
     public:
         /**
          * Cada Instancia gestiona su propio memoria (memoria aislada)
          */
-        vm::ArenaManager manager_mem_priv;
+        vm::ArenaManager manager_mem_priv{};
 
         /**
          * Manager de memoria "publico" del manager de instancias
@@ -255,14 +256,14 @@ namespace runtime {
         /**
          * Cada instancia de loader permite manejar sus propias cargas
          */
-        loader::Loader loader_priv;
+        loader::Loader loader_priv{mgr_vm};
 
         /**
          * Loader "publico" del manager de instancias.
          */
         loader::Loader &loader_public;
 
-        vm_state state;
+        vm_state state = BLOCKED;
         pthread_t thread_for_vm{};
         VM_ID id{};
 
@@ -274,22 +275,22 @@ namespace runtime {
         vm::MappedPtrHost rip{}; // puntero de instruccion
         RFlags_t flags{};
 
-        GeneralRegister r00;
-        GeneralRegister r01;
-        GeneralRegister r02;
-        GeneralRegister r03;
-        GeneralRegister r04;
-        GeneralRegister r05;
-        GeneralRegister r06;
-        GeneralRegister r07;
-        GeneralRegister r08;
-        GeneralRegister r09;
-        GeneralRegister r10;
-        GeneralRegister r11;
-        GeneralRegister r12;
-        GeneralRegister r13;
-        GeneralRegister r14;
-        GeneralRegister r15;
+        GeneralRegister r00 = {};
+        GeneralRegister r01 = {};
+        GeneralRegister r02 = {};
+        GeneralRegister r03 = {};
+        GeneralRegister r04 = {};
+        GeneralRegister r05 = {};
+        GeneralRegister r06 = {};
+        GeneralRegister r07 = {};
+        GeneralRegister r08 = {};
+        GeneralRegister r09 = {};
+        GeneralRegister r10 = {};
+        GeneralRegister r11 = {};
+        GeneralRegister r12 = {};
+        GeneralRegister r13 = {};
+        GeneralRegister r14 = {};
+        GeneralRegister r15 = {};
 
         /**
          * Cada instancia tiene asignada un manager general de instancias
@@ -304,7 +305,7 @@ namespace runtime {
                                      *  a la que despertar el hilo.
                                      *  Al dormir el hilo, se indica que su estado es BLOCK
                                      */
-        state_err_thread err_thread; /**
+        state_err_thread err_thread = THREAD_NO_ERROR; /**
                                              * Almcane el ultimo error ocurrido en el hilo.
                                              */
 

@@ -21,10 +21,7 @@ namespace runtime {
         uint64_t id_vm
     ): mgr_vm(mgr_vm), // manager de instancias
        manager_mem_public(mgr_vm.manager_mem),
-       loader_priv(mgr_vm.manager_mem),
        loader_public(mgr_vm.loader),
-       state(BLOCKED),
-       err_thread(THREAD_NO_ERROR),
        id({id_vm}) {
         {
             this->manager_mem_priv = {};
