@@ -15,6 +15,13 @@
 
 #include "runtime/manager_runtime.h"
 
+struct ManageVMSnapshot {
+    std::string name_manager;
+    size_t vm_count;
+    bool has_listener;
+};
+
+
 /**
  * @brief Esta clase permite almacenar todas las instancias de manager y servidores
  * de manager gestionadas por la cli.
@@ -31,7 +38,8 @@ class ManagerOfManagersAndServer {
      */
     mutable std::mutex mtx;
 
-    std::unordered_map<size_t, runtime::ManageVM> managers_map;
+    std::unordered_map<size_t, std::unique_ptr<runtime::ManageVM> > managers_map;
+
     std::atomic<size_t> next_id{1};
 
     // No copy ni move por simplicidad; si quierer soportar, implementar con cuidado.
@@ -46,16 +54,22 @@ public:
 
     /**
      * @brief Añade un manager y devuelve su id único.
+     *
+     * @code{.cpp}
+     * auto vm = std::make_unique<runtime::ManageVM>(/ ctor args /);
+     * size_t id = mgr.add_manager(std::move(vm));
+     * @endcode
+     *
      * @param vm Manager a añadir (se mueve).
      * @return id asignado al manager.
      */
-    size_t add_manager(const runtime::ManageVM vm);
+    runtime::ManageVM* add_manager(const std::string& name, runtime::ManagerTCPListener *listener);
 
     /**
      * @brief Devuelve una snapshot (copia) de todos los managers como vector de pares (id, copia).
      * @return vector de pares (id, runtime::ManageVM).
      */
-    std::vector<std::pair<size_t, runtime::ManageVM> > snapshot() const;
+    std::vector<std::pair<size_t, ManageVMSnapshot> > snapshot();
 
     /**
      * @brief Devuelve la cantidad de managers almacenados.
@@ -79,7 +93,7 @@ public:
      * @param id Id del manager.
      * @return std::optional con la copia; std::nullopt si no existe.
      */
-    std::optional<runtime::ManageVM> get_manager_copy(size_t id) const;
+    std::optional<ManageVMSnapshot> get_manager_copy(size_t id) const;
 
     /**
      * @brief Reemplaza el manager con id por uno nuevo.
@@ -87,39 +101,67 @@ public:
      * @param vm Nuevo manager (se mueve).
      * @return true si existía y fue reemplazado.
      */
-    bool replace_manager(size_t id, runtime::ManageVM vm);
+    bool replace_manager(size_t id, std::unique_ptr<runtime::ManageVM> vm);
 
     /**
-     * @brief Ejecuta una función sobre el manager identificado por id bajo mutex.
+     * @brief Ejecuta una función sobre el manager identificado por id bajo protección de mutex.
      *
-     * La función recibe una referencia no const al manager y puede modificarlo.
-     * La función se ejecuta mientras se mantiene el bloqueo, por lo que debe ser
-     * rápida y no bloquear recursos externos para evitar deadlocks.
+     * Este metodo permite modificar un manager existente de forma segura en un entorno multihilo.
+     * La función proporcionada recibe una referencia directa al objeto ManageVM almacenado en
+     * managers_map, por lo que puede modificar su estado interno.
      *
-     * @tparam Func Tipo callable: void(runtime::ManageVM &)
-     * @param id Id del manager.
-     * @param fn Callable que modifica el manager.
-     * @return true si el manager existía y la función fue ejecutada.
+     * El mutex interno del ManagerOfManagersAndServer se mantiene bloqueado durante toda la
+     * ejecución del callable, por lo que:
+     *   - La operación es thread-safe.
+     *   - El callable debe ser rápido y no realizar operaciones bloqueantes externas
+     *     (E/S, locks adicionales, esperas activas), para evitar deadlocks o contención excesiva.
+     *
+     * @tparam Func Callable con la firma: void(runtime::ManageVM&)
+     * @param id Identificador del manager a modificar.
+     * @param fn Función que recibe una referencia al manager y lo modifica.
+     * @return true si el manager existía y la función fue ejecutada; false en caso contrario.
      */
     template<typename Func>
     bool modify_manager(size_t id, Func &&fn) {
         std::lock_guard lk(mtx);
         auto it = managers_map.find(id);
         if (it == managers_map.end()) return false;
-        fn(it->second);
+        fn(it->second); // referencia directa al manager real
         return true;
     }
 
+
     /**
-     * @brief Busca el primer manager que cumpla el predicado y devuelve su id y copia.
-     * @tparam Pred Callable que recibe (const runtime::ManageVM&) y devuelve bool.
-     * @return optional<pair<id, copia>> si se encuentra.
+     * @brief Busca el primer manager que cumpla el predicado y devuelve su id y un snapshot ligero.
+     *
+     * Este metodo permite inspeccionar managers sin exponer referencias internas ni intentar copiar
+     * objetos ManageVM completos (lo cual no es posible debido a que ManageVM no es copiable).
+     *
+     * En su lugar, se genera un ManageVMSnapshot, una estructura ligera que contiene únicamente
+     * información segura y copiables del manager (nombre, número de VMs, estado del listener, etc.).
+     *
+     * El acceso al mapa está protegido por mutex, garantizando seguridad en entornos multihilo.
+     *
+     * @tparam Pred Callable con la firma: bool(const runtime::ManageVM&)
+     * @param pred Predicado que decide si un manager coincide.
+     * @return std::optional con (id, snapshot) si se encuentra un manager que cumpla el predicado;
+     *         std::nullopt si no existe ninguno.
      */
+
     template<typename Pred>
-    std::optional<std::pair<size_t, runtime::ManageVM> > find_if(Pred &&pred) const {
+    std::optional<std::pair<size_t, ManageVMSnapshot> >
+    find_if(Pred &&pred) const {
         std::lock_guard<std::mutex> lk(mtx);
-        for (const auto &p: managers_map) {
-            if (pred(p.second)) return std::make_pair(p.first, p.second);
+
+        for (const auto &[id, mgr]: managers_map) {
+            if (pred(mgr)) {
+                ManageVMSnapshot snap{
+                    mgr->name_manager,
+                    mgr->vm_count(),
+                    mgr->listener != nullptr
+                };
+                return std::make_pair(id, std::move(snap));
+            }
         }
         return std::nullopt;
     }

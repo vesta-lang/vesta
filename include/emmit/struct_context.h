@@ -78,6 +78,11 @@ namespace Assembly::Bytecode {
 
     typedef struct Section {
         /**
+         * offset en el archivo al usar el loader.
+         */
+        uint64_t file_offset = 0;
+
+        /**
          * nombre de la seccion
          */
         std::string name;
@@ -191,7 +196,7 @@ namespace Assembly::Bytecode {
         /**
          * Vector de secciones, los usamos para saber cual es el orden de las secciones.
          */
-        std::vector<Section*> ordered_sections;
+        std::vector<Section *> ordered_sections;
 
         /**
          * Añadir sección nueva, estas secciones se suelen almacenar en un espacio de direcciones, y una seccion
@@ -245,19 +250,18 @@ namespace Assembly::Bytecode {
          * @param bytes_aligned cantidad de bytes a usar para alinear la seccion
          */
         void compute_sections_ranges(uint64_t bytes_aligned) {
-
             // ordenamos las secciones segun se añadieron para poder computar los rangos
             // de las secciones en su correspondiente orden.
             std::sort(ordered_sections.begin(),
                       ordered_sections.end(),
-                      [](const Section* a, const Section* b) {
+                      [](const Section *a, const Section *b) {
                           return a->memory.address_init < b->memory.address_init;
                       });
 
 
             // el inicio de toda seccion es la direccion de inicio del espacio de direcciones
             uint64_t start = range.address_init;
-            for (Section* sec : ordered_sections)  {
+            for (Section *sec: ordered_sections) {
                 sec->compute_range(start, bytes_aligned);
 
                 // a la direccion base actual se suma el tamaño de la seccion para calcular
@@ -273,9 +277,9 @@ namespace Assembly::Bytecode {
      * @param s un espacio de direcciones con secciones y cada una con su tamaño real.
      * @return tamaño real del espacio de direcciones.
      */
-    static uint64_t compute_space_size(const Space& s) {
+    static uint64_t compute_space_size(const Space &s) {
         uint64_t total = 0;
-        for (auto& [name, sec] : s.table_section) {
+        for (auto &[name, sec]: s.table_section) {
             total += sec.size_real;
         }
         return total;

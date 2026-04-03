@@ -65,7 +65,22 @@ namespace vesta {
         }
 
         // sobrecarga para manipuladores como std::endl, std::flush, etc.
-        SyncOStream &operator<<(std::ostream & (*manip)(std::ostream &));
+        SyncOStream &SyncOStream::operator<<(std::ostream & (*manip)(std::ostream &)) {
+            // Aplicar el manipulador al buffer interno
+            manip(oss);
+
+            // Si es std::endl (inserta '\n' y flush), hacemos flush_now para que
+            // la salida se escriba inmediatamente bajo el mutex.
+            // Comparar punteros de función con std::endl es válido para manipuladores
+            if (manip == static_cast<std::ostream& (*)(std::ostream &)>(std::endl)) {
+                flush_now();
+            }
+            // Para std::flush también podemos forzar flush_now, lo hago?
+            if (manip == static_cast<std::ostream& (*)(std::ostream &)>(std::flush)) {
+                flush_now();
+            }
+            return *this;
+        }
 
         // fuerza el volcado inmediato (escribe bajo mutex y deja buffer vacío)
         void flush_now();
@@ -145,7 +160,6 @@ namespace vesta {
         ss << "0x" << std::hex << std::setw(16) << std::setfill('0') << v << std::dec;
         return ss.str();
     }
-
 }
 
 #endif //SYNC_IO_H

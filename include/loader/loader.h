@@ -5,6 +5,7 @@
 
 #include <cstdint>   // uint8_t, uint32_t
 #include <cstddef>   // size_t
+#include <mutex>
 
 #include "arena/arena_manager.h"
 #include "emmit/bytereader.h"
@@ -47,12 +48,12 @@ namespace loader {
     };
 
     [[noreturn]]
-    inline void throw_error(ErrorKind kind, const std::string& msg) {
+    inline void throw_error(ErrorKind kind, const std::string &msg) {
         throw LoaderError(kind, msg);
     }
 
     [[noreturn]]
-    inline void throw_error_at(ErrorKind kind, const std::string& msg, const ByteReader& reader) {
+    inline void throw_error_at(ErrorKind kind, const std::string &msg, const ByteReader &reader) {
         throw LoaderError(
             kind,
             msg + " (offset=" + std::to_string(reader.offset) + ")"
@@ -186,7 +187,7 @@ namespace loader {
          * Cada `Section` contiene bytecode ya resuelto y listo para copiarse
          * en el espacio correspondiente. Equivalente a `.text`, `.data`, `.rodata` en ELF.
          */
-        std::vector<Section*> sections{};
+        std::vector<Section *> sections{};
 
         /**
          * @brief Símbolos globales con dirección absoluta.
@@ -197,7 +198,7 @@ namespace loader {
          *
          * El loader los registra en la tabla de símbolos de la VM.
          */
-        std::vector<Label*> labels{};
+        std::vector<Label *> labels{};
 
         /**
          * @brief Bytecode final concatenado.
@@ -256,6 +257,35 @@ namespace loader {
 
     class Loader {
     public:
+        /**
+         * Vector de ejecutables cargados alguna vez.
+         *
+         * Se almacenan como std::unique_ptr<Executable> por varias razones:
+         *
+         * 1. Evita copias grandes:
+         *    Un Executable puede contener tablas, bytecode y estructuras pesadas.
+         *    Guardarlo como unique_ptr evita copiar todo_ el objeto al hacer push_back.
+         *
+         * 2. Estabilidad de direcciones:
+         *    Aunque el vector se realoque internamente, los punteros siguen siendo válidos.
+         *    Esto permite devolver referencias a Executable sin riesgo de que queden inválidas.
+         *
+         * 3. Propiedad clara:
+         *    El Loader es el dueño exclusivo de cada Executable.
+         *    No hay aliasing, no hay referencias compartidas, no hay riesgo de doble free.
+         *
+         * 4. Seguridad en multihilo:
+         *    Con un mutex protegiendo el vector, las referencias a los Executable
+         *    permanecen estables incluso si el vector crece.
+         *
+         * En resumen: unique_ptr permite almacenar ejecutables grandes de forma eficiente,
+         * segura y con direcciones estables, algo que un std::vector<Executable> no garantiza.
+         */
+        std::vector<std::unique_ptr<Executable> > executables;
+
+        /**
+         * referencia al manager de instancias de VM
+         */
         runtime::ManageVM &instance_manager;
 
         explicit Loader(
@@ -315,8 +345,6 @@ namespace loader {
 
         void load_executable(std::vector<uint8_t> bytecode);
 
-        void load_executable(const Executable &exe);
-
         void resolve_labels(Assembly::Bytecode::Section &section);
 
         void load_sections(Assembly::Bytecode::Label &label);
@@ -325,7 +353,16 @@ namespace loader {
 
         void build_runtime_context();
 
-        void create_vm_instance();
+        Executable &get_last_instance();
+
+        void create_vm_instance(Executable &exe);
+
+    private:
+        /**
+         * Un mutex en el loader para evitar problemas en el
+         * caso de usar multihilo
+         */
+        std::mutex loader_mutex;
     };
 }
 
