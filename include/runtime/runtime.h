@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "decode_instruction.h"
 #include "arena/arena.h"
 #include "arena/VirtualMemory.h"
 #include "cli/sync_io.h"
@@ -24,6 +25,7 @@
 #define VERSION_VM 0
 
 namespace runtime {
+    class VM;
     class ManageVM;
 
     typedef struct VM_ID {
@@ -31,55 +33,315 @@ namespace runtime {
     } VM_ID;
 
     /**
-     * representa los posibles estados de los hilos de la VM
+     * @brief Representa los posibles estados de los hilos de la VM.
+     *
+     * Cada hilo dentro de la VM puede encontrarse en uno de estos estados,
+     * lo cual permite al planificador (scheduler) controlar su ejecución,
+     * suspensión, bloqueo y finalización.
      */
     typedef enum vm_state {
         /**
-         * Significado: El hilo esta listo para ejecutarse, pero actualmente no esta corriendo.
-         *    Cuando se usa:
-         *          Despues de ser creado y preparado (inicializado su stack, IP, etc.).
-         *          Despues de ceder la CPU (por ejemplo, tras un yield o cambio de contexto).
-         *          Lo que implica: El planificador puede seleccionarlo para ejecutarse.
+         * @brief El hilo está listo para ejecutarse, pero no está corriendo.
+         *
+         * @details
+         * Se usa cuando:
+         *  - El hilo ha sido creado y ya tiene su contexto inicial preparado.
+         *  - El hilo ha cedido voluntariamente la CPU (yield).
+         *  - El hilo ha sido desbloqueado tras un evento o temporizador.
+         *
+         * Implica:
+         *  - El scheduler puede seleccionarlo para ejecutarse?
          */
         READY,
 
+
         /**
-         * Significado: Es el hilo que esta actualmente ejecutandose.
-         *      Cuando se usa:
-         *          Al ser elegido por el planificador (por scheduler_tick() lo selecciona).
-         *          Lo que implica: El hilo tiene el control de la CPU (de la VM).
+         * @brief El hilo está actualmente ejecutándose.
+         *
+         * @details
+         * Se usa cuando:
+         *  - El scheduler selecciona este hilo en un tick.
+         *
+         * Implica:
+         *  - El hilo tiene el control de la "CPU" virtual.
+         *  - Puede cambiar a otro estado según avance la ejecución.
          */
         RUNNING,
 
         /**
-         * Significado: El hilo esta bloqueado, hasta que se de un tiempo determinado, ocurra
-         * un evento de activacion, o sea activado por un hilo externo.
-         *      Cuando se usa:
-         *          Todo los hilos que se crean, pasan a estar bloqueados, hasta que se
-         *          indiquen que estan listos (READY), esto supone que el hilo se alla
-         *          configurado correctamente, para luego proceder a la ejcucion.
+         * @brief El hilo está bloqueado esperando un evento, tiempo o señal.
          *
+         * @details
+         * Se usa cuando:
+         *  - El hilo recién creado aún no está listo para ejecutarse.
+         *  - El hilo espera un evento externo (I/O, sincronización, etc.).
+         *  - El hilo espera un temporizador o condición.
+         *
+         * Implica:
+         *  - El hilo no será ejecutado hasta que sea desbloqueado.
          */
         BLOCKED,
 
         /**
-         * Significado: El hilo ha terminado su ejecucion.
-         *      Cuando se usa:
-         *          Cuando el hilo termina su funcion (retorna).
-         *          Cuando ocurre un error fatal o sale explicitamente.
-         *      Lo que implica:
-         *          El hilo ya no volvera a ejecutarse.
-         *          Su espacio de stack puede ser liberado o reciclado.
+         * @brief El hilo ha terminado su ejecución permanentemente.
+         *
+         * @details
+         * Se usa cuando:
+         *  - La función principal del hilo retorna.
+         *  - El hilo finaliza por un error fatal.
+         *  - El hilo se cierra explícitamente.
+         *
+         * Implica:
+         *  - El hilo no volverá a ejecutarse.
+         *  - Su stack y recursos pueden ser liberados.
          */
-        DEAD
+        DEAD,
+
+        /**
+         * @brief La VM está en fase de obtención de instrucción (fetch).
+         *
+         * @details
+         * Se usa cuando:
+         *  - La VM está leyendo la instrucción desde memoria virtual.
+         *
+         * Implica:
+         *  - Se accede al TLB y al subsistema de memoria.
+         *  - Se prepara la instrucción para decodificación.
+         */
+        FETCH,
+
+        /**
+         * @brief La VM está decodificando la instrucción obtenida.
+         *
+         * @details
+         * Se usa cuando:
+         *  - La instrucción ya fue leída y ahora se interpreta.
+         *
+         * Implica:
+         *  - Se determina el opcode, operandos y modo de direccionamiento.
+         *  - Se preparan los datos necesarios para la ejecución.
+         */
+        DECODE,
+
+        /**
+         * @brief La VM está ejecutando la instrucción decodificada.
+         *
+         * @details
+         * Se usa cuando:
+         *  - La instrucción ya fue decodificada y se está ejecutando.
+         *
+         * Implica:
+         *  - Se modifican registros, memoria o estado interno.
+         *  - Puede generar cambios de estado (WAIT_IO, BLOCKED, etc.).
+         */
+        EXECUTE,
+
+
+        /**
+         * @brief La VM está esperando una operación de entrada/salida.
+         *
+         * @details
+         * Se usa cuando:
+         *  - La instrucción requiere esperar un dispositivo o evento externo.
+         *
+         * Implica:
+         *  - El hilo no puede continuar hasta que la operación I/O termine.
+         *  - El scheduler puede ejecutar otros "hilos" mientras tanto.
+         */
+        WAIT_IO,
+
+        /**
+         * @brief La VM ha detenido su ejecución.
+         *
+         * @details
+         * Se usa cuando:
+         *  - La VM recibe una instrucción HALT.
+         *  - Se detiene explícitamente por el usuario o el sistema.
+         *
+         * Implica:
+         *  - La VM no ejecutará más instrucciones.
+         *  - Puede ser reiniciada o destruida.
+         */
+        HALT,
+
+        /**
+         * Este no es un estado real, sino que se usa para obtener cuantos estados
+         * existen en nuestra maquina de estados.
+         */
+        NUM_STATES
     } vm_state;
 
+    /**
+     * @brief Eventos que disparan transiciones en la máquina de estados de la VM.
+     *
+     * Cada evento representa un suceso interno del ciclo de ejecución
+     * o una condición externa que obliga a cambiar de estado.
+     */
+    enum vm_event {
+        /**
+         * @brief El scheduler ha seleccionado este hilo para ejecutarse.
+         *
+         * @details
+         * Este evento es generado por el planificador (scheduler) cuando decide
+         * que la VM debe reanudar su ejecución. Normalmente se dispara cuando:
+         *
+         *  - La VM estaba en estado READY esperando turno.
+         *  - La VM ha sido desbloqueada tras un WAIT_IO.
+         *  - El sistema decide asignarle tiempo de CPU.
+         *
+         * Implica:
+         *  - La VM pasa del estado READY al estado RUNNING.
+         *  - El hilo virtual obtiene control de la "CPU" virtual.
+         *  - El siguiente estado típico es FETCH, donde comienza el ciclo de instrucción.
+         *
+         * Este evento no es generado por la VM internamente, sino por el
+         * scheduler externo que gestiona múltiples instancias de VM?
+         */
+        EVT_SCHEDULED,
+
+
+        /**
+         * @brief La instrucción ha sido obtenida correctamente desde memoria.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - La fase FETCH termina de leer la instrucción desde memoria virtual.
+         *
+         * Implica:
+         *  - La VM puede pasar a DECODE para interpretar la instrucción.
+         */
+        EVT_FETCH_DONE,
+
+        /**
+         * @brief La instrucción ha sido decodificada correctamente.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - La fase DECODE identifica el opcode, operandos y modo de direccionamiento.
+         *
+         * Implica:
+         *  - La VM puede pasar a EXECUTE para ejecutar la instrucción.
+         */
+        EVT_DECODE_DONE,
+
+        /**
+         * @brief La instrucción ha sido ejecutada completamente.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - La fase EXECUTE finaliza sin requerir I/O ni bloquearse.
+         *
+         * Implica:
+         *  - La VM puede volver a FETCH para obtener la siguiente instrucción.
+         */
+        EVT_EXEC_DONE,
+
+        /**
+         * @brief La instrucción requiere esperar una operación de entrada/salida.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - La ejecución detecta que necesita esperar un dispositivo o evento externo.
+         *
+         * Implica:
+         *  - La VM debe pasar a WAIT_IO hasta que el evento se complete.
+         */
+        EVT_IO_WAIT,
+
+        /**
+         * @brief La operación de entrada/salida ha finalizado.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - Un dispositivo, hilo externo o evento notifica que la I/O terminó.
+         *
+         * Implica:
+         *  - La VM puede volver a READY para ser planificada nuevamente.
+         */
+        EVT_IO_READY,
+
+        /**
+         * @brief Se ha ejecutado una instrucción HALT o se solicita detener la VM.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - La instrucción HALT es encontrada.
+         *  - El sistema solicita detener la ejecución.
+         *
+         * Implica:
+         *  - La VM pasa al estado HALT y no ejecutará más instrucciones.
+         */
+        EVT_HALT,
+
+        /**
+         * @brief Ha ocurrido un error fatal durante la ejecución.
+         *
+         * @details
+         * Se dispara cuando:
+         *  - Se detecta un error irrecuperable (memoria inválida, instrucción ilegal, etc.).
+         *
+         * Implica:
+         *  - La VM pasa al estado DEAD.
+         *  - Se liberan recursos y se detiene la ejecución.
+         */
+        EVT_ERROR,
+
+        /**
+         * @brief Número total de eventos (no es un evento real).
+         */
+        NUM_EVENTS
+    };
+
+    static const char *event_name(vm_event e) {
+        switch (e) {
+            case EVT_FETCH_DONE: return "EVT_FETCH_DONE";
+            case EVT_DECODE_DONE: return "EVT_DECODE_DONE";
+            case EVT_EXEC_DONE: return "EVT_EXEC_DONE";
+            case EVT_IO_WAIT: return "EVT_IO_WAIT";
+            case EVT_IO_READY: return "EVT_IO_READY";
+            case EVT_HALT: return "EVT_HALT";
+            case EVT_ERROR: return "EVT_ERROR";
+            case EVT_SCHEDULED: return "EVT_SCHEDULED";
+            default: return "UNKNOWN_EVENT";
+        }
+    }
+
+
+    /**
+     * Estructura que representa una transicion de la maquina de estados.
+     */
+    typedef struct Transition {
+        vm_state next;
+
+        void (*action)(VM *);
+
+        /**
+         * Constructor de transicion, si no es especifica el estado siempre
+         * sera READY.
+         * @param n estado de transicion
+         * @param a accion de transicion.
+         */
+        Transition(vm_state n = READY, void (*a)(VM *) = nullptr)
+            : next(n), action(a) {
+        }
+    } Transition;
+
+
+    /**
+     * Estados de la la FSM(Maquina de estasdos finitio) en la VM
+     * @param state estado de la VM
+     * @return representacion string
+     */
     static const char *vm_state_to_str(vm_state state) {
-        // Ajusta según tu enum real
         switch (state) {
             case READY: return "READY";
             case RUNNING: return "RUNNING";
             case BLOCKED: return "BLOCKED";
+            case FETCH: return "FETCH";
+            case DECODE: return "DECODE";
+            case EXECUTE: return "EXECUTE";
+            case WAIT_IO: return "WAIT_IO";
+            case HALT: return "HALT";
             case DEAD: return "DEAD";
             default: return "UNKNOWN";
         }
@@ -245,6 +507,16 @@ namespace runtime {
     class VM {
     public:
         /**
+         * Contiene los datos de la instruccion descoficada.
+         */
+        DecodedInstr decode{};
+
+        /**
+         * Tabla de transiciones
+         */
+        Transition fsm[NUM_STATES][NUM_EVENTS];
+
+        /**
          * Cada Instancia gestiona su propio memoria (memoria aislada)
          */
         vm::ArenaManager manager_mem_priv{};
@@ -267,7 +539,7 @@ namespace runtime {
          */
         loader::Loader &loader_public;
 
-        vm_state state = BLOCKED;
+
         pthread_t thread_for_vm{};
         VM_ID id{};
 
@@ -318,68 +590,177 @@ namespace runtime {
 
         VM(ManageVM &mgr_vm, uint64_t id_vm);
 
-        std::string to_string() const;
+        /**
+         * Inicializa la tabla de transicicones.
+         */
+        void init_fsm();
+
+        /**
+         * Permite transiccionar de estado-
+         *
+         *  Ejemplo:
+         *      1. Mira el estado actual -> EXECUTE
+         *      2. Mira el evento recibido -> EVT_EXEC_DONE
+         *      3. Busca en la tabla -> fsm[EXECUTE][EVT_EXEC_DONE]
+         *
+         *      Esto te da:
+         *          - el siguiente estado
+         *          - la acción a ejecutar
+         *
+         * @param e nuevo estado para la maquina virtual
+         */
+        void on_event(vm_event e);
+
+        std::string to_string();
 
         /**
          * @brief Imprime estado completo de la VM (debug)
          */
-        void print() const;
+        void print();
+
+        /**
+         * Permite matar a la VM cambiado su estado mediante un evento de tipo
+         * EVT_ERROR
+         */
+        void kill();
+
+        /**
+         * @brief Inicia la ejecución de la VM en un hilo independiente.
+         *
+         * Este metodo crea un hilo real del sistema operativo y ejecuta dentro de él
+         * el bucle principal de la VM (`run_loop()`), permitiendo que cada instancia
+         * de VM funcione de manera concurrente y aislada.
+         *
+         * @details
+         * - El hilo creado ejecuta exclusivamente `run_loop()`.
+         * - El estado inicial debe ser READY o RUNNING según el scheduler.
+         * - La VM continúa ejecutándose hasta que entra en un estado terminal
+         *   (HALT o DEAD), momento en el cual el hilo finaliza automáticamente.
+         * - Otros hilos pueden interactuar con la VM mediante eventos seguros
+         *   (por ejemplo, para despertar WAIT_IO o forzar un error).
+         *
+         * Importante:
+         *  - Este metodo no bloquea; simplemente lanza el hilo.
+         *  - El hilo se almacena en `thread_for_vm` para permitir join, detach
+         *    o gestión por parte del scheduler.
+         */
+        void start();
+
+        void join();
+
+        std::string vm_summary() {
+            std::ostringstream ss;
+            // ID
+            ss << "ID=" << vesta::hex64(static_cast<uint64_t>(id.id));
+
+            // Estado
+            ss << " st=" << vm_state_to_str(state);
+            ss << std::endl;
+
+            ss << " R00=" << vesta::hex64(r00.qword());
+            ss << " R01=" << vesta::hex64(r01.qword());
+            ss << " R02=" << vesta::hex64(r02.qword());
+            ss << " R03=" << vesta::hex64(r03.qword());
+            ss << std::endl;
+
+            ss << " R04=" << vesta::hex64(r04.qword());
+            ss << " R05=" << vesta::hex64(r05.qword());
+            ss << " R06=" << vesta::hex64(r06.qword());
+            ss << " R07=" << vesta::hex64(r07.qword());
+            ss << std::endl;
+
+            ss << " R08=" << vesta::hex64(r08.qword());
+            ss << " R09=" << vesta::hex64(r09.qword());
+            ss << " R10=" << vesta::hex64(r10.qword());
+            ss << " R11=" << vesta::hex64(r11.qword());
+            ss << std::endl;
+
+            ss << " R12=" << vesta::hex64(r12.qword());
+            ss << " R13=" << vesta::hex64(r13.qword());
+            ss << " R14=" << vesta::hex64(r14.qword());
+            ss << " R15=" << vesta::hex64(r15.qword());
+            ss << std::endl;
+
+            // IP/SP/BP (usar component_to_string para capturar representación)
+            ss << " IP=" << vesta::component_to_string(rip);
+            ss << " SP=" << vesta::component_to_string(stack_pointer);
+            ss << " BP=" << vesta::component_to_string(base_pointer);
+
+            // Flags compactas
+            ss << " FLAGS="
+                    << static_cast<unsigned>(flags.bits.DM)
+                    << static_cast<unsigned>(flags.bits.CF)
+                    << static_cast<unsigned>(flags.bits.OF)
+                    << static_cast<unsigned>(flags.bits.SF)
+                    << static_cast<unsigned>(flags.bits.ZF);
+
+            // Thread / sleep
+            ss << " Th=" << reinterpret_cast<void *>(thread_for_vm)
+                    << " Sleep=" << time_sleep;
+
+            return ss.str();
+        }
+
+        void decode_instruction();
+
+    private:
+        /**
+         * Contiene el estado de la maquina virtual. Nunca debe ser accesible directamente
+         * ya que la VM usa un hilo para cambiar los estados, si otro hilo modifica el estado
+         * en ejecuccion sin mas puede ocasionar problemas, por eso lo ponemos privado y creamos
+         * un metodo que nos permita cambiar el estado de forma segura.
+         */
+        vm_state state = READY;
+
+        /**
+         * Mutex unico para cada instancia de VM. Con esto tenemos seguridad de que solo un hilo
+         * modifique el estado a la vez.
+         */
+        std::mutex state_lock;
+
+        /**
+         * @brief Bucle principal de ejecución de la máquina virtual.
+         *
+         * Este metodo implementa el ciclo de ejecución continuo de la VM utilizando
+         * un modelo de máquina de estados finita (FSM) combinado con un mecanismo
+         * de salto directo (dispatch table) para maximizar el rendimiento.
+         *
+         * @details
+         * El bucle realiza repetidamente las siguientes operaciones:
+         *
+         *  1. Salta directamente al bloque de código asociado al estado actual
+         *     mediante una tabla de despacho. Esto evita el uso de estructuras
+         *     condicionales como `switch` o `if`, reduciendo la penalización por
+         *     predicción de ramas y acelerando el intérprete.
+         *
+         *  2. Ejecuta la acción correspondiente al estado (por ejemplo: obtener
+         *     una instrucción, decodificarla, ejecutarla o esperar I/O).
+         *
+         *  3. Determina qué evento ocurrió durante la ejecución del estado
+         *     (por ejemplo: instrucción obtenida, decodificada, ejecutada,
+         *     espera de I/O, finalización, etc.).
+         *
+         *  4. Llama a `on_event(evento)`, que consulta la tabla de transiciones
+         *     `fsm[][]` y actualiza el estado de la VM según la lógica declarativa
+         *     definida en la máquina de estados.
+         *
+         *  5. Tras aplicar la transición, el bucle vuelve a saltar al bloque
+         *     correspondiente al nuevo estado, repitiendo el ciclo.
+         *
+         * El bucle finaliza únicamente cuando la VM entra en un estado terminal
+         * como HALT o DEAD. La transición hacia dichos estados es gestionada por
+         * `on_event()` y la tabla de transiciones, no por este metodo.
+         *
+         * Importante:
+         *  - Este metodo **no modifica directamente el estado**. Toda transición
+         *    ocurre exclusivamente dentro de `on_event()`, manteniendo la lógica
+         *    de la FSM centralizada y coherente.
+         *  - El metodo termina cuando el estado resultante es terminal, momento
+         *    en el cual la VM deja de ejecutar instrucciones.
+         */
+        void run_loop();
     };
 
-    static std::string vm_summary(const runtime::VM *vm) {
-        if (!vm) return "<null>";
-
-        std::ostringstream ss;
-        // ID
-        ss << "ID=" << vesta::hex64(static_cast<uint64_t>(vm->id.id));
-
-        // Estado
-        ss << " st=" << vm_state_to_str(vm->state);
-        ss << std::endl;
-
-        ss << " R00=" << vesta::hex64(vm->r00.qword());
-        ss << " R01=" << vesta::hex64(vm->r01.qword());
-        ss << " R02=" << vesta::hex64(vm->r02.qword());
-        ss << " R03=" << vesta::hex64(vm->r03.qword());
-        ss << std::endl;
-
-        ss << " R04=" << vesta::hex64(vm->r04.qword());
-        ss << " R05=" << vesta::hex64(vm->r05.qword());
-        ss << " R06=" << vesta::hex64(vm->r06.qword());
-        ss << " R07=" << vesta::hex64(vm->r07.qword());
-        ss << std::endl;
-
-        ss << " R08=" << vesta::hex64(vm->r08.qword());
-        ss << " R09=" << vesta::hex64(vm->r09.qword());
-        ss << " R10=" << vesta::hex64(vm->r10.qword());
-        ss << " R11=" << vesta::hex64(vm->r11.qword());
-        ss << std::endl;
-
-        ss << " R12=" << vesta::hex64(vm->r12.qword());
-        ss << " R13=" << vesta::hex64(vm->r13.qword());
-        ss << " R14=" << vesta::hex64(vm->r14.qword());
-        ss << " R15=" << vesta::hex64(vm->r15.qword());
-        ss << std::endl;
-
-        // IP/SP/BP (usar component_to_string para capturar representación)
-        ss << " IP=" << vesta::component_to_string(vm->rip);
-        ss << " SP=" << vesta::component_to_string(vm->stack_pointer);
-        ss << " BP=" << vesta::component_to_string(vm->base_pointer);
-
-        // Flags compactas
-        ss << " FLAGS="
-                << static_cast<unsigned>(vm->flags.bits.DM)
-                << static_cast<unsigned>(vm->flags.bits.CF)
-                << static_cast<unsigned>(vm->flags.bits.OF)
-                << static_cast<unsigned>(vm->flags.bits.SF)
-                << static_cast<unsigned>(vm->flags.bits.ZF);
-
-        // Thread / sleep
-        ss << " Th=" << reinterpret_cast<void *>(vm->thread_for_vm)
-                << " Sleep=" << vm->time_sleep;
-
-        return ss.str();
-    }
 
     static void dump_vm_region(VM *vm, uint64_t vaddr, size_t size) {
         uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
