@@ -10,6 +10,7 @@
 #include "arena/arena_manager.h"
 #include "emmit/bytereader.h"
 #include "linker/velb_linker_bytecode.h"
+#include "runtime/runtime.h"
 
 namespace runtime {
     class ManageVM;
@@ -341,9 +342,9 @@ namespace loader {
 
         std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
 
-        void load_executable(std::string path);
+        runtime::VM *load_executable(std::string path);
 
-        void load_executable(std::vector<uint8_t> bytecode);
+        runtime::VM *load_executable(std::vector<uint8_t> bytecode);
 
         void resolve_labels(Assembly::Bytecode::Section &section);
 
@@ -369,7 +370,7 @@ namespace loader {
          */
         Executable &get_last_instance();
 
-        void create_vm_instance(std::unique_ptr<Executable> exe);
+        runtime::VM *create_vm_instance(std::unique_ptr<Executable> exe);
 
     private:
         /**

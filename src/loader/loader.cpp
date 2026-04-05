@@ -3,7 +3,6 @@
 #include "emmit/bytereader.h"
 #include "emmit/struct_context.h"
 #include "runtime/manager_runtime.h"
-#include "runtime/runtime.h"
 
 /*
  *  Loader
@@ -265,7 +264,7 @@ namespace loader {
         return exe;
     }
 
-    void Loader::load_executable(std::string path) {
+    runtime::VM *Loader::load_executable(std::string path) {
         // Leer archivo completo
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
@@ -278,13 +277,13 @@ namespace loader {
         );
 
         // Delegar en la versión bytecode
-        load_executable(bytecode);
+        return load_executable(bytecode);
     }
 
-    void Loader::load_executable(std::vector<uint8_t> bytecode) {
+    runtime::VM *Loader::load_executable(std::vector<uint8_t> bytecode) {
         // Parsear el formato VELB
         auto exe = parse_velb(std::move(bytecode));
-        create_vm_instance(std::move(exe));
+        return create_vm_instance(std::move(exe));
     }
 
 
@@ -309,7 +308,7 @@ namespace loader {
         return get_last_instance_unlocked();
     }
 
-    void Loader::create_vm_instance(std::unique_ptr<Executable> exe_) {
+    runtime::VM *Loader::create_vm_instance(std::unique_ptr<Executable> exe_) {
         // bloqueamos el acceso si otro hilo intenta entrar
         std::lock_guard lock(loader_mutex);
 
@@ -342,10 +341,9 @@ namespace loader {
             // mostrar datos de la region de memoria reservacada para la seccion.
             runtime::dump_vm_region(vm, vm_addr, size);
         }
-
-        vm->start();
-        vm->join();
-
         //vm->vm_mem[0x10] = 1;
+        vm->start();
+
+        return vm;
     }
 }

@@ -13,6 +13,8 @@
 #define RUNTIME_H
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <queue>
 #include <vector>
 
 #include "decode_instruction.h"
@@ -20,13 +22,17 @@
 #include "arena/VirtualMemory.h"
 #include "cli/sync_io.h"
 #include "runtime/rflags.h"
-#include "loader/loader.h"
 
 #define VERSION_VM 0
 
+namespace loader {
+    class Loader;
+}
+
 namespace runtime {
-    class VM;
+    struct InstrFormat;
     class ManageVM;
+    class VM;
 
     typedef struct VM_ID {
         uint64_t id = 0;
@@ -306,14 +312,28 @@ namespace runtime {
         }
     }
 
+    /**
+     * ID de registros de proposito general
+     */
+    enum RegID {
+        R00, R01, R02, R03,
+        R04, R05, R06, R07,
+        R08, R09, R10, R11,
+        R12, R13, R14, R15,
+
+        /**
+         * Se usa para contar cuantos registros de proposito general hay
+         */
+        COUNT
+    };
+
 
     /**
      * Estructura que representa una transicion de la maquina de estados.
      */
     typedef struct Transition {
         vm_state next;
-
-        void (*action)(VM *);
+        std::function<void(runtime::VM *)> action;
 
         /**
          * Constructor de transicion, si no es especifica el estado siempre
@@ -321,8 +341,8 @@ namespace runtime {
          * @param n estado de transicion
          * @param a accion de transicion.
          */
-        Transition(vm_state n = READY, void (*a)(VM *) = nullptr)
-            : next(n), action(a) {
+        Transition(vm_state n = READY, void (*a)(runtime::VM *) = nullptr)
+            : next(n), action(std::move(a)) {
         }
     } Transition;
 
@@ -496,6 +516,105 @@ namespace runtime {
 
 
     /**
+     * Representa la informacion basica que se genera en la descodificacion
+     * y que una instruccion necesita leer para ser ejecutada.
+     */
+    typedef struct DecodedInstr {
+        uint8_t opcode[2]{};
+        uint8_t size = 0;
+
+        /**
+         * Indica si la instruccion tiene o no signo
+         */
+        uint8_t _signed_instruct = false;
+
+        union {
+            /**
+             * Datos en crudo
+             */
+            struct {
+                uint64_t raw1;
+                uint64_t raw2;
+            } raw_data;
+
+            /**
+             * Permite guardar datos para las instrucciones tipo
+             * reg, reg
+             */
+            struct {
+                uint8_t reg1; // indica cual es el registro 1 que se codifica
+                uint8_t reg2; // indica cual es el registro 2 que se codifica
+            } reg_data;
+
+            /**
+             * Permite guardar datos de instrucciones del tipo
+             * reg, inmmed o
+             * inmmed, reg
+             */
+            struct {
+                uint64_t inmmed; // valor inmediato
+                uint8_t reg; // registro destino
+            } inmmed_data;
+
+            /**
+             * Permite guardar datos para las instrucciones de tipo memoria como
+             * son
+             * add [reg2 * 2 + reg1], reg3
+             * A estas instrucciones no les afecta el campo modo mas que al registro
+             * destino u operando que no se usa para acceder a memoria.
+             *
+             * adds [r0 * 0 + r1], r3b // en este caso se accede a la direccion r1 y
+             * se obtiene un byte que se guarda en r3.
+             */
+            struct {
+                uint8_t reg_base; // base
+                uint8_t reg_index; // indice
+                uint8_t reg_final;
+                uint8_t scale; // escalar
+            } mem_data;
+        } data_instruction = {
+            static_cast<uint64_t>(0),
+            static_cast<uint64_t>(0)
+        };
+
+        /**
+         * Modo de la instruccion, o tamaño tambien llamado en algunos casos.
+         */
+        uint8_t mode = 0;
+
+        int64_t imm = 0; // inmediato (si existe)
+
+        /**
+         * Indica si la instrucción ha modificado manualmente el contador de programa (PC).
+         *
+         * Cuando una instrucción de control de flujo (por ejemplo: saltos, llamadas,
+         * retornos o saltos condicionales) cambia explícitamente el valor del PC,
+         * debe establecer este campo a `true`. Esto evita que la fase de ejecución
+         * (EXECUTE) avance automáticamente el PC al finalizar la instrucción.
+         *
+         * Si el valor es `false`, EXECUTE incrementará el PC en función del tamaño
+         * de la instrucción (`decoded.size`). Si es `true`, se asume que la instrucción
+         * ya ha actualizado el PC y no se realizará el incremento automático.
+         *
+         * Este mecanismo evita avanzar el PC dos veces
+         * en instrucciones que alteran el flujo de ejecución.
+         */
+        bool did_jump = false;
+
+        /**
+         * Indica si la instruccion requiere esperar un I/O o a alguna
+         * accion desbloqueante.
+         */
+        bool blocking = false;
+
+        /**
+         * referencia a la instruccion descodificada con sus meta-datos, la funcion a ejecutar,
+         * el metodo de descodificacion y otros campos utiles.
+         */
+        InstrFormat *metadata = nullptr;
+    } DecodedInstr;
+
+    /**
      * Esta clase representa una instancia de VM.
      * Cada instancia de VM usa un hilo real para ejecutar el codigo dado.
      * Por cada instancia de VM tendremos un hilo por tanto tendremos tantos
@@ -524,6 +643,12 @@ namespace runtime {
         DecodedInstr decoded;
         // -------------------------------------------------------------------------------
 
+        /**
+         * Cola de eventos pendientes, si alguna instruccion o algo externo
+         * quiero generar algun evento, se debe poner a la cola y hasta que la VM
+         * no termine su evento actual no se podra realizar los eventos de la cola.
+         */
+        //std::queue<vm_event> pending_events;
 
         /**
          * Tabla de transiciones
@@ -546,7 +671,7 @@ namespace runtime {
         /**
          * Cada instancia de loader permite manejar sus propias cargas
          */
-        loader::Loader loader_priv{mgr_vm};
+        std::unique_ptr<loader::Loader> loader_priv;
 
         /**
          * Loader "publico" del manager de instancias.
@@ -565,22 +690,10 @@ namespace runtime {
         vm::MappedPtr rip{}; // puntero de instruccion
         RFlags_t flags{};
 
-        GeneralRegister r00 = {};
-        GeneralRegister r01 = {};
-        GeneralRegister r02 = {};
-        GeneralRegister r03 = {};
-        GeneralRegister r04 = {};
-        GeneralRegister r05 = {};
-        GeneralRegister r06 = {};
-        GeneralRegister r07 = {};
-        GeneralRegister r08 = {};
-        GeneralRegister r09 = {};
-        GeneralRegister r10 = {};
-        GeneralRegister r11 = {};
-        GeneralRegister r12 = {};
-        GeneralRegister r13 = {};
-        GeneralRegister r14 = {};
-        GeneralRegister r15 = {};
+        /**
+         * Registros de proposito general.
+         */
+        GeneralRegister regs[16];
 
         /**
          * Cada instancia tiene asignada un manager general de instancias
@@ -634,9 +747,16 @@ namespace runtime {
 
         /**
          * Permite matar a la VM cambiado su estado mediante un evento de tipo
-         * EVT_ERROR
+         * EVT_ERROR. Esta funcion solo se permite llamar desde fuera.
          */
         void kill();
+
+        /**
+         * Permite poner un evento en la cola
+         * @param e evento a realizar, se pondra a la cola y se realizara cuando sea
+         * necesario.
+         */
+        //void emit_event(vm_event e);
 
         /**
          * @brief Inicia la ejecución de la VM en un hilo independiente.
@@ -671,28 +791,28 @@ namespace runtime {
             ss << " st=" << vm_state_to_str(state);
             ss << std::endl;
 
-            ss << " R00=" << vesta::hex64(r00.qword());
-            ss << " R01=" << vesta::hex64(r01.qword());
-            ss << " R02=" << vesta::hex64(r02.qword());
-            ss << " R03=" << vesta::hex64(r03.qword());
+            ss << " R00=" << vesta::hex64(regs[R00].qword());
+            ss << " R01=" << vesta::hex64(regs[R01].qword());
+            ss << " R02=" << vesta::hex64(regs[R02].qword());
+            ss << " R03=" << vesta::hex64(regs[R03].qword());
             ss << std::endl;
 
-            ss << " R04=" << vesta::hex64(r04.qword());
-            ss << " R05=" << vesta::hex64(r05.qword());
-            ss << " R06=" << vesta::hex64(r06.qword());
-            ss << " R07=" << vesta::hex64(r07.qword());
+            ss << " R04=" << vesta::hex64(regs[R04].qword());
+            ss << " R05=" << vesta::hex64(regs[R05].qword());
+            ss << " R06=" << vesta::hex64(regs[R06].qword());
+            ss << " R07=" << vesta::hex64(regs[R07].qword());
             ss << std::endl;
 
-            ss << " R08=" << vesta::hex64(r08.qword());
-            ss << " R09=" << vesta::hex64(r09.qword());
-            ss << " R10=" << vesta::hex64(r10.qword());
-            ss << " R11=" << vesta::hex64(r11.qword());
+            ss << " R08=" << vesta::hex64(regs[R08].qword());
+            ss << " R09=" << vesta::hex64(regs[R09].qword());
+            ss << " R10=" << vesta::hex64(regs[R10].qword());
+            ss << " R11=" << vesta::hex64(regs[R11].qword());
             ss << std::endl;
 
-            ss << " R12=" << vesta::hex64(r12.qword());
-            ss << " R13=" << vesta::hex64(r13.qword());
-            ss << " R14=" << vesta::hex64(r14.qword());
-            ss << " R15=" << vesta::hex64(r15.qword());
+            ss << " R12=" << vesta::hex64(regs[R12].qword());
+            ss << " R13=" << vesta::hex64(regs[R13].qword());
+            ss << " R14=" << vesta::hex64(regs[R14].qword());
+            ss << " R15=" << vesta::hex64(regs[R15].qword());
             ss << std::endl;
 
             // IP/SP/BP (usar component_to_string para capturar representación)
@@ -718,6 +838,35 @@ namespace runtime {
         void fetch_instruction();
 
         void decode_instruction();
+
+        /**
+         * Ejecuta la instrucción actualmente decodificada y devuelve el evento
+         * que debe procesar la máquina virtual como resultado de dicha ejecución.
+         *
+         * En lugar de un valor booleano, este metodo devuelve directamente un
+         * vm_event que representa la transición que debe realizar la FSM.
+         *
+         * Esto permite que una instrucción genere múltiples tipos de eventos:
+         *  - EVT_EXEC_DONE  -> La instrucción terminó correctamente.
+         *  - EVT_IO_WAIT    -> La instrucción es bloqueante y requiere esperar E/S.
+         *  - EVT_HALT       -> La instrucción solicita detener la VM.
+         *  - EVT_ERROR      -> Se produjo un error fatal durante la ejecución.
+         *  - Otros eventos específicos según la arquitectura de la VM.
+         *
+         * El metodo también se encarga de avanzar el contador de programa (PC)
+         * si la instrucción no ha modificado explícitamente su valor (campo did_jump).
+         *
+         * @return vm_event  Evento que la FSM debe procesar tras ejecutar la instrucción.
+         */
+        vm_event execute_instruction();
+
+
+        /**
+         * Permite indicar internamete que la VM debe morir o deberia estar
+         * muerta, esto lo hacemos ya que no se puede llamar a on_event desde
+         * dentro de la propio VM ni se puede llamar a kill() el cual llama a on_event.
+         */
+        bool should_kill = false;
 
     private:
         /**

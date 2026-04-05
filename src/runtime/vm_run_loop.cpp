@@ -38,7 +38,6 @@ namespace runtime {
             &&HALT_LABEL
         };
 
-
         goto *dispatch_table[state];
 
     READY_LABEL:
@@ -65,10 +64,10 @@ namespace runtime {
         goto *dispatch_table[state];
 
     EXECUTE_LABEL:
-        /*if (execute_instruction())
-            on_event(EVT_EXEC_DONE);
-        else
-            on_event(EVT_IO_WAIT);*/
+        // si la instruccion ejecuta no es bloqueante, se avanzara en el
+        // estado de la VM, pero en caso de que execute_instruction devuelva
+        // false, se lanzara un evento de tipo EVT_IO_WAIT como evento bloqueante.
+        on_event(execute_instruction());
         goto *dispatch_table[state];
 
     WAIT_IO_LABEL:
