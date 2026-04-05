@@ -28,15 +28,15 @@ namespace runtime {
             this->manager_mem_priv = {};
 
             // aun no se cargo nada asi que se inicializara a 0 todo_
-            stack_pointer = vm::MappedPtrHost{
+            stack_pointer = vm::MappedPtr{
 
             };
 
-            base_pointer = vm::MappedPtrHost{
+            base_pointer = vm::MappedPtr{
 
             };
 
-            rip = vm::MappedPtrHost{
+            rip = vm::MappedPtr{
 
             };
 
@@ -67,7 +67,7 @@ namespace runtime {
         fsm[FETCH][EVT_FETCH_DONE] = {
             DECODE,
             [](VM *vm) {
-                vm->decode_instruction();
+                vm->fetch_instruction();
             }
         };
 
@@ -75,7 +75,7 @@ namespace runtime {
         fsm[DECODE][EVT_DECODE_DONE] = {
             EXECUTE,
             [](VM *vm) {
-                /*vm->prepare_execute();*/
+                vm->decode_instruction();
             }
         };
 
@@ -83,7 +83,7 @@ namespace runtime {
         fsm[EXECUTE][EVT_EXEC_DONE] = {
             FETCH,
             [](VM *vm) {
-                /*vm->advance_ip();*/
+                /*vm->execute_instr();*/
             }
         };
 

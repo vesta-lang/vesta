@@ -44,19 +44,26 @@ namespace vm {
         uint8_t &operator[](uint64_t vaddr) {
             tlb::TLBEntryData *entry = tlb.get_entry(vaddr);
             if (!entry) {
-                // Lazy allocation automática
-                size_t page_size = 4096;
-                uint64_t page_vaddr = vaddr & ~0xFFFULL;
-                void *host_mem = get_ptr_arena(
-                    arena_mgr, arena_mgr.create_arena(page_size, permsDefault));
+                // si el tipo de entrada es MAPPED_PTR_HOST o NONE
+                if (entry->type_address == MAPPED_PTR_HOST || entry->type_address == NONE) {
+                    // Lazy allocation automática
+                    size_t page_size = 4096;
+                    uint64_t page_vaddr = vaddr & ~0xFFFULL;
+                    void *host_mem = get_ptr_arena(
+                        arena_mgr, arena_mgr.create_arena(page_size, permsDefault));
 
-                ptr_mapped pm{};
-                pm.ptr_host = host_mem;
-                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm);
-                entry = tlb.get_entry(vaddr);
+                    ptr_mapped pm{};
+                    pm.ptr_host = host_mem;
+                    tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm);
+                    entry = tlb.get_entry(vaddr);
+
+                    uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
+                    return base[vaddr & 0xFFF];
+                };
+            } else {
+                std::cout << "Modo de acceso no implementado: " << entry->type_address << std::endl;
+                exit(-1);
             }
-            uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
-            return base[vaddr & 0xFFF];
         }
     };
 }
