@@ -21,7 +21,7 @@ namespace runtime {
         uint64_t id_vm
     ) : vm_mem(tlb, mgr_vm.manager_mem),
         manager_mem_public(mgr_vm.manager_mem),
-        loader_priv(mgr_vm),
+        loader_priv(std::make_unique<loader::Loader>(mgr_vm)),
         loader_public(mgr_vm.loader),
         id({id_vm}),
         mgr_vm(mgr_vm) { {
@@ -64,7 +64,7 @@ namespace runtime {
         fsm[RUNNING][EVT_SCHEDULED] = {FETCH, nullptr};
 
         // FETCH -> DECODE
-        fsm[FETCH][EVT_FETCH_DONE] = {
+        fsm[FETCH][EVT_FETCH_DONE] = Transition{
             DECODE,
             [](VM *vm) {
                 vm->fetch_instruction();
@@ -72,7 +72,7 @@ namespace runtime {
         };
 
         // DECODE -> EXECUTE
-        fsm[DECODE][EVT_DECODE_DONE] = {
+        fsm[DECODE][EVT_DECODE_DONE] = Transition{
             EXECUTE,
             [](VM *vm) {
                 vm->decode_instruction();
@@ -80,7 +80,7 @@ namespace runtime {
         };
 
         // EXECUTE -> FETCH
-        fsm[EXECUTE][EVT_EXEC_DONE] = {
+        fsm[EXECUTE][EVT_EXEC_DONE] = Transition{
             FETCH,
             [](VM *vm) {
                 /*vm->execute_instr();*/
@@ -88,7 +88,7 @@ namespace runtime {
         };
 
         // EXECUTE -> WAIT_IO
-        fsm[EXECUTE][EVT_IO_WAIT] = {
+        fsm[EXECUTE][EVT_IO_WAIT] = Transition{
             WAIT_IO,
             [](VM *vm) {
                 /*vm->suspend_thread();*/
@@ -96,7 +96,7 @@ namespace runtime {
         };
 
         // WAIT_IO -> READY
-        fsm[WAIT_IO][EVT_IO_READY] = {
+        fsm[WAIT_IO][EVT_IO_READY] = Transition{
             READY,
             [](VM *vm) {
                 /*vm->resume_thread();*/
@@ -104,7 +104,7 @@ namespace runtime {
         };
 
         // EXECUTE -> HALT
-        fsm[EXECUTE][EVT_HALT] = {
+        fsm[EXECUTE][EVT_HALT] = Transition{
             HALT,
             [](VM *vm) {
                 /*vm->stop_vm();*/
@@ -113,7 +113,7 @@ namespace runtime {
 
         // Cualquier estado -> DEAD por error
         for (int s = 0; s < NUM_STATES; s++) {
-            fsm[s][EVT_ERROR] = {
+            fsm[s][EVT_ERROR] = Transition{
                 DEAD,
                 [](VM *vm) {
                     /*vm->fatal_error();*/
@@ -122,23 +122,26 @@ namespace runtime {
         }
     }
 
-    void VM::on_event(vm_event e) {
-        std::lock_guard guard(state_lock);
+    void VM::on_event(vm_event e) { {
+            std::lock_guard guard(state_lock);
 
-        vm_state old = state;
+            vm_state old = state;
 
-        // Obtener la transición desde la tabla
-        const Transition &t = fsm[state][e];
+            // Obtener la transición desde la tabla
+            const Transition &t = fsm[state][e];
 
-        vesta::scout() << "[VM] on_event: " << vm_state_to_str(old) <<
-                " --" << event_name(e) << "--> " << vm_state_to_str(t.next) << std::endl;
+            vesta::scout() << "[VM] on_event: " << vm_state_to_str(old) <<
+                    " --" << event_name(e) << "--> " << vm_state_to_str(t.next) << std::endl;
 
-        // Ejecutar acción asociada (si existe)
-        if (t.action)
-            t.action(this);
+            // Ejecutar acción asociada (si existe)
+            if (t.action)
+                t.action(this);
 
-        // Cambiar al siguiente estado
-        state = t.next;
+            // Cambiar al siguiente estado
+            state = t.next;
+        }
+
+
     }
 
     std::string VM::to_string() {
@@ -151,9 +154,14 @@ namespace runtime {
     }
 
     void VM::kill() {
-        std::lock_guard guard(state_lock);
         on_event(EVT_ERROR);
     }
+
+    /*void VM::emit_event(vm_event e) {
+        std::lock_guard guard(state_lock);
+        pending_events.push(e);
+    }*/
+
 
     void VM::start() {
         pthread_create(&thread_for_vm, nullptr, [](void *arg) -> void * {

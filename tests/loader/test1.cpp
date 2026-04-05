@@ -81,7 +81,7 @@ int main() {
         std::cerr << "Parse error: " << e.what() << "\n";
         return 1;
     }
-    std::cout << "[Tiempo parser] " << t_parser.us() << " us "  << t_parser.ms() << " ms\n";
+    std::cout << "[Tiempo parser] " << t_parser.us() << " us " << t_parser.ms() << " ms\n";
 
     // Resolver imports
     std::unordered_set<std::string> imported_files;
@@ -91,7 +91,7 @@ int main() {
     Assembler asmblr;
     Timer t_asm;
     auto bytecode = asmblr.assemble(program);
-    std::cout << "[Tiempo Assembler] " << t_asm.us() << " us "  << t_asm.ms() << " ms\n";
+    std::cout << "[Tiempo Assembler] " << t_asm.us() << " us " << t_asm.ms() << " ms\n";
 
 #ifdef DEBUG_EMIT
     std::cout << "\n=== CONTEXTO GENERADO POR EL ENSAMBLADOR ===\n";
@@ -137,7 +137,7 @@ int main() {
 
     // Reporte
     const auto &report = linker.get_report();
-    std::cout << "[Tiempo Linker] " << t_linker.us() << " us "  << t_linker.ms() << " ms\n";
+    std::cout << "[Tiempo Linker] " << t_linker.us() << " us " << t_linker.ms() << " ms\n";
 
     std::cout << "\n=== LINKER REPORT ===\n";
     std::cout << "Modulos enlazados: " << report.modules_linked << "\n";
@@ -156,13 +156,14 @@ int main() {
     }
 
 
-
     print_memory_stats();
 
     Timer t_loader;
-    manager.loader.load_executable(opts.output_path);
-    std::cout << "[Tiempo Loader] " << t_linker.us() << " us "  << t_linker.ms() << " ms\n";
+    runtime::VM *vm = manager.loader.load_executable(opts.output_path);
+    std::cout << "[Tiempo Loader] " << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
+
+    vm->join();
 
     std::cout << std::dec;
     std::cout << "\n[Tiempo total] " << global.us() << " us "
