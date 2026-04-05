@@ -120,7 +120,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
 
@@ -131,10 +131,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
@@ -144,10 +144,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
@@ -157,10 +157,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
@@ -170,10 +170,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
@@ -183,10 +183,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
@@ -196,10 +196,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr}
+                {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
             }
         },
         {
@@ -209,10 +209,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr},
+                {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
             },
         },
         {
@@ -222,10 +222,10 @@ namespace Assembly::Bytecode {
                 {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr},
+                {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
             },
         },
 
@@ -234,13 +234,13 @@ namespace Assembly::Bytecode {
                 // por definir
                 // mov
                 // reg, reg
-                {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, nullptr},
+                {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x15, InstrSizeMode::FIXED_8, AddressingMode::MEM, nullptr},
+                {0x00, 0x15, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, nullptr},
+                {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
             },
         },
         {
