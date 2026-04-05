@@ -157,30 +157,30 @@ static InstrFormat decode_table_primary[0X100] = {
     },
 
     /* 0x10 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // callvm
+        Assembly::Bytecode::AddressingMode::INMED,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
     /* 0x11 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // jmp
+        Assembly::Bytecode::AddressingMode::INMED,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
     /* 0x12 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // push
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_2,
         nullptr
     },
 
     /* 0x13 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // pop
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_2,
         nullptr
     },
 
@@ -402,8 +402,8 @@ static InstrFormat decode_table_primary[0X100] = {
     },
 
     /* 0x33 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
+        // nop1
+        Assembly::Bytecode::AddressingMode::NONE,
         Assembly::Bytecode::InstrSizeMode::FIXED_1,
         nullptr
     },
@@ -1419,8 +1419,8 @@ static InstrFormat decode_table_primary[0X100] = {
     },
 
     /* 0xC3 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
+        // ret
+        Assembly::Bytecode::AddressingMode::NONE,
         Assembly::Bytecode::InstrSizeMode::FIXED_1,
         nullptr
     },
@@ -1856,29 +1856,30 @@ static InstrFormat decode_table_primary[0X100] = {
  */
 static InstrFormat decode_table_extended[0X100] = {
     /* 0x00 */{
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // edmw4
+        Assembly::Bytecode::AddressingMode::NONE,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x01 */{
-        // 
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // edmw6
+        Assembly::Bytecode::AddressingMode::NONE,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x02 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // edm
+        Assembly::Bytecode::AddressingMode::NONE,
+        Assembly::Bytecode::InstrSizeMode::FIXED_2,
         nullptr
     },
 
     /* 0x03 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // hlt
+        Assembly::Bytecode::AddressingMode::NONE,
+        Assembly::Bytecode::InstrSizeMode::FIXED_2,
         nullptr
     },
 
@@ -1890,126 +1891,126 @@ static InstrFormat decode_table_extended[0X100] = {
     },
 
     /* 0x05 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // add reg, reg
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x06 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // add reg, [mem] || [mem], reg
+        Assembly::Bytecode::AddressingMode::MEM,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
     /* 0x07 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // add REG, SIB || SIB, REG
+        Assembly::Bytecode::AddressingMode::SIB,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x08 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // sub reg, reg
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x09 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // sub reg, [mem] || [mem], reg
+        Assembly::Bytecode::AddressingMode::MEM,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
     /* 0x0A */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // sub REG, SIB || SIB, REG
+        Assembly::Bytecode::AddressingMode::SIB,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x0B */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // mul reg, reg
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x0C */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // mul reg, [mem] || [mem], reg
+        Assembly::Bytecode::AddressingMode::MEM,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x0D */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // mul REG, SIB || SIB, REG
+        Assembly::Bytecode::AddressingMode::SIB,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x0E */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // div reg, reg
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x0F */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // div reg, [mem] || [mem], reg
+        Assembly::Bytecode::AddressingMode::MEM,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
     /* 0x10 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // div REG, SIB || SIB, REG
+        Assembly::Bytecode::AddressingMode::SIB,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x11 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // cmp reg, reg
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x12 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // cmp reg, [mem] || [mem], reg
+        Assembly::Bytecode::AddressingMode::MEM,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
     /* 0x13 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // cmp REG, SIB || SIB, REG
+        Assembly::Bytecode::AddressingMode::SIB,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
     /* 0x14 */{
-        //
+        // mov reg, reg
         Assembly::Bytecode::AddressingMode::COUNT,
         Assembly::Bytecode::InstrSizeMode::FIXED_1,
         nullptr
     },
 
     /* 0x15 */{
-        //
+        // mov reg, [mem] || [mem], reg
         Assembly::Bytecode::AddressingMode::COUNT,
         Assembly::Bytecode::InstrSizeMode::FIXED_1,
         nullptr
     },
 
     /* 0x16 */{
-        //
+        // mov REG, SIB || SIB, REG
         Assembly::Bytecode::AddressingMode::COUNT,
         Assembly::Bytecode::InstrSizeMode::FIXED_1,
         nullptr
@@ -2093,9 +2094,9 @@ static InstrFormat decode_table_extended[0X100] = {
     },
 
     /* 0x22 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // CALLVM/JMP   <addr56bits>
+        Assembly::Bytecode::AddressingMode::REG,
+        Assembly::Bytecode::InstrSizeMode::FIXED_4,
         nullptr
     },
 
@@ -2198,9 +2199,9 @@ static InstrFormat decode_table_extended[0X100] = {
     },
 
     /* 0x31 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // loop
+        Assembly::Bytecode::AddressingMode::INMED,
+        Assembly::Bytecode::InstrSizeMode::FIXED_8,
         nullptr
     },
 
@@ -2212,9 +2213,9 @@ static InstrFormat decode_table_extended[0X100] = {
     },
 
     /* 0x33 */{
-        //
-        Assembly::Bytecode::AddressingMode::COUNT,
-        Assembly::Bytecode::InstrSizeMode::FIXED_1,
+        // nop2
+        Assembly::Bytecode::AddressingMode::NONE,
+        Assembly::Bytecode::InstrSizeMode::FIXED_2,
         nullptr
     },
 
