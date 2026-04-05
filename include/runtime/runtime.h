@@ -506,10 +506,24 @@ namespace runtime {
      */
     class VM {
     public:
+        // -------------------------------------------------------------------------------
+        //               sistema de cache para descodificacion de instrucciones.
+        // -------------------------------------------------------------------------------
+        // 256 entradas de cache maximo
+        static const int ICACHE_SIZE = 256;
+        uint64_t icache_tag[ICACHE_SIZE];
+        DecodedInstr icache[ICACHE_SIZE];
+
+        inline uint32_t icache_index(uint64_t pc) {
+            return pc & (ICACHE_SIZE - 1); // si ICACHE_SIZE es potencia de 2
+        }
+
         /**
          * Contiene los datos de la instruccion descoficada.
          */
-        DecodedInstr decode{};
+        DecodedInstr decoded;
+        // -------------------------------------------------------------------------------
+
 
         /**
          * Tabla de transiciones
@@ -545,10 +559,10 @@ namespace runtime {
 
         // registros
         // -----------------------------------------------------------
-        vm::MappedPtrHost stack_pointer{}; // puntero tope de la pila
-        vm::MappedPtrHost base_pointer{}; // puntero base de la pila
+        vm::MappedPtr stack_pointer{}; // puntero tope de la pila
+        vm::MappedPtr base_pointer{}; // puntero base de la pila
 
-        vm::MappedPtrHost rip{}; // puntero de instruccion
+        vm::MappedPtr rip{}; // puntero de instruccion
         RFlags_t flags{};
 
         GeneralRegister r00 = {};
@@ -700,6 +714,8 @@ namespace runtime {
 
             return ss.str();
         }
+
+        void fetch_instruction();
 
         void decode_instruction();
 

@@ -277,7 +277,7 @@ namespace vm {
      * las arenas unas de otras. Hay una variante de este tipo de punteros donde se indica la direccion
      * IP de la maquina objetivo a la que dicha direccion pertenece. (MappedPtrRemote)
      */
-    typedef struct MappedPtrHost {
+    typedef struct MappedPtr {
         vm_map_ptr ptr_vm{}; // direccion virtual de la memoria
         ptr_mapped mapped{}; // direccion mapeada
 
@@ -286,7 +286,33 @@ namespace vm {
 
         // imprime en un ostream (útil para integración con SyncOStream)
         void print(std::ostream &os) const;
+
+
+        MappedPtr &operator+=(uint64_t offset) {
+            // Actualiza la dirección virtual
+            ptr_vm.raw += offset;
+
+            // Actualiza la dirección mapeada
+            mapped.ptr_vm.raw += offset;
+            return *this;
+        }
+
+        MappedPtr &operator++() {
+            return (*this += 1);
+        }
+
+        MappedPtr &operator--() {
+            return (*this += -1);
+        }
+
+        //
+        MappedPtr operator+(uint64_t offset) const {
+            MappedPtr tmp = *this;
+            tmp += offset;
+            return tmp;
+        }
     } MappedPtr;
+
 
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv4 {
         vm_map_ptr ptr_vm{}; // direccion virtual en una maquina remota
