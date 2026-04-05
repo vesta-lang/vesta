@@ -2,18 +2,18 @@ cmake_minimum_required(VERSION 3.20)
 project(VMTests)
 
 # Forzar Debug si no se especifica
-if(NOT CMAKE_BUILD_TYPE)
+if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
-endif()
+endif ()
 message(STATUS "Fuentes para ${FINAL_NAME}: ${ALL_PROJECT_SOURCES}")
 
 # Helper function para crear tests individuales
 function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
     set(FINAL_NAME "${PREFIX}_${TEST_NAME}")
-    
+
     add_executable(${FINAL_NAME} ${TEST_FILE} ${ALL_SOURCES})
-    
+
     target_include_directories(${FINAL_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/include
             ${CMAKE_SOURCE_DIR}/src
@@ -23,33 +23,95 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/keystone/include
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein
     )
-    
+
     # SQLite
     target_link_libraries(${FINAL_NAME}
             PRIVATE sqlite3
             PRIVATE capstone
             PRIVATE keystone
     )
-    
+
     # OpenSSL
-    if(WIN32)
+    if (WIN32)
         target_include_directories(${FINAL_NAME} PRIVATE ${OPENSSL_INCLUDE_DIR})
         target_link_directories(${FINAL_NAME} PRIVATE ${OPENSSL_LIB_DIR})
         target_link_libraries(${FINAL_NAME} PRIVATE libssl libcrypto ws2_32)
-    else()
+
+    else ()
         find_package(OpenSSL REQUIRED)
         target_link_libraries(${FINAL_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    endif()
-    
+    endif ()
+
     # pthread solo Linux/macOS
-    if(NOT WIN32)
+    if (NOT WIN32)
         target_link_libraries(${FINAL_NAME} PRIVATE pthread)
-    endif()
-    
+    endif ()
+
+    if ( WIN32)
+        target_link_libraries(vm PRIVATE applink)
+    endif ()
+
+    # Opciones globales para todos los builds
     target_compile_options(${FINAL_NAME} PRIVATE
+            -D__STDC_LIMIT_MACROS
+            -D__STDC_CONSTANT_MACROS
             -pedantic-errors
-            -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE
     )
+
+    # LTO (Link Time Optimization)
+    #set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+
+    # global
+    target_link_options(${FINAL_NAME} PRIVATE
+            -static
+    )
+
+    # release
+    target_link_options(${FINAL_NAME} PRIVATE
+            $<$<CONFIG:Release>:
+
+            # --- Eliminación de código muerto ---
+            -Wl,--gc-sections          # Elimina funciones/datos no usados
+
+            # --- Reducción de tamaño ---
+            -Wl,--strip-all            # Elimina todos los símbolos
+            -Wl,--as-needed            # Solo enlaza libs realmente usadas
+            -Wl,--build-id=none        # No genera build-id (reduce tamaño)
+
+            # --- Enlace estático ---
+            -static                    # Binario autónomo
+            -static-libgcc             # Libgcc estática
+            -static-libstdc++          # Libstdc++ estática
+
+            # --- Flags NO soportados por tu MinGW (comentados) ---
+            #-Wl,--icf=all             # Identical Code Folding (solo gold/lld)
+            #-Wl,--compress-debug-sections=zlib   # Solo binutils modernos
+            #-flto=thin                # mi MinGW no soporta LTO
+            >
+    )
+
+
+    # Opciones por configuracion
+    target_compile_options(${FINAL_NAME} PRIVATE
+            $<$<CONFIG:Debug>:
+            -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
+            >
+            $<$<CONFIG:Release>:
+            -O3
+            -march=x86-64
+            -mtune=native
+            -ffast-math
+            -fstrict-aliasing
+            -fno-plt
+            -fomit-frame-pointer
+            -fvisibility=hidden
+            -ffunction-sections
+            -fdata-sections
+            -DNDEBUG
+            >
+            $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
+    )
+
 endfunction()
 
 # Todos los sources de src/
@@ -62,9 +124,9 @@ file(GLOB_RECURSE ALL_PROJECT_SOURCES
 # Buscar todos los archivos .cpp dentro de tests/ y subcarpetas
 file(GLOB_RECURSE TEST_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
 
-foreach(TEST_FILE ${TEST_FILES})
+foreach (TEST_FILE ${TEST_FILES})
     # Crear un prefijo seguro basado en la ruta relativa
     get_filename_component(TEST_DIR ${TEST_FILE} DIRECTORY)
     string(REPLACE "/" "_" REL_DIR_SAFE ${TEST_DIR})
     add_single_test("test_${REL_DIR_SAFE}" ${TEST_FILE} "${ALL_PROJECT_SOURCES}")
-endforeach()
+endforeach ()

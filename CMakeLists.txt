@@ -1,19 +1,20 @@
 cmake_minimum_required(VERSION 3.20)
 
 # Evitar warning CMP0063 de librerias externas
-if(POLICY CMP0063)
+if (POLICY CMP0063)
     cmake_policy(SET CMP0063 NEW)
-endif()
+endif ()
 
-if (WIN32)
-    message(STATUS "Compilando en Windows: activando linkado estático")
-
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
-else ()
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
-endif()
+#if (WIN32)
+#    message(STATUS "Compilando en Windows: activando linkado estático")
+#
+#    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+#else ()
+#    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+#endif ()
 
 set(CMAKE_VERBOSE_MAKEFILE ON CACHE BOOL "Enable verbose build output" FORCE)
+
 
 # helper para imprimir propiedades relevantes de un target
 function(print_target_flags tgt)
@@ -95,9 +96,9 @@ project(VMProject)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT CMAKE_BUILD_TYPE)
+if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
-endif()
+endif ()
 
 
 # SQLite library (statica)
@@ -127,6 +128,11 @@ file(GLOB_RECURSE VM_SOURCES
         libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
 
+
+set(CAPSTONE_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(CAPSTONE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(CAPSTONE_USE_LTO OFF CACHE BOOL "" FORCE)
+
 # Capstone (desensamblador)
 add_subdirectory(libs/SourceCode/capstone)
 
@@ -145,55 +151,94 @@ target_link_libraries(vm
 )
 
 # OpenSSL
-if(WIN32)
+if (WIN32)
     set(OPENSSL_ROOT_DIR "${CMAKE_SOURCE_DIR}/libs/Windows/OpenSSL-Win64")
     set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include")
     set(OPENSSL_LIB_DIR "${OPENSSL_ROOT_DIR}/lib/VC/x64/MD")
-    
+
     target_include_directories(vm PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_link_directories(vm PRIVATE ${OPENSSL_LIB_DIR})
-    
+
     target_link_libraries(vm PRIVATE
             libssl
             libcrypto
             ws2_32        # Esto es crucial para sockets en windwos
     )
-else()
+
+    # es necesario en windows
+    add_library(applink STATIC
+            libs/Windows/OpenSSL-Win64/include/openssl/applink.c
+    )
+
+    target_link_libraries(vm PRIVATE applink)
+else ()
     find_package(OpenSSL REQUIRED)
     target_link_libraries(vm PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-endif()
+endif ()
 
 # Opciones globales para todos los builds
 target_compile_options(vm PRIVATE
-        -std=c++17
         -D__STDC_LIMIT_MACROS
         -D__STDC_CONSTANT_MACROS
-        -static
-        -static-libgcc -static-libstdc++
+        -pedantic-errors
 )
 
-target_compile_options(vm PRIVATE
-        $<$<CONFIG:Release>:-Os -ffunction-sections -fdata-sections>
-)
+# LTO (Link Time Optimization)
+#set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+
+# global
 target_link_options(vm PRIVATE
-        $<$<CONFIG:Release>:-Wl,--gc-sections>
+        -static
 )
+
+# release
+target_link_options(vm PRIVATE
+        $<$<CONFIG:Release>:
+
+        # --- Eliminación de código muerto ---
+        -Wl,--gc-sections          # Elimina funciones/datos no usados
+
+        # --- Reducción de tamaño ---
+        -Wl,--strip-all            # Elimina todos los símbolos
+        -Wl,--as-needed            # Solo enlaza libs realmente usadas
+        -Wl,--build-id=none        # No genera build-id (reduce tamaño)
+
+        # --- Enlace estático ---
+        -static                    # Binario autónomo
+        -static-libgcc             # Libgcc estática
+        -static-libstdc++          # Libstdc++ estática
+
+        # --- Flags NO soportados por tu MinGW (comentados) ---
+        #-Wl,--icf=all             # Identical Code Folding (solo gold/lld)
+        #-Wl,--compress-debug-sections=zlib   # Solo binutils modernos
+        #-flto=thin                # mi MinGW no soporta LTO
+        >
+)
+
 
 # Opciones por configuracion
 target_compile_options(vm PRIVATE
-        $<$<CONFIG:Debug>:-fno-omit-frame-pointer -fpermissive -g -O0 -Wall -Wextra -DMODE_DEBUG_ENABLE>
-        $<$<CONFIG:Release>:-fpermissive -O3 -DNDEBUG>
+        $<$<CONFIG:Debug>:
+        -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
+        >
+        $<$<CONFIG:Release>:
+        -O3
+        -march=x86-64
+        -mtune=native
+        -ffast-math
+        -fstrict-aliasing
+        -fno-plt
+        -fomit-frame-pointer
+        -fvisibility=hidden
+        -ffunction-sections
+        -fdata-sections
+        -DNDEBUG
+        >
         $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
 )
 
-# hace que el linker strippee simbolos innecesarios,
-# bajando el tamaño final
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    # Elimina simbolos de depuracion y reduce binario
-    set_target_properties(vm PROPERTIES
-            LINK_FLAGS "-s"
-    )
-endif()
+
+add_library(vmcore STATIC ${VM_SOURCES})
 
 # Añadir subdirectorio de tests
 add_subdirectory(tests)

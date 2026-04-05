@@ -21,6 +21,7 @@
 #include "arena/arena.h"
 #include "arena/VirtualMemory.h"
 #include "cli/sync_io.h"
+#include "profiler/timer.h"
 #include "runtime/rflags.h"
 
 #define VERSION_VM 0
@@ -102,19 +103,6 @@ namespace runtime {
          *  - Su stack y recursos pueden ser liberados.
          */
         DEAD,
-
-        /**
-         * @brief La VM está en fase de obtención de instrucción (fetch).
-         *
-         * @details
-         * Se usa cuando:
-         *  - La VM está leyendo la instrucción desde memoria virtual.
-         *
-         * Implica:
-         *  - Se accede al TLB y al subsistema de memoria.
-         *  - Se prepara la instrucción para decodificación.
-         */
-        FETCH,
 
         /**
          * @brief La VM está decodificando la instrucción obtenida.
@@ -205,19 +193,6 @@ namespace runtime {
          */
         EVT_SCHEDULED,
 
-
-        /**
-         * @brief La instrucción ha sido obtenida correctamente desde memoria.
-         *
-         * @details
-         * Se dispara cuando:
-         *  - La fase FETCH termina de leer la instrucción desde memoria virtual.
-         *
-         * Implica:
-         *  - La VM puede pasar a DECODE para interpretar la instrucción.
-         */
-        EVT_FETCH_DONE,
-
         /**
          * @brief La instrucción ha sido decodificada correctamente.
          *
@@ -300,7 +275,6 @@ namespace runtime {
 
     static const char *event_name(vm_event e) {
         switch (e) {
-            case EVT_FETCH_DONE: return "EVT_FETCH_DONE";
             case EVT_DECODE_DONE: return "EVT_DECODE_DONE";
             case EVT_EXEC_DONE: return "EVT_EXEC_DONE";
             case EVT_IO_WAIT: return "EVT_IO_WAIT";
@@ -357,7 +331,6 @@ namespace runtime {
             case READY: return "READY";
             case RUNNING: return "RUNNING";
             case BLOCKED: return "BLOCKED";
-            case FETCH: return "FETCH";
             case DECODE: return "DECODE";
             case EXECUTE: return "EXECUTE";
             case WAIT_IO: return "WAIT_IO";
@@ -520,7 +493,16 @@ namespace runtime {
      * y que una instruccion necesita leer para ser ejecutada.
      */
     typedef struct DecodedInstr {
-        uint8_t opcode[2]{};
+        /**
+         * opcode1
+         */
+        uint8_t is_extended;
+
+        /**
+         * opcode2
+         */
+        uint8_t opcode_index;
+
         uint8_t size = 0;
 
         /**
@@ -612,7 +594,46 @@ namespace runtime {
          * el metodo de descodificacion y otros campos utiles.
          */
         InstrFormat *metadata = nullptr;
+        uint64_t pc = 0;
     } DecodedInstr;
+
+    /**
+     * Estados de depuracion
+     */
+    enum class DebugStage {
+        /**
+         * realizar la depuracion en fase de descoficacion de instruccion.
+         *
+         */
+        DecodeBegin,
+        DecodeEnd,
+
+        /**
+         * permite realiza la depuracion en la fase previa a la ejecuccion de la
+         * instruccion.
+         */
+        ExecuteBegin,
+
+        /**
+         * permite realizar la depuracion en la fase final de la ejecuccion de la instruccion.
+         */
+        ExecuteEnd,
+
+        /**
+         * Permite hacer el hook antes de hacer el cambio de un estado a taves de un
+         * evento
+         */
+        OnEventBegin,
+
+        /**
+         * Permite hacer el hook despues del cambio de estado y el desencadenamiento del
+         * evento.
+         */
+        OnEventEnd,
+    };
+
+    using DebugHook = void(*)(VM *vm, DebugStage stage);
+
 
     /**
      * Esta clase representa una instancia de VM.
@@ -640,7 +661,7 @@ namespace runtime {
         /**
          * Contiene los datos de la instruccion descoficada.
          */
-        DecodedInstr decoded;
+        DecodedInstr *decoded_ptr = nullptr;
         // -------------------------------------------------------------------------------
 
         /**
@@ -649,6 +670,12 @@ namespace runtime {
          * no termine su evento actual no se podra realizar los eventos de la cola.
          */
         //std::queue<vm_event> pending_events;
+
+        Timer debug_timer; // mide la fase actual en el modo de depuracion
+
+        long long time_decode = 0;
+        long long time_exec = 0;
+        long long time_event = 0;
 
         /**
          * Tabla de transiciones
@@ -678,6 +705,13 @@ namespace runtime {
          */
         loader::Loader &loader_public;
 
+
+        /**
+         * Se usa para realizar depuracion o realizar ciertas acciones antes
+         * de una fase, especificada
+         */
+        std::vector<DebugHook> debug_hooks;
+        bool has_hooks = false;
 
         pthread_t thread_for_vm{};
         VM_ID id{};
@@ -738,7 +772,7 @@ namespace runtime {
          */
         void on_event(vm_event e);
 
-        std::string to_string();
+        std::string to_string() const;
 
         /**
          * @brief Imprime estado completo de la VM (debug)
@@ -782,7 +816,19 @@ namespace runtime {
 
         void join();
 
-        std::string vm_summary() {
+        /**
+         * Permite agregar una nueva hook a la VM, esta funcion no es thread-safe,
+         * asi que no se debe usar para añadir un hook mientras la VM se ejecuta, a
+         * no ser que se haga uso de algun mecanismo de sincronizacion. Se recomienda usar
+         * la version safe-thread la cual es "add_debug_hook" y añade un mutex que permite
+         * añadir hooks en run time mientras la VM se ejecuta.
+         * @param hook funcion hook que añadir a la cola de hooks.
+         */
+        void free_add_debug_hook(DebugHook hook);
+
+        void add_debug_hook(DebugHook hook);
+
+        std::string vm_summary() const {
             std::ostringstream ss;
             // ID
             ss << "ID=" << vesta::hex64(static_cast<uint64_t>(id.id));
@@ -835,8 +881,6 @@ namespace runtime {
             return ss.str();
         }
 
-        void fetch_instruction();
-
         void decode_instruction();
 
         /**
@@ -868,7 +912,6 @@ namespace runtime {
          */
         bool should_kill = false;
 
-    private:
         /**
          * Contiene el estado de la maquina virtual. Nunca debe ser accesible directamente
          * ya que la VM usa un hilo para cambiar los estados, si otro hilo modifica el estado
@@ -877,6 +920,7 @@ namespace runtime {
          */
         vm_state state = READY;
 
+    private:
         /**
          * Mutex unico para cada instancia de VM. Con esto tenemos seguridad de que solo un hilo
          * modifique el estado a la vez.
@@ -964,6 +1008,55 @@ namespace runtime {
 
         out << "================== End VM Memory Dump ==================\n";
     }
+
+    static const char *debug_stage_name(DebugStage s) {
+        switch (s) {
+            case DebugStage::DecodeBegin: return "DECODE_BEGIN";
+            case DebugStage::DecodeEnd: return "DECODE_END";
+            case DebugStage::ExecuteBegin: return "EXEC_BEGIN";
+            case DebugStage::ExecuteEnd: return "EXEC_END";
+            case DebugStage::OnEventBegin: return "EVENT_BEGIN";
+            case DebugStage::OnEventEnd: return "EVENT_END";
+            default: return "UNKNOWN";
+        }
+    }
+
+    /**
+     * @brief Ejecuta todos los hooks de depuración registrados para la máquina virtual.
+     *
+     * Esta función se invoca en distintos puntos del ciclo de ejecución de la VM
+     * (fetch, decode, execute, eventos del FSM, etc.) y permite que múltiples
+     * callbacks externos reaccionen a cada fase sin interferir con la lógica
+     * interna del intérprete.
+     *
+     * Cada hook registrado en `vm->debug_hooks` recibe el puntero a la VM y el
+     * estado de depuración actual, permitiendo implementar:
+     *  - trazas de ejecución,
+     *  - breakpoints,
+     *  - stepping,
+     *  - inspección del estado interno,
+     *  - profiling por instrucción o por evento,
+     *  - integración con debuggers externos.
+     *
+     * @param vm    Puntero a la máquina virtual que está ejecutando el ciclo.
+     * @param stage Fase del pipeline o del FSM en la que se dispara el hook.
+     *
+     * @note Esta función no realiza comprobaciones adicionales: si un hook lanza
+     *       una excepción o produce efectos secundarios inesperados, puede afectar
+     *       al flujo de depuración. Se recomienda que los hooks sean seguros y
+     *       no bloqueantes.
+     */
+//#define PROFILE_FAST
+#ifdef PROFILE_FAST
+#   define vm_hook(...) do {} while(0)
+#else
+    inline void vm_hook(VM *vm, DebugStage stage) {
+        if (!vm->has_hooks) return;
+
+        for (auto &hook: vm->debug_hooks)
+            hook(vm, stage);
+    }
+#endif
 }
 
 #endif //RUNTIME_H

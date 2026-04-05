@@ -91,7 +91,6 @@ namespace runtime {
 
     class ManageVM {
     public:
-
         uint64_t id;
 
         /**

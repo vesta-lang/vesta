@@ -10,10 +10,6 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#ifdef _WIN32
-// solo para windows
-#include <openssl/applink.c> // necesario si no se usa Visual para compilar
-#endif
 
 
 #include <cstdlib>

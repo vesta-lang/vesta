@@ -77,7 +77,7 @@ public:
      *          serán capturadas dentro del worker y descartadas.
      */
     template<typename F>
-void ThreadPool::enqueue(F &&f) { {
+void enqueue(F &&f) { {
         std::lock_guard lk(tasks_m_);
         if (stopping_.load()) {
             // lanzar excepción o ignorar?
