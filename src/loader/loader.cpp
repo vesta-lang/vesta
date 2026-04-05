@@ -342,7 +342,6 @@ namespace loader {
             runtime::dump_vm_region(vm, vm_addr, size);
         }
         //vm->vm_mem[0x10] = 1;
-        vm->start();
 
         return vm;
     }

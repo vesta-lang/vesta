@@ -65,7 +65,7 @@ namespace vesta {
         }
 
         // sobrecarga para manipuladores como std::endl, std::flush, etc.
-        SyncOStream &SyncOStream::operator<<(std::ostream & (*manip)(std::ostream &)) {
+        SyncOStream &operator<<(std::ostream & (*manip)(std::ostream &)) {
             // Aplicar el manipulador al buffer interno
             manip(oss);
 

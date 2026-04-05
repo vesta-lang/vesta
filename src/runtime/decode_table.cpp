@@ -20,7 +20,7 @@ namespace runtime {
         * Tabla de opcodes primarios, si no se usa 0x00 siempre se accedera a esta
         * tabla.
         */
-    static InstrFormat decode_table_primary[0X100] = {
+    InstrFormat decode_table_primary[0X100] = {
         /* 0x00 */{
             // aunque el 0x00 no se usa, lo definimos por seguridad.
             Assembly::Bytecode::AddressingMode::NONE,
@@ -1831,7 +1831,7 @@ namespace runtime {
      * Tabla de codigos extendidos, solo se usa si el primer byte de la instruccion
      * usa 0x00 para extender el opcode1 a dos.
      */
-    static InstrFormat decode_table_extended[0X100] = {
+     InstrFormat decode_table_extended[0X100] = {
         /* 0x00 */{
             // edmw4
             Assembly::Bytecode::AddressingMode::NONE,

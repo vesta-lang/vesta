@@ -57,19 +57,11 @@ namespace runtime {
                 fsm[s][e].action = nullptr;
             }
         }
-        // FETCH -> RUNNING
+        // READY -> RUNNING
         fsm[READY][EVT_SCHEDULED] = {RUNNING, nullptr};
 
-        // RUNNING -> FETCH
-        fsm[RUNNING][EVT_SCHEDULED] = {FETCH, nullptr};
-
-        // FETCH -> DECODE
-        fsm[FETCH][EVT_FETCH_DONE] = Transition{
-            DECODE,
-            [](VM *vm) {
-                vm->fetch_instruction();
-            }
-        };
+        // RUNNING -> DECODE
+        fsm[RUNNING][EVT_SCHEDULED] = {DECODE, nullptr};
 
         // DECODE -> EXECUTE
         fsm[DECODE][EVT_DECODE_DONE] = Transition{
@@ -79,9 +71,9 @@ namespace runtime {
             }
         };
 
-        // EXECUTE -> FETCH
+        // EXECUTE -> DECODE
         fsm[EXECUTE][EVT_EXEC_DONE] = Transition{
-            FETCH,
+            DECODE,
             [](VM *vm) {
                 /*vm->execute_instr();*/
             }
@@ -122,16 +114,15 @@ namespace runtime {
         }
     }
 
-    void VM::on_event(vm_event e) { {
+    void VM::on_event(vm_event e) {
+        //vm_hook(this, DebugStage::OnEventBegin);
+        {
             std::lock_guard guard(state_lock);
 
             vm_state old = state;
 
             // Obtener la transición desde la tabla
             const Transition &t = fsm[state][e];
-
-            vesta::scout() << "[VM] on_event: " << vm_state_to_str(old) <<
-                    " --" << event_name(e) << "--> " << vm_state_to_str(t.next) << std::endl;
 
             // Ejecutar acción asociada (si existe)
             if (t.action)
@@ -140,11 +131,10 @@ namespace runtime {
             // Cambiar al siguiente estado
             state = t.next;
         }
-
-
+        //vm_hook(this, DebugStage::OnEventEnd);
     }
 
-    std::string VM::to_string() {
+    std::string VM::to_string() const {
         return this->vm_summary();
     }
 
@@ -176,5 +166,15 @@ namespace runtime {
 
     void VM::join() {
         pthread_join(thread_for_vm, nullptr);
+    }
+
+    void VM::free_add_debug_hook(DebugHook hook) {
+        debug_hooks.push_back(hook);
+        has_hooks = true;
+    }
+
+    void VM::add_debug_hook(DebugHook hook) {
+        std::lock_guard guard(state_lock);
+        free_add_debug_hook(hook);
     }
 } // RUNTIME

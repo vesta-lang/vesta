@@ -31,7 +31,6 @@ namespace runtime {
             &&RUNNING_LABEL,
             &&BLOCKED_LABEL,
             &&DEAD_LABEL,
-            &&FETCH_LABEL,
             &&DECODE_LABEL,
             &&EXECUTE_LABEL,
             &&WAIT_IO_LABEL,
@@ -53,11 +52,6 @@ namespace runtime {
     BLOCKED_LABEL:
         // No hay nada que hacer hasta que un evento externo desbloquee
         return;
-
-    FETCH_LABEL:
-        /*fetch_instruction();*/
-        on_event(EVT_FETCH_DONE);
-        goto *dispatch_table[state];
 
     DECODE_LABEL:
         on_event(EVT_DECODE_DONE);

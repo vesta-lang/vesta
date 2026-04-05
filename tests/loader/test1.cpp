@@ -36,6 +36,9 @@ void print_memory_stats() {
             << " bytes, maximo: " << peak_memory << " bytes\n";
 }
 
+// modo perfilado activado
+#define VM_PROFILE
+
 #include "emmit/parser_to_bytecode.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
@@ -162,7 +165,83 @@ int main() {
     runtime::VM *vm = manager.loader.load_executable(opts.output_path);
     std::cout << "[Tiempo Loader] " << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
+    vm->add_debug_hook([](runtime::VM *vm, runtime::DebugStage stage) {
+        if (!vm) return;
 
+        switch (stage) {
+            // --- INICIO DE FASES ---
+            case runtime::DebugStage::DecodeBegin:
+            case runtime::DebugStage::ExecuteBegin:
+            case runtime::DebugStage::OnEventBegin:
+                vm->debug_timer.reset();
+                break;
+
+            // --- FIN DE FASES ---
+
+            case runtime::DebugStage::DecodeEnd: {
+                vm->time_decode += vm->debug_timer.ns();
+                vm->debug_timer.reset();
+                break;
+            }
+
+            case runtime::DebugStage::ExecuteEnd: {
+                vm->time_exec += vm->debug_timer.ns();
+                break;
+            }
+
+            case runtime::DebugStage::OnEventEnd: {
+                vm->time_event += vm->debug_timer.ns();
+                break;
+            }
+
+            default:
+                break;
+        }
+    });
+
+    // configuracion de un HOOK para la VM
+    vm->add_debug_hook([](runtime::VM *vm, runtime::DebugStage stage) {
+        if (!vm) return;
+        const char *stage_name = runtime::debug_stage_name(stage);
+
+        if (vm->decoded_ptr != nullptr) {
+            printf("[%s] PC=%llu  OP1=%u OP2=%u  MODE=%u  STATE=%s\n",
+                   stage_name,
+                   vm->rip.ptr_vm.raw,
+                   vm->decoded_ptr->is_extended,
+                   vm->decoded_ptr->opcode_index,
+                   vm->decoded_ptr->mode,
+                   vm_state_to_str(vm->state)
+            );
+        }
+
+        if (stage == runtime::DebugStage::ExecuteEnd) {
+            printf("[PROFILE]\n");
+
+            printf("  decode = %lld ns (%lld ms)\n",
+                   vm->time_decode,
+                   vm->time_decode / 1'000'000);
+
+            printf("  exec = %lld ns   (%lld ms)\n",
+                   vm->time_exec,
+                   vm->time_exec / 1'000'000);
+
+            printf("  event = %lld ns  (%lld ms)\n",
+                   vm->time_event,
+                   vm->time_event / 1'000'000);
+
+            _sleep(1000);
+
+            vm->debug_timer.reset();
+            vm->time_decode = 0;
+            vm->time_exec = 0;
+            vm->time_event = 0;
+        }
+        if (stage == runtime::DebugStage::OnEventBegin)
+            printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
+    });
+
+    vm->start();
     vm->join();
 
     std::cout << std::dec;

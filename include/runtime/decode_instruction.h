@@ -16,6 +16,22 @@
 #include "runtime.h"
 #include "emmit/emmit_decl.h"
 
+// para mediciones de tiempo ultraprecisas.
+#ifdef VM_PROFILE
+    #define PROFILE_START auto __t0 = clock::now();
+    #define PROFILE_END(label) \
+    do { \
+    auto __t1 = clock::now(); \
+    std::cout << "[" << label << "] " \
+    << std::chrono::duration_cast<std::chrono::nanoseconds>(__t1 - __t0).count() \
+    << " ns\n"; \
+    } while(0)
+#else
+#define PROFILE_START
+#define PROFILE_END(label)
+#endif
+
+
 namespace runtime {
     struct DecodedInstr;
     class VM;
@@ -69,6 +85,6 @@ namespace runtime {
      *      reg1, reg2 o
      *      reg2, reg1
      */
-     void decode_instr_reg(VM *vm, DecodedInstr &instr);
+    void decode_instr_reg(VM *vm, DecodedInstr &instr);
 }
 #endif //DECODE_INSTRUCTION_H
