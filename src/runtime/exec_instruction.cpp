@@ -12,5 +12,9 @@
 #include "runtime/exec_instruction.h"
 
 namespace runtime {
-
+    void exec_instr_hlt(VM *vm, const DecodedInstr &instr) {
+        // indicamos que queremos matar la VM, esto hara que la fase
+        // EXECUTE emita un evento de tipo EVT_ERROR
+        vm->should_kill = true;
+    }
 }

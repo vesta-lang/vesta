@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <queue>
+#include <thread>
 #include <vector>
 
 #include "decode_instruction.h"
@@ -503,8 +504,6 @@ namespace runtime {
          */
         uint8_t opcode_index;
 
-        uint8_t size = 0;
-
         /**
          * Indica si la instruccion tiene o no signo
          */
@@ -673,9 +672,25 @@ namespace runtime {
 
         Timer debug_timer; // mide la fase actual en el modo de depuracion
 
-        long long time_decode = 0;
-        long long time_exec = 0;
-        long long time_event = 0;
+        /**
+         * toiempo tardado en el decoder
+         */
+        uint64_t time_decode = 0;
+
+        /**
+         * tiempo de transicion de eventos.
+         */
+        uint64_t time_event = 0;
+
+        /**
+         * tiempo tardado en la ejecuccion
+         */
+        uint64_t time_exec = 0;
+
+        // --- PROFILER POR HILO / VM---
+        uint64_t profiler_sample = 0; // contador de instrucciones
+        uint64_t profiler_instr_counter = 0; // incrementa cada 256 instrucciones
+        // --- PROFILER POR HILO / VM ---
 
         /**
          * Tabla de transiciones
@@ -711,6 +726,13 @@ namespace runtime {
          * de una fase, especificada
          */
         std::vector<DebugHook> debug_hooks;
+
+        /**
+         * Permite activar y desactivar hooks, al añadir un hook
+         * usando add_debug_hook automaticamente esta flag se activa,
+         * se puede desactivar en cualquier momento para que los hooks
+         * no interfieran en la ejecuccion de la VM.
+         */
         bool has_hooks = false;
 
         pthread_t thread_for_vm{};
@@ -883,6 +905,9 @@ namespace runtime {
 
         void decode_instruction();
 
+
+        void load_raw_code(uint64_t address, const std::vector<uint8_t> &code);
+
         /**
          * Ejecuta la instrucción actualmente decodificada y devuelve el evento
          * que debe procesar la máquina virtual como resultado de dicha ejecución.
@@ -919,6 +944,12 @@ namespace runtime {
          * un metodo que nos permita cambiar el estado de forma segura.
          */
         vm_state state = READY;
+
+        /**
+         * permite indicar que se puede seguir ejecutado las funcionalidades
+         * de "profiler" internas o externas a la VM.
+         */
+        std::atomic<bool> profiler_running = true;
 
     private:
         /**
@@ -970,6 +1001,67 @@ namespace runtime {
         void run_loop();
     };
 
+    /**
+     * @brief Hilo de perfilado para una instancia de VM.
+     *
+     * Este hilo se ejecuta en paralelo a la VM y se encarga de:
+     *   - Calcular las instrucciones por segundo (IPS) usando muestreo.
+     *   - Calcular el porcentaje de CPU consumido por la VM.
+     *   - Imprimir los resultados usando vesta::scout() (thread-safe).
+     *
+     * El cálculo funciona así:
+     *   - Cada 256 instrucciones ejecutadas, la VM incrementa profiler_instr_counter.
+     *   - Cada segundo, este hilo lee ese contador y calcula:
+     *         IPS = delta * 256
+     *   - El tiempo ocupado (busy time) se acumula en vm->time_exec (ns).
+     *         CPU% = (time_exec / 1e9) * 100
+     *
+     *  IPS alto + CPU bajo -> la VM está idle o ejecuta pocas instrucciones por segundo.
+     *  IPS alto + CPU alto -> la VM está ejecutando un bucle caliente.
+     *  IPS bajo + CPU alto -> la VM está haciendo trabajo costoso por instrucción.
+     *
+     * Podemos ejecutar un profiler como se ve a continuacion:
+     *
+     * @code{.cpp}
+     * std::thread(&runtime::profiler_thread, vm).detach();
+     * @endcode
+     *
+     * profiler_thread depende de la flag interna vm->should_kill que indica
+     * si la VM va a morir o deberia morir y de vm->profiler_running que
+     * indica si la VM desea que se haga profiler no, en el caso de
+     * esta funcion se debe cumplir la siguiente condicion:
+     * @code{.cpp}
+     *      !vm->should_kill && vm->profiler_running
+     * @endcode
+     * En caso de que alguna cambiem el profiler se detendra.
+     *
+     * @param vm Puntero a la instancia de VM que se está perfilando.
+     */
+    static void profiler_thread(VM *vm) {
+        uint64_t last = 0;
+
+        // mientras la vm no debagaber acabado
+        while (!vm->should_kill && vm->profiler_running) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            // --- IPS ---
+            uint64_t now = vm->profiler_instr_counter;
+            uint64_t delta = now - last;
+            last = now;
+
+            uint64_t ips = delta * 256;
+
+            // --- CPU ---
+            double cpu = (vm->time_exec / 1e9) * 100.0;
+            vm->time_exec = 0;
+
+            // --- Salida thread-safe ---
+            vesta::scout()
+                    << "\r[VM " << vesta::hex64(vm->id.id) << "] "
+                    << "IPS: " << ips
+                    << " | CPU: " << cpu << "%\n";
+        }
+    }
 
     static void dump_vm_region(VM *vm, uint64_t vaddr, size_t size) {
         uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
@@ -1046,7 +1138,7 @@ namespace runtime {
      *       al flujo de depuración. Se recomienda que los hooks sean seguros y
      *       no bloqueantes.
      */
-//#define PROFILE_FAST
+    //#define PROFILE_FAST
 #ifdef PROFILE_FAST
 #   define vm_hook(...) do {} while(0)
 #else
