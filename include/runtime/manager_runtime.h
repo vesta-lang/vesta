@@ -16,10 +16,10 @@
 #include <memory>
 #include <vector>
 
+#include "net/tcp_server.h"
 #include "runtime.h"
 #include "cli/sync_io.h"
 #include "loader/loader.h"
-#include "net/tcp_server.h"
 #include "openssl/ssl.h"
 #include "util/sqlite_singleton.h"
 
@@ -38,12 +38,14 @@ namespace runtime {
     }
 
     // Helper: imprime una tabla simple con índice y resumen de VM
-    static void print_vm_list_table(std::ostream &out, const std::vector<runtime::VM *> &vms) {
+    static void print_vm_list_table(std::ostream &out,
+                                    const std::vector<std::unique_ptr<runtime::VM> > &vms) {
         for (size_t i = 0; i < vms.size(); ++i) {
-            const VM *vm = vms[i];
-            out << vm->to_string() << std::endl;
+            const runtime::VM *vm = vms[i].get();
+            out << vm->to_string() << '\n';
         }
     }
+
 
     class ManagerTLSConnection : public TLSConnection {
     public:
@@ -89,6 +91,8 @@ namespace runtime {
 
     class ManageVM {
     public:
+        uint64_t id;
+
         /**
          * Nombre del manager
          */
@@ -97,19 +101,19 @@ namespace runtime {
         /**
          * El manager puede gestionar memoria compartida entre instancias.
          */
-        vm::ArenaManager manager_mem;
+        vm::ArenaManager manager_mem{};
 
         /**
          * Cada instancia de VM puede escuchar en un puerto distinto.
          * No todas las instancias tienen por que ser un servicio de red,
          * pueden ejecutarse unicamente a nivel local.
          */
-        ManagerTCPListener *listener;
+        ManagerTCPListener *listener = nullptr;
 
         /**
          * El manager puede tener un loader publico
          */
-        loader::Loader loader;
+        loader::Loader loader{*this};
 
         /**
          * Base de datos para consultar usuario y credenciales.
@@ -118,7 +122,7 @@ namespace runtime {
         // Sqlite::SqliteSingleton &db; // no hace falta añadirlo por que es un singleton con metodos estaticos
 
         // Constructor por defecto
-        ManageVM(ManagerTCPListener *listener);
+        ManageVM(ManagerTCPListener *listener, uint64_t id);
 
         // Destructor - libera recursos
         ~ManageVM();
@@ -161,17 +165,40 @@ namespace runtime {
          */
         void destroy_all_vms();
 
-        // contiene todas las instancias de maquinas
-        std::vector<VM *> vms;
+        /**
+         * Contiene todas las instancias de máquinas virtuales gestionadas por este manager.
+         *
+         * Se almacenan como std::unique_ptr<VM> por varias razones:
+         *
+         * 1. Propiedad exclusiva:
+         *    El manager es el único dueño de cada VM. No hay riesgo de fugas ni dobles liberaciones.
+         *
+         * 2. Estabilidad de direcciones:
+         *    Aunque el vector se realoque internamente, los punteros siguen siendo válidos.
+         *    Esto permite devolver referencias a VM sin riesgo de invalidación.
+         *
+         * 3. Seguridad multihilo:
+         *    Con el mutex del manager, las VMs permanecen estables incluso si se añaden o eliminan.
+         *
+         * 4. Eficiencia:
+         *    Evita copiar objetos VM completos (que pueden ser grandes).
+         */
+        std::vector<std::unique_ptr<VM> > vms;
+
 
         void print_vm_manager_info();
 
         std::string to_string_vm_manager_info() const;
 
     private:
+        /**
+         * Protege acceso a vms
+         */
+        mutable std::mutex vm_mutex;
+
         // se usa para generar los ID's de la VM, las VM nuevas no tendran un mismo ID
         // que una instancia ya creada o muerta en el mismo manager.
-        uint64_t counter_vm;
+        uint64_t counter_vm = 0;
     };
 }
 

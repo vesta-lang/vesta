@@ -27,3 +27,18 @@ diagramas
 
 # Carpeta de documentación generada por Doxygen
 ./doc/doxygen_doc
+
+# est ees un code de prueba de 6 millones de instrucciones
+code_carga_pruebas.vel
+
+# Archivos de bytecode compilados
+*.velb
+*.velb-map
+*.exe
+*.o
+*.elf
+
+# historiales de ejecución de comandos
+*history.txt
+
+generated_vel_files

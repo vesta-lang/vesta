@@ -31,9 +31,6 @@
 #define ALIGN_4K(x) (((x) + 4095) & ~4095ULL)
 
 namespace vm {
-
-
-
     /**
      * @enum MemPerm
      * @brief Permisos de memoria para buffers ejecutables o mapeos.
@@ -51,10 +48,10 @@ namespace vm {
      * MemPerm p = MemPerm::READ | MemPerm::WRITE; // Lectura y escritura
      */
     enum class MemPerm : uint8_t {
-        NONE  = 0,
-        READ  = 1 << 0,
+        NONE = 0,
+        READ = 1 << 0,
         WRITE = 1 << 1,
-        EXEC  = 1 << 2,
+        EXEC = 1 << 2,
     };
 
     /**
@@ -115,6 +112,8 @@ namespace vm {
      * void* buf = allocate_memory(4096, MemPerm::READ | MemPerm::WRITE);
      */
     inline void *allocate_memory(size_t size, MemPerm perms) {
+        if (size == 0) return nullptr;
+
         // Redondear al multiplo de pagina
 #ifdef _WIN32
         SYSTEM_INFO si{};
@@ -131,17 +130,35 @@ namespace vm {
             if (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_EXECUTE_READWRITE;
             else if (has_perm(perms, MemPerm::READ)) flProtect = PAGE_EXECUTE_READ;
             else if (has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_EXECUTE_READWRITE; // no hay EXEC+WRITE solo
-            else flProtect                                      = PAGE_EXECUTE;
+            else flProtect = PAGE_EXECUTE;
         } else {
             if (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_READWRITE;
             else if (has_perm(perms, MemPerm::READ)) flProtect = PAGE_READONLY;
             else if (has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_READWRITE; // no hay solo WRITE
-            else flProtect                                      = PAGE_NOACCESS;
+            else flProtect = PAGE_NOACCESS;
         }
 
         void *mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, flProtect);
         if (!mem) {
-            std::cerr << "VirtualAlloc fallo\n";
+            DWORD err = GetLastError();
+
+            LPVOID msg;
+            FormatMessageA(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                FORMAT_MESSAGE_FROM_SYSTEM |
+                FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL,
+                err,
+                MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                (LPSTR) &msg,
+                0,
+                NULL
+            );
+
+            std::cerr << "VirtualAlloc fallo. Codigo: " << err
+                    << " - " << (msg ? (char *) msg : "Error desconocido") << "\n";
+
+            if (msg) LocalFree(msg);
             return nullptr;
         }
         return mem;
@@ -179,9 +196,9 @@ namespace vm {
     }
 
     typedef struct Arena {
-        void*       ptr;   //< puntero al bloque
-        size_t      size;  //< tamaño del bloque
-        MemPerm perms; //< permisos
+        void *ptr = nullptr; //< puntero al bloque
+        size_t size = 0; //< tamaño del bloque
+        MemPerm perms = MemPerm::NONE; //< permisos
     } Arena;
 
 
@@ -198,21 +215,22 @@ namespace vm {
      * Page Table1   = 0xFFFF    (`16bits`) [`40bits`] PT1
      * Page Table2   = 0xFFFFFF  (`24bits`) [`64bits`] PT2
      */
-    enum class PageLevel : uint8_t { OFFSET=0, PT, PT1, PT2 };
+    enum class PageLevel : uint8_t { OFFSET = 0, PT, PT1, PT2 };
 
     struct vm_map_ptr {
-        uint64_t raw;
+        uint64_t raw = 0;
 
         [[nodiscard]] uint64_t get(PageLevel level) const {
-            switch(level) {
+            switch (level) {
                 case PageLevel::OFFSET: return raw & 0xFFF;
-                case PageLevel::PT:     return (raw>>12) & 0xFFF;
-                case PageLevel::PT1:    return (raw>>24) & 0xFFFF;
-                case PageLevel::PT2:    return (raw>>40) & 0xFFFFFF;
+                case PageLevel::PT: return (raw >> 12) & 0xFFF;
+                case PageLevel::PT1: return (raw >> 24) & 0xFFFF;
+                case PageLevel::PT2: return (raw >> 40) & 0xFFFFFF;
             }
         }
+
         void set(PageLevel level, uint64_t value) {
-            switch(level) {
+            switch (level) {
                 case PageLevel::OFFSET:
                     raw = (raw & ~0xFFFULL) | (value & 0xFFFULL);
                     break;
@@ -242,12 +260,13 @@ namespace vm {
      * - Se puede mapear memoria virtual (otra direccion virtual).
      */
     typedef union ptr_mapped {
-        vm_map_ptr ptr_vm;     // para mapear una direccion virtual.
-        host_ptr   ptr_host;   // direccion real de la memoria mapeada
+        vm_map_ptr ptr_vm; // para mapear una direccion virtual.
+        host_ptr ptr_host; // direccion real de la memoria mapeada
         remote_ptr ptr_remote; // direccion remota de la memoria
     } ptr_mapped;
 
     typedef enum type_ptr_mapped {
+        NONE,
         MAPPED_PTR_VM,
         MAPPED_PTR_HOST,
         MAPPED_PTR_REMOTE
@@ -258,25 +277,51 @@ namespace vm {
      * las arenas unas de otras. Hay una variante de este tipo de punteros donde se indica la direccion
      * IP de la maquina objetivo a la que dicha direccion pertenece. (MappedPtrRemote)
      */
-    typedef struct MappedPtrHost {
-        vm_map_ptr ptr_vm; // direccion virtual de la memoria
-        ptr_mapped mapped; // direccion mapeada
+    typedef struct MappedPtr {
+        vm_map_ptr ptr_vm{}; // direccion virtual de la memoria
+        ptr_mapped mapped{}; // direccion mapeada
 
         // devuelve representación textual
         std::string to_string() const;
 
         // imprime en un ostream (útil para integración con SyncOStream)
         void print(std::ostream &os) const;
+
+
+        MappedPtr &operator+=(uint64_t offset) {
+            // Actualiza la dirección virtual
+            ptr_vm.raw += offset;
+
+            // Actualiza la dirección mapeada
+            mapped.ptr_vm.raw += offset;
+            return *this;
+        }
+
+        MappedPtr &operator++() {
+            return (*this += 1);
+        }
+
+        MappedPtr &operator--() {
+            return (*this += -1);
+        }
+
+        //
+        MappedPtr operator+(uint64_t offset) const {
+            MappedPtr tmp = *this;
+            tmp += offset;
+            return tmp;
+        }
     } MappedPtr;
 
+
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv4 {
-        vm_map_ptr ptr_vm;    // direccion virtual en una maquina remota
-        HostIpv4   host_ipv4; // direccion de la maquina a la que pertenece la direccion
+        vm_map_ptr ptr_vm{}; // direccion virtual en una maquina remota
+        HostIpv4 host_ipv4{}; // direccion de la maquina a la que pertenece la direccion
     } MappedPtrRemoteIpv4;
 
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv6 {
-        vm_map_ptr ptr_vm;    // direccion virtual en una maquina remota
-        HostIpv6   host_ipv6; // direccion de la maquina a la que pertenece la direccion
+        vm_map_ptr ptr_vm{}; // direccion virtual en una maquina remota
+        HostIpv6 host_ipv6{}; // direccion de la maquina a la que pertenece la direccion
     } MappedPtrRemote6;
 } // namespace vm
 #endif // ARENA_H

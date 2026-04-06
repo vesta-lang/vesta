@@ -94,8 +94,13 @@ namespace Assembly::Bytecode {
         return table[static_cast<uint8_t>(mode)];
     }
 
+    /**
+     * Permite obtener el tamaño de una instruccion
+     * @param mode modo o tamaño tambien llamado en algunos casos.
+     * @return tamaño de la instruccion.
+     */
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {};
+        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1,2,4,8};
         return table[static_cast<uint8_t>(mode)];
     }
 

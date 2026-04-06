@@ -64,16 +64,20 @@ int main() {
     }
 
     // Lexer + Parser
+
     vm::Lexer lexer(code);
     vm::Parser parser(lexer);
 
+
     std::vector<std::unique_ptr<vm::ASTNode> > program;
+    Timer t_parser;
     try {
         program = parser.parse();
     } catch (const vm::ParseError &e) {
         std::cerr << "Parse error: " << e.what() << "\n";
         return 1;
     }
+    std::cout << "[Tiempo parser] " << t_parser.us() << " us "  << t_parser.ms() << " ms\n";
 
     // Resolver imports
     std::unordered_set<std::string> imported_files;
@@ -81,8 +85,11 @@ int main() {
 
     // Ensamblar
     Assembler asmblr;
+    Timer t_asm;
     auto bytecode = asmblr.assemble(program);
+    std::cout << "[Tiempo Assembler] " << t_asm.us() << " us "  << t_asm.ms() << " ms\n";
 
+#ifdef DEBUG_EMIT
     std::cout << "\n=== CONTEXTO GENERADO POR EL ENSAMBLADOR ===\n";
     print_context(asmblr.ctx);
 
@@ -97,6 +104,7 @@ int main() {
     std::cout << std::dec << "\n\n";
 
     print_context_with_bytes(asmblr.ctx, bytecode);
+#endif
 
     // LINKER
     Linker::LinkerOptions opts;
@@ -106,6 +114,7 @@ int main() {
     opts.map_file_path = "program.velb-map";
     opts.verbose = true;
 
+    Timer t_linker;
     Linker::Linker linker(opts);
 
     // Añadir el ensamblado crudo
@@ -124,6 +133,7 @@ int main() {
 
     // Reporte
     const auto &report = linker.get_report();
+    std::cout << "[Tiempo Linker] " << t_linker.us() << " us "  << t_linker.ms() << " ms\n";
 
     std::cout << "\n=== LINKER REPORT ===\n";
     std::cout << "Modulos enlazados: " << report.modules_linked << "\n";
@@ -147,5 +157,6 @@ int main() {
 
     print_memory_stats();
 
+    getchar();
     return 0;
 }

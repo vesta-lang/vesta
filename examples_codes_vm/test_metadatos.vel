@@ -1,5 +1,13 @@
-org 0x100000000
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000001000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
 
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+}
 jmp end_data
 data:
 
