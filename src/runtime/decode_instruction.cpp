@@ -49,6 +49,25 @@ namespace runtime {
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
     }
 
+    void decode_instr_simple_mov(VM *vm, DecodedInstr &instr) {
+        // el offset del resto de datos empieza apartir del opcode,
+        // calculamos el offset al resto de datos.
+        uint8_t offset = vm->rip.ptr_vm.raw + ((instr.is_extended != 0) ? 1 : 2);
+
+        // leemos los dos bytes que ocupa la instrucciones de este tipo
+        uint16_t data = vm->vm_mem.read_u16(offset);
+
+        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
+        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
+
+        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
+        instr.mode = (n1 >> 6) & 0b11;
+
+        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
+        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
+    }
+
     void decode_instr_simple(VM *vm, DecodedInstr &instr) {
     }
 
@@ -144,7 +163,7 @@ namespace runtime {
         // Validación de instrucción (solo en modo debug)
         VM_ASSERT(
             metadata.mode < Assembly::Bytecode::AddressingMode::COUNT &&
-            metadata.exec != nullptr,
+            metadata.exec != nullptr && metadata.decode != nullptr,
 
             std::string("Instruccion invalida en RIP[") +
             vesta::hex64(rip.ptr_vm.raw) +

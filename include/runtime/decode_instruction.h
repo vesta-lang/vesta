@@ -52,7 +52,7 @@
     } \
     } while (0)
 #else
-    #define VM_ASSERT(cond, msg) do {} while (0)
+#define VM_ASSERT(cond, msg, code) do {} while (0)
 #endif
 
 namespace runtime {
@@ -143,6 +143,15 @@ namespace runtime {
      * tiene sus propios metadatos.
      */
     void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Permite descodificar instrucciones MOV de tipo registro. Es muy parecida a decode_instr_two_op_reg,
+     * pero se prefiere tener una func aparte solo para el mov ya que algunos campos pueden no ser necesarios
+     * de extraer, o la forma de descoficiar pued cambiar en el futuro.
+     * @param vm
+     * @param instr
+     */
+    void decode_instr_simple_mov(VM *vm, DecodedInstr &instr);
 
     /**
      * Se usa para descodificar instrucciones simples que no requieren de

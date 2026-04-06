@@ -1974,22 +1974,22 @@ namespace runtime {
 
         /* 0x14 */{
             // mov reg, reg
-            "mov", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            "mov", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_mov_reg, decode_instr_simple_mov
         },
 
         /* 0x15 */{
             // mov reg, [mem] || [mem], reg
-            "mov", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
+            "mov", Assembly::Bytecode::AddressingMode::MEM,
+            Assembly::Bytecode::InstrSizeMode::FIXED_8,
             nullptr, nullptr
         },
 
         /* 0x16 */{
             // mov REG, SIB || SIB, REG
-            "mov", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
+            "mov", Assembly::Bytecode::AddressingMode::SIB,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
             nullptr, nullptr
         },
 

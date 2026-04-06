@@ -101,6 +101,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     target_compile_options(${FINAL_NAME} PRIVATE
             $<$<CONFIG:Debug>:
             -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
+            -DVM_DEBUG_CHECKS # añadir checks para depuracion.
             >
             $<$<CONFIG:Release>:
             -O3
@@ -114,7 +115,6 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             -ffunction-sections
             -fdata-sections
             -DNDEBUG
-            -DVM_DEBUG_CHECKS # añadir checks para depuracion.
             >
             $<$<CONFIG:RelWithDebInfo>:-fpermissive -g -O1 -fno-omit-frame-pointer>
     )

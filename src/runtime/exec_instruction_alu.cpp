@@ -383,9 +383,27 @@ namespace runtime {
         }
     };
 
+
     typedef GeneralRegister &Reg;
     using BinaryFn = void(*)(VM *, Reg, Reg, bool, int);
     using UnaryFn = void(*)(VM *, Reg, int);
+
+    template<typename T>
+    static void mov_wrapper(VM *vm, Reg dst, Reg src, bool /*unused*/, int rdst) {
+        T value = src.raw(); // leer valor del registro origen
+        auto &d = vm->regs[rdst];
+
+        if constexpr (sizeof(T) == 1)
+            d.byte_lo((uint8_t) value);
+        else if constexpr (sizeof(T) == 2)
+            d.word_lo((uint16_t) value);
+        else if constexpr (sizeof(T) == 4)
+            d.dword_lo((uint32_t) value);
+        else
+            d.qword((uint64_t) value);
+
+        // MOV no toca flags
+    }
 
     template<typename T, typename Op>
     static void binary_wrapper(VM *vm, Reg &dst, Reg &src, bool is_signed, int rdst) {
@@ -396,6 +414,13 @@ namespace runtime {
     static void unary_wrapper(VM *vm, Reg &dst, int rdst) {
         alu_core_unary<T, Op>(vm, dst.raw(), rdst);
     }
+
+    static constexpr BinaryFn mov_table[] = {
+        &mov_wrapper<uint8_t>,
+        &mov_wrapper<uint16_t>,
+        &mov_wrapper<uint32_t>,
+        &mov_wrapper<uint64_t>
+    };
 
     static constexpr BinaryFn add_table[] = {
         &binary_wrapper<uint8_t, AddOp>,
@@ -481,6 +506,12 @@ namespace runtime {
         &binary_wrapper<uint64_t, SarOp>
     };
 
+    void exec_instr_mov_reg(VM *vm, const DecodedInstr &instr) {
+        const int rdst = instr.data_instruction.reg_data.reg1;
+        const int rsrc = instr.data_instruction.reg_data.reg2;
+
+        mov_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+    }
 
     void exec_instr_add_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
