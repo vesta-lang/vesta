@@ -24,7 +24,7 @@ struct range_memory {
 struct table_spaces_address {
     range_memory address;
     char *name[] : u64 ;
-    u64 padding_;
+    u8  *offset_bytecode[] : u64;
 };
 
 struct HeaderVELB {

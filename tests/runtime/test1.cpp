@@ -37,7 +37,7 @@ void print_memory_stats() {
 }
 
 int main() {
-    runtime::ManageVM manager = runtime::ManageVM(nullptr);
+    runtime::ManageVM manager = runtime::ManageVM(nullptr, 0);
 
     uint64_t vm1_id = manager.create_vm(); // ID=1
     uint64_t vm2_id = manager.create_vm(); // ID=2

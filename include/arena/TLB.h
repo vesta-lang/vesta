@@ -55,13 +55,13 @@ namespace tlb {
         /**
          * Tipo de direccion mapeada por esta entrada.
          */
-        vm::type_ptr_mapped type_address;
+        vm::type_ptr_mapped type_address = vm::NONE;
 
         /**
          * direccion real que se mapea. En una instancia o en un manager
          * a nivel remoto o local.
          */
-        vm::ptr_mapped address;
+        vm::ptr_mapped address = {};
 
         [[nodiscard]] std::string to_string() const {
             std::ostringstream oss;
@@ -106,9 +106,11 @@ namespace tlb {
             TLBEntryData data;
             TLBTable* table;
         } payload;
-        bool is_table;  // true = table, false = data
+        bool is_table = false;  // true = table, false = data
 
-        TLBEntry() : level(DATA), is_table(false) {}
+        TLBEntry() : level(DATA), payload({}) {
+        }
+
         ~TLBEntry() {
             if (is_table && payload.table) {
                 delete payload.table;

@@ -12,7 +12,9 @@
 
 #include "linker/velb_linker_bytecode.h"
 
+#include "emmit/bytereader.h"
 #include "emmit/parser_to_bytecode.h"
+#include "loader/loader.h"
 
 namespace Assembly::Bytecode::Linker {
     // cambiar en un futuro, por ahora para pruebas me vale
@@ -25,7 +27,7 @@ namespace Assembly::Bytecode::Linker {
     void Linker::add_object_file(const std::string &path) {
         std::ifstream f(path, std::ios::binary);
         if (!f) {
-            add_errorf(report, LinkerError::Type::IOError,  ("No se pudo abrir objeto: " + path).c_str());
+            add_errorf(report, LinkerError::Type::IOError, ("No se pudo abrir objeto: " + path).c_str());
             return;
         }
 
@@ -33,7 +35,7 @@ namespace Assembly::Bytecode::Linker {
                                   std::istreambuf_iterator<char>());
 
         if (data.empty()) {
-            add_errorf(report, LinkerError::Type::IOError,  ("Objeto vacio: " + path).c_str());
+            add_errorf(report, LinkerError::Type::IOError, ("Objeto vacio: " + path).c_str());
             return;
         }
 
@@ -53,7 +55,7 @@ namespace Assembly::Bytecode::Linker {
 
     void Linker::add_object_memory(const std::vector<uint8_t> &data) {
         if (data.empty()) {
-            add_warningf(report, LinkerWarning::Type::IOWarning,  ("add_object_memory: buffer vacio"));
+            add_warningf(report, LinkerWarning::Type::IOWarning, ("add_object_memory: buffer vacio"));
             return;
         }
 
@@ -71,7 +73,7 @@ namespace Assembly::Bytecode::Linker {
     void Linker::add_static_library(const std::string &path) {
         std::ifstream f(path, std::ios::binary);
         if (!f) {
-            add_errorf(report, LinkerError::Type::IOError,  ("No se pudo abrir libreria estatica: " + path).c_str());
+            add_errorf(report, LinkerError::Type::IOError, ("No se pudo abrir libreria estatica: " + path).c_str());
             return;
         }
 
@@ -172,11 +174,12 @@ namespace Assembly::Bytecode::Linker {
                     continue; // este se fusiona, no se compara
 
                 if (ranges_overlap(&existingSpace.range, &space.range)) {
-                    throw std::runtime_error(
-                        "Error: el espacio '" + spaceName +
-                        "' del modulo se solapa con el espacio '" +
-                        existingName + "' ya existente."
-                    );
+                    std::cout <<
+                            "Error: el espacio '" + spaceName +
+                            "' del modulo se solapa con el espacio '" +
+                            existingName + "' ya existente."
+                            << std::endl;
+                    exit(EXIT_FAILURE);
                 }
             }
 
@@ -476,11 +479,25 @@ namespace Assembly::Bytecode::Linker {
         // los strings va antes que la tabla de secciones
         final_header.table_offset += spaces_address["MetaSpace"].table_section["strings"].size_real;
 
+        // calcular el offset relativo de cada espacio de direcciones en el archivo.
+        // requiere que las secciones esten ordenadas por direcciones de inicio
+        uint64_t current_offset = 0;
+        for (auto space: ordered_spaces) {
+            spaces_address[space.first].file_offset = current_offset;
+
+            uint64_t space_size = compute_space_size(space.second);
+            current_offset += space_size;
+        }
+
         for (int i = 0; i < final_header.n_spaces; ++i) {
             table_spaces_address *const space = &final_header.address_spaces[i];
 
             // al macenar las direcciones
             space->address = ordered_spaces[i].second.range;
+
+            // guardar el offset al bytecode de cada espacio de direcciones
+            // calculado previamente.
+            space->offset_bytecode = spaces_address[ordered_spaces[i].first].file_offset;
 
             // por ahora los offset a los nombres de la seccion de strings no se calculara aqui.
             space->offset_section_strings = string_offsets[
@@ -492,6 +509,7 @@ namespace Assembly::Bytecode::Linker {
         for (auto &final_section: final_sections) {
             final_section.memory.offset_string = string_offsets[final_section.name];
         }
+
     }
 
     void Linker::build_section_strings(uint64_t offset_init) {
@@ -665,7 +683,10 @@ namespace Assembly::Bytecode::Linker {
 
                 // offset a la tabla de strings
                 result->emit64(final_header.address_spaces[i].offset_section_strings);
-                result->emit64(0);
+
+                // offset al bytecode para el espacio de direcciones,
+                // con este se calcula el inicio de cada la seccion en el bytecode
+                result->emit64(final_header.address_spaces[i].offset_bytecode);
             }
         };
 
@@ -716,6 +737,24 @@ namespace Assembly::Bytecode::Linker {
             result->emit64(sec.memory.address.address_init);
             result->emit64(sec.memory.address.address_final);
             result->emit64(sec.memory.offset_string);
+        }
+
+        // este es el offset base al bytecode, necesitamos conocerlo para hacer el
+        // parcheo en la tabla de espacio de direcciones, ya que ahora tiene un offset
+        // relativo en el que se tomo como base offset el valor 0.
+        uint64_t base_bytecode_offset = result->offset;
+
+        uint64_t entry_size = 4 * sizeof(uint64_t); // 32
+        uint64_t table_pos  = sizeof(HeaderVELB) - sizeof(table_spaces_address*);
+
+        for (int i = 0; i < final_header.n_spaces; ++i) {
+            auto& space = final_header.address_spaces[i];
+
+            uint64_t patched = space.offset_bytecode + base_bytecode_offset;
+
+            uint64_t field_pos = table_pos + i * entry_size + 3 * sizeof(uint64_t);
+            // parchemos el offset relativo de la tabla de espacios.
+            result->write64_at(patched, field_pos);
         }
 
         // añadir el bytecode al final
@@ -801,18 +840,18 @@ namespace Assembly::Bytecode::Linker {
                       return a.second.absolute < b.second.absolute;
                   });
 
-        if (final_executable.size() >= sizeof(HeaderVELB) +
-            sizeof(table_spaces_address) * final_header.n_spaces) {
-            auto *spaces = reinterpret_cast<const table_spaces_address *>(
-                final_executable.data() + sizeof(HeaderVELB)
-            );
+        uint64_t offset_space_address = align_up(sizeof(HeaderVELB) - sizeof(table_spaces_address *),16);
+
+        if (final_executable.size() >= (offset_space_address +
+            sizeof(table_spaces_address) * final_header.n_spaces)) {
 
             f << "=== ADDRESS SPACES ===\n";
             for (uint64_t i = 0; i < final_header.n_spaces; ++i) {
-                const auto &sp = spaces[i];
+                auto sp = final_header.address_spaces[i];
                 f << "[" << i << "]\n";
                 f << "  VA Range: 0x" << std::hex << sp.address.address_init
-                        << " - 0x" << sp.address.address_final << std::dec << "\n";
+                        << " - 0x" << std::hex << sp.address.address_final << "\n";
+                f << "  FILE: 0x" << std::hex << sp.offset_bytecode << "\n";
                 f << "  String offset: 0x" << std::hex << sp.offset_section_strings
                         << " (" << std::dec << sp.offset_section_strings << ")\n\n";
             }

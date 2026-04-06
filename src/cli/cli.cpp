@@ -63,7 +63,6 @@ namespace cli {
         // parsear parámetros: nombre y ruta
         CmdParams p = parse_cmd_params(cmd);
         if (!p.valid) {
-            std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "Uso: <name> <ruta_al_bytecode> [opciones]\n";
             return;
         }
@@ -71,26 +70,22 @@ namespace cli {
         // normalizar la ruta (usa tu utilitario vfs::normalize_path_safe)
         auto path = fs::normalize_path_safe(p.path);
         if (!fs::file_exists(path)) {
-            std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "No existe el archivo: " << path.string() << "\n";
             return;
         }
 
         if (!fs::is_regular_file(path)) {
-            std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "La ruta no es un archivo regular: " << path.string() << "\n";
             return;
         }
 
         if (!fs::can_read(path)) {
-            std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "No se puede leer el archivo: " << path.string() << "\n";
             return;
         }
 
         auto maybe_abs2 = fs::get_existing_absolute_path(path);
         if (!maybe_abs2) {
-            std::lock_guard lk(vesta::cout_mutex);
             vesta::scout() << "No se pudo resolver la ruta: " << path.string() << "\n";
             return;
         }
@@ -100,27 +95,17 @@ namespace cli {
         // p.name identificador y maybe_abs2->string() ruta absoluta
 
         // Construcción del manager
-        runtime::ManageVM vm{nullptr};
-        vm.name_manager = p.name;
-
-        // Añadir moviendo la instancia
-        size_t id = mgr.add_manager(std::move(vm));
-
-        // Obtener copia segura del manager
-        auto maybe = mgr.get_manager_copy(id);
-        if (!maybe) {
-            vesta::scout() << "No se pudo obtener copia del manager\n";
-            return;
-        }
+        runtime::ManageVM *vm = mgr.add_manager(p.name, nullptr);
+        vm->name_manager = p.name;
 
         // Construir la representación textual fuera del mutex,
         // espero que esto no de problemas en el futuro
-        std::string info = maybe->to_string_vm_manager_info();
+        std::string info = vm->to_string_vm_manager_info();
 
         // Imprimir bajo mutex (bloque corto)
         //{
         //std::lock_guard lk(vesta::cout_mutex);
-        vesta::scout() << "Manager creado con ID: " << id << "\n";
+        vesta::scout() << "Manager creado con ID: " << vm->id << "\n";
         vesta::scout() << info;
         //}
     }

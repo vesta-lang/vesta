@@ -12,6 +12,7 @@
 
 #ifndef STRUCT_CONTEXT_H
 #define STRUCT_CONTEXT_H
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -61,7 +62,7 @@ namespace Assembly::Bytecode {
 
         std::string symbol; // símbolo a resolver
         std::string section; // sección donde ocurre
-        uint64_t offset; // offset dentro de la sección
+        uint64_t offset = 0; // offset dentro de la sección
         Type type; // tipo de relocación
     };
 
@@ -77,6 +78,11 @@ namespace Assembly::Bytecode {
 
     typedef struct Section {
         /**
+         * offset en el archivo al usar el loader.
+         */
+        uint64_t file_offset = 0;
+
+        /**
          * nombre de la seccion
          */
         std::string name;
@@ -84,14 +90,14 @@ namespace Assembly::Bytecode {
         /**
          * rango de operacion de la seccion, es relativo al espacio de direcciones al generarse el ejecutable.
          */
-        range_memory memory;
+        range_memory memory{};
 
-        uint64_t size_real; // tamaño real de bytes generados
+        uint64_t size_real = 0; // tamaño real de bytes generados
 
         /**
          * tamaño al que alinear la seccion
          */
-        uint32_t size_align_section;
+        uint32_t size_align_section = 0;
 
         /**
          * Las secciones contienen labels
@@ -168,6 +174,11 @@ namespace Assembly::Bytecode {
 
     typedef struct Space {
         /**
+         * offset en el archivo al usar el linker.
+         */
+        uint64_t file_offset = 0;
+
+        /**
          * Rango de memoria para el espacio de direcciones.
          */
         range_memory range;
@@ -183,12 +194,19 @@ namespace Assembly::Bytecode {
         std::unordered_map<std::string, Section> table_section;
 
         /**
+         * Vector de secciones, los usamos para saber cual es el orden de las secciones.
+         */
+        std::vector<Section *> ordered_sections;
+
+        /**
          * Añadir sección nueva, estas secciones se suelen almacenar en un espacio de direcciones, y una seccion
          * suele tener una tabla con labels.
          * @param sec seccion a aladir
          */
         void add_section(const Section &sec) {
             table_section[sec.name] = sec;
+            // añadimos la referencia a la tabla de secciones para mantener el orden
+            ordered_sections.push_back(&table_section[sec.name]);
         }
 
         /**
@@ -232,11 +250,40 @@ namespace Assembly::Bytecode {
          * @param bytes_aligned cantidad de bytes a usar para alinear la seccion
          */
         void compute_sections_ranges(uint64_t bytes_aligned) {
-            for (auto &[name, sec]: table_section) {
-                sec.compute_range(range.address_init, bytes_aligned);
+            // ordenamos las secciones segun se añadieron para poder computar los rangos
+            // de las secciones en su correspondiente orden.
+            std::sort(ordered_sections.begin(),
+                      ordered_sections.end(),
+                      [](const Section *a, const Section *b) {
+                          return a->memory.address_init < b->memory.address_init;
+                      });
+
+
+            // el inicio de toda seccion es la direccion de inicio del espacio de direcciones
+            uint64_t start = range.address_init;
+            for (Section *sec: ordered_sections) {
+                sec->compute_range(start, bytes_aligned);
+
+                // a la direccion base actual se suma el tamaño de la seccion para calcular
+                // el base address de la siguiente seccion.
+                start += sec->size_real;
             }
         }
     } Space;
+
+    /**
+     * Permite calcula el tamaño real del espacio de direcciones usando
+     * el bytecode contenido en todas las secciones del espacio de direcciones
+     * @param s un espacio de direcciones con secciones y cada una con su tamaño real.
+     * @return tamaño real del espacio de direcciones.
+     */
+    static uint64_t compute_space_size(const Space &s) {
+        uint64_t total = 0;
+        for (auto &[name, sec]: s.table_section) {
+            total += sec.size_real;
+        }
+        return total;
+    }
 
     typedef struct Context {
         /**

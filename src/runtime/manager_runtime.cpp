@@ -18,9 +18,10 @@
 
 namespace runtime {
     ManageVM::ManageVM(
-        ManagerTCPListener *listener
-    ): listener(listener),
-       loader(this->manager_mem), counter_vm(0) {
+        ManagerTCPListener *listener,
+        uint64_t id
+    ): id(id) {
+        this->listener = listener;
     }
 
     ManageVM::~ManageVM() {
@@ -28,62 +29,63 @@ namespace runtime {
     }
 
     uint64_t ManageVM::create_vm() {
-        uint64_t new_id = counter_vm++;
+        std::lock_guard lock(vm_mutex);
+        uint64_t id = ++counter_vm;
 
         // cada instancia tiene un manager publica de instancia y de carga
-        VM *vm = new VM(*this, new_id);
-        vms.emplace_back(vm);
-        return new_id;
+        // Crear VM en el heap y almacenarla con propiedad exclusiva
+        vms.push_back(std::make_unique<VM>(*this, id));
+        return id;
     }
 
     bool ManageVM::destroy_vm(uint64_t vm_id) {
-        for (auto it = vms.begin(); it != vms.end(); ++it) {
-            if ((*it)->id.id == vm_id) {
-                delete *it; // Liberar memoria
-                vms.erase(it); // QUITAR de vector
-                return true;
-            }
-        }
-        return false;
+        std::lock_guard lock(vm_mutex);
+
+        auto it = std::find_if(vms.begin(), vms.end(),
+                               [vm_id](const std::unique_ptr<VM> &vm) {
+                                   return vm->id.id == vm_id;
+                               });
+
+        if (it == vms.end())
+            return false;
+
+        vms.erase(it); // unique_ptr libera automáticamente la VM
+        return true;
     }
 
 
     VM *ManageVM::get_vm(uint64_t vm_id) {
-        for (auto ptr: vms) {
-            if (ptr->id.id == vm_id) {
-                return ptr;
-            }
+        std::lock_guard lock(vm_mutex);
+        for (auto& vm : vms) {
+            if (vm->id.id == vm_id)
+                return vm.get(); // dirección estable
         }
         return nullptr;
     }
 
 
     bool ManageVM::has_vm(uint64_t vm_id) const {
-        for (const auto &vm: vms) {
-            if (vm->id.id == vm_id) {
+        std::lock_guard lock(vm_mutex);
+        for (auto& vm : vms)
+            if (vm->id.id == vm_id)
                 return true;
-            }
-        }
+
         return false;
     }
 
     size_t ManageVM::vm_count() const {
+        std::lock_guard lock(vm_mutex);
         return vms.size();
     }
 
     void ManageVM::destroy_all_vms() {
-        for (auto *vm: vms) {
-            if (vm != nullptr) {
-                printf("[DEBUG] Deleting VM ID=%llu\n", vm->id.id);
-                destroy_vm(vm->id.id);
-                vm = nullptr;
-            }
-        }
-        vms.clear();
+        std::lock_guard lock(vm_mutex);
+        vms.clear(); // unique_ptr libera todo_
         counter_vm = 0;
     }
 
     std::string ManageVM::to_string_vm_manager_info() const {
+        std::lock_guard lock(vm_mutex);
         std::ostringstream ss;
         ss << "=== ManageVM info ===\n";
         ss << "name_manager : " << name_manager << "\n";
@@ -100,6 +102,6 @@ namespace runtime {
     }
 
     void ManageVM::print_vm_manager_info() {
-        std::cout << to_string_vm_manager_info();
+        vesta::scout() << to_string_vm_manager_info();
     }
 }
