@@ -48,8 +48,108 @@ namespace Assembly::Bytecode {
          */
         FIXED_10,
 
-        COUNT
+        COUNT,
+
+        /**
+         * La instruccion puede tener un tamaño variable como son las instrucciones
+         * que usan valores inmediatos. estos suelen variar entre:
+         *
+         * @code
+         *  //  Total       opcode      inmediato
+         *  //    4    (    3           + 1),
+         *  //    5    (    3           + 2)
+         *  //    7    (    3           + 4)
+         *  //    11   (    3           + 8)
+         *  //  bytes
+         * @endcode
+         */
+        MIXED_SIZE
     };
+
+    /**
+     * Se usa para indicar el tamaño del inmediato y ademas si es con o sin signo.
+     */
+    enum class ImmType {
+        U8, S8,
+        U16, S16,
+        U32, S32,
+        U64, S64
+    };
+
+    /**
+     * Permite obtener el tamaño de un valor y si es con o sin signo
+     * @param value valor a comprobar
+     * @param is_signed si tiene o no tiene signo
+     * @return devuelve la variante que es.
+     */
+    inline ImmType detect_imm_type(int64_t value, bool is_signed) {
+        if (is_signed) {
+            if ((int8_t) value == value) return ImmType::S8;
+            if ((int16_t) value == value) return ImmType::S16;
+            if ((int32_t) value == value) return ImmType::S32;
+            return ImmType::S64;
+        } else {
+            uint64_t v = (uint64_t) value;
+            if ((uint8_t) v == v) return ImmType::U8;
+            if ((uint16_t) v == v) return ImmType::U16;
+            if ((uint32_t) v == v) return ImmType::U32;
+            return ImmType::U64;
+        }
+    }
+
+    inline int immtype_bits(ImmType t) {
+        switch (t) {
+            case ImmType::U8:
+            case ImmType::S8: return 8;
+            case ImmType::U16:
+            case ImmType::S16: return 16;
+            case ImmType::U32:
+            case ImmType::S32: return 32;
+            default: return 64;
+        }
+    }
+
+    /**
+     * modo 0(00) -> (0000 1000) 8  bits
+     * modo 1(01) -> (0001 0000) 16 bits
+     * modo 2(10) -> (0010 0000) 32 bits
+     * modo 3(11) -> (0100 0000) 64 bits
+     * @param mode modo a codear
+     * @return tamaño en bits
+     */
+    inline int mode_to_bits(uint8_t mode) {
+        return 1 << (3 + mode);
+    }
+
+    /**
+     * modo 0(00) -> (0000 0001) 1 bytes
+     * modo 1(01) -> (0000 0010) 2 bytes
+     * modo 2(10) -> (0000 0100) 4 bytes
+     * modo 3(11) -> (0000 1000) 8 bytes
+     * @param mode modo a codear
+     * @return tamaño en bits
+     */
+    inline int mode_to_bytes(uint8_t mode) {
+        return 1 << mode;
+    }
+
+    /**
+     * Permie codificar el modo del registro, 0, 1, 2, 3
+     * 0(0b00) = 1(0b1) byte   = 8 bits
+     * 1(0b01) = 2(0b10) bytes  = 16 bits
+     * 2(0b10) = 4(0b100) bytes  = 32 bits
+     * 3(0b11) = 8(0b1000) bytes  = 64 bits
+     * @param size_bits
+     * @return
+     */
+    inline uint8_t encode_mode(int size_bits) {
+        // si da un byte, al desplazar se queda en 0
+        // si da dos bytes, al desplazar queda en 1
+        // si da 4 bytes, al deslazar queda en 2
+        // si da 8 bytes, al desplazar queda en 4
+        uint8_t n_mode = (size_bits / 8) >> 1;
+        return (n_mode >= 4) ? 3 : n_mode;
+    }
 
     /**
      * Modos de direccionamiento de la instruccion
@@ -105,7 +205,7 @@ namespace Assembly::Bytecode {
      * @return tamaño de la instruccion.
      */
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1,2,4,8};
+        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1, 2, 4, 8, 10};
         return table[static_cast<uint8_t>(mode)];
     }
 
@@ -169,6 +269,13 @@ namespace Assembly::Bytecode {
     );
 
     void emit_instr_sib(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &code_final,
+        const InstrInfo *now_instr,
+        Assembler *assembly_ctx
+    );
+
+    void emit_instr_inmed(
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,

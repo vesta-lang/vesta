@@ -13,7 +13,7 @@
 #define DISPATCH_TABLE_H
 
 #define DISPATCH() \
-    goto *dispatch_table[vm->decoded_ptr->is_extended][vm->decoded_ptr->opcode_index]
+    goto *dispatch_table[vm->decoded_ptr->is_not_extended][vm->decoded_ptr->opcode_index]
 
 #define NEXT() \
     if (!decoded_ptr->did_jump) \

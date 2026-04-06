@@ -49,29 +49,12 @@ namespace Assembly::Bytecode {
         throw std::runtime_error("Registro inválido: debe comenzar por 'r'");
     }
 
-    /**
-     * Permie codificar el modo del registro, 0, 1, 2, 3
-     * 0(0b00) = 1(0b1) byte   = 8 bits
-     * 1(0b01) = 2(0b10) bytes  = 16 bits
-     * 2(0b10) = 4(0b100) bytes  = 32 bits
-     * 3(0b11) = 8(0b1000) bytes  = 64 bits
-     * @param size_bits
-     * @return
-     */
-    uint8_t encode_mode(int size_bits) {
-        // si da un byte, al desplazar se queda en 0
-        // si da dos bytes, al desplazar queda en 1
-        // si da 4 bytes, al deslazar queda en 2
-        // si da 8 bytes, al desplazar queda en 4
-        uint8_t n_mode = (size_bits / 8) >> 1;
-        return (n_mode >= 4) ? 3 : n_mode;
-    }
 
     void emit_inc_dec(
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,
-        Assembler* assembly_ctx
+        Assembler *assembly_ctx
     ) {
         // si el opcode es un dec, entonces, el segundo byte tiene el bit dos activo
         uint8_t reg = (instruction_parser->opcode == "inc") ? 0 : 0b01000000;
@@ -99,7 +82,7 @@ namespace Assembly::Bytecode {
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,
-        Assembler* assembly_ctx
+        Assembler *assembly_ctx
     ) {
         auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
         auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
@@ -117,10 +100,12 @@ namespace Assembly::Bytecode {
                 "registros, deben tener el mismo size."
             );
         }
+        bool is_a_signed = is_signed(instruction_parser->opcode);
+
         uint8_t mode = encode_mode(reg1->size_bits);
 
-        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
-        code_final.emit8(mode << 6);
+        // 0b`mode`sd0000 -> modo ocupa el los primeros 2 bits
+        code_final.emit8((mode << 6) | ((is_a_signed) ? 1 : 0) << 5);
 
         // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
         code_final.emit8(
@@ -137,14 +122,110 @@ namespace Assembly::Bytecode {
         );
     }
 
+    void emit_instr_inmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &code_final,
+        const InstrInfo *now_instr,
+        Assembler *assembly_ctx
+    ) {
+        if (now_instr->opcode1 != 0x00) {
+            throw std::runtime_error("Error instruccion != 0x00 no implementada");
+        }
+        bool is_a_signed = is_signed(instruction_parser->opcode);
+
+        auto n0 = instruction_parser->operands[0].get();
+        auto n1 = instruction_parser->operands[1].get();
+
+        auto inmmed_str = dynamic_cast<vm::NumberOperand *>(n1);
+
+        auto reg = dynamic_cast<vm::RegisterOperand *>(n0);
+        auto mem = dynamic_cast<vm::MemoryOperand *>(n0);
+        bool mem_dest = reg == nullptr; // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
+
+        if ((mem == nullptr && reg == nullptr) || inmmed_str == nullptr) {
+            throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
+                                     " no pudo situar un registro, inmediato por alguna razon, posiblemente usted cometio un error de sintaxis o logico");
+        }
+
+        auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
+        if (inmmed_opt == std::nullopt) {
+            throw std::runtime_error("Error el valor: " + inmmed_str->value +
+                                     " no pudo convertirse en un numero.");
+        }
+        uint64_t val_inmmed = inmmed_opt.value();
+        // detectamos el tipo de inmediato que es
+        ImmType type = detect_imm_type((int64_t) val_inmmed, is_a_signed);
+        if (mem_dest) {
+            reg = static_cast<vm::RegisterOperand *>(mem->expr.get());
+            if (reg == nullptr) {
+                std::cout << "Error instruccion: " + instruction_parser->opcode +
+                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: " << std::endl;
+                mem->expr->print(0);
+                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode);
+            }
+        }
+        uint8_t mode = encode_mode(reg->size_bits);
+
+
+        // validamos si los tamaños del modo y el inmediato son iguales
+        int instr_imm_bits = immtype_bits(type);
+        int instr_mode_bits = mode_to_bits(mode);
+
+        if (instr_imm_bits > instr_mode_bits) {
+            throw std::runtime_error(
+                "Error: el inmediato " + std::to_string(val_inmmed) +
+                " (" + std::to_string(instr_imm_bits) + " bits) no cabe en el modo " +
+                std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)."
+            );
+        }
+
+        // 0b `mode` s d reg -> modo ocupa el los primeros 2 bits
+        code_final.emit8(
+            (mode << 6) | // mode
+            (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
+            mem_dest << 4 |
+            encode_reg(reg->name.c_str()) // reg
+        );
+        // el campo d siempre es 0 ya que se usa para codificar otro tipo de inmediatos.
+
+        switch (mode) {
+            case 0: {
+                code_final.emit8((uint8_t) val_inmmed);
+                break;
+            }
+            case 1: {
+                code_final.emit16((uint16_t) val_inmmed);
+                break;
+            }
+            case 2: {
+                code_final.emit32((uint32_t) val_inmmed);
+                break;
+            }
+            default: {
+                code_final.emit64(val_inmmed);
+                break;
+            }
+        }
+
+        DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, INMED 0x%llx TYPE_INMED: %d MODE: %d\n",
+                    instruction_parser->opcode.c_str(),
+                    now_instr->opcode1,
+                    now_instr->opcode2,
+                    reg->name.c_str(), encode_reg(reg->name.c_str()),
+                    val_inmmed,
+                    type,
+                    mode
+        );
+    }
+
     void emit_instr_mem(
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,
-        Assembler* assembly_ctx
+        Assembler *assembly_ctx
     ) {
         if (now_instr->opcode1 != 0x00) {
-            throw std::runtime_error("Error instruccion instruccion != 0x00 no implementada");
+            throw std::runtime_error("Error instruccion != 0x00 no implementada");
         }
         bool is_a_signed = is_signed(instruction_parser->opcode);
 
@@ -163,7 +244,7 @@ namespace Assembly::Bytecode {
         }
 
         if (mem == nullptr || reg == nullptr) {
-            throw std::runtime_error("Error instruccion instruccion: " + instruction_parser->opcode +
+            throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
                                      " no pudo situar un operando de tipo memoria, mas de otro operando de tipo registro,");
         }
         uint8_t mode = encode_mode(reg->size_bits);
@@ -187,10 +268,10 @@ namespace Assembly::Bytecode {
         auto lalbel = dynamic_cast<vm::LabelOperand *>(mem->expr.get());
 
         Relocation rel;
-        rel.symbol  = lalbel->name;
+        rel.symbol = lalbel->name;
         rel.section = assembly_ctx->current_section->name;
-        rel.offset  = code_final.offset /*- 5*/; // el -5 se pone si se emite antes la direccion
-        rel.type    = Relocation::Type::Relative40;
+        rel.offset = code_final.offset /*- 5*/; // el -5 se pone si se emite antes la direccion
+        rel.type = Relocation::Type::Relative40;
 
         assembly_ctx->ctx.add_relocation(rel);
 
@@ -202,7 +283,7 @@ namespace Assembly::Bytecode {
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,
-        Assembler* assembly_ctx
+        Assembler *assembly_ctx
     ) {
         bool is_a_signed = is_signed(instruction_parser->opcode);
     }

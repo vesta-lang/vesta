@@ -19,6 +19,8 @@
 #include <type_traits>
 #include <iomanip>
 
+#include "arena/VirtualMemory.h"
+
 namespace vesta {
     /**
      * @brief Mutex global para sincronizar accesos a std::cout / std::cerr entre hilos.
@@ -159,6 +161,47 @@ namespace vesta {
         std::ostringstream ss;
         ss << "0x" << std::hex << std::setw(16) << std::setfill('0') << v << std::dec;
         return ss.str();
+    }
+
+    static std::string hex8(uint8_t v) {
+        static const char *lut = "0123456789ABCDEF";
+        std::string s;
+        s += lut[(v >> 4) & 0xF];
+        s += lut[v & 0xF];
+        return s;
+    }
+
+    /**
+     * Se usa para dumpear memoria real
+     * @param code codigo o memoria a dumpear
+     * @param size_dump_bytes cantidad de bytes a dumpear
+     * @return strings dump
+     */
+    static std::string dump(const uint8_t *code, uint16_t size_dump_bytes) {
+        std::string dump_;
+        for (int i = 1; i <= size_dump_bytes; i++) {
+            uint8_t b = code[i - 1];
+            dump_ += hex8(b) + " ";
+            if (((i % 8) == 0)) dump_ += "\n";
+        }
+        return dump_;
+    }
+
+    /**
+     * Se usa para dumpear memoria de la VM a traves de una direccion virtual
+     * @param vm_mem manejador de memoria virtual que usar para dumpear memoria.
+     * @param v_address direccion virtual a dumpear
+     * @param size_dump_bytes cantidad de bytes a dumpear
+     * @return strings dump
+     */
+    static std::string dump(vm::VirtualMemory vm_mem, uint16_t v_address, uint16_t size_dump_bytes) {
+        std::string dump_;
+        for (int i = 1; i <= size_dump_bytes; i++) {
+            uint8_t b = vm_mem[v_address + i - 1];
+            dump_ += hex8(b) + " ";
+            if (((i % 8) == 0)) dump_ += "\n";
+        }
+        return dump_;
     }
 }
 

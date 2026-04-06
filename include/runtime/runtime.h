@@ -494,20 +494,69 @@ namespace runtime {
      * y que una instruccion necesita leer para ser ejecutada.
      */
     typedef struct DecodedInstr {
-        /**
-         * opcode1
-         */
-        uint8_t is_extended;
+        struct {
+            /**
+             * opcode1
+             */
+            uint8_t is_not_extended: 8;
 
-        /**
-         * opcode2
-         */
-        uint8_t opcode_index;
+            /**
+             * opcode2
+             */
+            uint8_t opcode_index: 8;
 
-        /**
-         * Indica si la instruccion tiene o no signo
-         */
-        uint8_t _signed_instruct = false;
+            /**
+             * Indica si la instruccion tiene o no signo
+             */
+            uint8_t _signed_instruct: 1;
+
+
+            /**
+             * Modo de la instruccion, o tamaño tambien llamado en algunos casos.
+             */
+            uint8_t mode: 2;
+
+            /**
+             * Indica si la instrucción ha modificado manualmente el contador de programa (PC).
+             *
+             * Cuando una instrucción de control de flujo (por ejemplo: saltos, llamadas,
+             * retornos o saltos condicionales) cambia explícitamente el valor del PC,
+             * debe establecer este campo a `true`. Esto evita que la fase de ejecución
+             * (EXECUTE) avance automáticamente el PC al finalizar la instrucción.
+             *
+             * Si el valor es `false`, EXECUTE incrementará el PC en función del tamaño
+             * de la instrucción (`decoded.size`). Si es `true`, se asume que la instrucción
+             * ya ha actualizado el PC y no se realizará el incremento automático.
+             *
+             * Este mecanismo evita avanzar el PC dos veces
+             * en instrucciones que alteran el flujo de ejecución.
+             */
+            bool did_jump: 1;
+
+            /**
+             * Indica si la instruccion requiere esperar un I/O o a alguna
+             * accion desbloqueante.
+             */
+            bool blocking: 1;
+
+            /**
+             * Algunas instrucciones tiene direcciones de operacion:
+             *      adds [reg1 + reg2 * 8], reg3
+             *      adds reg3, [reg1 + reg2 * 8]
+             *
+             * Si la instruccion no tiene direccionalidad, este campo se usa en algunos
+             * casos como metadato de seleccion de otras variantes de la misma familia de instrucciones.
+             */
+            uint8_t direction: 1;
+
+            /**
+             * Tamaño de la instruccion, el maximo es 15 bytes
+             */
+            uint8_t size_instr: 4;
+        } flags_info = {
+            0, 0, 0, 0,
+            false, false, 0, 0
+        };
 
         union {
             /**
@@ -559,40 +608,14 @@ namespace runtime {
         };
 
         /**
-         * Modo de la instruccion, o tamaño tambien llamado en algunos casos.
-         */
-        uint8_t mode = 0;
-
-        int64_t imm = 0; // inmediato (si existe)
-
-        /**
-         * Indica si la instrucción ha modificado manualmente el contador de programa (PC).
-         *
-         * Cuando una instrucción de control de flujo (por ejemplo: saltos, llamadas,
-         * retornos o saltos condicionales) cambia explícitamente el valor del PC,
-         * debe establecer este campo a `true`. Esto evita que la fase de ejecución
-         * (EXECUTE) avance automáticamente el PC al finalizar la instrucción.
-         *
-         * Si el valor es `false`, EXECUTE incrementará el PC en función del tamaño
-         * de la instrucción (`decoded.size`). Si es `true`, se asume que la instrucción
-         * ya ha actualizado el PC y no se realizará el incremento automático.
-         *
-         * Este mecanismo evita avanzar el PC dos veces
-         * en instrucciones que alteran el flujo de ejecución.
-         */
-        bool did_jump = false;
-
-        /**
-         * Indica si la instruccion requiere esperar un I/O o a alguna
-         * accion desbloqueante.
-         */
-        bool blocking = false;
-
-        /**
          * referencia a la instruccion descodificada con sus meta-datos, la funcion a ejecutar,
          * el metodo de descodificacion y otros campos utiles.
          */
         InstrFormat *metadata = nullptr;
+
+        /**
+         * Direccion PC donde se encontro la instruccion
+         */
         uint64_t pc = 0;
     } DecodedInstr;
 

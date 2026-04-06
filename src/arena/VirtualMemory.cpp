@@ -154,8 +154,78 @@ namespace vm {
         }
     }
 
-    uint32_t VirtualMemory::read_u16(uint64_t vaddr) {
-        uint32_t x;
+    void VirtualMemory::write_bytes(uint64_t vaddr, const void *src, size_t size) {
+        const uint8_t *in = static_cast<const uint8_t *>(src);
+
+        while (size > 0) {
+            uint64_t page_vaddr = vaddr & ~0xFFFULL;
+            size_t offset = vaddr & 0xFFFULL;
+            size_t chunk = std::min<size_t>(4096 - offset, size);
+
+            tlb::TLBEntryData *entry = tlb.get_entry(vaddr);
+
+            // MISS -> lazy allocation
+            if (!entry || entry->type_address == NONE) {
+                void *host_mem = get_ptr_arena(
+                    arena_mgr, arena_mgr.create_arena(4096, permsDefault));
+
+                ptr_mapped pm{};
+                pm.ptr_host = host_mem;
+
+                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm);
+                entry = tlb.get_entry(vaddr);
+            }
+
+            switch (entry->type_address) {
+                case MAPPED_PTR_HOST: {
+                    uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
+
+                    // FAST-PATH: alineado a 16 bytes
+                    if ((offset & 0xF) == 0) {
+                        uint8_t *aligned = (uint8_t *) __builtin_assume_aligned(base + offset, 16);
+                        memcpy(aligned, in, chunk);
+                    } else {
+                        memcpy(base + offset, in, chunk);
+                    }
+                    break;
+                }
+
+                default:
+                    std::cout << "Modo de acceso no implementado: "
+                            << entry->type_address << std::endl;
+                    exit(-1);
+            }
+
+            vaddr += chunk;
+            in += chunk;
+            size -= chunk;
+        }
+    }
+
+    void VirtualMemory::write_u8(uint64_t vaddr, uint8_t value) {
+        write_bytes(vaddr, &value, sizeof(value));
+    }
+
+    void VirtualMemory::write_u16(uint64_t vaddr, uint16_t value) {
+        write_bytes(vaddr, &value, sizeof(value));
+    }
+
+    void VirtualMemory::write_u32(uint64_t vaddr, uint32_t value) {
+        write_bytes(vaddr, &value, sizeof(value));
+    }
+
+    void VirtualMemory::write_u64(uint64_t vaddr, uint64_t value) {
+        write_bytes(vaddr, &value, sizeof(value));
+    }
+
+    uint8_t VirtualMemory::read_u8(uint64_t vaddr) {
+        uint8_t x;
+        read_bytes(vaddr, &x, sizeof(x));
+        return x;
+    }
+
+    uint16_t VirtualMemory::read_u16(uint64_t vaddr) {
+        uint16_t x;
         read_bytes(vaddr, &x, sizeof(x));
         return x;
     }

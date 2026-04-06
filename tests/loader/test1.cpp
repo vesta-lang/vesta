@@ -303,9 +303,9 @@ int main() {
                    stage_name,
                    C_RESET,
                    vm->rip.ptr_vm.raw,
-                   vm->decoded_ptr->is_extended,
-                   vm->decoded_ptr->opcode_index,
-                   vm->decoded_ptr->mode,
+                   vm->decoded_ptr->flags_info.is_not_extended,
+                   vm->decoded_ptr->flags_info.opcode_index,
+                   vm->decoded_ptr->flags_info.mode,
                    vm_state_to_str(vm->state)
             );
         }

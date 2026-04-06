@@ -162,5 +162,15 @@ namespace runtime {
      * @param instr
      */
     void decode_instr_simple(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Permite descodificar instrucciones del tipo inmediato como son:
+     *      - adds r0d, 0x12345678
+     *      - adds [r1w], 0x1234
+     * se supone que todas las instrucciones de este tipo usan extension de opcode.
+     * @param vm
+     * @param instr
+     */
+    void decode_instr_inmed_reg(VM *vm, DecodedInstr &instr);
 }
 #endif //DECODE_INSTRUCTION_H
