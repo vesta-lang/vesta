@@ -25,6 +25,10 @@ namespace runtime {
 
     static constexpr int SIGNBIT[4] = {7, 15, 31, 63};
 
+
+    // ---------------------------------------------------------------------
+    //                          de tipo registro
+    // ---------------------------------------------------------------------
     /**
      * Permite ejecutar la instruccion INC o DEC dependiendo del valor de
      * instr._signed_instruct:
@@ -54,6 +58,16 @@ namespace runtime {
     void exec_instr_xor_reg(VM *vm, const DecodedInstr &instr);
 
     void exec_instr_div_reg(VM *vm, const DecodedInstr &instr);
+
+    // ---------------------------------------------------------------------
+
+
+    // ---------------------------------------------------------------------
+    //                          de tipo inmediato
+    // ---------------------------------------------------------------------
+    void exec_instr_add_imm(VM *vm, const DecodedInstr &instr);
+
+    // ---------------------------------------------------------------------
 
     /**
      * Permite ejecutar una instruccion HLT, esto hara que la fase

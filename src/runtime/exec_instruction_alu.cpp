@@ -99,6 +99,28 @@ namespace runtime {
         }
     }
 
+    template<typename T, typename Op>
+    static void binary_mem_imm_wrapper(VM *vm, uint64_t addr, uint64_t imm, bool is_signed) {
+        using UT = std::make_unsigned_t<T>;
+
+        // Leer valor desde memoria virtual
+        T val = vm->vm_mem.read_any<T>(addr);
+
+        // Ejecutar operación ALU
+        T res = Op::compute(val, (T) imm);
+
+        // Flags comunes
+        vm->flags.bits.ZF = (res == 0);
+        vm->flags.bits.SF = (UT(res) >> (sizeof(T) * 8 - 1)) & 1;
+
+        // Flags específicos de la operación
+        Op::flags(vm, val, (T) imm, res, is_signed);
+
+        // Escribir resultado en memoria virtual
+        vm->vm_mem.write_any<T>(addr, res);
+    }
+
+
     /**
      * @brief Núcleo del ALU para operaciones unarias (INC, DEC).
      *
@@ -388,6 +410,11 @@ namespace runtime {
     using BinaryFn = void(*)(VM *, Reg, Reg, bool, int);
     using UnaryFn = void(*)(VM *, Reg, int);
 
+    template<typename T, typename Op>
+    static void binary_imm_wrapper(VM *vm, Reg &dst, uint64_t imm, bool is_signed, int rdst) {
+        alu_core<T, Op>(vm, dst.raw(), (T) imm, is_signed, rdst);
+    }
+
     template<typename T>
     static void mov_wrapper(VM *vm, Reg dst, Reg src, bool /*unused*/, int rdst) {
         T value = src.raw(); // leer valor del registro origen
@@ -506,83 +533,138 @@ namespace runtime {
         &binary_wrapper<uint64_t, SarOp>
     };
 
+    using BinaryImmFn = void(*)(VM *, Reg &, uint64_t, bool, int);
+    static constexpr BinaryImmFn add_imm_table[] = {
+        &binary_imm_wrapper<uint8_t, AddOp>,
+        &binary_imm_wrapper<uint16_t, AddOp>,
+        &binary_imm_wrapper<uint32_t, AddOp>,
+        &binary_imm_wrapper<uint64_t, AddOp>
+    };
+
+    using BinaryMemImmFn = void(*)(VM *, uint64_t, uint64_t, bool);
+
+    static constexpr BinaryMemImmFn add_mem_imm_table[] = {
+        &binary_mem_imm_wrapper<uint8_t, AddOp>,
+        &binary_mem_imm_wrapper<uint16_t, AddOp>,
+        &binary_mem_imm_wrapper<uint32_t, AddOp>,
+        &binary_mem_imm_wrapper<uint64_t, AddOp>
+    };
+
+
+    void exec_instr_add_imm(VM *vm, const DecodedInstr &instr) {
+        const int rdst = instr.data_instruction.inmmed_data.reg;
+        uint64_t imm = instr.data_instruction.inmmed_data.inmmed;
+
+        // Caso 1: destino es un registro
+        if (instr.flags_info.direction == 0) {
+            add_imm_table[instr.flags_info.mode](
+                vm,
+                vm->regs[rdst],
+                imm,
+                instr.flags_info._signed_instruct,
+                rdst
+            );
+            return;
+        }
+
+        // Caso 2: destino es memoria
+        if (instr.flags_info.direction == 1) {
+            auto &base = vm->regs[instr.data_instruction.inmmed_data.reg];
+            auto index = 0;
+            uint8_t scale = 0;
+
+            uint64_t addr = base.raw() + index/*.raw()*/ * scale;
+
+            add_mem_imm_table[instr.flags_info.mode](
+                vm,
+                addr,
+                imm,
+                instr.flags_info._signed_instruct
+            );
+            return;
+        }
+
+        vm->should_kill = true;
+    }
+
+
     void exec_instr_mov_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        mov_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        mov_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_add_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        add_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr._signed_instruct, rdst);
+        add_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
     void exec_instr_sub_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        sub_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr._signed_instruct, rdst);
+        sub_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
     void exec_instr_cmp_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        cmp_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr._signed_instruct, rdst);
+        cmp_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
     void exec_instr_and_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        and_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        and_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_or_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        or_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        or_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_xor_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        xor_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        xor_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_div_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        div_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr._signed_instruct, rdst);
+        div_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
     void exec_instr_shl_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        shl_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        shl_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_shr_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        shr_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        shr_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_sar_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        sar_table[instr.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        sar_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
     }
 
     void exec_instr_inc_dec_reg(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         // aunque INC y DEC no tienen signo, se usa el campo _signed_instruct
         // en la descodificacion para almacenar si es la instruccion INC o DEC.
-        if (instr._signed_instruct == 0)
-            inc_table[instr.mode](vm, vm->regs[rdst], rdst);
+        if (instr.flags_info._signed_instruct == 0)
+            inc_table[instr.flags_info.mode](vm, vm->regs[rdst], rdst);
         else
-            dec_table[instr.mode](vm, vm->regs[rdst], rdst);
+            dec_table[instr.flags_info.mode](vm, vm->regs[rdst], rdst);
     }
 }

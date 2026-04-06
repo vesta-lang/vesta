@@ -305,7 +305,61 @@ namespace Assembly::Bytecode {
                 }
 
                 // Instrucción válida -> sumar su tamaño
-                offset += size_of_instruction(instr);
+
+                const auto &info = select_variant(instr->opcode, instr->operands);
+                switch (info.sizeMode) {
+                    case InstrSizeMode::FIXED_1: {
+                        offset += 1;
+                        break;
+                    }
+                    case InstrSizeMode::FIXED_2: {
+                        offset += 2;
+                        break;
+                    }
+                    case InstrSizeMode::FIXED_4: {
+                        offset += 4;
+                        break;
+                    }
+                    case InstrSizeMode::FIXED_8: {
+                        offset += 8;
+                        break;
+                    }
+
+                    // por ahora este caso solo existe para las instrucciones inmediatas, pues su tamaño
+                    // depende del modo de operacion el usuario elija, se debe examinar que tamaño
+                    // escogio el programador
+                    case InstrSizeMode::MIXED_SIZE: {
+                        auto n0 = instr->operands[0].get();
+                        auto n1 = instr->operands[1].get();
+
+                        auto inmmed_str = dynamic_cast<vm::NumberOperand *>(n1);
+
+                        auto reg = dynamic_cast<vm::RegisterOperand *>(n0);
+                        auto mem = dynamic_cast<vm::MemoryOperand *>(n0);
+
+                        // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
+                        if (reg == nullptr) {
+                            reg = dynamic_cast<vm::RegisterOperand *>(mem->expr.get());
+                            if (reg == nullptr) {
+                                std::cout << "Error instruccion: " + instr->opcode +
+                                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: " <<
+                                        std::endl;
+                                mem->expr->print(0);
+                                throw std::runtime_error("Error instruccion: " + instr->opcode);
+                            }
+                        }
+                        uint8_t mode = encode_mode(reg->size_bits);
+                        // las instrucciones inmediatas usan 3 bytes de inicio siempre + bytes del inmediato.
+                        offset += 3 + mode_to_bytes(mode);
+                        break;
+                    }
+                    default: {
+                        std::cout << "Error instruccion: " + instr->opcode +
+                                " instruccion de tamaño desconocido. " <<
+                                std::endl;
+                        throw std::runtime_error("Error instruccion: " + instr->opcode);
+                    }
+                }
             }
         }
     }
