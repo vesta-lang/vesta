@@ -14,6 +14,16 @@
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
 
+/**
+ * version inline para obtener el tiempo
+ * @return devuelve el tiempo actual, se usa para mediciones.
+ */
+inline uint64_t now_ns() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
 namespace runtime {
     using clock = std::chrono::high_resolution_clock;
 
@@ -39,10 +49,12 @@ namespace runtime {
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
     }
 
+    void decode_instr_simple(VM *vm, DecodedInstr &instr) {
+    }
+
 
     void VM::decode_instruction() {
         vm_hook(this, DebugStage::DecodeBegin);
-
         PROFILE_START
 
         uint64_t pc = rip.ptr_vm.raw;
@@ -105,7 +117,8 @@ namespace runtime {
             metadata.exec == nullptr) {
             // realizamos el hook en caso de error
             vm_hook(this, DebugStage::DecodeEnd);
-            std::cout << "Error, la instruccion con opcode1(" << vesta::hex64(decode_tmp.is_extended) << "), " <<
+            vesta::scout() << "RIP[" << vesta::hex64(rip.ptr_vm.raw) << "] "
+                    << "Error, la instruccion con opcode1(" << vesta::hex64(decode_tmp.is_extended) << "), " <<
                     "opcode2(" << vesta::hex64(decode_tmp.opcode_index) << ") no esta implementada en la VM"
                     << std::endl;
             exit(-1);
@@ -136,12 +149,15 @@ namespace runtime {
     }
 
 
-
     vm_event VM::execute_instruction() {
         // realizamos el hook antes de la ejecuccion
         vm_hook(this, DebugStage::ExecuteBegin);
-
         PROFILE_START
+
+        // --- PROFILER: inicio ---
+        // debemos ponerlo despues de la hook para no contabilizar el tiempo de las hook
+        const uint64_t t1 = now_ns();
+        // ------------------------
 
         // ejecutamos la instruccion descodificada. No hacemos aqui
         // validacion del campo "exec" por que se supone que ya hemos comprobado en la fase de decode
@@ -169,12 +185,23 @@ namespace runtime {
         // o una instruccion similar que modifique PC por su cuenta.
         if (!decoded_ptr->did_jump)
             // movemos el puntero de instruccion al final de ejecutar la instruccion
-            rip.ptr_vm.raw += decoded_ptr->size;
+            rip.ptr_vm.raw += instr_size(decoded_ptr->metadata->size);
+
+        // --- PROFILER: fin ---
+        const uint64_t t2 = now_ns();
+        profiler_sample++;
+
+        // Cada 256 instrucciones → sample
+        if ((profiler_sample & 0xFF) == 0) {
+            profiler_instr_counter++; // IPS sampling
+            time_exec += (t2 - t1); // tiempo ocupado
+        }
+        // -------------------------
+
         // antes de retorna hacemos el hook
-
         PROFILE_END("EXECUTER");
-
         vm_hook(this, DebugStage::ExecuteEnd);
+
         // indicamos que la ejecuccion tuvo exito y no se requiere bloquear la VM.
         return EVT_EXEC_DONE; // si se puede seguir ejecutando instrucciones
     }

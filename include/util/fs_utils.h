@@ -29,7 +29,10 @@
 
 #ifdef _WIN32
 #include "windows.h"
+#else
+#include <unistd.h>
 #endif
+
 namespace fs {
     /// Alias al namespace de la librería estándar para evitar colisiones de nombre.
     namespace fs = std::filesystem;

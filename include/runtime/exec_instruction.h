@@ -46,5 +46,13 @@ namespace runtime {
     void exec_instr_xor_reg(VM *vm, const DecodedInstr &instr);
 
     void exec_instr_div_reg(VM *vm, const DecodedInstr &instr);
+
+    /**
+     * Permite ejecutar una instruccion HLT, esto hara que la fase
+     * EXECUTE emita un evento de tipo EVT_ERROR
+     * @param vm
+     * @param instr
+     */
+    void exec_instr_hlt(VM *vm, const DecodedInstr &instr);
 }
 #endif //EXEC_INSTRUCTION_H

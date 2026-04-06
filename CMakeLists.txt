@@ -187,9 +187,11 @@ target_compile_options(vm PRIVATE
 #set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 
 # global
+if (WIN32)
 target_link_options(vm PRIVATE
         -static
 )
+endif()
 
 # release
 target_link_options(vm PRIVATE
@@ -203,11 +205,6 @@ target_link_options(vm PRIVATE
         -Wl,--as-needed            # Solo enlaza libs realmente usadas
         -Wl,--build-id=none        # No genera build-id (reduce tamaño)
 
-        # --- Enlace estático ---
-        -static                    # Binario autónomo
-        -static-libgcc             # Libgcc estática
-        -static-libstdc++          # Libstdc++ estática
-
         # --- Flags NO soportados por tu MinGW (comentados) ---
         #-Wl,--icf=all             # Identical Code Folding (solo gold/lld)
         #-Wl,--compress-debug-sections=zlib   # Solo binutils modernos
@@ -215,6 +212,15 @@ target_link_options(vm PRIVATE
         >
 )
 
+# Enlace estático solo en Windows + Release
+target_link_options(vm PRIVATE
+        $<$<AND:$<CONFIG:Release>,$<BOOL:${WIN32}>>:
+        # --- Enlace estático ---
+        -static                    # Binario autónomo
+        -static-libgcc             # Libgcc estática
+        -static-libstdc++          # Libstdc++ estática
+        >
+)
 
 # Opciones por configuracion
 target_compile_options(vm PRIVATE

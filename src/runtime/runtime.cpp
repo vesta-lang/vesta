@@ -177,4 +177,23 @@ namespace runtime {
         std::lock_guard guard(state_lock);
         free_add_debug_hook(hook);
     }
+
+    void VM::load_raw_code(uint64_t address, const std::vector<uint8_t> &code) {
+        // copiar a memoria virtual
+        vm_mem.vm_to_host_memcpy(address, code.data(), code.size());
+
+        // resetear PC
+        rip.ptr_vm.raw = address;
+
+        // resetear icache
+        for (auto &entry: icache) {
+            entry.pc = UINT64_MAX; // invalida
+            decoded_ptr = nullptr; // invalidar punteros decoder anteriores.
+        }
+
+        // resetear estado de ejecución
+        decoded_ptr = nullptr;
+        should_kill = false;
+        state = RUNNING;
+    }
 } // RUNTIME

@@ -21,6 +21,10 @@
 #include "profiler/timer.h"
 #include "util/fs_utils.h"
 
+#ifdef _WIN32
+    #define popen _popen
+    #define pclose _pclose
+#endif
 
 namespace asm_multi_process {
     int run_worker(const std::string &file_name,
@@ -150,14 +154,14 @@ namespace asm_multi_process {
         std::string result;
         char buffer[256];
 
-        FILE *pipe = _popen(cmd.c_str(), "r");
+        FILE *pipe = popen(cmd.c_str(), "r");
         if (!pipe) return "ERROR: no se pudo ejecutar el comando\n";
 
         while (fgets(buffer, sizeof(buffer), pipe)) {
             result += buffer;
         }
 
-        _pclose(pipe);
+        pclose(pipe);
         return result;
     }
 
