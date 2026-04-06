@@ -28,7 +28,7 @@ void flush_cache() {
     static const size_t SIZE = 50 * 1024 * 1024; // 50 MB
     static char *buffer = NULL;
 
-    if (!buffer) buffer = (char *)malloc(SIZE);
+    if (!buffer) buffer = (char *) malloc(SIZE);
 
     for (size_t i = 0; i < SIZE; i += 64) {
         buffer[i]++; // tocar cada línea de caché
@@ -96,6 +96,8 @@ void print_memory_stats() {
 #define SLEEP usleep
 #endif
 using namespace Assembly::Bytecode;
+
+//#define BENCHMARK_VM
 
 int main() {
     Timer global;
@@ -211,6 +213,7 @@ int main() {
     Timer t_loader;
     runtime::VM *vm = manager.loader.load_executable(opts.output_path);
 
+#ifdef BENCHMARK_VM
     std::vector<uint8_t> bench_code;
     bench_code.reserve(4 * 2'000'000); // 2M iteraciones -> 4M instrucciones
 
@@ -232,6 +235,7 @@ int main() {
     bench_code.push_back(0x03);
     // cagro codigo de pruebas:
     vm->load_raw_code(0, bench_code);
+#endif
 
     std::cout << C_CYAN << "[Tiempo Loader] " << C_RESET << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
@@ -317,6 +321,28 @@ int main() {
         }
 
         if (stage == runtime::DebugStage::ExecuteEnd) {
+            printf(C_CYAN "[STATE AFTER INSTRUCTION]\n" C_RESET);
+
+            // --- REGISTERS ---
+            for (int i = 0; i < 16; ++i) {
+                printf(" R%02d=0x%016llx", i, vm->regs[i].qword());
+                if ((i % 4) == 3) printf("\n");
+            }
+
+            // --- FLAGS ---
+            printf(" FLAGS=[");
+            printf("CF=%u ", vm->flags.bits.CF);
+            printf("OF=%u ", vm->flags.bits.OF);
+            printf("SF=%u ", vm->flags.bits.SF);
+            printf("ZF=%u ", vm->flags.bits.ZF);
+            printf("DM=%u", vm->flags.bits.DM);
+            printf("]\n");
+
+            // --- POINTERS ---
+            printf(" IP=0x%016llx\n", vm->rip.ptr_vm.raw);
+            printf(" SP=0x%016llx\n", vm->stack_pointer.ptr_vm.raw);
+            printf(" BP=0x%016llx\n", vm->base_pointer.ptr_vm.raw);
+
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
 
             printf("  decode = %lld ns (%lld ms)\n",
@@ -342,12 +368,9 @@ int main() {
             printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
     });
 
-    vm->has_hooks = false;
-
-#define BENCHMARK_VM
 #ifdef BENCHMARK_VM
 
-
+    vm->has_hooks = false;
     const uint64_t INSTR_PER_RUN = 8'000'000; // 4 ADD * 2M iteraciones
 
     uint64_t total_ns = 0;
@@ -415,19 +438,23 @@ int main() {
     std::cout << "MIPS maximo:   " << max_mips << "\n";
 
 #else
+    //vm->has_hooks = false;
 
     Timer t_bench;
     vm->start();
+    std::thread(&runtime::profiler_thread, vm).detach();
     vm->join();
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
-    std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " <<  runner_ns << " us\n";
+    std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " << runner_ns << " us\n";
 #endif
 
 
     std::cout << std::dec;
     std::cout << C_CYAN << "\n[Tiempo total] " << C_RESET << global.us() << " us "
             << global.ms() << " ms\n";
+
+    std::cout << vm->to_string() << std::endl;
 
     return 0;
 }

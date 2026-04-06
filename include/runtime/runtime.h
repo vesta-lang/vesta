@@ -633,6 +633,10 @@ namespace runtime {
 
     using DebugHook = void(*)(VM *vm, DebugStage stage);
 
+    /**
+     * Tamaño de la tabla cache de instrucciones decodificadas.
+     */
+    static const uint32_t ICACHE_SIZE = 256;
 
     /**
      * Esta clase representa una instancia de VM.
@@ -649,13 +653,8 @@ namespace runtime {
         //               sistema de cache para descodificacion de instrucciones.
         // -------------------------------------------------------------------------------
         // 256 entradas de cache maximo
-        static const int ICACHE_SIZE = 256;
         uint64_t icache_tag[ICACHE_SIZE];
         DecodedInstr icache[ICACHE_SIZE];
-
-        inline uint32_t icache_index(uint64_t pc) {
-            return pc & (ICACHE_SIZE - 1); // si ICACHE_SIZE es potencia de 2
-        }
 
         /**
          * Contiene los datos de la instruccion descoficada.
@@ -836,6 +835,11 @@ namespace runtime {
          */
         void start();
 
+        /**
+         * Permite hacer que el hilo que creo la VM espere a la finalizacion
+         * de la VM a traves de algun error, la instruccion HLT u otro evento
+         * o motivo que desencadene una finalizacion.
+         */
         void join();
 
         /**
@@ -890,11 +894,12 @@ namespace runtime {
 
             // Flags compactas
             ss << " FLAGS="
-                    << static_cast<unsigned>(flags.bits.DM)
-                    << static_cast<unsigned>(flags.bits.CF)
-                    << static_cast<unsigned>(flags.bits.OF)
-                    << static_cast<unsigned>(flags.bits.SF)
-                    << static_cast<unsigned>(flags.bits.ZF);
+                    << "CF=" << vesta::hex64(flags.bits.CF) << " "
+                    << "OF=" << vesta::hex64(flags.bits.OF) << " "
+                    << "SF=" << vesta::hex64(flags.bits.SF) << " "
+                    << "ZF=" << vesta::hex64(flags.bits.ZF) << " "
+                    << "DM=" << vesta::hex64(flags.bits.DM);
+
 
             // Thread / sleep
             ss << " Th=" << reinterpret_cast<void *>(thread_for_vm)
@@ -1111,6 +1116,15 @@ namespace runtime {
             case DebugStage::OnEventEnd: return "EVENT_END";
             default: return "UNKNOWN";
         }
+    }
+
+    /**
+     * Se usa para realizar el cacheado de las isntrucciones descodifcadas
+     * @param pc Direccion PC de la instruccion descodificada.
+     * @return entrada en la tabla cache.
+     */
+    inline uint32_t icache_index(uint64_t pc) {
+        return pc & (ICACHE_SIZE - 1); // si ICACHE_SIZE es potencia de 2
     }
 
     /**

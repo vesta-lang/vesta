@@ -43,17 +43,17 @@ namespace runtime {
         },
 
         /* 0x03 */{
-            // inc / dec
-            "inc / dec", Assembly::Bytecode::AddressingMode::REG,
-            Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            nullptr, nullptr
-        },
-
-        /* 0x04 */{
             //
             "", Assembly::Bytecode::AddressingMode::COUNT,
             Assembly::Bytecode::InstrSizeMode::FIXED_1,
             nullptr, nullptr
+        },
+
+        /* 0x04 */{
+            // inc / dec
+            "inc / dec", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_inc_dec_reg, decode_instr_one_op_reg
         },
 
         /* 0x05 */{
@@ -1871,7 +1871,7 @@ namespace runtime {
             // add reg, reg
             "add", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            exec_instr_add_reg, decode_instr_reg
+            exec_instr_add_reg, decode_instr_two_op_reg
         },
 
         /* 0x06 */{

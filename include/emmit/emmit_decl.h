@@ -142,7 +142,7 @@ namespace Assembly::Bytecode {
         return signed_ops.count(opcode) > 0;
     }
 
-    void emit_inc(
+    void emit_inc_dec(
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,

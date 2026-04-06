@@ -24,7 +24,10 @@ namespace runtime {
         /**
          * Usar la tecnica "computed goto" no me lo permite el estandar,
          * asi que debo desabilitar aqui los warnings que genere el compilador
-         * para que sea compilable
+         * para que sea compilable.
+         *
+         * Informacion sobre predicion de ramas (branch-prediction):
+         *      https://stackoverflow.com/questions/11668090/how-to-deal-with-branch-prediction-when-using-a-switch-case-in-cpu-emulation
          */
         static void *dispatch_table[NUM_STATES] = {
             &&READY_LABEL,
