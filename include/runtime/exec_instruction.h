@@ -35,6 +35,8 @@ namespace runtime {
      */
     void exec_instr_inc_dec_reg(VM *vm, const DecodedInstr &instr);
 
+    void exec_instr_mov_reg(VM *vm, const DecodedInstr &instr);
+
     /**
      * Permite ejecutar una instruccion de tipo
      * add reg, reg
