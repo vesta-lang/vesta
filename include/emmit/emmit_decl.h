@@ -43,6 +43,11 @@ namespace Assembly::Bytecode {
          */
         FIXED_8,
 
+        /**
+         * La instruccion siempre ocupa 10 bytes
+         */
+        FIXED_10,
+
         COUNT
     };
 

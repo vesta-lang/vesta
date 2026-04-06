@@ -131,7 +131,14 @@ namespace vm {
             switch (entry->type_address) {
                 case MAPPED_PTR_HOST: {
                     uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
-                    memcpy(out, base + offset, chunk);
+                    // FAST-PATH: puntero alineado a 16 bytes
+                    if ((offset & 0xF) == 0) {
+                        uint8_t *aligned = (uint8_t *) __builtin_assume_aligned(base + offset, 16);
+                        memcpy(out, aligned, chunk);
+                    } else {
+                        // fallback seguro
+                        memcpy(out, base + offset, chunk);
+                    }
                     break;
                 }
 

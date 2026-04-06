@@ -52,6 +52,17 @@ namespace vm {
          * registrándola en la TLB. Para otros tipos de mapeo, la función delega en la
          * lógica correspondiente o genera un error si el modo no está implementado.
          *
+         * Optimización:
+         *  - Cuando el puntero físico resultante está alineado a 16 bytes, se activa
+         *    un *fast‑path* que permite al compilador generar accesos alineados
+         *    mediante `__builtin_assume_aligned()`. Esto habilita instrucciones SIMD
+         *    alineadas (movaps/vmovaps o equivalentes NEON/AVX), reduciendo el coste
+         *    de copia en bloques grandes. Si la alineación no está garantizada, la
+         *    función recurre automáticamente al camino seguro tradicional.
+         *
+         * Esta optimización es transparente para el usuario y mantiene compatibilidad
+         * total con la versión anterior.
+         *
          * @param vaddr Dirección virtual inicial desde la que se desea leer.
          * @param dst   Puntero al buffer destino donde se almacenarán los bytes leídos.
          * @param size  Número de bytes a leer desde memoria virtual.
