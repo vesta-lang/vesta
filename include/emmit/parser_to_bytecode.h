@@ -54,8 +54,8 @@ namespace Assembly::Bytecode {
 
         // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
         // segundo byte
-        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc}}},
-        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc}}},
+        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
+        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
 
 
         {

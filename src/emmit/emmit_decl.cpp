@@ -67,7 +67,7 @@ namespace Assembly::Bytecode {
         return (n_mode >= 4) ? 3 : n_mode;
     }
 
-    void emit_inc(
+    void emit_inc_dec(
         const vm::Instruction *instruction_parser,
         ByteWriter &code_final,
         const InstrInfo *now_instr,
@@ -78,12 +78,18 @@ namespace Assembly::Bytecode {
 
         // INC solo usa un operando de tipo registro
         if (auto s = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get())) {
+            // 0b0 b mode reg
+            // b -> INC / DEC
+            // mode = 0b00 -> dos bits para tamaño de red
+            // reg =  0b0000 -> 4 bits para registro
+            uint8_t mode = encode_mode(s->size_bits);
+            reg += mode << 4; // se desplaza 4 bits
             reg += encode_reg(s->name.c_str()); // codificamos el registro
             code_final.emit8(reg);
         } else {
-            throw std::runtime_error("Registro inválido: esta instruccion INC espera un registro");
+            throw std::runtime_error("Registro inválido: esta instruccion INC / DEC espera un registro");
         }
-        DEBUG_PRINT("Emitiendo INC 0x%x REG: 0x%x, Size: %llu\n",
+        DEBUG_PRINT("Emitiendo INC / DEC 0x%x REG: 0x%x, Size: %llu\n",
                     now_instr->opcode1, reg,
                     instr_size(now_instr->sizeMode)
         );

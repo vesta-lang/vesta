@@ -27,7 +27,7 @@ inline uint64_t now_ns() {
 namespace runtime {
     using clock = std::chrono::high_resolution_clock;
 
-    void decode_instr_reg(VM *vm, DecodedInstr &instr) {
+    void decode_instr_two_op_reg(VM *vm, DecodedInstr &instr) {
         // suponiendo que sea un add, mov, sub, div, mul u otro
         // del estilo, se puede usar este modo de descodificacion.
 
@@ -50,6 +50,35 @@ namespace runtime {
     }
 
     void decode_instr_simple(VM *vm, DecodedInstr &instr) {
+    }
+
+    void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr) {
+        VM_ASSERT(
+            instr_size(instr.metadata->size) == 2,
+            std::string("Instruccion invalida en RIP[") +
+            vesta::hex64(vm->rip.ptr_vm.raw) +
+            "] opcode1(" + vesta::hex64(instr.is_extended) +
+            ") opcode2(" + vesta::hex64(instr.opcode_index) + ")\n" <<
+            "decode_instr_one_op_reg() Error la instruccion encontrada no tiene size 2 sino un size: "
+            << instr_size(instr.metadata->size) << "\n"
+            << vm->to_string(),
+            {}
+        );
+
+        // leemos solo 1 byte de datos pues se supone que la instruccion a
+        // descodificar es de longitud 2.
+        uint8_t data = vm->vm_mem[vm->rip.ptr_vm.raw + 1];
+
+        // 0b00`mode`0000 -> modo ocupa el los primeros 2 bits
+        instr.mode = (data >> 4) & 0b11;
+
+        // el septimo bit indica si es INC o DIC
+        // 0b0000 0000 -> INC
+        // 0b0100 0000 -> DEC
+        instr._signed_instruct = (data >> 6) & 0b1;
+
+        // 0b00`mode`reg -> registro ocupa los ultimos 4 bits
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(data & 0xF);
     }
 
 
@@ -112,17 +141,19 @@ namespace runtime {
         // obtenemos los metadatos de la instruccion.
         InstrFormat &metadata = table[index];
 
-        if (
-            metadata.mode == Assembly::Bytecode::AddressingMode::COUNT ||
-            metadata.exec == nullptr) {
-            // realizamos el hook en caso de error
+        // Validación de instrucción (solo en modo debug)
+        VM_ASSERT(
+            metadata.mode < Assembly::Bytecode::AddressingMode::COUNT &&
+            metadata.exec != nullptr,
+
+            std::string("Instruccion invalida en RIP[") +
+            vesta::hex64(rip.ptr_vm.raw) +
+            "] opcode1(" + vesta::hex64(decode_tmp.is_extended) +
+            ") opcode2(" + vesta::hex64(decode_tmp.opcode_index) + ")\n" <<
+            to_string(),
+
             vm_hook(this, DebugStage::DecodeEnd);
-            vesta::scout() << "RIP[" << vesta::hex64(rip.ptr_vm.raw) << "] "
-                    << "Error, la instruccion con opcode1(" << vesta::hex64(decode_tmp.is_extended) << "), " <<
-                    "opcode2(" << vesta::hex64(decode_tmp.opcode_index) << ") no esta implementada en la VM"
-                    << std::endl;
-            exit(-1);
-        }
+        );
 
         // obtenemos los metadatos de la instruccion.
         decode_tmp.metadata = &metadata;

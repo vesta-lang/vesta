@@ -25,9 +25,15 @@ namespace runtime {
 
     static constexpr int SIGNBIT[4] = {7, 15, 31, 63};
 
-    void exec_instr_inc_reg(VM *vm, const DecodedInstr &instr);
-
-    void exec_instr_dec_reg(VM *vm, const DecodedInstr &instr);
+    /**
+     * Permite ejecutar la instruccion INC o DEC dependiendo del valor de
+     * instr._signed_instruct:
+     *      - (instr._signed_instruct == 0) = INC
+     *      - (instr._signed_instruct == 1) = DEC
+     * @param vm
+     * @param instr
+     */
+    void exec_instr_inc_dec_reg(VM *vm, const DecodedInstr &instr);
 
     /**
      * Permite ejecutar una instruccion de tipo
