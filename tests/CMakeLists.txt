@@ -5,15 +5,32 @@ project(VMTests)
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif ()
+
+
 message(STATUS "Fuentes para ${FINAL_NAME}: ${ALL_PROJECT_SOURCES}")
 
 # Helper function para crear tests individuales
 function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
+    
+    
     get_filename_component(TEST_NAME ${TEST_FILE} NAME_WE)
     set(FINAL_NAME "${PREFIX}_${TEST_NAME}")
-
+    
     add_executable(${FINAL_NAME} ${TEST_FILE} ${ALL_SOURCES})
-
+    
+    # Si estamos en modo AsmIntel, forzar flags en el target
+    if (ASM_INTEL)
+        target_compile_options(${FINAL_NAME} PRIVATE -S -masm=intel -fverbose-asm -O0)
+        
+        # No enlazar
+        set_target_properties(${FINAL_NAME} PROPERTIES
+                EXCLUDE_FROM_ALL TRUE
+                LINKER_LANGUAGE CXX
+        )
+        
+        return()  # <-- IMPORTANTE
+    endif()
+    
     target_include_directories(${FINAL_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/include
             ${CMAKE_SOURCE_DIR}/src
@@ -23,70 +40,70 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/keystone/include
             ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein
     )
-
+    
     # SQLite
     target_link_libraries(${FINAL_NAME}
             PRIVATE sqlite3
             PRIVATE capstone
             PRIVATE keystone
     )
-
+    
     # OpenSSL
     if (WIN32)
         target_include_directories(${FINAL_NAME} PRIVATE ${OPENSSL_INCLUDE_DIR})
         target_link_directories(${FINAL_NAME} PRIVATE ${OPENSSL_LIB_DIR})
         target_link_libraries(${FINAL_NAME} PRIVATE libssl libcrypto ws2_32)
-
+    
     else ()
         find_package(OpenSSL REQUIRED)
         target_link_libraries(${FINAL_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif ()
-
+    
     # pthread solo Linux/macOS
     if (NOT WIN32)
         target_link_libraries(${FINAL_NAME} PRIVATE pthread)
     endif ()
-
+    
     if (WIN32)
         target_link_libraries(vm PRIVATE applink)
     endif ()
-
+    
     # Opciones globales para todos los builds
     target_compile_options(${FINAL_NAME} PRIVATE
             -D__STDC_LIMIT_MACROS
             -D__STDC_CONSTANT_MACROS
             -pedantic-errors
     )
-
+    
     # LTO (Link Time Optimization)
     #set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-
+    
     # global
     if (WIN32)
         target_link_options(${FINAL_NAME} PRIVATE
                 -static
         )
     endif ()
-
+    
     # release
     target_link_options(${FINAL_NAME} PRIVATE
             $<$<CONFIG:Release>:
-
+            
             # --- Eliminación de código muerto ---
             -Wl,--gc-sections          # Elimina funciones/datos no usados
-
+            
             # --- Reducción de tamaño ---
             -Wl,--strip-all            # Elimina todos los símbolos
             -Wl,--as-needed            # Solo enlaza libs realmente usadas
             -Wl,--build-id=none        # No genera build-id (reduce tamaño)
-
+            
             # --- Flags NO soportados por tu MinGW (comentados) ---
             #-Wl,--icf=all             # Identical Code Folding (solo gold/lld)
             #-Wl,--compress-debug-sections=zlib   # Solo binutils modernos
             #-flto=thin                # mi MinGW no soporta LTO
             >
     )
-
+    
     # Enlace estático solo en Windows + Release
     target_link_options(${FINAL_NAME} PRIVATE
             $<$<AND:$<CONFIG:Release>,$<BOOL:${WIN32}>>:
@@ -96,7 +113,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             -static-libstdc++          # Libstdc++ estática
             >
     )
-
+    
     # Opciones por configuracion
     target_compile_options(${FINAL_NAME} PRIVATE
             $<$<CONFIG:Debug>:

@@ -307,7 +307,7 @@ namespace runtime {
      * Estructura que representa una transicion de la maquina de estados.
      */
     typedef struct Transition {
-        vm_state next;
+        vm_state                           next;
         std::function<void(runtime::VM *)> action;
 
         /**
@@ -317,8 +317,7 @@ namespace runtime {
          * @param a accion de transicion.
          */
         Transition(vm_state n = READY, void (*a)(runtime::VM *) = nullptr)
-            : next(n), action(std::move(a)) {
-        }
+            : next(n), action(std::move(a)) {}
     } Transition;
 
 
@@ -345,11 +344,11 @@ namespace runtime {
      * Estados de error de los hilos
      */
     typedef enum state_err_thread {
-        THREAD_NO_ERROR = 0, /** Sin error */
-        THREAD_UNKNOWN_ERROR, /** Error no clasificado */
-        THREAD_SEGMENTATION_FAULT, /** Un hilo intento acceder a memoria a la cual no tiene permisos */
+        THREAD_NO_ERROR = 0,        /** Sin error */
+        THREAD_UNKNOWN_ERROR,       /** Error no clasificado */
+        THREAD_SEGMENTATION_FAULT,  /** Un hilo intento acceder a memoria a la cual no tiene permisos */
         THREAD_ILLEGAL_INSTRUCTION, /** Instruccion no reconocida o prohibida */
-        THREAD_DIVISION_BY_ZERO, /** Division por cero */
+        THREAD_DIVISION_BY_ZERO,    /** Division por cero */
 
         THREAD_STACK_OVERFLOW, /** Stack del hilo se desbordo:
                                          * El tope de pila(sp) se encontro con el limite de pila del hilo.
@@ -378,10 +377,10 @@ namespace runtime {
 
     typedef struct shellcode_t {
         size_t capacity = 0;
-        size_t size = 0;
+        size_t size     = 0;
 
-        uint8_t *code = nullptr;
-        err_shellcode err = NO_ERROR_SC;
+        uint8_t *     code = nullptr;
+        err_shellcode err  = NO_ERROR_SC;
 
         void (*Emit8)(struct shellcode_t *code, uint8_t byte);
 
@@ -400,10 +399,10 @@ namespace runtime {
      * Estructura para llamar a funciones nativas/externas a la VM.
      */
     typedef struct PendingCall_t {
-        void * (*func)(void *arg) = nullptr; /** funcion nativa que llamar  */
-        shellcode_t *arg = nullptr; /** argumentos para la funcion, formando un shellcode */
-        void *result = nullptr; /** valor de retorno */
-        bool finished = false; /** indica si la funcion fue ejecutada*/
+        void * (*    func)(void *arg) = nullptr; /** funcion nativa que llamar  */
+        shellcode_t *arg              = nullptr; /** argumentos para la funcion, formando un shellcode */
+        void *       result           = nullptr; /** valor de retorno */
+        bool         finished         = false;   /** indica si la funcion fue ejecutada*/
 
         pthread_mutex_t lock; /** Proteccion de acceso para finished/result */
     } PendingCall_t;
@@ -583,7 +582,7 @@ namespace runtime {
              */
             struct {
                 uint64_t inmmed; // valor inmediato
-                uint8_t reg; // registro destino
+                uint8_t  reg;    // registro destino
             } inmmed_data;
 
             /**
@@ -597,7 +596,7 @@ namespace runtime {
              * se obtiene un byte que se guarda en r3.
              */
             struct {
-                uint8_t reg_base; // base
+                uint8_t reg_base;  // base
                 uint8_t reg_index; // indice
                 uint8_t reg_final;
                 uint8_t scale; // escalar
@@ -676,7 +675,7 @@ namespace runtime {
         //               sistema de cache para descodificacion de instrucciones.
         // -------------------------------------------------------------------------------
         // 256 entradas de cache maximo
-        uint64_t icache_tag[ICACHE_SIZE];
+        uint64_t     icache_tag[ICACHE_SIZE];
         DecodedInstr icache[ICACHE_SIZE];
 
         /**
@@ -692,7 +691,7 @@ namespace runtime {
          */
         //std::queue<vm_event> pending_events;
 
-        Timer debug_timer; // mide la fase actual en el modo de depuracion
+        Timer debug_timer{}; // mide la fase actual en el modo de depuracion
 
         /**
          * toiempo tardado en el decoder
@@ -710,7 +709,7 @@ namespace runtime {
         uint64_t time_exec = 0;
 
         // --- PROFILER POR HILO / VM---
-        uint64_t profiler_sample = 0; // contador de instrucciones
+        uint64_t profiler_sample        = 0; // contador de instrucciones
         uint64_t profiler_instr_counter = 0; // incrementa cada 256 instrucciones
         // --- PROFILER POR HILO / VM ---
 
@@ -725,7 +724,7 @@ namespace runtime {
         vm::ArenaManager manager_mem_priv{};
 
         tlb::LazyHybridTLB tlb{};
-        vm::VirtualMemory vm_mem;
+        vm::VirtualMemory  vm_mem;
 
         /**
          * Manager de memoria "publico" del manager de instancias
@@ -758,20 +757,25 @@ namespace runtime {
         bool has_hooks = false;
 
         pthread_t thread_for_vm{};
-        VM_ID id{};
+        VM_ID     id{};
 
         // registros
         // -----------------------------------------------------------
-        vm::MappedPtr stack_pointer{}; // puntero tope de la pila
-        vm::MappedPtr base_pointer{}; // puntero base de la pila
+        GeneralRegister stack_pointer{}; // puntero tope de la pila
+        GeneralRegister base_pointer{};  // puntero base de la pila
 
-        vm::MappedPtr rip{}; // puntero de instruccion
-        RFlags_t flags{};
+        GeneralRegister rip{}; // puntero de instruccion
+        RFlags_t        flags{};
 
         /**
          * Registros de proposito general.
          */
         GeneralRegister regs[16];
+
+        /**
+         * Registros cursor, cur0, cur1, cur2 y cur3
+         */
+        GeneralRegister cur[4];
 
         /**
          * Cada instancia tiene asignada un manager general de instancias
@@ -782,7 +786,7 @@ namespace runtime {
         // -----------------------------------------------------------
 
 
-        uint64_t time_sleep{}; /** usado para almacenar un valor numerico, el cual es en ns, la hora
+        uint64_t         time_sleep{}; /** usado para almacenar un valor numerico, el cual es en ns, la hora
                                      *  a la que despertar el hilo.
                                      *  Al dormir el hilo, se indica que su estado es BLOCK
                                      */
@@ -879,57 +883,47 @@ namespace runtime {
 
         std::string vm_summary() const {
             std::ostringstream ss;
-            // ID
-            ss << "ID=" << vesta::hex64(static_cast<uint64_t>(id.id));
 
-            // Estado
-            ss << " st=" << vm_state_to_str(state);
-            ss << std::endl;
+            ss << "ID=" << vesta::hex64((uint64_t) id.id)
+                    << " st=" << vm_state_to_str(state) << "\n";
 
-            ss << " R00=" << vesta::hex64(regs[R00].qword());
-            ss << " R01=" << vesta::hex64(regs[R01].qword());
-            ss << " R02=" << vesta::hex64(regs[R02].qword());
-            ss << " R03=" << vesta::hex64(regs[R03].qword());
-            ss << std::endl;
+            // Registros generales R00–R15
+            for (int i = 0; i < 16; ++i) {
+                ss << " R" << std::setw(2) << std::setfill('0') << i
+                        << "=" << vesta::hex64(regs[i].qword());
+                if (i % 2 == 1) ss << "\n";
+            }
+            ss << "\n";
 
-            ss << " R04=" << vesta::hex64(regs[R04].qword());
-            ss << " R05=" << vesta::hex64(regs[R05].qword());
-            ss << " R06=" << vesta::hex64(regs[R06].qword());
-            ss << " R07=" << vesta::hex64(regs[R07].qword());
-            ss << std::endl;
+            // CUR0–CUR3
+            for (int i = 0; i < 4; ++i) {
+                ss << " CUR" << i << "=" << vesta::hex64(cur[i].qword());
+                if (i % 2 == 1) ss << "\n";
+            }
+            ss << "\n";
 
-            ss << " R08=" << vesta::hex64(regs[R08].qword());
-            ss << " R09=" << vesta::hex64(regs[R09].qword());
-            ss << " R10=" << vesta::hex64(regs[R10].qword());
-            ss << " R11=" << vesta::hex64(regs[R11].qword());
-            ss << std::endl;
+            // IP/SP/BP
+            ss << " RIP=" << vesta::component_to_string(rip)
+                    << " RSP=" << vesta::component_to_string(stack_pointer)
+                    << " RBP=" << vesta::component_to_string(base_pointer)
+                    << "\n";
 
-            ss << " R12=" << vesta::hex64(regs[R12].qword());
-            ss << " R13=" << vesta::hex64(regs[R13].qword());
-            ss << " R14=" << vesta::hex64(regs[R14].qword());
-            ss << " R15=" << vesta::hex64(regs[R15].qword());
-            ss << std::endl;
-
-            // IP/SP/BP (usar component_to_string para capturar representación)
-            ss << " IP=" << vesta::component_to_string(rip);
-            ss << " SP=" << vesta::component_to_string(stack_pointer);
-            ss << " BP=" << vesta::component_to_string(base_pointer);
-
-            // Flags compactas
-            ss << " FLAGS="
-                    << "CF=" << vesta::hex64(flags.bits.CF) << " "
-                    << "OF=" << vesta::hex64(flags.bits.OF) << " "
-                    << "SF=" << vesta::hex64(flags.bits.SF) << " "
-                    << "ZF=" << vesta::hex64(flags.bits.ZF) << " "
-                    << "DM=" << vesta::hex64(flags.bits.DM);
-
+            // FLAGS
+            ss << " FLAGS=["
+                    << "CF=" << (int) flags.bits.CF << " "
+                    << "OF=" << (int) flags.bits.OF << " "
+                    << "SF=" << (int) flags.bits.SF << " "
+                    << "ZF=" << (int) flags.bits.ZF << " "
+                    << "DM=" << (int) flags.bits.DM
+                    << "]\n";
 
             // Thread / sleep
-            ss << " Th=" << reinterpret_cast<void *>(thread_for_vm)
+            ss << " Th=" << (void *) thread_for_vm
                     << " Sleep=" << time_sleep;
 
             return ss.str();
         }
+
 
         void decode_instruction();
 
@@ -1073,14 +1067,14 @@ namespace runtime {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
             // --- IPS ---
-            uint64_t now = vm->profiler_instr_counter;
+            uint64_t now   = vm->profiler_instr_counter;
             uint64_t delta = now - last;
-            last = now;
+            last           = now;
 
             uint64_t ips = delta * 256;
 
             // --- CPU ---
-            double cpu = (vm->time_exec / 1e9) * 100.0;
+            double cpu    = (vm->time_exec / 1e9) * 100.0;
             vm->time_exec = 0;
 
             // --- Salida thread-safe ---
@@ -1093,7 +1087,7 @@ namespace runtime {
 
     static void dump_vm_region(VM *vm, uint64_t vaddr, size_t size) {
         uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
-        uint64_t end = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
+        uint64_t end   = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
 
         vesta::SyncOStream out = vesta::scout(); // salida thread-safe
 

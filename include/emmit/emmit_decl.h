@@ -77,6 +77,36 @@ namespace Assembly::Bytecode {
     };
 
     /**
+     * Codificacion para registros extendidos o especiales.
+     */
+    static const std::unordered_map<std::string, uint8_t> special_reg_encoding = {
+        {"cur0", 0b000000},
+        {"cur1", 0b000001},
+        {"cur2", 0b000010},
+        {"cur3", 0b000011},
+
+        {"rip", 0b001000},
+        {"rbp", 0b001001},
+        {"rsp", 0b001010},
+        {"rflags", 0b001011},
+    };
+
+    /**
+     * Permite obtener la codificacion de un registro especial/extendido, en caso de no ser uno de estos,
+     * podria ser un registro general u otra cosa.
+     * @param reg supuesto registro especial.
+     * @return codificacion del registro, en caso de no ser un registro especial, devuelve std::nullopt.
+     */
+    inline std::optional<uint8_t> encode_special_register(const std::string &reg) {
+        auto it = special_reg_encoding.find(reg);
+        if (it != special_reg_encoding.end())
+            return it->second;
+
+        return std::nullopt;
+    }
+
+
+    /**
      * Permite obtener el tamaño de un valor y si es con o sin signo
      * @param value valor a comprobar
      * @param is_signed si tiene o no tiene signo
@@ -213,8 +243,8 @@ namespace Assembly::Bytecode {
     * Tipo puntero a funcion para emitir la instruccion
     */
     typedef void (*emitInstr)(
-        const vm::Instruction *, // instruccion analizar por el parser
-        ByteWriter &, // lugar donde emitir la instruccion
+        const vm::Instruction *,  // instruccion analizar por el parser
+        ByteWriter &,             // lugar donde emitir la instruccion
         const struct InstrInfo *, // la propia estructura que contiene la informacion de la
         // instruccion codificada
         Assembler *assembly_ctx
@@ -247,39 +277,53 @@ namespace Assembly::Bytecode {
         return signed_ops.count(opcode) > 0;
     }
 
+    void emit_pop_push(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
     void emit_inc_dec(
         const vm::Instruction *instruction_parser,
-        ByteWriter &code_final,
-        const InstrInfo *now_instr,
-        Assembler *assembly_ctx
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
     );
 
     void emit_instr_reg(
         const vm::Instruction *instruction_parser,
-        ByteWriter &code_final,
-        const InstrInfo *now_instr,
-        Assembler *assembly_ctx
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
     );
 
     void emit_instr_mem(
         const vm::Instruction *instruction_parser,
-        ByteWriter &code_final,
-        const InstrInfo *now_instr,
-        Assembler *assembly_ctx
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
     );
 
     void emit_instr_sib(
         const vm::Instruction *instruction_parser,
-        ByteWriter &code_final,
-        const InstrInfo *now_instr,
-        Assembler *assembly_ctx
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
     );
 
     void emit_instr_inmed(
         const vm::Instruction *instruction_parser,
-        ByteWriter &code_final,
-        const InstrInfo *now_instr,
-        Assembler *assembly_ctx
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    void emit_instr_inmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
     );
 }
 #endif //EMMIT_DECL_H

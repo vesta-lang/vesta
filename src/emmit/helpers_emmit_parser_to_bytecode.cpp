@@ -165,6 +165,8 @@ namespace Assembly::Bytecode {
         //    aquí ya mirar los operandos y generar el encoding real.
         if (info.emit != nullptr) {
             info.emit(instr, output, &info, this);
+        } else {
+            std::cout << "La isntruccion: " << instr->opcode << " no esta implementada en el ensamblador, no tiene una unidad de emision"  << std::endl;
         }
     }
 }

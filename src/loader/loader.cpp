@@ -323,7 +323,7 @@ namespace loader {
         runtime::VM *vm = instance_manager.get_vm(id);
 
         // configuramos RIP (PC tambien llamado)
-        vm->rip.ptr_vm.raw = exe.init_pc;
+        vm->rip.qword(exe.init_pc);
 
         // copiamos cada seccion del ejecutable a la memoria virtual
         // de la VM
