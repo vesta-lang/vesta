@@ -296,5 +296,5 @@ namespace Sqlite {
         print_table(ss, rows, columns_order, right_align_numbers, max_width);
         return ss.str();
     }
-};
+}
 #endif //SQLITESINGLETON_H

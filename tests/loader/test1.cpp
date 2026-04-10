@@ -18,15 +18,15 @@
 #include <string>
 
 size_t total_allocated = 0;
-size_t peak_memory = 0;
+size_t peak_memory     = 0;
 
 /**
  * Metodo de "limpiado de cache" llamado "cache thrashing",
  * expulsa casi todo_ de L1/L2/L3
  */
 void flush_cache() {
-    static const size_t SIZE = 50 * 1024 * 1024; // 50 MB
-    static char *buffer = NULL;
+    static const size_t SIZE   = 50 * 1024 * 1024; // 50 MB
+    static char *       buffer = NULL;
 
     if (!buffer) buffer = (char *) malloc(SIZE);
 
@@ -52,7 +52,7 @@ void print_memory_stats() {
 }
 
 // modo perfilado activado
-#define VM_PROFILE
+//#define VM_PROFILE
 
 #include "emmit/parser_to_bytecode.h"
 #include "lexer/lexer.h"
@@ -100,12 +100,12 @@ using namespace Assembly::Bytecode;
 //#define BENCHMARK_VM
 
 int main() {
-    Timer global;
+    Timer             global;
     runtime::ManageVM manager = runtime::ManageVM(nullptr, 0);
 
     // Leer archivo fuente
     const std::string name_file("test.vel");
-    std::ifstream file(name_file);
+    std::ifstream     file(name_file);
     if (!file.is_open()) {
         std::cerr << "ERROR: No se pudo abrir: " << name_file << "\n";
         return 1;
@@ -121,12 +121,12 @@ int main() {
 
     // Lexer + Parser
 
-    vm::Lexer lexer(code);
+    vm::Lexer  lexer(code);
     vm::Parser parser(lexer);
 
 
     std::vector<std::unique_ptr<vm::ASTNode> > program;
-    Timer t_parser;
+    Timer                                      t_parser;
     try {
         program = parser.parse();
     } catch (const vm::ParseError &e) {
@@ -141,8 +141,8 @@ int main() {
 
     // Ensamblar
     Assembler asmblr;
-    Timer t_asm;
-    auto bytecode = asmblr.assemble(program);
+    Timer     t_asm;
+    auto      bytecode = asmblr.assemble(program);
     std::cout << C_CYAN << "[Tiempo Assembler] " << C_RESET << t_asm.us() << " us " << t_asm.ms() << " ms\n";
 
 #ifdef DEBUG_EMIT
@@ -166,11 +166,11 @@ int main() {
     Linker::LinkerOptions opts;
     opts.optimize_bytecode = true;
     opts.generate_map_file = true;
-    opts.output_path = "program.velb";
-    opts.map_file_path = "program.velb-map";
-    opts.verbose = true;
+    opts.output_path       = "program.velb";
+    opts.map_file_path     = "program.velb-map";
+    opts.verbose           = true;
 
-    Timer t_linker;
+    Timer          t_linker;
     Linker::Linker linker(opts);
 
     // Añadir el ensamblado crudo
@@ -210,7 +210,7 @@ int main() {
 
     print_memory_stats();
 
-    Timer t_loader;
+    Timer        t_loader;
     runtime::VM *vm = manager.loader.load_executable(opts.output_path);
 
 #ifdef BENCHMARK_VM
@@ -218,9 +218,9 @@ int main() {
     bench_code.reserve(4 * 2'000'000); // 2M iteraciones -> 4M instrucciones
 
     const uint8_t add_instr[4][4] = {
-        {0x00, 0x05, 0x00, 0xDF},
+        {0x04, 0x7f, 0x04, 0x7f},
         {0x00, 0x05, 0x40, 0xDF},
-        {0x00, 0x05, 0x80, 0xDF},
+        {0x04, 0x3e, 0x04, 0x7f},
         {0x00, 0x05, 0xC0, 0xDF}
     };
 
@@ -302,7 +302,7 @@ int main() {
                    stage_color,
                    stage_name,
                    C_RESET,
-                   vm->rip.ptr_vm.raw,
+                   vm->rip.raw(),
                    vm->decoded_ptr->flags_info.is_not_extended,
                    vm->decoded_ptr->flags_info.opcode_index,
                    vm->decoded_ptr->flags_info.mode,
@@ -326,22 +326,33 @@ int main() {
             // --- REGISTERS ---
             for (int i = 0; i < 16; ++i) {
                 printf(" R%02d=0x%016llx", i, vm->regs[i].qword());
-                if ((i % 4) == 3) printf("\n");
+                if ((i % 2) == 1) printf("\n");
             }
+            printf("\n");
+
+            for (int i = 0; i < 4; ++i) {
+                printf(" CUR%02d=0x%016llx", i, vm->cur[i].qword());
+                if ((i % 2) == 1) printf("\n");
+            }
+            printf("\n");
 
             // --- FLAGS ---
-            printf(" FLAGS=[");
-            printf("CF=%u ", vm->flags.bits.CF);
-            printf("OF=%u ", vm->flags.bits.OF);
-            printf("SF=%u ", vm->flags.bits.SF);
-            printf("ZF=%u ", vm->flags.bits.ZF);
-            printf("DM=%u", vm->flags.bits.DM);
+            printf("\nFLAGS=[");
+            printf("\n");
+            printf("\tCF=%u ", vm->flags.bits.CF);
+            printf("\tOF=%u ", vm->flags.bits.OF);
+            printf("\n");
+            printf("\tSF=%u ", vm->flags.bits.SF);
+            printf("\tZF=%u ", vm->flags.bits.ZF);
+            printf("\n");
+            printf("\tDM=%u", vm->flags.bits.DM);
+            printf("\n");
             printf("]\n");
 
             // --- POINTERS ---
-            printf(" IP=0x%016llx\n", vm->rip.ptr_vm.raw);
-            printf(" SP=0x%016llx\n", vm->stack_pointer.ptr_vm.raw);
-            printf(" BP=0x%016llx\n", vm->base_pointer.ptr_vm.raw);
+            printf(" IP=0x%016llx\n", vm->rip.raw());
+            printf(" SP=0x%016llx\n", vm->stack_pointer.raw());
+            printf(" BP=0x%016llx\n", vm->base_pointer.raw());
 
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
 
@@ -361,8 +372,8 @@ int main() {
 
             vm->debug_timer.reset();
             vm->time_decode = 0;
-            vm->time_exec = 0;
-            vm->time_event = 0;
+            vm->time_exec   = 0;
+            vm->time_event  = 0;
         }
         if (stage == runtime::DebugStage::OnEventBegin)
             printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
@@ -370,19 +381,19 @@ int main() {
 
 #ifdef BENCHMARK_VM
 
-    vm->has_hooks = false;
+    vm->has_hooks                = false;
     const uint64_t INSTR_PER_RUN = 8'000'000; // 4 ADD * 2M iteraciones
 
     uint64_t total_ns = 0;
-    uint64_t min_ns = UINT64_MAX;
-    uint64_t max_ns = 0;
+    uint64_t min_ns   = UINT64_MAX;
+    uint64_t max_ns   = 0;
 
     const int RUNS = 10000;
 
     for (int i = 0; i < RUNS; i++) {
         // Reset de la VM antes de cada ejecución
         vm->rip.ptr_vm.raw = 0;
-        vm->has_hooks = false;
+        vm->has_hooks      = false;
 
         // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
         // for (auto &entry: vm->icache) {
@@ -404,16 +415,16 @@ int main() {
         if (ns > max_ns) max_ns = ns;
 
         double ns_per_instr = double(ns) / INSTR_PER_RUN;
-        double mips = (INSTR_PER_RUN * 1000.0) / ns;
-       /* std::cout << C_CYAN << "[RUN " << i << "] " << C_RESET
-                << ns << " ns  (" << (ns / 1000.0) << " us, "
-                << (ns / 1'000'000.0) << " ms)"
-                << "  |  " << mips << " MIPS\n";*/
+        double mips         = (INSTR_PER_RUN * 1000.0) / ns;
+        /* std::cout << C_CYAN << "[RUN " << i << "] " << C_RESET
+                 << ns << " ns  (" << (ns / 1000.0) << " us, "
+                 << (ns / 1'000'000.0) << " ms)"
+                 << "  |  " << mips << " MIPS\n";*/
     }
 
     SLEEP(3000);
 
-    double avg_ns = double(total_ns) / RUNS;
+    double avg_ns   = double(total_ns) / RUNS;
     double avg_mips = (INSTR_PER_RUN * 1000.0) / avg_ns;
     std::cout << C_GREEN << "\n=== RESULTADOS BENCHMARK ===\n" << C_RESET;
 

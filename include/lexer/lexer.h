@@ -17,6 +17,7 @@
 #include <iostream>
 #include <string>
 #include <fstream>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -27,36 +28,41 @@ namespace vm {
      * @return si no es un registro, entonces devuelve false
      */
     inline bool is_register(const std::string &lexeme) {
-        if (lexeme.size() < 2) return false;
+        if (lexeme.empty()) return false;
+
+        // Tabla de registros especiales
+        static const std::unordered_set<std::string> special_regs = {
+            "rip", "rbp", "rsp", "rflags",
+            "cur0", "cur1", "cur2", "cur3"
+        };
+
+        if (special_regs.count(lexeme))
+            return true;
 
         // Registros generales: r[0-15][b|w|d]?
         if (lexeme[0] == 'r') {
-            // Extraer número después de 'r'
-            size_t num_start = 1;
-            while (num_start < lexeme.size() && isdigit(static_cast<unsigned char>(lexeme[num_start]))) {
-                ++num_start;
+            size_t i = 1;
+
+            // Leer número
+            while (i < lexeme.size() && isdigit((unsigned char) lexeme[i]))
+                i++;
+
+            if (i == 1) return false; // no había número
+
+            int reg_num = std::stoi(lexeme.substr(1, i - 1));
+            if (reg_num < 0 || reg_num > 15)
+                return false;
+
+            // Sufijo opcional
+            if (i == lexeme.size())
+                return true;
+
+            if (i + 1 == lexeme.size()) {
+                char suf = lexeme[i];
+                return (suf == 'b' || suf == 'w' || suf == 'd');
             }
 
-            // Verificar número válido (0-15)
-            if (num_start > 1) {
-                std::string num_str = lexeme.substr(1, num_start - 1);
-                int         reg_num = std::stoi(num_str);
-                if (reg_num >= 0 && reg_num <= 15) {
-                    // Suffix opcional: b=8bit, w=16bit, d=32bit (64bit sin suffix)
-                    if (num_start == lexeme.size() ||
-                        (num_start + 1 == lexeme.size() &&
-                            (lexeme[num_start] == 'b' ||
-                                lexeme[num_start] == 'w' ||
-                                lexeme[num_start] == 'd'))) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Registros especiales de VM
-        if (lexeme == "rp" || lexeme == "ip") {
-            return true;
+            return false;
         }
 
         return false;
@@ -132,7 +138,7 @@ namespace vm {
         COMMENT, ///< Comentario
         NEWLINE, ///< Salto de linea \n
 
-        SYMBOL,   ///< Simbolo generico no reconocido
+        SYMBOL, ///< Simbolo generico no reconocido
         END_LABEL,
         EndOfFile ///< Fin de archivo (EOF)
     };

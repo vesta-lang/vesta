@@ -72,8 +72,8 @@ namespace Assembly::Bytecode {
                 {0x00, 0x22, InstrSizeMode::FIXED_4, AddressingMode::REG, nullptr}, // jmp   <reg>
             }
         },
-        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, nullptr}}},
-        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, nullptr}}},
+        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
+        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
 
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
