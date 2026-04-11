@@ -338,7 +338,7 @@ namespace loader {
             // copiar a la memoria virtual de la VM
             vm->vm_mem.vm_to_host_memcpy(vm_addr, src, size);
 
-            // mostrar datos de la region de memoria reservacada para la seccion.
+            // mostrar datos de la region de memoria reservada para la seccion.
             runtime::dump_vm_region(vm, vm_addr, size);
         }
         //vm->vm_mem[0x10] = 1;
