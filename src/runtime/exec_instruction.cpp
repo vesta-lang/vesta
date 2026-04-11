@@ -17,4 +17,45 @@ namespace runtime {
         // EXECUTE emita un evento de tipo EVT_ERROR
         vm->should_kill = true;
     }
+
+    void exec_instr_push(VM *vm, const DecodedInstr &instr) {
+        uint8_t reg_ext  = instr.flags_info.reg_ext;
+        uint8_t reg_code = instr.data_instruction.reg_data.reg1;
+
+        uint64_t value;
+        size_t   size;
+
+        if (reg_ext) {
+            // Registro especial -> siempre 8 bytes
+            value = read_special(vm, reg_code);
+            size  = 8;
+        } else {
+            // Registro general
+            uint8_t mode = instr.flags_info.mode;
+            size         = Assembly::Bytecode::mode_to_bytes(mode);
+            value        = read_reg_table[mode](vm, reg_code);
+        }
+
+        vm->stack_pointer.qword(vm->stack_pointer.qword() - size);
+        vm->vm_mem.write_bytes(vm->stack_pointer.raw(), &value, size);
+    }
+
+
+    void exec_instr_pop(VM *vm, const DecodedInstr &instr) {
+        uint8_t reg_ext  = instr.flags_info.reg_ext;
+        uint8_t reg_code = instr.data_instruction.reg_data.reg1;
+
+        size_t size = reg_ext ? 8 : Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
+
+        uint64_t value = 0;
+        vm->vm_mem.read_bytes(vm->stack_pointer.raw(), &value, size);
+        vm->stack_pointer.qword(vm->stack_pointer.qword() + size);
+
+        if (reg_ext) {
+            write_special(vm, reg_code, value);
+        } else {
+            uint8_t mode = instr.flags_info.mode;
+            write_reg_table[mode](vm, reg_code, value);
+        }
+    }
 }

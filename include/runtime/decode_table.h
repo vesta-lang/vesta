@@ -18,7 +18,7 @@ namespace runtime {
 
     extern InstrFormat decode_table_primary[0x100];
     extern InstrFormat decode_table_extended[0x100];
-};
+}
 
 
 #endif //DECODE_TABLE_H

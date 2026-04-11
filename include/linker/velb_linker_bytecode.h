@@ -921,7 +921,7 @@ namespace Assembly::Bytecode::Linker {
          */
         void build_section_table();
     };
-};
+}
 
 //#endif
 

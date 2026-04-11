@@ -212,7 +212,7 @@ local function apply_build_mode( target, info )
 
         -- LTO
         if info.is_msvc then
-            -- Windows COFF → obligatorio lld
+            -- Windows COFF -> obligatorio lld
             target:add("cxflags", "-flto=thin", { force = true })
 
             -- Flags equivalentes a /OPT:REF /OPT:ICF
@@ -243,7 +243,7 @@ end
 
 local function apply_linker( target, info )
 
-    -- COFF (clang + MSVC ABI → lld-link)
+    -- COFF (clang + MSVC ABI -> lld-link)
     if info.is_msvc then
 
         if is_release( target ) then

@@ -54,8 +54,8 @@ namespace Assembly::Bytecode {
 
         // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
         // segundo byte
-        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc}}},
-        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc}}},
+        {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
+        {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
 
 
         {
@@ -72,8 +72,8 @@ namespace Assembly::Bytecode {
                 {0x00, 0x22, InstrSizeMode::FIXED_4, AddressingMode::REG, nullptr}, // jmp   <reg>
             }
         },
-        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, nullptr}}},
-        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, nullptr}}},
+        {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
+        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
 
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
@@ -104,7 +104,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x06, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -117,7 +117,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x06, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x06, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x07, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -131,7 +131,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x09, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -144,7 +144,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x09, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x09, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x0A, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -157,7 +157,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x0C, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -170,7 +170,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0C, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x0C, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x0D, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -183,7 +183,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x0F, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -196,7 +196,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x0F, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x0F, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x10, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib}
@@ -209,7 +209,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x12, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
@@ -222,7 +222,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x12, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x12, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x13, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
@@ -237,7 +237,7 @@ namespace Assembly::Bytecode {
                 {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x15, InstrSizeMode::FIXED_8, AddressingMode::MEM, emit_instr_mem},
+                {0x00, 0x15, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
 
                 // REG, SIB || SIB, REG
                 {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
@@ -358,16 +358,6 @@ namespace Assembly::Bytecode {
          */
         const InstrInfo &select_variant(const std::string &mnemonic,
                                         const std::vector<std::unique_ptr<vm::ASTNode> > &ops) const;
-
-        /**
-         * @brief Calcula el tamaño en bytes de una instrucción.
-         *
-         * Usa la variante seleccionada y su modo de tamaño (FIXED_1, FIXED_2, etc.).
-         *
-         * @param instr Nodo Instruction del AST.
-         * @return Tamaño en bytes de la instrucción.
-         */
-        size_t size_of_instruction(const vm::Instruction *instr) const;
 
         /**
          * @brief Emite una instrucción al buffer de salida.

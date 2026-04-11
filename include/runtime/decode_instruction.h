@@ -31,6 +31,29 @@
 #define PROFILE_END(label)
 #endif
 
+/**
+ * Permite indicar si se quiere realizar comprobaciones de seguridad o no.
+ * En caso de VM_DEBUG_CHECKS == 1 se añadira comprobaciones en la compilacion
+ * para hacer validaciones durante el desarollo de la VM.
+ *
+ * Se recomienda desactivar la flag poniendole el valor 0 para tener el maximo
+ * rendimiento en las funciones que son Hot-path como la fase de descodificacion
+ * y ejecuccion.
+ */
+
+#ifdef VM_DEBUG_CHECKS
+#pragma message("VM_DEBUG_CHECKS fue activada")
+#define VM_ASSERT(cond, msg, code) \
+    do { \
+    if (!(cond)) { \
+    vesta::scout() << "[VM ASSERT] " << msg << "\n"; \
+    code; \
+    abort(); \
+    } \
+    } while (0)
+#else
+#define VM_ASSERT(cond, msg, code) do {} while (0)
+#endif
 
 namespace runtime {
     struct DecodedInstr;
@@ -90,7 +113,45 @@ namespace runtime {
      *      reg1, reg2 o
      *      reg2, reg1
      */
-    void decode_instr_reg(VM *vm, DecodedInstr &instr);
+    void decode_instr_two_op_reg(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Se usa para descodificar instrucciones con un solo operando de tipo
+     * registro, donde el opcode que indica el registro tiene tambien el
+     * modo contenido como es el caso de INC y DEC:
+     *
+     * | Instrucción | opcode1 | byte (relleno o extensión o registro) | total bytes |
+     * | :---------: | :-----: | :-----------------------------------: | :---------: |
+     * |     INC     |   0x4   |             `0b00` `reg`              |      2      |
+     *
+     * | Instrucción | opcode1 | byte (relleno o extensión o registro) | total bytes |
+     * | :---------: | :-----: | :-----------------------------------: | :---------: |
+     * |     DEC     |   0x4   |             `0b01` `reg`              |      2      |
+     *
+     * En estos casos reg contiene 2 primeros bits para el "modo" (si el reg es de 1, 2, 4 u 8 bytes)
+     * mientras que los otros 4 bits se usa para indicar el registro general a usar que puede ser de
+     * r0 a r15.
+     *
+     * Estas instrucciones no deben usar 0x00 (extension de opcode), debe ser una instruccion
+     * mono-opcode.
+     *
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
+     */
+    void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Permite descodificar instrucciones MOV de tipo registro. Es muy parecida a decode_instr_two_op_reg,
+     * pero se prefiere tener una func aparte solo para el mov ya que algunos campos pueden no ser necesarios
+     * de extraer, o la forma de descoficiar pued cambiar en el futuro.
+     * @param vm
+     * @param instr
+     */
+    void decode_instr_simple_mov(VM *vm, DecodedInstr &instr);
 
     /**
      * Se usa para descodificar instrucciones simples que no requieren de
@@ -101,5 +162,23 @@ namespace runtime {
      * @param instr
      */
     void decode_instr_simple(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Permite descodificar instrucciones del tipo inmediato como son:
+     *      - adds r0d, 0x12345678
+     *      - adds [r1w], 0x1234
+     * se supone que todas las instrucciones de este tipo usan extension de opcode.
+     * @param vm
+     * @param instr
+     */
+    void decode_instr_inmed_reg(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Permite descodificar instrucciones como PUSH/POP donde pueden usar registros
+     * extendidos o generales.
+     * @param vm
+     * @param instr
+     */
+    void decode_instr_push_pop(VM *vm, DecodedInstr &instr);
 }
 #endif //DECODE_INSTRUCTION_H
