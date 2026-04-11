@@ -52,13 +52,36 @@ namespace vm {
          * registrándola en la TLB. Para otros tipos de mapeo, la función delega en la
          * lógica correspondiente o genera un error si el modo no está implementado.
          *
+         * Optimización:
+         *  - Cuando el puntero físico resultante está alineado a 16 bytes, se activa
+         *    un *fast‑path* que permite al compilador generar accesos alineados
+         *    mediante `__builtin_assume_aligned()`. Esto habilita instrucciones SIMD
+         *    alineadas (movaps/vmovaps o equivalentes NEON/AVX), reduciendo el coste
+         *    de copia en bloques grandes. Si la alineación no está garantizada, la
+         *    función recurre automáticamente al camino seguro tradicional.
+         *
+         * Esta optimización es transparente para el usuario y mantiene compatibilidad
+         * total con la versión anterior.
+         *
          * @param vaddr Dirección virtual inicial desde la que se desea leer.
          * @param dst   Puntero al buffer destino donde se almacenarán los bytes leídos.
          * @param size  Número de bytes a leer desde memoria virtual.
          */
         void read_bytes(uint64_t vaddr, void *dst, size_t size);
 
-        uint32_t read_u16(uint64_t vaddr);
+        void write_bytes(uint64_t vaddr, const void *src, size_t size);
+
+        void write_u8(uint64_t vaddr, uint8_t value);
+
+        void write_u16(uint64_t vaddr, uint16_t value);
+
+        void write_u32(uint64_t vaddr, uint32_t value);
+
+        void write_u64(uint64_t vaddr, uint64_t value);
+
+        uint8_t read_u8(uint64_t vaddr);
+
+        uint16_t read_u16(uint64_t vaddr);
 
         /**
          * Lee un valor de 32 bits desde memoria virtual.
@@ -98,6 +121,34 @@ namespace vm {
 
             uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
             return base[vaddr & 0xFFF];
+        }
+
+        template<typename T>
+        inline T read_any(uint64_t addr) {
+            if constexpr (std::is_same_v<T, uint8_t>)
+                return read_u8(addr);
+            else if constexpr (std::is_same_v<T, uint16_t>)
+                return read_u16(addr);
+            else if constexpr (std::is_same_v<T, uint32_t>)
+                return read_u32(addr);
+            else if constexpr (std::is_same_v<T, uint64_t>)
+                return read_u64(addr);
+            else
+                static_assert(sizeof(T) == 0, "Unsupported type in read_any");
+        }
+
+        template<typename T>
+        inline void write_any(uint64_t addr, T value) {
+            if constexpr (std::is_same_v<T, uint8_t>)
+                write_u8(addr, value);
+            else if constexpr (std::is_same_v<T, uint16_t>)
+                write_u16(addr, value);
+            else if constexpr (std::is_same_v<T, uint32_t>)
+                write_u32(addr, value);
+            else if constexpr (std::is_same_v<T, uint64_t>)
+                write_u64(addr, value);
+            else
+                static_assert(sizeof(T) == 0, "Unsupported type in write_any");
         }
     };
 }

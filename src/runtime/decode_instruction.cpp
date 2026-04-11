@@ -27,13 +27,16 @@ inline uint64_t now_ns() {
 namespace runtime {
     using clock = std::chrono::high_resolution_clock;
 
-    void decode_instr_reg(VM *vm, DecodedInstr &instr) {
+    void decode_instr_two_op_reg(VM *vm, DecodedInstr &instr) {
+        // las instrucciones de registro usan tamaño constante.
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
         // suponiendo que sea un add, mov, sub, div, mul u otro
         // del estilo, se puede usar este modo de descodificacion.
 
         // el offset del resto de datos empieza apartir del opcode,
         // calculamos el offset al resto de datos.
-        uint8_t offset = vm->rip.ptr_vm.raw + ((instr.is_extended != 0) ? 1 : 2);
+        uint8_t offset = vm->rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
 
         // leemos los dos bytes que ocupa la instrucciones de este tipo
         uint16_t data = vm->vm_mem.read_u16(offset);
@@ -42,22 +45,181 @@ namespace runtime {
         uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
 
         // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
-        instr.mode = (n1 >> 6) & 0b11;
+        instr.flags_info.mode = (n1 >> 6) & 0b11;
 
         // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
     }
 
-    void decode_instr_simple(VM *vm, DecodedInstr &instr) {
+    void decode_instr_simple_mov(VM *vm, DecodedInstr &instr) {
+        // los MOV simples ocupan espacio constantes
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // el offset del resto de datos empieza apartir del opcode,
+        // calculamos el offset al resto de datos.
+        uint8_t offset = vm->rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+
+        // leemos los dos bytes que ocupa la instrucciones de este tipo
+        uint16_t data = vm->vm_mem.read_u16(offset);
+
+        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
+        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
+
+        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
+        instr.flags_info.mode = (n1 >> 6) & 0b11;
+
+        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
+        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
     }
 
+    void decode_instr_simple(VM *vm, DecodedInstr &instr) {}
+
+    void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr) {
+        VM_ASSERT(
+            instr_size(instr.metadata->size) == 2,
+            std::string("VM::decode_instr_one_op_reg() Instruccion invalida en RIP[") +
+            vesta::hex64(vm->rip.raw()) +
+            "] opcode1(" + vesta::hex64(instr.flags_info.is_not_extended) +
+            ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
+            "decode_instr_one_op_reg() Error la instruccion encontrada no tiene size 2 sino un size: "
+            << instr_size(instr.metadata->size) << "\n"
+            << vm->to_string(),
+            {
+            vesta::scout() << vesta::dump(vm->vm_mem, vm->rip.raw(), 64) << std::endl;
+            }
+        );
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // leemos solo 1 byte de datos pues se supone que la instruccion a
+        // descodificar es de longitud 2.
+        uint8_t data = vm->vm_mem[vm->rip.raw() + 1];
+
+        // 0b00`mode`0000 -> modo ocupa el los primeros 2 bits
+        instr.flags_info.mode = (data >> 4) & 0b11;
+
+        // el septimo bit indica si es INC o DIC
+        // 0b0000 0000 -> INC
+        // 0b0100 0000 -> DEC
+        instr.flags_info._signed_instruct = (data >> 6) & 0b1;
+
+        // 0b00`mode`reg -> registro ocupa los ultimos 4 bits
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(data & 0xF);
+    }
+
+    void decode_instr_push_pop(VM *vm, DecodedInstr &instr) {
+        VM_ASSERT(
+            instr_size(instr.metadata->size) == 2,
+            std::string("VM::decode_instr_push_pop() Instruccion invalida en RIP[") +
+            vesta::hex64(vm->rip.raw()) +
+            "] opcode1(" + vesta::hex64(instr.flags_info.is_not_extended) +
+            ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
+            "decode_instr_push_pop() Error la instruccion encontrada no tiene size 2 sino un size: "
+            << instr_size(instr.metadata->size) << "\n"
+            << vm->to_string(),
+            {
+            vesta::scout() << vesta::dump(vm->vm_mem, vm->rip.raw(), 64) << std::endl;
+            }
+        );
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // leemos solo 1 byte de datos pues se supone que la instruccion a
+        // descodificar es de longitud 2.
+        uint8_t data = vm->vm_mem[vm->rip.raw() + 1];
+
+        // bit 7 -> registro extendido (especial)
+        uint8_t reg_ext          = (data >> 6) & 0b1;
+        instr.flags_info.reg_ext = reg_ext;
+
+        if (reg_ext == 1) {
+            //   REGISTRO ESPECIAL (6 bits)
+            uint8_t reg_code                     = data & 0b00111111; // bits 0..5
+            instr.data_instruction.reg_data.reg1 = reg_code;
+
+            // modo no aplica
+            instr.flags_info.mode = 0;
+        } else {
+            //   REGISTRO GENERAL (mode + reg) (6 bits)
+            uint8_t mode     = (data >> 4) & 0b11; // bits 4..5
+            uint8_t reg_code = data & 0b1111;      // bits 0..3
+
+            instr.flags_info.mode                = mode;
+            instr.data_instruction.reg_data.reg1 = reg_code;
+        }
+
+        instr.flags_info.size_instr = 2;
+    }
+
+    void decode_instr_inmed_reg(VM *vm, DecodedInstr &instr) {
+        VM_ASSERT(
+            instr.flags_info.is_not_extended == false,
+            std::string("VM::decode_instr_inmed_reg() Instruccion invalida en RIP[") +
+            vesta::hex64(vm->rip.raw()) +
+            "] opcode1(" + vesta::hex64(instr.flags_info.is_not_extended) +
+            ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
+            "decode_instr_inmed_reg() instr.is_not_extended == false " <<
+            "Error la instruccion encontrada deberia usar extension de signo pero no lo hace por algun motivo: "
+            << std::to_string(instr.flags_info.is_not_extended) << "\n"
+            << vm->to_string(),
+            {
+            vesta::scout() << vesta::dump(vm->vm_mem, vm->rip.raw(), 64) << std::endl;
+            }
+        );
+
+        /**
+         * data contiene los campos encodeados:
+         * 0b mm s d rrrr
+         *    │  │ │ └─── reg (4 bits)
+         *    │  │ └───── d (1 bit)
+         *    │  └─────── s (1 bit)
+         *    └────────── mode (2 bits)
+         */
+        uint8_t data = vm->vm_mem[vm->rip.raw() + 2];
+
+        // leemos solo 8 byte de datos apartir del segundo opcode y el campo data.
+        // las instrucciones de inmediatos usan longitud variable, para asgurarnos de hacer las menos
+        // lecturas posibles leemos 64 bits primeramente de golpe, luego usamos 1, 2, 4, u 8 bytes de los leeidos.
+        uint64_t inmed = vm->vm_mem.read_u64(vm->rip.raw() + 3);
+
+        /**
+         * Aunque las instrucciones de inmediatos no tiene direccionalidad, el campo
+         * direccion permite indicar en este caso si el valor inmediato debe operar a un registro:
+         *      mov reg, 0x1000    -> direccion = 0
+         * o si por el contrario el valor inmediato debe operar el valor contenido en la memoria señala por
+         * el registro:
+         *      mov [reg], 0x1000  -> direccion = 1
+         */
+        instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6 (mm)
+        instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5 (s)
+        instr.flags_info.direction             = (data >> 4) & 0b1;  // bit 4 (d)
+        instr.data_instruction.inmmed_data.reg = data & 0b1111;      // bits 3-0 (rrrr)
+
+        /**
+         * El tamaño de este tipo de instrucciones es variable ya que depende del modo usado, la cantidad
+         * de bytes para el inmediato varia.
+         * solo 3 bytes son constantes, los cuales 2 son opcodes y 1 es metadatos de la instruccion,
+         * los otrs bytes corresponden a la longitud del inmediato que depende del modo codificado.
+         */
+        instr.flags_info.size_instr = 3 + Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
+
+        switch (instr.flags_info.mode) {
+            case 0b00: instr.data_instruction.inmmed_data.inmmed = (uint8_t) inmed; //  8 bits
+                break;
+            case 0b01: instr.data_instruction.inmmed_data.inmmed = (uint16_t) inmed; // 16 bits
+                break;
+            case 0b10: instr.data_instruction.inmmed_data.inmmed = (uint32_t) inmed; // 32 bits
+                break;
+            default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
+                break;
+        }
+    }
 
     void VM::decode_instruction() {
         vm_hook(this, DebugStage::DecodeBegin);
         PROFILE_START
 
-        uint64_t pc = rip.ptr_vm.raw;
+        uint64_t pc  = rip.raw();
         uint32_t idx = icache_index(pc);
 
         // -------------------------------------------------------------------------------------------------------
@@ -88,11 +250,11 @@ namespace runtime {
         __builtin_prefetch(&vm_mem[pc + 16], 0, 1);
 
         DecodedInstr decode_tmp{}; // decodificamos en un temporal
-        decode_tmp.pc = pc;
-        decode_tmp.is_extended = vm_mem[pc];
+        decode_tmp.pc                         = pc;
+        decode_tmp.flags_info.is_not_extended = vm_mem[pc];
 
-        if (decode_tmp.is_extended == 0x00) {
-            decode_tmp.opcode_index = vm_mem[pc + 1];
+        if (decode_tmp.flags_info.is_not_extended == 0x00) {
+            decode_tmp.flags_info.opcode_index = vm_mem[pc + 1];
         }
 
         // -------------------------------------------------------------------------------------------------------
@@ -100,29 +262,34 @@ namespace runtime {
 
         InstrFormat *table = decode_table_primary;
         // decoded ya tiene los dos opcodes. leeidos
-        uint8_t index = decode_tmp.is_extended;
+        uint8_t index = decode_tmp.flags_info.is_not_extended;
 
         // seleccionamos la tabla de opcodes en base a si el primer byte es 0x00 o no,
         // en caso de ser 0x00 se usa la tabla extendida (decode_table_extended).
-        if (decode_tmp.is_extended == 0x00) {
+        if (decode_tmp.flags_info.is_not_extended == 0x00) {
             table = decode_table_extended;
-            index = decode_tmp.opcode_index;
+            index = decode_tmp.flags_info.opcode_index;
         }
 
         // obtenemos los metadatos de la instruccion.
         InstrFormat &metadata = table[index];
 
-        if (
-            metadata.mode == Assembly::Bytecode::AddressingMode::COUNT ||
-            metadata.exec == nullptr) {
-            // realizamos el hook en caso de error
+        // Validación de instrucción (solo en modo debug)
+        VM_ASSERT(
+            metadata.mode < Assembly::Bytecode::AddressingMode::COUNT &&
+            metadata.exec != nullptr && metadata.decode != nullptr,
+
+            std::string("VM::decode_instruction() Instruccion invalida en RIP[") +
+            vesta::hex64(rip.raw()) +
+            "] opcode1(" + vesta::hex64(decode_tmp.flags_info.is_not_extended) +
+            ") opcode2(" + vesta::hex64(decode_tmp.flags_info.opcode_index) + ")" <<
+            "Bytes64: " <<
+            "\n" <<
+            to_string(),
+
+            vesta::scout() << vesta::dump(vm_mem, rip.raw(), 64) << std::endl;
             vm_hook(this, DebugStage::DecodeEnd);
-            vesta::scout() << "RIP[" << vesta::hex64(rip.ptr_vm.raw) << "] "
-                    << "Error, la instruccion con opcode1(" << vesta::hex64(decode_tmp.is_extended) << "), " <<
-                    "opcode2(" << vesta::hex64(decode_tmp.opcode_index) << ") no esta implementada en la VM"
-                    << std::endl;
-            exit(-1);
-        }
+        );
 
         // obtenemos los metadatos de la instruccion.
         decode_tmp.metadata = &metadata;
@@ -172,7 +339,7 @@ namespace runtime {
          * de codigo no avance, ya que hasta que esta instruccion no deje de
          * estar bloqueada, no podemos avanzar el registro PC.
          */
-        if (decoded_ptr->blocking) {
+        if (decoded_ptr->flags_info.blocking) {
             vm_hook(this, DebugStage::ExecuteEnd);
             return EVT_IO_WAIT; // EVT_IO_WAIT
         }
@@ -183,18 +350,19 @@ namespace runtime {
 
         // Si la instrucción NO modificó el PC, lo avanzamos, esto siempre pasara a no ser que sea un jmp o un call.
         // o una instruccion similar que modifique PC por su cuenta.
-        if (!decoded_ptr->did_jump)
+        if (!decoded_ptr->flags_info.did_jump)
             // movemos el puntero de instruccion al final de ejecutar la instruccion
-            rip.ptr_vm.raw += instr_size(decoded_ptr->metadata->size);
+            rip.qword(rip.raw() + decoded_ptr->flags_info.size_instr);
+        else decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la isntruccion, desmarcamos el salto
 
         // --- PROFILER: fin ---
         const uint64_t t2 = now_ns();
         profiler_sample++;
 
-        // Cada 256 instrucciones → sample
+        // Cada 256 instrucciones -> sample
         if ((profiler_sample & 0xFF) == 0) {
             profiler_instr_counter++; // IPS sampling
-            time_exec += (t2 - t1); // tiempo ocupado
+            time_exec += (t2 - t1);   // tiempo ocupado
         }
         // -------------------------
 

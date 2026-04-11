@@ -43,17 +43,17 @@ namespace runtime {
         },
 
         /* 0x03 */{
-            // inc / dec
-            "inc / dec", Assembly::Bytecode::AddressingMode::REG,
-            Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            nullptr, nullptr
-        },
-
-        /* 0x04 */{
             //
             "", Assembly::Bytecode::AddressingMode::COUNT,
             Assembly::Bytecode::InstrSizeMode::FIXED_1,
             nullptr, nullptr
+        },
+
+        /* 0x04 */{
+            // inc / dec
+            "inc / dec", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_inc_dec_reg, decode_instr_one_op_reg
         },
 
         /* 0x05 */{
@@ -151,14 +151,14 @@ namespace runtime {
             // push
             "push", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            nullptr, nullptr
+            exec_instr_push, decode_instr_push_pop
         },
 
         /* 0x13 */{
             // pop
             "pop", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            nullptr, nullptr
+            exec_instr_pop, decode_instr_push_pop
         },
 
         /* 0x14 */{
@@ -1871,14 +1871,14 @@ namespace runtime {
             // add reg, reg
             "add", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            exec_instr_add_reg, decode_instr_reg
+            exec_instr_add_reg, decode_instr_two_op_reg
         },
 
         /* 0x06 */{
-            // add reg, [mem] || [mem], reg
+            // add reg, 0x1000 || [reg], 0x1000
             "add", Assembly::Bytecode::AddressingMode::MEM,
-            Assembly::Bytecode::InstrSizeMode::FIXED_8,
-            nullptr, nullptr
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
+            exec_instr_add_imm, decode_instr_inmed_reg
         },
 
         /* 0x07 */{
@@ -1898,7 +1898,7 @@ namespace runtime {
         /* 0x09 */{
             // sub reg, [mem] || [mem], reg
             "sub", Assembly::Bytecode::AddressingMode::MEM,
-            Assembly::Bytecode::InstrSizeMode::FIXED_8,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
             nullptr, nullptr
         },
 
@@ -1940,7 +1940,7 @@ namespace runtime {
         /* 0x0F */{
             // div reg, [mem] || [mem], reg
             "div", Assembly::Bytecode::AddressingMode::MEM,
-            Assembly::Bytecode::InstrSizeMode::FIXED_8,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
             nullptr, nullptr
         },
 
@@ -1961,7 +1961,7 @@ namespace runtime {
         /* 0x12 */{
             // cmp reg, [mem] || [mem], reg
             "cmp", Assembly::Bytecode::AddressingMode::MEM,
-            Assembly::Bytecode::InstrSizeMode::FIXED_8,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
             nullptr, nullptr
         },
 
@@ -1974,22 +1974,22 @@ namespace runtime {
 
         /* 0x14 */{
             // mov reg, reg
-            "mov", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            "mov", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_mov_reg, decode_instr_simple_mov
         },
 
         /* 0x15 */{
             // mov reg, [mem] || [mem], reg
-            "mov", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
+            "mov", Assembly::Bytecode::AddressingMode::MEM,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
             nullptr, nullptr
         },
 
         /* 0x16 */{
             // mov REG, SIB || SIB, REG
-            "mov", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
+            "mov", Assembly::Bytecode::AddressingMode::SIB,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
             nullptr, nullptr
         },
 

@@ -18,17 +18,17 @@
 #include <string>
 
 size_t total_allocated = 0;
-size_t peak_memory = 0;
+size_t peak_memory     = 0;
 
 /**
  * Metodo de "limpiado de cache" llamado "cache thrashing",
  * expulsa casi todo_ de L1/L2/L3
  */
 void flush_cache() {
-    static const size_t SIZE = 50 * 1024 * 1024; // 50 MB
-    static char *buffer = NULL;
+    static const size_t SIZE   = 50 * 1024 * 1024; // 50 MB
+    static char *       buffer = NULL;
 
-    if (!buffer) buffer = (char *)malloc(SIZE);
+    if (!buffer) buffer = (char *) malloc(SIZE);
 
     for (size_t i = 0; i < SIZE; i += 64) {
         buffer[i]++; // tocar cada línea de caché
@@ -97,13 +97,15 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
+//#define BENCHMARK_VM
+
 int main() {
-    Timer global;
+    Timer             global;
     runtime::ManageVM manager = runtime::ManageVM(nullptr, 0);
 
     // Leer archivo fuente
     const std::string name_file("test.vel");
-    std::ifstream file(name_file);
+    std::ifstream     file(name_file);
     if (!file.is_open()) {
         std::cerr << "ERROR: No se pudo abrir: " << name_file << "\n";
         return 1;
@@ -119,12 +121,12 @@ int main() {
 
     // Lexer + Parser
 
-    vm::Lexer lexer(code);
+    vm::Lexer  lexer(code);
     vm::Parser parser(lexer);
 
 
     std::vector<std::unique_ptr<vm::ASTNode> > program;
-    Timer t_parser;
+    Timer                                      t_parser;
     try {
         program = parser.parse();
     } catch (const vm::ParseError &e) {
@@ -139,8 +141,8 @@ int main() {
 
     // Ensamblar
     Assembler asmblr;
-    Timer t_asm;
-    auto bytecode = asmblr.assemble(program);
+    Timer     t_asm;
+    auto      bytecode = asmblr.assemble(program);
     std::cout << C_CYAN << "[Tiempo Assembler] " << C_RESET << t_asm.us() << " us " << t_asm.ms() << " ms\n";
 
 #ifdef DEBUG_EMIT
@@ -164,11 +166,11 @@ int main() {
     Linker::LinkerOptions opts;
     opts.optimize_bytecode = true;
     opts.generate_map_file = true;
-    opts.output_path = "program.velb";
-    opts.map_file_path = "program.velb-map";
-    opts.verbose = true;
+    opts.output_path       = "program.velb";
+    opts.map_file_path     = "program.velb-map";
+    opts.verbose           = true;
 
-    Timer t_linker;
+    Timer          t_linker;
     Linker::Linker linker(opts);
 
     // Añadir el ensamblado crudo
@@ -208,17 +210,23 @@ int main() {
 
     print_memory_stats();
 
-    Timer t_loader;
+    Timer        t_loader;
     runtime::VM *vm = manager.loader.load_executable(opts.output_path);
 
+#ifdef BENCHMARK_VM
     std::vector<uint8_t> bench_code;
     bench_code.reserve(4 * 2'000'000); // 2M iteraciones -> 4M instrucciones
 
     const uint8_t add_instr[4][4] = {
-        {0x00, 0x05, 0x00, 0xDF},
+        // loop infinito
+        // esto es un PUSH RIP; POP RIP
+        //{0x12, 0x48, 0x13, 0x48},
+        //{0x12, 0x48, 0x04, 0x7f}, // push rip / inc r15
+        {0x04, 0x7f, 0x04, 0x7f}, // INC r15 /DEC r15
         {0x00, 0x05, 0x40, 0xDF},
-        {0x00, 0x05, 0x80, 0xDF},
-        {0x00, 0x05, 0xC0, 0xDF}
+        {0x04, 0x3e, 0x04, 0x7f},
+        {0x00, 0x05, 0xC0, 0xDF},
+        //{0x04, 0x7f, 0x13, 0x48}, // inc r15 / pop rip
     };
 
     for (size_t i = 0; i < 2'000'000; i++) {
@@ -232,6 +240,7 @@ int main() {
     bench_code.push_back(0x03);
     // cagro codigo de pruebas:
     vm->load_raw_code(0, bench_code);
+#endif
 
     std::cout << C_CYAN << "[Tiempo Loader] " << C_RESET << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
@@ -249,13 +258,13 @@ int main() {
             // --- FIN DE FASES ---
 
             case runtime::DebugStage::DecodeEnd: {
-                vm->time_decode += vm->debug_timer.ns();
+                //vm->time_decode += vm->debug_timer.ns();
                 vm->debug_timer.reset();
                 break;
             }
 
             case runtime::DebugStage::ExecuteEnd: {
-                vm->time_exec += vm->debug_timer.ns();
+                //vm->time_exec += vm->debug_timer.ns();
                 break;
             }
 
@@ -298,10 +307,10 @@ int main() {
                    stage_color,
                    stage_name,
                    C_RESET,
-                   vm->rip.ptr_vm.raw,
-                   vm->decoded_ptr->is_extended,
-                   vm->decoded_ptr->opcode_index,
-                   vm->decoded_ptr->mode,
+                   vm->rip.raw(),
+                   vm->decoded_ptr->flags_info.is_not_extended,
+                   vm->decoded_ptr->flags_info.opcode_index,
+                   vm->decoded_ptr->flags_info.mode,
                    vm_state_to_str(vm->state)
             );
         }
@@ -317,6 +326,39 @@ int main() {
         }
 
         if (stage == runtime::DebugStage::ExecuteEnd) {
+            printf(C_CYAN "[STATE AFTER INSTRUCTION]\n" C_RESET);
+
+            // --- REGISTERS ---
+            for (int i = 0; i < 16; ++i) {
+                printf(" R%02d=0x%016llx", i, vm->regs[i].qword());
+                if ((i % 2) == 1) printf("\n");
+            }
+            printf("\n");
+
+            for (int i = 0; i < 4; ++i) {
+                printf(" CUR%02d=0x%016llx", i, vm->cur[i].qword());
+                if ((i % 2) == 1) printf("\n");
+            }
+            printf("\n");
+
+            // --- FLAGS ---
+            printf("\nFLAGS=[");
+            printf("\n");
+            printf("\tCF=%u ", vm->flags.bits.CF);
+            printf("\tOF=%u ", vm->flags.bits.OF);
+            printf("\n");
+            printf("\tSF=%u ", vm->flags.bits.SF);
+            printf("\tZF=%u ", vm->flags.bits.ZF);
+            printf("\n");
+            printf("\tDM=%u", vm->flags.bits.DM);
+            printf("\n");
+            printf("]\n");
+
+            // --- POINTERS ---
+            printf(" IP=0x%016llx\n", vm->rip.raw());
+            printf(" SP=0x%016llx\n", vm->stack_pointer.raw());
+            printf(" BP=0x%016llx\n", vm->base_pointer.raw());
+
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
 
             printf("  decode = %lld ns (%lld ms)\n",
@@ -335,30 +377,27 @@ int main() {
 
             vm->debug_timer.reset();
             vm->time_decode = 0;
-            vm->time_exec = 0;
-            vm->time_event = 0;
+            vm->time_exec   = 0;
+            vm->time_event  = 0;
         }
         if (stage == runtime::DebugStage::OnEventBegin)
             printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
     });
 
-    vm->has_hooks = false;
-
-#define BENCHMARK_VM
 #ifdef BENCHMARK_VM
 
-
+    vm->has_hooks                = false;
     const uint64_t INSTR_PER_RUN = 8'000'000; // 4 ADD * 2M iteraciones
 
     uint64_t total_ns = 0;
-    uint64_t min_ns = UINT64_MAX;
-    uint64_t max_ns = 0;
+    uint64_t min_ns   = UINT64_MAX;
+    uint64_t max_ns   = 0;
 
     const int RUNS = 10000;
 
     for (int i = 0; i < RUNS; i++) {
         // Reset de la VM antes de cada ejecución
-        vm->rip.ptr_vm.raw = 0;
+        vm->rip.qword(0);
         vm->has_hooks = false;
 
         // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
@@ -381,16 +420,16 @@ int main() {
         if (ns > max_ns) max_ns = ns;
 
         double ns_per_instr = double(ns) / INSTR_PER_RUN;
-        double mips = (INSTR_PER_RUN * 1000.0) / ns;
-       /* std::cout << C_CYAN << "[RUN " << i << "] " << C_RESET
-                << ns << " ns  (" << (ns / 1000.0) << " us, "
-                << (ns / 1'000'000.0) << " ms)"
-                << "  |  " << mips << " MIPS\n";*/
+        double mips         = (INSTR_PER_RUN * 1000.0) / ns;
+        /* std::cout << C_CYAN << "[RUN " << i << "] " << C_RESET
+                 << ns << " ns  (" << (ns / 1000.0) << " us, "
+                 << (ns / 1'000'000.0) << " ms)"
+                 << "  |  " << mips << " MIPS\n";*/
     }
 
     SLEEP(3000);
 
-    double avg_ns = double(total_ns) / RUNS;
+    double avg_ns   = double(total_ns) / RUNS;
     double avg_mips = (INSTR_PER_RUN * 1000.0) / avg_ns;
     std::cout << C_GREEN << "\n=== RESULTADOS BENCHMARK ===\n" << C_RESET;
 
@@ -415,19 +454,23 @@ int main() {
     std::cout << "MIPS maximo:   " << max_mips << "\n";
 
 #else
+    //vm->has_hooks = false;
 
     Timer t_bench;
     vm->start();
+    std::thread(&runtime::profiler_thread, vm).detach();
     vm->join();
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
-    std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " <<  runner_ns << " us\n";
+    std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " << runner_ns << " us\n";
 #endif
 
 
     std::cout << std::dec;
     std::cout << C_CYAN << "\n[Tiempo total] " << C_RESET << global.us() << " us "
             << global.ms() << " ms\n";
+
+    std::cout << vm->to_string() << std::endl;
 
     return 0;
 }

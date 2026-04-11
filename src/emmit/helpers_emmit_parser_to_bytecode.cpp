@@ -38,7 +38,8 @@ namespace Assembly::Bytecode {
 
         for (size_t i = 0; i < size; ++i) {
             output.emit8(static_cast<uint8_t>((value >> (i * 8)) & 0xFF));
-        }}
+        }
+    }
 
     /**
      * Las cadenas deben emitirse caracter a caracter
@@ -96,14 +97,14 @@ namespace Assembly::Bytecode {
                 mode = AddressingMode::REG;
             }
 
-            // es de tipo memoria, pero del que usa solo un inmed tipo [0x1000]
+            // es de tipo inmed [0x1000]
             else if (auto s = dynamic_cast<vm::NumberOperand *>(ops[1].get())) {
-                mode = AddressingMode::MEM;
+                mode = AddressingMode::INMED;
             }
 
             // si el operando 1 es de tipo memoria, el resto de operandos da igual de que tipo sea,
             // ya que siempre sera memoria. por eso usar if y no else if aqui
-             if (auto s = dynamic_cast<vm::MemoryOperand *>(ops[0].get())) {
+            if (auto s = dynamic_cast<vm::MemoryOperand *>(ops[0].get())) {
                 mode = AddressingMode::MEM;
 
                 if (auto bin = dynamic_cast<vm::BinaryExpr *>(s->expr.get())) {
@@ -119,6 +120,14 @@ namespace Assembly::Bytecode {
 
             // si no hubo registro, y solo hay un operando, debe ser un inmediato
             if (auto s = dynamic_cast<vm::NumberOperand *>(ops[0].get())) {
+                mode = AddressingMode::INMED;
+            }
+        }
+
+        // si este caso se da, quiere decir que el operando usa un inmediato que se mueve a memoria, por ejemplo:
+        // adds [r0], 0x1000
+        if (mode == AddressingMode::MEM) {
+            if (auto s = dynamic_cast<vm::NumberOperand *>(ops[1].get())) {
                 mode = AddressingMode::INMED;
             }
         }
@@ -141,17 +150,6 @@ namespace Assembly::Bytecode {
         throw std::runtime_error("select_variant(): Unknown instruction variants: " + mnemonic);
     }
 
-    size_t Assembler::size_of_instruction(const vm::Instruction *instr) const {
-        const auto &info = select_variant(instr->opcode, instr->operands);
-
-        switch (info.sizeMode) {
-            case InstrSizeMode::FIXED_1: return 1;
-            case InstrSizeMode::FIXED_2: return 2;
-            case InstrSizeMode::FIXED_4: return 4;
-            case InstrSizeMode::FIXED_8: return 8;
-        }
-        throw std::runtime_error("Invalid size mode");
-    }
 
     void Assembler::emit_instruction(const vm::Instruction *instr) {
         const auto &info = select_variant(instr->opcode, instr->operands);
@@ -167,6 +165,8 @@ namespace Assembly::Bytecode {
         //    aquí ya mirar los operandos y generar el encoding real.
         if (info.emit != nullptr) {
             info.emit(instr, output, &info, this);
+        } else {
+            std::cout << "La isntruccion: " << instr->opcode << " no esta implementada en el ensamblador, no tiene una unidad de emision"  << std::endl;
         }
     }
 }

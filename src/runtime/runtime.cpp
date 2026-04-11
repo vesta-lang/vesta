@@ -18,7 +18,7 @@
 namespace runtime {
     VM::VM(
         ManageVM &mgr_vm,
-        uint64_t id_vm
+        uint64_t  id_vm
     ) : vm_mem(tlb, mgr_vm.manager_mem),
         manager_mem_public(mgr_vm.manager_mem),
         loader_priv(std::make_unique<loader::Loader>(mgr_vm)),
@@ -27,20 +27,7 @@ namespace runtime {
         mgr_vm(mgr_vm) { {
             this->manager_mem_priv = {};
 
-            // aun no se cargo nada asi que se inicializara a 0 todo_
-            stack_pointer = vm::MappedPtr{
-
-            };
-
-            base_pointer = vm::MappedPtr{
-
-            };
-
-            rip = vm::MappedPtr{
-
-            };
-
-            time_sleep = 0;
+            time_sleep   = 0;
             pending_call = nullptr;
         }
 
@@ -183,17 +170,17 @@ namespace runtime {
         vm_mem.vm_to_host_memcpy(address, code.data(), code.size());
 
         // resetear PC
-        rip.ptr_vm.raw = address;
+        rip.qword(address);
 
         // resetear icache
         for (auto &entry: icache) {
-            entry.pc = UINT64_MAX; // invalida
-            decoded_ptr = nullptr; // invalidar punteros decoder anteriores.
+            entry.pc    = UINT64_MAX; // invalida
+            decoded_ptr = nullptr;    // invalidar punteros decoder anteriores.
         }
 
         // resetear estado de ejecución
         decoded_ptr = nullptr;
         should_kill = false;
-        state = RUNNING;
+        state       = RUNNING;
     }
 } // RUNTIME
