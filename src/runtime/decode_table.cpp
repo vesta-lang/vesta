@@ -151,14 +151,14 @@ namespace runtime {
             // push
             "push", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            nullptr, nullptr
+            exec_instr_push, decode_instr_push_pop
         },
 
         /* 0x13 */{
             // pop
             "pop", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            nullptr, nullptr
+            exec_instr_pop, decode_instr_push_pop
         },
 
         /* 0x14 */{

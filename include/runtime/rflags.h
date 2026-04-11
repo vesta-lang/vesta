@@ -28,7 +28,7 @@ typedef struct RFlags_t {
             uint8_t DM: 1; // Modo distribuido
         } bits;
 
-        uint8_t raw;
+        uint64_t raw;
     };
 } RFlags_t;
 

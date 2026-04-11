@@ -79,7 +79,7 @@ namespace runtime {
     void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr) {
         VM_ASSERT(
             instr_size(instr.metadata->size) == 2,
-            std::string("Instruccion invalida en RIP[") +
+            std::string("VM::decode_instr_one_op_reg() Instruccion invalida en RIP[") +
             vesta::hex64(vm->rip.raw()) +
             "] opcode1(" + vesta::hex64(instr.flags_info.is_not_extended) +
             ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
@@ -108,10 +108,53 @@ namespace runtime {
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(data & 0xF);
     }
 
+    void decode_instr_push_pop(VM *vm, DecodedInstr &instr) {
+        VM_ASSERT(
+            instr_size(instr.metadata->size) == 2,
+            std::string("VM::decode_instr_push_pop() Instruccion invalida en RIP[") +
+            vesta::hex64(vm->rip.raw()) +
+            "] opcode1(" + vesta::hex64(instr.flags_info.is_not_extended) +
+            ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
+            "decode_instr_push_pop() Error la instruccion encontrada no tiene size 2 sino un size: "
+            << instr_size(instr.metadata->size) << "\n"
+            << vm->to_string(),
+            {
+            vesta::scout() << vesta::dump(vm->vm_mem, vm->rip.raw(), 64) << std::endl;
+            }
+        );
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // leemos solo 1 byte de datos pues se supone que la instruccion a
+        // descodificar es de longitud 2.
+        uint8_t data = vm->vm_mem[vm->rip.raw() + 1];
+
+        // bit 7 -> registro extendido (especial)
+        uint8_t reg_ext          = (data >> 6) & 0b1;
+        instr.flags_info.reg_ext = reg_ext;
+
+        if (reg_ext == 1) {
+            //   REGISTRO ESPECIAL (6 bits)
+            uint8_t reg_code                     = data & 0b00111111; // bits 0..5
+            instr.data_instruction.reg_data.reg1 = reg_code;
+
+            // modo no aplica
+            instr.flags_info.mode = 0;
+        } else {
+            //   REGISTRO GENERAL (mode + reg) (6 bits)
+            uint8_t mode     = (data >> 4) & 0b11; // bits 4..5
+            uint8_t reg_code = data & 0b1111;      // bits 0..3
+
+            instr.flags_info.mode                = mode;
+            instr.data_instruction.reg_data.reg1 = reg_code;
+        }
+
+        instr.flags_info.size_instr = 2;
+    }
+
     void decode_instr_inmed_reg(VM *vm, DecodedInstr &instr) {
         VM_ASSERT(
             instr.flags_info.is_not_extended == false,
-            std::string("Instruccion invalida en RIP[") +
+            std::string("VM::decode_instr_inmed_reg() Instruccion invalida en RIP[") +
             vesta::hex64(vm->rip.raw()) +
             "] opcode1(" + vesta::hex64(instr.flags_info.is_not_extended) +
             ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
@@ -236,7 +279,7 @@ namespace runtime {
             metadata.mode < Assembly::Bytecode::AddressingMode::COUNT &&
             metadata.exec != nullptr && metadata.decode != nullptr,
 
-            std::string("Instruccion invalida en RIP[") +
+            std::string("VM::decode_instruction() Instruccion invalida en RIP[") +
             vesta::hex64(rip.raw()) +
             "] opcode1(" + vesta::hex64(decode_tmp.flags_info.is_not_extended) +
             ") opcode2(" + vesta::hex64(decode_tmp.flags_info.opcode_index) + ")" <<
@@ -310,12 +353,13 @@ namespace runtime {
         if (!decoded_ptr->flags_info.did_jump)
             // movemos el puntero de instruccion al final de ejecutar la instruccion
             rip.qword(rip.raw() + decoded_ptr->flags_info.size_instr);
+        else decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la isntruccion, desmarcamos el salto
 
         // --- PROFILER: fin ---
         const uint64_t t2 = now_ns();
         profiler_sample++;
 
-        // Cada 256 instrucciones → sample
+        // Cada 256 instrucciones -> sample
         if ((profiler_sample & 0xFF) == 0) {
             profiler_instr_counter++; // IPS sampling
             time_exec += (t2 - t1);   // tiempo ocupado

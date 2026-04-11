@@ -34,7 +34,7 @@
 namespace tlb {
     struct TLBTable;
 
-    inline std::ostream& operator<<(std::ostream& os, const vm::vm_map_ptr& ptr) {
+    inline std::ostream &operator<<(std::ostream &os, const vm::vm_map_ptr &ptr) {
         os << "0x" << std::hex << ptr.raw << std::dec;
         return os;
     }
@@ -67,17 +67,20 @@ namespace tlb {
             std::ostringstream oss;
 
             // TIPO HUMANO
-            switch(type_address) {
-                case vm::MAPPED_PTR_HOST:  oss << "HOST";    break;
-                case vm::MAPPED_PTR_VM: oss << "GUEST";   break;
-                case vm::MAPPED_PTR_REMOTE:oss << "REMOTE";  break;
-                default: oss << "NONE(" << (int)type_address << ")";
+            switch (type_address) {
+                case vm::MAPPED_PTR_HOST: oss << "HOST";
+                    break;
+                case vm::MAPPED_PTR_VM: oss << "GUEST";
+                    break;
+                case vm::MAPPED_PTR_REMOTE: oss << "REMOTE";
+                    break;
+                default: oss << "NONE(" << (int) type_address << ")";
             }
 
             oss << "{";
 
             // DIRECCIONES según tipo
-            switch(type_address) {
+            switch (type_address) {
                 case vm::MAPPED_PTR_HOST:
                     oss << "host=" << std::hex << address.ptr_host << std::dec;
                     break;
@@ -86,7 +89,7 @@ namespace tlb {
                     break;
                 case vm::MAPPED_PTR_REMOTE:
                     oss << "remote{id=" << std::hex << address.ptr_remote
-                        << ", offset=" << address.ptr_remote << std::dec << "}";
+                            << ", offset=" << address.ptr_remote << std::dec << "}";
                     break;
                 default:
                     oss << "addr=" << std::hex << address.ptr_host << std::dec;
@@ -95,21 +98,22 @@ namespace tlb {
             oss << "}";
             return oss.str();
         }
-
     } TLBEntryData;
 
 
     typedef enum levelEntry { DATA, PT, PT1, PT2 } level;
+
     typedef struct TLBEntry {
         levelEntry level;
+
         union {
             TLBEntryData data;
-            TLBTable* table;
+            TLBTable *   table;
         } payload;
-        bool is_table = false;  // true = table, false = data
 
-        TLBEntry() : level(DATA), payload({}) {
-        }
+        bool is_table = false; // true = table, false = data
+
+        TLBEntry() : level(DATA), payload({}) {}
 
         ~TLBEntry() {
             if (is_table && payload.table) {
@@ -124,12 +128,13 @@ namespace tlb {
     } TLBTable;
 
     typedef struct TLBNode {
-        levelEntry type = DATA;
-        TLBEntryData data;
-        std::vector<TLBNode*> children;  // nullptr = leaf (DATA), else table
+        levelEntry                             type = DATA;
+        TLBEntryData                           data;
+        std::vector<std::unique_ptr<TLBNode> > children; // nullptr = leaf (DATA), else table
 
-        TLBNode() : children(1, nullptr) {}
-        ~TLBNode() { for (auto* child : children) delete child; }
+        TLBNode() = default;
+
+        ~TLBNode() = default;
     } TLBNode;
 
     /**
@@ -137,16 +142,16 @@ namespace tlb {
      * PT2 (TLB_page) -> PT1 (TLB_page) -> PT -> TLB_Entry
      */
     class LazyHybridTLB {
-        std::vector<TLBNode> root{1};
+        std::vector<std::unique_ptr<TLBNode> > root{1};
 
     public:
-        ~LazyHybridTLB();
+        ~LazyHybridTLB() = default;
 
         void translate(uint64_t ptr, vm::type_ptr_mapped type, vm::ptr_mapped ptr_mapped);
 
         void clear_tlb_entry(uint64_t page_vaddr);
 
-        [[nodiscard]] TLBEntryData*get_entry(uint64_t ptr) const;
+        [[nodiscard]] TLBEntryData *get_entry(uint64_t ptr) const;
 
         void *get_real_host_ptr_of_vptr(uint64_t vptr_) const;
 
@@ -154,7 +159,10 @@ namespace tlb {
 
         void dump_stats() const;
 
-        LazyHybridTLB();
+        LazyHybridTLB() {
+            if (!root[0])
+                root[0] = std::make_unique<TLBNode>();
+        }
     };
 }
 

@@ -539,6 +539,12 @@ namespace runtime {
             bool blocking: 1;
 
             /**
+             * Se usa para indicar que se hace uso de registros extendidos/especiales
+             * como son rbp, rsp, rip, cur0, cur1, ...
+             */
+            bool reg_ext: 1;
+
+            /**
              * Algunas instrucciones tiene direcciones de operacion:
              *      adds [reg1 + reg2 * 8], reg3
              *      adds reg3, [reg1 + reg2 * 8]
@@ -1089,10 +1095,9 @@ namespace runtime {
         uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
         uint64_t end   = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
 
-        vesta::SyncOStream out = vesta::scout(); // salida thread-safe
 
-        out << "==================== VM Memory Dump ====================\n";
-        out << "Virtual region: 0x" << std::hex << start
+        vesta::scout() << "==================== VM Memory Dump ====================\n";
+        vesta::scout() << "Virtual region: 0x" << std::hex << start
                 << " - 0x" << end
                 << "  (" << std::dec << size << " bytes)\n\n";
 
@@ -1100,27 +1105,23 @@ namespace runtime {
             void *host = vm->tlb.get_real_host_ptr_of_vptr(page);
 
             if (!host) {
-                out << "  [0x" << std::hex << page << "]  ->  <not mapped>\n";
+                vesta::scout() << "  [0x" << std::hex << page << "]  ->  <not mapped>\n";
                 continue;
             }
 
-            out << "  [0x" << std::hex << page << "]  ->  host=" << host << "\n";
+            vesta::scout() << "  [0x" << std::hex << page << "]  ->  host=" << host << "\n";
 
             // Mostrar primeros 16 bytes en formato hexdump
             uint8_t *p = reinterpret_cast<uint8_t *>(host);
 
-            out << "       data: ";
+            vesta::scout() << "       data: ";
 
-            for (int i = 0; i < 16; i++) {
-                char buf[4];
-                std::snprintf(buf, sizeof(buf), "%02X", p[i]); // formateo manual
-                out << buf << " ";
-            }
+            vesta::scout() << vesta::dump(p, size);
 
-            out << "\n";
+            vesta::scout() << "\n";
         }
 
-        out << "================== End VM Memory Dump ==================\n";
+        vesta::scout() << "================== End VM Memory Dump ==================\n";
     }
 
     static const char *debug_stage_name(DebugStage s) {

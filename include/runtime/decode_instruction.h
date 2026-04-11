@@ -172,5 +172,13 @@ namespace runtime {
      * @param instr
      */
     void decode_instr_inmed_reg(VM *vm, DecodedInstr &instr);
+
+    /**
+     * Permite descodificar instrucciones como PUSH/POP donde pueden usar registros
+     * extendidos o generales.
+     * @param vm
+     * @param instr
+     */
+    void decode_instr_push_pop(VM *vm, DecodedInstr &instr);
 }
 #endif //DECODE_INSTRUCTION_H

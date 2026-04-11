@@ -34,45 +34,39 @@
     @Align(0x1000)
 }
 code:
-    // aqui sabemos que el offset de end_code es 0x35
-    // como queremos escribir 2 bytes, la operacion para
-    // calcular el offset final a escribir es:
-    //
-    //              (N bytes a escribir) - 1
-    // Esto lo sumamos al offset base que era 0x35 y nos da 0x36.
-    // para escribir 2 bytes usamos el registro 6 en modo WORD(16 bits) -> r6w
-    // luego indicamos el valor a escribir, en este caso quiero escribir la instruccion
-    // "hlt" para que el codigo se detenga correctamente, Los opcodes de esta instruccion
-    // son 0x00 0x03, esto es un WORD de 0x0003
-    adds r06,   0x36
-    adds [r06w], 0x03
+    moveee r0, 1
 
-    adds r0d, 0x12345678
+    jmp r4
+    jmp 0x100000
 
-    dec r15
-    //inc r15
-    //dec r15
-    //dec r15
-    mov r14, r15
-    mov r13, r14
-    mov r12, r13
-    adds r15b, r15b
-    adds r15w, r15w
-    addu r15d, r15d
-    addu r15, r15
-    //hlt
+    adds r15b, r13b
+    adds r15w, r13w
+    addu r15d, r13d
+    addu r15, r13
+
+    subu r15b, r13b
+    subu r15w, r13w
+    subs r15d, r13d
+    subs r15, r13
+
+    muls r15b, r13b
+    muls r15w, r13w
+    mulu r15d, r13d
+    mulu r15, r13
+
+    divs r15b, r13b
+    divs r15w, r13w
+    divu r15d, r13d
+    divu r15, r13
+
+    cmpu r15b, r13b
+    cmpu r15w, r13w
+    cmps r15d, r13d
+    cmps r15, r13
+
 end_code:
 
-align 16
 data:
     msg db "Hola mundo"
     msg1 dq 0x123456789abcdef
 end_data:
-
-
-msg33 db 1, 2, 3
-
-align 16
-msg44 dw 0x1234
-
-align 16
