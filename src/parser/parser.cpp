@@ -33,6 +33,10 @@ namespace vm {
         {"divs", {"divs", OpArity::TWO}},
         {"cmps", {"cmps", OpArity::TWO}},
 
+        {"xor", {"xor", OpArity::TWO}},
+        {"and", {"and", OpArity::TWO}},
+        {"or", {"or", OpArity::TWO}},
+
         // ZERO operandos
         {"throw", {"nop1", OpArity::ZERO}},
         {"nop1", {"nop1", OpArity::ZERO}},
@@ -113,7 +117,7 @@ namespace vm {
 
         while (current.type != TokenType::EndOfFile) {
             std::unique_ptr<ASTNode> node = nullptr;
-            Token next = peek();
+            Token                    next = peek();
             // IDENTIFIER + COLON? -> SECCIÓN
             if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
                 node = parse_section();
@@ -154,7 +158,7 @@ namespace vm {
             Token op = current;
             advance();
             auto right = parse_mem_factor();
-            node = std::make_unique<BinaryExpr>(op.lexeme[0],
+            node       = std::make_unique<BinaryExpr>(op.lexeme[0],
                                                 std::unique_ptr<
                                                     ExprNode>(static_cast<ExprNode *>(node.release())),
                                                 std::unique_ptr<ExprNode>(
@@ -171,7 +175,7 @@ namespace vm {
             Token op = current;
             advance();
             auto right = parse_mem_term();
-            node = std::make_unique<BinaryExpr>(op.lexeme[0],
+            node       = std::make_unique<BinaryExpr>(op.lexeme[0],
                                                 std::unique_ptr<
                                                     ExprNode>(static_cast<ExprNode *>(node.release())),
                                                 std::unique_ptr<ExprNode>(
@@ -220,7 +224,7 @@ namespace vm {
 
         while (current.type != TokenType::EndOfFile) {
             std::unique_ptr<ASTNode> node = nullptr;
-            Token next = peek();
+            Token                    next = peek();
             // IDENTIFIER + COLON? -> SECCIÓN
             if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
                 //node = parse_section();
@@ -371,7 +375,7 @@ namespace vm {
         // count dw 42, 100
 
         std::string label = current.lexeme; // "msg", "bytes"
-        advance(); // Consumir label
+        advance();                          // Consumir label
 
         // Esperar directiva: db, dw, dd, ptr, etc
         Token directiveTok = expectToken(TokenType::DATA_DIRECTIVE, "Expected data directive (dq, db, dw, dd, ptr)");
@@ -380,7 +384,7 @@ namespace vm {
         }
         advance(); // consumir la directiva
 
-        std::string directive = directiveTok.lexeme; // "db", "dw", "dd"
+        std::string                             directive = directiveTok.lexeme; // "db", "dw", "dd"
         std::vector<std::unique_ptr<ExprNode> > values;
 
         // Parsear valores: "Hola", 42, 0xFF, label, etc.
@@ -420,17 +424,17 @@ namespace vm {
 
 
     std::unique_ptr<ASTNode> Parser::parse_instruction() {
-        std::string opcode = current.lexeme;
-        auto it = InstructionSet.find(opcode);
-        auto valid_it = it;
+        std::string opcode   = current.lexeme;
+        auto        it       = InstructionSet.find(opcode);
+        auto        valid_it = it;
         if (it == InstructionSet.end()) {
             float affinity = 0.0;
-            int dist = 0;
+            int   dist     = 0;
 
 
             // intentamos recuperarnos del error ¿de sintaxis?
             for (auto &option: InstructionSet) {
-                dist = utils::Levenshtein::distance(opcode, option.first);
+                dist     = utils::Levenshtein::distance(opcode, option.first);
                 affinity = utils::Levenshtein::affinity(opcode, option.first);
 
                 // Top 3 resultados
@@ -439,15 +443,15 @@ namespace vm {
                     warning(current.line, current.column,
                             "Instruccion '" + current.lexeme + "' desconocida",
                             option.first);
-                    opcode = option.first;
+                    opcode   = option.first;
                     valid_it = InstructionSet.find(option.first); // Actualizar
-                    goto exit_error; // nos pudimos recuperar tal vez
+                    goto exit_error;                              // nos pudimos recuperar tal vez
                 }
             }
 
             std::stringstream ss;
             for (auto &option: InstructionSet) {
-                dist = utils::Levenshtein::distance(opcode, option.first);
+                dist     = utils::Levenshtein::distance(opcode, option.first);
                 affinity = utils::Levenshtein::affinity(opcode, option.first);
 
                 if (affinity > 30) {

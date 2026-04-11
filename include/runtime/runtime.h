@@ -1068,7 +1068,7 @@ namespace runtime {
     static void profiler_thread(VM *vm) {
         uint64_t last = 0;
 
-        // mientras la vm no debagaber acabado
+        // mientras la vm no deba haber acabado
         while (!vm->should_kill && vm->profiler_running) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
