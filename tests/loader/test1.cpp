@@ -52,7 +52,7 @@ void print_memory_stats() {
 }
 
 // modo perfilado activado
-//#define VM_PROFILE
+#define VM_PROFILE
 
 #include "emmit/parser_to_bytecode.h"
 #include "lexer/lexer.h"
@@ -218,10 +218,15 @@ int main() {
     bench_code.reserve(4 * 2'000'000); // 2M iteraciones -> 4M instrucciones
 
     const uint8_t add_instr[4][4] = {
-        {0x04, 0x7f, 0x04, 0x7f},
+        // loop infinito
+        // esto es un PUSH RIP; POP RIP
+        //{0x12, 0x48, 0x13, 0x48},
+        //{0x12, 0x48, 0x04, 0x7f}, // push rip / inc r15
+        {0x04, 0x7f, 0x04, 0x7f}, // INC r15 /DEC r15
         {0x00, 0x05, 0x40, 0xDF},
         {0x04, 0x3e, 0x04, 0x7f},
-        {0x00, 0x05, 0xC0, 0xDF}
+        {0x00, 0x05, 0xC0, 0xDF},
+        //{0x04, 0x7f, 0x13, 0x48}, // inc r15 / pop rip
     };
 
     for (size_t i = 0; i < 2'000'000; i++) {
@@ -253,13 +258,13 @@ int main() {
             // --- FIN DE FASES ---
 
             case runtime::DebugStage::DecodeEnd: {
-                vm->time_decode += vm->debug_timer.ns();
+                //vm->time_decode += vm->debug_timer.ns();
                 vm->debug_timer.reset();
                 break;
             }
 
             case runtime::DebugStage::ExecuteEnd: {
-                vm->time_exec += vm->debug_timer.ns();
+                //vm->time_exec += vm->debug_timer.ns();
                 break;
             }
 
@@ -392,8 +397,8 @@ int main() {
 
     for (int i = 0; i < RUNS; i++) {
         // Reset de la VM antes de cada ejecución
-        vm->rip.ptr_vm.raw = 0;
-        vm->has_hooks      = false;
+        vm->rip.qword(0);
+        vm->has_hooks = false;
 
         // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
         // for (auto &entry: vm->icache) {
