@@ -163,8 +163,35 @@ typedef struct PACKED HeaderVELB {
     uint64_t offset_section_strings = 0; // 8, 72
     uint64_t start_pc               = 0; // 8, 80
 
+    // ofset a la tabla de importacion
+    uint64_t offset_import_table = 0; // 8, 88
+
+    // ofset a la tabla de labels
+    uint64_t offset_label_table = 0; // 8, 96
+
     table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;
+
+/**
+ * Datos de entrada
+ */
+typedef struct PACKED entry_label_table {
+    /**
+     * Offset a la tabla string
+     */
+    uint32_t offset_table_string;
+
+    /**
+     * offset del bytecode en el archivo.
+     */
+    uint32_t offset_bytecode;
+
+    /**
+     * Indice de la seccion a la que pertecene.
+     */
+    uint32_t index_section;
+};
+
 
 typedef struct PACKED HeaderVELA {
     char     magic[4]            = {'V', 'E', 'L', 'A'}; // "VELA"
@@ -646,6 +673,39 @@ namespace Assembly::Bytecode::Linker {
         void merge_space_address(Space &dest, const Space &src);
 
         /**
+         * @brief Registra una entrada de importación en la tabla global del linker.
+         *
+         * Este metodo toma una entrada de importación generada por un módulo
+         * (compuesta por nombre de librería y nombre de función) y la inserta
+         * en la tabla global de importaciones del linker.
+         *
+         * Si la combinación <lib:func> ya existe en la tabla global, no se crea
+         * una nueva entrada y simplemente se devuelve el índice previamente
+         * asignado.
+         *
+         * Si no existe, se añade una nueva entrada a `import_table`, se genera
+         * un índice único y se actualiza `import_lookup` para permitir búsquedas
+         * O(1) mediante la clave "lib:function".
+         *
+         * @param imp Entrada de importación local del módulo, que contiene
+         *            el nombre de la librería y el nombre del metodo.
+         *
+         * @return uint64_t
+         *         Índice global dentro de la tabla de importaciones del linker.
+         *         Este índice es el que debe usarse en las relocaciones de tipo
+         *         import (por ejemplo, para instrucciones CALLN).
+         *
+         * @note Este metodo garantiza que no existan duplicados en la tabla
+         *       global de importaciones, incluso si varios módulos importan
+         *       la misma función nativa.
+         *
+         * @see import_table
+         * @see import_lookup
+         */
+        uint64_t register_import(const ImportEntry &imp);
+
+
+        /**
          * Recibe el resultado del ensamblador.
          * Responsabilidades:
          *      Crear un Module con:
@@ -823,6 +883,23 @@ namespace Assembly::Bytecode::Linker {
          * Simbolos globales
          */
         std::unordered_map<std::string, uint64_t> global_symbols;
+
+        /**
+          * Tabla de importacion con nombres de los metodos y nombre de las
+          * librerias usadas. Se recomienda usar la tabla `import_lookup` para
+          * examinar si existe un simbolo dado de forma rapida, ya que esta via
+          * tiene un coste O(1), en caso contrario usando otros metodos de buqyedas
+          * perdera mas tiempo.
+          */
+        std::vector<ImportEntry> import_table;
+
+        /**
+         * Tabla de importacion de tipo clave: valor para acceso rapido,
+         * ejemplo de clave:
+         * "kernel32.dll:GetTickCount". el valor es el indice de la entrada
+         * dentro de la tabla "import_table".
+         */
+        std::unordered_map<std::string, uint64_t> import_lookup;
 
         /**
          * Simbolos no globales

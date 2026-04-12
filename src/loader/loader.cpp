@@ -136,6 +136,12 @@ namespace loader {
         // PC por el que empezar la ejecuccion
         exe.init_pc = exe.header.start_pc = reader.read64();
 
+        // offset a la tabla de importacion
+        exe.header.offset_import_table = reader.read64();
+
+        // offset a la tabla de etiquetas o labels
+        exe.header.offset_label_table = reader.read64();
+
         // el header siempre debe estar alineado a 16 bytes
         while (reader.offset % 16 != 0) {
             (void) reader.read8();
@@ -231,7 +237,7 @@ namespace loader {
             if (!space) {
                 throw_error_at(
                     ErrorKind::InvalidFormat,
-                    "La sección '" + sec.name + "' no pertenece a ningún espacio de direcciones",
+                    "La seccion '" + sec.name + "' no pertenece a ningun espacio de direcciones",
                     reader_child
                 );
             }
