@@ -46,7 +46,7 @@ extern "C" {
  */
 typedef union velb_magic {
     uint32_t firma; // 0x424C4556 == "VELB" en LE
-    uint8_t firma_byte[4];
+    uint8_t  firma_byte[4];
 } velb_magic;
 
 /**
@@ -107,7 +107,7 @@ typedef uint64_t section_table_offset;
 typedef uint64_t number_spaces_address;
 
 typedef struct PACKED range_memory {
-    uint64_t address_init = 0;
+    uint64_t address_init  = 0;
     uint64_t address_final = 0;
 } range_memory;
 
@@ -137,17 +137,17 @@ typedef struct PACKED table_spaces_address {
 } table_spaces_address;
 
 typedef struct PACKED HeaderVELB {
-    velb_magic magic = {MAGIC_NUMBER_VELB}; // 4, 4
-    velb_version_format format_v = VERSION_VELB; // 4, 8
+    velb_magic          magic    = {MAGIC_NUMBER_VELB}; // 4, 4
+    velb_version_format format_v = VERSION_VELB;        // 4, 8
 
     max_vm_version max_v = 0; // 4, 12
     min_vm_version min_v = 0; // 4, 16
 
     velb_checksum checksum = 0; // 8, 24
 
-    velb_flags flags = 0; // 8, 32
+    velb_flags      flags     = 0; // 8, 32
     build_timestamp timestamp = 0; // 8, 40
-    target_arch arch = 0; // 4, 44
+    target_arch     arch      = 0; // 4, 44
 
     // cantidad de secciones en la tabla de secciones.
     section_count count = 0; // 4, 48
@@ -161,15 +161,15 @@ typedef struct PACKED HeaderVELB {
     // seccion con cadenas espaciales que pone el linker.
     // "code\0data\0stack\0main\0foo\0bar\0"
     uint64_t offset_section_strings = 0; // 8, 72
-    uint64_t start_pc = 0; // 8, 80
+    uint64_t start_pc               = 0; // 8, 80
 
     table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;
 
 typedef struct PACKED HeaderVELA {
-    char magic[4] = {'V', 'E', 'L', 'A'}; // "VELA"
-    uint32_t version = VERSION_VELA; // versión del formato
-    uint32_t module_count = 0; // número de módulos
+    char     magic[4]            = {'V', 'E', 'L', 'A'}; // "VELA"
+    uint32_t version             = VERSION_VELA;         // versión del formato
+    uint32_t module_count        = 0;                    // número de módulos
     uint64_t module_table_offset = 0;
 } HeaderVELA;
 
@@ -183,24 +183,24 @@ typedef struct PACKED section_range_memory {
 } section_range_memory;
 
 typedef struct PACKED VELA_ModuleEntry {
-    uint64_t offset = 0; // offset al módulo
-    uint64_t size = 0; // tamaño del módulo
-    uint32_t symbol_count = 0;
-    uint64_t symbol_table_offset = 0;
-    uint32_t relocation_count = 0;
+    uint64_t offset                  = 0; // offset al módulo
+    uint64_t size                    = 0; // tamaño del módulo
+    uint32_t symbol_count            = 0;
+    uint64_t symbol_table_offset     = 0;
+    uint32_t relocation_count        = 0;
     uint64_t relocation_table_offset = 0;
 } VELA_ModuleEntry;
 
 typedef struct PACKED VELA_Symbol {
-    uint64_t offset = 0; // offset dentro del módulo
-    uint8_t type = 0; // FUNC, DATA, GLOBAL, LOCAL
-    char name[32] = {};
+    uint64_t offset   = 0; // offset dentro del módulo
+    uint8_t  type     = 0; // FUNC, DATA, GLOBAL, LOCAL
+    char     name[32] = {};
 } VELA_Symbol;
 
 typedef struct PACKED VELA_Relocation {
-    uint64_t offset = 0; // dónde aplicar la relocación
-    uint8_t type = 0; // ABS64, REL32, REL64
-    char symbol[32] = {}; // símbolo a resolver
+    uint64_t offset     = 0;  // dónde aplicar la relocación
+    uint8_t  type       = 0;  // ABS64, REL32, REL64
+    char     symbol[32] = {}; // símbolo a resolver
 } VELA_Relocation;
 
 /**
@@ -211,7 +211,7 @@ typedef struct PACKED VELA_Relocation {
  */
 static bool ranges_overlap(const range_memory *a, const range_memory *b) {
     return !(a->address_final <= b->address_init ||
-             b->address_final <= a->address_init);
+        b->address_final <= a->address_init);
 }
 
 
@@ -237,12 +237,12 @@ namespace Assembly::Bytecode::Linker {
      * Opciones que controlan el comportamiento del linker.
      */
     struct LinkerOptions {
-        bool optimize_bytecode = true; // aplicar optimizaciones
+        bool optimize_bytecode       = true; // aplicar optimizaciones
         bool allow_undefined_symbols = false;
-        bool generate_map_file = false; // archivo .map opcional
-        bool verbose = false; // logs detallados
+        bool generate_map_file       = false; // archivo .map opcional
+        bool verbose                 = false; // logs detallados
 
-        std::string output_path; // ruta del ejecutable final
+        std::string output_path;   // ruta del ejecutable final
         std::string map_file_path; // donde generar el map
     };
 
@@ -272,7 +272,7 @@ namespace Assembly::Bytecode::Linker {
             }
         }
 
-        Type type;
+        Type        type;
         std::string message;
 
         /**
@@ -303,7 +303,7 @@ namespace Assembly::Bytecode::Linker {
             Other
         };
 
-        Type type;
+        Type        type;
         std::string message;
 
         [[nodiscard]] const char *type_to_string() const {
@@ -318,8 +318,7 @@ namespace Assembly::Bytecode::Linker {
             }
         }
 
-        LinkerWarning(Type t, std::string m) : type(t), message(std::move(m)) {
-        }
+        LinkerWarning(Type t, std::string m) : type(t), message(std::move(m)) {}
 
         /**
          * @brief Representación textual del warning.
@@ -335,6 +334,31 @@ namespace Assembly::Bytecode::Linker {
         }
     };
 
+    struct RelocReportEntry {
+        std::string module;
+        std::string symbol;
+        uint64_t    offset;
+        uint64_t    value_written;
+        Type        type;
+    };
+
+
+    static const char *reloc_type_to_string(Type t) {
+        switch (t) {
+            case Type::Relative64: return "REL64";
+            case Type::Relative40: return "REL40";
+            case Type::Relative32: return "REL32";
+            case Type::Relative16: return "REL16";
+            case Type::Relative8: return "REL8";
+            case Type::Absolute64: return "ABS64";
+            case Type::Absolute40: return "ABS40";
+            case Type::Absolute32: return "ABS32";
+            case Type::Absolute16: return "ABS16";
+            case Type::Absolute8: return "ABS8";
+
+            default: return "UNKNOWN";
+        }
+    }
 
     /**
      * Un informe final con estadísticas del linking.
@@ -361,6 +385,11 @@ namespace Assembly::Bytecode::Linker {
         size_t optimizations_applied = 0;
 
         /**
+         * Relocalizaciones aplicadas:
+         */
+        std::vector<RelocReportEntry> relocations_log;
+
+        /**
          * Tabla de warnings
          */
         std::vector<LinkerWarning> warnings;
@@ -374,7 +403,9 @@ namespace Assembly::Bytecode::Linker {
          * indica si no ocurrio ningun error.
          * @return En caso de no haber errores devuelve true.
          */
-        bool success() const { return errors.empty(); }
+        bool success() const {
+            return errors.empty();
+        }
 
         /**
          * @brief Añade un error estructurado al reporte.
@@ -417,7 +448,7 @@ namespace Assembly::Bytecode::Linker {
          * @param message Mensaje principal.
          * @param context Texto corto con contexto (p.ej. "config:assembler.conf:line 12").
          */
-        void add_error_with_context(LinkerError::Type type,
+        void add_error_with_context(LinkerError::Type  type,
                                     const std::string &message, const std::string &context) {
             std::string full = message;
             if (!context.empty()) full += " (" + context + ")";
@@ -428,7 +459,7 @@ namespace Assembly::Bytecode::Linker {
          * @brief Añade un warning con contexto.
          */
         void add_warning_with_context(LinkerWarning::Type type,
-                                      const std::string &message, const std::string &context) {
+                                      const std::string & message, const std::string &context) {
             std::string full = message;
             if (!context.empty()) full += " (" + context + ")";
             add_warning(type, full);
@@ -507,22 +538,8 @@ namespace Assembly::Bytecode::Linker {
      * Una librería estática es simplemente un contenedor de módulos.
      */
     struct StaticLibrary {
-        std::string path;
+        std::string                        path;
         std::vector<std::vector<uint8_t> > object_modules;
-    };
-
-
-    /**
-     * Cada módulo puede tener relocaciones pendientes:
-     */
-    struct Relocation {
-        uint64_t offset; // dónde aplicar la relocación
-        std::string symbol; // símbolo a resolver
-        enum class Type {
-            Absolute64,
-            Relative32,
-            Relative64
-        } type;
     };
 
 
@@ -530,11 +547,11 @@ namespace Assembly::Bytecode::Linker {
      * Cada Module tiene su contexto, su bytecode, sys simbolos, sus relocalizaciones.
      */
     struct Module {
-        std::string name;
-        std::vector<uint8_t> bytecode;
-        Context *ctx;
-        bool is_object = false;
-        std::vector<Relocation> relocations;
+        std::string                               name;
+        std::vector<uint8_t>                      bytecode;
+        Context *                                 ctx;
+        bool                                      is_object = false;
+        std::vector<Relocation>                   relocations;
         std::unordered_map<std::string, uint64_t> local_symbols;
     };
 
@@ -544,16 +561,16 @@ namespace Assembly::Bytecode::Linker {
     struct SymbolInfo {
         std::string space;
         std::string section;
-        uint64_t relative; // offset dentro de la sección
-        uint64_t absolute; // dirección virtual absoluta
-        uint64_t file_offset; // se rellena después en build_section_table()
-        std::string module; // módulo donde se definió
-        uint64_t size; // tamaño del label, algunas no tienen
+        uint64_t    relative;    // offset dentro de la sección
+        uint64_t    absolute;    // dirección virtual absoluta
+        uint64_t    file_offset; // se rellena después en build_section_table()
+        std::string module;      // módulo donde se definió
+        uint64_t    size;        // tamaño del label, algunas no tienen
     };
 
     typedef struct section_info_linker {
         section_range_memory memory;
-        std::string name;
+        std::string          name;
     } section_info_linker;
 
     /**
@@ -640,7 +657,7 @@ namespace Assembly::Bytecode::Linker {
          * @param bytecode
          * @param ctx
          */
-        void add_assembly_unit(const std::vector<uint8_t> &bytecode,
+        void add_assembly_unit(const std::vector<uint8_t> &       bytecode,
                                const Assembly::Bytecode::Context *ctx);
 
         /**
@@ -752,9 +769,10 @@ namespace Assembly::Bytecode::Linker {
          */
         void write_map_file(const std::string &path);
 
-        const LinkerReport &get_report() const { return report; }
+        const LinkerReport &get_report() const {
+            return report;
+        }
 
-    private:
         LinkerOptions options;
 
         /**
@@ -786,18 +804,19 @@ namespace Assembly::Bytecode::Linker {
         // para construir el binario final, buffer de salida
         ByteWriter *result;
 
+    private:
         // Interno: lista de módulos cargados
         struct Module {
-            std::string name;
+            std::string          name;
             std::vector<uint8_t> bytecode;
-            Context ctx;
-            bool is_object = false;
+            Context              ctx;
+            bool                 is_object = false;
 
-            std::vector<Relocation> relocations;
+            std::vector<Relocation>                   relocations;
             std::unordered_map<std::string, uint64_t> local_symbols;
         };
 
-        std::vector<Module> modules;
+        std::vector<Module>        modules;
         std::vector<StaticLibrary> libraries;
 
         /**
