@@ -21,6 +21,7 @@
 #include <optional>
 #include <system_error>
 
+#include "emmit_decl.h"
 #include "linker/velb_linker_bytecode.h"
 #include "linker/velb_linker_bytecode.h"
 
@@ -108,6 +109,57 @@ namespace Assembly::Bytecode {
         // para indicar errores o que no es valido
         NO_VALID
     } Type;
+
+
+    /**
+     * Permtie obtener un tipo de relocalizacion absoluta en base al modo
+     * @param mode mode del que obtener el tipo de relocalizacion absoluta
+     * @return tipo de relocalizacion
+     */
+    static Type mode_to_type_relocation_abs(uint8_t mode) {
+        switch (mode_to_bytes(mode)) {
+            case 1: {
+                return Type::Absolute8;
+            }
+            case 2: {
+                return Type::Absolute16;
+            }
+            case 4: {
+                return Type::Absolute32;
+            }
+            case 8: {
+                return Type::Absolute64;
+            }
+            default: {
+                return Type::NO_VALID;
+            }
+        }
+    }
+
+    /**
+     * Permtie obtener un tipo de relocalizacion relativa en base al modo
+     * @param mode mode del que obtener el tipo de relocalizacion absoluta
+     * @return tipo de relocalizacion
+     */
+    static Type mode_to_type_relocation_rel(uint8_t mode) {
+        switch (mode_to_bytes(mode)) {
+            case 1: {
+                return Type::Relative8;
+            }
+            case 2: {
+                return Type::Relative16;
+            }
+            case 4: {
+                return Type::Relative32;
+            }
+            case 8: {
+                return Type::Relative64;
+            }
+            default: {
+                return Type::NO_VALID;
+            }
+        }
+    }
 
     /**
      * Estructura basica para representar una relocalizacion

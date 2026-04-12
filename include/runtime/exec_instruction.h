@@ -217,6 +217,8 @@ namespace runtime {
 
     void exec_instr_sub_reg(VM *vm, const DecodedInstr &instr);
 
+    void exec_instr_mul_reg(VM *vm, const DecodedInstr &instr);
+
     void exec_instr_cmp_reg(VM *vm, const DecodedInstr &instr);
 
     void exec_instr_and_reg(VM *vm, const DecodedInstr &instr);
