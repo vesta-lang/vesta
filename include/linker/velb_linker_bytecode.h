@@ -164,10 +164,10 @@ typedef struct PACKED HeaderVELB {
     uint64_t start_pc               = 0; // 8, 80
 
     // ofset a la tabla de importacion
-    uint64_t offset_import_table = 0; // 8, 88
+    uint64_t offset_import_table = 0; // 8, 88 // vector<entry_import_table*>
 
     // ofset a la tabla de labels
-    uint64_t offset_label_table = 0; // 8, 96
+    uint64_t offset_label_table = 0; // 8, 96 // vector<entry_label_table*>
 
     table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;
@@ -190,8 +190,28 @@ typedef struct PACKED entry_label_table {
      * Indice de la seccion a la que pertecene.
      */
     uint32_t index_section;
-};
 
+    /**
+     * Tamaño de la label en el bytecode
+     */
+    uint32_t size_label;
+} entry_label_table;
+
+/**
+ * Entrada en la tabla de importaciones de funciones
+ * nativas.
+ */
+typedef struct PACKED entry_import_table {
+    /**
+     * Offset a la tabla string
+     */
+    uint32_t offset_table_string;
+
+    /**
+     * offset del bytecode en el archivo.
+     */
+    uint32_t offset_bytecode;
+} entry_import_table;
 
 typedef struct PACKED HeaderVELA {
     char     magic[4]            = {'V', 'E', 'L', 'A'}; // "VELA"
