@@ -485,6 +485,12 @@ namespace runtime {
         void raw(uint64_t v) {
             data = v;
         }
+
+        [[nodiscard]] std::string to_string() const {
+            std::ostringstream oss;
+            oss << data;
+            return oss.str();
+        }
     };
 
 

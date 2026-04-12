@@ -359,6 +359,9 @@ namespace vm {
 
                 return std::make_unique<MemoryOperand>(std::move(expr));
             }
+            case TokenType::AT: {
+                return parse_annotation();
+            }
 
 
             default:

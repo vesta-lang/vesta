@@ -95,6 +95,15 @@ namespace Assembly::Bytecode {
             // si el op2 es un registro, el modo de direcionamiento confirmado es registro
             else if (auto s = dynamic_cast<vm::RegisterOperand *>(ops[1].get())) {
                 mode = AddressingMode::REG;
+            } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[1].get())) {
+                // si el segundo operando es una notacion
+                if (s->key == "Method" || s->key == "Relative" || s->key == "Absolute") { // si el segundo operando es una notacion Method
+                    // entonces el modo de operacion es de tipo INMEDIATO, y se esta pidiendo indica la direccion
+                    // de memoria de un metodo que debe haber sido cargado por el loader-linker en run time.
+                    mode = AddressingMode::INMED;
+                } else {
+                    throw std::runtime_error("select_variant(): No se permite usar esta notacion (" + s->key + ") en la instruccion: " + mnemonic);
+                }
             }
 
             // es de tipo inmed [0x1000]

@@ -122,6 +122,146 @@ namespace Assembly::Bytecode {
         );
     }
 
+    void emit_instr_inmed_with_annotation(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        bool is_a_signed = is_signed(instruction_parser->opcode);
+
+        auto reg              = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto label_annotacion = instruction_parser->operands[1].get();
+
+        auto annotacion = dynamic_cast<vm::AnnotationNode *>(label_annotacion);
+
+        if (annotacion == nullptr) {
+            throw std::runtime_error(
+                "emit_instr_inmed_with_annotation(): Se debe implementar: " + instruction_parser->opcode + " ");
+        }
+
+
+        if (annotacion->key == "Method") {
+            // el modo siempre es del tamaño de palabra de la cpu para direcciones,
+            // se multiplica * 8 para obtener la cantidad de bit que ocupa un puntero.
+            uint8_t mode     = encode_mode(sizeof(void *) * 8);
+            bool    mem_dest = false; // el destino siempre es un registro, por eso false
+            code_final.emit8(
+                (mode << 6) |                    // mode
+                (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
+                mem_dest << 4 |
+                encode_reg_general(reg->name.c_str()) // reg
+            );
+
+
+            // creamos el valor
+            Relocation rel;
+            rel.symbol  = annotacion->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset /*- 8*/; // el -8 se pone si se emite antes la direccion
+            rel.type    = size_ptr_in_this_machine;  // relocalizacion absoluta segun el tamaño de palabra de la maquina
+
+            assembly_ctx->ctx.add_relocation(rel);
+
+            // siempre se emite 64 bits si la cpu es de 64 bits, ya que se parcheara la instruccion
+            // con un puntero real dependiente del tamaño de palabra de la cpu
+            if (size_ptr_in_this_machine == Type::Absolute64) {
+                code_final.emit64(0);
+            } else if (size_ptr_in_this_machine == Type::Absolute32) {
+                code_final.emit32(0);
+            } else if (size_ptr_in_this_machine == Type::Absolute16) {
+                code_final.emit16(0);
+            } else if (size_ptr_in_this_machine == Type::Absolute8) {
+                code_final.emit8(0);
+            } else {
+                throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
+                    "emision de instrucciones inmediatas con direcciones para tamaños de: " + sizeof(void *));
+            }
+        } else {
+            // si no es una notacion Method, entonces debe ser una
+            // Absolute o una Relative
+            uint8_t mode = encode_mode(reg->size_bits);
+
+            // tenemos en cuenta el tamaño del registro usado
+            int  instr_mode_bits = mode_to_bits(mode);
+            bool mem_dest        = false; // el destino siempre es un registro, por eso false
+
+
+            code_final.emit8(
+                (mode << 6) |                    // mode
+                (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
+                mem_dest << 4 |
+                encode_reg_general(reg->name.c_str()) // reg
+            );
+
+            // creamos el valor
+            Relocation rel;
+            rel.symbol  = annotacion->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset /*- 8*/; // el -8 se pone si se emite antes la direccion
+
+            // indicamos el tipo de relocalizacion que es
+            if (annotacion->key == "Relative") {
+                switch (mode_to_bytes(mode)) {
+                    case 1: {
+                        rel.type = Type::Relative8;
+                        break;
+                    }
+                    case 2: {
+                        rel.type = Type::Relative16;
+                        break;
+                    }
+                    case 4: {
+                        rel.type = Type::Relative32;
+                        break;
+                    }
+                    case 8: {
+                        rel.type = Type::Relative64;
+                        break;
+                    }
+                    default: {
+                        goto error_notation;
+                    }
+                }
+            } else if (annotacion->key == "Absolute") {
+                switch (mode_to_bytes(mode)) {
+                    case 1: {
+                        rel.type = Type::Absolute8;
+                        break;
+                    }
+                    case 2: {
+                        rel.type = Type::Absolute16;
+                        break;
+                    }
+                    case 4: {
+                        rel.type = Type::Absolute32;
+                        break;
+                    }
+                    case 8: {
+                        rel.type = Type::Absolute64;
+                        break;
+                    }
+                    default: {
+                        goto error_notation;
+                    }
+                }
+            } else {
+            error_notation:
+                throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
+                    "notacion: " + annotacion->key);
+            }
+
+            assembly_ctx->ctx.add_relocation(rel);
+
+            uint64_t val_inmmed = 0; // siempre 0 por que sera remplazado por el
+            // linker
+
+            size_t size_in_bytes = mode_to_bytes(mode);
+            // emitimos el resto de bytes de la instruccion dependiendo del modo/tamaño
+            code_final.emit_bytes(&val_inmmed, size_in_bytes);
+        }
+    }
+
     void emit_instr_inmed(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -142,9 +282,18 @@ namespace Assembly::Bytecode {
         auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);
         bool mem_dest = reg == nullptr; // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
 
-        if ((mem == nullptr && reg == nullptr) || inmmed_str == nullptr) {
-            throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
-                " no pudo situar un registro, inmediato por alguna razon, posiblemente usted cometio un error de sintaxis o logico");
+        if ((mem == nullptr) || inmmed_str == nullptr) {
+            // si no es un operando de tipo memoria, ni registro, entonces puede ser uno de tipo anotacion:
+            if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
+                emit_instr_inmed_with_annotation(instruction_parser, code_final, now_instr, assembly_ctx);
+                return;
+            }
+
+            // si ni es una notacion, ni es memoria ni es un inmediato:
+            if (mem == nullptr && inmmed_str == nullptr) {
+                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
+                    " no pudo situar un registro, inmediato por alguna razon, posiblemente usted cometio un error de sintaxis o logico");
+            }
         }
 
         auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
@@ -188,24 +337,8 @@ namespace Assembly::Bytecode {
         );
         // el campo d siempre es 0 ya que se usa para codificar otro tipo de inmediatos.
 
-        switch (mode) {
-            case 0: {
-                code_final.emit8((uint8_t) val_inmmed);
-                break;
-            }
-            case 1: {
-                code_final.emit16((uint16_t) val_inmmed);
-                break;
-            }
-            case 2: {
-                code_final.emit32((uint32_t) val_inmmed);
-                break;
-            }
-            default: {
-                code_final.emit64(val_inmmed);
-                break;
-            }
-        }
+        // emitimos el resto de bytes de la instruccion dependiendo del modo/tamaño
+        code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
 
         DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, INMED 0x%llx TYPE_INMED: %d MODE: %d\n",
                     instruction_parser->opcode.c_str(),
@@ -271,7 +404,7 @@ namespace Assembly::Bytecode {
         rel.symbol  = lalbel->name;
         rel.section = assembly_ctx->current_section->name;
         rel.offset  = code_final.offset /*- 5*/; // el -5 se pone si se emite antes la direccion
-        rel.type    = Relocation::Type::Relative40;
+        rel.type    = Type::Relative40;
 
         assembly_ctx->ctx.add_relocation(rel);
 
