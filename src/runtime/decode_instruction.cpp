@@ -74,6 +74,29 @@ namespace runtime {
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
     }
 
+
+    void decode_instr_inmed_mov(VM *vm, DecodedInstr &instr) {
+        // los MOV simples ocupan espacio constantes
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // el offset del resto de datos empieza apartir del opcode,
+        // calculamos el offset al resto de datos.
+        uint8_t offset = vm->rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+
+        // leemos los dos bytes que ocupa la instrucciones de este tipo
+        uint16_t data = vm->vm_mem.read_u16(offset);
+
+        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
+        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
+
+        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
+        instr.flags_info.mode = (n1 >> 6) & 0b11;
+
+        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
+        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
+    }
+
     void decode_instr_simple(VM *vm, DecodedInstr &instr) {}
 
     void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr) {

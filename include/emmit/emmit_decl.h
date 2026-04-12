@@ -312,6 +312,27 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    void emit_instr_mov_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    void emit_instr_mov_inmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    void emit_instr_mov_sib(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
     /**
      * Permite emitir isntrucciones de tipo inmediato como son MOV r12, 0x1234 y otras similares
      * @param instruction_parser

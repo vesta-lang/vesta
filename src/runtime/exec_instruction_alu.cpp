@@ -23,7 +23,7 @@ namespace runtime {
         template<typename T>
         static inline void flags(VM *vm, T a, T result) {
             vm->flags.bits.CF = vm->flags.bits.CF; // no cambia
-            vm->flags.bits.OF = 0; // INC unsigned no tiene overflow
+            vm->flags.bits.OF = 0;                 // INC unsigned no tiene overflow
             vm->flags.bits.ZF = (result == 0);
         }
     };
@@ -39,7 +39,7 @@ namespace runtime {
         template<typename T>
         static inline void flags(VM *vm, T a, T result) {
             vm->flags.bits.CF = vm->flags.bits.CF; // no cambia
-            vm->flags.bits.OF = 0; // DEC unsigned no tiene overflow
+            vm->flags.bits.OF = 0;                 // DEC unsigned no tiene overflow
             vm->flags.bits.ZF = (result == 0);
         }
     };
@@ -79,7 +79,7 @@ namespace runtime {
         vm->flags.bits.ZF = (result == 0);
 
         constexpr int SIGNBIT = sizeof(T) * 8 - 1;
-        vm->flags.bits.SF = (static_cast<UT>(result) >> SIGNBIT) & 1;
+        vm->flags.bits.SF     = (static_cast<UT>(result) >> SIGNBIT) & 1;
 
         // Flags específicos de la operación
         Op::flags(vm, a, b, result, is_signed);
@@ -151,7 +151,7 @@ namespace runtime {
         vm->flags.bits.ZF = (result == 0);
 
         constexpr int SIGNBIT = sizeof(T) * 8 - 1;
-        vm->flags.bits.SF = (static_cast<UT>(result) >> SIGNBIT) & 1;
+        vm->flags.bits.SF     = (static_cast<UT>(result) >> SIGNBIT) & 1;
 
         Op::flags(vm, a, result);
 
@@ -182,16 +182,75 @@ namespace runtime {
             using UT = std::make_unsigned_t<T>;
 
             if (is_signed) {
-                ST sa = (ST) a, sb = (ST) b, sres = (ST) result;
+                ST sa             = (ST) a, sb = (ST) b, sres = (ST) result;
                 vm->flags.bits.OF = ((sa ^ sres) & (sb ^ sres)) < 0;
                 vm->flags.bits.CF = 0;
             } else {
-                UT ua = (UT) a, ub = (UT) b, ures = (UT) result;
+                UT ua             = (UT) a, ub = (UT) b, ures = (UT) result;
                 vm->flags.bits.CF = (ua + ub) < ua;
                 vm->flags.bits.OF = 0;
             }
         }
     };
+
+
+    struct MulOp {
+        static constexpr bool is_compare = false;
+
+        template<typename T>
+        static inline T compute(T a, T b) {
+            return a * b;
+        }
+
+        template<typename T>
+        static inline void flags(VM *vm, T a, T b, T result, bool is_signed) {
+            using UT = std::make_unsigned_t<T>;
+            using ST = std::make_signed_t<T>;
+
+            bool overflow = false;
+
+            if (is_signed) {
+                ST sa = (ST) a;
+                ST sb = (ST) b;
+
+                constexpr ST S_MIN = std::numeric_limits<ST>::min();
+                constexpr ST S_MAX = std::numeric_limits<ST>::max();
+
+                if (sa == 0 || sb == 0) {
+                    overflow = false;
+                } else if (sa == -1) {
+                    overflow = (sb == S_MIN);
+                } else if (sb == -1) {
+                    overflow = (sa == S_MIN);
+                } else {
+                    overflow = (sa > 0)
+                                   ? (sb > 0
+                                          ? sa > S_MAX / sb
+                                          : sb < S_MIN / sa)
+                                   : (sb > 0
+                                          ? sa < S_MIN / sb
+                                          : sa < S_MAX / sb);
+                }
+
+                vm->flags.bits.OF = overflow;
+                vm->flags.bits.CF = 0; // IMUL
+            } else {
+                UT ua = (UT) a;
+                UT ub = (UT) b;
+
+                if (ua == 0 || ub == 0) {
+                    overflow = false;
+                } else {
+                    constexpr UT U_MAX = std::numeric_limits<UT>::max();
+                    overflow           = ua > (U_MAX / ub);
+                }
+
+                vm->flags.bits.CF = overflow;
+                vm->flags.bits.OF = overflow; // MUL
+            }
+        }
+    };
+
 
     struct SubOp {
         static constexpr bool is_compare = false;
@@ -207,11 +266,11 @@ namespace runtime {
             using UT = std::make_unsigned_t<T>;
 
             if (is_signed) {
-                ST sa = (ST) a, sb = (ST) b, sres = (ST) result;
+                ST sa             = (ST) a, sb = (ST) b, sres = (ST) result;
                 vm->flags.bits.OF = ((sa ^ sb) & (sa ^ sres)) < 0;
                 vm->flags.bits.CF = 0;
             } else {
-                UT ua = (UT) a, ub = (UT) b;
+                UT ua             = (UT) a, ub = (UT) b;
                 vm->flags.bits.CF = ua < ub;
                 vm->flags.bits.OF = 0;
             }
@@ -251,7 +310,7 @@ namespace runtime {
             if (b == 0) {
                 vm->flags.bits.OF = 1;
                 vm->flags.bits.CF = 1;
-                vm->should_kill = true;
+                vm->should_kill   = true;
                 return;
             }
 
@@ -263,7 +322,7 @@ namespace runtime {
                 if (sa == std::numeric_limits<ST>::min() && sb == -1) {
                     vm->flags.bits.OF = 1;
                     vm->flags.bits.CF = 1;
-                    vm->should_kill = true;
+                    vm->should_kill   = true;
                     return;
                 }
 
@@ -283,7 +342,9 @@ namespace runtime {
         static constexpr bool is_compare = false;
 
         template<typename T>
-        static inline T compute(T a, T b) { return a & b; }
+        static inline T compute(T a, T b) {
+            return a & b;
+        }
 
         template<typename T>
         static inline void flags(VM *vm, T, T, T, bool) {
@@ -296,7 +357,9 @@ namespace runtime {
         static constexpr bool is_compare = false;
 
         template<typename T>
-        static inline T compute(T a, T b) { return a | b; }
+        static inline T compute(T a, T b) {
+            return a | b;
+        }
 
         template<typename T>
         static inline void flags(VM *vm, T, T, T, bool) {
@@ -309,7 +372,9 @@ namespace runtime {
         static constexpr bool is_compare = false;
 
         template<typename T>
-        static inline T compute(T a, T b) { return a ^ b; }
+        static inline T compute(T a, T b) {
+            return a ^ b;
+        }
 
         template<typename T>
         static inline void flags(VM *vm, T, T, T, bool) {
@@ -323,14 +388,14 @@ namespace runtime {
 
         template<typename T>
         static inline T compute(T a, T b) {
-            using UT = std::make_unsigned_t<T>;
+            using UT       = std::make_unsigned_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
             return (T) ((UT) a << shift);
         }
 
         template<typename T>
         static inline void flags(VM *vm, T a, T b, T result, bool) {
-            using UT = std::make_unsigned_t<T>;
+            using UT       = std::make_unsigned_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
 
             if (shift == 0) {
@@ -339,12 +404,12 @@ namespace runtime {
                 return;
             }
 
-            UT ua = (UT) a;
-            UT cf_bit = (ua >> (sizeof(T) * 8 - shift)) & 1;
+            UT ua             = (UT) a;
+            UT cf_bit         = (ua >> (sizeof(T) * 8 - shift)) & 1;
             vm->flags.bits.CF = cf_bit;
 
             // Overflow: SHL OF = XOR(CF, MSB(result))
-            UT msb = (result >> (sizeof(T) * 8 - 1)) & 1;
+            UT msb            = (result >> (sizeof(T) * 8 - 1)) & 1;
             vm->flags.bits.OF = (cf_bit ^ msb);
         }
     };
@@ -354,14 +419,14 @@ namespace runtime {
 
         template<typename T>
         static inline T compute(T a, T b) {
-            using UT = std::make_unsigned_t<T>;
+            using UT       = std::make_unsigned_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
             return (T) ((UT) a >> shift);
         }
 
         template<typename T>
         static inline void flags(VM *vm, T a, T b, T result, bool) {
-            using UT = std::make_unsigned_t<T>;
+            using UT       = std::make_unsigned_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
 
             if (shift == 0) {
@@ -370,7 +435,7 @@ namespace runtime {
                 return;
             }
 
-            UT ua = (UT) a;
+            UT ua             = (UT) a;
             vm->flags.bits.CF = (ua >> (shift - 1)) & 1;
             vm->flags.bits.OF = 0;
         }
@@ -381,7 +446,7 @@ namespace runtime {
 
         template<typename T>
         static inline T compute(T a, T b) {
-            using ST = std::make_signed_t<T>;
+            using ST       = std::make_signed_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
             return (T) ((ST) a >> shift);
         }
@@ -399,7 +464,7 @@ namespace runtime {
                 return;
             }
 
-            UT ua = (UT) a;
+            UT ua             = (UT) a;
             vm->flags.bits.CF = (ua >> (shift - 1)) & 1;
             vm->flags.bits.OF = 0;
         }
@@ -408,7 +473,7 @@ namespace runtime {
 
     typedef GeneralRegister &Reg;
     using BinaryFn = void(*)(VM *, Reg, Reg, bool, int);
-    using UnaryFn = void(*)(VM *, Reg, int);
+    using UnaryFn  = void(*)(VM *, Reg, int);
 
     template<typename T, typename Op>
     static void binary_imm_wrapper(VM *vm, Reg &dst, uint64_t imm, bool is_signed, int rdst) {
@@ -417,8 +482,8 @@ namespace runtime {
 
     template<typename T>
     static void mov_wrapper(VM *vm, Reg dst, Reg src, bool /*unused*/, int rdst) {
-        T value = src.raw(); // leer valor del registro origen
-        auto &d = vm->regs[rdst];
+        T     value = src.raw(); // leer valor del registro origen
+        auto &d     = vm->regs[rdst];
 
         if constexpr (sizeof(T) == 1)
             d.byte_lo((uint8_t) value);
@@ -447,6 +512,13 @@ namespace runtime {
         &mov_wrapper<uint16_t>,
         &mov_wrapper<uint32_t>,
         &mov_wrapper<uint64_t>
+    };
+
+    static constexpr BinaryFn mul_table[] = {
+        &binary_wrapper<uint8_t, MulOp>,
+        &binary_wrapper<uint16_t, MulOp>,
+        &binary_wrapper<uint32_t, MulOp>,
+        &binary_wrapper<uint64_t, MulOp>
     };
 
     static constexpr BinaryFn add_table[] = {
@@ -533,7 +605,7 @@ namespace runtime {
         &binary_wrapper<uint64_t, SarOp>
     };
 
-    using BinaryImmFn = void(*)(VM *, Reg &, uint64_t, bool, int);
+    using BinaryImmFn                            = void(*)(VM *, Reg &, uint64_t, bool, int);
     static constexpr BinaryImmFn add_imm_table[] = {
         &binary_imm_wrapper<uint8_t, AddOp>,
         &binary_imm_wrapper<uint16_t, AddOp>,
@@ -553,7 +625,7 @@ namespace runtime {
 
     void exec_instr_add_imm(VM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.inmmed_data.reg;
-        uint64_t imm = instr.data_instruction.inmmed_data.inmmed;
+        uint64_t  imm  = instr.data_instruction.inmmed_data.inmmed;
 
         // Caso 1: destino es un registro
         if (instr.flags_info.direction == 0) {
@@ -569,8 +641,8 @@ namespace runtime {
 
         // Caso 2: destino es memoria
         if (instr.flags_info.direction == 1) {
-            auto &base = vm->regs[instr.data_instruction.inmmed_data.reg];
-            auto index = 0;
+            auto &  base  = vm->regs[instr.data_instruction.inmmed_data.reg];
+            auto    index = 0;
             uint8_t scale = 0;
 
             uint64_t addr = base.raw() + index/*.raw()*/ * scale;
@@ -600,6 +672,13 @@ namespace runtime {
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
         add_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
+    }
+
+    void exec_instr_mul_reg(VM *vm, const DecodedInstr &instr) {
+        const int rdst = instr.data_instruction.reg_data.reg1;
+        const int rsrc = instr.data_instruction.reg_data.reg2;
+
+        mul_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
     void exec_instr_sub_reg(VM *vm, const DecodedInstr &instr) {
