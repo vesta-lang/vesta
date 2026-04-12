@@ -380,7 +380,7 @@ namespace Assembly::Bytecode {
          * "kernel32.dll:GetTickCount". el valor es el indice de la entrada
          * dentro de la tabla "import_table".
          */
-        std::unordered_map<std::string, uint32_t> import_lookup;
+        std::unordered_map<std::string, uint64_t> import_lookup;
 
         /**
          * espacio de direcciones key(nombre): valor(espacio)
