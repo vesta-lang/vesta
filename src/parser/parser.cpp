@@ -57,7 +57,7 @@ namespace vm {
 
 
         {"jmp", {"jmp", OpArity::ONE}},
-        {"call", {"call", OpArity::ONE}},
+        {"calln", {"calln", OpArity::ONE}},
         {"callvm", {"callvm", OpArity::ONE}},
         {"push", {"push", OpArity::ONE}},
         {"pop", {"pop", OpArity::ONE}},
@@ -516,12 +516,23 @@ namespace vm {
             return parse_data_directive();
         }
 
+        bool cur_is_id       = current.type == TokenType::IDENTIFIER;
+        bool next_is_operand =
+                next.type == TokenType::REGISTER
+                || is_number_token(next.type)
+                || next.type == TokenType::IDENTIFIER
+                || next.type == TokenType::LBRACKET;
+
+        /*
         if (
             (current.type == TokenType::IDENTIFIER && next.type == TokenType::REGISTER) ||
             (current.type == TokenType::IDENTIFIER && is_number_token(next.type)) ||
             (current.type == TokenType::IDENTIFIER && next.type == TokenType::IDENTIFIER) ||
-            (current.type == TokenType::IDENTIFIER && next.type == TokenType::LBRACKET)
-        ) {
+            (current.type == TokenType::IDENTIFIER && next.type == TokenType::LBRACKET) ||
+            current.lexeme == "call" && next.type == TokenType::AT
+        ) */
+        if ((cur_is_id && next_is_operand) ||
+            (current.lexeme == "calln" && next.type == TokenType::AT)) {
             /**
              * Si es identificador + registro       ||
              * Si es identificador + numero         ||
@@ -532,10 +543,12 @@ namespace vm {
         }
 
         // instrucciones de identificador unico sin operandos:
-        if (current.lexeme == "nop1" || current.lexeme == "nop2" || current.lexeme == "ret" || current.lexeme ==
-            "hlt") {
-            return parse_instruction();
-        }
+        static const char *no_operand_instr[] = {"nop1", "nop2", "ret", "hlt"};
+
+        for (auto &name: no_operand_instr)
+            if (current.lexeme == name)
+                return parse_instruction();
+
 
         if (current.lexeme == "import") {
             return parse_import();
