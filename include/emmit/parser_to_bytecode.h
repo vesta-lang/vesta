@@ -369,6 +369,7 @@ namespace Assembly::Bytecode {
          */
         void emit_instruction(const vm::Instruction *instr);
 
+
         uint64_t eval_operand(const vm::ASTNode *op);
 
         /**

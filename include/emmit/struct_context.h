@@ -22,6 +22,7 @@
 #include <system_error>
 
 #include "linker/velb_linker_bytecode.h"
+#include "linker/velb_linker_bytecode.h"
 
 namespace Assembly::Bytecode {
     /**
@@ -46,34 +47,96 @@ namespace Assembly::Bytecode {
     }
 
     /**
+     * Tipo de relocalizaciones, esto puede cambiar en el futuro segun
+     * las necesidades del conjunto de instrucciones.
+     */
+    typedef enum class Type {
+        /**
+         * "Escribe en este campo el desplazamiento relativo desde esta instrucción hasta el símbolo."
+         * Es decir:
+         *      offset = destino - (PC + tamaño_del_campo)
+         *      - x86: CALL rel32
+         *      - x86: JMP rel32
+         *      - ARM64: ADR, B, BL
+         *
+         *      Características:
+         *          - No almacena una dirección absoluta.
+         *          - Almacena un delta.
+         *          - Permite que el código sea position-independent (PIC).
+         *          - El loader puede mover el código sin romper nada.
+         *
+         *  Si estás en:
+         *      PC = 0x1000
+         *  Y quieres saltar a:
+         *      destino = 0x2000
+         *  Entonces:
+         *      offset = 0x2000 - (0x1000 + 4) = 0xFFC
+         *
+         *  El campo contiene 0xFFC, no la dirección 0x2000.
+         */
+        Relative64,
+
+        Relative40, // desplazamiento relativo de 40 bits
+
+        /**
+         * Este modo normalmente se usa para CALL y JMP, y no Relative64 por que;
+         *
+         * En la práctica real, no existe casi nunca.
+         *   Porque:
+         *   - x86 usa rel32
+         *   - ARM64 usa rel26
+         *   - RISC-V usa rel20 + rel12
+         *   - WASM usa índices, no offsets
+         *   - PE/ELF no usan rel64 para saltos
+         */
+        Relative32,
+        Relative16,
+        Relative8,
+
+        /**
+         * Las Absolute64 son punteros de 64bits, una direccion absoluta es lo siguiente:
+         * "Escribe en este campo la dirección absoluta del símbolo."
+         * Si el símbolo GetTickCount de kernel32 por ejemplo puede estar en: 0x7FFB12340000
+         * El linker escribe esa dirección exacta en el binario.
+         */
+        Absolute64,
+        Absolute40, // dirección absoluta de 40 bits, para sub, add y etc
+        Absolute32,
+        Absolute16,
+        Absolute8,
+
+        // para indicar errores o que no es valido
+        NO_VALID
+    } Type;
+
+    /**
      * Estructura basica para representar una relocalizacion
      */
-    struct Relocation {
-        /**
-         * Tipo de relocalizaciones, esto puede cambiar en el futuro segun
-         * las necesidades del conjunto de instrucciones.
-         */
-        enum class Type {
-            Absolute40, // dirección absoluta de 40 bits, para sub, add y etc
-            Relative40, // desplazamiento relativo de 40 bits
-            Absolute64,
-            Relative32
-        };
+    typedef struct Relocation {
+        std::string symbol;     // símbolo a resolver
+        std::string section;    // sección donde ocurre
+        uint64_t    offset = 0; // offset dentro de la sección
+        Type        type;       // tipo de relocación
+    } Relocation;
 
-        std::string symbol; // símbolo a resolver
-        std::string section; // sección donde ocurre
-        uint64_t offset = 0; // offset dentro de la sección
-        Type type; // tipo de relocación
-    };
-
+    static Type size_ptr_in_this_machine =
+            (sizeof(void *) == 8)
+                ? Type::Absolute64
+                : (sizeof(void *) == 4)
+                      ? Type::Absolute32
+                      : (sizeof(void *) == 2)
+                            ? Type::Absolute16
+                            : (sizeof(void *) == 1)
+                                  ? Type::Absolute8
+                                  : Type::NO_VALID; // fallback
 
     /**
      * Estructura basica que define los campos de un label
      */
     typedef struct Label {
-        std::string name; // nombre de la etiqueta
-        uint64_t address{}; // offset relativo dentro de la sección
-        uint64_t size{}; // tamaño de la etiqueta
+        std::string name;      // nombre de la etiqueta
+        uint64_t    address{}; // offset relativo dentro de la sección
+        uint64_t    size{};    // tamaño de la etiqueta
     } Label;
 
     typedef struct Section {
@@ -110,7 +173,7 @@ namespace Assembly::Bytecode {
          * @param final direccion final de la seccion.
          */
         void set_range(uint64_t init, uint64_t final) {
-            memory.address_init = init;
+            memory.address_init  = init;
             memory.address_final = final;
         }
 
@@ -145,7 +208,7 @@ namespace Assembly::Bytecode {
          * @param bytes_aligned bytes a alinear, normalmente 4096 para el formato VELB
          */
         void compute_range(uint64_t base_address, uint64_t bytes_aligned) {
-            uint64_t start = base_address;
+            uint64_t start    = base_address;
             uint64_t end_real = base_address + size_real;
 
             uint64_t aligned_init = align_down(start, bytes_aligned);
@@ -154,7 +217,7 @@ namespace Assembly::Bytecode {
 
             uint64_t aligned_end = align_up(end_real, size_align_section);
 
-            memory.address_init = aligned_init;
+            memory.address_init  = aligned_init;
             memory.address_final = aligned_end;
         }
 
@@ -218,11 +281,11 @@ namespace Assembly::Bytecode {
          */
         void add_section(const std::string &name, uint64_t init, uint64_t final) {
             Section sec;
-            sec.name = name;
-            sec.memory.address_init = init;
+            sec.name                 = name;
+            sec.memory.address_init  = init;
             sec.memory.address_final = final;
-            sec.size_real = 0;
-            sec.size_align_section = 1;
+            sec.size_real            = 0;
+            sec.size_align_section   = 1;
 
             // añadimos la seccion a la tabla de secciones.
             add_section(sec);
@@ -285,6 +348,15 @@ namespace Assembly::Bytecode {
         return total;
     }
 
+    /**
+     * Representa una entrada en la tabla de importaciones para el contexto
+     */
+    struct ImportEntry {
+        std::string library;  // "kernel32.dll"
+        std::string function; // "GetTickCount"
+        uint32_t    index;    // índice en la tabla de imports
+    };
+
     typedef struct Context {
         /**
          * Valor PC de inicio para el linker, este valor es necesario al generar el bytecode para indicar
@@ -292,6 +364,23 @@ namespace Assembly::Bytecode {
          * @InitPc(label) entonces se definiria por defecto iniciar en la direccion 0 de la memoria virtual.
          */
         uint64_t start_pc{};
+
+        /**
+         * Tabla de importacion con nombres de los metodos y nombre de las
+         * librerias usadas. Se recomienda usar la tabla `import_lookup` para
+         * examinar si existe un simbolo dado de forma rapida, ya que esta via
+         * tiene un coste O(1), en caso contrario usando otros metodos de buqyedas
+         * perdera mas tiempo.
+         */
+        std::vector<ImportEntry> import_table;
+
+        /**
+         * Tabla de importacion de tipo clave: valor para acceso rapido,
+         * ejemplo de clave:
+         * "kernel32.dll:GetTickCount". el valor es el indice de la entrada
+         * dentro de la tabla "import_table".
+         */
+        std::unordered_map<std::string, uint32_t> import_lookup;
 
         /**
          * espacio de direcciones key(nombre): valor(espacio)
@@ -383,9 +472,9 @@ namespace Assembly::Bytecode {
          * @param final direccion final
          */
         void add_space(const std::string &name,
-                       uint64_t init, uint64_t final) {
+                       uint64_t           init, uint64_t final) {
             Space sp;
-            sp.range.address_init = init;
+            sp.range.address_init  = init;
             sp.range.address_final = final;
             sp.set_name(name);
             space_address[name] = sp;
@@ -441,13 +530,15 @@ namespace Assembly::Bytecode {
      * @brief Resultado de una búsqueda de label en el contexto.
      */
     struct LabelLookupResult {
-        Label *label = nullptr; ///< puntero al label (dentro de Section::table_label)
-        Section *section = nullptr; ///< puntero a la sección que contiene el label
-        Space *space = nullptr; ///< puntero al espacio que contiene la sección
-        std::string space_name; ///< nombre del espacio (clave)
-        std::string section_name; ///< nombre de la sección (clave)
-        std::optional<uint64_t> absolute_address; ///< dirección absoluta si se pudo calcular
-        [[nodiscard]] bool found() const { return label != nullptr; }
+        Label *                 label   = nullptr; ///< puntero al label (dentro de Section::table_label)
+        Section *               section = nullptr; ///< puntero a la sección que contiene el label
+        Space *                 space   = nullptr; ///< puntero al espacio que contiene la sección
+        std::string             space_name;        ///< nombre del espacio (clave)
+        std::string             section_name;      ///< nombre de la sección (clave)
+        std::optional<uint64_t> absolute_address;  ///< dirección absoluta si se pudo calcular
+        [[nodiscard]] bool      found() const {
+            return label != nullptr;
+        }
     };
 
     /**
@@ -474,23 +565,23 @@ namespace Assembly::Bytecode {
     static LabelLookupResult find_label_in_context(Context &ctx, const std::string &label_name) {
         LabelLookupResult out;
         for (auto &space_kv: ctx.space_address) {
-            Space &space = space_kv.second;
+            Space &            space      = space_kv.second;
             const std::string &space_name = space_kv.first;
             for (auto &sec_kv: space.table_section) {
-                Section &sec = sec_kv.second;
+                Section &          sec          = sec_kv.second;
                 const std::string &section_name = sec_kv.first;
-                auto it = sec.table_label.find(label_name);
+                auto               it           = sec.table_label.find(label_name);
                 if (it != sec.table_label.end()) {
-                    out.label = &it->second;
-                    out.section = &sec;
-                    out.space = &space;
-                    out.space_name = space_name;
+                    out.label        = &it->second;
+                    out.section      = &sec;
+                    out.space        = &space;
+                    out.space_name   = space_name;
                     out.section_name = section_name;
                     // intentar calcular dirección absoluta si los rangos están definidos
                     std::error_code ec;
                     if (space.range.address_init != 0 || sec.memory.address_init != 0) {
                         // Dirección absoluta = base del espacio + inicio de la sección (relativo al espacio) + offset del label (relativo a la sección)
-                        uint64_t abs = space.range.address_init + sec.memory.address_init + it->second.address;
+                        uint64_t abs         = space.range.address_init + sec.memory.address_init + it->second.address;
                         out.absolute_address = abs;
                     }
                     return out;
@@ -506,20 +597,20 @@ namespace Assembly::Bytecode {
     static LabelLookupResult find_label_in_context_const(const Context &ctx, const std::string &label_name) {
         LabelLookupResult out;
         for (const auto &space_kv: ctx.space_address) {
-            const Space &space = space_kv.second;
+            const Space &      space      = space_kv.second;
             const std::string &space_name = space_kv.first;
             for (const auto &sec_kv: space.table_section) {
-                const Section &sec = sec_kv.second;
+                const Section &    sec          = sec_kv.second;
                 const std::string &section_name = sec_kv.first;
-                auto it = sec.table_label.find(label_name);
+                auto               it           = sec.table_label.find(label_name);
                 if (it != sec.table_label.end()) {
                     // cast away const only for pointers in result? prefer to return non-const pointers as nullptr if const context
-                    out.label = const_cast<Label *>(&it->second);
-                    out.section = const_cast<Section *>(&sec);
-                    out.space = const_cast<Space *>(&space);
-                    out.space_name = space_name;
-                    out.section_name = section_name;
-                    uint64_t abs = space.range.address_init + sec.memory.address_init + it->second.address;
+                    out.label            = const_cast<Label *>(&it->second);
+                    out.section          = const_cast<Section *>(&sec);
+                    out.space            = const_cast<Space *>(&space);
+                    out.space_name       = space_name;
+                    out.section_name     = section_name;
+                    uint64_t abs         = space.range.address_init + sec.memory.address_init + it->second.address;
                     out.absolute_address = abs;
                     return out;
                 }
@@ -536,23 +627,23 @@ namespace Assembly::Bytecode {
      * @param label_name Nombre del label a buscar
      * @return LabelLookupResult con resultado o vacío si no existe.
      */
-    static LabelLookupResult find_label_in_space(Context &ctx, const std::string &space_name,
+    static LabelLookupResult find_label_in_space(Context &          ctx, const std::string &space_name,
                                                  const std::string &label_name) {
         LabelLookupResult out;
-        auto it_space = ctx.space_address.find(space_name);
+        auto              it_space = ctx.space_address.find(space_name);
         if (it_space == ctx.space_address.end()) return out;
         Space &space = it_space->second;
         for (auto &sec_kv: space.table_section) {
-            Section &sec = sec_kv.second;
+            Section &          sec          = sec_kv.second;
             const std::string &section_name = sec_kv.first;
-            auto it = sec.table_label.find(label_name);
+            auto               it           = sec.table_label.find(label_name);
             if (it != sec.table_label.end()) {
-                out.label = &it->second;
-                out.section = &sec;
-                out.space = &space;
-                out.space_name = space_name;
-                out.section_name = section_name;
-                uint64_t abs = space.range.address_init + sec.memory.address_init + it->second.address;
+                out.label            = &it->second;
+                out.section          = &sec;
+                out.space            = &space;
+                out.space_name       = space_name;
+                out.section_name     = section_name;
+                uint64_t abs         = space.range.address_init + sec.memory.address_init + it->second.address;
                 out.absolute_address = abs;
                 return out;
             }

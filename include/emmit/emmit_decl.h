@@ -312,6 +312,13 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * Permite emitir isntrucciones de tipo inmediato como son MOV r12, 0x1234 y otras similares
+     * @param instruction_parser
+     * @param code_final
+     * @param now_instr
+     * @param assembly_ctx
+     */
     void emit_instr_inmed(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -319,7 +326,17 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
-    void emit_instr_inmed(
+    /**
+     * Permite emitir instrucciones inmediatas donde el segundo operando es una label o una notacion,
+     * este tipo de instrucciones requiere crear una entrada en la tabla de relocalizaciones que el
+     * linker en run time debera resolver. Este metodo nunca es llamado directamente, sino que lo hara
+     * `emit_instr_inmed` cuando detecte que no es una instruccion convencional de inmediatos.
+     * @param instruction_parser
+     * @param code_final
+     * @param now_instr
+     * @param assembly_ctx
+     */
+    void emit_instr_inmed_with_annotation(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,
