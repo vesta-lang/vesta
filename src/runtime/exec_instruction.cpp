@@ -13,9 +13,14 @@
 
 namespace runtime {
     void exec_instr_hlt(ProcessVM *vm, const DecodedInstr &instr) {
-        // indicamos que queremos matar la VM, esto hara que la fase
-        // EXECUTE emita un evento de tipo EVT_ERROR
-        //vm->should_kill = true;
+        // bloqueamos el proceso antes de matarlo, ya que si no hacemos esto antes
+        // y "matamos el proceso" eñ gestor de procesos finalizara de ejecutar esta
+        // instruccion, volvera a la fase de execute y seguira ejecutando lo que quedaba
+        // de la instruccion, lo cual genera un fallo fatal al estar la memoria ya liberada.
+        vm->decoded_ptr->flags_info.blocking = true;
+
+        // indicamos que queremos matar el proceso al gestor de procesos.
+        //vm->scheduler.kill(vm->pid);
     }
 
     void exec_instr_push(ProcessVM *vm, const DecodedInstr &instr) {

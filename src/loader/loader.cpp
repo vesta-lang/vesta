@@ -269,7 +269,7 @@ namespace loader {
         return exe;
     }
 
-    runtime::ProcessVM *Loader::load_executable(std::string path) {
+    runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
         // Leer archivo completo
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
@@ -282,16 +282,10 @@ namespace loader {
         );
 
         // Delegar en la versión bytecode
-        return load_executable(bytecode);
+        return load_executable(vm, bytecode);
     }
 
-    runtime::ProcessVM *Loader::load_executable(std::vector<uint8_t> bytecode) {
-        // Parsear el formato VELB
-        //auto exe = parse_velb(std::move(bytecode));
-        auto vm = create_vm_instance();
-        vm->start(1); // iniciar la VM con 1 scheduler para que pueda ejecutar procesos
-        return load_executable(*vm, bytecode);
-    }
+
 
     runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::vector<uint8_t> bytecode) {
         auto exe = parse_velb(std::move(bytecode));

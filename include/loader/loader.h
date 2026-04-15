@@ -341,10 +341,22 @@ namespace loader {
 
         std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
 
-        runtime::ProcessVM *load_executable(std::string path);
+        /**
+         * Permite crear un proceso en una VM cargado su codigo en este proceso.
+         * La VM debe haber sido inicializada usando el metodo `start`
+         * @param vm instancia virtual inicializada donde crear el nuevo proceso
+         * @param path path al ejecutable VELB a ejecutuar.
+         * @return devuelve un proceso creado en la maquina virtual dada.
+         */
+        runtime::ProcessVM *load_executable(runtime::VM &vm, std::string path);
 
-        runtime::ProcessVM *load_executable(std::vector<uint8_t> bytecode);
-
+        /**
+         * Permite crear un proceso en una VM cargado su codigo en este proceso.
+         * La VM debe haber sido inicializada usando el metodo `start`
+         * @param vm instancia virtual inicializada donde crear el nuevo proceso
+         * @param bytecode bytecocde a cargar
+         * @return proceso creado en la maquina virtual
+         */
         runtime::ProcessVM *load_executable(runtime::VM &vm, std::vector<uint8_t> bytecode);
 
         void resolve_labels(Assembly::Bytecode::Section &section);
@@ -371,9 +383,15 @@ namespace loader {
          */
         Executable &get_last_instance();
 
-    private:
+        /**
+         * Permite crear una instancia de maquina virtual en un manager dado, la instancia
+         * no a sido aun inicializada a traves del metodo start, por lo que el usuario debera
+         * hacerlo antes de crear un proceso en esta instancia.
+         * @return instancia no inicializada.
+         */
         runtime::VM *create_vm_instance();
 
+    private:
         /**
          * Un mutex en el loader para evitar problemas en el
          * caso de usar multihilo

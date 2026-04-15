@@ -381,12 +381,12 @@ namespace runtime {
         // --- PROFILER: fin ---
         const uint64_t t2 = now_ns();
         // esto dara problemas al usar multihilo
-        process->scheduler.vm_reference.profiler_sample++;
+        process->scheduler.profiler_sample++;
 
         // Cada 256 instrucciones -> sample
-        if ((process->scheduler.vm_reference.profiler_sample & 0xFF) == 0) {
-            process->scheduler.vm_reference.profiler_instr_counter++; // IPS sampling
-            process->scheduler.vm_reference.time_exec += (t2 - t1);   // tiempo ocupado
+        if ((process->scheduler.profiler_sample & 0xFF) == 0) {
+            process->scheduler.profiler_instr_counter++; // IPS sampling
+            process->scheduler.time_exec += (t2 - t1);   // tiempo ocupado
         }
         // -------------------------
 

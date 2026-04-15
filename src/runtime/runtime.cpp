@@ -26,10 +26,8 @@ namespace runtime {
         id = id_vm;
     }
 
-
-
     std::string VM::to_string() const {
-        //return this->vm_summary();
+        return this->vm_summary();
         return "";
     }
 
@@ -38,14 +36,6 @@ namespace runtime {
         vesta::scout() << to_string();
     }
 
-
-
-    /*void VM::emit_event(vm_event e) {
-        std::lock_guard guard(state_lock);
-        pending_events.push(e);
-    }*/
-
-
     void VM::start(size_t num_schedulers) {
         schedulers.reserve(num_schedulers);
 
@@ -53,26 +43,33 @@ namespace runtime {
             auto sched = std::make_unique<Scheduler>(i, *this);
             schedulers.push_back(std::move(sched));
 
-            pool.enqueue([this, i] {
+            // submit() devuelve un future
+            std::future<void> fut = pool.submit([this, i] {
                 schedulers[i]->run_loop();
             });
+
+            scheduler_futures.push_back(std::move(fut));
         }
     }
-
-
-    //void VM::join() {
-    //    pthread_join(thread_for_vm, nullptr);
-    //}
 
     ProcessVM *VM::get_process(GlobalPID pid) {
         return schedulers[pid.scheduler_id]->pid_index[pid];
     }
+
+    void VM::wait() {
+        for (auto &f: scheduler_futures)
+            f.get(); // bloquea hasta que cada scheduler termine
+    }
+
 
     void VM::make_ready(GlobalPID pid) {
         schedulers[pid.scheduler_id]->make_ready(pid);
     }
 
     GlobalPID VM::spawn_process() {
+        if (schedulers.empty())
+            throw std::runtime_error("VM::spawn_process: no hay gestores de procesos, posiblemente no llamo a start()");
+
         size_t index = next_sched;
         next_sched   = (next_sched + 1) % schedulers.size();
 

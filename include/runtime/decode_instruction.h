@@ -181,6 +181,28 @@ namespace runtime {
      */
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
 
+
+    /**
+     * Ejecuta la instrucción actualmente decodificada y devuelve el evento
+     * que debe procesar la máquina virtual como resultado de dicha ejecución.
+     *
+     * En lugar de un valor booleano, este metodo devuelve directamente un
+     * vm_event que representa la transición que debe realizar la FSM.
+     *
+     * Esto permite que una instrucción genere múltiples tipos de eventos:
+     *  - EVT_EXEC_DONE  -> La instrucción terminó correctamente.
+     *  - EVT_IO_WAIT    -> La instrucción es bloqueante y requiere esperar E/S.
+     *  - EVT_HALT       -> La instrucción solicita detener la VM.
+     *  - EVT_ERROR      -> Se produjo un error fatal durante la ejecución.
+     *  - Otros eventos específicos según la arquitectura de la VM.
+     *
+     * El metodo también se encarga de avanzar el contador de programa (PC)
+     * si la instrucción no ha modificado explícitamente su valor (campo did_jump).
+     *
+     * @return vm_event  Evento que la FSM debe procesar tras ejecutar la instrucción.
+     */
+    vm_event execute_instruction(ProcessVM *process);
+
     void decode_instruction(ProcessVM *process);
 }
 #endif //DECODE_INSTRUCTION_H
