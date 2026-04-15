@@ -37,14 +37,13 @@ namespace loader {
     class LoaderError : public std::exception {
     public:
         LoaderError(ErrorKind kind, std::string msg)
-            : kind(kind), message(std::move(msg)) {
-        }
+            : kind(kind), message(std::move(msg)) {}
 
         const char *what() const noexcept override {
             return message.c_str();
         }
 
-        ErrorKind kind;
+        ErrorKind   kind;
         std::string message;
     };
 
@@ -99,13 +98,13 @@ namespace loader {
      * Información de un campo
      */
     typedef struct FieldInfo {
-        stringx name; // nombre del campo
-        FieldAccess access; // public/private/protected/default
-        FieldKind kind; // tipo de dato
-        ClassInfo *type_class; // si es FIELD_CLASS o FIELD_STRUCT
-        uint32_t size; // tamaño en bytes
-        uint32_t offset; // offset dentro del objeto
-        bool is_static; // si es un campo estático
+        stringx     name;       // nombre del campo
+        FieldAccess access;     // public/private/protected/default
+        FieldKind   kind;       // tipo de dato
+        ClassInfo * type_class; // si es FIELD_CLASS o FIELD_STRUCT
+        uint32_t    size;       // tamaño en bytes
+        uint32_t    offset;     // offset dentro del objeto
+        bool        is_static;  // si es un campo estático
     } FieldInfo;
 
     /**
@@ -113,27 +112,27 @@ namespace loader {
      */
     typedef struct HandlerException {
         ClassInfo *type; // null = catch-all
-        uint32_t start_pc;
-        uint32_t end_pc;
-        uint32_t handler_pc;
+        uint32_t   start_pc;
+        uint32_t   end_pc;
+        uint32_t   handler_pc;
     } HandlerException;
 
     /**
      * Informacion del metodo
      */
     typedef struct MethodInfo {
-        stringx name;
+        stringx           name;
         HandlerException *handlers;
-        size_t handler_count;
-        uint8_t *code; // puntero al bytecode
+        size_t            handler_count;
+        uint8_t *         code; // puntero al bytecode
         // aquí irían más cosas: num locals, tamaño de operand stack, etc.
     } MethodInfo;
 
     // Header de frame en la pila (en memoria de la VM)?
     typedef struct FrameHeader {
-        FrameHeader *prev; // frame anterior (caller)
-        MethodInfo *method; // metodo actual
-        uint32_t return_pc; // PC al que volver si se hace return
+        FrameHeader *prev;      // frame anterior (caller)
+        MethodInfo * method;    // metodo actual
+        uint32_t     return_pc; // PC al que volver si se hace return
         // después de esto, en memoria, irían locals, operand stack, etc.
     } FrameHeader;
 
@@ -342,9 +341,11 @@ namespace loader {
 
         std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
 
-        runtime::VM *load_executable(std::string path);
+        runtime::ProcessVM *load_executable(std::string path);
 
-        runtime::VM *load_executable(std::vector<uint8_t> bytecode);
+        runtime::ProcessVM *load_executable(std::vector<uint8_t> bytecode);
+
+        runtime::ProcessVM *load_executable(runtime::VM &vm, std::vector<uint8_t> bytecode);
 
         void resolve_labels(Assembly::Bytecode::Section &section);
 
@@ -370,9 +371,9 @@ namespace loader {
          */
         Executable &get_last_instance();
 
-        runtime::VM *create_vm_instance(std::unique_ptr<Executable> exe);
-
     private:
+        runtime::VM *create_vm_instance();
+
         /**
          * Un mutex en el loader para evitar problemas en el
          * caso de usar multihilo
