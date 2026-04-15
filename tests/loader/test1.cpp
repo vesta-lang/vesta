@@ -97,7 +97,7 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
-#define BENCHMARK_VM
+//#define BENCHMARK_VM
 
 int main() {
     Timer             global;
@@ -211,7 +211,8 @@ int main() {
     print_memory_stats();
 
     Timer               t_loader;
-    runtime::VM *       vm       = manager.loader.create_vm_instance(1);
+    unsigned            logical  = std::thread::hardware_concurrency();
+    runtime::VM *       vm       = manager.loader.create_vm_instance(logical);
     runtime::ProcessVM *process  = manager.loader.load_executable(*vm, opts.output_path);
     runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
 
@@ -381,12 +382,13 @@ int main() {
     uint64_t min_ns   = UINT64_MAX;
     uint64_t max_ns   = 0;
 
-    const int RUNS = 10;
+    const int RUNS = 15;
 
     for (int i = 0; i < RUNS; i++) {
         for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
             std::thread(&runtime::profiler_thread, s.get()).detach();
             s->has_hooks = false; // desactivar todos los hooks
+            //s->profiler_running = false;
         }
         // Reset de la VM antes de cada ejecución
         process->registers.rip.qword(0);
@@ -408,7 +410,7 @@ int main() {
         vm->start();
         while (vm->vm_running) {
             vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
-            SLEEP(1000);
+            SLEEP(100);
         }
         //process->scheduler.vm_reference.wait();
         uint64_t ns = t_bench.ns();
@@ -461,10 +463,15 @@ int main() {
 
     // perfilar cada gestor de procesos.
     for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
-        std::thread(&runtime::profiler_thread, s.get()).detach();
+        //std::thread(&runtime::profiler_thread, s.get()).detach();
     }
     vm->start();
+    //vm->wait();
+    while (vm->vm_running) {
+        vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
+        SLEEP(100);
 
+    }
 
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
@@ -478,5 +485,15 @@ int main() {
 
     std::cout << process->to_string() << std::endl;
 
+    int sleeping = 0;
+    for (auto &s : vm->schedulers)
+        if (s->is_waiting) sleeping++;
+    vesta::scout() << "En modo Waiting: " << sleeping << std::endl;
+
+    for (auto &s : vm->schedulers)
+        vesta::scout() << s->to_string() << std::endl;
+
+    // matar a todos los gestores
+    vm->stop();
     return 0;
 }

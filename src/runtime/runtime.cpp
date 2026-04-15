@@ -55,6 +55,28 @@ namespace runtime {
         }
     }
 
+    void VM::stop() {
+        // Indicar que la VM debe morir
+        vm_running = false;
+
+        // Marcar todos los schedulers para matar
+        for (auto &sched : schedulers) {
+            sched->should_kill = true;
+        }
+
+        // Despertar a todos los schedulers que estén en wait()
+        for (auto &sched : schedulers) {
+            sched->cv.notify_all();
+        }
+
+        // Esperar a que todos los hilos terminen
+        for (auto &f : scheduler_futures) {
+            f.get();
+        }
+
+        scheduler_futures.clear();
+    }
+
     ProcessVM *VM::get_process(GlobalPID pid) {
         return schedulers[pid.scheduler_id]->pid_index[pid];
     }
@@ -74,6 +96,7 @@ namespace runtime {
 
     void VM::make_ready(GlobalPID pid) {
         schedulers[pid.scheduler_id]->make_ready(pid);
+        schedulers[pid.scheduler_id]->cv.notify_one();
     }
 
     GlobalPID VM::spawn_process() {

@@ -219,11 +219,15 @@ namespace runtime {
                 if (!vm_reference.has_alive_processes()) {
                     vm_reference.vm_running = false;
                     break; // este scheduler termina
+                } {
+                    is_waiting = true;
+                    // Hay procesos vivos pero bloqueados -> idle,
+                    // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
+                    //std::this_thread::yield();
+                    std::unique_lock lock(mtx);
+                    cv.wait(lock); // duerme hasta que haya trabajo
+                    is_waiting = false;
                 }
-
-                // Hay procesos vivos pero bloqueados -> idle,
-                // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
-                std::this_thread::yield();
                 continue;
             }
 
@@ -249,6 +253,26 @@ namespace runtime {
             if (p->state == READY)
                 ready_queue.push_back(p->pid);
         }
+    }
+
+    std::string Scheduler::to_string() const {
+        std::ostringstream ss;
+
+        ss << "Scheduler[" << id_scheduler << "] {\n"
+           << "  waiting: " << (is_waiting ? "yes" : "no") << "\n"
+           << "  should_kill: " << (should_kill ? "yes" : "no") << "\n"
+           << "  profiler_running: " << (profiler_running ? "yes" : "no") << "\n"
+           << "  processes_total: " << processes.size() << "\n"
+           << "  ready_queue: " << ready_queue.size() << "\n"
+           << "  alive_processes: " << vm_reference.has_alive_processes() << "\n"
+           << "  reductions_now: " << reductions_now << "\n"
+           << "  profiler_instr_counter: " << profiler_instr_counter << "\n"
+           << "  time_exec(ns): " << time_exec << "\n"
+           << "  time_decode(ns): " << time_decode << "\n"
+           << "  time_event(ns): " << time_event << "\n"
+           << "}";
+
+        return ss.str();
     }
 
 
@@ -343,33 +367,33 @@ namespace runtime {
 
 
     void profiler_thread(Scheduler *scheduler) {
-        uint64_t last = 0;
+        uint64_t last_instr = 0;
+        uint64_t last_exec  = 0;
 
-        // mientras la vm no deba haber acabado
-        while (
-            scheduler->profiler_running &&
-            scheduler->should_kill != true &&
-            scheduler->vm_reference.vm_running) {
+        while (scheduler->profiler_running &&
+            !scheduler->should_kill &&
+            scheduler->vm_reference.vm_running && scheduler->is_waiting != true) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
-            // --- IPS ---
-            uint64_t now   = scheduler->profiler_instr_counter;
-            uint64_t delta = now - last;
-            last           = now;
+            // IPS
+            uint64_t now_instr   = scheduler->profiler_instr_counter;
+            uint64_t delta_instr = now_instr - last_instr;
+            last_instr           = now_instr;
 
-            uint64_t ips = delta * 256;
+            uint64_t ips = delta_instr;
 
-            // --- CPU ---
-            double cpu           = (scheduler->time_exec / 1e9) * 100.0;
-            scheduler->time_exec = 0;
+            // CPU%
+            uint64_t now_exec   = scheduler->time_exec;
+            uint64_t delta_exec = now_exec - last_exec;
+            last_exec           = now_exec;
 
-            // --- Salida thread-safe ---
+            double cpu = ((double(delta_exec) / 1e9) * 100.0);
+            if (cpu > 100.0) cpu = 100.0;
+
             vesta::scout()
-                    << "\r[scheduler[" << scheduler->id_scheduler << "]: "
-                    << vesta::hex64(scheduler->id_scheduler)
-                    << "] "
-                    << "IPS: " << ips
-                    << " | CPU: " << cpu << "%\n";
+                    << "[scheduler " << scheduler->id_scheduler << "] "
+                    << "IPS=" << ips
+                    << " | CPU=" << cpu << "%\n";
         }
     }
 }
