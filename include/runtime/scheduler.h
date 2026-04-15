@@ -375,10 +375,7 @@ namespace runtime {
         std::atomic<bool> profiler_running = true;
 
     private:
-        /**
-         * Mutex unico
-         */
-        std::mutex state_lock;
+
     };
 
     static const char *debug_stage_name(DebugStage s) {
@@ -463,7 +460,7 @@ namespace runtime {
      *
      * @param vm Puntero a la instancia de VM que se está perfilando.
      */
-    void profiler_thread(ProcessVM *vm);
+    void profiler_thread(Scheduler *scheduler);
 }
 
 #endif //SCHEDULER_H

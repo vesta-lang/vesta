@@ -88,7 +88,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     # release
     target_link_options(${FINAL_NAME} PRIVATE
             $<$<CONFIG:Release>:
-            
+
             # --- Eliminación de código muerto ---
             -Wl,--gc-sections          # Elimina funciones/datos no usados
             

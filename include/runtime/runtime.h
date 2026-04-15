@@ -97,7 +97,15 @@ namespace runtime {
          */
         ManageVM &mgr_vm;
 
-        VM(ManageVM &mgr_vm, uint64_t id_vm);
+        /**
+         * Permite inicializar todos los gestores de procesos indicados.
+         * Se ponen en ejecuccion al llamar a start.
+         * @param mgr_vm manager publico que contiene esta instancia
+         * @param id_vm id de la instancia.
+         * @param num_schedulers numero de hilos nativos que usar para gestionar
+         * procesos virtuales.
+         */
+        VM(ManageVM &mgr_vm, uint64_t id_vm, size_t num_schedulers);
 
         [[nodiscard]] std::string to_string() const;
 
@@ -109,16 +117,13 @@ namespace runtime {
         /**
          * @brief Inicia la máquina virtual y lanza los schedulers.
          *
-         * Crea y configura los `num_schedulers` planificadores (Scheduler),
-         * asignándolos al ThreadPool interno para que comiencen a ejecutar
-         * procesos de forma concurrente.
          *
          * Este metodo NO bloquea. Para esperar a que la VM finalice,
          * debe llamarse posteriormente a `wait()`.
          *
          * @param num_schedulers Número de schedulers a crear y lanzar.
          */
-        void start(size_t num_schedulers);
+        void start();
 
         /**
          * @brief Obtiene un puntero al proceso asociado a un PID global.
@@ -145,6 +150,8 @@ namespace runtime {
          */
         void wait();
 
+        bool has_alive_processes() const;
+
         /**
          * @brief Marca un proceso como listo para ejecutarse.
          *
@@ -170,6 +177,19 @@ namespace runtime {
 
             return ss.str();
         }
+
+        /**
+         * Almacena el estado actual de la instancia, si es true, tiene gestores
+         * de procesos ejecutandose, pero si es false, entonces es que la maquina
+         * no se ejecuta y por tanto no hay hilos en ejecuccion.
+         */
+        std::atomic<bool> vm_running{true};
+
+        /**
+         * Numero de gestores de procesos a crear, cada gestor de proceso
+         * usa un hilo nativo.
+         */
+        size_t num_schedulers;
 
     private:
         /**

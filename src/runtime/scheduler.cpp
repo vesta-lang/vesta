@@ -111,7 +111,6 @@ namespace runtime {
 #endif
 
     /*void VM::emit_event(vm_event e) {
-        std::lock_guard guard(state_lock);
         pending_events.push(e);
     }*/
 
@@ -198,14 +197,16 @@ namespace runtime {
 
     bool Scheduler::has_alive_processes() const {
         for (auto &p: processes) {
-            if (p->state != DEAD)
+            if (p->state != DEAD && p->state != HALT)
                 return true;
         }
         return false;
     }
 
     void Scheduler::run_loop() {
-        while (!should_kill) {
+        // should_kill puede matar solo un gestor de procesos,
+        // pèro vm_running puede matar a todos los gestores de la instancia
+        while (!should_kill && vm_reference.vm_running) {
             ProcessVM *p = schedule_next();
             if (!p) {
                 // si se obtuvo un puntero nulo, puede decir varias cosas, una de ellas es que los procesos
@@ -214,10 +215,11 @@ namespace runtime {
 
                 // No hay procesos vivos, en ese caso
                 // detenemos este gestor de procesos e hilo, esto no afectara a los demas gestores de procesos.
-                //if (!has_alive_processes()) {
-                //    // No queda nada que ejecutar -> detener scheduler
-                //    break;
-                //}
+                // ¿Quedan procesos vivos en toda la VM?
+                if (!vm_reference.has_alive_processes()) {
+                    vm_reference.vm_running = false;
+                    break; // este scheduler termina
+                }
 
                 // Hay procesos vivos pero bloqueados -> idle,
                 // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
@@ -231,7 +233,10 @@ namespace runtime {
 
                 p->reductions_remaining--;
 
-                if (p->state == WAIT_IO || p->state == BLOCKED || p->state == DEAD)
+                if (p->state == WAIT_IO ||
+                    p->state == BLOCKED ||
+                    p->state == DEAD ||
+                    p->state == HALT)
                     break;
             }
 
@@ -241,7 +246,7 @@ namespace runtime {
             }
 
             // Si sigue vivo, vuelve a la cola
-            if (p->state == READY || p->state == RUNNING)
+            if (p->state == READY)
                 ready_queue.push_back(p->pid);
         }
     }
@@ -304,7 +309,6 @@ namespace runtime {
     }
 
     void Scheduler::add_debug_hook(DebugHook hook) {
-        std::lock_guard guard(state_lock);
         free_add_debug_hook(hook);
     }
 
@@ -322,8 +326,6 @@ namespace runtime {
     void Scheduler::on_event(vm_event e) {
         //vm_hook(this, DebugStage::OnEventBegin);
         {
-            std::lock_guard guard(state_lock);
-
             vm_state old = instance->state;
 
             // Obtener la transición desde la tabla
@@ -340,27 +342,32 @@ namespace runtime {
     }
 
 
-    void profiler_thread(ProcessVM *vm) {
+    void profiler_thread(Scheduler *scheduler) {
         uint64_t last = 0;
 
         // mientras la vm no deba haber acabado
-        while (vm->scheduler.profiler_running) {
+        while (
+            scheduler->profiler_running &&
+            scheduler->should_kill != true &&
+            scheduler->vm_reference.vm_running) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
 
             // --- IPS ---
-            uint64_t now   = vm->scheduler.profiler_instr_counter;
+            uint64_t now   = scheduler->profiler_instr_counter;
             uint64_t delta = now - last;
             last           = now;
 
             uint64_t ips = delta * 256;
 
             // --- CPU ---
-            double cpu              = (vm->scheduler.time_exec / 1e9) * 100.0;
-            vm->scheduler.time_exec = 0;
+            double cpu           = (scheduler->time_exec / 1e9) * 100.0;
+            scheduler->time_exec = 0;
 
             // --- Salida thread-safe ---
             vesta::scout()
-                    << "\r[scheduler[" << vm->pid.local_pid << "]: " << vesta::hex64(vm->scheduler.id_scheduler) << "] "
+                    << "\r[scheduler[" << scheduler->id_scheduler << "]: "
+                    << vesta::hex64(scheduler->id_scheduler)
+                    << "] "
                     << "IPS: " << ips
                     << " | CPU: " << cpu << "%\n";
         }

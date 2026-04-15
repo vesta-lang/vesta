@@ -18,12 +18,20 @@
 namespace runtime {
     VM::VM(
         ManageVM &mgr_vm_,
-        uint64_t  id_vm
+        uint64_t  id_vm,
+        size_t    num_schedulers
     ) : manager_mem_public(mgr_vm_.manager_mem),
         loader_priv(std::make_unique<loader::Loader>(mgr_vm_)),
         loader_public(mgr_vm_.loader),
-        mgr_vm(mgr_vm_) {
+        mgr_vm(mgr_vm_), num_schedulers(num_schedulers) {
         id = id_vm;
+
+        schedulers.reserve(num_schedulers);
+
+        for (uint32_t i = 0; i < num_schedulers; i++) {
+            auto sched = std::make_unique<Scheduler>(i, *this);
+            schedulers.push_back(std::move(sched));
+        }
     }
 
     std::string VM::to_string() const {
@@ -36,13 +44,8 @@ namespace runtime {
         vesta::scout() << to_string();
     }
 
-    void VM::start(size_t num_schedulers) {
-        schedulers.reserve(num_schedulers);
-
+    void VM::start() {
         for (uint32_t i = 0; i < num_schedulers; i++) {
-            auto sched = std::make_unique<Scheduler>(i, *this);
-            schedulers.push_back(std::move(sched));
-
             // submit() devuelve un future
             std::future<void> fut = pool.submit([this, i] {
                 schedulers[i]->run_loop();
@@ -61,6 +64,13 @@ namespace runtime {
             f.get(); // bloquea hasta que cada scheduler termine
     }
 
+    bool VM::has_alive_processes() const {
+        for (auto &sched: schedulers) {
+            if (sched->has_alive_processes())
+                return true;
+        }
+        return false;
+    }
 
     void VM::make_ready(GlobalPID pid) {
         schedulers[pid.scheduler_id]->make_ready(pid);

@@ -387,9 +387,11 @@ namespace loader {
          * Permite crear una instancia de maquina virtual en un manager dado, la instancia
          * no a sido aun inicializada a traves del metodo start, por lo que el usuario debera
          * hacerlo antes de crear un proceso en esta instancia.
+         * @param num_schedulers numeros de hilos nativos que puede usar la instancia
+         * para ejecutar procesos virtuales.
          * @return instancia no inicializada.
          */
-        runtime::VM *create_vm_instance();
+        runtime::VM *create_vm_instance(size_t num_schedulers);
 
     private:
         /**

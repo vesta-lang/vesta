@@ -129,9 +129,11 @@ namespace runtime {
 
         /**
          * @brief Crea una nueva VM con ID unico
+         * @param num_schedulers numeros de hilos nativos que puede usar la instancia
+         * para ejecutar procesos virtuales.
          * @return ID de la VM creada (0 si falla)
          */
-        uint64_t create_vm();
+        uint64_t create_vm(size_t num_schedulers);
 
         /**
          * @brief Destruye una VM por su ID

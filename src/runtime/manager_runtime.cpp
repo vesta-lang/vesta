@@ -28,13 +28,13 @@ namespace runtime {
         destroy_all_vms();
     }
 
-    uint64_t ManageVM::create_vm() {
+    uint64_t ManageVM::create_vm(size_t num_schedulers) {
         std::lock_guard lock(vm_mutex);
         uint64_t id = ++counter_vm;
 
         // cada instancia tiene un manager publica de instancia y de carga
         // Crear VM en el heap y almacenarla con propiedad exclusiva
-        vms.push_back(std::make_unique<VM>(*this, id));
+        vms.push_back(std::make_unique<VM>(*this, id, num_schedulers));
         return id;
     }
 

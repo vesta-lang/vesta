@@ -38,10 +38,10 @@ namespace cli {
     }
 
     void VestaInterprete::run_interprete() {
-        uint8_t             id      = manager.create_vm();
+        uint8_t             id      = manager.create_vm(1);
         uint64_t            last_ip = 0;
         runtime::VM *       vm      = manager.get_vm(id);
-        vm->start(1);
+        vm->start();
 
         GlobalPID           pid     = vm->spawn_process();
         runtime::ProcessVM *process = vm->get_process(pid);
