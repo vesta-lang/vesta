@@ -380,7 +380,7 @@ namespace runtime {
 
         // --- PROFILER: fin ---
         const uint64_t t2 = now_ns();
-        // esto dara problemas al usar multihilo
+
         process->scheduler.profiler_sample++;
 
         // Cada 256 instrucciones -> sample

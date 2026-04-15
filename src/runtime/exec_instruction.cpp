@@ -17,6 +17,7 @@ namespace runtime {
         // y "matamos el proceso" eñ gestor de procesos finalizara de ejecutar esta
         // instruccion, volvera a la fase de execute y seguira ejecutando lo que quedaba
         // de la instruccion, lo cual genera un fallo fatal al estar la memoria ya liberada.
+        vm->scheduler.on_event(EVT_HALT);
         vm->decoded_ptr->flags_info.blocking = true;
 
         // indicamos que queremos matar el proceso al gestor de procesos.

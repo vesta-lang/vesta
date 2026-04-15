@@ -337,12 +337,12 @@ namespace loader {
     }
 
 
-    runtime::VM *Loader::create_vm_instance() {
+    runtime::VM *Loader::create_vm_instance(size_t num_schedulers) {
         // bloqueamos el acceso si otro hilo intenta entrar
         std::lock_guard lock(loader_mutex);
 
         // cramos una instancia VM y configuramos el PC
-        uint64_t     id = instance_manager.create_vm();
+        uint64_t     id = instance_manager.create_vm(num_schedulers);
         runtime::VM *vm = instance_manager.get_vm(id);
 
         return vm;

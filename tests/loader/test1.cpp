@@ -97,7 +97,7 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
-//#define BENCHMARK_VM
+#define BENCHMARK_VM
 
 int main() {
     Timer             global;
@@ -211,9 +211,8 @@ int main() {
     print_memory_stats();
 
     Timer               t_loader;
-    runtime::VM *       vm      = manager.loader.create_vm_instance();
-    vm->start(1);
-    runtime::ProcessVM *process = manager.loader.load_executable(*vm, opts.output_path);
+    runtime::VM *       vm       = manager.loader.create_vm_instance(2);
+    runtime::ProcessVM *process  = manager.loader.load_executable(*vm, opts.output_path);
     runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
 
 #ifdef BENCHMARK_VM
@@ -242,7 +241,8 @@ int main() {
     bench_code.push_back(0x00);
     bench_code.push_back(0x03);
     // cagro codigo de pruebas:
-    vm->load_raw_code(0, bench_code);
+    process->load_raw_code(0, bench_code);
+    process2->load_raw_code(0, bench_code);
 #endif
 
     std::cout << C_CYAN << "[Tiempo Loader] " << C_RESET << t_loader.us() << " us " << t_loader.ms() << " ms\n";
@@ -374,19 +374,26 @@ int main() {
 
 #ifdef BENCHMARK_VM
 
-    vm->has_hooks                = false;
+    //vm->has_hooks                = false;
     const uint64_t INSTR_PER_RUN = 8'000'000; // 4 ADD * 2M iteraciones
 
     uint64_t total_ns = 0;
     uint64_t min_ns   = UINT64_MAX;
     uint64_t max_ns   = 0;
 
-    const int RUNS = 10000;
+    const int RUNS = 10;
 
     for (int i = 0; i < RUNS; i++) {
+        for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
+            std::thread(&runtime::profiler_thread, s.get()).detach();
+            s->has_hooks = false; // desactivar todos los hooks
+        }
         // Reset de la VM antes de cada ejecución
-        vm->rip.qword(0);
-        vm->has_hooks = false;
+        process->registers.rip.qword(0);
+        process2->registers.rip.qword(0);
+
+        vm->vm_running = true;
+        //vm->has_hooks = false;
 
         // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
         // for (auto &entry: vm->icache) {
@@ -398,9 +405,14 @@ int main() {
         // -------------------------------------------------------------
 
         Timer t_bench;
-        std::thread(&runtime::profiler_thread, vm).detach();
+        vm->make_ready(process2->pid);
+        vm->make_ready(process->pid); // marcar el proceso como listo
         vm->start();
-        vm->join();
+        while (vm->vm_running) {
+            vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
+            SLEEP(2000);
+        }
+        //process->scheduler.vm_reference.wait();
         uint64_t ns = t_bench.ns();
 
         total_ns += ns;
@@ -419,27 +431,27 @@ int main() {
 
     double avg_ns   = double(total_ns) / RUNS;
     double avg_mips = (INSTR_PER_RUN * 1000.0) / avg_ns;
-    std::cout << C_GREEN << "\n=== RESULTADOS BENCHMARK ===\n" << C_RESET;
+    vesta::scout() << C_GREEN << "\n=== RESULTADOS BENCHMARK ===\n" << C_RESET;
 
-    std::cout << "Promedio: " << avg_ns << " ns  ("
+    vesta::scout() << "Promedio: " << avg_ns << " ns  ("
             << (avg_ns / 1000.0) << " us, "
             << (avg_ns / 1'000'000.0) << " ms)\n";
 
-    std::cout << "Minimo:   " << min_ns << " ns  ("
+    vesta::scout() << "Minimo:   " << min_ns << " ns  ("
             << (min_ns / 1000.0) << " us, "
             << (min_ns / 1'000'000.0) << " ms)\n";
 
-    std::cout << "Maximo:   " << max_ns << " ns  ("
+    vesta::scout() << "Maximo:   " << max_ns << " ns  ("
             << (max_ns / 1000.0) << " us, "
             << (max_ns / 1'000'000.0) << " ms)\n";
 
     double min_mips = (INSTR_PER_RUN * 1000.0) / max_ns; // max_ns = peor tiempo
     double max_mips = (INSTR_PER_RUN * 1000.0) / min_ns; // min_ns = mejor tiempo
 
-    std::cout << C_MAGENTA << "\n--- MIPS ---\n" << C_RESET;
-    std::cout << "MIPS promedio: " << avg_mips << "\n";
-    std::cout << "MIPS minimo:   " << min_mips << "\n";
-    std::cout << "MIPS maximo:   " << max_mips << "\n";
+    vesta::scout() << C_MAGENTA << "\n--- MIPS ---\n" << C_RESET;
+    vesta::scout() << "MIPS promedio: " << avg_mips << "\n";
+    vesta::scout() << "MIPS minimo:   " << min_mips << "\n";
+    vesta::scout() << "MIPS maximo:   " << max_mips << "\n";
 
 #else
     //vm->has_hooks = false;
@@ -449,7 +461,12 @@ int main() {
     vm->make_ready(process2->pid);
     vm->make_ready(process->pid); // marcar el proceso como listo
 
-    std::thread(&runtime::profiler_thread, process).detach();
+    // perfilar cada gestor de procesos.
+    for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
+        std::thread(&runtime::profiler_thread, s.get()).detach();
+    }
+    vm->start();
+
 
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
@@ -463,6 +480,5 @@ int main() {
 
     std::cout << process->to_string() << std::endl;
 
-    process->scheduler.vm_reference.wait();
     return 0;
 }
