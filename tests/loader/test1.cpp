@@ -211,7 +211,7 @@ int main() {
     print_memory_stats();
 
     Timer               t_loader;
-    runtime::VM *       vm       = manager.loader.create_vm_instance(2);
+    runtime::VM *       vm       = manager.loader.create_vm_instance(1);
     runtime::ProcessVM *process  = manager.loader.load_executable(*vm, opts.output_path);
     runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
 
@@ -391,9 +391,7 @@ int main() {
         // Reset de la VM antes de cada ejecución
         process->registers.rip.qword(0);
         process2->registers.rip.qword(0);
-
         vm->vm_running = true;
-        //vm->has_hooks = false;
 
         // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
         // for (auto &entry: vm->icache) {
@@ -410,7 +408,7 @@ int main() {
         vm->start();
         while (vm->vm_running) {
             vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
-            SLEEP(2000);
+            SLEEP(1000);
         }
         //process->scheduler.vm_reference.wait();
         uint64_t ns = t_bench.ns();

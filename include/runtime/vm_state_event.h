@@ -297,8 +297,9 @@ namespace runtime {
      * Estructura que representa una transicion de la maquina de estados.
      */
     typedef struct Transition {
-        vm_state                         next;
-        std::function<void(ProcessVM *)> action;
+        vm_state next;
+
+        void (*action)(ProcessVM *);
 
         /**
          * Constructor de transicion, si no es especifica el estado siempre
@@ -309,8 +310,6 @@ namespace runtime {
         Transition(vm_state n = READY, void (*a)(ProcessVM *) = nullptr)
             : next(n), action(a) {}
     } Transition;
-
-
 }
 
 #endif //VM_STATE_EVENT_H

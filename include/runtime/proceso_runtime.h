@@ -19,7 +19,7 @@
 
 #include "runtime/pid.h"
 
-#define reductions_remaining_default 2000
+#define reductions_remaining_default 8192
 
 namespace runtime {
     struct InstrFormat;
@@ -189,7 +189,7 @@ namespace runtime {
     /**
      * Tamaño de la tabla cache de instrucciones decodificadas.
      */
-    static constexpr uint32_t ICACHE_SIZE = 256;
+    static constexpr uint32_t ICACHE_SIZE = 1024;
 
     /**
      * Se usa para realizar el cacheado de las isntrucciones descodifcadas
@@ -247,7 +247,6 @@ namespace runtime {
         //               sistema de cache para descodificacion de instrucciones.
         // -------------------------------------------------------------------------------
         // 256 entradas de cache maximo
-        uint64_t     icache_tag[ICACHE_SIZE] = {};
         DecodedInstr icache[ICACHE_SIZE]     = {};
 
         /**
