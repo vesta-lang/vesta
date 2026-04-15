@@ -68,7 +68,7 @@ namespace runtime {
         std::ostringstream ss;
 
         ss << "PID LOCAL=" << vesta::hex64((uint64_t) pid.local_pid) <<
-                " PID SCHEDULER=" << vesta::hex64((uint64_t) pid.scheduler_id)
+                " ID SCHEDULER=" << vesta::hex64((uint64_t) pid.scheduler_id)
                 << " st=" << vm_state_to_str(state) << "\n";
 
         // Registros generales R00–R15
@@ -101,9 +101,43 @@ namespace runtime {
                 << "DM=" << (int) registers.flags.bits.DM
                 << "]\n";
 
+        ss << " Reductions=" << reductions_remaining
+                << " TSC=" << tsc
+                << " SleepUntil=" << time_sleep
+                << " LastErr=" << err_thread
+                << "\n";
+
+        if (decoded_ptr) {
+            ss << " Instr: opcode=" << (int) decoded_ptr->flags_info.opcode_index
+                    << " size=" << (int) decoded_ptr->flags_info.size_instr
+                    << " mode=" << (int) decoded_ptr->flags_info.mode
+                    << " did_jump=" << decoded_ptr->flags_info.did_jump
+                    << " blocking=" << decoded_ptr->flags_info.blocking
+                    << " pc=" << vesta::hex64(decoded_ptr->pc)
+                    << "\n";
+        }
+
+        size_t valid = 0;
+        for (int i = 0; i < ICACHE_SIZE; i++)
+            if (icache_tag[i] != 0) valid++;
+
+        ss << " ICACHE: valid=" << valid << "/" << ICACHE_SIZE
+                << " (" << (100 * valid / ICACHE_SIZE) << "%)"
+                << "\n";
+
+
+        ss << " MEM: total_allocated_bytes=" << manager_mem_priv.total_allocated_bytes_
+                << "\n";
+
+        ss << " SchedulerID=" << scheduler.id_scheduler
+                << " Ready=" << scheduler.ready_queue.size()
+                //<< " Alive=" << scheduler.count_alive()
+                << "\n";
+
+
         // Thread / sleep
-        ss /*<< " Th=" << (void *) thread_for_vm*/
-                << " Sleep=" << time_sleep;
+        ss << " Sleep=" << time_sleep
+        << "\n";
 
         return ss.str();
     }

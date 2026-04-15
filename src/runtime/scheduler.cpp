@@ -61,17 +61,19 @@ namespace runtime {
             &&NEW_LABEL
         };
 
-        //goto *dispatch_table[instance->state];
+        /**
+         */
+        goto *dispatch_table[instance->state];
 
     READY_LABEL:
-        // READY no ejecuta instrucciones, solo espera scheduling externo
+        // READY no ejecuta instrucciones, solo pasa a running
         on_event(EVT_SCHEDULED); // transición READY -> RUNNING
-        return;                  //goto *dispatch_table[instance->state];
+        goto *dispatch_table[instance->state];
 
     RUNNING_LABEL:
         // RUNNING simplemente pasa a FETCH
         on_event(EVT_SCHEDULED); // o EVT_SCHEDULED ?
-        return;                  //goto *dispatch_table[instance->state];
+        goto *dispatch_table[instance->state];
 
     BLOCKED_LABEL:
         // No hay nada que hacer hasta que un evento externo desbloquee
@@ -85,7 +87,7 @@ namespace runtime {
         // si la instruccion ejecuta no es bloqueante, se avanzara en el
         // estado de la VM, pero en caso de que execute_instruction devuelva
         // false, se lanzara un evento de tipo EVT_IO_WAIT como evento bloqueante.
-        on_event(vm_reference.execute_instruction());
+        on_event(execute_instruction(process));
         return; //goto *dispatch_table[instance->state];
 
     WAIT_IO_LABEL:
@@ -108,6 +110,11 @@ namespace runtime {
 #pragma GCC diagnostic pop
 #endif
 
+    /*void VM::emit_event(vm_event e) {
+        std::lock_guard guard(state_lock);
+        pending_events.push(e);
+    }*/
+
     void Scheduler::init_fsm() {
         // Limpia todo_
         for (uint64_t s = 0; s < NUM_STATES; s++) {
@@ -118,6 +125,8 @@ namespace runtime {
                 fsm[s][e].action = nullptr;
             }
         }
+
+
         // READY -> RUNNING
         fsm[READY][EVT_SCHEDULED] = {RUNNING, nullptr};
 
@@ -164,6 +173,11 @@ namespace runtime {
             }
         };
 
+        // evento FSM para “yield” (fin de reducciones)
+        fsm[EXECUTE][EVT_YIELD] = {READY, nullptr};
+        fsm[DECODE][EVT_YIELD]  = {READY, nullptr};
+        fsm[RUNNING][EVT_YIELD] = {READY, nullptr};
+
         /**
          * Esto significa:
          * cuando el scheduler decida que el proceso está listo
@@ -182,10 +196,31 @@ namespace runtime {
         }
     }
 
+    bool Scheduler::has_alive_processes() const {
+        for (auto &p: processes) {
+            if (p->state != DEAD)
+                return true;
+        }
+        return false;
+    }
+
     void Scheduler::run_loop() {
         while (!should_kill) {
             ProcessVM *p = schedule_next();
             if (!p) {
+                // si se obtuvo un puntero nulo, puede decir varias cosas, una de ellas es que los procesos
+                // que hay no estan muertos pero estan en otro estado difente a listo y aun no estan preparados para
+                // ser procesados. El otro caso que se puede dar es que todos los procesos hayan muerto,
+
+                // No hay procesos vivos, en ese caso
+                // detenemos este gestor de procesos e hilo, esto no afectara a los demas gestores de procesos.
+                //if (!has_alive_processes()) {
+                //    // No queda nada que ejecutar -> detener scheduler
+                //    break;
+                //}
+
+                // Hay procesos vivos pero bloqueados -> idle,
+                // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
                 std::this_thread::yield();
                 continue;
             }
@@ -198,6 +233,11 @@ namespace runtime {
 
                 if (p->state == WAIT_IO || p->state == BLOCKED || p->state == DEAD)
                     break;
+            }
+
+            // si se acaba las reducciones se re-encola el proceso.
+            if (p->reductions_remaining == 0) {
+                on_event(EVT_YIELD);
             }
 
             // Si sigue vivo, vuelve a la cola
@@ -268,6 +308,17 @@ namespace runtime {
         free_add_debug_hook(hook);
     }
 
+#ifdef PROFILE_FAST
+#else
+    void vm_hook(ProcessVM *process, DebugStage stage) {
+        if (!process->scheduler.has_hooks) return;
+
+        for (auto &hook: process->scheduler.debug_hooks)
+            hook(process, stage);
+    }
+#endif
+
+
     void Scheduler::on_event(vm_event e) {
         //vm_hook(this, DebugStage::OnEventBegin);
         {
@@ -286,5 +337,32 @@ namespace runtime {
             instance->state = t.next;
         }
         //vm_hook(this, DebugStage::OnEventEnd);
+    }
+
+
+    void profiler_thread(ProcessVM *vm) {
+        uint64_t last = 0;
+
+        // mientras la vm no deba haber acabado
+        while (vm->scheduler.profiler_running) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            // --- IPS ---
+            uint64_t now   = vm->scheduler.profiler_instr_counter;
+            uint64_t delta = now - last;
+            last           = now;
+
+            uint64_t ips = delta * 256;
+
+            // --- CPU ---
+            double cpu              = (vm->scheduler.time_exec / 1e9) * 100.0;
+            vm->scheduler.time_exec = 0;
+
+            // --- Salida thread-safe ---
+            vesta::scout()
+                    << "\r[scheduler[" << vm->pid.local_pid << "]: " << vesta::hex64(vm->scheduler.id_scheduler) << "] "
+                    << "IPS: " << ips
+                    << " | CPU: " << cpu << "%\n";
+        }
     }
 }

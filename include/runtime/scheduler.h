@@ -23,6 +23,7 @@
 #include "runtime/runtime.h"
 #include "runtime/proceso_runtime.h"
 #include "vm_state_event.h"
+#include "profiler/timer.h"
 
 #include "runtime/pid.h"
 
@@ -273,6 +274,13 @@ namespace runtime {
         void init_fsm();
 
         /**
+         * Permite saber si aun hay procesos vivos en ejecuccion.
+         * @return true si quedan procesos vivos u en otro estados
+         * distinto a DEAD. Este metodo tiene un coste O(N)
+         */
+        bool has_alive_processes() const;
+
+        /**
          * Permite ejecutar el siguiente proceso de la VM
          * @return devuelve un puntero al proceso que esta en ejecuccion
          */
@@ -331,6 +339,41 @@ namespace runtime {
 
         ~Scheduler() = default;
 
+        /**
+         * Cola de eventos pendientes, si alguna instruccion o algo externo
+         * quiero generar algun evento, se debe poner a la cola y hasta que la VM
+         * no termine su evento actual no se podra realizar los eventos de la cola.
+         */
+        //std::queue<vm_event> pending_events;
+
+        Timer debug_timer{}; // mide la fase actual en el modo de depuracion
+
+        /**
+         * toiempo tardado en el decoder
+         */
+        uint64_t time_decode = 0;
+
+        /**
+         * tiempo de transicion de eventos.
+         */
+        uint64_t time_event = 0;
+
+        /**
+         * tiempo tardado en la ejecuccion
+         */
+        uint64_t time_exec = 0;
+
+        // --- PROFILER POR HILO / VM---
+        uint64_t profiler_sample        = 0; // contador de instrucciones
+        uint64_t profiler_instr_counter = 0; // incrementa cada 256 instrucciones
+        // --- PROFILER POR HILO / VM ---
+
+        /**
+         * permite indicar que se puede seguir ejecutado las funcionalidades
+         * de "profiler" internas o externas a la VM.
+         */
+        std::atomic<bool> profiler_running = true;
+
     private:
         /**
          * Mutex unico
@@ -381,13 +424,46 @@ namespace runtime {
 #ifdef PROFILE_FAST
 #   define vm_hook(...) do {} while(0)
 #else
-    inline void vm_hook(ProcessVM *process, DebugStage stage) {
-        //if (!process->scheduler.vm_reference.has_hooks) return;
-        //
-        //for (auto &hook: process->scheduler.vm_reference.debug_hooks)
-        //    hook(process, stage);
-    }
+    void vm_hook(ProcessVM *process, DebugStage stage);
 #endif
+
+    /**
+     * @brief Hilo de perfilado para una instancia de VM.
+     *
+     * Este hilo se ejecuta en paralelo a la VM y se encarga de:
+     *   - Calcular las instrucciones por segundo (IPS) usando muestreo.
+     *   - Calcular el porcentaje de CPU consumido por la VM.
+     *   - Imprimir los resultados usando vesta::scout() (thread-safe).
+     *
+     * El cálculo funciona así:
+     *   - Cada 256 instrucciones ejecutadas, la VM incrementa profiler_instr_counter.
+     *   - Cada segundo, este hilo lee ese contador y calcula:
+     *         IPS = delta * 256
+     *   - El tiempo ocupado (busy time) se acumula en vm->time_exec (ns).
+     *         CPU% = (time_exec / 1e9) * 100
+     *
+     *  IPS alto + CPU bajo -> la VM está idle o ejecuta pocas instrucciones por segundo.
+     *  IPS alto + CPU alto -> la VM está ejecutando un bucle caliente.
+     *  IPS bajo + CPU alto -> la VM está haciendo trabajo costoso por instrucción.
+     *
+     * Podemos ejecutar un profiler como se ve a continuacion:
+     *
+     * @code{.cpp}
+     * std::thread(&runtime::profiler_thread, vm).detach();
+     * @endcode
+     *
+     * profiler_thread depende de la flag interna vm->should_kill que indica
+     * si la VM va a morir o deberia morir y de vm->profiler_running que
+     * indica si la VM desea que se haga profiler no, en el caso de
+     * esta funcion se debe cumplir la siguiente condicion:
+     * @code{.cpp}
+     *      !vm->should_kill && vm->profiler_running
+     * @endcode
+     * En caso de que alguna cambiem el profiler se detendra.
+     *
+     * @param vm Puntero a la instancia de VM que se está perfilando.
+     */
+    void profiler_thread(ProcessVM *vm);
 }
 
 #endif //SCHEDULER_H

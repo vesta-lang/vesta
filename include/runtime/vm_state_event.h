@@ -176,6 +176,11 @@ namespace runtime {
         EVT_SCHEDULED,
 
         /**
+         * Permite ceder control a otro proceso de forma voluntaria.
+         */
+        EVT_YIELD,
+
+        /**
          * @brief La instrucción ha sido decodificada correctamente.
          *
          * @details

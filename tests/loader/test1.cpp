@@ -211,7 +211,10 @@ int main() {
     print_memory_stats();
 
     Timer               t_loader;
-    runtime::ProcessVM *vm = manager.loader.load_executable(opts.output_path);
+    runtime::VM *       vm      = manager.loader.create_vm_instance();
+    vm->start(1);
+    runtime::ProcessVM *process = manager.loader.load_executable(*vm, opts.output_path);
+    runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
 
 #ifdef BENCHMARK_VM
     std::vector<uint8_t> bench_code;
@@ -244,32 +247,32 @@ int main() {
 
     std::cout << C_CYAN << "[Tiempo Loader] " << C_RESET << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
-    vm->scheduler.add_debug_hook([](runtime::ProcessVM *vm, runtime::DebugStage stage) {
-        if (!vm) return;
+    process->scheduler.add_debug_hook([](runtime::ProcessVM *process, runtime::DebugStage stage) {
+        if (!process) return;
 
         switch (stage) {
             // --- INICIO DE FASES ---
             case runtime::DebugStage::DecodeBegin:
             case runtime::DebugStage::ExecuteBegin:
             case runtime::DebugStage::OnEventBegin:
-                vm->scheduler.vm_reference.debug_timer.reset();
+                process->scheduler.debug_timer.reset();
                 break;
 
             // --- FIN DE FASES ---
 
             case runtime::DebugStage::DecodeEnd: {
-                //vm->time_decode += vm->debug_timer.ns();
-                vm->scheduler.vm_reference.debug_timer.reset();
+                //process->time_decode += process->debug_timer.ns();
+                process->scheduler.debug_timer.reset();
                 break;
             }
 
             case runtime::DebugStage::ExecuteEnd: {
-                //vm->time_exec += vm->debug_timer.ns();
+                //process->time_exec += process->debug_timer.ns();
                 break;
             }
 
             case runtime::DebugStage::OnEventEnd: {
-                vm->scheduler.vm_reference.time_event += vm->scheduler.vm_reference.debug_timer.ns();
+                process->scheduler.time_event += process->scheduler.debug_timer.ns();
                 break;
             }
 
@@ -279,8 +282,8 @@ int main() {
     });
 
     // configuracion de un HOOK para la VM
-    vm->scheduler.add_debug_hook([](runtime::ProcessVM *vm, runtime::DebugStage stage) {
-        if (!vm) return;
+    process->scheduler.add_debug_hook([](runtime::ProcessVM *process, runtime::DebugStage stage) {
+        if (!process) return;
         const char *stage_name = runtime::debug_stage_name(stage);
 
         const char *stage_color = C_RESET;
@@ -302,16 +305,16 @@ int main() {
                 break;
         }
 
-        if (vm->decoded_ptr != nullptr) {
+        if (process->decoded_ptr != nullptr) {
             printf("%s[%s]%s PC=%llu  OP1=%u OP2=%u  MODE=%u  STATE=%s\n",
                    stage_color,
                    stage_name,
                    C_RESET,
-                   vm->registers.rip.raw(),
-                   vm->decoded_ptr->flags_info.is_not_extended,
-                   vm->decoded_ptr->flags_info.opcode_index,
-                   vm->decoded_ptr->flags_info.mode,
-                   vm_state_to_str(vm->state)
+                   process->registers.rip.raw(),
+                   process->decoded_ptr->flags_info.is_not_extended,
+                   process->decoded_ptr->flags_info.opcode_index,
+                   process->decoded_ptr->flags_info.mode,
+                   runtime::vm_state_to_str(process->state)
             );
         }
 
@@ -320,7 +323,7 @@ int main() {
                    stage_name,
                    C_RESET,
                    C_YELLOW,
-                   vm->decoded_ptr->metadata->name,
+                   process->decoded_ptr->metadata->name,
                    C_RESET
             );
         }
@@ -330,58 +333,43 @@ int main() {
 
             // --- REGISTERS ---
             for (int i = 0; i < 16; ++i) {
-                printf(" R%02d=0x%016llx", i, vm->registers.regs[i].qword());
+                printf(" R%02d=0x%016llx", i, process->registers.regs[i].qword());
                 if ((i % 2) == 1) printf("\n");
             }
             printf("\n");
 
             for (int i = 0; i < 4; ++i) {
-                printf(" CUR%02d=0x%016llx", i, vm->registers.cur[i].qword());
+                printf(" CUR%02d=0x%016llx", i, process->registers.cur[i].qword());
                 if ((i % 2) == 1) printf("\n");
             }
             printf("\n");
 
             // --- FLAGS ---
-            printf("\nFLAGS=[");
-            printf("\n");
-            printf("\tCF=%u ", vm->registers.flags.bits.CF);
-            printf("\tOF=%u ", vm->registers.flags.bits.OF);
-            printf("\n");
-            printf("\tSF=%u ", vm->registers.flags.bits.SF);
-            printf("\tZF=%u ", vm->registers.flags.bits.ZF);
-            printf("\n");
-            printf("\tDM=%u", vm->registers.flags.bits.DM);
-            printf("\n");
-            printf("]\n");
-
-            // --- POINTERS ---
-            printf(" IP=0x%016llx\n", vm->registers.rip.raw());
-            printf(" SP=0x%016llx\n", vm->registers.stack_pointer.raw());
-            printf(" BP=0x%016llx\n", vm->registers.base_pointer.raw());
+            printf(process->to_string().c_str());
 
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
 
             printf("  decode = %lld ns (%lld ms)\n",
-                   vm->scheduler.vm_reference.time_decode,
-                   vm->scheduler.vm_reference.time_decode / 1'000'000);
+                   process->scheduler.time_decode,
+                   process->scheduler.time_decode / 1'000'000);
 
             printf("  exec = %lld ns   (%lld ms)\n",
-                   vm->scheduler.vm_reference.time_exec,
-                   vm->scheduler.vm_reference.time_exec / 1'000'000);
+                   process->scheduler.time_exec,
+                   process->scheduler.time_exec / 1'000'000);
 
             printf("  event = %lld ns  (%lld ms)\n",
-                   vm->scheduler.vm_reference.time_event,
-                   vm->scheduler.vm_reference.time_event / 1'000'000);
+                   process->scheduler.time_event,
+                   process->scheduler.time_event / 1'000'000);
 
             SLEEP(500);
 
-            vm->scheduler.vm_reference.debug_timer.reset();
-            vm->scheduler.vm_reference.time_decode = 0;
-            vm->scheduler.vm_reference.time_exec   = 0;
-            vm->scheduler.vm_reference.time_event  = 0;
+            process->scheduler.debug_timer.reset();
+            process->scheduler.time_decode = 0;
+            process->scheduler.time_exec   = 0;
+            process->scheduler.time_event  = 0;
         }
         if (stage == runtime::DebugStage::OnEventBegin)
-            printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
+            printf(">>> EVENT: %s\n\n", vm_state_to_str(process->state));
     });
 
 #ifdef BENCHMARK_VM
@@ -457,10 +445,12 @@ int main() {
     //vm->has_hooks = false;
 
     Timer t_bench;
-    vm->scheduler.vm_reference.make_ready(vm->pid); // marcar el proceso como listo
-    //vm->scheduler.vm_reference.start(1);
-    //std::thread(&runtime::profiler_thread, vm).detach();
-    //vm->scheduler.vm_reference.join();
+
+    vm->make_ready(process2->pid);
+    vm->make_ready(process->pid); // marcar el proceso como listo
+
+    std::thread(&runtime::profiler_thread, process).detach();
+
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
     std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " << runner_ns << " us\n";
@@ -471,7 +461,8 @@ int main() {
     std::cout << C_CYAN << "\n[Tiempo total] " << C_RESET << global.us() << " us "
             << global.ms() << " ms\n";
 
-    std::cout << vm->to_string() << std::endl;
+    std::cout << process->to_string() << std::endl;
 
+    process->scheduler.vm_reference.wait();
     return 0;
 }

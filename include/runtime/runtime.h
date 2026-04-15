@@ -25,7 +25,6 @@
 #include "arena/arena.h"
 #include "arena/VirtualMemory.h"
 #include "cli/sync_io.h"
-#include "profiler/timer.h"
 #include "runtime/rflags.h"
 #include "util/ThreadPool.h"
 
@@ -71,33 +70,10 @@ namespace runtime {
         std::vector<std::unique_ptr<Scheduler> > schedulers;
 
         /**
-         * Cola de eventos pendientes, si alguna instruccion o algo externo
-         * quiero generar algun evento, se debe poner a la cola y hasta que la VM
-         * no termine su evento actual no se podra realizar los eventos de la cola.
+         * Futures de cada gestor de procesos, se generar al llamar
+         * a start junto a los valores del vector schedulers
          */
-        //std::queue<vm_event> pending_events;
-
-        Timer debug_timer{}; // mide la fase actual en el modo de depuracion
-
-        /**
-         * toiempo tardado en el decoder
-         */
-        uint64_t time_decode = 0;
-
-        /**
-         * tiempo de transicion de eventos.
-         */
-        uint64_t time_event = 0;
-
-        /**
-         * tiempo tardado en la ejecuccion
-         */
-        uint64_t time_exec = 0;
-
-        // --- PROFILER POR HILO / VM---
-        uint64_t profiler_sample        = 0; // contador de instrucciones
-        uint64_t profiler_instr_counter = 0; // incrementa cada 256 instrucciones
-        // --- PROFILER POR HILO / VM ---
+        std::vector<std::future<void> > scheduler_futures;
 
         /**
          * Manager de memoria "publico" del manager de instancias
@@ -114,12 +90,7 @@ namespace runtime {
          */
         loader::Loader &loader_public;
 
-
-
-
-
-        pthread_t thread_for_vm{};
-        uint64_t  id;
+        uint64_t id;
 
         /**
          * Cada instancia tiene asignada un manager general de instancias
@@ -135,19 +106,55 @@ namespace runtime {
          */
         void print();
 
+        /**
+         * @brief Inicia la máquina virtual y lanza los schedulers.
+         *
+         * Crea y configura los `num_schedulers` planificadores (Scheduler),
+         * asignándolos al ThreadPool interno para que comiencen a ejecutar
+         * procesos de forma concurrente.
+         *
+         * Este metodo NO bloquea. Para esperar a que la VM finalice,
+         * debe llamarse posteriormente a `wait()`.
+         *
+         * @param num_schedulers Número de schedulers a crear y lanzar.
+         */
         void start(size_t num_schedulers);
 
         /**
-         * Permite hacer que el hilo que creo la VM espere a la finalizacion
-         * de la VM a traves de algun error, la instruccion HLT u otro evento
-         * o motivo que desencadene una finalizacion.
+         * @brief Obtiene un puntero al proceso asociado a un PID global.
+         *
+         * El PID global contiene:
+         *   - `scheduler_id`: identifica el scheduler propietario del proceso.
+         *   - `local_pid`: identifica el proceso dentro de ese scheduler.
+         *
+         * Este metodo localiza el scheduler correspondiente y devuelve
+         * el proceso asociado. No realiza comprobaciones de validez del PID.
+         *
+         * @param pid PID global del proceso.
+         * @return Puntero al proceso, o nullptr si no existe.
          */
-        //void join();
-
         ProcessVM *get_process(GlobalPID pid);
 
-        void make_ready(GlobalPID pid);
+        /**
+         * @brief Bloquea el hilo que creó la VM hasta que todos los schedulers finalicen.
+         *
+         * Este mwtodo espera a que todas las tareas asociadas a los schedulers
+         * hayan terminado su ejecución. La VM puede finalizar por:
+         *
+         * Este mwtodo es el equivalente a `join()` en un sistema de hilos.
+         */
+        void wait();
 
+        /**
+         * @brief Marca un proceso como listo para ejecutarse.
+         *
+         * Inserta el PID en la cola de procesos listos del scheduler correspondiente.
+         * Esto permite que el proceso sea seleccionado por el planificador en la
+         * siguiente iteración del run loop.
+         *
+         * @param pid PID global del proceso que debe pasar a estado READY.
+         */
+        void make_ready(GlobalPID pid);
 
 
         /**
@@ -156,80 +163,13 @@ namespace runtime {
          */
         GlobalPID spawn_process();
 
-        /*std::string vm_summary() const {
+        std::string vm_summary() const {
             std::ostringstream ss;
 
-            ss << "ID=" << vesta::hex64((uint64_t) id.id)
-                    << " st=" << vm_state_to_str(state) << "\n";
-
-            // Registros generales R00–R15
-            for (int i = 0; i < 16; ++i) {
-                ss << " R" << std::setw(2) << std::setfill('0') << i
-                        << "=" << vesta::hex64(regs[i].qword());
-                if (i % 2 == 1) ss << "\n";
-            }
-            ss << "\n";
-
-            // CUR0–CUR3
-            for (int i = 0; i < 4; ++i) {
-                ss << " CUR" << i << "=" << vesta::hex64(cur[i].qword());
-                if (i % 2 == 1) ss << "\n";
-            }
-            ss << "\n";
-
-            // IP/SP/BP
-            ss << " RIP=" << vesta::component_to_string(rip)
-                    << " RSP=" << vesta::component_to_string(stack_pointer)
-                    << " RBP=" << vesta::component_to_string(base_pointer)
-                    << "\n";
-
-            // FLAGS
-            ss << " FLAGS=["
-                    << "CF=" << (int) flags.bits.CF << " "
-                    << "OF=" << (int) flags.bits.OF << " "
-                    << "SF=" << (int) flags.bits.SF << " "
-                    << "ZF=" << (int) flags.bits.ZF << " "
-                    << "DM=" << (int) flags.bits.DM
-                    << "]\n";
-
-            // Thread / sleep
-            ss << " Th=" << (void *) thread_for_vm
-                    << " Sleep=" << time_sleep;
+            ss << "ID=" << vesta::hex64((uint64_t) id) << "\n";
 
             return ss.str();
-        }*/
-
-
-
-        /**
-         * Ejecuta la instrucción actualmente decodificada y devuelve el evento
-         * que debe procesar la máquina virtual como resultado de dicha ejecución.
-         *
-         * En lugar de un valor booleano, este metodo devuelve directamente un
-         * vm_event que representa la transición que debe realizar la FSM.
-         *
-         * Esto permite que una instrucción genere múltiples tipos de eventos:
-         *  - EVT_EXEC_DONE  -> La instrucción terminó correctamente.
-         *  - EVT_IO_WAIT    -> La instrucción es bloqueante y requiere esperar E/S.
-         *  - EVT_HALT       -> La instrucción solicita detener la VM.
-         *  - EVT_ERROR      -> Se produjo un error fatal durante la ejecución.
-         *  - Otros eventos específicos según la arquitectura de la VM.
-         *
-         * El metodo también se encarga de avanzar el contador de programa (PC)
-         * si la instrucción no ha modificado explícitamente su valor (campo did_jump).
-         *
-         * @return vm_event  Evento que la FSM debe procesar tras ejecutar la instrucción.
-         */
-        vm_event execute_instruction();
-
-
-
-
-        /**
-         * permite indicar que se puede seguir ejecutado las funcionalidades
-         * de "profiler" internas o externas a la VM.
-         */
-        std::atomic<bool> profiler_running = true;
+        }
 
     private:
         /**
@@ -239,67 +179,6 @@ namespace runtime {
         std::mutex state_lock;
     };
 
-    /**
-     * @brief Hilo de perfilado para una instancia de VM.
-     *
-     * Este hilo se ejecuta en paralelo a la VM y se encarga de:
-     *   - Calcular las instrucciones por segundo (IPS) usando muestreo.
-     *   - Calcular el porcentaje de CPU consumido por la VM.
-     *   - Imprimir los resultados usando vesta::scout() (thread-safe).
-     *
-     * El cálculo funciona así:
-     *   - Cada 256 instrucciones ejecutadas, la VM incrementa profiler_instr_counter.
-     *   - Cada segundo, este hilo lee ese contador y calcula:
-     *         IPS = delta * 256
-     *   - El tiempo ocupado (busy time) se acumula en vm->time_exec (ns).
-     *         CPU% = (time_exec / 1e9) * 100
-     *
-     *  IPS alto + CPU bajo -> la VM está idle o ejecuta pocas instrucciones por segundo.
-     *  IPS alto + CPU alto -> la VM está ejecutando un bucle caliente.
-     *  IPS bajo + CPU alto -> la VM está haciendo trabajo costoso por instrucción.
-     *
-     * Podemos ejecutar un profiler como se ve a continuacion:
-     *
-     * @code{.cpp}
-     * std::thread(&runtime::profiler_thread, vm).detach();
-     * @endcode
-     *
-     * profiler_thread depende de la flag interna vm->should_kill que indica
-     * si la VM va a morir o deberia morir y de vm->profiler_running que
-     * indica si la VM desea que se haga profiler no, en el caso de
-     * esta funcion se debe cumplir la siguiente condicion:
-     * @code{.cpp}
-     *      !vm->should_kill && vm->profiler_running
-     * @endcode
-     * En caso de que alguna cambiem el profiler se detendra.
-     *
-     * @param vm Puntero a la instancia de VM que se está perfilando.
-     */
-    /*static void profiler_thread(ProcessVM *vm) {
-        uint64_t last = 0;
-
-        // mientras la vm no deba haber acabado
-        while (vm->scheduler.vm_reference.profiler_running) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-
-            // --- IPS ---
-            uint64_t now   = vm->scheduler.vm_reference.profiler_instr_counter;
-            uint64_t delta = now - last;
-            last           = now;
-
-            uint64_t ips = delta * 256;
-
-            // --- CPU ---
-            double cpu    = (vm->scheduler.vm_reference.time_exec / 1e9) * 100.0;
-            vm->scheduler.vm_reference.time_exec = 0;
-
-            // --- Salida thread-safe ---
-            vesta::scout()
-                    << "\r[VM " << vesta::hex64(vm->scheduler.vm_reference.id) << "] "
-                    << "IPS: " << ips
-                    << " | CPU: " << cpu << "%\n";
-        }
-    }*/
 
     static void dump_vm_region(tlb::LazyHybridTLB *tlb, uint64_t vaddr, size_t size) {
         uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
@@ -333,8 +212,6 @@ namespace runtime {
 
         vesta::scout() << "================== End VM Memory Dump ==================\n";
     }
-
-
 }
 
 #endif //RUNTIME_H
