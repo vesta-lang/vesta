@@ -119,12 +119,11 @@ namespace runtime {
 
         size_t valid = 0;
         for (int i = 0; i < ICACHE_SIZE; i++)
-            if (icache_tag[i] != 0) valid++;
+            if (icache[i].pc != ~0ull) // entrada válida
+                valid++;
 
         ss << " ICACHE: valid=" << valid << "/" << ICACHE_SIZE
-                << " (" << (100 * valid / ICACHE_SIZE) << "%)"
-                << "\n";
-
+                << " (" << (100 * valid / ICACHE_SIZE) << "%)\n";
 
         ss << " MEM: total_allocated_bytes=" << manager_mem_priv.total_allocated_bytes_
                 << "\n";
@@ -137,7 +136,7 @@ namespace runtime {
 
         // Thread / sleep
         ss << " Sleep=" << time_sleep
-        << "\n";
+                << "\n";
 
         return ss.str();
     }
