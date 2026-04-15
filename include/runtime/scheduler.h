@@ -19,6 +19,7 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 
 #include "runtime/runtime.h"
 #include "runtime/proceso_runtime.h"
@@ -267,6 +268,8 @@ namespace runtime {
          */
         void run_loop();
 
+        std::string to_string() const;
+
 
         /**
          * Inicializa la tabla de transicicones.
@@ -374,8 +377,20 @@ namespace runtime {
          */
         std::atomic<bool> profiler_running = true;
 
-    private:
+        /**
+         * Permite saber si esta a la espera.
+         */
+        std::atomic<bool> is_waiting { false };
 
+        std::mutex mtx;
+        /**
+         * Permite reactivar un gestor de procesos que se haya quedado
+         * esperando indefinidamente, esto se hace para no consumir
+         * cpu.
+         */
+        std::condition_variable cv;
+
+    private:
     };
 
     static const char *debug_stage_name(DebugStage s) {

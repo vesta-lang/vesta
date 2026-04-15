@@ -125,6 +125,8 @@ namespace runtime {
          */
         void start();
 
+        void stop();
+
         /**
          * @brief Obtiene un puntero al proceso asociado a un PID global.
          *

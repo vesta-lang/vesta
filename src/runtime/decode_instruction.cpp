@@ -383,12 +383,8 @@ namespace runtime {
 
         process->scheduler.profiler_sample++;
 
-        // Cada 256 instrucciones -> sample
-        if ((process->scheduler.profiler_sample & 0xFF) == 0) {
-            process->scheduler.profiler_instr_counter++; // IPS sampling
-            process->scheduler.time_exec += (t2 - t1);   // tiempo ocupado
-        }
-        // -------------------------
+        process->scheduler.profiler_instr_counter++; // IPS sampling
+        process->scheduler.time_exec += (t2 - t1);   // tiempo ocupado
 
         // antes de retorna hacemos el hook
         PROFILE_END("EXECUTER");
