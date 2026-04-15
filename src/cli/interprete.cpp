@@ -38,9 +38,13 @@ namespace cli {
     }
 
     void VestaInterprete::run_interprete() {
-        uint8_t      id      = manager.create_vm();
-        uint64_t     last_ip = 0;
-        runtime::VM *vm      = manager.get_vm(id);
+        uint8_t             id      = manager.create_vm();
+        uint64_t            last_ip = 0;
+        runtime::VM *       vm      = manager.get_vm(id);
+        vm->start(1);
+
+        GlobalPID           pid     = vm->spawn_process();
+        runtime::ProcessVM *process = vm->get_process(pid);
 
         while (running) {
             try {
@@ -99,10 +103,9 @@ namespace cli {
                 bytecode.push_back(0x00);
                 bytecode.push_back(0x03);
 
-                vm->load_raw_code(last_ip, bytecode);
-                vm->start();
-                vm->join();
-                last_ip = vm->rip.raw();
+                process->load_raw_code(last_ip, bytecode);
+                //vm->join();
+                last_ip = process->registers.rip.raw();
             } catch (const std::exception &e) {
                 std::cerr << "Error: " << e.what() << "\n";
             }

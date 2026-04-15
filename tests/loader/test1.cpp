@@ -210,8 +210,8 @@ int main() {
 
     print_memory_stats();
 
-    Timer        t_loader;
-    runtime::VM *vm = manager.loader.load_executable(opts.output_path);
+    Timer               t_loader;
+    runtime::ProcessVM *vm = manager.loader.load_executable(opts.output_path);
 
 #ifdef BENCHMARK_VM
     std::vector<uint8_t> bench_code;
@@ -244,7 +244,7 @@ int main() {
 
     std::cout << C_CYAN << "[Tiempo Loader] " << C_RESET << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
-    vm->add_debug_hook([](runtime::VM *vm, runtime::DebugStage stage) {
+    vm->scheduler.add_debug_hook([](runtime::ProcessVM *vm, runtime::DebugStage stage) {
         if (!vm) return;
 
         switch (stage) {
@@ -252,14 +252,14 @@ int main() {
             case runtime::DebugStage::DecodeBegin:
             case runtime::DebugStage::ExecuteBegin:
             case runtime::DebugStage::OnEventBegin:
-                vm->debug_timer.reset();
+                vm->scheduler.vm_reference.debug_timer.reset();
                 break;
 
             // --- FIN DE FASES ---
 
             case runtime::DebugStage::DecodeEnd: {
                 //vm->time_decode += vm->debug_timer.ns();
-                vm->debug_timer.reset();
+                vm->scheduler.vm_reference.debug_timer.reset();
                 break;
             }
 
@@ -269,7 +269,7 @@ int main() {
             }
 
             case runtime::DebugStage::OnEventEnd: {
-                vm->time_event += vm->debug_timer.ns();
+                vm->scheduler.vm_reference.time_event += vm->scheduler.vm_reference.debug_timer.ns();
                 break;
             }
 
@@ -279,7 +279,7 @@ int main() {
     });
 
     // configuracion de un HOOK para la VM
-    vm->add_debug_hook([](runtime::VM *vm, runtime::DebugStage stage) {
+    vm->scheduler.add_debug_hook([](runtime::ProcessVM *vm, runtime::DebugStage stage) {
         if (!vm) return;
         const char *stage_name = runtime::debug_stage_name(stage);
 
@@ -307,7 +307,7 @@ int main() {
                    stage_color,
                    stage_name,
                    C_RESET,
-                   vm->rip.raw(),
+                   vm->registers.rip.raw(),
                    vm->decoded_ptr->flags_info.is_not_extended,
                    vm->decoded_ptr->flags_info.opcode_index,
                    vm->decoded_ptr->flags_info.mode,
@@ -330,13 +330,13 @@ int main() {
 
             // --- REGISTERS ---
             for (int i = 0; i < 16; ++i) {
-                printf(" R%02d=0x%016llx", i, vm->regs[i].qword());
+                printf(" R%02d=0x%016llx", i, vm->registers.regs[i].qword());
                 if ((i % 2) == 1) printf("\n");
             }
             printf("\n");
 
             for (int i = 0; i < 4; ++i) {
-                printf(" CUR%02d=0x%016llx", i, vm->cur[i].qword());
+                printf(" CUR%02d=0x%016llx", i, vm->registers.cur[i].qword());
                 if ((i % 2) == 1) printf("\n");
             }
             printf("\n");
@@ -344,41 +344,41 @@ int main() {
             // --- FLAGS ---
             printf("\nFLAGS=[");
             printf("\n");
-            printf("\tCF=%u ", vm->flags.bits.CF);
-            printf("\tOF=%u ", vm->flags.bits.OF);
+            printf("\tCF=%u ", vm->registers.flags.bits.CF);
+            printf("\tOF=%u ", vm->registers.flags.bits.OF);
             printf("\n");
-            printf("\tSF=%u ", vm->flags.bits.SF);
-            printf("\tZF=%u ", vm->flags.bits.ZF);
+            printf("\tSF=%u ", vm->registers.flags.bits.SF);
+            printf("\tZF=%u ", vm->registers.flags.bits.ZF);
             printf("\n");
-            printf("\tDM=%u", vm->flags.bits.DM);
+            printf("\tDM=%u", vm->registers.flags.bits.DM);
             printf("\n");
             printf("]\n");
 
             // --- POINTERS ---
-            printf(" IP=0x%016llx\n", vm->rip.raw());
-            printf(" SP=0x%016llx\n", vm->stack_pointer.raw());
-            printf(" BP=0x%016llx\n", vm->base_pointer.raw());
+            printf(" IP=0x%016llx\n", vm->registers.rip.raw());
+            printf(" SP=0x%016llx\n", vm->registers.stack_pointer.raw());
+            printf(" BP=0x%016llx\n", vm->registers.base_pointer.raw());
 
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
 
             printf("  decode = %lld ns (%lld ms)\n",
-                   vm->time_decode,
-                   vm->time_decode / 1'000'000);
+                   vm->scheduler.vm_reference.time_decode,
+                   vm->scheduler.vm_reference.time_decode / 1'000'000);
 
             printf("  exec = %lld ns   (%lld ms)\n",
-                   vm->time_exec,
-                   vm->time_exec / 1'000'000);
+                   vm->scheduler.vm_reference.time_exec,
+                   vm->scheduler.vm_reference.time_exec / 1'000'000);
 
             printf("  event = %lld ns  (%lld ms)\n",
-                   vm->time_event,
-                   vm->time_event / 1'000'000);
+                   vm->scheduler.vm_reference.time_event,
+                   vm->scheduler.vm_reference.time_event / 1'000'000);
 
             SLEEP(500);
 
-            vm->debug_timer.reset();
-            vm->time_decode = 0;
-            vm->time_exec   = 0;
-            vm->time_event  = 0;
+            vm->scheduler.vm_reference.debug_timer.reset();
+            vm->scheduler.vm_reference.time_decode = 0;
+            vm->scheduler.vm_reference.time_exec   = 0;
+            vm->scheduler.vm_reference.time_event  = 0;
         }
         if (stage == runtime::DebugStage::OnEventBegin)
             printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
@@ -457,9 +457,10 @@ int main() {
     //vm->has_hooks = false;
 
     Timer t_bench;
-    vm->start();
-    std::thread(&runtime::profiler_thread, vm).detach();
-    vm->join();
+    vm->scheduler.vm_reference.make_ready(vm->pid); // marcar el proceso como listo
+    //vm->scheduler.vm_reference.start(1);
+    //std::thread(&runtime::profiler_thread, vm).detach();
+    //vm->scheduler.vm_reference.join();
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
     std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " << runner_ns << " us\n";

@@ -57,7 +57,7 @@
 
 namespace runtime {
     struct DecodedInstr;
-    class VM;
+    class ProcessVM;
 
     /**
      * Contiene la informacion minima para descoficiar las instrucciones
@@ -99,12 +99,12 @@ namespace runtime {
          *
          * @param vm Puntero a la máquina virtual sobre la que se ejecuta la instrucción.
          */
-        void (*exec)(VM *, const DecodedInstr &) = nullptr;
+        void (*exec)(ProcessVM *, const DecodedInstr &) = nullptr;
 
         /**
          * Metodo que permite descodificar una instruccion.
          */
-        void (*decode)(VM *, DecodedInstr &) = nullptr;
+        void (*decode)(ProcessVM *, DecodedInstr &) = nullptr;
     } InstrFormat;
 
 
@@ -113,7 +113,7 @@ namespace runtime {
      *      reg1, reg2 o
      *      reg2, reg1
      */
-    void decode_instr_two_op_reg(VM *vm, DecodedInstr &instr);
+    void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Se usa para descodificar instrucciones con un solo operando de tipo
@@ -142,7 +142,7 @@ namespace runtime {
      * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
      * tiene sus propios metadatos.
      */
-    void decode_instr_one_op_reg(VM *vm, DecodedInstr &instr);
+    void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Permite descodificar instrucciones MOV de tipo registro. Es muy parecida a decode_instr_two_op_reg,
@@ -151,7 +151,7 @@ namespace runtime {
      * @param vm
      * @param instr
      */
-    void decode_instr_simple_mov(VM *vm, DecodedInstr &instr);
+    void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Se usa para descodificar instrucciones simples que no requieren de
@@ -161,7 +161,7 @@ namespace runtime {
      * @param vm
      * @param instr
      */
-    void decode_instr_simple(VM *vm, DecodedInstr &instr);
+    void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Permite descodificar instrucciones del tipo inmediato como son:
@@ -171,7 +171,7 @@ namespace runtime {
      * @param vm
      * @param instr
      */
-    void decode_instr_inmed_reg(VM *vm, DecodedInstr &instr);
+    void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Permite descodificar instrucciones como PUSH/POP donde pueden usar registros
@@ -179,6 +179,8 @@ namespace runtime {
      * @param vm
      * @param instr
      */
-    void decode_instr_push_pop(VM *vm, DecodedInstr &instr);
+    void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
+
+    void decode_instruction(ProcessVM *process);
 }
 #endif //DECODE_INSTRUCTION_H

@@ -21,10 +21,10 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T result) {
-            vm->flags.bits.CF = vm->flags.bits.CF; // no cambia
-            vm->flags.bits.OF = 0;                 // INC unsigned no tiene overflow
-            vm->flags.bits.ZF = (result == 0);
+        static inline void flags(ProcessVM *vm, T a, T result) {
+            vm->registers.flags.bits.CF = vm->registers.flags.bits.CF; // no cambia
+            vm->registers.flags.bits.OF = 0;                           // INC unsigned no tiene overflow
+            vm->registers.flags.bits.ZF = (result == 0);
         }
     };
 
@@ -37,10 +37,10 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T result) {
-            vm->flags.bits.CF = vm->flags.bits.CF; // no cambia
-            vm->flags.bits.OF = 0;                 // DEC unsigned no tiene overflow
-            vm->flags.bits.ZF = (result == 0);
+        static inline void flags(ProcessVM *vm, T a, T result) {
+            vm->registers.flags.bits.CF = vm->registers.flags.bits.CF; // no cambia
+            vm->registers.flags.bits.OF = 0;                           // DEC unsigned no tiene overflow
+            vm->registers.flags.bits.ZF = (result == 0);
         }
     };
 
@@ -68,7 +68,7 @@ namespace runtime {
      *          verificó la instrucción.
      */
     template<typename T, typename Op>
-    inline void alu_core(VM *vm, T a, T b, bool is_signed, int dst_reg_index) {
+    inline void alu_core(ProcessVM *vm, T a, T b, bool is_signed, int dst_reg_index) {
         using ST = std::make_signed_t<T>;
         using UT = std::make_unsigned_t<T>;
 
@@ -76,17 +76,17 @@ namespace runtime {
         T result = Op::compute(a, b);
 
         // Flags comunes
-        vm->flags.bits.ZF = (result == 0);
+        vm->registers.flags.bits.ZF = (result == 0);
 
-        constexpr int SIGNBIT = sizeof(T) * 8 - 1;
-        vm->flags.bits.SF     = (static_cast<UT>(result) >> SIGNBIT) & 1;
+        constexpr int SIGNBIT       = sizeof(T) * 8 - 1;
+        vm->registers.flags.bits.SF = (static_cast<UT>(result) >> SIGNBIT) & 1;
 
         // Flags específicos de la operación
         Op::flags(vm, a, b, result, is_signed);
 
         // Escribir resultado (excepto CMP)
         if constexpr (!Op::is_compare) {
-            auto &dst = vm->regs[dst_reg_index];
+            auto &dst = vm->registers.regs[dst_reg_index];
 
             if constexpr (sizeof(T) == 1)
                 dst.byte_lo((uint8_t) result);
@@ -100,7 +100,7 @@ namespace runtime {
     }
 
     template<typename T, typename Op>
-    static void binary_mem_imm_wrapper(VM *vm, uint64_t addr, uint64_t imm, bool is_signed) {
+    static void binary_mem_imm_wrapper(ProcessVM *vm, uint64_t addr, uint64_t imm, bool is_signed) {
         using UT = std::make_unsigned_t<T>;
 
         // Leer valor desde memoria virtual
@@ -110,8 +110,8 @@ namespace runtime {
         T res = Op::compute(val, (T) imm);
 
         // Flags comunes
-        vm->flags.bits.ZF = (res == 0);
-        vm->flags.bits.SF = (UT(res) >> (sizeof(T) * 8 - 1)) & 1;
+        vm->registers.flags.bits.ZF = (res == 0);
+        vm->registers.flags.bits.SF = (UT(res) >> (sizeof(T) * 8 - 1)) & 1;
 
         // Flags específicos de la operación
         Op::flags(vm, val, (T) imm, res, is_signed);
@@ -143,19 +143,19 @@ namespace runtime {
      *          verificó la instrucción.
      */
     template<typename T, typename Op>
-    inline void alu_core_unary(VM *vm, T a, int dst_reg_index) {
+    inline void alu_core_unary(ProcessVM *vm, T a, int dst_reg_index) {
         using UT = std::make_unsigned_t<T>;
 
         T result = Op::compute(a);
 
-        vm->flags.bits.ZF = (result == 0);
+        vm->registers.flags.bits.ZF = (result == 0);
 
-        constexpr int SIGNBIT = sizeof(T) * 8 - 1;
-        vm->flags.bits.SF     = (static_cast<UT>(result) >> SIGNBIT) & 1;
+        constexpr int SIGNBIT       = sizeof(T) * 8 - 1;
+        vm->registers.flags.bits.SF = (static_cast<UT>(result) >> SIGNBIT) & 1;
 
         Op::flags(vm, a, result);
 
-        auto &dst = vm->regs[dst_reg_index];
+        auto &dst = vm->registers.regs[dst_reg_index];
 
         if constexpr (sizeof(T) == 1)
             dst.byte_lo((uint8_t) result);
@@ -177,18 +177,18 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool is_signed) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool is_signed) {
             using ST = std::make_signed_t<T>;
             using UT = std::make_unsigned_t<T>;
 
             if (is_signed) {
-                ST sa             = (ST) a, sb = (ST) b, sres = (ST) result;
-                vm->flags.bits.OF = ((sa ^ sres) & (sb ^ sres)) < 0;
-                vm->flags.bits.CF = 0;
+                ST sa                       = (ST) a, sb = (ST) b, sres = (ST) result;
+                vm->registers.flags.bits.OF = ((sa ^ sres) & (sb ^ sres)) < 0;
+                vm->registers.flags.bits.CF = 0;
             } else {
-                UT ua             = (UT) a, ub = (UT) b, ures = (UT) result;
-                vm->flags.bits.CF = (ua + ub) < ua;
-                vm->flags.bits.OF = 0;
+                UT ua                       = (UT) a, ub = (UT) b, ures = (UT) result;
+                vm->registers.flags.bits.CF = (ua + ub) < ua;
+                vm->registers.flags.bits.OF = 0;
             }
         }
     };
@@ -203,7 +203,7 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool is_signed) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool is_signed) {
             using UT = std::make_unsigned_t<T>;
             using ST = std::make_signed_t<T>;
 
@@ -232,8 +232,8 @@ namespace runtime {
                                           : sa < S_MAX / sb);
                 }
 
-                vm->flags.bits.OF = overflow;
-                vm->flags.bits.CF = 0; // IMUL
+                vm->registers.flags.bits.OF = overflow;
+                vm->registers.flags.bits.CF = 0; // IMUL
             } else {
                 UT ua = (UT) a;
                 UT ub = (UT) b;
@@ -245,8 +245,8 @@ namespace runtime {
                     overflow           = ua > (U_MAX / ub);
                 }
 
-                vm->flags.bits.CF = overflow;
-                vm->flags.bits.OF = overflow; // MUL
+                vm->registers.flags.bits.CF = overflow;
+                vm->registers.flags.bits.OF = overflow; // MUL
             }
         }
     };
@@ -261,18 +261,18 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool is_signed) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool is_signed) {
             using ST = std::make_signed_t<T>;
             using UT = std::make_unsigned_t<T>;
 
             if (is_signed) {
-                ST sa             = (ST) a, sb = (ST) b, sres = (ST) result;
-                vm->flags.bits.OF = ((sa ^ sb) & (sa ^ sres)) < 0;
-                vm->flags.bits.CF = 0;
+                ST sa                       = (ST) a, sb = (ST) b, sres = (ST) result;
+                vm->registers.flags.bits.OF = ((sa ^ sb) & (sa ^ sres)) < 0;
+                vm->registers.flags.bits.CF = 0;
             } else {
-                UT ua             = (UT) a, ub = (UT) b;
-                vm->flags.bits.CF = ua < ub;
-                vm->flags.bits.OF = 0;
+                UT ua                       = (UT) a, ub = (UT) b;
+                vm->registers.flags.bits.CF = ua < ub;
+                vm->registers.flags.bits.OF = 0;
             }
         }
     };
@@ -287,7 +287,7 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool is_signed) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool is_signed) {
             SubOp::flags(vm, a, b, result, is_signed);
         }
     };
@@ -302,15 +302,15 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool is_signed) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool is_signed) {
             using ST = std::make_signed_t<T>;
             using UT = std::make_unsigned_t<T>;
 
             // División por cero
             if (b == 0) {
-                vm->flags.bits.OF = 1;
-                vm->flags.bits.CF = 1;
-                vm->should_kill   = true;
+                vm->registers.flags.bits.OF = 1;
+                vm->registers.flags.bits.CF = 1;
+                //vm->registers.should_kill   = true;
                 return;
             }
 
@@ -320,18 +320,18 @@ namespace runtime {
 
                 // Overflow en signed DIV: INT_MIN / -1
                 if (sa == std::numeric_limits<ST>::min() && sb == -1) {
-                    vm->flags.bits.OF = 1;
-                    vm->flags.bits.CF = 1;
-                    vm->should_kill   = true;
+                    vm->registers.flags.bits.OF = 1;
+                    vm->registers.flags.bits.CF = 1;
+                    //vm->should_kill   = true;
                     return;
                 }
 
-                vm->flags.bits.OF = 0;
-                vm->flags.bits.CF = 0;
+                vm->registers.flags.bits.OF = 0;
+                vm->registers.flags.bits.CF = 0;
             } else {
                 // Unsigned DIV nunca tiene overflow excepto por división por cero
-                vm->flags.bits.OF = 0;
-                vm->flags.bits.CF = 0;
+                vm->registers.flags.bits.OF = 0;
+                vm->registers.flags.bits.CF = 0;
             }
         }
     };
@@ -347,9 +347,9 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T, T, T, bool) {
-            vm->flags.bits.CF = 0;
-            vm->flags.bits.OF = 0;
+        static inline void flags(ProcessVM *vm, T, T, T, bool) {
+            vm->registers.flags.bits.CF = 0;
+            vm->registers.flags.bits.OF = 0;
         }
     };
 
@@ -362,9 +362,9 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T, T, T, bool) {
-            vm->flags.bits.CF = 0;
-            vm->flags.bits.OF = 0;
+        static inline void flags(ProcessVM *vm, T, T, T, bool) {
+            vm->registers.flags.bits.CF = 0;
+            vm->registers.flags.bits.OF = 0;
         }
     };
 
@@ -377,9 +377,9 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T, T, T, bool) {
-            vm->flags.bits.CF = 0;
-            vm->flags.bits.OF = 0;
+        static inline void flags(ProcessVM *vm, T, T, T, bool) {
+            vm->registers.flags.bits.CF = 0;
+            vm->registers.flags.bits.OF = 0;
         }
     };
 
@@ -394,23 +394,23 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool) {
             using UT       = std::make_unsigned_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
 
             if (shift == 0) {
-                vm->flags.bits.CF = 0;
-                vm->flags.bits.OF = 0;
+                vm->registers.flags.bits.CF = 0;
+                vm->registers.flags.bits.OF = 0;
                 return;
             }
 
-            UT ua             = (UT) a;
-            UT cf_bit         = (ua >> (sizeof(T) * 8 - shift)) & 1;
-            vm->flags.bits.CF = cf_bit;
+            UT ua                       = (UT) a;
+            UT cf_bit                   = (ua >> (sizeof(T) * 8 - shift)) & 1;
+            vm->registers.flags.bits.CF = cf_bit;
 
             // Overflow: SHL OF = XOR(CF, MSB(result))
-            UT msb            = (result >> (sizeof(T) * 8 - 1)) & 1;
-            vm->flags.bits.OF = (cf_bit ^ msb);
+            UT msb                      = (result >> (sizeof(T) * 8 - 1)) & 1;
+            vm->registers.flags.bits.OF = (cf_bit ^ msb);
         }
     };
 
@@ -425,19 +425,19 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool) {
             using UT       = std::make_unsigned_t<T>;
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
 
             if (shift == 0) {
-                vm->flags.bits.CF = 0;
-                vm->flags.bits.OF = 0;
+                vm->registers.flags.bits.CF = 0;
+                vm->registers.flags.bits.OF = 0;
                 return;
             }
 
-            UT ua             = (UT) a;
-            vm->flags.bits.CF = (ua >> (shift - 1)) & 1;
-            vm->flags.bits.OF = 0;
+            UT ua                       = (UT) a;
+            vm->registers.flags.bits.CF = (ua >> (shift - 1)) & 1;
+            vm->registers.flags.bits.OF = 0;
         }
     };
 
@@ -452,38 +452,38 @@ namespace runtime {
         }
 
         template<typename T>
-        static inline void flags(VM *vm, T a, T b, T result, bool) {
+        static inline void flags(ProcessVM *vm, T a, T b, T result, bool) {
             using ST = std::make_signed_t<T>;
             using UT = std::make_unsigned_t<T>;
 
             uint32_t shift = (uint32_t) b & (sizeof(T) * 8 - 1);
 
             if (shift == 0) {
-                vm->flags.bits.CF = 0;
-                vm->flags.bits.OF = 0;
+                vm->registers.flags.bits.CF = 0;
+                vm->registers.flags.bits.OF = 0;
                 return;
             }
 
-            UT ua             = (UT) a;
-            vm->flags.bits.CF = (ua >> (shift - 1)) & 1;
-            vm->flags.bits.OF = 0;
+            UT ua                       = (UT) a;
+            vm->registers.flags.bits.CF = (ua >> (shift - 1)) & 1;
+            vm->registers.flags.bits.OF = 0;
         }
     };
 
 
     typedef GeneralRegister &Reg;
-    using BinaryFn = void(*)(VM *, Reg, Reg, bool, int);
-    using UnaryFn  = void(*)(VM *, Reg, int);
+    using BinaryFn = void(*)(ProcessVM *, Reg, Reg, bool, int);
+    using UnaryFn  = void(*)(ProcessVM *, Reg, int);
 
     template<typename T, typename Op>
-    static void binary_imm_wrapper(VM *vm, Reg &dst, uint64_t imm, bool is_signed, int rdst) {
+    static void binary_imm_wrapper(ProcessVM *vm, Reg &dst, uint64_t imm, bool is_signed, int rdst) {
         alu_core<T, Op>(vm, dst.raw(), (T) imm, is_signed, rdst);
     }
 
     template<typename T>
-    static void mov_wrapper(VM *vm, Reg dst, Reg src, bool /*unused*/, int rdst) {
+    static void mov_wrapper(ProcessVM *vm, Reg dst, Reg src, bool /*unused*/, int rdst) {
         T     value = src.raw(); // leer valor del registro origen
-        auto &d     = vm->regs[rdst];
+        auto &d     = vm->registers.regs[rdst];
 
         if constexpr (sizeof(T) == 1)
             d.byte_lo((uint8_t) value);
@@ -498,12 +498,12 @@ namespace runtime {
     }
 
     template<typename T, typename Op>
-    static void binary_wrapper(VM *vm, Reg &dst, Reg &src, bool is_signed, int rdst) {
+    static void binary_wrapper(ProcessVM *vm, Reg &dst, Reg &src, bool is_signed, int rdst) {
         alu_core<T, Op>(vm, dst.raw(), src.raw(), is_signed, rdst);
     }
 
     template<typename T, typename Op>
-    static void unary_wrapper(VM *vm, Reg &dst, int rdst) {
+    static void unary_wrapper(ProcessVM *vm, Reg &dst, int rdst) {
         alu_core_unary<T, Op>(vm, dst.raw(), rdst);
     }
 
@@ -605,7 +605,7 @@ namespace runtime {
         &binary_wrapper<uint64_t, SarOp>
     };
 
-    using BinaryImmFn                            = void(*)(VM *, Reg &, uint64_t, bool, int);
+    using BinaryImmFn                            = void(*)(ProcessVM *, Reg &, uint64_t, bool, int);
     static constexpr BinaryImmFn add_imm_table[] = {
         &binary_imm_wrapper<uint8_t, AddOp>,
         &binary_imm_wrapper<uint16_t, AddOp>,
@@ -613,7 +613,7 @@ namespace runtime {
         &binary_imm_wrapper<uint64_t, AddOp>
     };
 
-    using BinaryMemImmFn = void(*)(VM *, uint64_t, uint64_t, bool);
+    using BinaryMemImmFn = void(*)(ProcessVM *, uint64_t, uint64_t, bool);
 
     static constexpr BinaryMemImmFn add_mem_imm_table[] = {
         &binary_mem_imm_wrapper<uint8_t, AddOp>,
@@ -623,7 +623,7 @@ namespace runtime {
     };
 
 
-    void exec_instr_add_imm(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_add_imm(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.inmmed_data.reg;
         uint64_t  imm  = instr.data_instruction.inmmed_data.inmmed;
 
@@ -631,7 +631,7 @@ namespace runtime {
         if (instr.flags_info.direction == 0) {
             add_imm_table[instr.flags_info.mode](
                 vm,
-                vm->regs[rdst],
+                vm->registers.regs[rdst],
                 imm,
                 instr.flags_info._signed_instruct,
                 rdst
@@ -641,7 +641,7 @@ namespace runtime {
 
         // Caso 2: destino es memoria
         if (instr.flags_info.direction == 1) {
-            auto &  base  = vm->regs[instr.data_instruction.inmmed_data.reg];
+            auto &  base  = vm->registers.regs[instr.data_instruction.inmmed_data.reg];
             auto    index = 0;
             uint8_t scale = 0;
 
@@ -656,94 +656,93 @@ namespace runtime {
             return;
         }
 
-        vm->should_kill = true;
     }
 
 
-    void exec_instr_mov_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_mov_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        mov_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        mov_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_add_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_add_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        add_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
+        add_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
-    void exec_instr_mul_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_mul_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        mul_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
+        mul_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
-    void exec_instr_sub_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_sub_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        sub_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
+        sub_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
-    void exec_instr_cmp_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_cmp_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
 
-        cmp_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
+        cmp_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
-    void exec_instr_and_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_and_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        and_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        and_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_or_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_or_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        or_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        or_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_xor_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_xor_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        xor_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        xor_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_div_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_div_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        div_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], instr.flags_info._signed_instruct, rdst);
+        div_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], instr.flags_info._signed_instruct, rdst);
     }
 
-    void exec_instr_shl_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_shl_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        shl_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        shl_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_shr_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_shr_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        shr_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        shr_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_sar_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_sar_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         const int rsrc = instr.data_instruction.reg_data.reg2;
-        sar_table[instr.flags_info.mode](vm, vm->regs[rdst], vm->regs[rsrc], false, rdst);
+        sar_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
-    void exec_instr_inc_dec_reg(VM *vm, const DecodedInstr &instr) {
+    void exec_instr_inc_dec_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         // aunque INC y DEC no tienen signo, se usa el campo _signed_instruct
         // en la descodificacion para almacenar si es la instruccion INC o DEC.
         if (instr.flags_info._signed_instruct == 0)
-            inc_table[instr.flags_info.mode](vm, vm->regs[rdst], rdst);
+            inc_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], rdst);
         else
-            dec_table[instr.flags_info.mode](vm, vm->regs[rdst], rdst);
+            dec_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], rdst);
     }
 }
