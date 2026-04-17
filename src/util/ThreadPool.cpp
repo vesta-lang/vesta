@@ -33,15 +33,14 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::shutdown() {
-    bool expected = false;
-    if (!stopping_.compare_exchange_strong(expected, true)) return; // ya cerrando
-    {
-        std::lock_guard lk(tasks_m_);
-        // marcar cerrado; no se añaden más tareas
-    }
-    tasks_cv_.notify_all();
-    for (auto &t: workers_) if (t.joinable()) t.join();
-    workers_.clear();
+    wake_flag_.store(1, std::memory_order_release);
+
+#ifdef WIN32
+    WakeByAddressAll(&wake_flag_);
+#else
+    futex_wake(&wake_flag_, workers_.size());
+#endif
+
 }
 
 bool ThreadPool::idle() {
@@ -52,29 +51,37 @@ bool ThreadPool::idle() {
 
 void ThreadPool::worker_loop() {
     while (true) {
-        std::function<void()> task; {
-            std::unique_lock lk(tasks_m_);
+        std::function<void()> task;
 
-            tasks_cv_.wait(lk, [this] {
-                return stopping_.load() || !tasks_.empty();
-            });
+        while (true) {
+            int expected = 0;
 
-            // si estamos parando y no hay tareas -> salir
-            if (stopping_.load() && tasks_.empty())
-                return;
+            // Comprobamos tareas SIN dormir con el mutex
+            {
+                std::lock_guard lk(tasks_m_);
+                if (!tasks_.empty()) break;
+                if (stopping_.load()) return;
+            }
 
-            // si no hay tareas, continuar esperando
-            if (tasks_.empty())
-                continue;
+            // Resetear flag antes de dormir
+            wake_flag_.store(0, std::memory_order_relaxed);
 
-            task = std::move(tasks_.front());
-            tasks_.pop();
+#ifdef WIN32
+            WaitOnAddress(&wake_flag_, &expected, sizeof(int), INFINITE);
+#else
+            futex_wait(&wake_flag_, expected);
+#endif
         }
-        //try {
-        task();
-        //} catch (...) {
-        // No propagar excepción fuera del hilo worker.
-        // Opcional: loggear?
-        //}
+
+        // Extraer tarea
+        {
+            std::lock_guard lk(tasks_m_);
+            if (!tasks_.empty()) {
+                task = std::move(tasks_.front());
+                tasks_.pop();
+            }
+        }
+
+        if (task) task();
     }
 }

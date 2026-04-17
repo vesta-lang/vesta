@@ -21,6 +21,32 @@
 #include <condition_variable>
 #include <atomic>
 
+#ifdef WIN32
+#include "Windows.h"
+#elif defined(__linux__)
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+static int futex_wait(std::atomic<int>* addr, int expected) {
+    return syscall(SYS_futex,
+                   reinterpret_cast<int*>(addr),
+                   FUTEX_WAIT,
+                   expected,
+                   nullptr, nullptr, 0);
+}
+
+
+static int futex_wake(std::atomic<int>* addr, int count) {
+    return syscall(SYS_futex,
+                   reinterpret_cast<int*>(addr),
+                   FUTEX_WAKE,
+                   count,
+                   nullptr, nullptr, 0);
+}
+
+#endif
+
 /**
  * @brief Simple thread pool para ejecutar tareas y devolver futures.
  *
@@ -100,39 +126,52 @@ public:
      *          serán capturadas dentro del worker y descartadas.
      */
     template<typename F>
-void enqueue(F &&f) { {
-        std::lock_guard lk(tasks_m_);
-        if (stopping_.load()) {
-            // lanzar excepción o ignorar?
-            return;
+    void enqueue(F &&f) { {
+            std::lock_guard lk(tasks_m_);
+            if (stopping_.load()) return;
+            tasks_.emplace(std::forward<F>(f));
         }
-        tasks_.emplace(std::forward<F>(f));
+
+        wake_flag_.store(1, std::memory_order_release);
+
+#ifdef WIN32
+        WakeByAddressSingle(&wake_flag_);
+#else
+        futex_wake(&wake_flag_, 1);
+#endif
     }
-    tasks_cv_.notify_one();
-}
 
 private:
+    std::atomic<int> wake_flag_{0};
+
     void worker_loop();
 
-    std::vector<std::thread> workers_;
+    std::vector<std::thread>           workers_;
     std::queue<std::function<void()> > tasks_;
-    std::mutex tasks_m_;
-    std::condition_variable tasks_cv_;
-    std::atomic<bool> stopping_{false};
+    std::mutex                         tasks_m_;
+    std::condition_variable            tasks_cv_;
+    std::atomic<bool>                  stopping_{false};
 };
 
 template<typename F, typename... Args>
 auto ThreadPool::submit(F &&f, Args &&... args) -> std::future<typename std::invoke_result_t<F, Args...> > {
-    using R = typename std::invoke_result_t<F, Args...>;
+    using R       = typename std::invoke_result_t<F, Args...>;
     auto task_ptr = std::make_shared<std::packaged_task<R()> >(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
     std::future<R> fut = task_ptr->get_future(); {
         std::lock_guard<std::mutex> lk(tasks_m_);
         if (stopping_.load()) throw std::runtime_error("ThreadPool is stopping, cannot submit new tasks");
-        tasks_.emplace([task_ptr]() { (*task_ptr)(); });
+        tasks_.emplace([task_ptr]() {
+            (*task_ptr)();
+        });
     }
-    tasks_cv_.notify_one();
+    wake_flag_.store(1, std::memory_order_release);
+#ifdef WIN32
+    WakeByAddressSingle(&wake_flag_);
+#else
+    futex_wake(&wake_flag_, 1);
+#endif
     return fut;
 }
 
