@@ -1892,35 +1892,35 @@ namespace runtime {
             // sub reg, reg
             "sub", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            exec_instr_sub_reg, decode_instr_two_op_reg
         },
 
         /* 0x09 */{
-            // sub reg, [mem] || [mem], reg
+            // sub reg, 0x1000 || [reg], 0x1000
             "sub", Assembly::Bytecode::AddressingMode::MEM,
             Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
-            nullptr, nullptr
+            nullptr, decode_instr_inmed_reg
         },
 
         /* 0x0A */{
             // sub REG, SIB || SIB, REG
             "sub", Assembly::Bytecode::AddressingMode::SIB,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            nullptr, decode_instr_inmed_reg
         },
 
         /* 0x0B */{
             // mul reg, reg
             "mul", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            exec_instr_mul_reg, decode_instr_two_op_reg
         },
 
         /* 0x0C */{
-            // mul reg, [mem] || [mem], reg
+            // mul reg, 0x1000 || [reg], 0x1000
             "mul", Assembly::Bytecode::AddressingMode::MEM,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            nullptr, decode_instr_inmed_reg
         },
 
         /* 0x0D */{
@@ -1934,14 +1934,14 @@ namespace runtime {
             // div reg, reg
             "div", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            exec_instr_div_reg, decode_instr_two_op_reg
         },
 
         /* 0x0F */{
-            // div reg, [mem] || [mem], reg
+            // div reg, 0x1000 || [reg], 0x1000
             "div", Assembly::Bytecode::AddressingMode::MEM,
             Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
-            nullptr, nullptr
+            nullptr, decode_instr_inmed_reg
         },
 
         /* 0x10 */{
@@ -1955,14 +1955,14 @@ namespace runtime {
             // cmp reg, reg
             "cmp", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            exec_instr_cmp_reg, decode_instr_two_op_reg
         },
 
         /* 0x12 */{
-            // cmp reg, [mem] || [mem], reg
+            // cmp reg, 0x1000 || [reg], 0x1000
             "cmp", Assembly::Bytecode::AddressingMode::MEM,
             Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
-            nullptr, nullptr
+            nullptr, decode_instr_inmed_reg
         },
 
         /* 0x13 */{
@@ -1980,7 +1980,7 @@ namespace runtime {
         },
 
         /* 0x15 */{
-            // mov reg, [mem] || [mem], reg
+            // mov reg, 0x1000 || [reg], 0x1000
             "mov", Assembly::Bytecode::AddressingMode::MEM,
             Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
             nullptr, nullptr

@@ -1,0 +1,92 @@
+{
+    "scopeName": "source.vestaasm",
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#directives" },
+        { "include": "#labels" },
+        { "include": "#instructions" },
+        { "include": "#registers" },
+        { "include": "#numbers" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.vestaasm",
+                    "match": "//.*$"
+                },
+                {
+                    "name": "comment.block.vestaasm",
+                    "begin": "/\\*",
+                    "end": "\\*/"
+                }
+            ]
+        },
+
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.vestaasm",
+                    "begin": "\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.vestaasm",
+                            "match": "\\\\."
+                        }
+                    ]
+                }
+            ]
+        },
+
+        "directives": {
+            "patterns": [
+                {
+                    "name": "keyword.control.directive.vestaasm",
+                    "match": "@[A-Za-z_][A-Za-z0-9_]*"
+                }
+            ]
+        },
+
+        "labels": {
+            "patterns": [
+                {
+                    "name": "entity.name.label.vestaasm",
+                    "match": "^[A-Za-z_][A-Za-z0-9_]*:"
+                }
+            ]
+        },
+
+        "instructions": {
+            "patterns": [
+                {
+                    "name": "keyword.instruction.vestaasm",
+                    "match": "\\b(mov|addu|subu|mulu|divu|cmpu|adds|subs|muls|divs|cmps|throw|nop1|nop2|hlt|ret|resbp|leave|enter|org|align|import|jmp|call|callvm|push|pop|inc|dec|vminfo|vminfomanager|db|dw|dd|dq)\\b"
+                }
+            ]
+        },
+
+        "registers": {
+            "patterns": [
+                {
+                    "name": "variable.register.vestaasm",
+                    "match": "\\b(r[0-9]{1,2}(b|w|d)?|rip|rsp|rbp|rflags)\\b"
+                }
+            ]
+        },
+
+        "numbers": {
+            "patterns": [
+                {
+                    "name": "constant.numeric.hex.vestaasm",
+                    "match": "0x[0-9A-Fa-f]+"
+                },
+                {
+                    "name": "constant.numeric.decimal.vestaasm",
+                    "match": "\\b[0-9]+\\b"
+                }
+            ]
+        }
+    }
+}

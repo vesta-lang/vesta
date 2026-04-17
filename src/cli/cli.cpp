@@ -16,9 +16,12 @@
 
 #include "cli/cli_init_manager_and_server.h"
 #include "cli/sync_io.h"
+#include "emmit/parser_to_bytecode.h"
 
 namespace cli {
     static ManagerOfManagersAndServer mgr = ManagerOfManagersAndServer();
+
+    using namespace Assembly::Bytecode;
 
     struct Impl {
         Config cfg;
@@ -29,31 +32,29 @@ namespace cli {
 
         // historial
         std::vector<std::string> history;
-        std::mutex hist_m;
-        int history_cursor = -1;
+        std::mutex               hist_m;
+        int                      history_cursor = -1;
 
         // cola de comandos
         std::deque<std::string> cmd_queue;
-        std::mutex q_m;
+        std::mutex              q_m;
         std::condition_variable q_cv;
-        bool q_closed = false;
+        bool                    q_closed = false;
 
         // worker
         std::thread worker_thread;
 
         // callback
         std::function<void(const std::string &)> vm_execute_cb;
-        std::mutex cb_m;
+        std::mutex                               cb_m;
 
-        Impl(Config c) : cfg(std::move(c)) {
-        }
+        Impl(Config c) : cfg(std::move(c)) {}
     };
 
     /**
      * Permite listar todos los manager disponibles
      */
-    static void command_list_vmgr() {
-    }
+    static void command_list_vmgr() {}
 
     /**
      * Comando que permite ejecutar un bytecode creand un nuevo manager
@@ -96,7 +97,7 @@ namespace cli {
 
         // Construcción del manager
         runtime::ManageVM *vm = mgr.add_manager(p.name, nullptr);
-        vm->name_manager = p.name;
+        vm->name_manager      = p.name;
 
         // Construir la representación textual fuera del mutex,
         // espero que esto no de problemas en el futuro
@@ -120,9 +121,9 @@ namespace cli {
 
     // Utilidades
     static std::vector<std::string> split_words(const std::string &s) {
-        std::istringstream iss(s);
+        std::istringstream       iss(s);
         std::vector<std::string> out;
-        std::string w;
+        std::string              w;
         while (iss >> w) out.push_back(w);
         return out;
     }
@@ -130,7 +131,7 @@ namespace cli {
     // Impl helpers
     static void load_history_impl(Impl &I) {
         std::lock_guard lk(I.hist_m);
-        std::ifstream f(I.cfg.history_file);
+        std::ifstream   f(I.cfg.history_file);
         if (!f) return;
         std::string line;
         while (std::getline(f, line)) {
@@ -140,7 +141,7 @@ namespace cli {
 
     static void save_history_impl(Impl &I) {
         std::lock_guard lk(I.hist_m);
-        std::ofstream f(I.cfg.history_file, std::ios::trunc);
+        std::ofstream   f(I.cfg.history_file, std::ios::trunc);
         if (!f) return;
         size_t start = I.history.size() > I.cfg.history_max ? I.history.size() - I.cfg.history_max : 0;
         for (size_t i = start; i < I.history.size(); ++i) f << I.history[i] << "\n";
@@ -164,7 +165,9 @@ namespace cli {
 
     static bool cmd_queue_pop_impl(Impl &I, std::string &out) {
         std::unique_lock lk(I.q_m);
-        I.q_cv.wait(lk, [&] { return !I.cmd_queue.empty() || I.q_closed; });
+        I.q_cv.wait(lk, [&] {
+            return !I.cmd_queue.empty() || I.q_closed;
+        });
         if (I.cmd_queue.empty()) return false;
         out = std::move(I.cmd_queue.front());
         I.cmd_queue.pop_front();
@@ -260,7 +263,7 @@ namespace cli {
     static void handle_history_exec_impl(Impl &I, const std::string &cmd) {
         std::string num = cmd.substr(1);
         try {
-            size_t idx = std::stoul(num);
+            size_t          idx = std::stoul(num);
             std::lock_guard lk(I.hist_m);
             if (idx < I.history.size()) {
                 std::string hcmd = I.history[idx];
@@ -284,7 +287,7 @@ namespace cli {
         if (I.history_cursor < 0) I.history_cursor = static_cast<int>(I.history.size()) - 1;
         std::cout << I.history[I.history_cursor] << "\n";
         I.history_cursor = (I.history_cursor - 1 + static_cast<int>(I.history.size())) % static_cast<int>(I.history.
-                               size());
+            size());
     }
 
     static void show_next_history_impl(Impl &I) {
@@ -361,7 +364,7 @@ namespace cli {
         std::string full_cmd;
 #if defined(_WIN32)
         // En Windows, ejecutar con cmd.exe /C para que la sintaxis sea la esperada
-        full_cmd = "cmd.exe /C \"" + cmd + "\" 2>&1";
+        full_cmd   = "cmd.exe /C \"" + cmd + "\" 2>&1";
         FILE *pipe = _popen(full_cmd.c_str(), "r");
 #else
         // POSIX: usar /bin/sh -c o directamente popen con redirección
@@ -371,7 +374,7 @@ namespace cli {
         if (!pipe) throw std::runtime_error("failed to open pipe for command");
 
         std::string result;
-        char buffer[4096];
+        char        buffer[4096];
         while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
             result.append(buffer);
         }
@@ -457,6 +460,7 @@ namespace cli {
     }
 
 
+
     void VestaViewManager::run() {
         if (impl_->running) return;
         impl_->running = true;
@@ -488,7 +492,7 @@ namespace cli {
                 continue;
             }
 
-            std::string full = line;
+            std::string        full = line;
             const std::string &term = impl_->cfg.multiline_end;
 
             // Si la línea termina con el terminador, quitarlo y usarla directamente
@@ -541,7 +545,7 @@ namespace cli {
             // trim
             auto start = full.find_first_not_of(" \t\r\n");
             if (start == std::string::npos) continue;
-            auto end = full.find_last_not_of(" \t\r\n");
+            auto        end = full.find_last_not_of(" \t\r\n");
             std::string cmd = full.substr(start, end - start + 1);
 
             // comandos especiales
@@ -569,6 +573,11 @@ namespace cli {
                 show_next_history_impl(*impl_);
                 continue;
             }
+            if (cmd == "interprete") {
+                VestaInterprete interprete{};
+                interprete.run_interprete();
+                continue;
+            }
 
             // detectar comandos de limpieza de pantalla
             if (cmd == "cls" || cmd == "clear") {
@@ -586,7 +595,7 @@ namespace cli {
                 std::thread([shell]() {
                     // Integración asíncrona (no bloquear REPL)
                     try {
-                        std::string out = execute_shell_command(shell);
+                        std::string                 out = execute_shell_command(shell);
                         std::lock_guard<std::mutex> lk(vesta::cout_mutex);
                         std::cout << out << std::endl;
                     } catch (const std::exception &e) {
