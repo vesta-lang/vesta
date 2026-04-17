@@ -29,7 +29,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
         )
         
         return()  # <-- IMPORTANTE
-    endif()
+    endif ()
     
     target_include_directories(${FINAL_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/include
@@ -88,7 +88,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     # release
     target_link_options(${FINAL_NAME} PRIVATE
             $<$<CONFIG:Release>:
-
+            
             # --- Eliminación de código muerto ---
             -Wl,--gc-sections          # Elimina funciones/datos no usados
             
@@ -117,8 +117,9 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
     # Opciones por configuracion
     target_compile_options(${FINAL_NAME} PRIVATE
             $<$<CONFIG:Debug>:
-            -g -O0 -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
-            -DVM_DEBUG_CHECKS   # añadir checks para depuracion.
+            -g -O0 -DVM_DEBUG_CHECKS # añadir checks para depuracion.
+            -Wall -Wextra -fno-omit-frame-pointer -DMODE_DEBUG_ENABLE
+            #-O2
             -DDEBUG_EMIT        # permitir mostrar el proceso de emision de codigo
             >
             $<$<CONFIG:Release>:

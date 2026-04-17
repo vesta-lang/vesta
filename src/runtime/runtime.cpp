@@ -45,13 +45,18 @@ namespace runtime {
     }
 
     void VM::start() {
+        vm_running = true;
         for (uint32_t i = 0; i < num_schedulers; i++) {
+            //vesta::scout() << "Creando future para scheduler " << i << "\n";
+
             // submit() devuelve un future
             std::future<void> fut = pool.submit([this, i] {
                 schedulers[i]->run_loop();
             });
+            //vesta::scout() << "Future creado\n";
 
-            scheduler_futures.push_back(std::move(fut));
+            scheduler_futures.push_back(fut.share());
+            //vesta::scout() << "Future movido al vector\n";
         }
     }
 
@@ -60,19 +65,24 @@ namespace runtime {
         vm_running = false;
 
         // Marcar todos los schedulers para matar
-        for (auto &sched : schedulers) {
+        for (auto &sched: schedulers) {
             sched->should_kill = true;
         }
 
         // Despertar a todos los schedulers que estén en wait()
-        for (auto &sched : schedulers) {
+        for (auto &sched: schedulers) {
             sched->cv.notify_all();
         }
 
+        // si los hilos no terminaron debemos esperar, en caso contrario
+        // no debemos hacer nada simplemente.
+        //bool status = all_schedulers_dead();
+        //if (!status) {
         // Esperar a que todos los hilos terminen
-        for (auto &f : scheduler_futures) {
+        for (auto &f: scheduler_futures) {
             f.get();
         }
+        //}
 
         scheduler_futures.clear();
     }
@@ -82,21 +92,49 @@ namespace runtime {
     }
 
     void VM::wait() {
-        for (auto &f: scheduler_futures)
-            f.get(); // bloquea hasta que cada scheduler termine
+        //vesta::scout() << "Entrando en wait()\n";
+        for (auto &f: scheduler_futures) {
+            //::scout() << "Haciendo get() del future " << "\n";
+            f.wait(); // bloquea hasta que cada scheduler termine
+        }
+        //vesta::scout() << "Todos los futures consumidos\n";
     }
 
-    bool VM::has_alive_processes() const {
+    bool VM::all_schedulers_dead() {
+        bool is_dead = pool.idle();
+        return is_dead;
+    }
+
+    bool VM::has_alive_processes() {
         for (auto &sched: schedulers) {
             if (sched->has_alive_processes())
                 return true;
         }
+
+        // si no quedan tareas en el thread pool entonces todos los gestores
+        // de procesos murieron.
+        //if (all_schedulers_dead() == false) {
+        // si aun queda tareas, o es un bug, o solo algunos gestores de procesos
+        // finalizaron su run_loop.
+        //    return true;
+        //}
+
+        // matar a todos los gestores, nos aseguramos de que todos mueran de
+        // forma correcta, pues que no queden procesos no finaliza el gestor de procesos
+        // automaticamente.
         return false;
     }
 
     void VM::make_ready(GlobalPID pid) {
         schedulers[pid.scheduler_id]->make_ready(pid);
         schedulers[pid.scheduler_id]->cv.notify_one();
+
+        // muy importante si se añade procesos sin un reset, el gestor de procesos una
+        // vez finalice todos sus procesos, la instancia, activa esta bandera que indica
+        // al propio gestor que a terminado y no debe volver a iniciar o continuar con
+        // ningun otro proceso. Si se quiere añadir nuevos procesos en un estado como
+        // este, es necesario reactivarla o nunca sera ejecutado el proceso.
+        schedulers[pid.scheduler_id]->should_kill = false;
     }
 
     GlobalPID VM::spawn_process() {
@@ -107,5 +145,23 @@ namespace runtime {
         next_sched   = (next_sched + 1) % schedulers.size();
 
         return schedulers[index]->spawn();
+    }
+
+    void VM::reset() {
+        // Asegurar que todos los schedulers han terminado
+        stop(); // vm_running = false, should_kill = true, cv.notify_all(), f.get(), clear()
+
+        // Resetear el estado interno de cada scheduler
+        for (auto &sched: schedulers) {
+            sched->reset(); // limpia procesos, colas, pid_index, FSM, contadores, flags...
+        }
+
+        // Resetear estado interno de la VM
+        next_sched = 0;
+        vm_running = true; // lista para volver a arrancar
+
+        // Volver a lanzar los schedulers en el ThreadPool
+        scheduler_futures.clear(); // por si acaso
+        start();
     }
 } // RUNTIME

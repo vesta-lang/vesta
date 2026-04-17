@@ -270,6 +270,8 @@ namespace runtime {
 
         std::string to_string() const;
 
+        void reset();
+
 
         /**
          * Inicializa la tabla de transicicones.
@@ -340,7 +342,7 @@ namespace runtime {
          */
         bool has_hooks = false;
 
-        ~Scheduler() = default;
+        ~Scheduler();
 
         /**
          * Cola de eventos pendientes, si alguna instruccion o algo externo

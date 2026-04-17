@@ -288,6 +288,7 @@ namespace runtime {
             case WAIT_IO: return "WAIT_IO";
             case HALT: return "HALT";
             case DEAD: return "DEAD";
+            case NEW: return "NEW";
             default: return "UNKNOWN";
         }
     }

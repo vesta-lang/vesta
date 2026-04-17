@@ -197,18 +197,44 @@ namespace runtime {
 
     bool Scheduler::has_alive_processes() const {
         for (auto &p: processes) {
-            if (p->state != DEAD && p->state != HALT)
+            /*if (this->vm_reference.all_schedulers_dead() == true &&
+                (p->state == DEAD || p->state == HALT || p->state == NEW)) {
+                asm("int3");
+            }*/
+            //vesta::scout()
+            //        << "[Scheduler " << p->pid.scheduler_id
+            //        << "] Estados de procesos:" << std::endl
+            //        << "  PID " << p->pid.local_pid
+            //        << "  state=" << vm_state_to_str(p->state)
+            //        << " " << ready_queue.size()
+            //        << std::endl;
+
+            // los procesos NEW no son marcados como vivos
+            if (p->state != DEAD && p->state != HALT && p->state != NEW) {
                 return true;
+            }
         }
         return false;
+    }
+
+    Scheduler::~Scheduler() {
+        should_kill = true;
+        for (auto &p: processes) {
+            // si decoded_ptr es nullptr posiblemente se haya liberado memoria previamente.
+            if (p->decoded_ptr != nullptr) {
+                p->decoded_ptr->flags_info.blocking = true;
+                p->state                            = DEAD;
+                //kill(p->pid);
+            }
+        }
     }
 
     void Scheduler::run_loop() {
         // should_kill puede matar solo un gestor de procesos,
         // pèro vm_running puede matar a todos los gestores de la instancia
         while (!should_kill && vm_reference.vm_running) {
-            ProcessVM *p = schedule_next();
-            if (!p) {
+            instance = schedule_next();
+            if (!instance) {
                 // si se obtuvo un puntero nulo, puede decir varias cosas, una de ellas es que los procesos
                 // que hay no estan muertos pero estan en otro estado difente a listo y aun no estan preparados para
                 // ser procesados. El otro caso que se puede dar es que todos los procesos hayan muerto,
@@ -219,39 +245,58 @@ namespace runtime {
                 if (!vm_reference.has_alive_processes()) {
                     vm_reference.vm_running = false;
                     break; // este scheduler termina
-                } {
-                    is_waiting = true;
+                }
+                is_waiting = true; {
                     // Hay procesos vivos pero bloqueados -> idle,
                     // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
                     //std::this_thread::yield();
+
                     std::unique_lock lock(mtx);
-                    cv.wait(lock); // duerme hasta que haya trabajo
+                    cv.wait(lock, [&] {
+                        return should_kill
+                                || !vm_reference.vm_running
+                                || !ready_queue.empty();
+                    }); // duerme hasta que haya trabajo
+
                     is_waiting = false;
+
+                    // Si nos despertaron porque la VM muere -> salir
+                    if (should_kill || !vm_reference.vm_running)
+                        break;
+
+                    // Si nos despertaron porque hay trabajo -> obtener proceso
+                    instance   = schedule_next();
                 }
+
                 continue;
             }
 
             // Ejecutar hasta agotar reducciones
-            while (p->reductions_remaining > 0) {
-                run_fsm_step(p); // ejecuta UNA instrucción
+            while (instance->reductions_remaining > 0) {
+                run_fsm_step(instance); // ejecuta UNA instrucción
 
-                p->reductions_remaining--;
+                instance->reductions_remaining--;
 
-                if (p->state == WAIT_IO ||
-                    p->state == BLOCKED ||
-                    p->state == DEAD ||
-                    p->state == HALT)
+                if (instance->state == WAIT_IO ||
+                    instance->state == BLOCKED ||
+                    instance->state == DEAD ||
+                    instance->state == HALT) {
+                    instance = nullptr; // eliminar el proceso referenciado
                     break;
+                }
+            }
+            if (instance == nullptr) {
+                continue;
             }
 
             // si se acaba las reducciones se re-encola el proceso.
-            if (p->reductions_remaining == 0) {
+            if (instance->reductions_remaining == 0) {
                 on_event(EVT_YIELD);
             }
 
             // Si sigue vivo, vuelve a la cola
-            if (p->state == READY)
-                ready_queue.push_back(p->pid);
+            if (instance->state == READY)
+                ready_queue.push_back(instance->pid);
         }
     }
 
@@ -259,20 +304,43 @@ namespace runtime {
         std::ostringstream ss;
 
         ss << "Scheduler[" << id_scheduler << "] {\n"
-           << "  waiting: " << (is_waiting ? "yes" : "no") << "\n"
-           << "  should_kill: " << (should_kill ? "yes" : "no") << "\n"
-           << "  profiler_running: " << (profiler_running ? "yes" : "no") << "\n"
-           << "  processes_total: " << processes.size() << "\n"
-           << "  ready_queue: " << ready_queue.size() << "\n"
-           << "  alive_processes: " << vm_reference.has_alive_processes() << "\n"
-           << "  reductions_now: " << reductions_now << "\n"
-           << "  profiler_instr_counter: " << profiler_instr_counter << "\n"
-           << "  time_exec(ns): " << time_exec << "\n"
-           << "  time_decode(ns): " << time_decode << "\n"
-           << "  time_event(ns): " << time_event << "\n"
-           << "}";
+                << "  waiting: " << (is_waiting ? "yes" : "no") << "\n"
+                << "  should_kill: " << (should_kill ? "yes" : "no") << "\n"
+                << "  profiler_running: " << (profiler_running ? "yes" : "no") << "\n"
+                << "  processes_total: " << processes.size() << "\n"
+                << "  ready_queue: " << ready_queue.size() << "\n"
+                << "  alive_processes: " << vm_reference.has_alive_processes() << "\n"
+                << "  reductions_now: " << reductions_now << "\n"
+                << "  profiler_instr_counter: " << profiler_instr_counter << "\n"
+                << "  time_exec(ns): " << time_exec << "\n"
+                << "  time_decode(ns): " << time_decode << "\n"
+                << "  time_event(ns): " << time_event << "\n"
+                << "}";
 
         return ss.str();
+    }
+
+    void Scheduler::reset() {
+        // Reset de colas y estructuras
+        ready_queue.clear();
+        pid_index.clear();
+        processes.clear();
+
+        // Reset de contadores
+        next_pid               = 0;
+        reductions_now         = 0;
+        profiler_instr_counter = 0;
+        time_exec              = 0;
+        time_decode            = 0;
+        time_event             = 0;
+
+        // Reset de flags
+        is_waiting       = false;
+        should_kill      = false;
+        profiler_running = false;
+
+        // Reset de la instancia FSM
+        instance = nullptr;
     }
 
 
@@ -306,6 +374,11 @@ namespace runtime {
         ProcessVM *p = pid_index[pid];
         p->state     = READY;
         ready_queue.push_back(pid);
+
+        // usar el nuevo prcceso si no hay ninguno
+        /*if (instance == nullptr) {
+            instance = p;
+        }*/
     }
 
     void Scheduler::kill(GlobalPID pid) {
@@ -326,6 +399,8 @@ namespace runtime {
             }
         }
     }
+
+
 
     void Scheduler::free_add_debug_hook(DebugHook hook) {
         debug_hooks.push_back(hook);

@@ -241,7 +241,7 @@ namespace runtime {
          * en ejecuccion sin mas puede ocasionar problemas, por eso lo ponemos privado y creamos
          * un metodo que nos permita cambiar el estado de forma segura.
          */
-        vm_state state = READY;
+        vm_state state = NEW;
 
         // -------------------------------------------------------------------------------
         //               sistema de cache para descodificacion de instrucciones.
@@ -285,7 +285,7 @@ namespace runtime {
 
         std::string vm_summary() const;
 
-        ~ProcessVM() = default;
+        ~ProcessVM();
 
         [[nodiscard]] std::string to_string() const;
 

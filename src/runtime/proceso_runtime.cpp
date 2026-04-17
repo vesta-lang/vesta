@@ -39,6 +39,10 @@ namespace runtime {
 
     ProcessVM::ProcessVM(Scheduler &scheduler, GlobalPID pid): pid(pid), vm_mem(tlb, manager_mem_priv),
                                                                scheduler(scheduler) {}
+    ProcessVM::~ProcessVM() {
+        state = DEAD;
+        manager_mem_priv.free_all(); // en teoria no es necesario por que ya lo hace el destructor
+    }
 
     void ProcessVM::reset_cache() {
         // resetear icache
