@@ -122,6 +122,146 @@ namespace Assembly::Bytecode {
         );
     }
 
+    void emit_instr_inmed_with_annotation(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        bool is_a_signed = is_signed(instruction_parser->opcode);
+
+        auto reg              = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto label_annotacion = instruction_parser->operands[1].get();
+
+        auto annotacion = dynamic_cast<vm::AnnotationNode *>(label_annotacion);
+
+        if (annotacion == nullptr) {
+            throw std::runtime_error(
+                "emit_instr_inmed_with_annotation(): Se debe implementar: " + instruction_parser->opcode + " ");
+        }
+
+
+        if (annotacion->key == "Method") {
+            // el modo siempre es del tamaño de palabra de la cpu para direcciones,
+            // se multiplica * 8 para obtener la cantidad de bit que ocupa un puntero.
+            uint8_t mode     = encode_mode(sizeof(void *) * 8);
+            bool    mem_dest = false; // el destino siempre es un registro, por eso false
+            code_final.emit8(
+                (mode << 6) |                    // mode
+                (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
+                mem_dest << 4 |
+                encode_reg_general(reg->name.c_str()) // reg
+            );
+
+
+            // creamos el valor
+            Relocation rel;
+            rel.symbol  = annotacion->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset /*- 8*/; // el -8 se pone si se emite antes la direccion
+            rel.type    = size_ptr_in_this_machine;  // relocalizacion absoluta segun el tamaño de palabra de la maquina
+
+            assembly_ctx->ctx.add_relocation(rel);
+
+            // siempre se emite 64 bits si la cpu es de 64 bits, ya que se parcheara la instruccion
+            // con un puntero real dependiente del tamaño de palabra de la cpu
+            if (size_ptr_in_this_machine == Type::Absolute64) {
+                code_final.emit64(0);
+            } else if (size_ptr_in_this_machine == Type::Absolute32) {
+                code_final.emit32(0);
+            } else if (size_ptr_in_this_machine == Type::Absolute16) {
+                code_final.emit16(0);
+            } else if (size_ptr_in_this_machine == Type::Absolute8) {
+                code_final.emit8(0);
+            } else {
+                throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
+                    "emision de instrucciones inmediatas con direcciones para tamaños de: " + sizeof(void *));
+            }
+        } else {
+            // si no es una notacion Method, entonces debe ser una
+            // Absolute o una Relative
+            uint8_t mode = encode_mode(reg->size_bits);
+
+            // tenemos en cuenta el tamaño del registro usado
+            int  instr_mode_bits = mode_to_bits(mode);
+            bool mem_dest        = false; // el destino siempre es un registro, por eso false
+
+
+            code_final.emit8(
+                (mode << 6) |                    // mode
+                (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
+                mem_dest << 4 |
+                encode_reg_general(reg->name.c_str()) // reg
+            );
+
+            // creamos el valor
+            Relocation rel;
+            rel.symbol  = annotacion->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset /*- 8*/; // el -8 se pone si se emite antes la direccion
+
+            // indicamos el tipo de relocalizacion que es
+            if (annotacion->key == "Relative") {
+                switch (mode_to_bytes(mode)) {
+                    case 1: {
+                        rel.type = Type::Relative8;
+                        break;
+                    }
+                    case 2: {
+                        rel.type = Type::Relative16;
+                        break;
+                    }
+                    case 4: {
+                        rel.type = Type::Relative32;
+                        break;
+                    }
+                    case 8: {
+                        rel.type = Type::Relative64;
+                        break;
+                    }
+                    default: {
+                        goto error_notation;
+                    }
+                }
+            } else if (annotacion->key == "Absolute") {
+                switch (mode_to_bytes(mode)) {
+                    case 1: {
+                        rel.type = Type::Absolute8;
+                        break;
+                    }
+                    case 2: {
+                        rel.type = Type::Absolute16;
+                        break;
+                    }
+                    case 4: {
+                        rel.type = Type::Absolute32;
+                        break;
+                    }
+                    case 8: {
+                        rel.type = Type::Absolute64;
+                        break;
+                    }
+                    default: {
+                        goto error_notation;
+                    }
+                }
+            } else {
+            error_notation:
+                throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
+                    "notacion: " + annotacion->key);
+            }
+
+            assembly_ctx->ctx.add_relocation(rel);
+
+            uint64_t val_inmmed = 0; // siempre 0 por que sera remplazado por el
+            // linker
+
+            size_t size_in_bytes = mode_to_bytes(mode);
+            // emitimos el resto de bytes de la instruccion dependiendo del modo/tamaño
+            code_final.emit_bytes(&val_inmmed, size_in_bytes);
+        }
+    }
+
     void emit_instr_inmed(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -142,9 +282,18 @@ namespace Assembly::Bytecode {
         auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);
         bool mem_dest = reg == nullptr; // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
 
-        if ((mem == nullptr && reg == nullptr) || inmmed_str == nullptr) {
-            throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
-                " no pudo situar un registro, inmediato por alguna razon, posiblemente usted cometio un error de sintaxis o logico");
+        if ((mem == nullptr) || inmmed_str == nullptr) {
+            // si no es un operando de tipo memoria, ni registro, entonces puede ser uno de tipo anotacion:
+            if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
+                emit_instr_inmed_with_annotation(instruction_parser, code_final, now_instr, assembly_ctx);
+                return;
+            }
+
+            // si ni es una notacion, ni es memoria ni es un inmediato:
+            if (mem == nullptr && inmmed_str == nullptr) {
+                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
+                    " no pudo situar un registro, inmediato por alguna razon, posiblemente usted cometio un error de sintaxis o logico");
+            }
         }
 
         auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
@@ -173,7 +322,7 @@ namespace Assembly::Bytecode {
 
         if (instr_imm_bits > instr_mode_bits) {
             throw std::runtime_error(
-                "Error: el inmediato " + std::to_string(val_inmmed) +
+                "emit_instr_inmed(): Error: el inmediato " + std::to_string(val_inmmed) +
                 " (" + std::to_string(instr_imm_bits) + " bits) no cabe en el modo " +
                 std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)."
             );
@@ -188,24 +337,8 @@ namespace Assembly::Bytecode {
         );
         // el campo d siempre es 0 ya que se usa para codificar otro tipo de inmediatos.
 
-        switch (mode) {
-            case 0: {
-                code_final.emit8((uint8_t) val_inmmed);
-                break;
-            }
-            case 1: {
-                code_final.emit16((uint16_t) val_inmmed);
-                break;
-            }
-            case 2: {
-                code_final.emit32((uint32_t) val_inmmed);
-                break;
-            }
-            default: {
-                code_final.emit64(val_inmmed);
-                break;
-            }
-        }
+        // emitimos el resto de bytes de la instruccion dependiendo del modo/tamaño
+        code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
 
         DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, INMED 0x%llx TYPE_INMED: %d MODE: %d\n",
                     instruction_parser->opcode.c_str(),
@@ -271,7 +404,7 @@ namespace Assembly::Bytecode {
         rel.symbol  = lalbel->name;
         rel.section = assembly_ctx->current_section->name;
         rel.offset  = code_final.offset /*- 5*/; // el -5 se pone si se emite antes la direccion
-        rel.type    = Relocation::Type::Relative40;
+        rel.type    = Type::Relative40;
 
         assembly_ctx->ctx.add_relocation(rel);
 
@@ -332,4 +465,293 @@ namespace Assembly::Bytecode {
 
         code_final.emit8(byte);
     }
+
+    void emit_instr_mov_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (reg1 == nullptr || reg2 == nullptr) {
+            throw std::runtime_error(
+                "Error, la instruccion " + instruction_parser->opcode + " esperaba dos registros"
+            );
+        }
+
+        if (reg1->size_bits != reg2->size_bits) {
+            throw std::runtime_error(
+                "Error, la instruccion " + instruction_parser->opcode + " " +
+                reg1->name + " " + reg2->name + " tiene sizes distintos en los " +
+                "registros, deben tener el mismo size."
+            );
+        }
+
+        // miramos si los registros son especiales/extendidos
+        std::optional<uint8_t> opt_reg1_special = encode_special_register(reg1->name);
+        std::optional<uint8_t> opt_reg2_special = encode_special_register(reg2->name);
+
+        bool r1_special = opt_reg1_special.has_value();
+        bool r2_special = opt_reg2_special.has_value();
+
+        if (r1_special && r2_special) {
+            throw std::runtime_error(
+                "emit_instr_mov_reg() Error, la instruccion " + instruction_parser->opcode +
+                " no permite usar dos registros extendidos/especiales"
+            );
+        }
+
+        uint8_t mode        = 0;
+        uint8_t is_a_signed = 0;
+        uint8_t direction   = 0;
+        uint8_t reg_special = 0; // guarda cual es el registro especial/extendido usado
+        // ninguno de los dos registros era ext/especial
+        uint8_t reg_general = 0; // en caso de usar un reg especial, debemos almacenar tmb el reg general.
+
+        if (r1_special == false && r2_special == false) {
+            // sacamos el tamaño de los registros:
+            mode = encode_mode(reg1->size_bits);
+
+            // ``MOV reg1, reg2``, is_a_signed siempre es 0 aqui.
+            // direction << 4, direction = 0 por que la direccion
+            // siempre es 0 al no haber direccion.
+
+            // 0b`mode`sd0000 -> modo ocupa el los primeros 2 bits
+            code_final.emit8((mode << 6) | (((is_a_signed) ? 1 : 0) << 5) | (direction << 4));
+
+            // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+            code_final.emit8(
+                encode_reg_general(reg2->name.c_str()) << 4 | encode_reg_general(reg1->name.c_str())
+            );
+            DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
+                        instruction_parser->opcode.c_str(),
+                        now_instr->opcode1,
+                        now_instr->opcode2,
+                        reg1->name.c_str(), encode_reg_general(reg2->name.c_str()) << 4,
+                        reg2->name.c_str(), encode_reg_general(reg1->name.c_str()),
+                        mode
+            );
+            return;
+        }
+        /**
+         * | MOV reg_ext, reg    |   0x0   |  0x14   |  0b`mode`1d0000    d = 0  |
+         * | :------------------ | :-----: | :-----: | :-----------------------: |
+         * | MOV reg, reg_ext    |   0x0   |  0x14   |  0b`mode`1d0000    d = 1  |
+         *
+         * Estas instrucciones siempre tienen is_a_signed = 1 que es el bit entre "mode" y "d".
+         * El modo en este caso, es el modo del registro especial, mas no indica tamaño del registro
+         * general en este caso.
+         */
+        is_a_signed = 1;
+
+        reg_general = r1_special
+                          ? encode_reg_general(reg2->name.c_str())
+                          : encode_reg_general(reg1->name.c_str());
+        reg_special = r1_special ? opt_reg1_special.value() : opt_reg2_special.value();
+
+        // direction   = 0; // MOV reg_ext, reg
+        // direction   = 1; // MOV reg, reg_ext
+        direction = r1_special ? 0 : 1;
+
+        // un registro espcial o extendido normalmente codifica el campo modo
+        // como bits extras del registro, lo que hace que ocupe 2 + 4 = 6bits,
+        // debemos separa el modo y el registro
+        mode = (reg_special >> 4) & 0b11;
+
+        // 0b`mode`sd0000 -> modo ocupa el los primeros 2 bits
+        code_final.emit8((mode << 6) | (((is_a_signed) ? 1 : 0) << 5) | (direction << 4));
+
+        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        code_final.emit8(
+            (reg_special & 0x0F) << 4 | (reg_general & 0x0F)
+        );
+
+        DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
+                    instruction_parser->opcode.c_str(),
+                    now_instr->opcode1,
+                    now_instr->opcode2,
+                    reg1->name.c_str(), reg_special,
+                    reg2->name.c_str(), reg_general,
+                    mode
+        );
+    }
+
+    void emit_instr_mov_inmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        uint8_t is_a_signed = 0;
+        uint8_t mode        = 0;
+        uint8_t direction   = 0;
+        uint8_t size_bytes  = 0;
+
+        // unicos modos permitidos:
+        /**
+         * | ``MOV reg1, inmmed``   |   0x0   |  0x15   | 0b`mode`0d`reg1`<br>d = 0 |
+         * |                        |   0x0   |  0x15   | 0b`mode`0d`reg1`<br>d = 1 |
+         * | ``MOV [reg], inmmed``  |   0x0   |  0x15   | 0b`mode`1d`reg1`<br>d = 0 |
+         * | ``MOV reg_ext, inmmed``|   0x0   |  0x15   | 0b`mode`1d`reg1`<br>d = 1 |
+         */
+
+        auto n0 = instruction_parser->operands[0].get();
+        auto n1 = instruction_parser->operands[1].get();
+
+        // el segundo operando debe ser siempre un inmediato, si no es una notacion
+        auto     inmmed_str = dynamic_cast<vm::NumberOperand *>(n1);
+        uint64_t val_inmmed = 0;
+        if (inmmed_str != nullptr) {
+            auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
+            if (inmmed_opt == std::nullopt) {
+                throw std::runtime_error("Error el valor: " + inmmed_str->value +
+                    " no pudo convertirse en un numero.");
+            }
+            val_inmmed = inmmed_opt.value();
+        }
+
+        // el primer operando puede ser un registro general, especial, o memoria.
+        auto reg      = dynamic_cast<vm::RegisterOperand *>(n0);
+        auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);
+        bool mem_dest = reg == nullptr; // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
+
+        if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
+            if (annotacion->key == "Method") {
+                if (reg != nullptr) {
+                    // si se usa una notacion Method, se debe usar un tamaño multiplo de
+                    // palabra.
+                    reg->size_bits = sizeof(void *) * 8;
+                } else if (mem != nullptr) {
+                    reg            = static_cast<vm::RegisterOperand *>(mem->expr.get());
+                    reg->size_bits = sizeof(void *) * 8;
+                }
+
+                // creamos el valor
+                Relocation rel;
+                rel.symbol  = annotacion->value;
+                rel.section = assembly_ctx->current_section->name;
+                rel.offset  = code_final.offset + 1;
+                // se debe sumar 1 ya que aun no se emitio el byte de data(informacion de campos)
+                rel.type = size_ptr_in_this_machine; // relocalizacion absoluta segun el tamaño de palabra de la maquina
+
+                assembly_ctx->ctx.add_relocation(rel);
+            } else {
+                uint8_t mode = 0;
+                if (reg != nullptr) {
+                    mode = encode_mode(reg->size_bits);
+                } else if (mem != nullptr) {
+                    reg  = static_cast<vm::RegisterOperand *>(mem->expr.get());
+                    mode = encode_mode(reg->size_bits);
+                }
+
+                // creamos el valor
+                Relocation rel;
+                rel.symbol  = annotacion->value;
+                rel.section = assembly_ctx->current_section->name;
+                rel.offset  = code_final.offset + 1;
+                // se debe sumar 1 ya que aun no se emitio el byte de data(informacion de campos)
+
+                // obtener tipo de relocalizacion:
+                if (annotacion->key == "Relative") {
+                    rel.type = mode_to_type_relocation_rel(mode);
+                } else if (annotacion->key == "Absolute") {
+                    rel.type = mode_to_type_relocation_abs(mode);
+                } else {
+                error_notation:
+                    throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
+                        "notacion: " + annotacion->key);
+                }
+
+                if (rel.type == Type::NO_VALID) goto error_notation;
+
+                assembly_ctx->ctx.add_relocation(rel);
+                val_inmmed = 0; // siempre 0 por que sera remplazado por el
+                // linker
+            }
+        }
+
+        // si el destino es memoria:
+        if (mem_dest) {
+            // signed = 1 si es memoria o reg extendido
+            is_a_signed = 1;
+
+            // obtenemos el registro donde se apunta para escribir
+            reg = static_cast<vm::RegisterOperand *>(mem->expr.get());
+            if (reg == nullptr) {
+                std::cout << "Error instruccion: " + instruction_parser->opcode +
+                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: " << std::endl;
+                mem->expr->print(0);
+                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode);
+            }
+        } else {
+            std::optional<uint8_t> opt_reg_special = encode_special_register(reg->name);
+
+            // si es un registro especial, signo es 1, sino, es 0 y es un registro general
+            is_a_signed = opt_reg_special.has_value();
+
+
+            // si fue 1, entonces es un registro especial
+            if (is_a_signed == 1) {
+                uint8_t reg_special = opt_reg_special.value();
+                // un registro espcial o extendido normalmente codifica el campo modo
+                // como bits extras del registro, lo que hace que ocupe 2 + 4 = 6bits,
+                // debemos separa el modo y el registro
+                mode = (reg_special >> 4) & 0b11;
+
+                direction = 1; // si es un registro especial, se debe indicar 1.
+                code_final.emit8(
+                    (mode << 6) |
+                    (((is_a_signed) ? 1 : 0) << 5) |
+                    (direction << 4) |
+                    (reg_special & 0x0F)
+                );
+                // Se emite una cantidad de bytes de 64bits para q siempre entre un puntero.
+                // esto en un futuro puede dar problemas con SP y BP y otros registros especiales
+                // al intentar usarlo en 32 bits tal vez.
+                size_bytes = sizeof(uint64_t);
+                code_final.emit_bytes(&val_inmmed, size_bytes);
+                return;
+            }
+        }
+        // si es registro general + inmediato
+
+        // se debe sacar el modo del registro general.
+        mode = encode_mode(reg->size_bits);
+
+        // validamos si los tamaños del modo y el inmediato son iguales
+        ImmType type            = detect_imm_type((int64_t) val_inmmed, is_a_signed);
+        int     instr_imm_bits  = immtype_bits(type);
+        int     instr_mode_bits = mode_to_bits(mode);
+
+        if (instr_imm_bits > instr_mode_bits) {
+            throw std::runtime_error(
+                "emit_instr_mov_inmed() Error: el inmediato " + std::to_string(val_inmmed) +
+                " (" + std::to_string(instr_imm_bits) + " bits) no cabe en el modo " +
+                std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)."
+            );
+        }
+
+        // el signo y la direccion en este caso siempre es 0 segun la expecificacion.
+        // is_a_signed = 0; // no descomentar, si se usa memoria, esto sera 1.
+        direction = 0;
+
+        code_final.emit8(
+            (mode << 6) |
+            (((is_a_signed) ? 1 : 0) << 5) |
+            (direction << 4) |
+            encode_reg_general(reg->name.c_str())
+        );
+
+        // emitimos tantos bytes de inmediato como se especificara segun el tamaño del registro general
+        code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
+    }
+
+    void emit_instr_mov_sib(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {}
 }

@@ -81,6 +81,33 @@ namespace Assembly::Bytecode {
      */
     void apply_init_pc(const vm::AnnotationNode *node, Assembler &assembler);
 
+    /**
+     * Permite aplicar una importacion en la tabla de importaciones para el linker
+     * @param node nodo padre
+     * @param assembler contexto global del ensamblador
+     */
+    void apply_import(const vm::AnnotationNode *node, Assembler &assembler);
+
+    /**
+     * Permite obtener una direccion relativa de una etiqueta. Depende de la posicion
+     * en la que se use la notacion, se debe calcular la direccion relativa en base
+     * a la direccion de la instruccion que la uso, esto permite codigo PIC.
+     * No se aplica la notacion de forma directa, estas se usan en el emisor para
+     * indicarle que se quiere hacer una relocalizacion de un tipo u otro.
+     * @param node nodo padre
+     * @param assembler contexto global del ensamblador
+     */
+    void apply_relative(const vm::AnnotationNode *node, Assembler &assembler);
+
+    /**
+     * Permite obtener una direccion absoluta de un etiqueta. No se aplica la notacion
+     * de forma directa, estas se usan en el emisor para indicarle que se quiere
+     * hacer una relocalizacion de un tipo u otro.
+     * @param node nodo padre
+     * @param assembler contexto global del ensamblador
+     */
+    void apply_absolute(const vm::AnnotationNode *node, Assembler &assembler);
+
     static std::unordered_map<std::string, AnnotationHandler> annotation_handlers = {
         {
             "SpaceAddress", apply_space_address
@@ -108,7 +135,17 @@ namespace Assembly::Bytecode {
             "Name", [](const vm::AnnotationNode *a, Assembler &ctx) {
                 /* ... */
             }
+        },
+        {
+            "Import", apply_import
+        },
+        {
+            "Relative", apply_relative
+        },
+        {
+            "Absolute", apply_absolute
         }
+
     };
 
     static std::unordered_set<std::string> annotation_allow_doc = {
@@ -174,7 +211,7 @@ namespace Assembly::Bytecode {
         }
     }
 
-    static void print_context_with_bytes(const Context &ctx,
+    static void print_context_with_bytes(const Context &             ctx,
                                          const std::vector<uint8_t> &bytes) {
         std::cout << "=== CONTEXT + BYTES ===\n";
         std::cout << "Formato de salida: " << ctx.format_output << "\n\n";
@@ -216,7 +253,7 @@ namespace Assembly::Bytecode {
                 std::cout << "     Bytes:\n";
 
                 uint64_t start = sec.memory.address_init - space.range.address_init;
-                uint64_t end = sec.memory.address_final - space.range.address_init;
+                uint64_t end   = sec.memory.address_final - space.range.address_init;
 
                 if (start >= bytes.size()) {
                     std::cout << "       (fuera del rango del binario)\n";

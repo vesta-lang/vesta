@@ -17,8 +17,10 @@
 #include <vector>
 #include <string>
 
+#include "cli/sync_io.h"
+
 size_t total_allocated = 0;
-size_t peak_memory = 0;
+size_t peak_memory     = 0;
 
 void *operator new(std::size_t size) {
     total_allocated += size;
@@ -49,7 +51,7 @@ int main() {
 
     // Leer archivo fuente
     const std::string name_file("test.vel");
-    std::ifstream file(name_file);
+    std::ifstream     file(name_file);
     if (!file.is_open()) {
         std::cerr << "ERROR: No se pudo abrir: " << name_file << "\n";
         return 1;
@@ -65,19 +67,19 @@ int main() {
 
     // Lexer + Parser
 
-    vm::Lexer lexer(code);
+    vm::Lexer  lexer(code);
     vm::Parser parser(lexer);
 
 
     std::vector<std::unique_ptr<vm::ASTNode> > program;
-    Timer t_parser;
+    Timer                                      t_parser;
     try {
         program = parser.parse();
     } catch (const vm::ParseError &e) {
         std::cerr << "Parse error: " << e.what() << "\n";
         return 1;
     }
-    std::cout << "[Tiempo parser] " << t_parser.us() << " us "  << t_parser.ms() << " ms\n";
+    std::cout << "[Tiempo parser] " << t_parser.us() << " us " << t_parser.ms() << " ms\n";
 
     // Resolver imports
     std::unordered_set<std::string> imported_files;
@@ -85,9 +87,9 @@ int main() {
 
     // Ensamblar
     Assembler asmblr;
-    Timer t_asm;
-    auto bytecode = asmblr.assemble(program);
-    std::cout << "[Tiempo Assembler] " << t_asm.us() << " us "  << t_asm.ms() << " ms\n";
+    Timer     t_asm;
+    auto      bytecode = asmblr.assemble(program);
+    std::cout << "[Tiempo Assembler] " << t_asm.us() << " us " << t_asm.ms() << " ms\n";
 
 #ifdef DEBUG_EMIT
     std::cout << "\n=== CONTEXTO GENERADO POR EL ENSAMBLADOR ===\n";
@@ -110,11 +112,11 @@ int main() {
     Linker::LinkerOptions opts;
     opts.optimize_bytecode = true;
     opts.generate_map_file = true;
-    opts.output_path = "program.velb";
-    opts.map_file_path = "program.velb-map";
-    opts.verbose = true;
+    opts.output_path       = "program.velb";
+    opts.map_file_path     = "program.velb-map";
+    opts.verbose           = true;
 
-    Timer t_linker;
+    Timer          t_linker;
     Linker::Linker linker(opts);
 
     // Añadir el ensamblado crudo
@@ -133,13 +135,13 @@ int main() {
 
     // Reporte
     const auto &report = linker.get_report();
-    std::cout << "[Tiempo Linker] " << t_linker.us() << " us "  << t_linker.ms() << " ms\n";
+    std::cout << "[Tiempo Linker] " << std::dec << t_linker.us() << " us " << t_linker.ms() << " ms\n";
 
     std::cout << "\n=== LINKER REPORT ===\n";
-    std::cout << "Modulos enlazados: " << report.modules_linked << "\n";
-    std::cout << "Simbolos resueltos: " << report.symbols_resolved << "\n";
-    std::cout << "Relocaciones aplicadas: " << report.relocations_applied << "\n";
-    std::cout << "Optimizaciones aplicadas: " << report.optimizations_applied << "\n";
+    std::cout << "Modulos enlazados: " << std::dec << (int) report.modules_linked << "\n";
+    std::cout << "Simbolos resueltos: " << std::dec << (int) report.symbols_resolved << "\n";
+    std::cout << "Relocaciones aplicadas: " << std::dec << (int) report.relocations_applied << "\n";
+    std::cout << "Optimizaciones aplicadas: " << std::dec << (int) report.optimizations_applied << "\n";
 
     if (!report.errors.empty()) {
         std::cout << "\n=== ERRORES ===\n";
@@ -151,12 +153,26 @@ int main() {
         for (auto &w: report.warnings) std::cout << " - " << w << "\n";
     }
 
+    std::cout << "\n=== RELOCATIONS ===\n";
+    for (const auto &r: report.relocations_log) {
+        std::cout << "[Reloc] module=" << r.module
+                << " symbol=" << r.symbol
+                << " type=" << Linker::reloc_type_to_string(r.type)
+                << " offset=0x" << std::hex << r.offset
+                << " value=0x" << std::hex << r.value_written
+                << std::dec << "\n";
+    }
+    std::cout << "Archivo final generado por el linker" << std::endl;
+    std::cout << vesta::dump(
+        linker.result->output.data(),
+        linker.result->output.size()
+    );
+
     std::cout << std::dec;
     std::cout << "\n[Tiempo total] " << global.us() << " us "
             << global.ms() << " ms\n";
 
     print_memory_stats();
 
-    getchar();
     return 0;
 }

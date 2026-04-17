@@ -17,12 +17,11 @@
 
 
 namespace Assembly::Bytecode {
-
-    const vm::AnnotationNode* find_child_raw(
-        const vm::AnnotationNode* node,
-        const std::string& key
+    const vm::AnnotationNode *find_child_raw(
+        const vm::AnnotationNode *node,
+        const std::string &       key
     ) {
-        for (const auto& child : node->children) {
+        for (const auto &child: node->children) {
             if (child->key == key)
                 return child.get();
         }
@@ -38,7 +37,7 @@ namespace Assembly::Bytecode {
      */
     const vm::AnnotationNode *optional_find_child(
         const vm::AnnotationNode *node,
-        const std::string &key
+        const std::string &       key
     ) {
         return find_child_raw(node, key);
     }
@@ -52,15 +51,55 @@ namespace Assembly::Bytecode {
      */
     const vm::AnnotationNode *expect_find_child(
         const vm::AnnotationNode *node,
-        const std::string &key
+        const std::string &       key
     ) {
-        if (auto* found = find_child_raw(node, key))
+        if (auto *found = find_child_raw(node, key))
             return found;
 
         throw std::runtime_error(
             "La anotacion '" + node->key +
             "' requiere el operando '" + key + "' pero no fue encontrado"
         );
+    }
+
+    void apply_import(const vm::AnnotationNode *node, Assembler &assembler) {
+        // una notacion Import puede tener N notaciones Method
+        for (uint32_t i = 0; i < node->children.size(); ++i) {
+            // obtenemos el nodo hijo, un Method
+            auto &method_node = node->children[i];
+            if (method_node.get()->key != "Method") {
+                vesta::scout() << "En la notacion Import, se encontro una notacion que no es un Method: " <<
+                        node->value << std::endl;
+                exit(EXIT_FAILURE);
+            }
+
+            if (method_node->children.size() != 2) {
+                vesta::scout() << "En la notacion Method no se encontro una notacion Lib y una notacion Name: " <<
+                        node->value << std::endl;
+                exit(EXIT_FAILURE);
+            }
+            auto lib_name_node = expect_find_child(method_node.get(), "Lib");  // nombre de la lib/dll
+            auto func_name     = expect_find_child(method_node.get(), "Name"); // nombre del metodo
+
+
+            // clave única para evitar duplicados
+            std::string key = lib_name_node->value + ":" + func_name->value;
+
+            // ¿ya existe?
+            auto it = assembler.ctx.import_lookup.find(key);
+            if (it != assembler.ctx.import_lookup.end()) {
+                continue; // ya está registrado
+            }
+
+            // crear nueva entrada
+            ImportEntry entry;
+            entry.library  = lib_name_node->value;
+            entry.function = func_name->value;
+            entry.index    = assembler.ctx.import_table.size();
+
+            assembler.ctx.import_lookup[key] = entry.index;
+            assembler.ctx.import_table.push_back(entry);
+        }
     }
 
     void apply_space_address(const vm::AnnotationNode *node, Assembler &assembler) {
@@ -76,8 +115,8 @@ namespace Assembly::Bytecode {
 
         // Extraer valores
         std::string string_space = nameNode->value;
-        uint64_t IniAddress = vm::parse_number(iniNode->value);
-        uint64_t EndAddress = vm::parse_number(endNode->value);
+        uint64_t    IniAddress   = vm::parse_number(iniNode->value);
+        uint64_t    EndAddress   = vm::parse_number(endNode->value);
 
         // indicar el final del nombre en el caracter 16
         //string_space[15] = 0;
@@ -89,13 +128,15 @@ namespace Assembly::Bytecode {
 
     void apply_init_pc(const vm::AnnotationNode *node, Assembler &assembler) {
         std::optional<uint64_t> n = vm::parse_number_safe(node->value);
-        if (n != std::nullopt) { // si es un numero valido
+        if (n != std::nullopt) {
+            // si es un numero valido
             assembler.ctx.start_pc = n.value();
             return;
         }
 
         if (assembler.current_section == nullptr) {
-            vesta::scout() << "No se a definido ninguna seccion y por tanto no se puede encontrar la label: " << node->value << std::endl;
+            vesta::scout() << "No se a definido ninguna seccion y por tanto no se puede encontrar la label: " << node->
+                    value << std::endl;
             exit(EXIT_FAILURE);
         }
 
@@ -111,24 +152,25 @@ namespace Assembly::Bytecode {
             // mas el offset de la seccion dentro de ese espacio de direcciones mas el offset del label dentro de la
             // seccion
             assembler.ctx.start_pc =
-                res2.space->range.address_init +
+                    res2.space->range.address_init +
                     res2.section->memory.address_init +
-                        res2.label->address;
+                    res2.label->address;
             return;
         }
 
-        vesta::scout() << "No se pudo encontrar la label: " << node->value << ", no fue definida o se declaro despues de la notacion." << std::endl;
+        vesta::scout() << "No se pudo encontrar la label: " << node->value <<
+                ", no fue definida o se declaro despues de la notacion." << std::endl;
         exit(EXIT_FAILURE);
     }
 
     void apply_section(const vm::AnnotationNode *node, Assembler &assembler) {
         // Obtener el nombre de la sección
-        const vm::AnnotationNode *nameNode = expect_find_child(node, "Name");
-        std::string section_name = nameNode->value;
+        const vm::AnnotationNode *nameNode     = expect_find_child(node, "Name");
+        std::string               section_name = nameNode->value;
 
         // Obtener el SpaceAddress asociado
-        const vm::AnnotationNode *spaceNode = expect_find_child(node, "SpaceAddress");
-        std::string space_name = spaceNode->value;
+        const vm::AnnotationNode *spaceNode  = expect_find_child(node, "SpaceAddress");
+        std::string               space_name = spaceNode->value;
 
         // miramos si el usuario introdujo un nodo de tipo alineacion
         const vm::AnnotationNode *alignNode = optional_find_child(node, "Align");
@@ -154,7 +196,7 @@ namespace Assembly::Bytecode {
         } else sec.size_align_section = vm::parse_number(alignNode->value);
 
         sec.memory.address_final = 0;
-        sec.memory.address_init = 0;
+        sec.memory.address_init  = 0;
         //  hereda el rango del espacio
         //sec.memory = sp->range;
 
@@ -176,4 +218,12 @@ namespace Assembly::Bytecode {
         // cambiamos el formato raw al definido por el usuario.
         ctx.ctx.format_output = node->value;
     }
+
+    // no debe hacer nada al aplicarse desde el analizador, se debe aplicar
+    // en el emisor
+    void apply_relative(const vm::AnnotationNode *node, Assembler &assembler) {}
+
+    // no debe hacer nada al aplicarse desde el analizador, se debe aplicar
+    // en el emisor
+    void apply_absolute(const vm::AnnotationNode *node, Assembler &assembler) {}
 }

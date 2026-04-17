@@ -62,6 +62,29 @@ public:
     void shutdown();
 
     /**
+     * @brief Indica si el ThreadPool está completamente inactivo.
+     *
+     * Esta función devuelve true únicamente cuando:
+     *   - No quedan tareas pendientes en la cola interna (`tasks_`).
+     *   - Ningún hilo worker está ejecutando una tarea en este momento
+     *     (`active_tasks_ == 0`).
+     *
+     * Es útil para:
+     *   - Detectar cuándo todas las tareas enviadas al pool han finalizado.
+     *   - Implementar mecanismos de apagado coordinado (shutdown) en sistemas
+     *     que dependen del estado real de los workers, como VestaVM.
+     *   - Evitar condiciones donde el sistema aparenta estar vivo aunque
+     *     los hilos worker ya hayan terminado su trabajo.
+     *
+     * @note Esta función es thread-safe.
+     * @note No bloquea: solo inspecciona el estado actual del pool.
+     *
+     * @return true si no hay tareas pendientes ni tareas en ejecución.
+     * @return false si queda alguna tarea en cola o algún worker sigue activo.
+     */
+    bool idle();
+
+    /**
      * @brief Encola una tarea para ser ejecutada por el ThreadPool.
      *
      * Inserta una función en la cola de tareas y despierta a uno de los hilos

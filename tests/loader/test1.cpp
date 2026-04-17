@@ -97,7 +97,7 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
-//#define BENCHMARK_VM
+#define BENCHMARK_VM
 
 int main() {
     Timer             global;
@@ -211,11 +211,12 @@ int main() {
     print_memory_stats();
 
     Timer        t_loader;
-    runtime::VM *vm = manager.loader.load_executable(opts.output_path);
+    unsigned     logical = std::thread::hardware_concurrency();
+    runtime::VM *vm      = manager.loader.create_vm_instance(logical);
+    runtime::ProcessVM *process  = manager.loader.load_executable(*vm, opts.output_path);
+    //runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
 
 #ifdef BENCHMARK_VM
-    std::vector<uint8_t> bench_code;
-    bench_code.reserve(4 * 2'000'000); // 2M iteraciones -> 4M instrucciones
 
     const uint8_t add_instr[4][4] = {
         // loop infinito
@@ -229,47 +230,54 @@ int main() {
         //{0x04, 0x7f, 0x13, 0x48}, // inc r15 / pop rip
     };
 
-    for (size_t i = 0; i < 2'000'000; i++) {
-        bench_code.insert(bench_code.end(), add_instr[0], add_instr[0] + 4);
-        bench_code.insert(bench_code.end(), add_instr[1], add_instr[1] + 4);
-        bench_code.insert(bench_code.end(), add_instr[2], add_instr[2] + 4);
-        bench_code.insert(bench_code.end(), add_instr[3], add_instr[3] + 4);
+    const size_t N = 8'000'000;
+    std::vector<uint8_t> bench_code;
+    bench_code.reserve(16 * N + 2); // N bloques + HLT
+
+    // Copiamos las 4 instrucciones en un bloque de 16 bytes
+    std::array<uint8_t, 16> block;
+    memcpy(block.data(), add_instr, 16);
+
+    // Repetimos el bloque N veces
+    for (size_t i = 0; i < N; i++) {
+        bench_code.insert(bench_code.end(), block.begin(), block.end());
     }
-    // HLT = 00 03
+
+    // HLT
     bench_code.push_back(0x00);
     bench_code.push_back(0x03);
-    // cagro codigo de pruebas:
-    vm->load_raw_code(0, bench_code);
-#endif
+
+
+#else
 
     std::cout << C_CYAN << "[Tiempo Loader] " << C_RESET << t_loader.us() << " us " << t_loader.ms() << " ms\n";
 
-    vm->add_debug_hook([](runtime::VM *vm, runtime::DebugStage stage) {
-        if (!vm) return;
+    process->scheduler.add_debug_hook([](runtime::ProcessVM *process, runtime::DebugStage stage) {
+        if (!process) return;
 
         switch (stage) {
             // --- INICIO DE FASES ---
             case runtime::DebugStage::DecodeBegin:
             case runtime::DebugStage::ExecuteBegin:
             case runtime::DebugStage::OnEventBegin:
-                vm->debug_timer.reset();
+                process->scheduler.debug_timer.reset();
                 break;
 
             // --- FIN DE FASES ---
 
             case runtime::DebugStage::DecodeEnd: {
-                //vm->time_decode += vm->debug_timer.ns();
-                vm->debug_timer.reset();
+                //process->time_decode += process->debug_timer.ns();
+                process->scheduler.debug_timer.reset();
                 break;
             }
 
             case runtime::DebugStage::ExecuteEnd: {
-                //vm->time_exec += vm->debug_timer.ns();
+                //process->time_exec += process->debug_timer.ns();
                 break;
             }
 
             case runtime::DebugStage::OnEventEnd: {
-                vm->time_event += vm->debug_timer.ns();
+                process->scheduler.time_event += process->scheduler.debug_timer.ns();
                 break;
             }
 
@@ -279,8 +287,8 @@ int main() {
     });
 
     // configuracion de un HOOK para la VM
-    vm->add_debug_hook([](runtime::VM *vm, runtime::DebugStage stage) {
-        if (!vm) return;
+    process->scheduler.add_debug_hook([](runtime::ProcessVM *process, runtime::DebugStage stage) {
+        if (!process) return;
         const char *stage_name = runtime::debug_stage_name(stage);
 
         const char *stage_color = C_RESET;
@@ -302,16 +310,16 @@ int main() {
                 break;
         }
 
-        if (vm->decoded_ptr != nullptr) {
+        if (process->decoded_ptr != nullptr) {
             printf("%s[%s]%s PC=%llu  OP1=%u OP2=%u  MODE=%u  STATE=%s\n",
                    stage_color,
                    stage_name,
                    C_RESET,
-                   vm->rip.raw(),
-                   vm->decoded_ptr->flags_info.is_not_extended,
-                   vm->decoded_ptr->flags_info.opcode_index,
-                   vm->decoded_ptr->flags_info.mode,
-                   vm_state_to_str(vm->state)
+                   process->registers.rip.raw(),
+                   process->decoded_ptr->flags_info.is_not_extended,
+                   process->decoded_ptr->flags_info.opcode_index,
+                   process->decoded_ptr->flags_info.mode,
+                   runtime::vm_state_to_str(process->state)
             );
         }
 
@@ -320,7 +328,7 @@ int main() {
                    stage_name,
                    C_RESET,
                    C_YELLOW,
-                   vm->decoded_ptr->metadata->name,
+                   process->decoded_ptr->metadata->name,
                    C_RESET
             );
         }
@@ -330,90 +338,136 @@ int main() {
 
             // --- REGISTERS ---
             for (int i = 0; i < 16; ++i) {
-                printf(" R%02d=0x%016llx", i, vm->regs[i].qword());
+                printf(" R%02d=0x%016llx", i, process->registers.regs[i].qword());
                 if ((i % 2) == 1) printf("\n");
             }
             printf("\n");
 
             for (int i = 0; i < 4; ++i) {
-                printf(" CUR%02d=0x%016llx", i, vm->cur[i].qword());
+                printf(" CUR%02d=0x%016llx", i, process->registers.cur[i].qword());
                 if ((i % 2) == 1) printf("\n");
             }
             printf("\n");
 
             // --- FLAGS ---
-            printf("\nFLAGS=[");
-            printf("\n");
-            printf("\tCF=%u ", vm->flags.bits.CF);
-            printf("\tOF=%u ", vm->flags.bits.OF);
-            printf("\n");
-            printf("\tSF=%u ", vm->flags.bits.SF);
-            printf("\tZF=%u ", vm->flags.bits.ZF);
-            printf("\n");
-            printf("\tDM=%u", vm->flags.bits.DM);
-            printf("\n");
-            printf("]\n");
-
-            // --- POINTERS ---
-            printf(" IP=0x%016llx\n", vm->rip.raw());
-            printf(" SP=0x%016llx\n", vm->stack_pointer.raw());
-            printf(" BP=0x%016llx\n", vm->base_pointer.raw());
+            printf(process->to_string().c_str());
 
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
 
             printf("  decode = %lld ns (%lld ms)\n",
-                   vm->time_decode,
-                   vm->time_decode / 1'000'000);
+                   process->scheduler.time_decode,
+                   process->scheduler.time_decode / 1'000'000);
 
             printf("  exec = %lld ns   (%lld ms)\n",
-                   vm->time_exec,
-                   vm->time_exec / 1'000'000);
+                   process->scheduler.time_exec,
+                   process->scheduler.time_exec / 1'000'000);
 
             printf("  event = %lld ns  (%lld ms)\n",
-                   vm->time_event,
-                   vm->time_event / 1'000'000);
+                   process->scheduler.time_event,
+                   process->scheduler.time_event / 1'000'000);
 
             SLEEP(500);
 
-            vm->debug_timer.reset();
-            vm->time_decode = 0;
-            vm->time_exec   = 0;
-            vm->time_event  = 0;
+            process->scheduler.debug_timer.reset();
+            process->scheduler.time_decode = 0;
+            process->scheduler.time_exec   = 0;
+            process->scheduler.time_event  = 0;
         }
         if (stage == runtime::DebugStage::OnEventBegin)
-            printf(">>> EVENT: %s\n\n", vm_state_to_str(vm->state));
+            printf(">>> EVENT: %s\n\n", vm_state_to_str(process->state));
     });
+#endif
 
 #ifdef BENCHMARK_VM
 
-    vm->has_hooks                = false;
-    const uint64_t INSTR_PER_RUN = 8'000'000; // 4 ADD * 2M iteraciones
+    //vm->has_hooks                = false;
+    const uint64_t INSTR_PER_RUN = N * 4 + 1; // N instrucciones de bloque ADD  + 1 HLT
 
     uint64_t total_ns = 0;
     uint64_t min_ns   = UINT64_MAX;
     uint64_t max_ns   = 0;
 
-    const int RUNS = 10000;
-
+    const int RUNS = 10;
     for (int i = 0; i < RUNS; i++) {
-        // Reset de la VM antes de cada ejecución
-        vm->rip.qword(0);
-        vm->has_hooks = false;
+        for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
+            std::thread(&runtime::profiler_thread, s.get()).detach();
+            s->has_hooks = false; // desactivar todos los hooks
+            //s->profiler_running = false;
+        }
 
-        // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
-        // for (auto &entry: vm->icache) {
-        //     entry = {};
-        //     entry.pc = UINT64_MAX;
-        // }
-        // vm->decoded_ptr = nullptr; // retaurar el puntero decoder para que el cache se reinicie.
-        //flush_cache(); // limpiar cache de CPU
-        // -------------------------------------------------------------
+        // creamos tantos hilos como queramos de pruebas
+        std::vector<runtime::ProcessVM *> process;
+        //unsigned     logical = std::thread::hardware_concurrency();
+        const size_t n_hilos = 20/*2  logical**/;
+        for (int i = 1; i <= n_hilos; i++) {
+            // creo dos procesos vacios nuevos
+            runtime::ProcessVM *process_vench = vm->get_process(vm->spawn_process());
+
+            // cargo codigo de pruebas:
+            process_vench->load_raw_code(0, bench_code);
+
+            // Reset de la VM antes de cada ejecución
+            process_vench->registers.rip.qword(0);
+
+            // limpio la cache de la VM y la CPU para poder intentar medir un rendimiento real
+            // for (auto &entry: vm->icache) {
+            //     entry = {};
+            //     entry.pc = UINT64_MAX;
+            // }
+            // vm->decoded_ptr = nullptr; // retaurar el puntero decoder para que el cache se reinicie.
+            //flush_cache(); // limpiar cache de CPU
+            // -------------------------------------------------------------
+
+            // marcar el proceso como listo
+            vm->make_ready(process_vench->pid);
+
+            process.push_back(process_vench);
+        }
+
 
         Timer t_bench;
-        std::thread(&runtime::profiler_thread, vm).detach();
-        vm->start();
-        vm->join();
+        try {
+            vm->start();
+        } catch (const std::exception &e) {
+            std::cerr << "[vm->start()] Error: " << e.what() << '\n';
+        }
+        while (vm->has_alive_processes()) {
+            vesta::scout() << "[" << i << "] Esperando: " << vm->has_alive_processes() << " vm->vm_running " << vm->
+                    vm_running <<
+                    std::endl;
+            SLEEP(500);
+            //vesta::scout() << process_vench->to_string() << std::endl;
+            //vesta::scout() << process_vench2->to_string() << std::endl;
+            for (auto &s: vm->schedulers) {
+                /*
+                vesta::scout()
+                        << "[Scheduler " << s->id_scheduler
+                        << "] Estados de procesos: " << s->ready_queue.size()
+                        << " "
+                        << s->processes.size()
+                        << " "
+                        << s->is_waiting
+                        << " "
+                        << s->should_kill // indica si la instancia debe morir.
+                        << std::endl;
+                for (auto &p: s->processes) {
+                    vesta::scout()
+                            << "\t[Process " << p->pid.local_pid
+                            << "] Estados de procesos: " << vm_state_to_str(p->state)
+                            << " "
+                            << std::endl;
+                }
+
+                */
+            }
+        }
         uint64_t ns = t_bench.ns();
+
+        vm->stop();  // matar a todos los gestores
+        vm->reset(); // usamos reset para restaurar el gestor de procesos, sino estariamos
+        // añadiendo multiples procesos, no se recomienda usar, es preferible crear una nueva VM.
+
+        //process->scheduler.vm_reference.wait();
 
         total_ns += ns;
         if (ns < min_ns) min_ns = ns;
@@ -427,50 +481,69 @@ int main() {
                  << "  |  " << mips << " MIPS\n";*/
     }
 
-    SLEEP(3000);
+    SLEEP(1000);
 
     double avg_ns   = double(total_ns) / RUNS;
     double avg_mips = (INSTR_PER_RUN * 1000.0) / avg_ns;
-    std::cout << C_GREEN << "\n=== RESULTADOS BENCHMARK ===\n" << C_RESET;
+    vesta::scout() << C_GREEN << "\n=== RESULTADOS BENCHMARK ===\n" << C_RESET;
 
-    std::cout << "Promedio: " << avg_ns << " ns  ("
+    vesta::scout() << "Promedio: " << avg_ns << " ns  ("
             << (avg_ns / 1000.0) << " us, "
             << (avg_ns / 1'000'000.0) << " ms)\n";
 
-    std::cout << "Minimo:   " << min_ns << " ns  ("
+    vesta::scout() << "Minimo:   " << min_ns << " ns  ("
             << (min_ns / 1000.0) << " us, "
             << (min_ns / 1'000'000.0) << " ms)\n";
 
-    std::cout << "Maximo:   " << max_ns << " ns  ("
+    vesta::scout() << "Maximo:   " << max_ns << " ns  ("
             << (max_ns / 1000.0) << " us, "
             << (max_ns / 1'000'000.0) << " ms)\n";
 
     double min_mips = (INSTR_PER_RUN * 1000.0) / max_ns; // max_ns = peor tiempo
     double max_mips = (INSTR_PER_RUN * 1000.0) / min_ns; // min_ns = mejor tiempo
 
-    std::cout << C_MAGENTA << "\n--- MIPS ---\n" << C_RESET;
-    std::cout << "MIPS promedio: " << avg_mips << "\n";
-    std::cout << "MIPS minimo:   " << min_mips << "\n";
-    std::cout << "MIPS maximo:   " << max_mips << "\n";
+    vesta::scout() << C_MAGENTA << "\n--- MIPS ---\n" << C_RESET;
+    vesta::scout() << "MIPS promedio: " << avg_mips << "\n";
+    vesta::scout() << "MIPS minimo:   " << min_mips << "\n";
+    vesta::scout() << "MIPS maximo:   " << max_mips << "\n";
 
 #else
     //vm->has_hooks = false;
 
     Timer t_bench;
+
+    vm->make_ready(process->pid); // marcar el proceso como listo
+    // perfilar cada gestor de procesos.
+    for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
+        //std::thread(&runtime::profiler_thread, s.get()).detach();
+    }
     vm->start();
-    std::thread(&runtime::profiler_thread, vm).detach();
-    vm->join();
+
+    //vm->wait();
+    while (vm->has_alive_processes()) {
+        vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
+        SLEEP(100);
+    }
+
     auto runner_ns = t_bench.ns();
     std::cout << std::dec;
     std::cout << C_CYAN << "\n[VM_EXEC_CODE] " << C_RESET << "Tardo en ejecutar: " << runner_ns << " us\n";
-#endif
 
+
+    std::cout << process->to_string() << std::endl;
+    vesta::scout() << vm->schedulers[0]->to_string() << std::endl;
+
+    //for (auto &s : vm->schedulers)
+    //    vesta::scout() << s->to_string() << std::endl;
+
+    // matar a todos los gestores si alguno quedo vivo
+    vm->stop();
+
+#endif
 
     std::cout << std::dec;
     std::cout << C_CYAN << "\n[Tiempo total] " << C_RESET << global.us() << " us "
             << global.ms() << " ms\n";
-
-    std::cout << vm->to_string() << std::endl;
 
     return 0;
 }

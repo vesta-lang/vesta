@@ -28,13 +28,13 @@ namespace runtime {
         destroy_all_vms();
     }
 
-    uint64_t ManageVM::create_vm() {
+    uint64_t ManageVM::create_vm(size_t num_schedulers) {
         std::lock_guard lock(vm_mutex);
         uint64_t id = ++counter_vm;
 
         // cada instancia tiene un manager publica de instancia y de carga
         // Crear VM en el heap y almacenarla con propiedad exclusiva
-        vms.push_back(std::make_unique<VM>(*this, id));
+        vms.push_back(std::make_unique<VM>(*this, id, num_schedulers));
         return id;
     }
 
@@ -43,7 +43,7 @@ namespace runtime {
 
         auto it = std::find_if(vms.begin(), vms.end(),
                                [vm_id](const std::unique_ptr<VM> &vm) {
-                                   return vm->id.id == vm_id;
+                                   return vm->id == vm_id;
                                });
 
         if (it == vms.end())
@@ -57,7 +57,7 @@ namespace runtime {
     VM *ManageVM::get_vm(uint64_t vm_id) {
         std::lock_guard lock(vm_mutex);
         for (auto& vm : vms) {
-            if (vm->id.id == vm_id)
+            if (vm->id == vm_id)
                 return vm.get(); // dirección estable
         }
         return nullptr;
@@ -67,7 +67,7 @@ namespace runtime {
     bool ManageVM::has_vm(uint64_t vm_id) const {
         std::lock_guard lock(vm_mutex);
         for (auto& vm : vms)
-            if (vm->id.id == vm_id)
+            if (vm->id == vm_id)
                 return true;
 
         return false;

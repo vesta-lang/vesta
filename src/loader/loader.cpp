@@ -17,8 +17,7 @@
 namespace loader {
     Loader::Loader(
         runtime::ManageVM &instance_manager
-    ): instance_manager(instance_manager) {
-    }
+    ): instance_manager(instance_manager) {}
 
     std::string Loader::read_string_at(const std::vector<uint8_t> &blob, uint64_t offset) {
         std::string result;
@@ -34,7 +33,7 @@ namespace loader {
 
     std::vector<std::string> Loader::read_all_strings(const std::vector<uint8_t> &blob) {
         std::vector<std::string> result;
-        uint64_t i = 0;
+        uint64_t                 i = 0;
 
         while (i < blob.size()) {
             std::string s;
@@ -109,10 +108,10 @@ namespace loader {
             );
         }
 
-        exe.header.checksum = reader.read64();
-        exe.header.flags = reader.read64();
+        exe.header.checksum  = reader.read64();
+        exe.header.flags     = reader.read64();
         exe.header.timestamp = reader.read64();
-        exe.header.arch = reader.read32();
+        exe.header.arch      = reader.read32();
 
         // cantidad de espacios de direcciones
         exe.header.count = reader.read32();
@@ -135,6 +134,12 @@ namespace loader {
 
         // PC por el que empezar la ejecuccion
         exe.init_pc = exe.header.start_pc = reader.read64();
+
+        // offset a la tabla de importacion
+        exe.header.offset_import_table = reader.read64();
+
+        // offset a la tabla de etiquetas o labels
+        exe.header.offset_label_table = reader.read64();
 
         // el header siempre debe estar alineado a 16 bytes
         while (reader.offset % 16 != 0) {
@@ -167,7 +172,7 @@ namespace loader {
             Space space{};
 
             // indicamos el espacio de direcciones
-            space.range.address_init = exe.header.address_spaces[i].address.address_init;
+            space.range.address_init  = exe.header.address_spaces[i].address.address_init;
             space.range.address_final = exe.header.address_spaces[i].address.address_final;
 
             // offset en el bytecode
@@ -208,9 +213,9 @@ namespace loader {
 
         for (size_t i = 0; i < exe.header.count; i++) {
             Section sec;
-            sec.memory.address_init = reader_child.read64();
+            sec.memory.address_init  = reader_child.read64();
             sec.memory.address_final = reader_child.read64();
-            uint64_t offset_string = reader_child.read64();
+            uint64_t offset_string   = reader_child.read64();
             try {
                 // aqui usamos al padre, por que el offset de la tabla de strings no puede accederse
                 // con el cursor hijo, ya que el cursor hijo solo puede acceder a la tabla de seeciones
@@ -231,7 +236,7 @@ namespace loader {
             if (!space) {
                 throw_error_at(
                     ErrorKind::InvalidFormat,
-                    "La sección '" + sec.name + "' no pertenece a ningún espacio de direcciones",
+                    "La seccion '" + sec.name + "' no pertenece a ningun espacio de direcciones",
                     reader_child
                 );
             }
@@ -246,7 +251,7 @@ namespace loader {
     }
 
     std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
-        auto exe = std::make_unique<Executable>();
+        auto exe      = std::make_unique<Executable>();
         exe->bytecode = bytecode;
 
         ByteReader reader(exe->bytecode);
@@ -264,7 +269,7 @@ namespace loader {
         return exe;
     }
 
-    runtime::VM *Loader::load_executable(std::string path) {
+    runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
         // Leer archivo completo
         std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
@@ -277,27 +282,53 @@ namespace loader {
         );
 
         // Delegar en la versión bytecode
-        return load_executable(bytecode);
-    }
-
-    runtime::VM *Loader::load_executable(std::vector<uint8_t> bytecode) {
-        // Parsear el formato VELB
-        auto exe = parse_velb(std::move(bytecode));
-        return create_vm_instance(std::move(exe));
+        return load_executable(vm, bytecode);
     }
 
 
-    void Loader::resolve_labels(Assembly::Bytecode::Section &section) {
+
+    runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::vector<uint8_t> bytecode) {
+        if (bytecode.empty()) {
+            throw std::runtime_error("Loader::load_executable: Se intento cargar un ejecutable con bytecode vacio");
+        }
+        auto exe = parse_velb(bytecode);
+
+        GlobalPID           pid      = vm.spawn_process();
+        runtime::ProcessVM *proccess = vm.get_process(pid);
+
+        // configuramos RIP (PC tambien llamado)
+        proccess->registers.rip.qword(exe->init_pc);
+
+        // copiamos cada seccion del ejecutable a la memoria virtual
+        // de la VM
+        for (auto *sec: exe->sections) {
+            uint64_t vm_addr = sec->memory.address_init;
+            uint64_t size    = sec->size_real;
+            uint64_t offset  = sec->file_offset;
+
+            // puntero al bytecode real
+            const uint8_t *src = exe->bytecode.data() + offset;
+
+            // copiar a la memoria virtual de la VM
+            proccess->vm_mem.vm_to_host_memcpy(vm_addr, src, bytecode.size());
+
+            // mostrar datos de la region de memoria reservada para la seccion.
+            //runtime::dump_vm_region(&proccess->tlb, vm_addr, bytecode.size());
+        }
+        // poner ejecutable a la pila de ejecutuables
+        executables.push_back(std::move(exe));
+
+        //vm->vm_mem[0x10] = 1;
+        return proccess;
     }
 
-    void Loader::load_sections(Assembly::Bytecode::Label &label) {
-    }
+    void Loader::resolve_labels(Assembly::Bytecode::Section &section) {}
 
-    void Loader::load_spaces(Assembly::Bytecode::Space &space) {
-    }
+    void Loader::load_sections(Assembly::Bytecode::Label &label) {}
 
-    void Loader::build_runtime_context() {
-    }
+    void Loader::load_spaces(Assembly::Bytecode::Space &space) {}
+
+    void Loader::build_runtime_context() {}
 
     Executable &Loader::get_last_instance_unlocked() {
         return *executables.back();
@@ -308,40 +339,14 @@ namespace loader {
         return get_last_instance_unlocked();
     }
 
-    runtime::VM *Loader::create_vm_instance(std::unique_ptr<Executable> exe_) {
+
+    runtime::VM *Loader::create_vm_instance(size_t num_schedulers) {
         // bloqueamos el acceso si otro hilo intenta entrar
         std::lock_guard lock(loader_mutex);
 
-        executables.push_back(std::move(exe_));
-
-        // obtener el ultimo ejecutable agregado sin volver a alterar el mutex
-        // en el proceso
-        Executable &exe = get_last_instance_unlocked();
-
         // cramos una instancia VM y configuramos el PC
-        uint64_t id = instance_manager.create_vm();
+        uint64_t     id = instance_manager.create_vm(num_schedulers);
         runtime::VM *vm = instance_manager.get_vm(id);
-
-        // configuramos RIP (PC tambien llamado)
-        vm->rip.qword(exe.init_pc);
-
-        // copiamos cada seccion del ejecutable a la memoria virtual
-        // de la VM
-        for (auto *sec: exe.sections) {
-            uint64_t vm_addr = sec->memory.address_init;
-            uint64_t size = sec->size_real;
-            uint64_t offset = sec->file_offset;
-
-            // puntero al bytecode real
-            const uint8_t *src = exe.bytecode.data() + offset;
-
-            // copiar a la memoria virtual de la VM
-            vm->vm_mem.vm_to_host_memcpy(vm_addr, src, size);
-
-            // mostrar datos de la region de memoria reservacada para la seccion.
-            runtime::dump_vm_region(vm, vm_addr, size);
-        }
-        //vm->vm_mem[0x10] = 1;
 
         return vm;
     }

@@ -17,112 +17,26 @@
 
 namespace runtime {
     VM::VM(
-        ManageVM &mgr_vm,
-        uint64_t  id_vm
-    ) : vm_mem(tlb, mgr_vm.manager_mem),
-        manager_mem_public(mgr_vm.manager_mem),
-        loader_priv(std::make_unique<loader::Loader>(mgr_vm)),
-        loader_public(mgr_vm.loader),
-        id({id_vm}),
-        mgr_vm(mgr_vm) { {
-            this->manager_mem_priv = {};
+        ManageVM &mgr_vm_,
+        uint64_t  id_vm,
+        size_t    num_schedulers
+    ) : manager_mem_public(mgr_vm_.manager_mem),
+        loader_priv(std::make_unique<loader::Loader>(mgr_vm_)),
+        loader_public(mgr_vm_.loader),
+        mgr_vm(mgr_vm_), num_schedulers(num_schedulers) {
+        id = id_vm;
 
-            time_sleep   = 0;
-            pending_call = nullptr;
+        schedulers.reserve(num_schedulers);
+
+        for (uint32_t i = 0; i < num_schedulers; i++) {
+            auto sched = std::make_unique<Scheduler>(i, *this);
+            schedulers.push_back(std::move(sched));
         }
-
-        init_fsm();
-    }
-
-    void VM::init_fsm() {
-        // Limpia todo_
-        for (uint64_t s = 0; s < NUM_STATES; s++) {
-            for (uint64_t e = 0; e < NUM_EVENTS; e++) {
-                fsm[s][e].next = (vm_state) s;
-
-                // por defecto: no cambia de estado
-                fsm[s][e].action = nullptr;
-            }
-        }
-        // READY -> RUNNING
-        fsm[READY][EVT_SCHEDULED] = {RUNNING, nullptr};
-
-        // RUNNING -> DECODE
-        fsm[RUNNING][EVT_SCHEDULED] = {DECODE, nullptr};
-
-        // DECODE -> EXECUTE
-        fsm[DECODE][EVT_DECODE_DONE] = Transition{
-            EXECUTE,
-            [](VM *vm) {
-                vm->decode_instruction();
-            }
-        };
-
-        // EXECUTE -> DECODE
-        fsm[EXECUTE][EVT_EXEC_DONE] = Transition{
-            DECODE,
-            [](VM *vm) {
-                /*vm->execute_instr();*/
-            }
-        };
-
-        // EXECUTE -> WAIT_IO
-        fsm[EXECUTE][EVT_IO_WAIT] = Transition{
-            WAIT_IO,
-            [](VM *vm) {
-                /*vm->suspend_thread();*/
-            }
-        };
-
-        // WAIT_IO -> READY
-        fsm[WAIT_IO][EVT_IO_READY] = Transition{
-            READY,
-            [](VM *vm) {
-                /*vm->resume_thread();*/
-            }
-        };
-
-        // EXECUTE -> HALT
-        fsm[EXECUTE][EVT_HALT] = Transition{
-            HALT,
-            [](VM *vm) {
-                /*vm->stop_vm();*/
-            }
-        };
-
-        // Cualquier estado -> DEAD por error
-        for (int s = 0; s < NUM_STATES; s++) {
-            fsm[s][EVT_ERROR] = Transition{
-                DEAD,
-                [](VM *vm) {
-                    /*vm->fatal_error();*/
-                }
-            };
-        }
-    }
-
-    void VM::on_event(vm_event e) {
-        //vm_hook(this, DebugStage::OnEventBegin);
-        {
-            std::lock_guard guard(state_lock);
-
-            vm_state old = state;
-
-            // Obtener la transición desde la tabla
-            const Transition &t = fsm[state][e];
-
-            // Ejecutar acción asociada (si existe)
-            if (t.action)
-                t.action(this);
-
-            // Cambiar al siguiente estado
-            state = t.next;
-        }
-        //vm_hook(this, DebugStage::OnEventEnd);
     }
 
     std::string VM::to_string() const {
         return this->vm_summary();
+        return "";
     }
 
     void VM::print() {
@@ -130,57 +44,124 @@ namespace runtime {
         vesta::scout() << to_string();
     }
 
-    void VM::kill() {
-        on_event(EVT_ERROR);
-    }
-
-    /*void VM::emit_event(vm_event e) {
-        std::lock_guard guard(state_lock);
-        pending_events.push(e);
-    }*/
-
-
     void VM::start() {
-        pthread_create(&thread_for_vm, nullptr, [](void *arg) -> void * {
-            VM *vm = static_cast<VM *>(arg);
-            vm->run_loop();
-            return nullptr;
-        }, this);
+        vm_running = true;
+        for (uint32_t i = 0; i < num_schedulers; i++) {
+            //vesta::scout() << "Creando future para scheduler " << i << "\n";
 
-        // no usar por que entonces join ya no se puede usar.
-        //pthread_detach(thread_for_vm); // auto destruir hilo al finalizar.
+            // submit() devuelve un future
+            std::future<void> fut = pool.submit([this, i] {
+                schedulers[i]->run_loop();
+            });
+            //vesta::scout() << "Future creado\n";
+
+            scheduler_futures.push_back(fut.share());
+            //vesta::scout() << "Future movido al vector\n";
+        }
     }
 
-    void VM::join() {
-        pthread_join(thread_for_vm, nullptr);
-    }
+    void VM::stop() {
+        // Indicar que la VM debe morir
+        vm_running = false;
 
-    void VM::free_add_debug_hook(DebugHook hook) {
-        debug_hooks.push_back(hook);
-        has_hooks = true;
-    }
-
-    void VM::add_debug_hook(DebugHook hook) {
-        std::lock_guard guard(state_lock);
-        free_add_debug_hook(hook);
-    }
-
-    void VM::load_raw_code(uint64_t address, const std::vector<uint8_t> &code) {
-        // copiar a memoria virtual
-        vm_mem.vm_to_host_memcpy(address, code.data(), code.size());
-
-        // resetear PC
-        rip.qword(address);
-
-        // resetear icache
-        for (auto &entry: icache) {
-            entry.pc    = UINT64_MAX; // invalida
-            decoded_ptr = nullptr;    // invalidar punteros decoder anteriores.
+        // Marcar todos los schedulers para matar
+        for (auto &sched: schedulers) {
+            sched->should_kill = true;
         }
 
-        // resetear estado de ejecución
-        decoded_ptr = nullptr;
-        should_kill = false;
-        state       = RUNNING;
+        // Despertar a todos los schedulers que estén en wait()
+        for (auto &sched: schedulers) {
+            sched->cv.notify_all();
+        }
+
+        // si los hilos no terminaron debemos esperar, en caso contrario
+        // no debemos hacer nada simplemente.
+        //bool status = all_schedulers_dead();
+        //if (!status) {
+        // Esperar a que todos los hilos terminen
+        for (auto &f: scheduler_futures) {
+            f.get();
+        }
+        //}
+
+        scheduler_futures.clear();
+    }
+
+    ProcessVM *VM::get_process(GlobalPID pid) {
+        return schedulers[pid.scheduler_id]->pid_index[pid];
+    }
+
+    void VM::wait() {
+        //vesta::scout() << "Entrando en wait()\n";
+        for (auto &f: scheduler_futures) {
+            //::scout() << "Haciendo get() del future " << "\n";
+            f.wait(); // bloquea hasta que cada scheduler termine
+        }
+        //vesta::scout() << "Todos los futures consumidos\n";
+    }
+
+    bool VM::all_schedulers_dead() {
+        bool is_dead = pool.idle();
+        return is_dead;
+    }
+
+    bool VM::has_alive_processes() {
+        for (auto &sched: schedulers) {
+            if (sched->has_alive_processes())
+                return true;
+        }
+
+        // si no quedan tareas en el thread pool entonces todos los gestores
+        // de procesos murieron.
+        //if (all_schedulers_dead() == false) {
+        // si aun queda tareas, o es un bug, o solo algunos gestores de procesos
+        // finalizaron su run_loop.
+        //    return true;
+        //}
+
+        // matar a todos los gestores, nos aseguramos de que todos mueran de
+        // forma correcta, pues que no queden procesos no finaliza el gestor de procesos
+        // automaticamente.
+        return false;
+    }
+
+    void VM::make_ready(GlobalPID pid) {
+        schedulers[pid.scheduler_id]->make_ready(pid);
+        schedulers[pid.scheduler_id]->cv.notify_one();
+
+        // muy importante si se añade procesos sin un reset, el gestor de procesos una
+        // vez finalice todos sus procesos, la instancia, activa esta bandera que indica
+        // al propio gestor que a terminado y no debe volver a iniciar o continuar con
+        // ningun otro proceso. Si se quiere añadir nuevos procesos en un estado como
+        // este, es necesario reactivarla o nunca sera ejecutado el proceso.
+        schedulers[pid.scheduler_id]->should_kill = false;
+    }
+
+    GlobalPID VM::spawn_process() {
+        if (schedulers.empty())
+            throw std::runtime_error("VM::spawn_process: no hay gestores de procesos, posiblemente no llamo a start()");
+
+        size_t index = next_sched;
+        next_sched   = (next_sched + 1) % schedulers.size();
+
+        return schedulers[index]->spawn();
+    }
+
+    void VM::reset() {
+        // Asegurar que todos los schedulers han terminado
+        stop(); // vm_running = false, should_kill = true, cv.notify_all(), f.get(), clear()
+
+        // Resetear el estado interno de cada scheduler
+        for (auto &sched: schedulers) {
+            sched->reset(); // limpia procesos, colas, pid_index, FSM, contadores, flags...
+        }
+
+        // Resetear estado interno de la VM
+        next_sched = 0;
+        vm_running = true; // lista para volver a arrancar
+
+        // Volver a lanzar los schedulers en el ThreadPool
+        scheduler_futures.clear(); // por si acaso
+        start();
     }
 } // RUNTIME

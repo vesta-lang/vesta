@@ -43,8 +43,8 @@ namespace Assembly::Bytecode::Linker {
         // Por ahora, lo tratamos como un módulo con bytecode plano y sin contexto real.
 
         Module m;
-        m.name = path;
-        m.bytecode = std::move(data);
+        m.name      = path;
+        m.bytecode  = std::move(data);
         m.is_object = true;
 
         // TODO: rellenar m.ctx, m.local_symbols, m.relocations según el formato real.
@@ -60,8 +60,8 @@ namespace Assembly::Bytecode::Linker {
         }
 
         Module m;
-        m.name = "<memory-object>";
-        m.bytecode = data;
+        m.name      = "<memory-object>";
+        m.bytecode  = data;
         m.is_object = true;
 
         // TODO: parsear cabecera interna si la hay.
@@ -135,8 +135,30 @@ namespace Assembly::Bytecode::Linker {
         }
     }
 
+    uint64_t Linker::register_import(const ImportEntry &imp) {
+        std::string key = imp.library + ":" + imp.function;
+
+        // ¿Ya existe?
+        auto it = import_lookup.find(key);
+        if (it != import_lookup.end()) {
+            return it->second; // devolver índice existente
+        }
+
+        // Crear nueva entrada
+        uint64_t new_index = import_table.size();
+
+        ImportEntry copy = imp;
+        copy.index       = new_index;
+
+        import_table.push_back(copy);
+        import_lookup[key] = new_index;
+
+        return new_index;
+    }
+
+
     void Linker::add_assembly_unit(const std::vector<uint8_t> &bytecode,
-                                   const Context *ctx) {
+                                   const Context *             ctx) {
         /**
          * Problemas resueltos:
          *      - 1 espacio de direcciones solapados, si se solapan se emite un error.
@@ -152,10 +174,27 @@ namespace Assembly::Bytecode::Linker {
          *          problema.
          */
         Module m;
-        m.name = "<assembly-unit>";
-        m.bytecode = bytecode;
-        m.ctx = *ctx; // copia del contexto
+        m.name      = "<assembly-unit>";
+        m.bytecode  = bytecode;
+        m.ctx       = *ctx; // copia del contexto
         m.is_object = false;
+
+        // añadir las relocalizaciones del modulo a todo_ el linker
+        m.relocations.insert(
+            m.relocations.end(),
+            ctx->relocations.begin(),
+            ctx->relocations.end()
+        );
+
+        for (const auto &imp: ctx->import_table) {
+            uint64_t global_index = register_import(imp);
+
+            // IMPORTANTE:
+            // Debe actualizar las relocaciones del módulo que usen este import.
+            // Ejemplo: CALLN <local_index> -> CALLN <global_index>
+        }
+
+
 
         // Fusionar espacios del módulo en el linker
         for (const auto &[spaceName, space]: ctx->space_address) {
@@ -270,13 +309,13 @@ namespace Assembly::Bytecode::Linker {
 
                         // Registrar información extendida
                         SymbolInfo info;
-                        info.space = spaceName;
-                        info.section = sectionName;
-                        info.relative = start;
-                        info.absolute = absolute;
+                        info.space       = spaceName;
+                        info.section     = sectionName;
+                        info.relative    = start;
+                        info.absolute    = absolute;
                         info.file_offset = 0; // se rellenará después
-                        info.size = size;
-                        info.module = mod.name;
+                        info.size        = size;
+                        info.module      = mod.name;
 
                         symbol_info[fullName] = info;
 
@@ -306,58 +345,87 @@ namespace Assembly::Bytecode::Linker {
                 // Busca el símbolo en la tabla global
                 auto it = global_symbols.find(rel.symbol);
 
+                bool import_code = false;
                 // Si no existe, error de símbolo no resuelto.
                 // equivalente a: ld: undefined reference to `foo'
                 if (it == global_symbols.end()) {
-                    add_errorf(report, LinkerError::Type::RelocationError,
-                               ("Relocacion: simbolo no resuelto: " + rel.symbol).c_str());
-                    continue;
-                }
-
-                // Obtiene la dirección final del símbolo
-                // Esta dirección ya fue calculada previamente por el linker al:
-                //     concatenar módulos
-                //     aplicar alineaciones
-                //     asignar direcciones virtuales
-                //     resolver secciones
-                uint64_t target_addr = it->second;
-
-                if (rel.offset + sizeof(uint64_t) > mod.bytecode.size()) {
-                    add_errorf(report, LinkerError::Type::RelocationError,
-                               ("Relocacion fuera de rango en modulo " + mod.name).c_str());
-                    continue;
-                }
-
-                switch (rel.type) {
-                    // Escribe la dirección absoluta de 64 bits.
-                    // mov rax, [foo]   ->   se escribe la dirección absoluta de foo
-                    case Relocation::Type::Absolute64: {
-                        std::memcpy(&mod.bytecode[rel.offset], &target_addr, sizeof(uint64_t));
-                        break;
+                    // si no es un simbolo global que hace referencia a codigo
+                    // de la VM, entonces puede ser un simbolo global a codigo
+                    // externo:
+                    it = import_lookup.find(rel.symbol);
+                    if (it == import_lookup.end()) {
+                        add_errorf(report, LinkerError::Type::RelocationError,
+                                   ("Relocacion: simbolo no resuelto: " + rel.symbol).c_str());
+                        continue;
                     }
+                    // es codigo importado, se debe procceder de otra manera.
+                    import_code = true;
+                }
 
-                    // Esto es un PC-relative displacement, típico de:
-                    // call foo; jmp bar
-                    // El +4 es porque la instrucción ya habrá avanzado 4 bytes cuando se evalúa el PC.
-                    // int32_t rel32 = target_addr - (rel.offset + 4);
-                    case Relocation::Type::Relative32: {
-                        // offset relativo simplificado (suponemos PC en rel.offset + 4)
-                        int32_t rel32 = static_cast<int32_t>(target_addr - (rel.offset + 4));
-                        if (rel.offset + sizeof(int32_t) > mod.bytecode.size()) {
-                            add_errorf(report, LinkerError::Type::RelocationError,
-                                       ("Reloc REL32 fuera de rango en modulo " + mod.name).c_str());
-                            continue;
+                if (import_code == false) {
+                    // Obtiene la dirección final del símbolo
+                    // Esta dirección ya fue calculada previamente por el linker al:
+                    //     concatenar módulos
+                    //     aplicar alineaciones
+                    //     asignar direcciones virtuales
+                    //     resolver secciones
+                    uint64_t target_addr = it->second;
+
+                    if (rel.offset + sizeof(uint64_t) > mod.bytecode.size()) {
+                        add_errorf(report, LinkerError::Type::RelocationError,
+                                   ("Relocacion fuera de rango en modulo " + mod.name).c_str());
+                        continue;
+                    }
+                    uint64_t rel_address = 0;
+
+                    switch (rel.type) {
+                        // Escribe la dirección absoluta de 64 bits.
+                        // mov rax, [foo]   ->   se escribe la dirección absoluta de foo
+                        case Type::Absolute64: {
+                            std::memcpy(&mod.bytecode[rel.offset], &target_addr, sizeof(uint64_t));
+                            break;
                         }
-                        std::memcpy(&mod.bytecode[rel.offset], &rel32, sizeof(int32_t));
-                        break;
+
+                        // Esto es un PC-relative displacement, típico de:
+                        // call foo; jmp bar
+                        // El +4 es porque la instrucción ya habrá avanzado 4 bytes cuando se evalúa el PC.
+                        // int32_t rel32 = target_addr - (rel.offset + 4);
+                        case Type::Relative32: {
+                            // offset relativo simplificado (suponemos PC en rel.offset + 4)
+                            int32_t rel32 = static_cast<int32_t>(target_addr - (rel.offset + 4));
+                            rel_address   = rel32;
+                            if (rel.offset + sizeof(int32_t) > mod.bytecode.size()) {
+                                add_errorf(report, LinkerError::Type::RelocationError,
+                                           ("Reloc REL32 fuera de rango en modulo " + mod.name).c_str());
+                                continue;
+                            }
+                            std::memcpy(&mod.bytecode[rel.offset], &rel32, sizeof(int32_t));
+                            break;
+                        }
+
+                        // Lo mismo que REL32, pero con 64 bits.
+                        case Type::Relative64: {
+                            int64_t rel64 = static_cast<int64_t>(target_addr - (rel.offset + 8));
+                            rel_address   = rel64;
+                            std::memcpy(&mod.bytecode[rel.offset], &rel64, sizeof(int64_t));
+                            break;
+                        }
                     }
 
-                    // Lo mismo que REL32, pero con 64 bits.
-                    case Relocation::Type::Relative64: {
-                        int64_t rel64 = static_cast<int64_t>(target_addr - (rel.offset + 8));
-                        std::memcpy(&mod.bytecode[rel.offset], &rel64, sizeof(int64_t));
-                        break;
-                    }
+
+                    // añadir relocalizacion aplicada al reporte:
+                    RelocReportEntry entry;
+                    entry.module        = mod.name;
+                    entry.symbol        = rel.symbol;
+                    entry.offset        = rel.offset;
+                    entry.type          = rel.type;
+                    entry.value_written = (rel.type == Type::Relative32)
+                                              ? (uint32_t) rel_address
+                                              : (rel.type == Type::Relative64)
+                                                    ? (uint64_t) rel_address
+                                                    : target_addr;
+
+                    report.relocations_log.push_back(entry);
                 }
 
                 report.relocations_applied++;
@@ -431,7 +499,7 @@ namespace Assembly::Bytecode::Linker {
         // anteriores de funciones previas.
 
         final_header.magic.firma = MAGIC_NUMBER_VELB;
-        final_header.format_v = 1;
+        final_header.format_v    = 1;
 
         final_header.max_v = 0; // 0.0.0 => compatible con futuras
         final_header.min_v = 0; // 0.0.0 => retrocompatible
@@ -441,7 +509,7 @@ namespace Assembly::Bytecode::Linker {
         final_header.flags = 0;
 
         final_header.timestamp = static_cast<uint64_t>(std::time(nullptr));
-        final_header.arch = 1; // debo definir las arch posibles
+        final_header.arch      = 1; // debo definir las arch posibles
 
         final_header.count = static_cast<section_count>(final_sections.size());
 
@@ -509,7 +577,6 @@ namespace Assembly::Bytecode::Linker {
         for (auto &final_section: final_sections) {
             final_section.memory.offset_string = string_offsets[final_section.name];
         }
-
     }
 
     void Linker::build_section_strings(uint64_t offset_init) {
@@ -538,6 +605,12 @@ namespace Assembly::Bytecode::Linker {
             }
         }
 
+        // Recoger strings de imports (librerías y funciones)
+        for (const auto& imp : import_table) {
+            string_pool.push_back(imp.library);
+            string_pool.push_back(imp.function);
+        }
+
         // Eliminar duplicados
         std::sort(string_pool.begin(), string_pool.end());
         string_pool.erase(std::unique(string_pool.begin(), string_pool.end()),
@@ -564,7 +637,7 @@ namespace Assembly::Bytecode::Linker {
         Section *sec = &spaces_address["MetaSpace"].table_section["strings"];
         // Insertar en el espacio "meta"
         sec->size_align_section = 1;
-        sec->size_real = align_up(
+        sec->size_real          = align_up(
             string_blob.size(), 16);
     }
 
@@ -582,7 +655,7 @@ namespace Assembly::Bytecode::Linker {
 
         // el hader siempre esta alineado a 16 bytes
         return align_up((relative_size_header +
-                         size_table_space_address) /*+ size_table_sections*/, 16);
+                            size_table_space_address) /*+ size_table_sections*/, 16);
     }
 
     void Linker::compute_symbol_file_offsets() {
@@ -590,7 +663,7 @@ namespace Assembly::Bytecode::Linker {
             for (const auto &sec: final_sections) {
                 if (info.absolute >= sec.memory.address.address_init &&
                     info.absolute < sec.memory.address.address_final) {
-                    uint64_t delta = info.absolute - sec.memory.address.address_init;
+                    uint64_t delta   = info.absolute - sec.memory.address.address_init;
                     info.file_offset = sec.memory.offset_string + delta;
                     break;
                 }
@@ -611,7 +684,7 @@ namespace Assembly::Bytecode::Linker {
 
         // Buscar el terminador nulo sin salirnos del buffer
         size_t max_len = string_blob.size() - offset;
-        size_t len = strnlen(start, max_len);
+        size_t len     = strnlen(start, max_len);
 
         return std::string(start, len);
     }
@@ -714,6 +787,12 @@ namespace Assembly::Bytecode::Linker {
         // Indicar el valor de PC al cargar el programa
         result->emit64(final_header.start_pc);
 
+        // Indicar el offset a la tabla de importacion
+        result->emit64(final_header.offset_import_table);
+
+        // Indicar el offset a la tabla de labels
+        result->emit64(final_header.offset_label_table);
+
         // el header siempre debe estar alineado a 16 bytes
         while (result->offset % 16 != 0) {
             result->emit8(0x00);
@@ -745,10 +824,10 @@ namespace Assembly::Bytecode::Linker {
         uint64_t base_bytecode_offset = result->offset;
 
         uint64_t entry_size = 4 * sizeof(uint64_t); // 32
-        uint64_t table_pos  = sizeof(HeaderVELB) - sizeof(table_spaces_address*);
+        uint64_t table_pos  = sizeof(HeaderVELB) - sizeof(table_spaces_address *);
 
         for (int i = 0; i < final_header.n_spaces; ++i) {
-            auto& space = final_header.address_spaces[i];
+            auto &space = final_header.address_spaces[i];
 
             uint64_t patched = space.offset_bytecode + base_bytecode_offset;
 
@@ -840,11 +919,10 @@ namespace Assembly::Bytecode::Linker {
                       return a.second.absolute < b.second.absolute;
                   });
 
-        uint64_t offset_space_address = align_up(sizeof(HeaderVELB) - sizeof(table_spaces_address *),16);
+        uint64_t offset_space_address = align_up(sizeof(HeaderVELB) - sizeof(table_spaces_address *), 16);
 
         if (final_executable.size() >= (offset_space_address +
             sizeof(table_spaces_address) * final_header.n_spaces)) {
-
             f << "=== ADDRESS SPACES ===\n";
             for (uint64_t i = 0; i < final_header.n_spaces; ++i) {
                 auto sp = final_header.address_spaces[i];
@@ -910,7 +988,27 @@ namespace Assembly::Bytecode::Linker {
                     << "\n\n";
         }
 
-        f << "=== FINAL SIZE ===\n";
-        f << "Executable size: " << final_executable.size() << " bytes\n";
+        f << "\n=== RELOCATIONS ===\n";
+        for (const auto &r: report.relocations_log) {
+            f << "[Reloc] module=" << r.module
+                    << " symbol=" << r.symbol
+                    << " type=" << reloc_type_to_string(r.type)
+                    << " offset=0x" << std::hex << r.offset
+                    << " value=0x" << std::hex << r.value_written
+                    << std::dec << "\n";
+        }
+
+
+        f << "\n=== IMPORTS ===\n";
+        for (const auto &entry: import_table) {
+            f << "[Import] library=" << entry.library
+                    << " function=" << entry.function
+                    << " index=" << entry.index
+                    << std::dec << "\n";
+        }
+
+
+        f << "\n=== FINAL SIZE ===\n";
+        f << "Executable size: " << final_executable.size() << " bytes\n" << std::dec;
     }
 }

@@ -37,10 +37,10 @@ namespace cli {
     struct Impl;
 
     struct CmdParams {
-        std::string name; ///< primer token (nombre)
-        std::string path; ///< segundo token (ruta al ejecutable)
-        std::string rest; ///< resto de la cadena (opcional)
-        bool valid = false; ///< true si se extrajeron al menos name y path
+        std::string name;          ///< primer token (nombre)
+        std::string path;          ///< segundo token (ruta al ejecutable)
+        std::string rest;          ///< resto de la cadena (opcional)
+        bool        valid = false; ///< true si se extrajeron al menos name y path
     };
 
     /**
@@ -56,7 +56,7 @@ namespace cli {
         if (pos >= s.size()) return {};
 
         std::string out;
-        char quote = 0;
+        char        quote = 0;
         if (s[pos] == '"' || s[pos] == '\'') {
             quote = s[pos++];
         }
@@ -90,6 +90,22 @@ namespace cli {
         return out;
     }
 
+    class VestaInterprete {
+        bool              running       = true;
+        bool              show_bytecode = true;
+        runtime::ManageVM manager       = runtime::ManageVM(nullptr, 0);
+        std::string       code;
+
+    public:
+        VestaInterprete();
+
+        std::vector<uint8_t> run_interprete_execute_code();
+
+        std::vector<std::string> tokenize(const std::string &input);
+
+        void run_interprete();
+    };
+
     /**
      * @brief Parsea la cadena cmd extrayendo name (primer token) y path (segundo token).
      *
@@ -107,8 +123,8 @@ namespace cli {
      */
     static CmdParams parse_cmd_params(const std::string &cmd) {
         CmdParams out;
-        size_t pos = 0;
-        out.name = extract_token(cmd, pos);
+        size_t    pos = 0;
+        out.name      = extract_token(cmd, pos);
         if (out.name.empty()) return out; // invalid
 
         out.path = extract_token(cmd, pos);
@@ -122,9 +138,9 @@ namespace cli {
     }
 
     struct Config {
-        std::string history_file = "vm_history.txt";
-        size_t history_max = 2000;
-        std::string prompt = "vm> ";
+        std::string history_file  = "vm_history.txt";
+        size_t      history_max   = 2000;
+        std::string prompt        = "vm> ";
         std::string multiline_end = ";;";
     };
 

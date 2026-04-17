@@ -234,13 +234,13 @@ namespace Assembly::Bytecode {
                 // por definir
                 // mov
                 // reg, reg
-                {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
+                {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_mov_reg},
 
                 // reg, [mem] || [mem], reg
-                {0x00, 0x15, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
+                {0x00, 0x15, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_mov_inmed},
 
                 // REG, SIB || SIB, REG
-                {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_sib},
+                {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_mov_sib},
             },
         },
         {
@@ -368,6 +368,7 @@ namespace Assembly::Bytecode {
          * @param instr Nodo Instruction del AST.
          */
         void emit_instruction(const vm::Instruction *instr);
+
 
         uint64_t eval_operand(const vm::ASTNode *op);
 
