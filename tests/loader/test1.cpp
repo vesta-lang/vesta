@@ -97,7 +97,7 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
-//#define BENCHMARK_VM
+#define BENCHMARK_VM
 
 int main() {
     Timer             global;
@@ -217,8 +217,6 @@ int main() {
     //runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
 
 #ifdef BENCHMARK_VM
-    std::vector<uint8_t> bench_code;
-    bench_code.reserve(4 * 2'000'000); // 2M iteraciones -> 4M instrucciones
 
     const uint8_t add_instr[4][4] = {
         // loop infinito
@@ -232,15 +230,23 @@ int main() {
         //{0x04, 0x7f, 0x13, 0x48}, // inc r15 / pop rip
     };
 
-    for (size_t i = 0; i < 2'000'000; i++) {
-        bench_code.insert(bench_code.end(), add_instr[0], add_instr[0] + 4);
-        bench_code.insert(bench_code.end(), add_instr[1], add_instr[1] + 4);
-        bench_code.insert(bench_code.end(), add_instr[2], add_instr[2] + 4);
-        bench_code.insert(bench_code.end(), add_instr[3], add_instr[3] + 4);
+    const size_t N = 8'000'000;
+    std::vector<uint8_t> bench_code;
+    bench_code.reserve(16 * N + 2); // N bloques + HLT
+
+    // Copiamos las 4 instrucciones en un bloque de 16 bytes
+    std::array<uint8_t, 16> block;
+    memcpy(block.data(), add_instr, 16);
+
+    // Repetimos el bloque N veces
+    for (size_t i = 0; i < N; i++) {
+        bench_code.insert(bench_code.end(), block.begin(), block.end());
     }
-    // HLT = 00 03
+
+    // HLT
     bench_code.push_back(0x00);
     bench_code.push_back(0x03);
+
 
 #else
 
@@ -375,13 +381,13 @@ int main() {
 #ifdef BENCHMARK_VM
 
     //vm->has_hooks                = false;
-    const uint64_t INSTR_PER_RUN = 8'000'000; // 4 ADD * 2M iteraciones
+    const uint64_t INSTR_PER_RUN = N * 4 + 1; // N instrucciones de bloque ADD  + 1 HLT
 
     uint64_t total_ns = 0;
     uint64_t min_ns   = UINT64_MAX;
     uint64_t max_ns   = 0;
 
-    const int RUNS = 20;
+    const int RUNS = 10;
     for (int i = 0; i < RUNS; i++) {
         for (const std::unique_ptr<runtime::Scheduler> &s: vm->schedulers) {
             std::thread(&runtime::profiler_thread, s.get()).detach();
