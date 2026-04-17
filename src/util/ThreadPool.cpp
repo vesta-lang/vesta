@@ -12,6 +12,7 @@
 
 #include "util/ThreadPool.h"
 
+#include <iostream>
 #include <utility>
 
 ThreadPool::ThreadPool(size_t n) {
@@ -20,11 +21,14 @@ ThreadPool::ThreadPool(size_t n) {
     }
     workers_.reserve(n);
     for (size_t i = 0; i < n; ++i) {
-        workers_.emplace_back([this] { this->worker_loop(); });
+        workers_.emplace_back([this] {
+            this->worker_loop();
+        });
     }
 }
 
 ThreadPool::~ThreadPool() {
+    //std::cout << "Destruyendo ThreadPool\n";
     shutdown();
 }
 
@@ -40,23 +44,37 @@ void ThreadPool::shutdown() {
     workers_.clear();
 }
 
-
-
+bool ThreadPool::idle() {
+    // No tareas pendientes y ningún worker ejecutando nada
+    std::lock_guard lk(tasks_m_);
+    return tasks_.empty();
+}
 
 void ThreadPool::worker_loop() {
     while (true) {
         std::function<void()> task; {
             std::unique_lock lk(tasks_m_);
-            tasks_cv_.wait(lk, [this] { return stopping_.load() || !tasks_.empty(); });
-            if (stopping_.load() && tasks_.empty()) return;
+
+            tasks_cv_.wait(lk, [this] {
+                return stopping_.load() || !tasks_.empty();
+            });
+
+            // si estamos parando y no hay tareas -> salir
+            if (stopping_.load() && tasks_.empty())
+                return;
+
+            // si no hay tareas, continuar esperando
+            if (tasks_.empty())
+                continue;
+
             task = std::move(tasks_.front());
             tasks_.pop();
         }
-        try {
-            task();
-        } catch (...) {
-            // No propagar excepción fuera del hilo worker.
-            // Opcional: loggear?
-        }
+        //try {
+        task();
+        //} catch (...) {
+        // No propagar excepción fuera del hilo worker.
+        // Opcional: loggear?
+        //}
     }
 }

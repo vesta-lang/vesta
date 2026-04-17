@@ -73,7 +73,7 @@ namespace runtime {
          * Futures de cada gestor de procesos, se generar al llamar
          * a start junto a los valores del vector schedulers
          */
-        std::vector<std::future<void> > scheduler_futures;
+        std::vector<std::shared_future<void> > scheduler_futures;
 
         /**
          * Manager de memoria "publico" del manager de instancias
@@ -152,7 +152,36 @@ namespace runtime {
          */
         void wait();
 
-        bool has_alive_processes() const;
+        /**
+         * @brief Indica si todos los gestores de procesos (schedulers) han finalizado su ejecución.
+         *
+         * Este metodo consulta el estado interno del ThreadPool asociado a la VM para determinar
+         * si ya no queda ninguna tarea en ejecución ni tareas pendientes. Dado que cada scheduler
+         * se ejecuta como una tarea dentro del ThreadPool, el estado "idle" del pool implica que:
+         *
+         *   - Todos los schedulers han salido de su metodo run_loop().
+         *   - No quedan procesos en ejecución dentro de la VM.
+         *   - No existen tareas pendientes relacionadas con la planificación.
+         *
+         * Este metodo es especialmente útil para:
+         *   - Detectar cuándo la VM ha terminado completamente su actividad.
+         *   - Implementar un apagado limpio (shutdown) sin hilos colgados.
+         *   - Evitar estados inconsistentes donde la VM aparenta estar viva
+         *     aunque los schedulers ya hayan terminado.
+         *
+         * @note Este metodo es thread-safe siempre que ThreadPool::idle() lo sea.
+         * @note No bloquea: simplemente inspecciona el estado actual del ThreadPool.
+         *
+         * @return true  si no queda ningún scheduler activo ni tareas pendientes.
+         * @return false si aún hay schedulers ejecutándose o tareas en cola.
+         */
+        bool all_schedulers_dead();
+
+        /**
+         * Permite saber si hay procesos vivos en la VM aun
+         * @return true si aun hay procesos vivos, en caso contrario false.
+         */
+        bool has_alive_processes();
 
         /**
          * @brief Marca un proceso como listo para ejecutarse.
@@ -171,6 +200,8 @@ namespace runtime {
          * @return PID del proceso creado en ese gestro de procesos.
          */
         GlobalPID spawn_process();
+
+        void reset();
 
         std::string vm_summary() const {
             std::ostringstream ss;

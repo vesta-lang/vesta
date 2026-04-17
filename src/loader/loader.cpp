@@ -288,7 +288,10 @@ namespace loader {
 
 
     runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::vector<uint8_t> bytecode) {
-        auto exe = parse_velb(std::move(bytecode));
+        if (bytecode.empty()) {
+            throw std::runtime_error("Loader::load_executable: Se intento cargar un ejecutable con bytecode vacio");
+        }
+        auto exe = parse_velb(bytecode);
 
         GlobalPID           pid      = vm.spawn_process();
         runtime::ProcessVM *proccess = vm.get_process(pid);
@@ -307,10 +310,10 @@ namespace loader {
             const uint8_t *src = exe->bytecode.data() + offset;
 
             // copiar a la memoria virtual de la VM
-            proccess->vm_mem.vm_to_host_memcpy(vm_addr, src, size);
+            proccess->vm_mem.vm_to_host_memcpy(vm_addr, src, bytecode.size());
 
             // mostrar datos de la region de memoria reservada para la seccion.
-            runtime::dump_vm_region(&proccess->tlb, vm_addr, size);
+            //runtime::dump_vm_region(&proccess->tlb, vm_addr, bytecode.size());
         }
         // poner ejecutable a la pila de ejecutuables
         executables.push_back(std::move(exe));
