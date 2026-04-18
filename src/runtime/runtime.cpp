@@ -106,22 +106,12 @@ namespace runtime {
     }
 
     bool VM::has_alive_processes() {
+        // O(N_schedulers): cada scheduler mantiene alive_count atómico,
+        // evitando iterar todos los procesos (era O(N_procesos total)).
         for (auto &sched: schedulers) {
-            if (sched->has_alive_processes())
+            if (sched->alive_count > 0)
                 return true;
         }
-
-        // si no quedan tareas en el thread pool entonces todos los gestores
-        // de procesos murieron.
-        //if (all_schedulers_dead() == false) {
-        // si aun queda tareas, o es un bug, o solo algunos gestores de procesos
-        // finalizaron su run_loop.
-        //    return true;
-        //}
-
-        // matar a todos los gestores, nos aseguramos de que todos mueran de
-        // forma correcta, pues que no queden procesos no finaliza el gestor de procesos
-        // automaticamente.
         return false;
     }
 
