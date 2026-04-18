@@ -16,6 +16,7 @@
 #ifdef _WIN32
 #include "windows.h"
 #else
+#include <dlfcn.h>
 #endif
 
 namespace ffi {
@@ -60,12 +61,24 @@ namespace ffi {
 
 #ifdef _WIN32
         HMODULE h = LoadLibraryA(name.c_str());
-        if (!h) /* manejar error en un futuro*/;
+        if (!h) {
+            DWORD err = GetLastError();
+            throw FFIError(
+                "FFI: No se pudo cargar la librería '" + name +
+                "' (LoadLibraryA falló, código: " + std::to_string(err) + ")"
+            );
+        }
         native_modules[name] = h;
         return h;
 #else
-        void* h = dlopen(name.c_str(), RTLD_LAZY);
-        if (!h) /* manejar error */;
+        void *h = dlopen(name.c_str(), RTLD_LAZY);
+        if (!h) {
+            const char *err = dlerror();
+            throw FFIError(
+                "FFI: No se pudo cargar la librería '" + name +
+                "' (dlopen falló: " + std::string(err ? err : "error desconocido") + ")"
+            );
+        }
         native_modules[name] = h;
         return h;
 #endif
@@ -74,11 +87,24 @@ namespace ffi {
     void *FFI::resolve_native_symbol(void *module, const std::string &func) {
 #ifdef _WIN32
         FARPROC p = GetProcAddress((HMODULE) module, func.c_str());
-        if (!p) /* manejar error en un futuro*/;
+        if (!p) {
+            DWORD err = GetLastError();
+            throw FFIError(
+                "FFI: No se pudo resolver el símbolo '" + func +
+                "' (GetProcAddress falló, código: " + std::to_string(err) + ")"
+            );
+        }
         return (void *) p;
 #else
-        void* p = dlsym(module, func.c_str());
-        if (!p) /* manejar error */;
+        dlerror(); // limpiar error previo
+        void *p = dlsym(module, func.c_str());
+        if (!p) {
+            const char *err = dlerror();
+            throw FFIError(
+                "FFI: No se pudo resolver el símbolo '" + func +
+                "' (dlsym falló: " + std::string(err) + ")"
+            );
+        }
         return p;
 #endif
     }
