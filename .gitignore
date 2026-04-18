@@ -37,8 +37,16 @@ code_carga_pruebas.vel
 *.exe
 *.o
 *.elf
+*.gch
+*.obj
 
 # historiales de ejecución de comandos
 *history.txt
 
 generated_vel_files
+
+# Archivos temp de agentes de AI
+claude*
+chatgpt*
+copilot*
+deepseck*

@@ -33,6 +33,25 @@ namespace runtime {
     struct Transition;
     class VM;
 
+    // Polyfill de std::counting_semaphore para GCC < 11.
+    // Drop-in: reemplazar con std::counting_semaphore<> al actualizar el compilador.
+    struct BinarySemaphore {
+        void release() {
+            std::lock_guard lock(mtx_);
+            ++count_;
+            cv_.notify_one();
+        }
+        void acquire() {
+            std::unique_lock lock(mtx_);
+            cv_.wait(lock, [&]{ return count_ > 0; });
+            --count_;
+        }
+    private:
+        std::mutex mtx_;
+        std::condition_variable cv_;
+        int count_ = 0;
+    };
+
     /**
      * Estados de depuracion
      */
@@ -384,13 +403,12 @@ namespace runtime {
          */
         std::atomic<bool> is_waiting { false };
 
-        std::mutex mtx;
         /**
-         * Permite reactivar un gestor de procesos que se haya quedado
-         * esperando indefinidamente, esto se hace para no consumir
-         * cpu.
+         * Permite reactivar un gestor de procesos que se haya quedado esperando.
+         * API idéntica a std::counting_semaphore: sem.acquire() bloquea,
+         * sem.release() despierta desde cualquier hilo (make_ready/stop).
          */
-        std::condition_variable cv;
+        BinarySemaphore sem;
 
     private:
     };

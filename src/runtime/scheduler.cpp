@@ -246,27 +246,16 @@ namespace runtime {
                     vm_reference.vm_running = false;
                     break; // este scheduler termina
                 }
-                is_waiting = true; {
-                    // Hay procesos vivos pero bloqueados -> idle,
-                    // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
-                    //std::this_thread::yield();
+                is_waiting = true;
+                sem.acquire(); // duerme hasta que haya trabajo (sem.release desde make_ready/stop)
+                is_waiting = false;
 
-                    std::unique_lock lock(mtx);
-                    cv.wait(lock, [&] {
-                        return should_kill
-                                || !vm_reference.vm_running
-                                || !ready_queue.empty();
-                    }); // duerme hasta que haya trabajo
+                // Si nos despertaron porque la VM muere -> salir
+                if (should_kill || !vm_reference.vm_running)
+                    break;
 
-                    is_waiting = false;
-
-                    // Si nos despertaron porque la VM muere -> salir
-                    if (should_kill || !vm_reference.vm_running)
-                        break;
-
-                    // Si nos despertaron porque hay trabajo -> obtener proceso
-                    instance   = schedule_next();
-                }
+                // Si nos despertaron porque hay trabajo -> obtener proceso
+                instance = schedule_next();
 
                 continue;
             }
