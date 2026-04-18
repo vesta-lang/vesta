@@ -69,9 +69,9 @@ namespace runtime {
             sched->should_kill = true;
         }
 
-        // Despertar a todos los schedulers que estén en wait()
+        // Despertar a todos los schedulers que estén en sem.acquire()
         for (auto &sched: schedulers) {
-            sched->cv.notify_all();
+            sched->sem.release();
         }
 
         // si los hilos no terminaron debemos esperar, en caso contrario
@@ -127,7 +127,7 @@ namespace runtime {
 
     void VM::make_ready(GlobalPID pid) {
         schedulers[pid.scheduler_id]->make_ready(pid);
-        schedulers[pid.scheduler_id]->cv.notify_one();
+        schedulers[pid.scheduler_id]->sem.release();
 
         // muy importante si se añade procesos sin un reset, el gestor de procesos una
         // vez finalice todos sus procesos, la instancia, activa esta bandera que indica
