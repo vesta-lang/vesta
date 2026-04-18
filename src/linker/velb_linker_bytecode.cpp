@@ -471,6 +471,21 @@ namespace Assembly::Bytecode::Linker {
                             );
                     }
 
+                    // creamos una entrada en la tabla de importacion
+                    entry_import_table entry_import;
+                    entry_import.offset_bytecode         = rel.offset;
+                    entry_import.offset_signature_string = index_import_table; // aun no se usa
+
+                    /**
+                     * En esta fase aun la tabla de cadenas no fue construida, ya que se genera en la fase
+                     * de construccion del hader. Debemos almacenar el index del metodo en la tabla import_lookup
+                     * para luego poder parchearlo con los offsets reales mas posteriormente.
+                     */
+                    entry_import.offset_function_string = index_import_table;
+                    entry_import.offset_module_string   = index_import_table;
+
+                    table_import_method.push_back(entry_import);
+
                     // añadir relocalizacion aplicada al reporte:
                     RelocReportEntry entry;
                     entry.module        = mod.name;
@@ -511,15 +526,15 @@ namespace Assembly::Bytecode::Linker {
     }
 
     void Linker::merge_sections() {
-        final_executable.clear();
+        final_bytecode.clear();
         final_sections.clear();
 
 
         // Concatenar bytecode de todos los módulos
         for (auto &mod: modules) {
-            final_executable.insert(final_executable.end(),
-                                    mod.bytecode.begin(),
-                                    mod.bytecode.end());
+            final_bytecode.insert(final_bytecode.end(),
+                                  mod.bytecode.begin(),
+                                  mod.bytecode.end());
         }
 
         // Construir final_sections a partir de los Context de cada módulo
@@ -558,7 +573,7 @@ namespace Assembly::Bytecode::Linker {
         final_header.max_v = 0; // 0.0.0 => compatible con futuras
         final_header.min_v = 0; // 0.0.0 => retrocompatible
 
-        final_header.checksum = simple_checksum(final_executable);
+        final_header.checksum = simple_checksum(final_bytecode);
 
         final_header.flags = 0;
 
@@ -630,6 +645,30 @@ namespace Assembly::Bytecode::Linker {
         // añadir a cada seccion el offset al nombre de su stirng
         for (auto &final_section: final_sections) {
             final_section.memory.offset_string = string_offsets[final_section.name];
+        }
+
+        /**
+         * La tabla de secciones contiene entradas de (8 * 3) bytes, donde los primeros 8 bytes son para la direccion
+         * virtual de la seccion, los 8 posteriores para la direccion virtual final y los ultimos 8 bytes para el
+         * offset a la tabla de strings.
+         */
+        uint64_t init_bytecode = final_header.table_offset + (8 * 3) * final_header.n_spaces;
+        // inicio del bytecode, es el offset dentro del archivo final donde se encuentra todo el bytecode.
+
+        // offset de inicio de la tabla de importacion
+        uint64_t init_table_import       = init_bytecode + final_bytecode.size();
+        final_header.offset_import_table = init_table_import; // offset a la tabla de importacion.
+        for (auto &entry: table_import_method) {
+            // buscamos el nombre de la libreria del metodo nativo a traves del indice temporal que esta almacenado
+            // en entry.offset_module_string, debemos usar los strings obtenidos para guardar los datos
+            // correctos de la tabla de importacion
+            std::string name_lib    = import_table[entry.offset_module_string].library;
+            std::string name_method = import_table[entry.offset_module_string].function;
+
+            // parchemos los offset a la tabla strings con los valores reales, eliminando los valores temporales
+            // que tenian:
+            entry.offset_function_string = string_offsets[name_method]; // offset al nombre del metodo.
+            entry.offset_module_string   = string_offsets[name_lib];    // offset al nombre de la lib
         }
     }
 
@@ -891,7 +930,14 @@ namespace Assembly::Bytecode::Linker {
         }
 
         // añadir el bytecode al final
-        result->output.insert(result->output.end(), final_executable.begin(), final_executable.end());
+        result->output.insert(result->output.end(), final_bytecode.begin(), final_bytecode.end());
+
+        for (auto &entry: table_import_method) {
+            result->emit32(entry.offset_module_string);
+            result->emit32(entry.offset_function_string);
+            result->emit32(entry.offset_signature_string);
+            result->emit32(entry.offset_bytecode);
+        }
 
         return result->output;
     }
@@ -975,7 +1021,7 @@ namespace Assembly::Bytecode::Linker {
 
         uint64_t offset_space_address = align_up(sizeof(HeaderVELB) - sizeof(table_spaces_address *), 16);
 
-        if (final_executable.size() >= (offset_space_address +
+        if (final_bytecode.size() >= (offset_space_address +
             sizeof(table_spaces_address) * final_header.n_spaces)) {
             f << "=== ADDRESS SPACES ===\n";
             for (uint64_t i = 0; i < final_header.n_spaces; ++i) {
@@ -1009,9 +1055,9 @@ namespace Assembly::Bytecode::Linker {
             // Mostrar código hexadecimal
             f << "    HEX:  ";
 
-            if (info.file_offset + info.size <= final_executable.size()) {
+            if (info.file_offset + info.size <= final_bytecode.size()) {
                 for (uint64_t i = 0; i < info.size; ++i) {
-                    uint8_t b = final_executable[info.file_offset + i];
+                    uint8_t b = final_bytecode[info.file_offset + i];
                     f << std::hex << std::setw(2) << std::setfill('0')
                             << (int) b << " ";
                 }
@@ -1063,6 +1109,6 @@ namespace Assembly::Bytecode::Linker {
 
 
         f << "\n=== FINAL SIZE ===\n";
-        f << "Executable size: " << final_executable.size() << " bytes\n" << std::dec;
+        f << "Executable size: " << final_bytecode.size() << " bytes\n" << std::dec;
     }
 }
