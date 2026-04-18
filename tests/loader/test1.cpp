@@ -439,7 +439,7 @@ int main() {
             //vesta::scout() << process_vench->to_string() << std::endl;
             //vesta::scout() << process_vench2->to_string() << std::endl;
             for (auto &s: vm->schedulers) {
-                /*
+
                 vesta::scout()
                         << "[Scheduler " << s->id_scheduler
                         << "] Estados de procesos: " << s->ready_queue.size()
@@ -458,7 +458,7 @@ int main() {
                             << std::endl;
                 }
 
-                */
+
             }
         }
         uint64_t ns = t_bench.ns();

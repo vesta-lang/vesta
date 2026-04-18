@@ -179,18 +179,33 @@ namespace runtime {
          * ¿Por qué deque?
          *      - push_back O(1)
          *      - pop_front O(1)
-         *      - ideal para round‑robin
+         *      - ideal para round-robin
          *      - no mueve memoria como un vector
          *
-         * Cuando un proceso esta list, se agrega a esta lista:
-         *  - Cuando se crea (spawn) -> ready_queue.push_back(pid);
-         *  - Cuando termina WAIT_IO -> ready_queue.push_back(pid);
-         *  - Cuando termina WAIT_MSG (implementas mailbox) -> ready_queue.push_back(pid);
-         *  - Cuando termina WAIT_TIMER -> ready_queue.push_back(pid);
-         *  - Cuando se agotan las reducciones -> ready_queue.push_back(pid);
+         * Almacena punteros directos para evitar el hash lookup en pid_index
+         * en cada ciclo de schedule_next().
          *
+         * Protegida por queue_mutex: make_ready() puede ser llamado desde
+         * hilos externos (ej. completion de IO), mientras run_loop() opera
+         * sobre la cola desde el hilo del scheduler.
          */
-        std::deque<GlobalPID> ready_queue;
+        std::deque<ProcessVM*> ready_queue;
+
+        /**
+         * Mutex que protege ready_queue ante accesos concurrentes entre
+         * el hilo del scheduler (schedule_next, re-enqueue tras yield) y
+         * hilos externos (make_ready desde IO o el hilo principal).
+         */
+        std::mutex queue_mutex;
+
+        /**
+         * Numero de procesos "vivos" en este scheduler, es decir, procesos
+         * que no estan en estado NEW, DEAD ni HALT.
+         * Se incrementa al hacer make_ready sobre un proceso NEW.
+         * Se decrementa cuando un proceso alcanza DEAD o HALT.
+         * Permite implementar has_alive_processes() en O(1).
+         */
+        std::atomic<int> alive_count{0};
 
 
         /**

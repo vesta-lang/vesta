@@ -56,12 +56,16 @@ namespace runtime {
         // copiar a memoria virtual
         vm_mem.vm_to_host_memcpy(address, code.data(), code.size());
 
-        // resetear PC
+        // Configurar
         registers.rip.qword(address);
 
-        // resetear estado de ejecución
-        decoded_ptr = nullptr;
-        state       = RUNNING;
+        // No debemos configurar manualmente el estado del proceso,
+        // si el proceso es nuevo, el proceso se configura automaticamente
+        // en el estado de NEW, este estado es necesario para que el metodo
+        // Scheduler::make_ready del gestor de procesos, pueda detectar
+        // que el proceso es nuevo, se incremente el contador de procesos
+        // vivos que requiere que el proceso este en NEW y cambie el estado
+        // del proceso a READY 
     }
 
     std::string ProcessVM::to_string() const {
