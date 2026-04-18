@@ -97,7 +97,7 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
-#define BENCHMARK_VM
+//#define BENCHMARK_VM
 
 int main() {
     Timer             global;
@@ -522,7 +522,7 @@ int main() {
     //vm->wait();
     while (vm->has_alive_processes()) {
         vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
-        SLEEP(100);
+        SLEEP(500);
     }
 
     auto runner_ns = t_bench.ns();

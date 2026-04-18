@@ -410,6 +410,12 @@ namespace Assembly::Bytecode::Linker {
                             std::memcpy(&mod.bytecode[rel.offset], &rel64, sizeof(int64_t));
                             break;
                         }
+                        default:
+                            throw std::runtime_error(
+                                "Linker::apply_relocations() Error: la relocalizacion de tipo " + std::to_string(
+                                    (int) rel.type) + " definido por el simbolo " + rel.symbol + " de la seccion " +
+                                rel.section + " con offset en " + std::to_string(rel.offset) + " no existe."
+                            );
                     }
 
 
@@ -424,6 +430,54 @@ namespace Assembly::Bytecode::Linker {
                                               : (rel.type == Type::Relative64)
                                                     ? (uint64_t) rel_address
                                                     : target_addr;
+
+                    report.relocations_log.push_back(entry);
+                }
+                // si es una relocalizacion a un simbolo nativo:
+                else {
+                    // indice de la funcion nativa buscada.
+                    uint64_t index_import_table = 0;
+                    switch (rel.type) {
+                        case Type::Native_Method: // usado unicamente por CALLN
+                        case Type::Absolute64: {
+                            // usado por el resto de instrucciones cuando se usa notacion @Method
+
+                            // obtenemos el index en la tabla de importacion del metodo dado.
+                            auto entry_index = import_lookup.find(rel.symbol);
+                            if (entry_index == import_lookup.end()) {
+                                // error: símbolo no encontrado
+                                throw std::runtime_error(
+                                    "Simbolo " + rel.symbol + " no encontrado en la tabla de importacion."
+                                );
+                            }
+
+                            // indice del simbolo en la tabla de importacion.
+                            index_import_table = entry_index->second;
+
+                            // para Native_Method y Absolute64 size_relocation_emmit(rel.type) siempre sera 8
+
+                            // parcheamos el offset con el valor que queremos
+                            std::memcpy(&mod.bytecode[rel.offset], &index_import_table,
+                                        size_relocation_emmit(rel.type));
+
+                            break;
+                        }
+                        default:
+                            throw std::runtime_error(
+                                "Linker::apply_relocations() Error: la relocalizacion de tipo " + std::to_string(
+                                    (int) rel.type) + " no existe, definido por el simbolo " + rel.symbol +
+                                " de la seccion '" +
+                                rel.section + "' con offset en " + std::to_string(rel.offset) + "."
+                            );
+                    }
+
+                    // añadir relocalizacion aplicada al reporte:
+                    RelocReportEntry entry;
+                    entry.module        = mod.name;
+                    entry.symbol        = rel.symbol;
+                    entry.offset        = rel.offset;
+                    entry.type          = rel.type;
+                    entry.value_written = index_import_table;
 
                     report.relocations_log.push_back(entry);
                 }
@@ -606,7 +660,7 @@ namespace Assembly::Bytecode::Linker {
         }
 
         // Recoger strings de imports (librerías y funciones)
-        for (const auto& imp : import_table) {
+        for (const auto &imp: import_table) {
             string_pool.push_back(imp.library);
             string_pool.push_back(imp.function);
         }

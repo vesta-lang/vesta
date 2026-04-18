@@ -78,6 +78,13 @@ namespace Assembly::Bytecode {
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
         {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+
+        {
+            "callnr", {
+                {0x55, 0x00, InstrSizeMode::FIXED_1, AddressingMode::REG, nullptr},
+            },
+        },
+
         {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
 
         // Extensión (opcode1 = 0x00)
@@ -249,6 +256,12 @@ namespace Assembly::Bytecode {
             },
         },
 
+        {
+            "calln", {
+                {0x00, 0x55, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_calln_inmmed},
+            },
+        },
+
     };
 
 
@@ -356,7 +369,7 @@ namespace Assembly::Bytecode {
          * @param ops Lista de operandos de la instrucción.
          * @return Referencia a la variante seleccionada.
          */
-        const InstrInfo &select_variant(const std::string &mnemonic,
+        const InstrInfo &select_variant(const std::string &                               mnemonic,
                                         const std::vector<std::unique_ptr<vm::ASTNode> > &ops) const;
 
         /**
@@ -433,7 +446,7 @@ namespace Assembly::Bytecode {
      * @param imported
      */
     static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
-                                std::unordered_set<std::string> &imported) {
+                                std::unordered_set<std::string> &           imported) {
         std::vector<std::unique_ptr<vm::ASTNode> > result;
 
         for (auto &node: ast) {
@@ -449,13 +462,13 @@ namespace Assembly::Bytecode {
 
                 // Leer archivo
                 std::ifstream f(file);
-                std::string code((std::istreambuf_iterator<char>(f)),
+                std::string   code((std::istreambuf_iterator<char>(f)),
                                  std::istreambuf_iterator<char>());
 
                 // Lex + parse del codigo importado
-                vm::Lexer lx(code);
+                vm::Lexer  lx(code);
                 vm::Parser px(lx);
-                auto imported_ast = px.parse();
+                auto       imported_ast = px.parse();
 
                 // Expandir imports recursivamente
                 resolve_imports(imported_ast, imported);

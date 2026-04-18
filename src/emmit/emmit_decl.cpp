@@ -748,6 +748,36 @@ namespace Assembly::Bytecode {
         code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
     }
 
+    void emit_instr_calln_inmmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto method_annotation_node = instruction_parser->operands[0].get();
+        auto method                 = dynamic_cast<vm::AnnotationNode *>(method_annotation_node);
+        if (method == nullptr) {
+            throw std::runtime_error(
+                "emit_instr_calln_inmmed() Error: la instruccion " + instruction_parser->opcode +
+                " esperaba una notacion del tipo @Method con el metodo a llamar, pero no se pudo situar"
+                "una notacion de este tipo."
+            );
+        }
+
+        Relocation rel;
+        rel.symbol = method->value; // nombre del metodo con la libreria que lo contiene
+        // Ejemplo: @Method("kernel32.dll:GetTickCount"), value contiene "kernel32.dll:GetTickCount"
+        rel.section = assembly_ctx->current_section->name;
+        rel.type    = Type::Native_Method; // es un metodo nativo
+        // el offset debe obtenerse antes de emitir los bytes del placeholder
+        rel.offset = code_final.offset;
+
+        uint64_t placeholder = 0x1122334455667788;
+        code_final.emit_bytes(&placeholder, size_relocation_emmit(rel.type));
+
+        assembly_ctx->ctx.add_relocation(rel);
+    }
+
     void emit_instr_mov_sib(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
