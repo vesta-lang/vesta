@@ -38,22 +38,37 @@ struct HeaderVELB {
     u32 max_v;
     u32 min_v;
 
-    u64 checksum;
+    u64 checksum; // suma de comprobacion del ejecutable
 
-    u64 flags;
-    u64 timestamp;
-    u32 arch;
+    u64 flags; // flags del ejecutable
+    u64 timestamp; // fecha de tiempo en la que se genero el ejecutable
+    u32 arch; // arch donde se genero el ejecutable
 
-    u32 count;
-    u64 table_offset;
-    u64 n_spaces;
-    u64 offset_section_strings;
-
+    u32 count; // cantidad de secciones de la tabla de secciones
+    u64 table_offset; // offset a la tabla de secciones
+    u64 n_spaces; // numero de direcciones de espacios
+    u64 offset_section_strings; // offset a todos los strings
+ 
+    // direccion IP incial
     u64 start_pc;
 
+    // offset a la tabla de importacion
     u64 offset_import_table;
 
+    // offset a la tabla de labels
     u64 offset_label_table;
+    
+    // cantidad de entradas en la tabla de importacion
+    u32 size_import_table;
+    
+    // cantidad de labels en la tabla de labels
+    u32 size_label_table;
+    
+    // el header siempre se alinea a  16 bytes
+    u64 padding_;
+    
+    // final del header, el offset debe estar alineado o el pattern
+    // dara error.
     
     table_spaces_address address_spaces[n_spaces];
  

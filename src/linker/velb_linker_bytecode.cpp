@@ -656,8 +656,9 @@ namespace Assembly::Bytecode::Linker {
         // inicio del bytecode, es el offset dentro del archivo final donde se encuentra todo el bytecode.
 
         // offset de inicio de la tabla de importacion
-        uint64_t init_table_import       = init_bytecode + final_bytecode.size();
+        uint64_t init_table_import = init_bytecode + final_bytecode.size();
         final_header.offset_import_table = init_table_import; // offset a la tabla de importacion.
+        final_header.size_import_table = table_import_method.size(); // cantidad de entradas de la tabla de importacion
         for (auto &entry: table_import_method) {
             // buscamos el nombre de la libreria del metodo nativo a traves del indice temporal que esta almacenado
             // en entry.offset_module_string, debemos usar los strings obtenidos para guardar los datos
@@ -885,6 +886,12 @@ namespace Assembly::Bytecode::Linker {
 
         // Indicar el offset a la tabla de labels
         result->emit64(final_header.offset_label_table);
+
+        // Indicar el tamaño de la tabla de importacion
+        result->emit32(final_header.size_import_table);
+
+        // indicar el tamaño de la tabla de etiquetas.
+        result->emit32(final_header.size_label_table);
 
         // el header siempre debe estar alineado a 16 bytes
         while (result->offset % 16 != 0) {
