@@ -152,8 +152,8 @@ typedef struct PACKED HeaderVELB {
     // cantidad de secciones en la tabla de secciones.
     section_count count = 0; // 4, 48
 
-    // offset a la tabla de secciones
-    section_table_offset table_offset = 0; // 8, 56
+    // offset a la tabla de secciones // 8, 56 vector<section_range_memory>
+    section_table_offset table_offset = 0;
 
     // cantidad de espacios de direcciones
     number_spaces_address n_spaces = 0; // 8, 64
@@ -168,6 +168,16 @@ typedef struct PACKED HeaderVELB {
 
     // ofset a la tabla de labels
     uint64_t offset_label_table = 0; // 8, 96 // vector<entry_label_table*>
+
+    /**
+     * Cantidad de entradas de la tabla de importacion
+     */
+    uint32_t size_import_table = 0;
+
+    /**
+     * cantidad de entradas en la tabla de etiquetas.
+     */
+    uint32_t size_label_table = 0;
 
     table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;

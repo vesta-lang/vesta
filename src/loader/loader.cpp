@@ -141,6 +141,12 @@ namespace loader {
         // offset a la tabla de etiquetas o labels
         exe.header.offset_label_table = reader.read64();
 
+        // obtener cuantas entradas tiene la tabla de importacion
+        exe.header.size_import_table = reader.read32();
+
+        // obtener cuantas labels tiene la tabla de labels
+        exe.header.size_label_table = reader.read32();
+
         // el header siempre debe estar alineado a 16 bytes
         while (reader.offset % 16 != 0) {
             (void) reader.read8();
@@ -248,6 +254,68 @@ namespace loader {
             space->add_section(sec);
             exe.sections.push_back(&space->table_section[sec.name]);
         }
+
+        // es muy importante saber donde empieza el bytecode real generado por el ensamblador
+        // para que el loader pueda parchearlo y cargarlo de forma correcta.
+        exe.offset_real_bytecode = (
+            exe.header.table_offset +
+            exe.sections.size() * sizeof(section_range_memory)
+            // debemos calcular el final de la tabla de secciones que es
+            // donde empieza el bytecode real dentro del archivo
+        );
+    }
+
+    void Loader::parser_import_table(Executable &exe, ByteReader &reader) {
+        /**
+         * Si el offset es 0 entonces no hay tabla de importacion.
+         */
+        if (exe.header.offset_import_table == 0) {
+            return;
+        }
+
+        // nos desplazamos hasta la tabla de importacion moviendo el cursor
+        // al offset indicado
+        reader.seek(exe.header.offset_import_table);
+
+        std::vector<entry_import_table> import_table_from_file;
+
+        // obtener la tabla de importacion del archivo:
+        for (size_t i = 0; i < exe.header.size_import_table; i++) {
+            entry_import_table entry;
+            entry.offset_module_string    = reader.read32();
+            entry.offset_function_string  = reader.read32();
+            entry.offset_signature_string = reader.read32();
+            entry.offset_bytecode         = reader.read32();
+            import_table_from_file.push_back(entry);
+        }
+
+        for (auto &imp: import_table_from_file) {
+            uint32_t module_idx   = ffi_loader.intern_module(read_string_at(reader, imp.offset_module_string));
+            uint32_t function_idx = ffi_loader.intern_function(read_string_at(reader, imp.offset_function_string));
+
+            // si el metodo no tiene firma no se usa firma
+            std::string sig = "";
+            //if (imp.offset_signature_string != 0) { // aun no se usa por que no se a implementado
+            //    sig = read_string_at(reader, imp.offset_signature_string);
+            //}
+            uint32_t sig_idx = ffi_loader.intern_signature(sig);
+
+            ffi::NativeImportKey key{module_idx, function_idx, sig_idx};
+
+            auto &entry = ffi_loader.imports[key]; // crea si no existe
+
+            if (entry.patch_sites.empty()) {
+                entry.key.module_idx    = module_idx;
+                entry.key.function_idx  = function_idx;
+                entry.key.signature_idx = sig_idx;
+            }
+
+            entry.patch_sites.push_back(imp.offset_bytecode);
+        }
+
+        // resolver todas las instrucciones que usan la tabla de importacion
+        // nativa.
+        this->ffi_loader.resolve_all(exe.bytecode.data(), exe.offset_real_bytecode);
     }
 
     std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
@@ -265,6 +333,9 @@ namespace loader {
         // parseamos la tabla de secciones, requiere haber parseado previamente la tabla
         // de espacios de direcciones, ya que se va a añadir a estos.
         parser_table_sections(*exe, reader);
+
+        // parseamos la tabla de importacion.
+        parser_import_table(*exe, reader);
 
         return exe;
     }
@@ -287,11 +358,12 @@ namespace loader {
 
 
 
-    runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::vector<uint8_t> bytecode) {
-        if (bytecode.empty()) {
-            throw std::runtime_error("Loader::load_executable: Se intento cargar un ejecutable con bytecode vacio");
+    runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::vector<uint8_t> raw_bytecode_file) {
+        if (raw_bytecode_file.empty()) {
+            throw std::runtime_error(
+                "Loader::load_executable: Se intento cargar un ejecutable con raw_bytecode_file vacio");
         }
-        auto exe = parse_velb(bytecode);
+        auto exe = parse_velb(raw_bytecode_file);
 
         GlobalPID           pid      = vm.spawn_process();
         runtime::ProcessVM *proccess = vm.get_process(pid);
@@ -306,14 +378,16 @@ namespace loader {
             uint64_t size    = sec->size_real;
             uint64_t offset  = sec->file_offset;
 
-            // puntero al bytecode real
-            const uint8_t *src = exe->bytecode.data() + offset;
+            // no se debe usar raw_bytecode_file ya que no contiene simbolos resueltos, se debe
+            // usar exe->bytecode que contiene los mismos datos de raw_bytecode_file pero
+            // con las instrucciones parcheadas
+            const uint8_t *src = exe->bytecode.data() + exe->offset_real_bytecode + offset;
 
             // copiar a la memoria virtual de la VM
-            proccess->vm_mem.vm_to_host_memcpy(vm_addr, src, bytecode.size());
+            proccess->vm_mem.vm_to_host_memcpy(vm_addr, src, exe->bytecode.size());
 
             // mostrar datos de la region de memoria reservada para la seccion.
-            //runtime::dump_vm_region(&proccess->tlb, vm_addr, bytecode.size());
+            //runtime::dump_vm_region(&proccess->tlb, vm_addr, exe->bytecode.size());
         }
         // poner ejecutable a la pila de ejecutuables
         executables.push_back(std::move(exe));

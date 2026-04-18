@@ -13,8 +13,13 @@
 
 #include "ffi/native_ffi.h"
 
-namespace ffi{
-    uint32_t FFI::intern_module(const std::string & name) {
+#ifdef _WIN32
+#include "windows.h"
+#else
+#endif
+
+namespace ffi {
+    uint32_t FFI::intern_module(const std::string &name) {
         auto it = module_map.find(name);
         if (it != module_map.end())
             return it->second;
@@ -23,10 +28,9 @@ namespace ffi{
         modules.push_back(name);
         module_map[name] = idx;
         return idx;
-
     }
 
-    uint32_t FFI::intern_function(const std::string & name) {
+    uint32_t FFI::intern_function(const std::string &name) {
         auto it = function_map.find(name);
         if (it != function_map.end())
             return it->second;
@@ -35,11 +39,10 @@ namespace ffi{
         functions.push_back(name);
         function_map[name] = idx;
         return idx;
-
     }
 
 
-    uint32_t FFI::intern_signature(const std::string & sig) {
+    uint32_t FFI::intern_signature(const std::string &sig) {
         auto it = signature_map.find(sig);
         if (it != signature_map.end())
             return it->second;
@@ -48,6 +51,52 @@ namespace ffi{
         signatures.push_back(sig);
         signature_map[sig] = idx;
         return idx;
+    }
 
+    void *FFI::load_native_module(const std::string &name) {
+        auto it = native_modules.find(name);
+        if (it != native_modules.end())
+            return it->second;
+
+#ifdef _WIN32
+        HMODULE h = LoadLibraryA(name.c_str());
+        if (!h) /* manejar error en un futuro*/;
+        native_modules[name] = h;
+        return h;
+#else
+        void* h = dlopen(name.c_str(), RTLD_LAZY);
+        if (!h) /* manejar error */;
+        native_modules[name] = h;
+        return h;
+#endif
+    }
+
+    void *FFI::resolve_native_symbol(void *module, const std::string &func) {
+#ifdef _WIN32
+        FARPROC p = GetProcAddress((HMODULE) module, func.c_str());
+        if (!p) /* manejar error en un futuro*/;
+        return (void *) p;
+#else
+        void* p = dlsym(module, func.c_str());
+        if (!p) /* manejar error */;
+        return p;
+#endif
+    }
+
+    void FFI::resolve_all(uint8_t *file_base, uint64_t offset_real_bytecode) {
+        for (auto &[key, entry]: imports) {
+            const std::string &module   = modules[key.module_idx];
+            const std::string &function = functions[key.function_idx];
+
+            void *mod          = load_native_module(module);
+            void *fn           = resolve_native_symbol(mod, function);
+            entry.resolved_ptr = fn;
+
+            // Parchear todos los CALL que apuntan a este símbolo
+            for (uint32_t off: entry.patch_sites) {
+                uint64_t real = off + offset_real_bytecode;
+                patch_call(file_base, real, fn);
+            }
+        }
     }
 }
