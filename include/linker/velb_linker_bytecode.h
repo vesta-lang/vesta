@@ -402,6 +402,8 @@ namespace Assembly::Bytecode::Linker {
             case Type::Absolute32: return "ABS32";
             case Type::Absolute16: return "ABS16";
             case Type::Absolute8: return "ABS8";
+            case Type::Native_Method: return "NATIVE_METHOD";
+            case Type::NO_VALID: return "NO_VALID";
 
             default: return "UNKNOWN";
         }

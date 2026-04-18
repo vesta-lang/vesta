@@ -1,12 +1,12 @@
 /*
  * VestaVM - Máquina Virtual Distribuida
- * 
+ *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
@@ -34,7 +34,7 @@ namespace Assembly::Bytecode {
             return eval_expr(const_cast<vm::ExprNode *>(expr));
         }
 
-        //throw std::runtime_error("Operando no valido para directiva (se esperaba numero o label)");
+        // throw std::runtime_error("Operando no valido para directiva (se esperaba numero o label)");
         return 0;
     }
 
@@ -49,10 +49,14 @@ namespace Assembly::Bytecode {
             uint64_t L = eval_expr(b->left.get());
             uint64_t R = eval_expr(b->right.get());
             switch (b->op) {
-                case '+': return L + R;
-                case '-': return L - R;
-                case '*': return L * R;
-                case '/': return L / R;
+                case '+':
+                    return L + R;
+                case '-':
+                    return L - R;
+                case '*':
+                    return L * R;
+                case '/':
+                    return L / R;
             }
         }
 
@@ -108,15 +112,14 @@ namespace Assembly::Bytecode {
             first_pass(node.get(), offset);
 
         current_section = nullptr;
-        current_label = nullptr;
+        current_label   = nullptr;
 
         // conociendo el offset de cada seccion y label, se puede
         // calcular el tamaño de cada label
-        //compute_label_sizes();
+        // compute_label_sizes();
 
         for (auto &node: ast)
             emit_pass(node.get());
-
 
         // 2 Segunda pasada (datos)
         /*for (auto &node: ast)
@@ -135,11 +138,11 @@ namespace Assembly::Bytecode {
         return output.output;
     }
 
-
     void Assembler::emit_pass(const vm::ASTNode *node) {
         // Si el nodo es una etiqueta (LabelNode)
         if (auto lab = dynamic_cast<const vm::LabelNode *>(node)) {
-            if (current_section == nullptr) throw std::runtime_error("Label no definido: " + lab->name);
+            if (current_section == nullptr)
+                throw std::runtime_error("Label no definido: " + lab->name);
             current_label = current_section->get_label(lab->name);
             // Recorre todos los nodos dentro del cuerpo de la etiqueta
             // y vuelve a llamar a emit_pass recursivamente.
@@ -157,8 +160,7 @@ namespace Assembly::Bytecode {
         else if (auto annotation = dynamic_cast<const vm::AnnotationNode *>(node)) {
             if (annotation->key == "Section") {
                 std::string section_name;
-                for (const auto &child
-                     : annotation->children) {
+                for (const auto &child: annotation->children) {
                     if (child->key == "Name") {
                         section_name = child->value;
                         break;
@@ -180,7 +182,6 @@ namespace Assembly::Bytecode {
             }
         }
     }
-
 
     void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         // --- LABELS ---
@@ -234,11 +235,10 @@ namespace Assembly::Bytecode {
             // Validar que el label no esté duplicado
             if (symbol_table.find(data->label) != symbol_table.end()) {
                 throw std::runtime_error(
-                    "Error: label duplicado: '" + data->label + "'"
-                );
+                    "Error: label duplicado: '" + data->label + "'");
             }
 
-            size_t elem_size = size_of_directive(data->directive);
+            size_t elem_size    = size_of_directive(data->directive);
             size_t offset_label = offset; // debemos guardar el offset de la label,
             // ya que se modificara en el for el offset global y se perdera la referencia
 
@@ -284,24 +284,24 @@ namespace Assembly::Bytecode {
                     if (PseudoInstructions.count(instr->opcode)) {
                         if (instr->opcode == "align") {
                             /* si es align, en la primera fase se debe aplicar aqui, ya que
-                                                       * sino offset y current_offset se desincronizaran.
-                                                       */
+                             * sino offset y current_offset se desincronizaran.
+                             */
                             // No ocupan espacio, configuran el entorno / emisor
                             vm::NumberOperand *number = dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
-                            uint64_t align = eval_operand(number);
+                            uint64_t           align  = eval_operand(number);
 
                             if (align == 0 || (align & (align - 1)) != 0)
                                 throw std::runtime_error("Error: align debe ser potencia de 2.");
 
                             // alineamos el offset local al tamaño indicado.
                             offset = (offset + align - 1) & ~(align - 1);
-                        } else apply_directive(instr);
+                        } else
+                            apply_directive(instr);
                         return;
                     }
 
                     throw std::runtime_error(
-                        "Error: instruccion o directiva desconocida: '" + instr->opcode + "'"
-                    );
+                        "Error: instruccion o directiva desconocida: '" + instr->opcode + "'");
                 }
 
                 // Instrucción válida -> sumar su tamaño
@@ -324,6 +324,10 @@ namespace Assembly::Bytecode {
                         offset += 8;
                         break;
                     }
+                    case InstrSizeMode::FIXED_10: {
+                        offset += 10;
+                        break;
+                    }
 
                     // por ahora este caso solo existe para las instrucciones inmediatas, pues su tamaño
                     // depende del modo de operacion el usuario elija, se debe examinar que tamaño
@@ -342,8 +346,8 @@ namespace Assembly::Bytecode {
                             reg = dynamic_cast<vm::RegisterOperand *>(mem->expr.get());
                             if (reg == nullptr) {
                                 std::cout << "Error instruccion: " + instr->opcode +
-                                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: " <<
-                                        std::endl;
+                                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: "
+                                        << std::endl;
                                 mem->expr->print(0);
                                 throw std::runtime_error("Error instruccion: " + instr->opcode);
                             }
@@ -355,8 +359,8 @@ namespace Assembly::Bytecode {
                     }
                     default: {
                         std::cout << "Error instruccion: " + instr->opcode +
-                                " instruccion de tamaño desconocido. " <<
-                                std::endl;
+                                " instruccion de size desconocido. "
+                                << std::endl;
                         throw std::runtime_error("Error instruccion: " + instr->opcode);
                     }
                 }
@@ -408,7 +412,7 @@ namespace Assembly::Bytecode {
                 throw std::runtime_error("Error: align requiere 1 operando.");
 
             vm::NumberOperand *number = dynamic_cast<vm::NumberOperand *>(instr->operands[0].get());
-            uint64_t align = eval_operand(number);
+            uint64_t           align  = eval_operand(number);
 
             if (align == 0 || (align & (align - 1)) != 0)
                 throw std::runtime_error("Error: align debe ser potencia de 2.");

@@ -363,5 +363,25 @@ namespace Assembly::Bytecode {
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
     );
+
+    /**
+     * Permite emitir una instruccion de tipo CALLN que permite
+     * realizar una llamada nativa con una direccion de host del metodo
+     * a ejecutar. En caso de usarse en el ensamblado, el emisor generar
+     * la instruccion con un placeholder que el linker parchear con un index
+     * a la tabla de metodos importados, esta tabla indicara al loader
+     * que el metodo debe parchearse en lazy loader si existe en la tabla
+     * de importacion.
+     * @param instruction_parser
+     * @param code_final
+     * @param now_instr
+     * @param assembly_ctx
+     */
+    void emit_instr_calln_inmmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
 }
 #endif //EMMIT_DECL_H

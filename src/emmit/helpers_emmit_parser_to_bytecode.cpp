@@ -60,7 +60,7 @@ namespace Assembly::Bytecode {
     }
 
     const InstrInfo &Assembler::select_variant(
-        const std::string &mnemonic,
+        const std::string &                               mnemonic,
         const std::vector<std::unique_ptr<vm::ASTNode> > &ops) const {
         auto it = InstrTable.find(mnemonic);
         if (it == InstrTable.end())
@@ -97,12 +97,15 @@ namespace Assembly::Bytecode {
                 mode = AddressingMode::REG;
             } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[1].get())) {
                 // si el segundo operando es una notacion
-                if (s->key == "Method" || s->key == "Relative" || s->key == "Absolute") { // si el segundo operando es una notacion Method
+                if (s->key == "Method" || s->key == "Relative" || s->key == "Absolute") {
+                    // si el segundo operando es una notacion Method
                     // entonces el modo de operacion es de tipo INMEDIATO, y se esta pidiendo indica la direccion
                     // de memoria de un metodo que debe haber sido cargado por el loader-linker en run time.
                     mode = AddressingMode::INMED;
                 } else {
-                    throw std::runtime_error("select_variant(): No se permite usar esta notacion (" + s->key + ") en la instruccion: " + mnemonic);
+                    throw std::runtime_error(
+                        "select_variant(): No se permite usar esta notacion (" + s->key + ") en la instruccion: " +
+                        mnemonic);
                 }
             }
 
@@ -130,6 +133,18 @@ namespace Assembly::Bytecode {
             // si no hubo registro, y solo hay un operando, debe ser un inmediato
             if (auto s = dynamic_cast<vm::NumberOperand *>(ops[0].get())) {
                 mode = AddressingMode::INMED;
+            } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[0].get())) {
+                // si el segundo operando es una notacion
+                if (s->key == "Method" || s->key == "Relative" || s->key == "Absolute") {
+                    // si el segundo operando es una notacion Method
+                    // entonces el modo de operacion es de tipo INMEDIATO, y se esta pidiendo indica la direccion
+                    // de memoria de un metodo que debe haber sido cargado por el loader-linker en run time.
+                    mode = AddressingMode::INMED;
+                } else {
+                    throw std::runtime_error(
+                        "select_variant(): No se permite usar esta notacion (" + s->key + ") en la instruccion: " +
+                        mnemonic);
+                }
             }
         }
 
@@ -175,7 +190,8 @@ namespace Assembly::Bytecode {
         if (info.emit != nullptr) {
             info.emit(instr, output, &info, this);
         } else {
-            std::cout << "La isntruccion: " << instr->opcode << " no esta implementada en el ensamblador, no tiene una unidad de emision"  << std::endl;
+            std::cout << "La isntruccion: " << instr->opcode <<
+                    " no esta implementada en el ensamblador, no tiene una unidad de emision" << std::endl;
         }
     }
 }

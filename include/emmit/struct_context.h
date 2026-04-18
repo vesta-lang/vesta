@@ -106,10 +106,44 @@ namespace Assembly::Bytecode {
         Absolute16,
         Absolute8,
 
+        /**
+         * Reloc para indicar metodos nativos
+         */
+        Native_Method,
+
         // para indicar errores o que no es valido
         NO_VALID
     } Type;
 
+    /**
+     * Permite obtener la cantidad de bytes que es necesario emitir para un tipo dado
+     * de relocalizacion, por ejemplo una relocalizacion de tipo Native_Method necesita
+     * emitir 8 bytes ya que una direccion de sistema operativo de 64 bits ocupa este espacio.
+     * @param type tipo de relocalizacion de la que obtener el tamaño
+     * @return retorna el tamaño de la relocalizacion dada.
+     */
+    static uint8_t size_relocation_emmit(Type type) {
+        switch (type) {
+            case Type::Relative64:
+            case Type::Absolute64:
+            case Type::Native_Method:
+                return 8;
+            case Type::Relative40:
+            case Type::Absolute40:
+                return 5;
+            case Type::Relative32:
+            case Type::Absolute32:
+                return 4;
+            case Type::Relative16:
+            case Type::Absolute16:
+                return 2;
+            case Type::Relative8:
+            case Type::Absolute8:
+                return 1;
+            default:
+                throw std::runtime_error("size_relocation_emmit(Type type): Unknown type");
+        }
+    }
 
     /**
      * Permtie obtener un tipo de relocalizacion absoluta en base al modo
