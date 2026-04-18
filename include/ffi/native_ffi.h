@@ -18,9 +18,16 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace ffi {
+    class FFIError : public std::runtime_error {
+    public:
+        explicit FFIError(const std::string &msg)
+            : std::runtime_error(msg) {}
+    };
+
     /**
      * Permite parchear una instruccion call o cualquier instruccion que reciba
      * un puntero de tamaño de CPU
