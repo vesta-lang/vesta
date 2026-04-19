@@ -208,6 +208,22 @@ namespace runtime {
      */
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
 
+    /**
+     * Permite descodificar una instruccion de tipo MOV inmediato de la forma:
+     * mov:
+     *      - reg, 0x1000 ||
+     *      -  [reg], 0x1000 ||
+     *      - reg_ext, 0x1000
+     *
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
+     */
+    void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr);
+
 
     /**
      * Ejecuta la instrucción actualmente decodificada y devuelve el evento
@@ -230,6 +246,10 @@ namespace runtime {
      */
     vm_event execute_instruction(ProcessVM *process);
 
+    /**
+     * Permite descodificar una instruccion en un proceso
+     * @param process proceso que quiere realizar la descodificacion de instruccion.
+     */
     void decode_instruction(ProcessVM *process);
 }
 #endif //DECODE_INSTRUCTION_H

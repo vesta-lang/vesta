@@ -1980,10 +1980,10 @@ namespace runtime {
         },
 
         /* 0x15 */{
-            // mov reg, 0x1000 || [reg], 0x1000
+            // mov reg, 0x1000 || [reg], 0x1000 || reg_ext, 0x1000
             "mov", Assembly::Bytecode::AddressingMode::MEM,
             Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
-            nullptr, nullptr
+            exec_instr_inmed_mov, decode_instr_inmed_mov
         },
 
         /* 0x16 */{

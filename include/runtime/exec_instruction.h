@@ -168,23 +168,26 @@ namespace runtime {
         vm->registers.flags.raw = v;
     }
 
-    static constexpr WriteSpecialFn write_special_table[12] = {
-        write_cur0,  // 0
-        write_cur1,  // 1
-        write_cur2,  // 2
-        write_cur3,  // 3
-        nullptr,     // 4
-        nullptr,     // 5
-        nullptr,     // 6
-        nullptr,     // 7
-        write_rip,   // 8
-        write_rbp,   // 9
-        write_rsp,   // 10
-        write_rflags // 11
+    static constexpr WriteSpecialFn write_special_table[] = {
+        write_cur0,  // 0b000000
+        write_cur1,  // 0b000001
+        write_cur2,  // 0b000010
+        write_cur3,  // 0b000011
+        nullptr,     // 0b000100
+        nullptr,     // 0b000101
+        nullptr,     // 0b000110
+        nullptr,     // 0b000111
+        write_rip,   // 0b001000
+        write_rbp,   // 0b001001
+        write_rsp,   // 0b001010
+        write_rflags // 0b001011
     };
 
     inline void write_special(ProcessVM *vm, uint8_t code, uint64_t v) {
-        if (code >= 12 || write_special_table[code] == nullptr) {
+        if (code >= sizeof(write_special_table) ||
+            write_special_table[code % sizeof(write_special_table)] == nullptr
+        ) {
+            VM_ASSERT(false, "write_special: code=" + std::to_string(code) + " is not (code >= 12)", {});
             return;
         }
         write_special_table[code](vm, v);
@@ -273,5 +276,16 @@ namespace runtime {
      * @param instr
      */
     void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * Permite ejecutar una instruccion MOV del tipo:
+     * mov:
+     *      - reg, 0x1000 ||
+     *      -  [reg], 0x1000 ||
+     *      - reg_ext, 0x1000
+     * @param vm
+     * @param instr
+     */
+    void exec_instr_inmed_mov(ProcessVM *vm, const DecodedInstr &instr);
 }
 #endif //EXEC_INSTRUCTION_H
