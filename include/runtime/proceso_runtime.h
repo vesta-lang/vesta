@@ -18,6 +18,8 @@
 #include "vm_state_event.h"
 
 #include "runtime/pid.h"
+#include "gc/gc_heap.h"
+#include "gc/raw_allocator.h"
 
 #define reductions_remaining_default 8192
 
@@ -262,6 +264,9 @@ namespace runtime {
 
         tlb::LazyHybridTLB tlb{};
         vm::VirtualMemory  vm_mem;
+
+        gc::GcHeap       gc_heap{manager_mem_priv, 2 * 1024 * 1024, 8 * 1024 * 1024};
+        gc::RawAllocator raw_alloc{};
 
         /**
          * Instancia global manejador de este proceso.

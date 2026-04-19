@@ -2960,32 +2960,32 @@ namespace runtime {
         },
 
         /* 0xA0 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // NEWOBJ reg_size -> R0 = GcHandle
+            "newobj", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_newobj, decode_instr_two_op_reg
         },
 
 
         /* 0xA1 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GCRUN (sin operandos) - dispara minor+major GC del proceso
+            "gcrun", Assembly::Bytecode::AddressingMode::NONE,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_gcrun, decode_instr_simple
         },
 
         /* 0xA2 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GCCONFIG reg_threshold - ajusta umbral de OldGen para major GC
+            "gcconfig", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gcconfig, decode_instr_two_op_reg
         },
 
         /* 0xA3 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // DROP reg_handle - libera el GcHandle en el registro
+            "drop", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gc_drop, decode_instr_two_op_reg
         },
 
         /* 0xA4 */{
@@ -3073,25 +3073,25 @@ namespace runtime {
         },
 
         /* 0xB0 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // ALLOC reg_size -> R0 = ptr host real
+            "alloc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_raw_alloc, decode_instr_two_op_reg
         },
 
 
         /* 0xB1 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // FREE reg_ptr - libera el bloque en el puntero host
+            "free", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_raw_free, decode_instr_two_op_reg
         },
 
         /* 0xB2 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // REALLOC reg_ptr, reg_size -> R0 = nuevo ptr host
+            "realloc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_raw_realloc, decode_instr_two_op_reg
         },
 
         /* 0xB3 */{
