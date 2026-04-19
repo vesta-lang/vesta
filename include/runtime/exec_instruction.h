@@ -287,5 +287,47 @@ namespace runtime {
      * @param instr
      */
     void exec_instr_inmed_mov(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    //                   GC generacional (0x00 0xA0 .. 0xA3)
+    // -------------------------------------------------------------------------
+
+    /** NEWOBJ reg_size -> R0 = GcHandle
+     *  reg1 = registro que contiene el numero de bytes a reservar.
+     *  Retorna GC_NULL_HANDLE en R0 si no hay memoria disponible. */
+    void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GCRUN  (sin operandos)
+     *  Ejecuta minor_gc() del proceso actual; si old_used >= threshold
+     *  tambien ejecuta major_gc(). */
+    void exec_instr_gcrun(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GCCONFIG reg_threshold
+     *  reg1 = registro que contiene el nuevo umbral de OldGen (bytes). */
+    void exec_instr_gcconfig(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** DROP reg_handle
+     *  reg1 = registro que contiene el GcHandle a liberar. */
+    void exec_instr_gc_drop(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    //                   Raw allocator (0x00 0xB0 .. 0xB2)
+    // -------------------------------------------------------------------------
+
+    /** ALLOC reg_size -> R0 = ptr host real (uint64_t)
+     *  reg1 = registro que contiene el numero de bytes a reservar.
+     *  Retorna 0 en R0 si la asignacion falla. */
+    void exec_instr_raw_alloc(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** FREE reg_ptr
+     *  reg1 = registro que contiene el puntero host a liberar.
+     *  No hace nada si el puntero no pertenece a este proceso. */
+    void exec_instr_raw_free(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** REALLOC reg_ptr, reg_size -> R0 = nuevo ptr host real
+     *  reg1 = registro con el puntero original.
+     *  reg2 = registro que contiene el nuevo tamano en bytes.
+     *  Retorna 0 en R0 si la asignacion falla. */
+    void exec_instr_raw_realloc(ProcessVM *vm, const DecodedInstr &instr);
 }
 #endif //EXEC_INSTRUCTION_H
