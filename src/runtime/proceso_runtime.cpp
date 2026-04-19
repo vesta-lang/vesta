@@ -126,8 +126,8 @@ namespace runtime {
         }
 
         size_t valid = 0;
-        for (int i = 0; i < ICACHE_SIZE; i++)
-            if (icache[i].pc != ~0ull) // entrada válida
+        for (const auto & i : icache)
+            if (i.metadata !=  nullptr) // entrada válida
                 valid++;
 
         ss << " ICACHE: valid=" << valid << "/" << ICACHE_SIZE

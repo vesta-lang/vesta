@@ -49,6 +49,30 @@ namespace runtime {
         vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &value, size);
     }
 
+    void exec_instr_inmed_mov(ProcessVM *vm, const DecodedInstr &instr) {
+        const int rdst      = instr.data_instruction.inmmed_data.reg;
+        uint64_t  imm       = instr.data_instruction.inmmed_data.inmmed;
+        uint8_t   direction = instr.flags_info.direction;
+        uint8_t   is_signed = instr.flags_info._signed_instruct;
+
+        // Caso especial: registro extendido (rip, rbp, rsp, cur0...)
+        if (direction == 1 && is_signed == 1) {
+            // si el registro es rip, la instruccion automaticamente esta haciendo un salto.
+            write_special(vm, rdst, imm);
+            return;
+        }
+
+        // Caso 1: mov reg, imm - asignacion directa, sin ALU ni flags
+        if (direction == 0 && is_signed == 0) {
+            write_reg_table[instr.flags_info.mode](vm, rdst, imm);
+            return;
+        }
+
+        // Caso 2: mov [reg], imm - escribir inmediato en memoria
+        uint64_t addr = vm->registers.regs[rdst].raw();
+        size_t   size = Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
+        vm->vm_mem.write_bytes(addr, &imm, size);
+    }
 
     void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr) {
         uint8_t reg_ext  = instr.flags_info.reg_ext;

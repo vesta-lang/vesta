@@ -97,7 +97,7 @@ namespace runtime {
             uint8_t size_instr: 4;
         } flags_info = {
             0, 0, 0, 0,
-            false, false, 0, 0, 0
+            false, false, false, 0, 0
         };
 
         union {
