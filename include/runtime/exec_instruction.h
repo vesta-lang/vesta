@@ -277,6 +277,8 @@ namespace runtime {
      */
     void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr);
 
+    void exec_instr_xchg(ProcessVM *vm, const DecodedInstr &instr);
+
     /**
      * Permite ejecutar una instruccion MOV del tipo:
      * mov:

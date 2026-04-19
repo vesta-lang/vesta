@@ -312,6 +312,13 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    void emit_xchg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
     void emit_instr_mov_reg(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,

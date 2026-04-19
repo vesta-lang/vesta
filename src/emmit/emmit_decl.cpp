@@ -421,6 +421,63 @@ namespace Assembly::Bytecode {
         bool is_a_signed = is_signed(instruction_parser->opcode);
     }
 
+    void emit_xchg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (reg1 == nullptr) {
+            throw std::runtime_error("Error la instruccion: " + instruction_parser->opcode +
+                " no encontro un registro 1");
+        }
+
+        if (reg2 == nullptr) {
+            throw std::runtime_error("Error la instruccion: " + instruction_parser->opcode +
+                " no encontro un registro 2");
+        }
+
+        uint8_t flags = 0; // aun no se usa, pero se debe emitir.
+        code_final.emit8(flags);
+
+        // miramos si algunos de los registros son especiales, si no los son, o si lo son ambos
+        std::optional<uint8_t> opt_special1 = encode_special_register(reg1->name);
+        std::optional<uint8_t> opt_special2 = encode_special_register(reg2->name);
+
+        // codificamos el primer byte de registros
+        uint8_t byte1 = 0b0000'0000;
+        if (opt_special1) {
+            // si es un registro especial, se debe indicar con el segundo bit, en caso
+            // de ser registro general, no se activa este bit
+            byte1 = 0b0100'0000;
+            byte1 = byte1 | opt_special1.value(); // 6 bits para indicar el registro
+        } else {
+            uint8_t mode     = encode_mode(reg1->size_bits);           // 2 bits
+            uint8_t reg_code = encode_reg_general(reg1->name.c_str()); // 4 bits
+            byte1            = byte1 | (mode << 4 | reg_code);
+        }
+
+        // codificamos el segundo byte de registros
+        uint8_t byte2 = 0b0000'0000;
+        if (opt_special2) {
+            // si es un registro especial, se debe indicar con el segundo bit, en caso
+            // de ser registro general, no se activa este bit
+            byte2 = 0b0100'0000;
+            byte2 = byte2 | opt_special2.value(); // 6 bits para indicar el registro
+        } else {
+            uint8_t mode     = encode_mode(reg2->size_bits);           // 2 bits
+            uint8_t reg_code = encode_reg_general(reg2->name.c_str()); // 4 bits
+            byte2            = byte2 | (mode << 4 | reg_code);
+        }
+
+        // emitimos los bytes de los registros
+        code_final.emit8(byte1);
+        code_final.emit8(byte2);
+    }
+
     void emit_pop_push(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
