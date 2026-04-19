@@ -120,6 +120,23 @@ namespace runtime {
                 uint8_t reg2; // indica cual es el registro 2 que se codifica
             } reg_data;
 
+            // datos usados unicamente por instrucciones que hacen
+            // uso de codificacion mixta de registros generales y registros
+            // especiales, la instruccion XCHG por ejemplo permite codificar
+            // registros especiales y generales en la misma instruccion para
+            // intercambiar valores entre los registros, el primer registro
+            // puede ser especial/extendido y el segundo no o al reves, por
+            // lo que es necesario un template distinto para almacenar toda la
+            // informacion
+            struct {
+                uint8_t reg1      : 6; // registro 1, puede ser extendido o no
+                uint8_t reg1_flags: 1; // flags, indica normalmente si es o no extendido
+                uint8_t unused1   : 1; // aun no usado
+                uint8_t reg2      : 6; // registro 2, puede ser extendido o no
+                uint8_t reg2_flags: 1; // flags, indica normalmente si es o no extendido
+                uint8_t unused2   : 1; // aun no usado
+            } regs_data_extent;
+
             /**
              * Permite guardar datos de instrucciones del tipo
              * reg, inmmed o
@@ -249,7 +266,7 @@ namespace runtime {
         //               sistema de cache para descodificacion de instrucciones.
         // -------------------------------------------------------------------------------
         // 256 entradas de cache maximo
-        DecodedInstr icache[ICACHE_SIZE]     = {};
+        DecodedInstr icache[ICACHE_SIZE] = {};
 
         /**
          * Contiene los datos de la instruccion descoficada.

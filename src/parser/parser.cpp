@@ -20,6 +20,7 @@ namespace vm {
     static const std::unordered_map<std::string, InstructionPattern> InstructionSet = {
         // TWO operandos
         {"mov", {"mov", OpArity::TWO}},
+        {"xchg", {"xchg", OpArity::TWO}},
 
         {"addu", {"addu", OpArity::TWO}},
         {"subu", {"subu", OpArity::TWO}},

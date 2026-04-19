@@ -101,11 +101,11 @@ namespace runtime {
 
             // indicamos el tamaño de la instruccion que es 2 bytes de opcode + 1 de datos + 8 de inmediato
             instr.flags_info.size_instr = 2 + 1 + 8;
-            instr.flags_info.reg_ext = true; // indicar que usa un registro extendido
+            instr.flags_info.reg_ext    = true; // indicar que usa un registro extendido
 
             // un registro especial usa el modo como bits adicional para codificar el registro espcial.
             instr.data_instruction.inmmed_data.reg = instr.flags_info.mode << 4 |
-                instr.data_instruction.inmmed_data.reg;
+                    instr.data_instruction.inmmed_data.reg;
 
             return; // debemos salir ya que lo de abajo solo aplica con descodificacion convencional
         }
@@ -269,6 +269,22 @@ namespace runtime {
             default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
                 break;
         }
+    }
+
+    void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // sumamos 2 por que saltamos el opcode y el byte de flags que aun no
+        // tiene ningun uso
+        uint16_t data = vm->vm_mem.read_u16(vm->registers.rip.raw() + 2);
+
+        auto byte1 = static_cast<uint8_t>(data & 0xFF);
+        auto byte2 = static_cast<uint8_t>(data >> 8);
+
+        instr.data_instruction.regs_data_extent.reg1       = byte1 & 0b11'1111;
+        instr.data_instruction.regs_data_extent.reg1_flags = byte1 >> 6 & 0b1;
+        instr.data_instruction.regs_data_extent.reg2       = byte2 & 0b11'1111;
+        instr.data_instruction.regs_data_extent.reg2_flags = byte2 >> 6 & 0b1;
     }
 
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {

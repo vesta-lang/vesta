@@ -160,4 +160,54 @@ namespace runtime {
 #undef A
         vm->registers.regs[R00].qword(r);
     }
+
+    void exec_instr_xchg(ProcessVM *vm, const DecodedInstr &instr) {
+        uint64_t val1 = 0;
+        uint64_t val2 = 0;
+
+        bool    reg1_is_general = false;
+        uint8_t reg1_mode         = 0;
+        uint8_t reg1_general      = 0;
+
+        if (instr.data_instruction.regs_data_extent.reg1_flags == 1) {
+            // registro especial
+            val1              = read_special(vm, instr.data_instruction.regs_data_extent.reg1);
+            reg1_is_general = false;
+        } else {
+            // registro general
+
+            reg1_mode         = instr.data_instruction.regs_data_extent.reg1 >> 4;     // obtenemos el modo
+            reg1_general      = instr.data_instruction.regs_data_extent.reg1 & 0b1111; // obtenemos el registro general
+            val1              = read_reg_table[reg1_mode](vm, reg1_general);
+            reg1_is_general = true;
+        }
+
+        if (instr.data_instruction.regs_data_extent.reg2_flags == 1) {
+            // registro especial
+            val2 = read_special(vm, instr.data_instruction.regs_data_extent.reg2);
+
+            // escribimos el valor obtenido del registro 1 en el registro 2
+            write_special(vm, instr.data_instruction.regs_data_extent.reg2, val1);
+        } else {
+            // registro general
+            uint8_t mode = instr.data_instruction.regs_data_extent.reg2 >> 4; // obtenemos el modo
+
+            // obtenemos el registro general
+            uint8_t reg_general = instr.data_instruction.regs_data_extent.reg2 & 0b1111;
+
+            val2 = read_reg_table[mode](vm, reg_general);
+
+            // escribimos el valor del registro 1 en el registro 2
+            write_reg_table[mode](vm, reg_general, val1);
+        }
+
+        // si el registro 1 era general, escribimos el valor del registro 2 en el registro 1
+        if (reg1_is_general == 1) {
+            // escribimos en el registro general analizado
+            write_reg_table[reg1_mode](vm, reg1_general, val2);
+        } else {
+            // si se dio esta condicion entonces es un registro especial
+            write_special(vm, instr.data_instruction.regs_data_extent.reg1, val2);
+        }
+    }
 }

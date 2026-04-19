@@ -163,9 +163,9 @@ namespace runtime {
 
         /* 0x14 */{
             //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            "xchg", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_xchg, decode_instr_xchg
         },
 
         /* 0x15 */{

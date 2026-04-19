@@ -1,18 +1,17 @@
 /*
  * VestaVM - Máquina Virtual Distribuida
- * 
+ *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
 #ifndef PARSER_TO_BYTECODE_H
 #define PARSER_TO_BYTECODE_H
-
 
 #include "emmit_decl.h"
 #include "annotations.h"
@@ -23,7 +22,6 @@
  *      - Segunda pasada: evaluar expresiones y generar datos (expresiones es 2+3 Por ejemplo)
  *      - Tercera pasada: generar instrucciones y resolver saltos
  */
-
 
 namespace Assembly::Bytecode {
     /**
@@ -41,22 +39,13 @@ namespace Assembly::Bytecode {
      * Tabla de instrucciones con metadatos correspondientes
      */
     static const std::unordered_map<std::string, std::vector<InstrInfo> > InstrTable = {
-        {
-            "vminfo", {
-                {0x01, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}
-            }
-        },
-        {
-            "vminfomanager", {
-                {0x02, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}
-            }
-        },
+        {"vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"vminfomanager", {{0x02, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
         // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
         // segundo byte
         {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
         {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
-
 
         {
             "callvm", {
@@ -75,12 +64,15 @@ namespace Assembly::Bytecode {
         {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
         {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
 
+        {"xchg", {{0x14, 0x00, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_xchg}}},
+
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
         {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
         {
-            "callnr", {
+            "callnr",
+            {
                 {0x55, 0x00, InstrSizeMode::FIXED_1, AddressingMode::REG, nullptr},
             },
         },
@@ -92,7 +84,6 @@ namespace Assembly::Bytecode {
         {"edmw6", {{0x00, 0x01, InstrSizeMode::FIXED_4, AddressingMode::NONE, nullptr}}},
         {"edm", {{0x00, 0x02, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
         {"hlt", {{0x00, 0x03, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
-
 
         /**
          * ADD tiene 3 variantes.
@@ -210,7 +201,8 @@ namespace Assembly::Bytecode {
             }
         },
         {
-            "cmpu", {
+            "cmpu",
+            {
                 // cmpu/cmps
                 // reg, reg
                 {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
@@ -223,7 +215,8 @@ namespace Assembly::Bytecode {
             },
         },
         {
-            "cmps", {
+            "cmps",
+            {
                 // cmpu/cmps
                 // reg, reg
                 {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
@@ -237,7 +230,8 @@ namespace Assembly::Bytecode {
         },
 
         {
-            "mov", {
+            "mov",
+            {
                 // por definir
                 // mov
                 // reg, reg
@@ -251,19 +245,20 @@ namespace Assembly::Bytecode {
             },
         },
         {
-            "loop", {
+            "loop",
+            {
                 {0x00, 0x31, InstrSizeMode::FIXED_8, AddressingMode::INMED, nullptr},
             },
         },
 
         {
-            "calln", {
+            "calln",
+            {
                 {0x00, 0x55, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_calln_inmmed},
             },
         },
 
     };
-
 
     /**
      * @class Assembler
@@ -382,7 +377,6 @@ namespace Assembly::Bytecode {
          */
         void emit_instruction(const vm::Instruction *instr);
 
-
         uint64_t eval_operand(const vm::ASTNode *op);
 
         /**
@@ -463,7 +457,7 @@ namespace Assembly::Bytecode {
                 // Leer archivo
                 std::ifstream f(file);
                 std::string   code((std::istreambuf_iterator<char>(f)),
-                                 std::istreambuf_iterator<char>());
+                                   std::istreambuf_iterator<char>());
 
                 // Lex + parse del codigo importado
                 vm::Lexer  lx(code);
@@ -488,4 +482,4 @@ namespace Assembly::Bytecode {
     }
 }
 
-#endif //PARSER_TO_BYTECODE_H
+#endif // PARSER_TO_BYTECODE_H

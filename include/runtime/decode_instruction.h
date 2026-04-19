@@ -224,6 +224,22 @@ namespace runtime {
      */
     void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr);
 
+    /**
+     * Permite descodificar una instruccion de tipo xchg de la forma:
+     * xchg:
+     *      - xchg r0, cur0
+     *      - xchg cur1, cur0
+     *      - xchg cur0, r1
+     *      - xchg r2, r1
+     *
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
+     */
+    void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Ejecuta la instrucción actualmente decodificada y devuelve el evento
