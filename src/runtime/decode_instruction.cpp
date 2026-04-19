@@ -10,6 +10,7 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
+#include "ffi/native_ffi.h"
 #include "runtime/decode_table.h"
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
@@ -236,6 +237,18 @@ namespace runtime {
             default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
                 break;
         }
+    }
+
+    void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
+        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2);
+
+        // tamaño de la instruccion para luego incrementar rip
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // argc se cachea en decode para que en exec ambos (fn y argc) vengan del
+        // ICACHE — constantes por PC de instruccion — lo que permite al IBP de la CPU
+        // predecir correctamente el switch(argc) tras la primera ejecucion.
+        instr.data_instruction.inmmed_data.reg = static_cast<uint8_t>(vm->registers.regs[R15].qword());
     }
 
     void decode_instruction(ProcessVM *process) {

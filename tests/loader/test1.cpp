@@ -211,7 +211,7 @@ int main() {
     print_memory_stats();
 
     Timer        t_loader;
-    unsigned     logical = std::thread::hardware_concurrency();
+    unsigned     logical = 1;//std::thread::hardware_concurrency();
     runtime::VM *vm      = manager.loader.create_vm_instance(logical);
     runtime::ProcessVM *process  = manager.loader.load_executable(*vm, opts.output_path);
     //runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);

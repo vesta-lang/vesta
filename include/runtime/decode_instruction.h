@@ -148,8 +148,12 @@ namespace runtime {
      * Permite descodificar instrucciones MOV de tipo registro. Es muy parecida a decode_instr_two_op_reg,
      * pero se prefiere tener una func aparte solo para el mov ya que algunos campos pueden no ser necesarios
      * de extraer, o la forma de descoficiar pued cambiar en el futuro.
-     * @param vm
-     * @param instr
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
      */
     void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr);
 
@@ -158,8 +162,12 @@ namespace runtime {
      * ningun tipo de analisis profundo como son los NOP, HLT y instrucciones
      * similares que no toman parametros o no requieren descodificar los
      * parametros en los opcodes.
-     * @param vm
-     * @param instr
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
      */
     void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr);
 
@@ -168,16 +176,35 @@ namespace runtime {
      *      - adds r0d, 0x12345678
      *      - adds [r1w], 0x1234
      * se supone que todas las instrucciones de este tipo usan extension de opcode.
-     * @param vm
-     * @param instr
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
      */
     void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * Permite descodificar una instruccion de tipo CALLN
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
+     */
+    void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * Permite descodificar instrucciones como PUSH/POP donde pueden usar registros
      * extendidos o generales.
-     * @param vm
-     * @param instr
+     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
+     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
+     * para esta instruccion.
+     *
+     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
+     * tiene sus propios metadatos.
      */
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
 
@@ -199,7 +226,7 @@ namespace runtime {
      * El metodo también se encarga de avanzar el contador de programa (PC)
      * si la instrucción no ha modificado explícitamente su valor (campo did_jump).
      *
-     * @return vm_event  Evento que la FSM debe procesar tras ejecutar la instrucción.
+     * @return  Evento que la FSM debe procesar tras ejecutar la instrucción.
      */
     vm_event execute_instruction(ProcessVM *process);
 
