@@ -151,7 +151,7 @@ namespace runtime {
             // push
             "push", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            exec_instr_push, decode_instr_push_pop
+            exec_instr_push, decode_instr_calln
         },
 
         /* 0x13 */{
@@ -620,7 +620,7 @@ namespace runtime {
 
         /* 0x55 */{
             //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
+            "callnr", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_1,
             nullptr, nullptr
         },
@@ -2431,10 +2431,11 @@ namespace runtime {
 
         /* 0x55 */{
             //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            "calln", Assembly::Bytecode::AddressingMode::INMED,
+            Assembly::Bytecode::InstrSizeMode::FIXED_10,
+            exec_instr_calln, decode_instr_calln
         },
+
 
         /* 0x56 */{
             //

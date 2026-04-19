@@ -21,7 +21,35 @@
 #include <stdexcept>
 #include <unordered_map>
 
+using CallFn = uint64_t(*)(
+    void *,
+    uint64_t, uint64_t,
+    uint64_t, uint64_t,
+    uint64_t, uint64_t,
+    uint64_t, uint64_t,
+    uint64_t, uint64_t,
+    uint64_t, uint64_t);
+
 namespace ffi {
+    using Fn00 = uint64_t(*)(void *);
+    using Fn01 = uint64_t(*)(void *, uint64_t);
+    using Fn02 = uint64_t(*)(void *, uint64_t, uint64_t);
+    using Fn03 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t);
+    using Fn04 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t);
+    using Fn05 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    using Fn06 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    using Fn07 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    using Fn08 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    using Fn09 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                             uint64_t);
+    using Fn10 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                             uint64_t, uint64_t);
+    using Fn11 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                             uint64_t, uint64_t, uint64_t);
+    using Fn12 = uint64_t(*)(void *, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                             uint64_t, uint64_t, uint64_t, uint64_t);
+
+
     class FFIError : public std::runtime_error {
     public:
         explicit FFIError(const std::string &msg)

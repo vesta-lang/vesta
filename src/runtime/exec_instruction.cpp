@@ -10,6 +10,9 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 #include "runtime/exec_instruction.h"
+#include "runtime/decode_instruction.h"
+
+#include "ffi/native_ffi.h"
 
 namespace runtime {
     void exec_instr_hlt(ProcessVM *vm, const DecodedInstr &instr) {
@@ -63,5 +66,74 @@ namespace runtime {
             uint8_t mode = instr.flags_info.mode;
             write_reg_table[mode](vm, reg_code, value);
         }
+    }
+
+    void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr) {
+        void *   fn   = reinterpret_cast<void *>(instr.data_instruction.inmmed_data.inmmed);
+        uint64_t argc = instr.data_instruction.inmmed_data.reg; // del ICACHE
+        uint64_t r    = 0;
+
+        typedef uint64_t u64;
+
+        // Switch compila a jump table (mismo costo de indirección que dispatch[]),
+        // pero cada case llama directamente a fn sin frame intermedio de callN,
+        // y solo lee los registros que realmente necesita.
+#define A(n) vm->registers.regs[R##n].qword()
+        switch (argc) {
+            case 0: r = reinterpret_cast<u64(*)()>(fn)();
+                break;
+            case 1: r = reinterpret_cast<u64(*)(u64)>(fn)(
+                    A(01));
+                break;
+            case 2: r = reinterpret_cast<u64(*)(
+                    u64, u64)>(fn)(
+                    A(01),A(02));
+                break;
+            case 3: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03));
+                break;
+            case 4: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04));
+                break;
+            case 5: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05));
+                break;
+            case 6: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06));
+                break;
+            case 7: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06),A(07));
+                break;
+            case 8: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06),A(07),A(08));
+                break;
+            case 9: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06),A(07),A(08),A(09));
+                break;
+            case 10: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06),A(07),A(08),A(09),A(10));
+                break;
+            case 11: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06),A(07),A(08),A(09),A(10),A(11));
+                break;
+            case 12: r = reinterpret_cast<u64(*)(
+                    u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64, u64)>(fn)(
+                    A(01),A(02),A(03),A(04),A(05),A(06),A(07),A(08),A(09),A(10),A(11),A(12));
+                break;
+            default:
+                VM_ASSERT(false, "exec_instr_calln: argc=" + std::to_string(argc) + " excede el maximo de 12", {});
+                break; // no eliminar el break, en modo release es lo unico que detiene el switch case
+        }
+#undef A
+        vm->registers.regs[R00].qword(r);
     }
 }

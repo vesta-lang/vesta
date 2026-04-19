@@ -265,5 +265,13 @@ namespace runtime {
      * @param instr
      */
     void exec_instr_pop(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * Permite ejecutar una instruccion CALLN que realiza una llamada
+     * nativa, puede bloquear la VM si la funcion bloquea.
+     * @param vm
+     * @param instr
+     */
+    void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr);
 }
 #endif //EXEC_INSTRUCTION_H
