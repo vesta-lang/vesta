@@ -132,7 +132,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // Minor GC — Cheney-style copy de Nursery a OldGen
+    // Minor GC - Cheney-style copy de Nursery a OldGen
     // -------------------------------------------------------------------------
 
     void GcHeap::evacuate_object(GcHandle h) {
@@ -186,7 +186,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // Major GC — mark-and-sweep sobre OldGen
+    // Major GC - mark-and-sweep sobre OldGen
     // -------------------------------------------------------------------------
 
     void GcHeap::major_gc() {

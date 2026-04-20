@@ -291,6 +291,28 @@ namespace runtime {
     void exec_instr_inmed_mov(ProcessVM *vm, const DecodedInstr &instr);
 
     // -------------------------------------------------------------------------
+    //                   Cursor - acceso a memoria real (0x00 0xC0 .. 0xC2)
+    // -------------------------------------------------------------------------
+
+    /** READCUR dest_reg, curN
+     *  Lee N bytes de la dirección host almacenada en curN y los escribe en dest_reg.
+     *  El tamaño viene dado por el campo mode (0=byte, 1=word, 2=dword, 3=qword).
+     *  reg1 = registro destino general, reg2 = cursor index (0-3). */
+    void exec_instr_readcur(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** WRITECUR curN, src_reg
+     *  Escribe N bytes de src_reg en la dirección host almacenada en curN.
+     *  El tamaño viene dado por el campo mode (0=byte, 1=word, 2=dword, 3=qword).
+     *  reg1 = registro fuente general, reg2 = cursor index (0-3). */
+    void exec_instr_writecur(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GCDEREF curN, handle_reg
+     *  Desreferencia el GcHandle contenido en handle_reg y almacena el puntero
+     *  raw al payload en el cursor curN.
+     *  reg1 = registro general con el handle, reg2 = cursor index destino (0-3). */
+    void exec_instr_gcderef(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
     //                   GC generacional (0x00 0xA0 .. 0xA3)
     // -------------------------------------------------------------------------
 

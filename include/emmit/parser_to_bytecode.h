@@ -66,6 +66,22 @@ namespace Assembly::Bytecode {
 
         {"xchg", {{0x14, 0x00, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_xchg}}},
 
+        // GC generacional (0x00 0xA0 .. 0xA3)
+        {"newobj",   {{0x00, 0xA0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"gcrun",    {{0x00, 0xA1, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"gcconfig", {{0x00, 0xA2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"drop",     {{0x00, 0xA3, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+
+        // Raw allocator (0x00 0xB0 .. 0xB2)
+        {"alloc",    {{0x00, 0xB0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"free",     {{0x00, 0xB1, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"realloc",  {{0x00, 0xB2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+
+        // Cursor - acceso a memoria real (0x00 0xC0 .. 0xC2)
+        {"readcur",  {{0x00, 0xC0, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
+        {"writecur", {{0x00, 0xC1, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
+        {"gcderef",  {{0x00, 0xC2, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_gcderef}}},
+
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
         {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},

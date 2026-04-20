@@ -287,6 +287,22 @@ namespace runtime {
         instr.data_instruction.regs_data_extent.reg2_flags = byte2 >> 6 & 0b1;
     }
 
+    void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // los 2 bytes de datos empiezan tras los 2 bytes de opcode extendido
+        uint8_t offset = static_cast<uint8_t>(vm->registers.rip.raw() + 2);
+        uint16_t data  = vm->vm_mem.read_u16(offset);
+
+        uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF);
+        uint8_t reg  = static_cast<uint8_t>((data & 0xFF00) >> 8);
+
+        // ctrl_byte: bits 7-6 = mode (tamaño), bits 5-4 = cursor index (0-3)
+        instr.flags_info.mode                = (ctrl >> 6) & 0b11;
+        instr.data_instruction.reg_data.reg2 = (ctrl >> 4) & 0b11; // cursor index
+        instr.data_instruction.reg_data.reg1 = reg & 0xF;           // registro general
+    }
+
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
         instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2);
 
@@ -389,7 +405,7 @@ namespace runtime {
 
         // -------------------------------------------------------------------------------------------------------
 
-        // ejecutamos el metodo encarga de descodificar dicha instruccion.
+        // ejecutamos el metodo encargado de descodificar dicha instruccion.
         metadata.decode(process, decode_tmp);
 
         // Guardar en caché, despues de llamara a decode, muy importante el orden.

@@ -390,5 +390,47 @@ namespace Assembly::Bytecode {
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
     );
+
+    /**
+     * Emite instrucciones con un único operando de tipo registro general:
+     *   newobj reg_size, gcconfig reg_threshold, drop reg_handle,
+     *   alloc reg_size, free reg_ptr
+     *
+     * Formato (FIXED_4, opcode extendido 0x00):
+     *   [0x00][opcode][ctrl_byte][reg_byte]
+     *   ctrl_byte: bits 7-6 = mode (tamaño del registro), bits 5-0 = 0
+     *   reg_byte:  bits 3-0 = registro general, bits 7-4 = 0
+     */
+    void emit_instr_one_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * Emite instrucciones de lectura/escritura a memoria real via cursor:
+     *   readcur  dest_reg, curN   - lee N bytes de la dir. host en curN
+     *   writecur curN, src_reg    - escribe src_reg en la dir. host en curN
+     *
+     * ctrl_byte = (mode<<6)|(cur_idx<<4), reg_byte = gen_reg_index
+     */
+    void emit_cursor_rw(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * Emite la instruccion gcderef curN, handle_reg.
+     * ctrl_byte = (cur_idx<<4), reg_byte = handle_reg_index
+     */
+    void emit_gcderef(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
 }
 #endif //EMMIT_DECL_H

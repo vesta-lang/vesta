@@ -17,7 +17,47 @@
 namespace runtime {
 
     // -------------------------------------------------------------------------
-    // GC generacional — 0x00 0xA0 .. 0xA3
+    // Cursor - acceso a memoria real - 0x00 0xC0 .. 0xC2
+    // -------------------------------------------------------------------------
+
+    void exec_instr_readcur(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  cur_idx = instr.data_instruction.reg_data.reg2;
+        const uint8_t  dst     = instr.data_instruction.reg_data.reg1;
+        const uint64_t addr    = vm->registers.cur[cur_idx].qword();
+
+        switch (instr.flags_info.mode) {
+            case 0b00: vm->registers.regs[dst].qword(*reinterpret_cast<const uint8_t  *>(addr)); break;
+            case 0b01: vm->registers.regs[dst].qword(*reinterpret_cast<const uint16_t *>(addr)); break;
+            case 0b10: vm->registers.regs[dst].qword(*reinterpret_cast<const uint32_t *>(addr)); break;
+            default:   vm->registers.regs[dst].qword(*reinterpret_cast<const uint64_t *>(addr)); break;
+        }
+    }
+
+    void exec_instr_writecur(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  cur_idx = instr.data_instruction.reg_data.reg2;
+        const uint8_t  src     = instr.data_instruction.reg_data.reg1;
+        const uint64_t addr    = vm->registers.cur[cur_idx].qword();
+        const uint64_t val     = vm->registers.regs[src].qword();
+
+        switch (instr.flags_info.mode) {
+            case 0b00: *reinterpret_cast<uint8_t  *>(addr) = static_cast<uint8_t >(val); break;
+            case 0b01: *reinterpret_cast<uint16_t *>(addr) = static_cast<uint16_t>(val); break;
+            case 0b10: *reinterpret_cast<uint32_t *>(addr) = static_cast<uint32_t>(val); break;
+            default:   *reinterpret_cast<uint64_t *>(addr) = val;                        break;
+        }
+    }
+
+    void exec_instr_gcderef(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  cur_idx    = instr.data_instruction.reg_data.reg2;
+        const uint8_t  handle_reg = instr.data_instruction.reg_data.reg1;
+        const uint64_t raw_handle = vm->registers.regs[handle_reg].qword();
+
+        uint8_t *payload = vm->gc_heap.deref(static_cast<gc::GcHandle>(raw_handle));
+        vm->registers.cur[cur_idx].qword(reinterpret_cast<uint64_t>(payload));
+    }
+
+    // -------------------------------------------------------------------------
+    // GC generacional - 0x00 0xA0 .. 0xA3
     // -------------------------------------------------------------------------
 
     void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr) {
@@ -46,7 +86,7 @@ namespace runtime {
     }
 
     // -------------------------------------------------------------------------
-    // Raw allocator — 0x00 0xB0 .. 0xB2
+    // Raw allocator - 0x00 0xB0 .. 0xB2
     // -------------------------------------------------------------------------
 
     void exec_instr_raw_alloc(ProcessVM *vm, const DecodedInstr &instr) {

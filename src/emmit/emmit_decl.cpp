@@ -841,4 +841,97 @@ namespace Assembly::Bytecode {
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
     ) {}
+
+    void emit_instr_one_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        if (reg == nullptr) {
+            throw std::runtime_error(
+                "Error: " + instruction_parser->opcode + " requiere un operando de tipo registro"
+            );
+        }
+
+        uint8_t mode = encode_mode(reg->size_bits);
+
+        // ctrl_byte: bits 7-6 = mode, resto = 0
+        code_final.emit8(static_cast<uint8_t>(mode << 6));
+        // reg_byte:  bits 3-0 = registro, bits 7-4 = 0
+        code_final.emit8(encode_reg_general(reg->name.c_str()));
+    }
+
+    void emit_cursor_rw(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg0 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (reg0 == nullptr || reg1 == nullptr) {
+            throw std::runtime_error(
+                "Error: " + instruction_parser->opcode + " requiere dos operandos registro"
+            );
+        }
+
+        std::optional<uint8_t> opt0 = encode_special_register(reg0->name);
+        std::optional<uint8_t> opt1 = encode_special_register(reg1->name);
+
+        uint8_t cur_idx, gen_reg, mode;
+
+        if (opt0) {
+            // writecur curN, src_reg - primer operando es el cursor
+            if (opt0.value() > 3) {
+                throw std::runtime_error("writecur: primer operando debe ser cur0-cur3, no rip/rbp/rsp/rflags");
+            }
+            cur_idx = opt0.value() & 0b11;
+            gen_reg = encode_reg_general(reg1->name.c_str());
+            mode    = encode_mode(reg1->size_bits);
+        } else {
+            // readcur dest_reg, curN - segundo operando es el cursor
+            if (!opt1) {
+                throw std::runtime_error(
+                    instruction_parser->opcode + ": uno de los operandos debe ser cur0-cur3"
+                );
+            }
+            gen_reg = encode_reg_general(reg0->name.c_str());
+            cur_idx = opt1.value() & 0b11;
+            mode    = encode_mode(reg0->size_bits);
+        }
+
+        // ctrl_byte: bits 7-6 = mode, bits 5-4 = cursor index
+        code_final.emit8(static_cast<uint8_t>((mode << 6) | (cur_idx << 4)));
+        code_final.emit8(gen_reg);
+    }
+
+    void emit_gcderef(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        // gcderef curN, handle_reg
+        auto cur_op    = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto handle_op = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (cur_op == nullptr || handle_op == nullptr) {
+            throw std::runtime_error("gcderef: requiere dos operandos registro");
+        }
+
+        std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
+        if (!opt_cur) {
+            throw std::runtime_error("gcderef: primer operando debe ser cur0-cur3");
+        }
+
+        uint8_t cur_idx    = opt_cur.value() & 0b11;
+        uint8_t handle_reg = encode_reg_general(handle_op->name.c_str());
+
+        // ctrl_byte: bits 5-4 = cursor index (mode no aplica para gcderef)
+        code_final.emit8(static_cast<uint8_t>(cur_idx << 4));
+        code_final.emit8(handle_reg);
+    }
 }

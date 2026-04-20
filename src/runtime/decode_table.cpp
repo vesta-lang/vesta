@@ -3186,25 +3186,24 @@ namespace runtime {
         },
 
         /* 0xC0 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // readcur dest_reg, curN  - lee N bytes de la dir. host en curN -> dest_reg
+            "readcur", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_readcur, decode_instr_cursor_rw
         },
 
-
         /* 0xC1 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // writecur curN, src_reg  - escribe src_reg en la dir. host en curN
+            "writecur", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_writecur, decode_instr_cursor_rw
         },
 
         /* 0xC2 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // gcderef curN, handle_reg  - GcHandle -> puntero raw payload en curN
+            "gcderef", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gcderef, decode_instr_cursor_rw
         },
 
         /* 0xC3 */{
