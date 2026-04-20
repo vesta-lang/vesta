@@ -242,6 +242,19 @@ namespace runtime {
     void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * Descodifica instrucciones de lectura/escritura a memoria real via cursor:
+     *   readcur  dest_reg, curN   - lee de la dirección host en curN
+     *   writecur curN, src_reg    - escribe src_reg en la dirección host en curN
+     *   gcderef  curN, handle_reg - convierte GcHandle a puntero raw en curN
+     *
+     * Formato (FIXED_4, opcode extendido 0x00):
+     *   [0x00][opcode][ctrl_byte][reg_byte]
+     *   ctrl_byte: bits 7-6 = mode (tamaño), bits 5-4 = cursor index (0-3)
+     *   reg_byte:  bits 3-0 = registro general
+     */
+    void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * Ejecuta la instrucción actualmente decodificada y devuelve el evento
      * que debe procesar la máquina virtual como resultado de dicha ejecución.
      *

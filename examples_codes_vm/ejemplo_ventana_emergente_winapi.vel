@@ -1,0 +1,83 @@
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+// indicar que el formato es crudo, aunque de por si el ensamblador
+// lo define asi por defecto
+@Format("raw")
+
+// creamos nuestro espacio de direcciones, como el formato es crudo, no se
+// usara para nada, pero el ensamblador necesita un espacio y una
+// seccion para que tu codigo se pueda generar
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+// creamos la seccion minima para hacer que nuestro codigo se genere,
+// esta bien se podria llamar de cualquier manera
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+// importamos MessageBoxA de user32.dll
+@Import {
+    @Method {
+        @Lib("user32.dll")
+        @Name("MessageBoxA")
+    }
+}
+
+code:
+    // --- Buffer de texto: "Hello\0\0\0" (8 bytes) ---
+    // Bytes en memoria: 48 65 6C 6C 6F 00 00 00
+    // Como qword little-endian: 0x0000006F6C6C6548
+    mov    r1, 8
+    alloc  r1                           // r0 = ptr host al buffer texto
+    mov    r10, r0                      // guardar ptr en r10 ANTES del xchg
+    xchg   cur0, r0                     // cur0 = ptr texto, r0 = viejo cur0 (0)
+    mov    r5, 0x0000006F6C6C6548       // "Hello\0\0\0" little-endian
+    writecur cur0, r5                   // escribe 8 bytes en el buffer
+
+    // --- Buffer de caption: "VestaVM\0" (8 bytes) ---
+    // Bytes en memoria: 56 65 73 74 61 56 4D 00
+    // Como qword little-endian: 0x004D566174736556
+    mov    r1, 8
+    alloc  r1                           // r0 = ptr host al buffer caption
+    mov    r11, r0                      // guardar ptr en r11 ANTES del xchg
+    xchg   cur1, r0                     // cur1 = ptr caption, r0 = viejo cur1 (0)
+    mov    r5, 0x004D566174736556       // "VestaVM\0" little-endian
+    writecur cur1, r5                   // escribe 8 bytes en el buffer
+
+    // --- MessageBoxA(NULL, lpText, lpCaption, MB_OK) ---
+    // int MessageBoxA(HWND hWnd, LPCSTR lpText, LPCSTR lpCaption, UINT uType)
+    mov    r15, 4                       // argc = 4
+    mov    r1, 0                        // hWnd = NULL
+    mov    r2, r10                      // lpText = ptr a "Hello\0\0\0"
+    mov    r3, r11                      // lpCaption = ptr a "VestaVM\0"
+    mov    r4, 0                        // uType = MB_OK (0)
+    calln  @Method("user32.dll:MessageBoxA")    // r0 = IDOK(1) al pulsar OK
+
+    // --- Liberar buffers y terminar ---
+    free   r10
+    free   r11
+    hlt
+
+end_code:
+
+align 16
+data:
+    msg db "Hola mundo"
+    msg1 dq 0x123456789abcdef
+end_data:
