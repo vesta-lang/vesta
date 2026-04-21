@@ -172,7 +172,7 @@ int main(int argc, char *argv[]) {
             Timer t_run;
             vm->start();
             while (vm->has_alive_processes()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             long long elapsed_ns = t_run.ns();
             vm->stop();
@@ -188,10 +188,6 @@ int main(int argc, char *argv[]) {
                     active_time_ns += sched->time_exec + sched->time_decode;
                 }
 
-                // MIPS sobre tiempo activo real (excluye sleeps del polling)
-                double mips = total_instrs > 0 && active_time_ns > 0
-                                  ? (total_instrs * 1000.0) / active_time_ns
-                                  : 0.0;
 
                 for (auto &sched: vm->schedulers) {
                     vesta::scout()
@@ -215,15 +211,23 @@ int main(int argc, char *argv[]) {
                     }
                 }
 
+                // sin hooks time_decode/time_exec son 0; usar wall time como base
+                uint64_t mips_base_ns = active_time_ns > 0 ? active_time_ns : (uint64_t) elapsed_ns;
+                double   mips         = total_instrs > 0 && mips_base_ns > 0
+                                  ? (total_instrs * 1000.0) / mips_base_ns
+                                  : 0.0;
 
                 vesta::scout() << "\n=== RUN STATS ===\n";
                 vesta::scout() << "Wall time:     " << elapsed_ns << " ns  ("
                         << elapsed_us << " us, " << elapsed_ms << " ms)\n";
-                vesta::scout() << "Tiempo activo: " << active_time_ns << " ns  ("
-                        << active_time_ns / 1000 << " us, "
-                        << active_time_ns / 1'000'000 << " ms)\n";
+                if (active_time_ns > 0) {
+                    vesta::scout() << "Tiempo activo: " << active_time_ns << " ns  ("
+                            << active_time_ns / 1000 << " us, "
+                            << active_time_ns / 1'000'000 << " ms)\n";
+                }
                 vesta::scout() << "Instrucciones: " << total_instrs << "\n";
-                vesta::scout() << "MIPS:          " << mips << "\n";
+                vesta::scout() << "MIPS:          " << mips
+                        << (active_time_ns > 0 ? "" : "  (wall time)") << "\n";
             }
         } catch (const std::exception &e) {
             std::cerr << "Error al ejecutar " << velb_path << ": " << e.what() << "\n";
