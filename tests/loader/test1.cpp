@@ -97,7 +97,7 @@ void print_memory_stats() {
 #endif
 using namespace Assembly::Bytecode;
 
-#define BENCHMARK_VM
+//#define BENCHMARK_VM
 
 int main() {
     Timer             global;
@@ -211,7 +211,7 @@ int main() {
     print_memory_stats();
 
     Timer        t_loader;
-    unsigned     logical = std::thread::hardware_concurrency();
+    unsigned     logical = 1;//std::thread::hardware_concurrency();
     runtime::VM *vm      = manager.loader.create_vm_instance(logical);
     runtime::ProcessVM *process  = manager.loader.load_executable(*vm, opts.output_path);
     //runtime::ProcessVM *process2 = manager.loader.load_executable(*vm, opts.output_path);
@@ -337,6 +337,7 @@ int main() {
             printf(C_CYAN "[STATE AFTER INSTRUCTION]\n" C_RESET);
 
             // --- REGISTERS ---
+            /*
             for (int i = 0; i < 16; ++i) {
                 printf(" R%02d=0x%016llx", i, process->registers.regs[i].qword());
                 if ((i % 2) == 1) printf("\n");
@@ -346,10 +347,9 @@ int main() {
             for (int i = 0; i < 4; ++i) {
                 printf(" CUR%02d=0x%016llx", i, process->registers.cur[i].qword());
                 if ((i % 2) == 1) printf("\n");
-            }
+            }*/
             printf("\n");
 
-            // --- FLAGS ---
             printf(process->to_string().c_str());
 
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
@@ -366,7 +366,7 @@ int main() {
                    process->scheduler.time_event,
                    process->scheduler.time_event / 1'000'000);
 
-            SLEEP(500);
+            SLEEP(100);
 
             process->scheduler.debug_timer.reset();
             process->scheduler.time_decode = 0;
@@ -439,7 +439,7 @@ int main() {
             //vesta::scout() << process_vench->to_string() << std::endl;
             //vesta::scout() << process_vench2->to_string() << std::endl;
             for (auto &s: vm->schedulers) {
-                /*
+
                 vesta::scout()
                         << "[Scheduler " << s->id_scheduler
                         << "] Estados de procesos: " << s->ready_queue.size()
@@ -458,7 +458,7 @@ int main() {
                             << std::endl;
                 }
 
-                */
+
             }
         }
         uint64_t ns = t_bench.ns();
@@ -522,7 +522,7 @@ int main() {
     //vm->wait();
     while (vm->has_alive_processes()) {
         vesta::scout() << "Esperando: " << vm->has_alive_processes() << std::endl;
-        SLEEP(100);
+        SLEEP(500);
     }
 
     auto runner_ns = t_bench.ns();

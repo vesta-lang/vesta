@@ -69,9 +69,9 @@ namespace runtime {
             sched->should_kill = true;
         }
 
-        // Despertar a todos los schedulers que estén en wait()
+        // Despertar a todos los schedulers que estén en sem.acquire()
         for (auto &sched: schedulers) {
-            sched->cv.notify_all();
+            sched->sem.release();
         }
 
         // si los hilos no terminaron debemos esperar, en caso contrario
@@ -106,28 +106,18 @@ namespace runtime {
     }
 
     bool VM::has_alive_processes() {
+        // O(N_schedulers): cada scheduler mantiene alive_count atómico,
+        // evitando iterar todos los procesos (era O(N_procesos total)).
         for (auto &sched: schedulers) {
-            if (sched->has_alive_processes())
+            if (sched->alive_count > 0)
                 return true;
         }
-
-        // si no quedan tareas en el thread pool entonces todos los gestores
-        // de procesos murieron.
-        //if (all_schedulers_dead() == false) {
-        // si aun queda tareas, o es un bug, o solo algunos gestores de procesos
-        // finalizaron su run_loop.
-        //    return true;
-        //}
-
-        // matar a todos los gestores, nos aseguramos de que todos mueran de
-        // forma correcta, pues que no queden procesos no finaliza el gestor de procesos
-        // automaticamente.
         return false;
     }
 
     void VM::make_ready(GlobalPID pid) {
         schedulers[pid.scheduler_id]->make_ready(pid);
-        schedulers[pid.scheduler_id]->cv.notify_one();
+        schedulers[pid.scheduler_id]->sem.release();
 
         // muy importante si se añade procesos sin un reset, el gestor de procesos una
         // vez finalice todos sus procesos, la instancia, activa esta bandera que indica

@@ -18,6 +18,8 @@
 #include "vm_state_event.h"
 
 #include "runtime/pid.h"
+#include "gc/gc_heap.h"
+#include "gc/raw_allocator.h"
 
 #define reductions_remaining_default 8192
 
@@ -97,7 +99,7 @@ namespace runtime {
             uint8_t size_instr: 4;
         } flags_info = {
             0, 0, 0, 0,
-            false, false, 0, 0, 0
+            false, false, false, 0, 0
         };
 
         union {
@@ -117,6 +119,23 @@ namespace runtime {
                 uint8_t reg1; // indica cual es el registro 1 que se codifica
                 uint8_t reg2; // indica cual es el registro 2 que se codifica
             } reg_data;
+
+            // datos usados unicamente por instrucciones que hacen
+            // uso de codificacion mixta de registros generales y registros
+            // especiales, la instruccion XCHG por ejemplo permite codificar
+            // registros especiales y generales en la misma instruccion para
+            // intercambiar valores entre los registros, el primer registro
+            // puede ser especial/extendido y el segundo no o al reves, por
+            // lo que es necesario un template distinto para almacenar toda la
+            // informacion
+            struct {
+                uint8_t reg1      : 6; // registro 1, puede ser extendido o no
+                uint8_t reg1_flags: 1; // flags, indica normalmente si es o no extendido
+                uint8_t unused1   : 1; // aun no usado
+                uint8_t reg2      : 6; // registro 2, puede ser extendido o no
+                uint8_t reg2_flags: 1; // flags, indica normalmente si es o no extendido
+                uint8_t unused2   : 1; // aun no usado
+            } regs_data_extent;
 
             /**
              * Permite guardar datos de instrucciones del tipo
@@ -192,7 +211,7 @@ namespace runtime {
     static constexpr uint32_t ICACHE_SIZE = 1024;
 
     /**
-     * Se usa para realizar el cacheado de las isntrucciones descodifcadas
+     * Se usa para realizar el cacheado de las instrucciones descodifcadas
      * @param pc Direccion PC de la instruccion descodificada.
      * @return entrada en la tabla cache.
      */
@@ -247,7 +266,7 @@ namespace runtime {
         //               sistema de cache para descodificacion de instrucciones.
         // -------------------------------------------------------------------------------
         // 256 entradas de cache maximo
-        DecodedInstr icache[ICACHE_SIZE]     = {};
+        DecodedInstr icache[ICACHE_SIZE] = {};
 
         /**
          * Contiene los datos de la instruccion descoficada.
@@ -262,6 +281,9 @@ namespace runtime {
 
         tlb::LazyHybridTLB tlb{};
         vm::VirtualMemory  vm_mem;
+
+        gc::GcHeap       gc_heap{manager_mem_priv, 2 * 1024 * 1024, 8 * 1024 * 1024};
+        gc::RawAllocator raw_alloc{};
 
         /**
          * Instancia global manejador de este proceso.
@@ -278,7 +300,7 @@ namespace runtime {
         /**
          * Permite cargar codigo crudo a un proceso, pone el hilo en un
          * estado de RUNNING automaticamente.
-         * @param address direccion virtual donde realizar la carga de las isntrucciones
+         * @param address direccion virtual donde realizar la carga de las instrucciones
          * @param code codigo a cargar en la direccion virtual.
          */
         void load_raw_code(uint64_t address, const std::vector<uint8_t> &code);
