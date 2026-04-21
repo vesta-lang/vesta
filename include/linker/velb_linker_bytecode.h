@@ -152,8 +152,8 @@ typedef struct PACKED HeaderVELB {
     // cantidad de secciones en la tabla de secciones.
     section_count count = 0; // 4, 48
 
-    // offset a la tabla de secciones
-    section_table_offset table_offset = 0; // 8, 56
+    // offset a la tabla de secciones // 8, 56 vector<section_range_memory>
+    section_table_offset table_offset = 0;
 
     // cantidad de espacios de direcciones
     number_spaces_address n_spaces = 0; // 8, 64
@@ -168,6 +168,16 @@ typedef struct PACKED HeaderVELB {
 
     // ofset a la tabla de labels
     uint64_t offset_label_table = 0; // 8, 96 // vector<entry_label_table*>
+
+    /**
+     * Cantidad de entradas de la tabla de importacion
+     */
+    uint32_t size_import_table = 0;
+
+    /**
+     * cantidad de entradas en la tabla de etiquetas.
+     */
+    uint32_t size_label_table = 0;
 
     table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;
@@ -203,15 +213,30 @@ typedef struct PACKED entry_label_table {
  */
 typedef struct PACKED entry_import_table {
     /**
-     * Offset a la tabla string
+     * Offset al nombre del modulo, Ejemplo: kernel32.dll
      */
-    uint32_t offset_table_string;
+    uint32_t offset_module_string = 0;
 
     /**
-     * offset del bytecode en el archivo.
+     * offset al nombre del metodo, Ejemplo: GetTickCount()
      */
-    uint32_t offset_bytecode;
+    uint32_t offset_function_string = 0;
+
+    /**
+     * La firma sirve para describir los tipos de argumentos y el tipo de retorno de la función nativa.
+     *      - (i32,i32)->i32
+     *      - (f64)->f64
+     *      - (str)->void
+     *      - (ptr,i32)->i32
+     */
+    uint32_t offset_signature_string = 0;
+
+    /**
+     * offset de la instruccion a parchear.
+     */
+    uint32_t offset_bytecode = 0;
 } entry_import_table;
+
 
 typedef struct PACKED HeaderVELA {
     char     magic[4]            = {'V', 'E', 'L', 'A'}; // "VELA"
@@ -402,6 +427,8 @@ namespace Assembly::Bytecode::Linker {
             case Type::Absolute32: return "ABS32";
             case Type::Absolute16: return "ABS16";
             case Type::Absolute8: return "ABS8";
+            case Type::Native_Method: return "NATIVE_METHOD";
+            case Type::NO_VALID: return "NO_VALID";
 
             default: return "UNKNOWN";
         }
@@ -929,13 +956,22 @@ namespace Assembly::Bytecode::Linker {
         /**
          * bytecode final que plasmar, esto esta generado por una unidad de ensamblado
          */
-        std::vector<uint8_t> final_executable;
+        std::vector<uint8_t> final_bytecode;
 
         /**
          * Header que escribir en el archivo final
          */
         HeaderVELB final_header{};
 
+        /**
+         * Tabla de metodos nativos a ejecutar. Esta tabla debe construirse en dos dases distintas,
+         * la primera fase es en "apply_relocations" donde detectamos el tipo de relocalizacion y creamos
+         * la entrada dentro de esta tabla con el indice del metodo a la tabla import_lookup. Como aun no
+         * tenemos la tabla strings construida, es necesario pos-poner la construccion completa a la siguiente
+         * fase donde ya deberiamos tener la tabla strings y podemos completar cada entrada de la tabla de importa
+         * -cion
+         */
+        std::vector<entry_import_table> table_import_method;
 
         /**
          * Tabla de secciones finales

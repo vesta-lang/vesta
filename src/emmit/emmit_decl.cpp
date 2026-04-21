@@ -10,7 +10,7 @@
 
 
 /**
- * La isntruccion de emision emiten el resto de bytes faltantes,
+ * La instruccion de emision emiten el resto de bytes faltantes,
  * el opcode/s ya debio ser emitido por a funcion llamadora del metodo de emision.
  */
 namespace Assembly::Bytecode {
@@ -421,6 +421,63 @@ namespace Assembly::Bytecode {
         bool is_a_signed = is_signed(instruction_parser->opcode);
     }
 
+    void emit_xchg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (reg1 == nullptr) {
+            throw std::runtime_error("Error la instruccion: " + instruction_parser->opcode +
+                " no encontro un registro 1");
+        }
+
+        if (reg2 == nullptr) {
+            throw std::runtime_error("Error la instruccion: " + instruction_parser->opcode +
+                " no encontro un registro 2");
+        }
+
+        uint8_t flags = 0; // aun no se usa, pero se debe emitir.
+        code_final.emit8(flags);
+
+        // miramos si algunos de los registros son especiales, si no los son, o si lo son ambos
+        std::optional<uint8_t> opt_special1 = encode_special_register(reg1->name);
+        std::optional<uint8_t> opt_special2 = encode_special_register(reg2->name);
+
+        // codificamos el primer byte de registros
+        uint8_t byte1 = 0b0000'0000;
+        if (opt_special1) {
+            // si es un registro especial, se debe indicar con el segundo bit, en caso
+            // de ser registro general, no se activa este bit
+            byte1 = 0b0100'0000;
+            byte1 = byte1 | opt_special1.value(); // 6 bits para indicar el registro
+        } else {
+            uint8_t mode     = encode_mode(reg1->size_bits);           // 2 bits
+            uint8_t reg_code = encode_reg_general(reg1->name.c_str()); // 4 bits
+            byte1            = byte1 | (mode << 4 | reg_code);
+        }
+
+        // codificamos el segundo byte de registros
+        uint8_t byte2 = 0b0000'0000;
+        if (opt_special2) {
+            // si es un registro especial, se debe indicar con el segundo bit, en caso
+            // de ser registro general, no se activa este bit
+            byte2 = 0b0100'0000;
+            byte2 = byte2 | opt_special2.value(); // 6 bits para indicar el registro
+        } else {
+            uint8_t mode     = encode_mode(reg2->size_bits);           // 2 bits
+            uint8_t reg_code = encode_reg_general(reg2->name.c_str()); // 4 bits
+            byte2            = byte2 | (mode << 4 | reg_code);
+        }
+
+        // emitimos los bytes de los registros
+        code_final.emit8(byte1);
+        code_final.emit8(byte2);
+    }
+
     void emit_pop_push(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -748,10 +805,221 @@ namespace Assembly::Bytecode {
         code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
     }
 
+    void emit_instr_calln_inmmed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto method_annotation_node = instruction_parser->operands[0].get();
+        auto method                 = dynamic_cast<vm::AnnotationNode *>(method_annotation_node);
+        if (method == nullptr) {
+            throw std::runtime_error(
+                "emit_instr_calln_inmmed() Error: la instruccion " + instruction_parser->opcode +
+                " esperaba una notacion del tipo @Method con el metodo a llamar, pero no se pudo situar"
+                "una notacion de este tipo."
+            );
+        }
+
+        Relocation rel;
+        rel.symbol = method->value; // nombre del metodo con la libreria que lo contiene
+        // Ejemplo: @Method("kernel32.dll:GetTickCount"), value contiene "kernel32.dll:GetTickCount"
+        rel.section = assembly_ctx->current_section->name;
+        rel.type    = Type::Native_Method; // es un metodo nativo
+        // el offset debe obtenerse antes de emitir los bytes del placeholder
+        rel.offset = code_final.offset;
+
+        uint64_t placeholder = 0x1122334455667788;
+        code_final.emit_bytes(&placeholder, size_relocation_emmit(rel.type));
+
+        assembly_ctx->ctx.add_relocation(rel);
+    }
+
     void emit_instr_mov_sib(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
     ) {}
+
+    void emit_instr_one_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        if (reg == nullptr) {
+            throw std::runtime_error(
+                "Error: " + instruction_parser->opcode + " requiere un operando de tipo registro"
+            );
+        }
+
+        uint8_t mode = encode_mode(reg->size_bits);
+
+        // ctrl_byte: bits 7-6 = mode, resto = 0
+        code_final.emit8(static_cast<uint8_t>(mode << 6));
+        // reg_byte:  bits 3-0 = registro, bits 7-4 = 0
+        code_final.emit8(encode_reg_general(reg->name.c_str()));
+    }
+
+    void emit_cursor_rw(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        auto reg0 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (reg0 == nullptr || reg1 == nullptr) {
+            throw std::runtime_error(
+                "Error: " + instruction_parser->opcode + " requiere dos operandos registro"
+            );
+        }
+
+        std::optional<uint8_t> opt0 = encode_special_register(reg0->name);
+        std::optional<uint8_t> opt1 = encode_special_register(reg1->name);
+
+        uint8_t cur_idx, gen_reg, mode;
+
+        if (opt0) {
+            // writecur curN, src_reg - primer operando es el cursor
+            if (opt0.value() > 3) {
+                throw std::runtime_error("writecur: primer operando debe ser cur0-cur3, no rip/rbp/rsp/rflags");
+            }
+            cur_idx = opt0.value() & 0b11;
+            gen_reg = encode_reg_general(reg1->name.c_str());
+            mode    = encode_mode(reg1->size_bits);
+        } else {
+            // readcur dest_reg, curN - segundo operando es el cursor
+            if (!opt1) {
+                throw std::runtime_error(
+                    instruction_parser->opcode + ": uno de los operandos debe ser cur0-cur3"
+                );
+            }
+            gen_reg = encode_reg_general(reg0->name.c_str());
+            cur_idx = opt1.value() & 0b11;
+            mode    = encode_mode(reg0->size_bits);
+        }
+
+        // ctrl_byte: bits 7-6 = mode, bits 5-4 = cursor index
+        code_final.emit8(static_cast<uint8_t>((mode << 6) | (cur_idx << 4)));
+        code_final.emit8(gen_reg);
+    }
+
+    void emit_gcderef(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        // gcderef curN, handle_reg
+        auto cur_op    = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+        auto handle_op = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+        if (cur_op == nullptr || handle_op == nullptr) {
+            throw std::runtime_error("gcderef: requiere dos operandos registro");
+        }
+
+        std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
+        if (!opt_cur) {
+            throw std::runtime_error("gcderef: primer operando debe ser cur0-cur3");
+        }
+
+        uint8_t cur_idx    = opt_cur.value() & 0b11;
+        uint8_t handle_reg = encode_reg_general(handle_op->name.c_str());
+
+        // ctrl_byte: bits 5-4 = cursor index (mode no aplica para gcderef)
+        code_final.emit8(static_cast<uint8_t>(cur_idx << 4));
+        code_final.emit8(handle_reg);
+    }
+
+    void emit_instr_abs64(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        // segundo byte: condición (para jmp) o reservado 0x00 (para callvm/enter)
+        code_final.emit8(now_instr->opcode2);
+
+        auto *op = instruction_parser->operands[0].get();
+
+        if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
+            auto val_opt = vm::parse_number_safe(num->value);
+            if (!val_opt)
+                throw std::runtime_error("emit_instr_abs64: valor numerico invalido: " + num->value);
+            uint64_t val = val_opt.value();
+            code_final.emit64(val);
+        } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
+            Relocation rel;
+            rel.symbol  = lbl->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset;
+            rel.type    = Type::Absolute64;
+            assembly_ctx->ctx.add_relocation(rel);
+            code_final.emit64(0);
+        } else {
+            throw std::runtime_error(
+                "emit_instr_abs64: operando invalido para '" + instruction_parser->opcode +
+                "': se esperaba un numero o label"
+            );
+        }
+    }
+
+    static uint8_t suffix_to_cond(const std::string &opcode) {
+        size_t dot = opcode.find('.');
+        if (dot == std::string::npos) return 0x0F; // incondicional
+        std::string s = opcode.substr(dot + 1);
+        if (s == "je"  || s == "jz")  return 0x00;
+        if (s == "jne" || s == "jnz") return 0x01;
+        if (s == "jcs" || s == "jae") return 0x02;
+        if (s == "jcc" || s == "jb")  return 0x03;
+        if (s == "jmi")               return 0x04;
+        if (s == "jpl")               return 0x05;
+        if (s == "jvs")               return 0x06;
+        if (s == "jvc")               return 0x07;
+        if (s == "jhi")               return 0x08;
+        if (s == "jls")               return 0x09;
+        if (s == "jge")               return 0x0A;
+        if (s == "jlt")               return 0x0B;
+        if (s == "jgt")               return 0x0C;
+        if (s == "jle")               return 0x0D;
+        return 0x0F;
+    }
+
+    void emit_jrel(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        // emit_instruction ya emitió [0x00][0x2D]; aquí emitimos [cond][pad][disp32]
+        code_final.emit8(suffix_to_cond(instruction_parser->opcode));
+        code_final.emit8(0x00); // padding
+
+        auto *op = instruction_parser->operands[0].get();
+
+        if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
+            auto val_opt = vm::parse_number_safe(num->value);
+            if (!val_opt)
+                throw std::runtime_error("emit_jrel: valor numérico inválido: " + num->value);
+            int32_t disp = static_cast<int32_t>(val_opt.value());
+            code_final.emit32(static_cast<uint32_t>(disp));
+        } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
+            Relocation rel;
+            rel.symbol  = lbl->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset;
+            rel.type    = Type::Relative32;
+            assembly_ctx->ctx.add_relocation(rel);
+            code_final.emit32(0);
+        } else {
+            throw std::runtime_error(
+                "emit_jrel: operando invalido para '" + instruction_parser->opcode +
+                "': se esperaba un número o label"
+            );
+        }
+    }
 }

@@ -56,12 +56,16 @@ namespace runtime {
         // copiar a memoria virtual
         vm_mem.vm_to_host_memcpy(address, code.data(), code.size());
 
-        // resetear PC
+        // Configurar
         registers.rip.qword(address);
 
-        // resetear estado de ejecución
-        decoded_ptr = nullptr;
-        state       = RUNNING;
+        // No debemos configurar manualmente el estado del proceso,
+        // si el proceso es nuevo, el proceso se configura automaticamente
+        // en el estado de NEW, este estado es necesario para que el metodo
+        // Scheduler::make_ready del gestor de procesos, pueda detectar
+        // que el proceso es nuevo, se incremente el contador de procesos
+        // vivos que requiere que el proceso este en NEW y cambie el estado
+        // del proceso a READY 
     }
 
     std::string ProcessVM::to_string() const {
@@ -75,7 +79,7 @@ namespace runtime {
                 " ID SCHEDULER=" << vesta::hex64((uint64_t) pid.scheduler_id)
                 << " st=" << vm_state_to_str(state) << "\n";
 
-        // Registros generales R00–R15
+        // Registros generales R00-R15
         for (int i = 0; i < 16; ++i) {
             ss << " R" << std::setw(2) << std::setfill('0') << i
                     << "=" << vesta::hex64(registers.regs[i].qword());
@@ -83,7 +87,7 @@ namespace runtime {
         }
         ss << "\n";
 
-        // CUR0–CUR3
+        // CUR0-CUR3
         for (int i = 0; i < 4; ++i) {
             ss << " CUR" << i << "=" << vesta::hex64(registers.cur[i].qword());
             if (i % 2 == 1) ss << "\n";
@@ -122,8 +126,8 @@ namespace runtime {
         }
 
         size_t valid = 0;
-        for (int i = 0; i < ICACHE_SIZE; i++)
-            if (icache[i].pc != ~0ull) // entrada válida
+        for (const auto & i : icache)
+            if (i.metadata !=  nullptr) // entrada válida
                 valid++;
 
         ss << " ICACHE: valid=" << valid << "/" << ICACHE_SIZE

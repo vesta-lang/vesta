@@ -126,8 +126,8 @@ namespace vm {
         if (s_in.empty()) return std::nullopt;
         std::string s = remove_underscores(s_in);
 
-        size_t pos = 0;
-        bool has_plus = false;
+        size_t pos      = 0;
+        bool   has_plus = false;
         if (s[pos] == '+') {
             has_plus = true;
             ++pos;
@@ -140,8 +140,8 @@ namespace vm {
             std::string body = s.substr(pos + 2);
             if (body.empty()) return std::nullopt;
             // use from_chars for hex (C++17/20)
-            uint64_t val = 0;
-            auto [ptr, ec] = std::from_chars(body.data(), body.data() + body.size(), val, 16);
+            uint64_t val       = 0;
+            auto     [ptr, ec] = std::from_chars(body.data(), body.data() + body.size(), val, 16);
             if (ec == std::errc() && ptr == body.data() + body.size()) return val;
             return std::nullopt;
         }
@@ -163,7 +163,7 @@ namespace vm {
         // octal (cero inicial y longitud > 1)
         if (s[pos] == '0' && (s.size() - pos) > 1) {
             std::string body = s.substr(pos + 1);
-            uint64_t val = 0;
+            uint64_t    val  = 0;
             for (char c: body) {
                 if (c < '0' || c > '7') return std::nullopt;
                 int d = c - '0';
@@ -277,34 +277,31 @@ namespace vm {
      */
     inline bool is_number_token(TokenType type) {
         return type == TokenType::NUMBER_DEC || type == TokenType::NUMBER_HEX ||
-               type == TokenType::NUMBER_BIN || type == TokenType::NUMBER_OCT;
+                type == TokenType::NUMBER_BIN || type == TokenType::NUMBER_OCT;
     }
 
     class ParseError : public std::runtime_error {
     public:
-        int line, column;
-        TokenType expected, found;
+        int         line,     column;
+        TokenType   expected, found;
         std::string token_info;
 
         ParseError(int l, int c, const std::string &msg)
-            : std::runtime_error(msg), line(l), column(c) {
-        }
+            : std::runtime_error(msg), line(l), column(c) {}
 
         ParseError(int l, int c, TokenType exp, TokenType f, const std::string &tok)
             : std::runtime_error("Expected " + token_type_to_string(exp) +
-                                 ", found " + token_type_to_string(f)),
-              line(l), column(c), expected(exp), found(f), token_info(tok) {
-        }
+                  ", found " + token_type_to_string(f)),
+              line(l), column(c), expected(exp), found(f), token_info(tok) {}
     };
 
     class ParseWarning : public std::runtime_error {
     public:
-        int line, column;
+        int         line, column;
         std::string suggestion;
 
         ParseWarning(int l, int c, const std::string &msg, const std::string &sugg = "")
-            : std::runtime_error(msg), line(l), column(c), suggestion(sugg) {
-        }
+            : std::runtime_error(msg), line(l), column(c), suggestion(sugg) {}
     };
 
 
@@ -330,8 +327,8 @@ namespace vm {
      */
     class Parser {
     private:
-        vm::Lexer &lexer; ///< Lexer fuente de tokens
-        vm::Token current{vm::TokenType::EndOfFile, "", 0, 0}; ///< Token actual (lookahead)
+        vm::Lexer &lexer;                                       ///< Lexer fuente de tokens
+        vm::Token  current{vm::TokenType::EndOfFile, "", 0, 0}; ///< Token actual (lookahead)
 
         /**
          * @brief Avanza al siguiente token del lexer.
@@ -342,6 +339,9 @@ namespace vm {
             current = lexer.next_token();
         }
 
+        /**
+         * @return Retorna el SIGUIENTE token SIN consumirlo
+         */
         [[nodiscard]] Token peek() const {
             return lexer.peek_token();
         }
