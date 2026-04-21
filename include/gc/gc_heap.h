@@ -95,12 +95,12 @@
 #include <cstdint>
 #include <cstddef>
 #include <vector>
+#include <unordered_set>
 
 #include "arena/VirtualMemory.h"
 #include "arena/arena_manager.h"
 
 namespace gc {
-
     /**
      * @brief Handle opaco para referenciar objetos gestionados por el GcHeap.
      *
@@ -168,11 +168,11 @@ namespace gc {
      *          si puede reutilizarlo. Nunca poner size = 0 en un slot DEAD.
      */
     struct alignas(8) GcHeader {
-        uint32_t size;        /**< Bytes del payload (sin incluir esta cabecera). */
-        GcColor  color : 2;   /**< Estado tri-color mas DEAD. */
-        GcGen    gen   : 1;   /**< Generacion: YOUNG o OLD. */
-        uint8_t  _pad  : 5;   /**< Bits reservados para uso futuro. */
-        uint8_t  _reserved[3];/**< Padding hasta 8 bytes; reservado. */
+        uint32_t size;         /**< Bytes del payload (sin incluir esta cabecera). */
+        GcColor  color: 2;     /**< Estado tri-color mas DEAD. */
+        GcGen    gen  : 1;     /**< Generacion: YOUNG o OLD. */
+        uint8_t  _pad : 5;     /**< Bits reservados para uso futuro. */
+        uint8_t  _reserved[3]; /**< Padding hasta 8 bytes; reservado. */
     };
 
     static_assert(sizeof(GcHeader) == 8,
@@ -277,7 +277,8 @@ namespace gc {
          */
         ~GcHeap();
 
-        GcHeap(const GcHeap &)            = delete;
+        GcHeap(const GcHeap &) = delete;
+
         GcHeap &operator=(const GcHeap &) = delete;
 
         /**
@@ -350,7 +351,9 @@ namespace gc {
          *
          * @param h Handle a liberar. Si es invalido o ya esta libre, no hace nada.
          */
-        void drop(GcHandle h) { release_handle(h); }
+        void drop(GcHandle h) {
+            release_handle(h);
+        }
 
         /**
          * @brief Minor GC: evacua la Nursery copiando supervivientes a OldGen.
@@ -415,16 +418,24 @@ namespace gc {
          * @param bytes Umbral en bytes. Un valor de 0 deshabilita el major GC
          *              automatico (solo se puede disparar manualmente).
          */
-        void set_old_threshold(size_t bytes) { old_threshold_ = bytes; }
+        void set_old_threshold(size_t bytes) {
+            old_threshold_ = bytes;
+        }
 
         /** @brief Bytes actualmente usados en la Nursery (distancia bump-base). */
-        size_t nursery_used()  const { return static_cast<size_t>(nursery_bump_ - nursery_base_); }
+        size_t nursery_used() const {
+            return static_cast<size_t>(nursery_bump_ - nursery_base_);
+        }
 
         /** @brief Tamano total de la Nursery en bytes. */
-        size_t nursery_total() const { return nursery_size_; }
+        size_t nursery_total() const {
+            return nursery_size_;
+        }
 
         /** @brief Bytes actualmente contabilizados en OldGen. */
-        size_t old_used()      const { return old_used_; }
+        size_t old_used() const {
+            return old_used_;
+        }
 
         /**
          * @brief Devuelve una referencia de solo lectura a las estadisticas acumuladas.
@@ -435,7 +446,9 @@ namespace gc {
          *
          * @return Referencia const a GcStats.
          */
-        const GcStats &stats() const { return stats_; }
+        const GcStats &stats() const {
+            return stats_;
+        }
 
     private:
         vm::ArenaManager &arena_mgr_;
@@ -463,7 +476,7 @@ namespace gc {
         std::vector<GcHandle>    free_handles_; ///< Freelist LIFO de slots reciclables.
 
         // --- RememberedSet ---
-        std::vector<GcHandle> remembered_set_; ///< Handles OLD con referencias a YOUNG.
+        std::unordered_set<GcHandle> remembered_set_; ///< Handles OLD con referencias a YOUNG.
 
         // --- Estadisticas ---
         GcStats stats_;
@@ -503,9 +516,34 @@ namespace gc {
          *
          * @param h Handle del objeto a evacuar.
          */
-        void evacuate_object(GcHandle h);
-    };
+        void do_evacuate(GcHandle h);
 
+        /**
+         * @brief Evacua el objeto referenciado por @p h de Nursery a OldGen.
+         *
+         * Wrapper que comprueba addr != nullptr antes de delegar en do_evacuate().
+         * Los objetos ya en OldGen o ya marcados BLACK son ignorados.
+         */
+        void evacuate_object(GcHandle h);
+
+        /**
+         * @brief Escanea el payload del objeto @p h buscando handles YOUNG y los evacua.
+         *
+         * Cada palabra de 4 bytes del payload se interpreta como potencial GcHandle.
+         * Si apunta a un objeto YOUNG no evacuado, llama a do_evacuate() y lo
+         * añade al worklist para escaneo transitivo posterior (Cheney-style).
+         */
+        void scan_young_refs(GcHandle h, std::vector<GcHandle> &worklist);
+
+        /**
+         * @brief Marca transitivamente todos los objetos OLD alcanzables desde @p h.
+         *
+         * Escanea el payload de @p h. Si alguna palabra de 4 bytes es un handle
+         * valido con addr != nullptr que apunta a un objeto OLD WHITE, lo marca
+         * BLACK y lo añade al worklist para propagacion.
+         */
+        void mark_reachable(GcHandle h, std::vector<GcHandle> &worklist);
+    };
 } // namespace gc
 
 #endif // GC_HEAP_H

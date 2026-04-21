@@ -68,10 +68,10 @@ typedef struct RFlags_t {
 #define COND_LT(flags) ((flags).SF != (flags).OF)
 // Signed Less Than: signo y overflow son distintos -> lhs < rhs (signed)
 
-#define COND_GT(flags) ((flags).ZF == 0 && (flags).SF == (flags).OF))
+#define COND_GT(flags) ((flags).ZF == 0 && (flags).SF == (flags).OF)
 // Signed Greater Than: no es cero y signo = overflow -> lhs > rhs (signed)
 
-#define COND_LE(flags) ((flags).ZF == 1 || (flags).SF != (flags).OF))
+#define COND_LE(flags) ((flags).ZF == 1 || (flags).SF != (flags).OF)
 // Signed Less or Equal: es cero o signo ≠ overflow -> lhs ≤ rhs (signed)
 
 

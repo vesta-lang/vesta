@@ -79,7 +79,7 @@ namespace runtime {
                 " ID SCHEDULER=" << vesta::hex64((uint64_t) pid.scheduler_id)
                 << " st=" << vm_state_to_str(state) << "\n";
 
-        // Registros generales R00–R15
+        // Registros generales R00-R15
         for (int i = 0; i < 16; ++i) {
             ss << " R" << std::setw(2) << std::setfill('0') << i
                     << "=" << vesta::hex64(registers.regs[i].qword());
@@ -87,7 +87,7 @@ namespace runtime {
         }
         ss << "\n";
 
-        // CUR0–CUR3
+        // CUR0-CUR3
         for (int i = 0; i < 4; ++i) {
             ss << " CUR" << i << "=" << vesta::hex64(registers.cur[i].qword());
             if (i % 2 == 1) ss << "\n";

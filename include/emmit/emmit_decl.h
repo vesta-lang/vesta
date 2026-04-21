@@ -48,6 +48,8 @@ namespace Assembly::Bytecode {
          */
         FIXED_10,
 
+        FIXED_11,
+
         COUNT,
 
         /**
@@ -176,7 +178,7 @@ namespace Assembly::Bytecode {
         // si da un byte, al desplazar se queda en 0
         // si da dos bytes, al desplazar queda en 1
         // si da 4 bytes, al deslazar queda en 2
-        // si da 8 bytes, al desplazar queda en 4
+        // si da 8 bytes, al desplazar queda en 4 se va 3
         uint8_t n_mode = (size_bits / 8) >> 1;
         return (n_mode >= 4) ? 3 : n_mode;
     }
@@ -207,7 +209,7 @@ namespace Assembly::Bytecode {
         SIB,
 
         /**
-         * Se usa para indicar que la isntruccion usa inmediatos o es una variante que lo hace. Una direccion de memoria
+         * Se usa para indicar que la instruccion usa inmediatos o es una variante que lo hace. Una direccion de memoria
          * constante o un valor se considera inmediato:
          *      adds r00, 0x1234
          */
@@ -235,7 +237,7 @@ namespace Assembly::Bytecode {
      * @return tamaño de la instruccion.
      */
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1, 2, 4, 8, 10};
+        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1, 2, 4, 8, 10, 11};
         return table[static_cast<uint8_t>(mode)];
     }
 
@@ -269,8 +271,8 @@ namespace Assembly::Bytecode {
     };
 
     /**
-     * Coste O(1) para busqueda de isntrucciones con signo
-     * @param opcode nombre de la isntruccion a comprobar si es con signo
+     * Coste O(1) para busqueda de instrucciones con signo
+     * @param opcode nombre de la instruccion a comprobar si es con signo
      * @return true si fue una instruccion contemplada con signo.
      */
     static bool is_signed(const std::string &opcode) {
@@ -341,7 +343,7 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Permite emitir isntrucciones de tipo inmediato como son MOV r12, 0x1234 y otras similares
+     * Permite emitir instrucciones de tipo inmediato como son MOV r12, 0x1234 y otras similares
      * @param instruction_parser
      * @param code_final
      * @param now_instr
@@ -393,7 +395,7 @@ namespace Assembly::Bytecode {
 
     /**
      * Emite instrucciones con un único operando de tipo registro general:
-     *   newobj reg_size, gcconfig reg_threshold, drop reg_handle,
+     *   newobj reg_size, gcconfig reg_threshold, drop reg_handle, gcwb reg_old_handle,
      *   alloc reg_size, free reg_ptr
      *
      * Formato (FIXED_4, opcode extendido 0x00):
@@ -427,6 +429,32 @@ namespace Assembly::Bytecode {
      * ctrl_byte = (cur_idx<<4), reg_byte = handle_reg_index
      */
     void emit_gcderef(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * Emite el byte now_instr->opcode2 seguido de una dirección de 64 bits absoluta.
+     * Se usa para callvm, enter y las variantes condicionales de jmp:
+     *   [opcode2][8 bytes addr/valor]
+     * Si el operando es un LabelOperand se crea una relocalización Absolute64.
+     */
+    void emit_instr_abs64(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * Emite el cuerpo de una instrucción jrel:
+     *   [cond][pad=0x00][disp32]
+     * La condición se deduce del sufijo del mnemónico (jrel.je, jrel.jne, …).
+     * Si el operando es un LabelOperand se crea una relocalización Relative32.
+     */
+    void emit_jrel(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,

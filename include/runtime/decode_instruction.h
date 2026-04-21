@@ -242,6 +242,31 @@ namespace runtime {
     void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * Descodifica instrucciones de salto (JMP, Jcc) y llamada (CALLVM).
+     * Formato FIXED_10 (opcode primario):
+     *   [opcode][cond_o_reservado][8 bytes dirección destino]
+     *
+     * El byte cond_o_reservado se almacena en inmmed_data.reg:
+     *   JMP : 0x0F = incondicional; 0x00-0x0D = condicional (Jcc).
+     *   CALLVM : reservado (ignorado en exec).
+     */
+    void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
+     * Decodificador para instrucciones sin operandos (RET, LEAVE).
+     * Solo establece el tamaño de la instrucción según los metadatos.
+     */
+    void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
+     * Decodifica JREL (salto relativo condicional).
+     * Formato extendido FIXED_8: [0x00][0x2D][cond_byte][padding][disp32]
+     *   cond_byte -> inmmed_data.reg
+     *   disp32 sign-extended a 64 bits -> inmmed_data.inmmed
+     */
+    void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * Descodifica instrucciones de lectura/escritura a memoria real via cursor:
      *   readcur  dest_reg, curN   - lee de la dirección host en curN
      *   writecur curN, src_reg    - escribe src_reg en la dirección host en curN

@@ -134,24 +134,24 @@ namespace runtime {
         },
 
         /* 0x10 */{
-            // callvm
+            // callvm addr: push ret_addr; jmp addr
             "callvm", Assembly::Bytecode::AddressingMode::INMED,
-            Assembly::Bytecode::InstrSizeMode::FIXED_8,
-            nullptr, nullptr
+            Assembly::Bytecode::InstrSizeMode::FIXED_10,
+            exec_instr_callvm, decode_instr_jump
         },
 
         /* 0x11 */{
-            // jmp
+            // jmp/jcc: [0x11][cond][8-byte addr]; cond=0x0F => incondicional
             "jmp", Assembly::Bytecode::AddressingMode::INMED,
-            Assembly::Bytecode::InstrSizeMode::FIXED_8,
-            nullptr, nullptr
+            Assembly::Bytecode::InstrSizeMode::FIXED_10,
+            exec_instr_jmp, decode_instr_jump
         },
 
         /* 0x12 */{
             // push
             "push", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            exec_instr_push, decode_instr_calln
+            exec_instr_push, decode_instr_push_pop
         },
 
         /* 0x13 */{
@@ -169,17 +169,17 @@ namespace runtime {
         },
 
         /* 0x15 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // jmpr reg: salta a la dirección almacenada en un registro
+            "jmpr", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_jmpr, decode_instr_push_pop
         },
 
         /* 0x16 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // callvmr reg: callvm con dirección en registro
+            "callvmr", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_callvmr, decode_instr_push_pop
         },
 
         /* 0x17 */{
@@ -302,17 +302,17 @@ namespace runtime {
         },
 
         /* 0x28 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // enter frame_size: push rbp; mov rbp,rsp; sub rsp,frame_size
+            "enter", Assembly::Bytecode::AddressingMode::INMED,
+            Assembly::Bytecode::InstrSizeMode::FIXED_10,
+            exec_instr_enter, decode_instr_jump
         },
 
         /* 0x29 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
+            // leave: mov rsp,rbp; pop rbp
+            "leave", Assembly::Bytecode::AddressingMode::NONE,
             Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            exec_instr_leave, decode_instr_no_operands
         },
 
         /* 0x2A */{
@@ -1396,10 +1396,10 @@ namespace runtime {
         },
 
         /* 0xC3 */{
-            // ret
+            // ret: pop addr de la pila y salta a ella
             "ret", Assembly::Bytecode::AddressingMode::NONE,
             Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            exec_instr_ret, decode_instr_no_operands
         },
 
         /* 0xC4 */{
@@ -2148,12 +2148,12 @@ namespace runtime {
         },
 
         /* 0x2D */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // jrel cond, disp32: salto relativo condicional con desplazamiento 32-bit
+            // [0x00][0x2D][cond][pad][disp32] = 8 bytes
+            "jrel", Assembly::Bytecode::AddressingMode::INMED,
+            Assembly::Bytecode::InstrSizeMode::FIXED_8,
+            exec_instr_jrel, decode_instr_jrel
         },
-
         /* 0x2E */{
             //
             "", Assembly::Bytecode::AddressingMode::COUNT,
@@ -2989,10 +2989,10 @@ namespace runtime {
         },
 
         /* 0xA4 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GCWB reg_old_handle - registra el handle OLD en el remembered set
+            "gcwb", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gcwb, decode_instr_two_op_reg
         },
 
         /* 0xA5 */{

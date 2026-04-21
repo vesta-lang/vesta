@@ -210,4 +210,121 @@ namespace runtime {
             write_special(vm, instr.data_instruction.regs_data_extent.reg1, val2);
         }
     }
+
+    void exec_instr_jmp(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  cond = instr.data_instruction.inmmed_data.reg;
+        const uint64_t addr = instr.data_instruction.inmmed_data.inmmed;
+        auto          &fl   = vm->registers.flags.bits;
+
+        bool taken;
+        switch (cond) {
+            case 0x00: taken = COND_EQ(fl); break;
+            case 0x01: taken = COND_NE(fl); break;
+            case 0x02: taken = COND_CS(fl); break;
+            case 0x03: taken = COND_CC(fl); break;
+            case 0x04: taken = COND_MI(fl); break;
+            case 0x05: taken = COND_PL(fl); break;
+            case 0x06: taken = COND_VS(fl); break;
+            case 0x07: taken = COND_VC(fl); break;
+            case 0x08: taken = COND_HI(fl); break;
+            case 0x09: taken = COND_LS(fl); break;
+            case 0x0A: taken = COND_GE(fl); break;
+            case 0x0B: taken = COND_LT(fl); break;
+            case 0x0C: taken = (fl.ZF == 0 && fl.SF == fl.OF); break;
+            case 0x0D: taken = (fl.ZF == 1 || fl.SF != fl.OF); break;
+            default:   taken = true; break; // 0x0F y cualquier otro = incondicional
+        }
+
+        if (taken)
+            write_rip(vm, addr);
+    }
+
+    void exec_instr_callvm(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint64_t addr     = instr.data_instruction.inmmed_data.inmmed;
+        const uint64_t ret_addr = vm->registers.rip.raw() + instr.flags_info.size_instr;
+
+        // push ret_addr
+        vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() - 8);
+        vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &ret_addr, 8);
+        write_rip(vm, addr);
+    }
+
+    void exec_instr_ret(ProcessVM *vm, const DecodedInstr &instr) {
+        uint64_t ret_addr = 0;
+        vm->vm_mem.read_bytes(vm->registers.stack_pointer.raw(), &ret_addr, 8);
+        vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() + 8);
+        write_rip(vm, ret_addr);
+    }
+
+    void exec_instr_enter(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint64_t frame_size = instr.data_instruction.inmmed_data.inmmed;
+        const uint64_t rbp_val    = vm->registers.base_pointer.raw();
+
+        // push rbp
+        vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() - 8);
+        vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &rbp_val, 8);
+
+        // mov rbp, rsp
+        vm->registers.base_pointer.raw(vm->registers.stack_pointer.raw());
+
+        // sub rsp, frame_size
+        vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() - frame_size);
+    }
+
+    void exec_instr_leave(ProcessVM *vm, const DecodedInstr &instr) {
+        // mov rsp, rbp
+        vm->registers.stack_pointer.raw(vm->registers.base_pointer.raw());
+
+        // pop rbp
+        uint64_t rbp_val = 0;
+        vm->vm_mem.read_bytes(vm->registers.stack_pointer.raw(), &rbp_val, 8);
+        vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() + 8);
+        vm->registers.base_pointer.raw(rbp_val);
+    }
+
+    void exec_instr_jmpr(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint64_t addr = instr.flags_info.reg_ext
+            ? read_special(vm, instr.data_instruction.reg_data.reg1)
+            : read_reg64(vm, instr.data_instruction.reg_data.reg1);
+        write_rip(vm, addr);
+    }
+
+    void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint64_t addr     = instr.flags_info.reg_ext
+            ? read_special(vm, instr.data_instruction.reg_data.reg1)
+            : read_reg64(vm, instr.data_instruction.reg_data.reg1);
+        const uint64_t ret_addr = vm->registers.rip.raw() + instr.flags_info.size_instr;
+
+        vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() - 8);
+        vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &ret_addr, 8);
+        write_rip(vm, addr);
+    }
+
+    void exec_instr_jrel(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t cond = instr.data_instruction.inmmed_data.reg;
+        const int64_t disp = static_cast<int64_t>(instr.data_instruction.inmmed_data.inmmed);
+        auto         &fl   = vm->registers.flags.bits;
+
+        bool taken;
+        switch (cond) {
+            case 0x00: taken = COND_EQ(fl); break;
+            case 0x01: taken = COND_NE(fl); break;
+            case 0x02: taken = COND_CS(fl); break;
+            case 0x03: taken = COND_CC(fl); break;
+            case 0x04: taken = COND_MI(fl); break;
+            case 0x05: taken = COND_PL(fl); break;
+            case 0x06: taken = COND_VS(fl); break;
+            case 0x07: taken = COND_VC(fl); break;
+            case 0x08: taken = COND_HI(fl); break;
+            case 0x09: taken = COND_LS(fl); break;
+            case 0x0A: taken = COND_GE(fl); break;
+            case 0x0B: taken = COND_LT(fl); break;
+            case 0x0C: taken = (fl.ZF == 0 && fl.SF == fl.OF); break;
+            case 0x0D: taken = (fl.ZF == 1 || fl.SF != fl.OF); break;
+            default:   taken = true; break;
+        }
+
+        if (taken)
+            write_rip(vm, vm->registers.rip.raw() + instr.flags_info.size_instr + static_cast<uint64_t>(disp));
+    }
 }

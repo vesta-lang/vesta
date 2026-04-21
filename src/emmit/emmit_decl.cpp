@@ -10,7 +10,7 @@
 
 
 /**
- * La isntruccion de emision emiten el resto de bytes faltantes,
+ * La instruccion de emision emiten el resto de bytes faltantes,
  * el opcode/s ya debio ser emitido por a funcion llamadora del metodo de emision.
  */
 namespace Assembly::Bytecode {
@@ -933,5 +933,93 @@ namespace Assembly::Bytecode {
         // ctrl_byte: bits 5-4 = cursor index (mode no aplica para gcderef)
         code_final.emit8(static_cast<uint8_t>(cur_idx << 4));
         code_final.emit8(handle_reg);
+    }
+
+    void emit_instr_abs64(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        // segundo byte: condición (para jmp) o reservado 0x00 (para callvm/enter)
+        code_final.emit8(now_instr->opcode2);
+
+        auto *op = instruction_parser->operands[0].get();
+
+        if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
+            auto val_opt = vm::parse_number_safe(num->value);
+            if (!val_opt)
+                throw std::runtime_error("emit_instr_abs64: valor numerico invalido: " + num->value);
+            uint64_t val = val_opt.value();
+            code_final.emit64(val);
+        } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
+            Relocation rel;
+            rel.symbol  = lbl->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset;
+            rel.type    = Type::Absolute64;
+            assembly_ctx->ctx.add_relocation(rel);
+            code_final.emit64(0);
+        } else {
+            throw std::runtime_error(
+                "emit_instr_abs64: operando invalido para '" + instruction_parser->opcode +
+                "': se esperaba un numero o label"
+            );
+        }
+    }
+
+    static uint8_t suffix_to_cond(const std::string &opcode) {
+        size_t dot = opcode.find('.');
+        if (dot == std::string::npos) return 0x0F; // incondicional
+        std::string s = opcode.substr(dot + 1);
+        if (s == "je"  || s == "jz")  return 0x00;
+        if (s == "jne" || s == "jnz") return 0x01;
+        if (s == "jcs" || s == "jae") return 0x02;
+        if (s == "jcc" || s == "jb")  return 0x03;
+        if (s == "jmi")               return 0x04;
+        if (s == "jpl")               return 0x05;
+        if (s == "jvs")               return 0x06;
+        if (s == "jvc")               return 0x07;
+        if (s == "jhi")               return 0x08;
+        if (s == "jls")               return 0x09;
+        if (s == "jge")               return 0x0A;
+        if (s == "jlt")               return 0x0B;
+        if (s == "jgt")               return 0x0C;
+        if (s == "jle")               return 0x0D;
+        return 0x0F;
+    }
+
+    void emit_jrel(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        // emit_instruction ya emitió [0x00][0x2D]; aquí emitimos [cond][pad][disp32]
+        code_final.emit8(suffix_to_cond(instruction_parser->opcode));
+        code_final.emit8(0x00); // padding
+
+        auto *op = instruction_parser->operands[0].get();
+
+        if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
+            auto val_opt = vm::parse_number_safe(num->value);
+            if (!val_opt)
+                throw std::runtime_error("emit_jrel: valor numérico inválido: " + num->value);
+            int32_t disp = static_cast<int32_t>(val_opt.value());
+            code_final.emit32(static_cast<uint32_t>(disp));
+        } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
+            Relocation rel;
+            rel.symbol  = lbl->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset;
+            rel.type    = Type::Relative32;
+            assembly_ctx->ctx.add_relocation(rel);
+            code_final.emit32(0);
+        } else {
+            throw std::runtime_error(
+                "emit_jrel: operando invalido para '" + instruction_parser->opcode +
+                "': se esperaba un número o label"
+            );
+        }
     }
 }

@@ -79,7 +79,6 @@ namespace gc {
             hdr->gen   = gen;
             std::memset(raw + sizeof(GcHeader), 0, size);
 
-            // stats: incrementos simples, sin ramas extra
             stats_.alloc_count++;
             stats_.alloc_bytes += size;
             size_t nu = nursery_used();
@@ -121,29 +120,25 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // write_barrier
+    // write_barrier  — O(1) con unordered_set
     // -------------------------------------------------------------------------
 
     void GcHeap::write_barrier(GcHandle old_handle) {
-        for (GcHandle h : remembered_set_) {
-            if (h == old_handle) return;
-        }
-        remembered_set_.push_back(old_handle);
+        remembered_set_.insert(old_handle);
     }
 
     // -------------------------------------------------------------------------
-    // Minor GC - Cheney-style copy de Nursery a OldGen
+    // do_evacuate — nucleo de evacuacion sin comprobacion de liveness
     // -------------------------------------------------------------------------
 
-    void GcHeap::evacuate_object(GcHandle h) {
-        if (h >= handles_.size() || !handles_[h].live) return;
-
+    void GcHeap::do_evacuate(GcHandle h) {
         uint8_t *src_raw = handles_[h].addr;
-        auto    *hdr     = reinterpret_cast<GcHeader *>(src_raw);
+        if (!src_raw) return;
 
+        auto *hdr = reinterpret_cast<GcHeader *>(src_raw);
         if (hdr->color == GcColor::BLACK || hdr->gen == GcGen::OLD) return;
 
-        size_t total     = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
+        size_t   total   = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
         uint8_t *dst_raw = alloc_in_old(total);
         if (!dst_raw) return;
 
@@ -160,66 +155,141 @@ namespace gc {
         std::memcpy(src_payload, &dst_raw, sizeof(void *));
         hdr->color = GcColor::BLACK;
 
-        // stats: promocion
         stats_.promoted_count++;
         stats_.promoted_bytes += hdr->size;
         if (old_used_ > stats_.peak_old) stats_.peak_old = old_used_;
     }
 
+    void GcHeap::evacuate_object(GcHandle h) {
+        if (h >= handles_.size() || !handles_[h].addr) return;
+        do_evacuate(h);
+    }
+
+    // -------------------------------------------------------------------------
+    // scan_young_refs — escanea payload buscando handles VIVOS que apunten a YOUNG
+    // -------------------------------------------------------------------------
+
+    void GcHeap::scan_young_refs(GcHandle h, std::vector<GcHandle>& worklist) {
+        if (!handles_[h].addr) return;
+
+        auto    *hdr     = reinterpret_cast<GcHeader *>(handles_[h].addr);
+        uint8_t *payload = handles_[h].addr + sizeof(GcHeader);
+        size_t   sz      = hdr->size;
+
+        for (size_t off = 0; off + sizeof(GcHandle) <= sz; off += sizeof(GcHandle)) {
+            GcHandle ref;
+            std::memcpy(&ref, payload + off, sizeof(GcHandle));
+
+            if (ref == GC_NULL_HANDLE || ref >= static_cast<GcHandle>(handles_.size())) continue;
+            // Solo seguir handles vivos para evitar falsos positivos con datos numericos
+            if (!handles_[ref].live || !handles_[ref].addr) continue;
+
+            uint8_t *ref_raw = handles_[ref].addr;
+            if (ref_raw < nursery_base_ || ref_raw >= nursery_end_) continue;
+
+            auto *ref_hdr = reinterpret_cast<GcHeader *>(ref_raw);
+            if (ref_hdr->color == GcColor::BLACK) continue;
+
+            do_evacuate(ref);
+            worklist.push_back(ref);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // mark_reachable — BFS sobre handles VIVOS embebidos en payloads OLD
+    // -------------------------------------------------------------------------
+
+    void GcHeap::mark_reachable(GcHandle h, std::vector<GcHandle>& worklist) {
+        if (!handles_[h].addr) return;
+
+        auto    *hdr     = reinterpret_cast<GcHeader *>(handles_[h].addr);
+        uint8_t *payload = handles_[h].addr + sizeof(GcHeader);
+        size_t   sz      = hdr->size;
+
+        for (size_t off = 0; off + sizeof(GcHandle) <= sz; off += sizeof(GcHandle)) {
+            GcHandle ref;
+            std::memcpy(&ref, payload + off, sizeof(GcHandle));
+
+            if (ref == GC_NULL_HANDLE || ref >= static_cast<GcHandle>(handles_.size())) continue;
+            // Solo seguir handles vivos: un handle soltado con drop() no mantiene
+            // vivo al objeto aunque su valor este embebido en el payload
+            if (!handles_[ref].live || !handles_[ref].addr) continue;
+
+            auto *ref_hdr = reinterpret_cast<GcHeader *>(handles_[ref].addr);
+            if (ref_hdr->gen != GcGen::OLD || ref_hdr->color != GcColor::WHITE) continue;
+
+            ref_hdr->color = GcColor::BLACK;
+            worklist.push_back(ref);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Minor GC — Cheney-style
+    // -------------------------------------------------------------------------
+
     void GcHeap::minor_gc() {
         stats_.minor_gc_count++;
 
+        // Evacuar todos los objetos YOUNG con handle vivo
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
-            if (!handles_[h].live) continue;
+            if (!handles_[h].live || !handles_[h].addr) continue;
             uint8_t *raw = handles_[h].addr;
             if (raw < nursery_base_ || raw >= nursery_end_) continue;
             auto *hdr = reinterpret_cast<GcHeader *>(raw);
             if (hdr->gen == GcGen::YOUNG)
-                evacuate_object(h);
+                do_evacuate(h);
         }
 
+        // Raices adicionales del remembered_set: OLD objects con refs a YOUNG vivos
+        // Cubre el caso: objeto OLD escribe ref YOUNG via GCWB y el objeto YOUNG
+        // solo es alcanzable desde ese campo (sin handle propio en el bytecode)
+        std::vector<GcHandle> rs_worklist;
+        for (GcHandle old_h : remembered_set_)
+            scan_young_refs(old_h, rs_worklist);
+
         remembered_set_.clear();
-        nursery_bump_ = nursery_base_; // reset bump: toda la Nursery libre
+        nursery_bump_ = nursery_base_;
 
         if (old_used_ >= old_threshold_)
             major_gc();
     }
 
     // -------------------------------------------------------------------------
-    // Major GC - mark-and-sweep sobre OldGen
+    // Major GC — mark-and-sweep tri-color transitivo sobre OldGen
     // -------------------------------------------------------------------------
 
     void GcHeap::major_gc() {
         stats_.major_gc_count++;
 
-        // PRE-MARK: todos los objetos OldGen vivos (no DEAD) -> WHITE.
-        // Necesario porque los objetos llegan a OldGen con BLACK tras la evacuacion,
-        // y los handles soltados con drop() no tienen ningun mecanismo para reset.
-        // Sin este paso, un objeto evacuado con BLACK y luego soltado nunca seria
-        // barrido por el SWEEP (seguiria siendo BLACK aunque ya no tenga raiz).
+        // PRE-MARK: todos los objetos OldGen vivos (no DEAD) -> WHITE
         for (auto &block : old_blocks_) {
             uint8_t *cursor = block.ptr;
             uint8_t *end    = block.ptr + block.size;
             while (cursor + sizeof(GcHeader) <= end) {
                 auto *hdr = reinterpret_cast<GcHeader *>(cursor);
                 if (hdr->size == 0) break;
-                if (hdr->color != GcColor::DEAD)  // respetar slots ya liberados
+                if (hdr->color != GcColor::DEAD)
                     hdr->color = GcColor::WHITE;
                 cursor += (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
             }
         }
 
-        // MARK: handles vivos en OldGen -> BLACK
-        for (auto &entry : handles_) {
-            if (!entry.live || !entry.addr) continue;
-            auto *hdr = reinterpret_cast<GcHeader *>(entry.addr);
-            if (hdr->gen == GcGen::OLD)
+        // MARK: BFS desde handles vivos con objeto OLD
+        std::vector<GcHandle> worklist;
+        for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
+            if (!handles_[h].live || !handles_[h].addr) continue;
+            auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
+            if (hdr->gen == GcGen::OLD && hdr->color == GcColor::WHITE) {
                 hdr->color = GcColor::BLACK;
+                worklist.push_back(h);
+            }
         }
 
-        // SWEEP: WHITE (sin raiz) -> DEAD; el slot fisico queda reutilizable.
-        // No se busca el handle porque drop() ya lo libero; solo se reclama
-        // el espacio contabilizado en old_used_.
+        // BFS transitivo: seguir handles VIVOS embebidos en payloads
+        for (size_t i = 0; i < worklist.size(); ++i)
+            mark_reachable(worklist[i], worklist);
+
+        // SWEEP: WHITE (sin raiz) -> DEAD
         for (auto &block : old_blocks_) {
             uint8_t *cursor = block.ptr;
             uint8_t *end    = block.ptr + block.size;
@@ -234,10 +304,8 @@ namespace gc {
                     stats_.freed_count++;
                     stats_.freed_bytes += hdr->size;
                     old_used_ -= total;
-                    hdr->color = GcColor::DEAD;  // slot reutilizable; size se preserva
+                    hdr->color = GcColor::DEAD;
                 }
-                // BLACK: alcanzable, no tocar
-                // DEAD:  ya liberado, no tocar (double-free protection)
 
                 cursor += total;
             }
@@ -257,7 +325,6 @@ namespace gc {
                 auto *hdr = reinterpret_cast<GcHeader *>(cursor);
 
                 if (hdr->size == 0) {
-                    // Fin de la region usada del bloque: espacio libre contiguo
                     size_t available = static_cast<size_t>(end - cursor);
                     if (available >= total_bytes) {
                         old_used_ += total_bytes;
@@ -267,8 +334,6 @@ namespace gc {
                 }
 
                 if (hdr->color == GcColor::DEAD) {
-                    // Slot liberado por sweep: reutilizar si el tamaño es suficiente.
-                    // El campo size se preservo al marcar DEAD para poder calcular esto.
                     size_t slot_total = (sizeof(GcHeader) + hdr->size + 7) & ~7ULL;
                     if (slot_total >= total_bytes) {
                         old_used_ += total_bytes;
