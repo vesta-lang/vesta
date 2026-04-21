@@ -27,6 +27,8 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "util/sqlite_singleton.h"
+#include "runtime/manager_runtime.h"
+#include "loader/loader.h"
 
 
 int main(int argc, char *argv[]) {
@@ -50,7 +52,10 @@ int main(int argc, char *argv[]) {
             ("arch", "Arquitectura para ensamblar/desensamblar", cxxopts::value<std::string>())
             ("save-output", "Guardar código ensamblado/desensamblado en archivo")
             ("output-prefix", "Prefijo/nombre base para archivos de salida",
-             cxxopts::value<std::string>()->default_value("out"));
+             cxxopts::value<std::string>()->default_value("out"))
+            ("run", "Ejecutar un archivo .velb en la VM", cxxopts::value<std::string>())
+            ("build", "Compilar un archivo .vel a .velb", cxxopts::value<std::string>())
+            ("schedulers", "Número de schedulers para el comando run", cxxopts::value<size_t>()->default_value("1"));
 
     auto result = options.parse(argc, argv);
 
@@ -133,6 +138,45 @@ int main(int argc, char *argv[]) {
                    : EXIT_FAILURE;
     }
 
+    // Compilar un archivo .vel a .velb
+    // vm.exe --build src/main.vel -o main.velb
+    if (result.count("build")) {
+        return asm_multi_process::run_worker(
+            result["build"].as<std::string>(),
+            out_prefix
+        );
+    }
+
+    // Ejecutar un archivo .velb en la VM
+    // vm.exe --run program.velb
+    if (result.count("run")) {
+        const std::string &velb_path = result["run"].as<std::string>();
+        size_t num_schedulers = result["schedulers"].as<size_t>();
+
+        try {
+            runtime::ManageVM mgr(nullptr, 0);
+            runtime::VM *vm = mgr.loader.create_vm_instance(num_schedulers);
+            if (!vm) {
+                std::cerr << "Error: no se pudo crear la instancia de VM\n";
+                return EXIT_FAILURE;
+            }
+            runtime::ProcessVM *proc = mgr.loader.load_executable(*vm, velb_path);
+            if (!proc) {
+                std::cerr << "Error: no se pudo cargar el ejecutable\n";
+                return EXIT_FAILURE;
+            }
+            vm->make_ready(proc->pid);
+            vm->start();
+            while (vm->has_alive_processes()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            vm->stop();
+        } catch (const std::exception &e) {
+            std::cerr << "Error al ejecutar " << velb_path << ": " << e.what() << "\n";
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+    }
 
     cli::Config cfg;
     cfg.history_file = "my_vm_history.txt";
