@@ -339,6 +339,9 @@ namespace vm {
             current = lexer.next_token();
         }
 
+        /**
+         * @return Retorna el SIGUIENTE token SIN consumirlo
+         */
         [[nodiscard]] Token peek() const {
             return lexer.peek_token();
         }

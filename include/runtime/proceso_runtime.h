@@ -211,7 +211,7 @@ namespace runtime {
     static constexpr uint32_t ICACHE_SIZE = 1024;
 
     /**
-     * Se usa para realizar el cacheado de las isntrucciones descodifcadas
+     * Se usa para realizar el cacheado de las instrucciones descodifcadas
      * @param pc Direccion PC de la instruccion descodificada.
      * @return entrada en la tabla cache.
      */
@@ -300,7 +300,7 @@ namespace runtime {
         /**
          * Permite cargar codigo crudo a un proceso, pone el hilo en un
          * estado de RUNNING automaticamente.
-         * @param address direccion virtual donde realizar la carga de las isntrucciones
+         * @param address direccion virtual donde realizar la carga de las instrucciones
          * @param code codigo a cargar en la direccion virtual.
          */
         void load_raw_code(uint64_t address, const std::vector<uint8_t> &code);

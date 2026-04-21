@@ -124,6 +124,21 @@ namespace runtime {
         read_rflags // 11
     };
 
+    static const char *regs_special[] = {
+        "cur0",
+        "cur1",
+        "cur2",
+        "cur3",
+        "nullptr",
+        "nullptr",
+        "nullptr",
+        "nullptr",
+        "rip",
+        "rbp",
+        "rsp",
+        "rflags",
+    };
+
 
     inline uint64_t read_special(ProcessVM *vm, uint8_t code) {
         if (code >= 12 || read_special_table[code] == nullptr) {
@@ -280,6 +295,64 @@ namespace runtime {
     void exec_instr_xchg(ProcessVM *vm, const DecodedInstr &instr);
 
     /**
+     * JMP incondicional y Jcc condicionales.
+     * El byte de condición en inmmed_data.reg selecciona la condición;
+     * 0x0F (o cualquier valor no reconocido) salta siempre.
+     *
+     * Códigos de condición:
+     *   0x00 je/jz   0x01 jne/jnz  0x02 jcs/jae  0x03 jcc/jb
+     *   0x04 jmi     0x05 jpl      0x06 jvs       0x07 jvc
+     *   0x08 jhi     0x09 jls      0x0A jge       0x0B jlt
+     *   0x0C jgt     0x0D jle      0x0F jmp (siempre)
+     */
+    void exec_instr_jmp(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * CALLVM addr: empuja la dirección de retorno (RIP + tamaño) en la pila
+     * y salta a addr. Equivalente al CALL de x64 pero dentro de la VM.
+     */
+    void exec_instr_callvm(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * RET: extrae la dirección de retorno de la pila y salta a ella.
+     */
+    void exec_instr_ret(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * ENTER frame_size: crea un stack frame.
+     *   push rbp  ->  mov rbp, rsp  ->  sub rsp, frame_size
+     */
+    void exec_instr_enter(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * LEAVE: destruye el stack frame actual.
+     *   mov rsp, rbp  ->  pop rbp
+     */
+    void exec_instr_leave(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * JMPR reg: salta a la dirección almacenada en un registro.
+     * El registro se codifica en instr.data_instruction.reg_data.reg1;
+     * si flags_info.reg_ext está activo se interpreta como registro especial.
+     * Siempre incondicional.
+     */
+    void exec_instr_jmpr(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * CALLVMR reg: igual que CALLVM pero la dirección viene de un registro.
+     * Empuja la dirección de retorno en la pila y salta al valor del registro.
+     */
+    void exec_instr_callvmr(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * JREL cond, disp32: salto relativo condicional.
+     * Mismos códigos de condición que JMP (0x00-0x0D; 0x0F = siempre).
+     * El desplazamiento es un int32 con signo relativo al FIN de la instrucción.
+     * Formato extendido (0x00 0x2D): [0x00][0x2D][cond][pad][disp32] = 8 bytes.
+     */
+    void exec_instr_jrel(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
      * Permite ejecutar una instruccion MOV del tipo:
      * mov:
      *      - reg, 0x1000 ||
@@ -333,6 +406,12 @@ namespace runtime {
     /** DROP reg_handle
      *  reg1 = registro que contiene el GcHandle a liberar. */
     void exec_instr_gc_drop(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GCWB reg_old_handle
+     *  Registra el handle OLD en el remembered set para que el minor GC
+     *  lo trate como raiz adicional y escanee sus referencias a YOUNG.
+     *  reg1 = registro que contiene el GcHandle del objeto OLD modificado. */
+    void exec_instr_gcwb(ProcessVM *vm, const DecodedInstr &instr);
 
     // -------------------------------------------------------------------------
     //                   Raw allocator (0x00 0xB0 .. 0xB2)

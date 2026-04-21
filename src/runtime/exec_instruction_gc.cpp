@@ -85,6 +85,12 @@ namespace runtime {
         vm->gc_heap.drop(static_cast<gc::GcHandle>(handle));
     }
 
+    void exec_instr_gcwb(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  rsrc       = instr.data_instruction.reg_data.reg1;
+        const uint64_t old_handle = read_reg_table[instr.flags_info.mode](vm, rsrc);
+        vm->gc_heap.write_barrier(static_cast<gc::GcHandle>(old_handle));
+    }
+
     // -------------------------------------------------------------------------
     // Raw allocator - 0x00 0xB0 .. 0xB2
     // -------------------------------------------------------------------------

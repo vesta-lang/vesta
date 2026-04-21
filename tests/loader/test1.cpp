@@ -337,6 +337,7 @@ int main() {
             printf(C_CYAN "[STATE AFTER INSTRUCTION]\n" C_RESET);
 
             // --- REGISTERS ---
+            /*
             for (int i = 0; i < 16; ++i) {
                 printf(" R%02d=0x%016llx", i, process->registers.regs[i].qword());
                 if ((i % 2) == 1) printf("\n");
@@ -346,10 +347,9 @@ int main() {
             for (int i = 0; i < 4; ++i) {
                 printf(" CUR%02d=0x%016llx", i, process->registers.cur[i].qword());
                 if ((i % 2) == 1) printf("\n");
-            }
+            }*/
             printf("\n");
 
-            // --- FLAGS ---
             printf(process->to_string().c_str());
 
             printf(C_MAGENTA "[PROFILE]\n" C_RESET);
@@ -366,7 +366,7 @@ int main() {
                    process->scheduler.time_event,
                    process->scheduler.time_event / 1'000'000);
 
-            SLEEP(500);
+            SLEEP(100);
 
             process->scheduler.debug_timer.reset();
             process->scheduler.time_decode = 0;
