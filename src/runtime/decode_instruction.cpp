@@ -447,9 +447,10 @@ namespace runtime {
 
 
     void decode_instruction(ProcessVM *process) {
+        const bool measuring = process->scheduler.has_hooks;
         vm_hook(process, DebugStage::DecodeBegin);
         PROFILE_START
-        const uint64_t t1 = now_ns();
+        const uint64_t t1 = measuring ? now_ns() : 0;
 
         uint64_t pc  = process->registers.rip.raw();
         uint32_t idx = icache_index(pc);
@@ -468,8 +469,7 @@ namespace runtime {
 
             process->decoded_ptr = cached; // NO COPIA, SOLO APUNTA
 
-            const uint64_t t2 = now_ns();
-            process->scheduler.time_decode += (t2 - t1);
+            if (measuring) process->scheduler.time_decode += now_ns() - t1;
 
             PROFILE_END("DECODER");
             // realizamos el hook al final de la fase
@@ -547,8 +547,7 @@ namespace runtime {
         // apuntar a la entrada de caché
         process->decoded_ptr = &process->icache[idx];
 
-        const uint64_t t2 = now_ns();
-        process->scheduler.time_decode += (t2 - t1);
+        if (measuring) process->scheduler.time_decode += now_ns() - t1;
 
         PROFILE_END("DECODER");
         // realizamos el hook al final de la fase
@@ -557,13 +556,13 @@ namespace runtime {
 
 
     vm_event execute_instruction(ProcessVM *process) {
+        const bool measuring = process->scheduler.has_hooks;
         // realizamos el hook antes de la ejecuccion
         vm_hook(process, DebugStage::ExecuteBegin);
         PROFILE_START
 
         // --- PROFILER: inicio ---
-        // debemos ponerlo despues de la hook para no contabilizar el tiempo de las hook
-        const uint64_t t1 = now_ns();
+        const uint64_t t1 = measuring ? now_ns() : 0;
         // ------------------------
 
         // ejecutamos la instruccion descodificada. No hacemos aqui
@@ -596,12 +595,8 @@ namespace runtime {
         else process->decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la instruccion, desmarcamos el salto
 
         // --- PROFILER: fin ---
-        const uint64_t t2 = now_ns();
-
-        process->scheduler.profiler_sample++;
-
-        process->scheduler.profiler_instr_counter++; // IPS sampling
-        process->scheduler.time_exec += (t2 - t1);   // tiempo ocupado
+        process->scheduler.profiler_instr_counter++;
+        if (measuring) process->scheduler.time_exec += now_ns() - t1;
 
         // antes de retorna hacemos el hook
         PROFILE_END("EXECUTER");
