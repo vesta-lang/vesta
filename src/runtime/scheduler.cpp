@@ -244,22 +244,56 @@ namespace runtime {
                 continue;
             }
 
-            // Ejecutar hasta agotar reducciones
-            while (instance->reductions_remaining > 0) {
-                run_fsm_step(instance); // ejecuta decode+execute (1 instrucción completa)
+            if (!has_hooks) {
+                // === FAST PATH: decode+execute directo, sin FSM ni hooks ===
+                // Los estados READY/RUNNING no tienen acción; saltar directo a DECODE.
+                if (instance->state == READY || instance->state == RUNNING)
+                    instance->state = DECODE;
 
-                instance->reductions_remaining--;
+                while (instance->reductions_remaining > 0) {
+                    decode_instruction(instance);
+                    // El FSM pasa a EXECUTE antes de ejecutar; las instrucciones que
+                    // llaman on_event internamente (ej. HLT) necesitan el estado correcto
+                    // para que sus transiciones (EXECUTE->HALT) funcionen.
+                    instance->state = EXECUTE;
+                    vm_event evt = execute_instruction(instance);
+                    instance->reductions_remaining--;
 
-                if (instance->state == DEAD || instance->state == HALT) {
-                    alive_count--;
+                    // Camino rápido: instrucción normal completada
+                    if (__builtin_expect(evt == EVT_EXEC_DONE, 1)) {
+                        instance->state = DECODE;
+                        continue;
+                    }
+
+                    // El estado del proceso es autoritativo (HLT lo puso en HALT vía on_event)
+                    if (instance->state == HALT || instance->state == DEAD) {
+                        alive_count--;
+                        instance = nullptr;
+                        break;
+                    }
+                    // IO genuino: estado sigue en EXECUTE, poner en WAIT_IO
+                    instance->state = WAIT_IO;
                     instance = nullptr;
                     break;
                 }
-                if (instance->state == WAIT_IO || instance->state == BLOCKED) {
-                    instance = nullptr;
-                    break;
+            } else {
+                // === SLOW PATH: FSM completo con hooks ===
+                while (instance->reductions_remaining > 0) {
+                    run_fsm_step(instance);
+                    instance->reductions_remaining--;
+
+                    if (instance->state == DEAD || instance->state == HALT) {
+                        alive_count--;
+                        instance = nullptr;
+                        break;
+                    }
+                    if (instance->state == WAIT_IO || instance->state == BLOCKED) {
+                        instance = nullptr;
+                        break;
+                    }
                 }
             }
+
             if (instance == nullptr) {
                 continue;
             }
@@ -403,8 +437,7 @@ namespace runtime {
 #else
     void vm_hook(ProcessVM *process, DebugStage stage) {
         if (!process->scheduler.has_hooks) return;
-
-        for (auto &hook: process->scheduler.debug_hooks)
+        for (auto &hook : process->scheduler.debug_hooks)
             hook(process, stage);
     }
 #endif
