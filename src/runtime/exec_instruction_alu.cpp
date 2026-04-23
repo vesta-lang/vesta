@@ -736,6 +736,33 @@ namespace runtime {
         sar_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], vm->registers.regs[rsrc], false, rdst);
     }
 
+    struct NotOp {
+        static constexpr bool is_compare = false;
+
+        template<typename T>
+        static inline T compute(T a) {
+            return ~a;
+        }
+
+        template<typename T>
+        static inline void flags(ProcessVM *vm, T /*a*/, T /*result*/) {
+            vm->registers.flags.bits.CF = 0;
+            vm->registers.flags.bits.OF = 0;
+        }
+    };
+
+    static constexpr UnaryFn not_table[] = {
+        &unary_wrapper<uint8_t,  NotOp>,
+        &unary_wrapper<uint16_t, NotOp>,
+        &unary_wrapper<uint32_t, NotOp>,
+        &unary_wrapper<uint64_t, NotOp>
+    };
+
+    void exec_instr_not_reg(ProcessVM *vm, const DecodedInstr &instr) {
+        const int rdst = instr.data_instruction.reg_data.reg1;
+        not_table[instr.flags_info.mode](vm, vm->registers.regs[rdst], rdst);
+    }
+
     void exec_instr_inc_dec_reg(ProcessVM *vm, const DecodedInstr &instr) {
         const int rdst = instr.data_instruction.reg_data.reg1;
         // aunque INC y DEC no tienen signo, se usa el campo _signed_instruct

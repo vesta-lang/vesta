@@ -114,6 +114,19 @@ namespace loader {
     struct FieldInfo;
 
     // -------------------------------------------------------------------------
+    //  AttrEntry - par clave/valor para anotaciones arbitrarias
+    //
+    //  Permite adjuntar metadatos extensibles a ClassInfo, MethodInfo y FieldInfo:
+    //    @Deprecated, @Since, @Warning, @Author, @See, etc.
+    //
+    //  sizeof(AttrEntry) == 32 bytes (dos stringx de 12B c/u + padding de alineacion)
+    // -------------------------------------------------------------------------
+    typedef struct AttrEntry {
+        stringx key;    ///< nombre de la anotacion  ("Deprecated", "Since", ...)
+        stringx value;  ///< valor de la anotacion   ("true", "1.4", ...)
+    } AttrEntry;
+
+    // -------------------------------------------------------------------------
     //  FieldInfo - descripcion de un campo de instancia o estatico
     // -------------------------------------------------------------------------
     typedef struct FieldInfo {
@@ -124,6 +137,10 @@ namespace loader {
         uint32_t    size;       ///< bytes que ocupa el campo
         uint32_t    offset;     ///< offset dentro del payload del objeto
         bool        is_static;
+        // --- reflexion/documentacion (offsets 48-79) ---
+        stringx     doc;        ///< docstring del campo
+        AttrEntry  *attrs;      ///< tabla de anotaciones clave/valor
+        size_t      attr_count;
     } FieldInfo;
 
     // -------------------------------------------------------------------------
@@ -156,6 +173,10 @@ namespace loader {
         size_t            handler_count;
 
         void             *jit_code;     ///< nullptr si no esta compilado JIT
+        // --- reflexion/documentacion (offsets 112-143) ---
+        stringx           doc;          ///< docstring del metodo
+        AttrEntry        *attrs;        ///< tabla de anotaciones clave/valor
+        size_t            attr_count;
     } MethodInfo;
 
     // -------------------------------------------------------------------------
@@ -189,6 +210,10 @@ namespace loader {
         // --- todos los metodos (para reflexion) ---
         MethodInfo *methods;
         size_t      method_count;
+        // --- reflexion/documentacion (offsets 136-167) ---
+        stringx     doc;        ///< docstring de la clase
+        AttrEntry  *attrs;      ///< tabla de anotaciones clave/valor
+        size_t      attr_count;
     } ClassInfo;
 
     // -------------------------------------------------------------------------

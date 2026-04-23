@@ -389,4 +389,167 @@ namespace runtime {
         vm->registers.regs[R00].qword(reinterpret_cast<uint64_t>(cls->name.data));
     }
 
+    // =========================================================================
+    //  Helpers para acceso a doc/attrs
+    // =========================================================================
+
+    static inline uint64_t str_ptr(const loader::stringx &s) {
+        return reinterpret_cast<uint64_t>(s.data);
+    }
+
+    template<typename T>
+    static inline uint64_t attr_key(T *obj, uint8_t idx) {
+        if (obj == nullptr || idx >= obj->attr_count || obj->attrs == nullptr)
+            return 0;
+        return reinterpret_cast<uint64_t>(obj->attrs[idx].key.data);
+    }
+
+    template<typename T>
+    static inline uint64_t attr_val(T *obj, uint8_t idx) {
+        if (obj == nullptr || idx >= obj->attr_count || obj->attrs == nullptr)
+            return 0;
+        return reinterpret_cast<uint64_t>(obj->attrs[idx].value.data);
+    }
+
+    // =========================================================================
+    //  0xDD CLASSDOC
+    // =========================================================================
+    void exec_instr_classdoc(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *cls = reinterpret_cast<loader::ClassInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(cls ? str_ptr(cls->doc) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xDE CLASSATTRCOUNT
+    // =========================================================================
+    void exec_instr_classattrcount(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *cls = reinterpret_cast<loader::ClassInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(cls ? static_cast<uint64_t>(cls->attr_count) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xDF CLASSATTRKEY
+    // =========================================================================
+    void exec_instr_classattrkey(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *cls = reinterpret_cast<loader::ClassInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(
+            attr_key(cls, instr.data_instruction.reg_data.reg2));
+    }
+
+    // =========================================================================
+    //  0xE0 CLASSATTRVAL
+    // =========================================================================
+    void exec_instr_classattrval(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *cls = reinterpret_cast<loader::ClassInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(
+            attr_val(cls, instr.data_instruction.reg_data.reg2));
+    }
+
+    // =========================================================================
+    //  0xE1 METHODNAME
+    // =========================================================================
+    void exec_instr_methodname(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *m = reinterpret_cast<loader::MethodInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(m ? str_ptr(m->name) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xE2 METHODDOC
+    // =========================================================================
+    void exec_instr_methoddoc(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *m = reinterpret_cast<loader::MethodInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(m ? str_ptr(m->doc) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xE3 METHODDESC
+    // =========================================================================
+    void exec_instr_methoddesc(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *m = reinterpret_cast<loader::MethodInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(m ? str_ptr(m->descriptor) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xE4 METHODATTRCOUNT
+    // =========================================================================
+    void exec_instr_methodattrcount(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *m = reinterpret_cast<loader::MethodInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(m ? static_cast<uint64_t>(m->attr_count) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xE5 METHODATTRKEY
+    // =========================================================================
+    void exec_instr_methodattrkey(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *m = reinterpret_cast<loader::MethodInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(
+            attr_key(m, instr.data_instruction.reg_data.reg2));
+    }
+
+    // =========================================================================
+    //  0xE6 METHODATTRVAL
+    // =========================================================================
+    void exec_instr_methodattrval(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *m = reinterpret_cast<loader::MethodInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(
+            attr_val(m, instr.data_instruction.reg_data.reg2));
+    }
+
+    // =========================================================================
+    //  0xE7 FIELDNAME
+    // =========================================================================
+    void exec_instr_fieldname(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *f = reinterpret_cast<loader::FieldInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(f ? str_ptr(f->name) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xE8 FIELDDOC
+    // =========================================================================
+    void exec_instr_fielddoc(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *f = reinterpret_cast<loader::FieldInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(f ? str_ptr(f->doc) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xE9 FIELDATTRCOUNT
+    // =========================================================================
+    void exec_instr_fieldattrcount(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *f = reinterpret_cast<loader::FieldInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(f ? static_cast<uint64_t>(f->attr_count) : 0ULL);
+    }
+
+    // =========================================================================
+    //  0xEA FIELDATTRKEY
+    // =========================================================================
+    void exec_instr_fieldattrkey(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *f = reinterpret_cast<loader::FieldInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(
+            attr_key(f, instr.data_instruction.reg_data.reg2));
+    }
+
+    // =========================================================================
+    //  0xEB FIELDATTRVAL
+    // =========================================================================
+    void exec_instr_fieldattrval(ProcessVM *vm, const DecodedInstr &instr) {
+        auto *f = reinterpret_cast<loader::FieldInfo *>(
+            vm->registers.regs[instr.data_instruction.reg_data.reg1].qword());
+        vm->registers.regs[R00].qword(
+            attr_val(f, instr.data_instruction.reg_data.reg2));
+    }
+
 } // namespace runtime
