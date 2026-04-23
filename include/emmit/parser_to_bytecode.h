@@ -125,6 +125,21 @@ namespace Assembly::Bytecode {
         {"writecur", {{0x00, 0xC1, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
         {"gcderef",  {{0x00, 0xC2, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_gcderef}}},
 
+        // OOP - sistema de objetos (0x00 0xD0 .. 0xDC)
+        {"newobjraw",  {{0x00, 0xD0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        {"callvirt",   {{0x00, 0xD1, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
+        {"callsuper",  {{0x00, 0xD2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
+        {"throw",      {{0x00, 0xD3, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"rethrow",    {{0x00, 0xD4, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"getclass",   {{0x00, 0xD5, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"instanceof", {{0x00, 0xD6, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        {"checkcast",  {{0x00, 0xD7, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        {"getfield",   {{0x00, 0xD8, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
+        {"getmethod",  {{0x00, 0xD9, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
+        {"fieldcount", {{0x00, 0xDA, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"methodcount",{{0x00, 0xDB, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"classname",  {{0x00, 0xDC, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
         {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},

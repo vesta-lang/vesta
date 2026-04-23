@@ -54,6 +54,26 @@ inline uint64_t now_ns() {
 namespace runtime {
     using clock = std::chrono::high_resolution_clock;
 
+    // -------------------------------------------------------------------------
+    // OOP - decodificador para instrucciones de la forma [reg1, imm8]
+    // Formato: [0x00][opcode][reg_byte][imm8]
+    //   reg_byte bits 3-0 -> reg1 (registro general)
+    //   imm8              -> reg2 (indice de vtable/campo/metodo, 0-255)
+    // -------------------------------------------------------------------------
+    void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // las instrucciones extendidas siempre tienen prefijo 0x00
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint16_t data   = vm->vm_mem.read_u16(offset);
+
+        uint8_t reg_byte = static_cast<uint8_t>(data & 0xFF);        // byte 2
+        uint8_t imm8     = static_cast<uint8_t>((data >> 8) & 0xFF); // byte 3
+
+        instr.data_instruction.reg_data.reg1 = reg_byte & 0x0F; // bits 3-0 = reg general
+        instr.data_instruction.reg_data.reg2 = imm8;            // 0-255 = indice
+    }
+
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
         // las instrucciones de registro usan tamaño constante.
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
