@@ -74,6 +74,30 @@ namespace runtime {
         instr.data_instruction.reg_data.reg2 = imm8;            // 0-255 = indice
     }
 
+    void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // 4 bytes tras los 2 bytes de opcode: ctrl | regs | index | pad
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint32_t data   = vm->vm_mem.read_u32(offset);
+
+        uint8_t ctrl_byte  = static_cast<uint8_t>(data & 0xFF);
+        uint8_t regs_byte  = static_cast<uint8_t>((data >> 8) & 0xFF);
+        uint8_t index_byte = static_cast<uint8_t>((data >> 16) & 0xFF);
+
+        instr.flags_info.mode             = (ctrl_byte >> 6) & 0x3;
+        instr.flags_info._signed_instruct = (ctrl_byte >> 5) & 0x1;
+        instr.flags_info.direction        = (ctrl_byte >> 4) & 0x1;
+        uint8_t scale                     = (ctrl_byte >> 2) & 0x3;
+        uint8_t has_index                 = (ctrl_byte >> 1) & 0x1;
+
+        instr.data_instruction.mem_data.reg_final = regs_byte >> 4;
+        instr.data_instruction.mem_data.reg_base  = regs_byte & 0x0F;
+        instr.data_instruction.mem_data.reg_index = index_byte & 0x0F;
+        // bits 1-0 de scale = escala real (0=x1,1=x2,2=x4,3=x8); bit 2 = has_index
+        instr.data_instruction.mem_data.scale     = scale | (has_index << 2);
+    }
+
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
         // las instrucciones de registro usan tamaño constante.
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
@@ -107,23 +131,20 @@ namespace runtime {
     }
 
     void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr) {
-        // los MOV simples ocupan espacio constantes
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
 
-        // el offset del resto de datos empieza apartir del opcode,
-        // calculamos el offset al resto de datos.
         uint64_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
-
-        // leemos los dos bytes que ocupa la instrucciones de este tipo
-        uint16_t data = vm->vm_mem.read_u16(offset);
+        uint16_t data   = vm->vm_mem.read_u16(offset);
 
         uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
         uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
 
-        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
-        instr.flags_info.mode = (n1 >> 6) & 0b11;
+        // ctrl byte: mode(2) | signed(1) | dir(1) | 0000
+        instr.flags_info.mode             = (n1 >> 6) & 0b11;
+        instr.flags_info._signed_instruct = (n1 >> 5) & 0b1;
+        instr.flags_info.direction        = (n1 >> 4) & 0b1;
 
-        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        // regs byte: reg2(4) | reg1(4)
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
 
@@ -244,6 +265,27 @@ namespace runtime {
                    << (int)instr.data_instruction.reg_data.reg1
         );
         DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
+    }
+
+    // MOVC/MOVCH mem-reg: [0x00][0x1E][ctrl][byte4]  (4 bytes total)
+    // ctrl: host(1)|host(1)|d(1)|reg1(5)
+    //   bits 7-6: 0b10 = MOVCH, 0b00 = MOVC  (repurposing mode field)
+    // byte4: flag(3)|reg2(5)
+    void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 4;
+
+        uint64_t base = vm->registers.rip.raw() + 2;
+        uint8_t  ctrl = vm->vm_mem[base];
+        uint8_t  b4   = vm->vm_mem[base + 1];
+
+        // bits 7-6 of ctrl: 0b10 = MOVCH (host), 0b00 = MOVC (vm)
+        uint8_t host_bits               = (ctrl >> 6) & 0b11;
+        instr.flags_info._signed_instruct = (host_bits == 0b10) ? 1 : 0;
+        instr.flags_info.direction        = (ctrl >> 5) & 0b1;
+        instr.flags_info.mode             = 3; // always qword for register moves
+        instr.data_instruction.reg_data.reg1 = ctrl & 0xF;        // reg1 (dest/src)
+        instr.data_instruction.reg_data.reg2 = (b4 >> 5) & 0x7;   // flag code (3 bits)
+        instr.data_instruction.inmmed_data.reg = b4 & 0x1F;        // reg2 (src/dest)
     }
 
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr) {
