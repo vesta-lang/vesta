@@ -76,9 +76,9 @@ code:
     alloc r3
     mov   r7, r0
 
-    // type (offset 0) = null (catch-all) — already 0 from alloc
+    // type (offset 0) = null (catch-all) - already 0 from alloc
 
-    // start_pc (offset 8, dword) = 0 — already 0
+    // start_pc (offset 8, dword) = 0 - already 0
 
     // end_pc (offset 12, dword) = 4
     mov   r14, r7
