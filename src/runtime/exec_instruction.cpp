@@ -11,6 +11,7 @@
  */
 #include "runtime/exec_instruction.h"
 #include "runtime/decode_instruction.h"
+#include "loader/oop_types.h"
 
 #include "ffi/native_ffi.h"
 
@@ -250,6 +251,13 @@ namespace runtime {
     }
 
     void exec_instr_ret(ProcessVM *vm, const DecodedInstr &instr) {
+        // Si el tope de la pila de llamadas OOP tiene un frame activo, descartarlo
+        if (vm->frame_stack != nullptr) {
+            loader::FrameHeader *frame = vm->frame_stack;
+            vm->frame_stack = frame->prev;
+            delete frame;
+        }
+
         uint64_t ret_addr = 0;
         vm->vm_mem.read_bytes(vm->registers.stack_pointer.raw(), &ret_addr, 8);
         vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() + 8);

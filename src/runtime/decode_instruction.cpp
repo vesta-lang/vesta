@@ -54,6 +54,26 @@ inline uint64_t now_ns() {
 namespace runtime {
     using clock = std::chrono::high_resolution_clock;
 
+    // -------------------------------------------------------------------------
+    // OOP - decodificador para instrucciones de la forma [reg1, imm8]
+    // Formato: [0x00][opcode][reg_byte][imm8]
+    //   reg_byte bits 3-0 -> reg1 (registro general)
+    //   imm8              -> reg2 (indice de vtable/campo/metodo, 0-255)
+    // -------------------------------------------------------------------------
+    void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // las instrucciones extendidas siempre tienen prefijo 0x00
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint16_t data   = vm->vm_mem.read_u16(offset);
+
+        uint8_t reg_byte = static_cast<uint8_t>(data & 0xFF);        // byte 2
+        uint8_t imm8     = static_cast<uint8_t>((data >> 8) & 0xFF); // byte 3
+
+        instr.data_instruction.reg_data.reg1 = reg_byte & 0x0F; // bits 3-0 = reg general
+        instr.data_instruction.reg_data.reg2 = imm8;            // 0-255 = indice
+    }
+
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
         // las instrucciones de registro usan tamaño constante.
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
@@ -368,7 +388,7 @@ namespace runtime {
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
 
         // los 2 bytes de datos empiezan tras los 2 bytes de opcode extendido
-        uint64_t  offset = static_cast<uint8_t>(vm->registers.rip.raw() + 2);
+        uint64_t  offset = vm->registers.rip.raw() + 2;
         uint16_t data   = vm->vm_mem.read_u16(offset);
 
         uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF);
@@ -435,7 +455,7 @@ namespace runtime {
         // argc se cachea en decode para que en exec ambos (fn y argc) vengan del
         // ICACHE - constantes por PC de instruccion - lo que permite al IBP de la CPU
         // predecir correctamente el switch(argc) tras la primera ejecucion.
-        instr.data_instruction.inmmed_data.reg = static_cast<uint8_t>(vm->registers.regs[R15].qword());
+        instr.data_instruction.inmmed_data.reg = static_cast<uint64_t>(vm->registers.regs[R15].qword());
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                    "["
                    << (int)instr.data_instruction.inmmed_data.reg << "] "
@@ -447,9 +467,10 @@ namespace runtime {
 
 
     void decode_instruction(ProcessVM *process) {
+        const bool measuring = process->scheduler.has_hooks;
         vm_hook(process, DebugStage::DecodeBegin);
         PROFILE_START
-        const uint64_t t1 = now_ns();
+        const uint64_t t1 = measuring ? now_ns() : 0;
 
         uint64_t pc  = process->registers.rip.raw();
         uint32_t idx = icache_index(pc);
@@ -468,8 +489,7 @@ namespace runtime {
 
             process->decoded_ptr = cached; // NO COPIA, SOLO APUNTA
 
-            const uint64_t t2 = now_ns();
-            process->scheduler.time_decode += (t2 - t1);
+            if (measuring) process->scheduler.time_decode += now_ns() - t1;
 
             PROFILE_END("DECODER");
             // realizamos el hook al final de la fase
@@ -547,8 +567,7 @@ namespace runtime {
         // apuntar a la entrada de caché
         process->decoded_ptr = &process->icache[idx];
 
-        const uint64_t t2 = now_ns();
-        process->scheduler.time_decode += (t2 - t1);
+        if (measuring) process->scheduler.time_decode += now_ns() - t1;
 
         PROFILE_END("DECODER");
         // realizamos el hook al final de la fase
@@ -557,13 +576,13 @@ namespace runtime {
 
 
     vm_event execute_instruction(ProcessVM *process) {
+        const bool measuring = process->scheduler.has_hooks;
         // realizamos el hook antes de la ejecuccion
         vm_hook(process, DebugStage::ExecuteBegin);
         PROFILE_START
 
         // --- PROFILER: inicio ---
-        // debemos ponerlo despues de la hook para no contabilizar el tiempo de las hook
-        const uint64_t t1 = now_ns();
+        const uint64_t t1 = measuring ? now_ns() : 0;
         // ------------------------
 
         // ejecutamos la instruccion descodificada. No hacemos aqui
@@ -596,12 +615,8 @@ namespace runtime {
         else process->decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la instruccion, desmarcamos el salto
 
         // --- PROFILER: fin ---
-        const uint64_t t2 = now_ns();
-
-        process->scheduler.profiler_sample++;
-
-        process->scheduler.profiler_instr_counter++; // IPS sampling
-        process->scheduler.time_exec += (t2 - t1);   // tiempo ocupado
+        process->scheduler.profiler_instr_counter++;
+        if (measuring) process->scheduler.time_exec += now_ns() - t1;
 
         // antes de retorna hacemos el hook
         PROFILE_END("EXECUTER");
