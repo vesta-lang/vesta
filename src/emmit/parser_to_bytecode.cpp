@@ -320,12 +320,20 @@ namespace Assembly::Bytecode {
                         offset += 4;
                         break;
                     }
+                    case InstrSizeMode::FIXED_6: {
+                        offset += 6;
+                        break;
+                    }
                     case InstrSizeMode::FIXED_8: {
                         offset += 8;
                         break;
                     }
                     case InstrSizeMode::FIXED_10: {
                         offset += 10;
+                        break;
+                    }
+                    case InstrSizeMode::FIXED_11: {
+                        offset += 11;
                         break;
                     }
 
