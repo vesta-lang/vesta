@@ -252,11 +252,29 @@ namespace runtime {
 
     // ---------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------
+    //                          modo SIB (Scale-Index-Base)
+    // ---------------------------------------------------------------------
+    void exec_instr_add_sib(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_sub_sib(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_mul_sib(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_div_sib(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_cmp_sib(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_mov_sib(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_movc_mem(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_movc_reg(ProcessVM *vm, const DecodedInstr &instr);
+
+    // ---------------------------------------------------------------------
+
 
     // ---------------------------------------------------------------------
     //                          de tipo inmediato
     // ---------------------------------------------------------------------
     void exec_instr_add_imm(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_sub_imm(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_mul_imm(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_div_imm(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_cmp_imm(ProcessVM *vm, const DecodedInstr &instr);
 
     // ---------------------------------------------------------------------
 

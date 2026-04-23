@@ -412,6 +412,83 @@ namespace Assembly::Bytecode {
         code_final.emit40(0x1122334455);
     }
 
+    // The parser stores non-ExprNode objects (RegisterOperand, NumberOperand) as ExprNode* via UB
+    // static_cast. To safely recover the actual type, we must cast through void* to ASTNode* first
+    // (since RegisterOperand/NumberOperand ARE ASTNode subclasses), then dynamic_cast to the target.
+    template<typename T>
+    static const T *sib_cast(const vm::ExprNode *node) {
+        return dynamic_cast<const T *>(static_cast<const vm::ASTNode *>(static_cast<const void *>(node)));
+    }
+
+    static uint8_t parse_scale(const vm::ExprNode *node) {
+        auto *sc = sib_cast<vm::NumberOperand>(node);
+        if (!sc) return 0;
+        int sv = std::stoi(sc->value, nullptr, 0);
+        return (sv <= 1) ? 0 : (sv == 2) ? 1 : (sv == 4) ? 2 : 3;
+    }
+
+    // Walk [base + index*scale] or [base + index] or [base] from MemoryOperand expr.
+    static void parse_sib_expr(
+        const vm::ASTNode *expr,
+        uint8_t &base, uint8_t &index, uint8_t &scale
+    ) {
+        base = 0; index = 0; scale = 0;
+
+        if (auto *reg = dynamic_cast<const vm::RegisterOperand *>(expr)) {
+            base = encode_reg_general(reg->name.c_str());
+            return;
+        }
+
+        auto *bin = dynamic_cast<const vm::BinaryExpr *>(expr);
+        if (!bin) throw std::runtime_error("SIB: expresion de memoria no soportada");
+
+        if (bin->op == '*') {
+            // [index*scale] sin base
+            auto *idx = sib_cast<vm::RegisterOperand>(bin->left.get());
+            auto *sc  = bin->left.get();
+            if (!idx) { idx = sib_cast<vm::RegisterOperand>(bin->right.get()); sc = bin->left.get(); }
+            else       { sc  = bin->right.get(); }
+            if (idx) index = encode_reg_general(idx->name.c_str());
+            scale = parse_scale(sc);
+            return;
+        }
+
+        if (bin->op == '+') {
+            auto *left_reg  = sib_cast<vm::RegisterOperand>(bin->left.get());
+            auto *left_mul  = dynamic_cast<const vm::BinaryExpr *>(bin->left.get());
+            auto *right_reg = sib_cast<vm::RegisterOperand>(bin->right.get());
+            auto *right_mul = dynamic_cast<const vm::BinaryExpr *>(bin->right.get());
+
+            if (left_reg && right_reg) {
+                // [base + index] scale=1
+                base  = encode_reg_general(left_reg->name.c_str());
+                index = encode_reg_general(right_reg->name.c_str());
+                scale = 0;
+            } else if (left_reg && right_mul && right_mul->op == '*') {
+                // [base + index*scale]
+                base = encode_reg_general(left_reg->name.c_str());
+                auto *idx = sib_cast<vm::RegisterOperand>(right_mul->left.get());
+                auto *sc  = right_mul->right.get();
+                if (!idx) { idx = sib_cast<vm::RegisterOperand>(right_mul->right.get()); sc = right_mul->left.get(); }
+                if (idx) index = encode_reg_general(idx->name.c_str());
+                scale = parse_scale(sc);
+            } else if (left_mul && left_mul->op == '*' && right_reg) {
+                // [index*scale + base]
+                base = encode_reg_general(right_reg->name.c_str());
+                auto *idx = sib_cast<vm::RegisterOperand>(left_mul->left.get());
+                auto *sc  = left_mul->right.get();
+                if (!idx) { idx = sib_cast<vm::RegisterOperand>(left_mul->right.get()); sc = left_mul->left.get(); }
+                if (idx) index = encode_reg_general(idx->name.c_str());
+                scale = parse_scale(sc);
+            } else {
+                throw std::runtime_error("SIB: forma de expresion de memoria no reconocida");
+            }
+            return;
+        }
+
+        throw std::runtime_error("SIB: operador de memoria no soportado");
+    }
+
     void emit_instr_sib(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -419,6 +496,50 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     ) {
         bool is_a_signed = is_signed(instruction_parser->opcode);
+
+        auto *op0 = instruction_parser->operands[0].get();
+        auto *op1 = instruction_parser->operands[1].get();
+
+        vm::RegisterOperand *reg_op = nullptr;
+        vm::MemoryOperand   *mem_op = nullptr;
+        uint8_t direction = 0;
+
+        if (auto *r = dynamic_cast<vm::RegisterOperand *>(op0)) {
+            reg_op    = r;
+            mem_op    = dynamic_cast<vm::MemoryOperand *>(op1);
+            direction = 0;
+        } else {
+            mem_op    = dynamic_cast<vm::MemoryOperand *>(op0);
+            reg_op    = dynamic_cast<vm::RegisterOperand *>(op1);
+            direction = 1;
+        }
+
+        if (!reg_op || !mem_op)
+            throw std::runtime_error("SIB: la instruccion " + instruction_parser->opcode +
+                " requiere un registro y un operando de memoria SIB");
+
+        uint8_t base = 0, index = 0, scale = 0;
+        parse_sib_expr(mem_op->expr.get(), base, index, scale);
+
+        // has_index=1 si la expresion tiene base+index (BinaryExpr),
+        // has_index=0 si es solo un registro base sin indice.
+        uint8_t has_index = (dynamic_cast<const vm::BinaryExpr *>(mem_op->expr.get()) != nullptr) ? 1 : 0;
+
+        uint8_t mode    = encode_mode(reg_op->size_bits);
+        uint8_t dst_reg = encode_reg_general(reg_op->name.c_str());
+
+        // byte2: mode(2) | signed(1) | dir(1) | scale(2) | has_index(1) | 0
+        uint8_t ctrl = (uint8_t)((mode << 6) | ((is_a_signed ? 1 : 0) << 5) | (direction << 4) | ((scale & 0x3) << 2) | (has_index << 1));
+        code_final.emit8(ctrl);
+
+        // byte3: dst_reg(4) | base_reg(4)
+        code_final.emit8((dst_reg << 4) | (base & 0xF));
+
+        // byte4: index_reg(4) | 0000
+        code_final.emit8(index & 0xF);
+
+        // byte5: padding
+        code_final.emit8(0x00);
     }
 
     void emit_xchg(
@@ -840,7 +961,9 @@ namespace Assembly::Bytecode {
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
-    ) {}
+    ) {
+        emit_instr_sib(instruction_parser, code_final, now_instr, assembly_ctx);
+    }
 
     void emit_instr_one_reg(
         const vm::Instruction *instruction_parser,
@@ -1073,5 +1196,99 @@ namespace Assembly::Bytecode {
         DEBUG_PRINT("Emitiendo %s 0x%02x reg=%d imm8=%d\n",
                     instruction_parser->opcode.c_str(),
                     now_instr->opcode2, reg_byte, imm8);
+    }
+
+    // flag name -> 3-bit code (SF=0, ZF=1, CF=2, OF=3, DM=4)
+    static uint8_t encode_flag(const std::string &name) {
+        if (name == "SF") return 0;
+        if (name == "ZF") return 1;
+        if (name == "CF") return 2;
+        if (name == "OF") return 3;
+        if (name == "DM") return 4;
+        throw std::runtime_error("emit_instr_movc: flag desconocido: " + name);
+    }
+
+    // MOVC/MOVCH — 4 bytes: [0x00][opcode2][ctrl][byte4]
+    // Soporta:
+    //   movc  reg1, [reg2], flag   (0x1E, host=0, d=0)
+    //   movc  [reg1], reg2, flag   (0x1E, host=0, d=1)
+    //   movch reg1, [reg2], flag   (0x1E, host=1, d=0)
+    //   movch [reg1], reg2, flag   (0x1E, host=1, d=1)
+    //   movc  reg1, reg2, flag     (0x1F, host=0, d=0)
+    void emit_instr_movc(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            /*assembly_ctx*/
+    ) {
+        if (instruction_parser->operands.size() != 3)
+            throw std::runtime_error("emit_instr_movc: se requieren 3 operandos");
+
+        auto *op0 = instruction_parser->operands[0].get();
+        auto *op1 = instruction_parser->operands[1].get();
+        auto *op2 = instruction_parser->operands[2].get();
+
+        // 3er operando debe ser un flag (LabelOperand o IDENTIFIER)
+        std::string flag_name;
+        if (auto *lab = dynamic_cast<vm::LabelOperand *>(op2))
+            flag_name = lab->name;
+        else
+            throw std::runtime_error("emit_instr_movc: 3er operando debe ser un flag (ZF/SF/CF/OF/DM)");
+
+        uint8_t flag_code = encode_flag(flag_name);
+        bool    is_movch  = (instruction_parser->opcode == "movch");
+
+        auto *reg0 = dynamic_cast<vm::RegisterOperand *>(op0);
+        auto *mem0 = dynamic_cast<vm::MemoryOperand *>(op0);
+        auto *reg1 = dynamic_cast<vm::RegisterOperand *>(op1);
+        auto *mem1 = dynamic_cast<vm::MemoryOperand *>(op1);
+
+        // ---- MOVC/MOVCH con operando memoria (opcode2 = 0x1E) ----
+        if (now_instr->opcode2 == 0x1E) {
+            uint8_t d;
+            const vm::RegisterOperand *reg_a; // siempre el reg dentro de []
+            const vm::RegisterOperand *reg_b; // el otro operando
+
+            if (mem0 != nullptr && reg1 != nullptr) {
+                // movc [reg1_in_mem0], reg1, flag  -> d=1
+                d     = 1;
+                reg_a = dynamic_cast<vm::RegisterOperand *>(mem0->expr.get());
+                reg_b = reg1;
+            } else if (reg0 != nullptr && mem1 != nullptr) {
+                // movc reg0, [reg1_in_mem1], flag  -> d=0
+                d     = 0;
+                reg_a = dynamic_cast<vm::RegisterOperand *>(mem1->expr.get());
+                reg_b = reg0;
+            } else {
+                throw std::runtime_error("emit_instr_movc (0x1E): un operando debe ser memoria y otro registro");
+            }
+            if (!reg_a)
+                throw std::runtime_error("emit_instr_movc (0x1E): la expresion en [] debe ser un registro");
+
+            uint8_t r_mem = encode_reg_general(reg_a->name.c_str());
+            uint8_t r_reg = encode_reg_general(reg_b->name.c_str());
+
+            // ctrl: host(1)|host(1)|d(1)|reg_mem/reg_src(5)
+            // bits 7-6: 0b10 = MOVCH, 0b00 = MOVC
+            uint8_t host_bits = is_movch ? 0b10 : 0b00;
+            // d=0: reg_b=destino, reg_a=fuente (addr)  -> ctrl tiene el "otro" registro
+            // d=1: reg_a=destino (addr), reg_b=fuente  -> ctrl tiene el "otro" registro
+            // En ambos: reg1 de ctrl = el reg que NO está dentro de []
+            uint8_t ctrl = (uint8_t)((host_bits << 6) | (d << 5) | (r_reg & 0xF));
+            uint8_t b4   = (uint8_t)((flag_code << 5) | (r_mem & 0x1F));
+            code_final.emit8(ctrl);
+            code_final.emit8(b4);
+            return;
+        }
+
+        // ---- MOVC reg, reg, flag (opcode2 = 0x1F) ----
+        if (!reg0 || !reg1)
+            throw std::runtime_error("emit_instr_movc (0x1F): ambos operandos deben ser registros");
+
+        uint8_t r1c = encode_reg_general(reg0->name.c_str());
+        uint8_t r2c = encode_reg_general(reg1->name.c_str());
+        // ctrl: 0b00 | 0 | reg1(4)
+        code_final.emit8(r1c & 0xF);
+        code_final.emit8((uint8_t)((flag_code << 5) | (r2c & 0x1F)));
     }
 }

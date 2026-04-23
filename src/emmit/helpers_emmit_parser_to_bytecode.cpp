@@ -159,6 +159,18 @@ namespace Assembly::Bytecode {
             }
         }
 
+        // si mode sigue siendo MEM y la instruccion no tiene variante MEM explicita
+        // (p.ej. mov r0,[r1] o adds r0,[r1]) -> usar SIB.
+        // Instrucciones como movc que tienen variante MEM real no deben caer aqui.
+        if (mode == AddressingMode::MEM) {
+            bool has_mem_variant = false;
+            for (const auto &v : variants) {
+                if (v.mode == AddressingMode::MEM) { has_mem_variant = true; break; }
+            }
+            if (!has_mem_variant)
+                mode = AddressingMode::SIB;
+        }
+
         // alguna instrucciones como los NOP no tiene operandos,
         // por lo que todoo el analisis anterior se puede saltar
     search_variante_None:

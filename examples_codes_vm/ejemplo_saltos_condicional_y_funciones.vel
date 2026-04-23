@@ -62,7 +62,7 @@ t3_ok:
     mov r02, 7
     cmpu r01, r02                       // 7 == 7 -> ZF=1
     jmp.jne @Absolute("code.t4_bad")    // NO debe saltar (ZF=1 -> jne no actúa)
-    mov r12, 0x44                       // r12 = 0x44  ← se ejecuta porque jne NO saltó
+    mov r12, 0x44                       // r12 = 0x44  <- se ejecuta porque jne NO saltó
     jmp @Absolute("code.t4_end")
 t4_bad:
     mov r12, 0xBAD2         // si llegamos aquí, jmp.jne saltó cuando no debía
