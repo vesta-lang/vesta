@@ -388,7 +388,7 @@ namespace runtime {
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
 
         // los 2 bytes de datos empiezan tras los 2 bytes de opcode extendido
-        uint64_t  offset = static_cast<uint8_t>(vm->registers.rip.raw() + 2);
+        uint64_t  offset = vm->registers.rip.raw() + 2;
         uint16_t data   = vm->vm_mem.read_u16(offset);
 
         uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF);
@@ -455,7 +455,7 @@ namespace runtime {
         // argc se cachea en decode para que en exec ambos (fn y argc) vengan del
         // ICACHE - constantes por PC de instruccion - lo que permite al IBP de la CPU
         // predecir correctamente el switch(argc) tras la primera ejecucion.
-        instr.data_instruction.inmmed_data.reg = static_cast<uint8_t>(vm->registers.regs[R15].qword());
+        instr.data_instruction.inmmed_data.reg = static_cast<uint64_t>(vm->registers.regs[R15].qword());
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                    "["
                    << (int)instr.data_instruction.inmmed_data.reg << "] "

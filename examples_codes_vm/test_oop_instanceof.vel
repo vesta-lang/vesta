@@ -20,6 +20,15 @@
  * Tambien verifica GCALLOC: reserva un buffer GC sin ObjectHeader
  * y lo accede via GCDEREF + cursor.
  *
+ * Offsets REALES de ClassInfo (136 bytes):
+ *   +32 supers* (8B)   +40 super_count (8B)
+ *
+ * Offsets REALES de ObjectHeader (16 bytes):
+ *   +0 class_ptr (8B)  +8 flags (4B dword)
+ *
+ * NOTA: "xchg cur0, rN" DESTRUYE rN. Patron seguro:
+ *   mov r14, rN / xchg cur0, r14
+ *
  * alloc() devuelve memoria zeroeada.
  */
 
@@ -59,8 +68,11 @@ code:
     mov   r5, 8
     alloc r5
     mov   r3, r0
-    xchg  cur0, r3
-    writecur cur0, r1                     // supers[0] = ClassParent*
+
+    // supers[0] = ClassParent* (r1)
+    mov   r14, r3
+    xchg  cur0, r14
+    writecur cur0, r1
 
 // -----------------------------------------------------------------------
 // 4. Configurar ClassChild.supers (offset 32) y super_count (offset 40)
@@ -87,7 +99,8 @@ code:
     mov   r4, r0
 
     // ObjectHeader.class_ptr (offset 0) = ClassChild*
-    xchg  cur0, r4
+    mov   r14, r4
+    xchg  cur0, r14
     writecur cur0, r2
 
     // ObjectHeader.flags (offset 8) = 2 (OBJ_FLAG_RAW_OWNED)

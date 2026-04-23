@@ -16,6 +16,9 @@
  * Offsets REALES de ClassInfo (136 bytes):
  *   +80 vtable** (8B)   +88 vtable_size (8B)
  *
+ * NOTA: "xchg cur0, rN" DESTRUYE rN. Patron seguro:
+ *   mov r14, rN / xchg cur0, r14
+ *
  * alloc() devuelve memoria zeroeada.
  */
 
@@ -54,7 +57,8 @@ code:
     mov   r10, r0
 
     // class_ptr (offset 0) = ExcClassInfo*
-    xchg  cur0, r10
+    mov   r14, r10
+    xchg  cur0, r14
     writecur cur0, r9
 
     // flags (offset 8, dword) = 2
@@ -126,7 +130,9 @@ code:
     mov   r3, 8
     alloc r3
     mov   r6, r0
-    xchg  cur0, r6
+
+    mov   r14, r6
+    xchg  cur0, r14
     writecur cur0, r1
 
 // -----------------------------------------------------------------------
@@ -158,9 +164,12 @@ code:
     alloc r3
     mov   r4, r0
 
-    xchg  cur0, r4
+    // class_ptr (offset 0) = ClassInfo receptor*
+    mov   r14, r4
+    xchg  cur0, r14
     writecur cur0, r2
 
+    // flags (offset 8, dword) = 2
     mov   r14, r4
     addu  r14, 8
     xchg  cur0, r14
