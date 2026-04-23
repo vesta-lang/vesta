@@ -20,6 +20,7 @@
 #include "runtime/pid.h"
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
+#include "loader/oop_types.h"
 
 #define reductions_remaining_default 8192
 
@@ -284,6 +285,16 @@ namespace runtime {
 
         gc::GcHeap       gc_heap{manager_mem_priv, 2 * 1024 * 1024, 8 * 1024 * 1024};
         gc::RawAllocator raw_alloc{};
+
+        // --- Sistema de objetos (OOP) ---
+
+        /** Cabeza de la cadena de FrameHeaders activos.
+         *  CALLVIRT empuja frames; RET/THROW los desapila. */
+        loader::FrameHeader *frame_stack = nullptr;
+
+        /** Handle/puntero host de la excepcion activa durante el unwinding.
+         *  Valor 0 significa "sin excepcion activa". */
+        uint64_t current_exception = 0;
 
         /**
          * Instancia global manejador de este proceso.

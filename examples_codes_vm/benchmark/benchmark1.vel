@@ -1,0 +1,90 @@
+/*
+ * bench.vel - VestaVM Benchmark
+ *
+ * Mide el rendimiento de tres patrones fundamentales de la VM:
+ *
+ *   TEST 1 : dec + jmp.jne  -  10 000 000 iters x 2 instrs  =  20 M instrucciones
+ *            Mide throughput puro de decode + execute + branch.
+ *
+ *   TEST 2 : ALU (addux4)   -   5 000 000 iters x 6 instrs  =  30 M instrucciones
+ *            Mide throughput aritmético (add 64-bit).
+ *
+ *   TEST 3 : callvm          -     100 000 iters x 5 instrs  = 0.5 M instrucciones
+ *            Mide overhead de llamada virtual (callvm/enter/leave/ret).
+ *
+ * Registros al finalizar (hlt):
+ *   r00 = 0  (contador T1 agotado)
+ *   r09 = 0  (contador T2 agotado)
+ *   r13 = 0  (contador T3 agotado)
+ */
+
+@Format("velb")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// =============================================================
+// TEST 1: dec + jmp.jne - throughput puro de decode/branch
+// r00 = 10 000 000 -> 0
+// =============================================================
+
+    mov r00, 10000000
+bench1_loop:
+    dec r00
+    jmp.jne @Absolute("code.bench1_loop")
+
+// =============================================================
+// TEST 2: ALU - 5 000 000 x (addux4 + dec + jmp.jne)
+// r09 = 5 000 000 -> 0
+// r01..r04 usados como acumuladores (overflow intencionado)
+// =============================================================
+
+    mov r09, 5000000
+    mov r01, 1
+    mov r02, 2
+    mov r03, 3
+    mov r04, 4
+bench2_loop:
+    addu r01, r02
+    addu r03, r04
+    addu r01, r03
+    addu r02, r04
+    dec r09
+    jmp.jne @Absolute("code.bench2_loop")
+
+// =============================================================
+// TEST 3: callvm - 100 000 llamadas a función trivial
+// r13 = 100 000 -> 0
+// Stack en 0x8000 (dentro del espacio anónimo)
+// =============================================================
+
+    mov r13, 100000
+    mov r15, 0
+    mov rbp, 0x8000
+    mov rsp, 0x8000
+bench3_loop:
+    callvm @Absolute("code.trivial_func")
+    dec r13
+    jmp.jne @Absolute("code.bench3_loop")
+    jmp @Absolute("code.done")
+
+trivial_func:
+    enter 0
+    leave
+    ret
+
+done:
+    hlt
+
+end_code:

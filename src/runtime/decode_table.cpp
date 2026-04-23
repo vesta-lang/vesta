@@ -2960,7 +2960,9 @@ namespace runtime {
         },
 
         /* 0xA0 */{
-            // NEWOBJ reg_size -> R0 = GcHandle
+            // NEWOBJ reg_classinfo -> R0 = GcHandle
+            // reg1 = host_ptr a ClassInfo; alloc classinfo->instance_size bytes,
+            // escribe ObjectHeader (class_ptr, OBJ_FLAG_GC_OWNED, hash).
             "newobj", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
             exec_instr_newobj, decode_instr_two_op_reg
@@ -2996,10 +2998,11 @@ namespace runtime {
         },
 
         /* 0xA5 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GCALLOC reg_size -> R0 = GcHandle
+            // Reserva size bytes en el GC heap sin escribir ObjectHeader.
+            "gcalloc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gcalloc, decode_instr_two_op_reg
         },
 
         /* 0xA6 */{
@@ -3298,95 +3301,94 @@ namespace runtime {
         },
 
         /* 0xD0 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // NEWOBJRAW reg_classinfo, reg_size -> R0 = host_ptr
+            "newobjraw", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_newobjraw, decode_instr_two_op_reg
         },
 
-
         /* 0xD1 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // CALLVIRT reg_obj, vtable_idx
+            "callvirt", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_callvirt, decode_instr_oop_reg_imm8
         },
 
         /* 0xD2 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // CALLSUPER reg_classinfo, vtable_idx
+            "callsuper", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_callsuper, decode_instr_oop_reg_imm8
         },
 
         /* 0xD3 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // THROW reg_obj
+            "throw", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_throw, decode_instr_two_op_reg
         },
 
         /* 0xD4 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // RETHROW
+            "rethrow", Assembly::Bytecode::AddressingMode::NONE,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_rethrow, decode_instr_simple
         },
 
         /* 0xD5 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GETCLASS reg_obj -> R0 = ClassInfo*
+            "getclass", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getclass, decode_instr_two_op_reg
         },
 
         /* 0xD6 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // INSTANCEOF reg_obj, reg_classinfo -> R0 = bool
+            "instanceof", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_instanceof, decode_instr_two_op_reg
         },
 
         /* 0xD7 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // CHECKCAST reg_obj, reg_classinfo -> R0 = reg_obj o THROW
+            "checkcast", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_checkcast, decode_instr_two_op_reg
         },
 
         /* 0xD8 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GETFIELD reg_classinfo, field_idx -> R0 = FieldInfo*
+            "getfield", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getfield, decode_instr_oop_reg_imm8
         },
 
         /* 0xD9 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GETMETHOD reg_classinfo, method_idx -> R0 = MethodInfo*
+            "getmethod", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getmethod, decode_instr_oop_reg_imm8
         },
 
         /* 0xDA */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // FIELDCOUNT reg_classinfo -> R0 = uint64
+            "fieldcount", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fieldcount, decode_instr_two_op_reg
         },
 
         /* 0xDB */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // METHODCOUNT reg_classinfo -> R0 = uint64
+            "methodcount", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_methodcount, decode_instr_two_op_reg
         },
 
         /* 0xDC */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // CLASSNAME reg_classinfo -> R0 = char*
+            "classname", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_classname, decode_instr_two_op_reg
         },
 
         /* 0xDD */{

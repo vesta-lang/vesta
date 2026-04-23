@@ -28,10 +28,10 @@ code:
 
 // crear objeto A (contenedor) y objeto B (hijo)
 mov    r1, 32
-newobj r1            // R0 = handle A
+gcalloc r1           // R0 = handle A
 mov    r8, r0        // r8 = handle A
 mov    r1, 16
-newobj r1            // R0 = handle B
+gcalloc r1           // R0 = handle B
 mov    r9, r0        // r9 = handle B
 // escribir handle B dentro del payload de A
 gcderef cur0, r8     // cur0 = payload de A

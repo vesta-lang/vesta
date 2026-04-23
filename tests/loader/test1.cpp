@@ -366,7 +366,7 @@ int main() {
                    process->scheduler.time_event,
                    process->scheduler.time_event / 1'000'000);
 
-            SLEEP(100);
+            //SLEEP(100);
 
             process->scheduler.debug_timer.reset();
             process->scheduler.time_decode = 0;

@@ -413,6 +413,13 @@ namespace runtime {
      *  reg1 = registro que contiene el GcHandle del objeto OLD modificado. */
     void exec_instr_gcwb(ProcessVM *vm, const DecodedInstr &instr);
 
+    /** GCALLOC reg_size -> R0 = GcHandle
+     *  Reserva reg1 bytes en el GC heap sin escribir ningun ObjectHeader.
+     *  Util para buffers GC-gestionados, arrays crudos o cualquier dato
+     *  que deba vivir bajo GC pero sin estructura OOP.
+     *  Retorna GC_NULL_HANDLE si la asignacion falla. */
+    void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr);
+
     // -------------------------------------------------------------------------
     //                   Raw allocator (0x00 0xB0 .. 0xB2)
     // -------------------------------------------------------------------------
@@ -432,5 +439,69 @@ namespace runtime {
      *  reg2 = registro que contiene el nuevo tamano en bytes.
      *  Retorna 0 en R0 si la asignacion falla. */
     void exec_instr_raw_realloc(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    //                   OOP - sistema de objetos (0x00 0xD0 .. 0xDC)
+    // -------------------------------------------------------------------------
+
+    /** NEWOBJRAW reg_classinfo, reg_size -> R0 = host_ptr
+     *  reg1 = registro con puntero host a ClassInfo.
+     *  reg2 = registro con bytes a reservar (0 = usar classinfo->instance_size).
+     *  Escribe ObjectHeader con OBJ_FLAG_RAW_OWNED al inicio del bloque. */
+    void exec_instr_newobjraw(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** CALLVIRT reg_obj, vtable_idx
+     *  reg1 = host_ptr al ObjectHeader del objeto receptor.
+     *  reg2 = indice en la vtable (0-255).
+     *  Empuja FrameHeader y salta a MethodInfo->code_vaddr. */
+    void exec_instr_callvirt(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** CALLSUPER reg_classinfo, vtable_idx
+     *  reg1 = host_ptr al ClassInfo de la superclase.
+     *  reg2 = indice en la vtable de la superclase (0-255). */
+    void exec_instr_callsuper(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** THROW reg_obj
+     *  reg1 = host_ptr al ObjectHeader de la excepcion.
+     *  Recorre la cadena de FrameHeaders buscando un handler compatible.
+     *  Deposita el puntero de excepcion en R00 y salta al handler_pc. */
+    void exec_instr_throw(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** RETHROW  (sin operandos)
+     *  Relanza current_exception sin modificar el ObjectHeader. */
+    void exec_instr_rethrow(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GETCLASS reg_obj -> R0 = ClassInfo*
+     *  reg1 = host_ptr al ObjectHeader del objeto. */
+    void exec_instr_getclass(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** INSTANCEOF reg_obj, reg_classinfo -> R0 = bool (0/1)
+     *  reg1 = host_ptr al ObjectHeader.
+     *  reg2 = host_ptr al ClassInfo objetivo. */
+    void exec_instr_instanceof(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** CHECKCAST reg_obj, reg_classinfo -> R0 = reg_obj o THROW ClassCastException
+     *  reg1 = host_ptr al ObjectHeader.
+     *  reg2 = host_ptr al ClassInfo objetivo. */
+    void exec_instr_checkcast(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GETFIELD reg_classinfo, field_idx -> R0 = FieldInfo*
+     *  reg1 = host_ptr al ClassInfo.
+     *  reg2 = indice del campo (0-255). */
+    void exec_instr_getfield(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** GETMETHOD reg_classinfo, method_idx -> R0 = MethodInfo*
+     *  reg1 = host_ptr al ClassInfo.
+     *  reg2 = indice del metodo (0-255). */
+    void exec_instr_getmethod(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** FIELDCOUNT reg_classinfo -> R0 = uint64 */
+    void exec_instr_fieldcount(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** METHODCOUNT reg_classinfo -> R0 = uint64 */
+    void exec_instr_methodcount(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** CLASSNAME reg_classinfo -> R0 = char* (puntero host a ClassInfo.name.data) */
+    void exec_instr_classname(ProcessVM *vm, const DecodedInstr &instr);
 }
 #endif //EXEC_INSTRUCTION_H

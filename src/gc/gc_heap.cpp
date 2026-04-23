@@ -120,7 +120,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // write_barrier  — O(1) con unordered_set
+    // write_barrier  - O(1) con unordered_set
     // -------------------------------------------------------------------------
 
     void GcHeap::write_barrier(GcHandle old_handle) {
@@ -128,7 +128,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // do_evacuate — nucleo de evacuacion sin comprobacion de liveness
+    // do_evacuate - nucleo de evacuacion sin comprobacion de liveness
     // -------------------------------------------------------------------------
 
     void GcHeap::do_evacuate(GcHandle h) {
@@ -166,7 +166,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // scan_young_refs — escanea payload buscando handles VIVOS que apunten a YOUNG
+    // scan_young_refs - escanea payload buscando handles VIVOS que apunten a YOUNG
     // -------------------------------------------------------------------------
 
     void GcHeap::scan_young_refs(GcHandle h, std::vector<GcHandle>& worklist) {
@@ -196,7 +196,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // mark_reachable — BFS sobre handles VIVOS embebidos en payloads OLD
+    // mark_reachable - BFS sobre handles VIVOS embebidos en payloads OLD
     // -------------------------------------------------------------------------
 
     void GcHeap::mark_reachable(GcHandle h, std::vector<GcHandle>& worklist) {
@@ -224,7 +224,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // Minor GC — Cheney-style
+    // Minor GC - Cheney-style
     // -------------------------------------------------------------------------
 
     void GcHeap::minor_gc() {
@@ -255,7 +255,7 @@ namespace gc {
     }
 
     // -------------------------------------------------------------------------
-    // Major GC — mark-and-sweep tri-color transitivo sobre OldGen
+    // Major GC - mark-and-sweep tri-color transitivo sobre OldGen
     // -------------------------------------------------------------------------
 
     void GcHeap::major_gc() {

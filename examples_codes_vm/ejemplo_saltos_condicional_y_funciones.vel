@@ -1,5 +1,5 @@
 /*
- * Test de instrucciones de flujo de control — VestaVM
+ * Test de instrucciones de flujo de control - VestaVM
  *
  * Cubre: jmp, jmp.je, jmp.jne, callvm, enter, leave, ret, jrel.je
  *
