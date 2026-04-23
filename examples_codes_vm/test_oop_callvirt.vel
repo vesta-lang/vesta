@@ -14,6 +14,9 @@
  * Offsets REALES de ObjectHeader (16 bytes):
  *   +0 class_ptr (8B)   +8 flags (4B dword)
  *
+ * NOTA: "xchg cur0, rN" DESTRUYE rN. Patron seguro:
+ *   mov r14, rN / xchg cur0, r14
+ *
  * alloc() devuelve memoria zeroeada.
  */
 
@@ -72,7 +75,8 @@ code:
     mov   r6, r0
 
     // vtable[0] = method_body MethodInfo (r1)
-    xchg  cur0, r6
+    mov   r14, r6
+    xchg  cur0, r14
     writecur cur0, r1
 
     // vtable[1] = method_body2 MethodInfo (r9)
@@ -111,7 +115,8 @@ code:
     mov   r4, r0
 
     // class_ptr (offset 0) = ClassInfo*
-    xchg  cur0, r4
+    mov   r14, r4
+    xchg  cur0, r14
     writecur cur0, r2
 
     // flags (offset 8, dword) = 2
