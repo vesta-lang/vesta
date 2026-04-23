@@ -13,6 +13,7 @@
 #include "runtime/proceso_runtime.h"
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
+#include "loader/oop_types.h"
 
 namespace runtime {
 
@@ -61,10 +62,26 @@ namespace runtime {
     // -------------------------------------------------------------------------
 
     void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr) {
-        const uint8_t  rsrc = instr.data_instruction.reg_data.reg1;
-        const uint64_t size = read_reg_table[instr.flags_info.mode](vm, rsrc);
+        const uint8_t r_cls = instr.data_instruction.reg_data.reg1;
+        auto *cls = reinterpret_cast<loader::ClassInfo *>(vm->registers.regs[r_cls].qword());
 
-        gc::GcHandle h = vm->gc_heap.alloc(static_cast<size_t>(size));
+        if (cls == nullptr) {
+            vm->registers.regs[R00].qword(static_cast<uint64_t>(gc::GC_NULL_HANDLE));
+            return;
+        }
+
+        gc::GcHandle h = vm->gc_heap.alloc(static_cast<size_t>(cls->instance_size));
+
+        if (h != gc::GC_NULL_HANDLE) {
+            uint8_t *payload = vm->gc_heap.deref(h);
+            if (payload != nullptr) {
+                auto *hdr      = reinterpret_cast<loader::ObjectHeader *>(payload);
+                hdr->class_ptr = cls;
+                hdr->flags     = loader::OBJ_FLAG_GC_OWNED;
+                hdr->hash_code = static_cast<uint32_t>(h); // handle como hash inicial
+            }
+        }
+
         vm->registers.regs[R00].qword(static_cast<uint64_t>(h));
     }
 
@@ -89,6 +106,14 @@ namespace runtime {
         const uint8_t  rsrc       = instr.data_instruction.reg_data.reg1;
         const uint64_t old_handle = read_reg_table[instr.flags_info.mode](vm, rsrc);
         vm->gc_heap.write_barrier(static_cast<gc::GcHandle>(old_handle));
+    }
+
+    void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  rsrc = instr.data_instruction.reg_data.reg1;
+        const uint64_t size = read_reg_table[instr.flags_info.mode](vm, rsrc);
+
+        gc::GcHandle h = vm->gc_heap.alloc(static_cast<size_t>(size));
+        vm->registers.regs[R00].qword(static_cast<uint64_t>(h));
     }
 
     // -------------------------------------------------------------------------

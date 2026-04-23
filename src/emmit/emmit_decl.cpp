@@ -1022,4 +1022,56 @@ namespace Assembly::Bytecode {
             );
         }
     }
+
+    // -------------------------------------------------------------------------
+    // OOP - emit_instr_reg_imm8
+    // Emite [reg_byte][imm8] para instrucciones callvirt/callsuper/getfield/getmethod
+    // -------------------------------------------------------------------------
+    void emit_instr_reg_imm8(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    ) {
+        if (instruction_parser->operands.size() < 2) {
+            throw std::runtime_error(
+                "emit_instr_reg_imm8: '" + instruction_parser->opcode +
+                "' requiere dos operandos (reg, imm8)"
+            );
+        }
+
+        auto *reg_op = dynamic_cast<vm::RegisterOperand *>(
+            instruction_parser->operands[0].get());
+        if (reg_op == nullptr) {
+            throw std::runtime_error(
+                "emit_instr_reg_imm8: primer operando de '" +
+                instruction_parser->opcode + "' debe ser un registro"
+            );
+        }
+
+        auto *num_op = dynamic_cast<vm::NumberOperand *>(
+            instruction_parser->operands[1].get());
+        if (num_op == nullptr) {
+            throw std::runtime_error(
+                "emit_instr_reg_imm8: segundo operando de '" +
+                instruction_parser->opcode + "' debe ser un inmediato entero (0-255)"
+            );
+        }
+
+        uint8_t reg_byte = encode_reg_general(reg_op->name.c_str()) & 0x0F;
+        // parse_unsigned del valor; NumberOperand almacena el valor en .value
+        auto val_opt = vm::parse_number_safe(num_op->value);
+        if (!val_opt)
+            throw std::runtime_error(
+                "emit_instr_reg_imm8: valor numerico invalido: " + num_op->value);
+
+        uint8_t imm8 = static_cast<uint8_t>(val_opt.value() & 0xFF);
+
+        code_final.emit8(reg_byte);
+        code_final.emit8(imm8);
+
+        DEBUG_PRINT("Emitiendo %s 0x%02x reg=%d imm8=%d\n",
+                    instruction_parser->opcode.c_str(),
+                    now_instr->opcode2, reg_byte, imm8);
+    }
 }
