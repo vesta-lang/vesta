@@ -47,13 +47,13 @@ code:
 
     // Objeto para el texto (8 bytes = "Hello\0\0\0")
     mov    r1, 8
-    newobj r1                           // r0 = GcHandle del buffer texto
+    gcalloc r1                          // r0 = GcHandle del buffer texto
     mov    r12, r0                      // r12 = handle texto (estable, no es puntero)
 
     // Objeto para el caption (8 bytes = "VestaVM\0")
     // NOTA: este newobj puede disparar GC, pero r12 sigue siendo valido
     mov    r1, 8
-    newobj r1                           // r0 = GcHandle del buffer caption
+    gcalloc r1                          // r0 = GcHandle del buffer caption
     mov    r13, r0                      // r13 = handle caption
 
     // === FASE 2: Deref + escritura (sin newobj ni gcrun entre medio) ===

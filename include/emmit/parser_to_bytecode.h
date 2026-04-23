@@ -114,6 +114,7 @@ namespace Assembly::Bytecode {
         {"gcconfig", {{0x00, 0xA2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"drop",     {{0x00, 0xA3, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"gcwb",     {{0x00, 0xA4, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"gcalloc",  {{0x00, 0xA5, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
 
         // Raw allocator (0x00 0xB0 .. 0xB2)
         {"alloc",    {{0x00, 0xB0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
@@ -127,15 +128,15 @@ namespace Assembly::Bytecode {
 
         // OOP - sistema de objetos (0x00 0xD0 .. 0xDC)
         {"newobjraw",  {{0x00, 0xD0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
-        {"callvirt",   {{0x00, 0xD1, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
-        {"callsuper",  {{0x00, 0xD2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
+        {"callvirt",   {{0x00, 0xD1, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"callsuper",  {{0x00, 0xD2, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
         {"throw",      {{0x00, 0xD3, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"rethrow",    {{0x00, 0xD4, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
         {"getclass",   {{0x00, 0xD5, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"instanceof", {{0x00, 0xD6, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
         {"checkcast",  {{0x00, 0xD7, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
-        {"getfield",   {{0x00, 0xD8, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
-        {"getmethod",  {{0x00, 0xD9, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg_imm8}}},
+        {"getfield",   {{0x00, 0xD8, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"getmethod",  {{0x00, 0xD9, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
         {"fieldcount", {{0x00, 0xDA, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"methodcount",{{0x00, 0xDB, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"classname",  {{0x00, 0xDC, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},

@@ -413,6 +413,13 @@ namespace runtime {
      *  reg1 = registro que contiene el GcHandle del objeto OLD modificado. */
     void exec_instr_gcwb(ProcessVM *vm, const DecodedInstr &instr);
 
+    /** GCALLOC reg_size -> R0 = GcHandle
+     *  Reserva reg1 bytes en el GC heap sin escribir ningun ObjectHeader.
+     *  Util para buffers GC-gestionados, arrays crudos o cualquier dato
+     *  que deba vivir bajo GC pero sin estructura OOP.
+     *  Retorna GC_NULL_HANDLE si la asignacion falla. */
+    void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr);
+
     // -------------------------------------------------------------------------
     //                   Raw allocator (0x00 0xB0 .. 0xB2)
     // -------------------------------------------------------------------------

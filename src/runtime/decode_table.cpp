@@ -2998,10 +2998,11 @@ namespace runtime {
         },
 
         /* 0xA5 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // GCALLOC reg_size -> R0 = GcHandle
+            // Reserva size bytes en el GC heap sin escribir ObjectHeader.
+            "gcalloc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gcalloc, decode_instr_two_op_reg
         },
 
         /* 0xA6 */{

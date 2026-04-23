@@ -19,6 +19,8 @@
  *
  * Tambien verifica GCALLOC: reserva un buffer GC sin ObjectHeader
  * y lo accede via GCDEREF + cursor.
+ *
+ * alloc() devuelve memoria zeroeada.
  */
 
 @Format("raw")
@@ -38,36 +40,18 @@
 code:
 
 // -----------------------------------------------------------------------
-// Helper: zerear N*8 bytes a partir de cur0
-//   entrada: r12 = N (numero de qwords), r11 = 0, cur0 = inicio bloque
-//   modifica: r12, r14, cur0 (avanza N*8 bytes)
-// -----------------------------------------------------------------------
-
-// -----------------------------------------------------------------------
-// 1. ClassParent (136 bytes, todo cero)  -> r1
+// 1. ClassParent (136 bytes, zeroeado)  -> r1
 // -----------------------------------------------------------------------
     mov   r1, 136
     alloc r1
     mov   r1, r0
-    xchg  cur0, r1 ; mov r11, 0 ; mov r12, 17
-zero_parent:
-    writecur cur0, r11
-    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
-    dec  r12 ; jmp.jne @Absolute("code.zero_parent")
-    xchg  cur0, r1              // cur0 = ClassParent base
 
 // -----------------------------------------------------------------------
-// 2. ClassChild (136 bytes, todo cero)  -> r2
+// 2. ClassChild (136 bytes, zeroeado)  -> r2
 // -----------------------------------------------------------------------
     mov   r3, 136
     alloc r3
     mov   r2, r0
-    xchg  cur0, r2 ; mov r11, 0 ; mov r12, 17
-zero_child:
-    writecur cur0, r11
-    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
-    dec  r12 ; jmp.jne @Absolute("code.zero_child")
-    xchg  cur0, r2
 
 // -----------------------------------------------------------------------
 // 3. Supers array para ClassChild: [ClassParent]  (8 bytes)  -> r3
@@ -76,16 +60,23 @@ zero_child:
     alloc r5
     mov   r3, r0
     xchg  cur0, r3
-    writecur cur0, r1           // supers[0] = ClassParent*
+    writecur cur0, r1                     // supers[0] = ClassParent*
 
 // -----------------------------------------------------------------------
 // 4. Configurar ClassChild.supers (offset 32) y super_count (offset 40)
 // -----------------------------------------------------------------------
-    mov   r14, r2 ; addu r14, 32 ; xchg cur0, r14
-    writecur cur0, r3           // ClassChild.supers = array
+    // ClassChild.supers (offset 32) = r3
+    mov   r14, r2
+    addu  r14, 32
+    xchg  cur0, r14
+    writecur cur0, r3
 
-    mov   r14, r2 ; addu r14, 40 ; xchg cur0, r14
-    mov   r5, 1 ; writecur cur0, r5  // ClassChild.super_count = 1
+    // ClassChild.super_count (offset 40) = 1
+    mov   r14, r2
+    addu  r14, 40
+    xchg  cur0, r14
+    mov   r5, 1
+    writecur cur0, r5
 
 // -----------------------------------------------------------------------
 // 5. ObjectHeader del objeto de tipo ClassChild  (16 bytes)  -> r4
@@ -95,71 +86,88 @@ zero_child:
     alloc r5
     mov   r4, r0
 
+    // ObjectHeader.class_ptr (offset 0) = ClassChild*
     xchg  cur0, r4
-    writecur cur0, r2           // ObjectHeader.class_ptr = ClassChild*
+    writecur cur0, r2
 
-    mov   r14, r4 ; addu r14, 8 ; xchg cur0, r14
-    mov   r5, 2 ; writecur cur0, r5d  // ObjectHeader.flags = OBJ_FLAG_RAW_OWNED
+    // ObjectHeader.flags (offset 8) = 2 (OBJ_FLAG_RAW_OWNED)
+    mov   r14, r4
+    addu  r14, 8
+    xchg  cur0, r14
+    mov   r5, 2
+    writecur cur0, r5d
 
 // -----------------------------------------------------------------------
 // T1: INSTANCEOF(obj, ClassChild) -> R0 = 1  (clase exacta)
 // -----------------------------------------------------------------------
     instanceof r4, r2
+    mov   r9, r0                          // r9 = 1
 
 // -----------------------------------------------------------------------
 // T2: INSTANCEOF(obj, ClassParent) -> R0 = 1  (transitivo via supers[0])
 // -----------------------------------------------------------------------
     instanceof r4, r1
+    mov   r10, r0                         // r10 = 1
 
 // -----------------------------------------------------------------------
-// 6. ClassUnrelated (136 bytes, sin parentesco)  -> r5
+// 6. ClassUnrelated (136 bytes, zeroeado, sin parentesco)  -> r5
 // -----------------------------------------------------------------------
     mov   r6, 136
     alloc r6
     mov   r5, r0
-    xchg  cur0, r5 ; mov r11, 0 ; mov r12, 17
-zero_unrel:
-    writecur cur0, r11
-    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
-    dec  r12 ; jmp.jne @Absolute("code.zero_unrel")
 
 // -----------------------------------------------------------------------
 // T3: INSTANCEOF(obj, ClassUnrelated) -> R0 = 0
 // -----------------------------------------------------------------------
     instanceof r4, r5
+    mov   r11, r0                         // r11 = 0
 
 // -----------------------------------------------------------------------
 // T4: CHECKCAST(null, cualquiera) -> R0 = 0  (null pasa siempre)
 // -----------------------------------------------------------------------
     mov       r6, 0
     checkcast r6, r2
+    mov   r12, r0                         // r12 = 0
 
 // -----------------------------------------------------------------------
 // T5: CHECKCAST(obj, ClassChild) -> R0 = r4  (misma clase)
 // -----------------------------------------------------------------------
     checkcast r4, r2
+    mov   r13, r0                         // r13 = r4
 
 // -----------------------------------------------------------------------
 // T6: CHECKCAST(obj, ClassParent) -> R0 = r4  (subclase pasa)
 // -----------------------------------------------------------------------
     checkcast r4, r1
+    mov   r14, r0                         // r14 = r4
 
 // -----------------------------------------------------------------------
 // T7: GCALLOC de un buffer de 256 bytes sin ClassInfo
 //     R0 = GcHandle (distinto de GC_NULL_HANDLE = 0xFFFFFFFF)
 // -----------------------------------------------------------------------
     mov      r6, 256
-    gcalloc  r6              // R0 = GcHandle de 256 bytes en el GcHeap
+    gcalloc  r6                           // R0 = GcHandle
+    mov      r15, r0                      // r15 = handle
 
-    gcderef  cur1, r0        // cur1 = payload ptr del buffer GC
+    gcderef  cur1, r15                    // cur1 = payload ptr del buffer GC
 
     // Escribir y leer un valor para confirmar que el payload es accesible
     mov      r7, 0xCAFEBABE
-    writecur cur1, r7        // buf[0] = 0xCAFEBABE
-    readcur  r8, cur1        // r8 = 0xCAFEBABE  (verificacion)
+    writecur cur1, r7                     // buf[0] = 0xCAFEBABE
 
-    drop     r0              // liberar el handle cuando ya no hace falta
+    gcderef  cur1, r15                    // re-deref (GC puede haber movido el objeto)
+    readcur  r8, cur1                     // r8 = 0xCAFEBABE
 
+    drop     r15                          // liberar el handle
+
+    // Resultado esperado al llegar a hlt:
+    //   r9  = 1  (instanceof exacta)
+    //   r10 = 1  (instanceof transitiva)
+    //   r11 = 0  (instanceof sin relacion)
+    //   r12 = 0  (checkcast null)
+    //   r13 = r4 (checkcast misma clase)
+    //   r14 = r4 (checkcast subclase)
+    //   r8  = 0xCAFEBABE
     hlt
 
 end_code:
