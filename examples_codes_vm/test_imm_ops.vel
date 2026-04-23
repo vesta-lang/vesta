@@ -1,0 +1,42 @@
+/*
+ * test_imm_ops.vel
+ *
+ * Prueba las instrucciones ALU con inmediatos: sub, mul, div, cmp
+ *
+ * Resultado esperado:
+ *   R01 == 5    (10 - 5 = 5)
+ *   R02 == 6    (2 * 3 = 6)
+ *   R03 == 4    (12 / 3 = 4)
+ *   R04 == 1    (cmp 5,3 -> SF=0; cmp 3,5 -> SF=1, so after cmp r04=3, cmp r05=5 ZF=0)
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+    // subs r1, 5  -> r1 = 10 - 5 = 5
+    mov   r1, 10
+    subs  r1, 5
+
+    // muls r2, 3  -> r2 = 2 * 3 = 6
+    mov   r2, 2
+    muls  r2, 3
+
+    // divs r3, 3  -> r3 = 12 / 3 = 4
+    mov   r3, 12
+    divs  r3, 3
+
+    hlt
+
+end_code:

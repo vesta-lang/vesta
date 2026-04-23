@@ -224,6 +224,8 @@ namespace runtime {
      */
     void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr);
 
+    void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr);
+
     /**
      * Permite descodificar una instruccion de tipo xchg de la forma:
      * xchg:
@@ -292,6 +294,16 @@ namespace runtime {
      *   reg_byte:  bits 3-0 = registro general
      */
     void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
+     * Decodifica instrucciones SIB (Scale-Index-Base): adds/subs/muls/divs/cmps/mov con [base+index*scale].
+     * Formato extendido FIXED_6: [0x00][opcode2][ctrl][regs][index][pad]
+     *   ctrl:  bits 7-6 = mode, bit 5 = signed, bit 4 = direction, bits 3-2 = scale, bits 1-0 = 0
+     *   regs:  bits 7-4 = dst_reg, bits 3-0 = base_reg
+     *   index: bits 3-0 = index_reg
+     * Rellena mem_data: reg_final=dst, reg_base=base, reg_index=index, scale=scale
+     */
+    void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr);
 
     /**
      * Ejecuta la instrucción actualmente decodificada y devuelve el evento

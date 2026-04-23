@@ -52,6 +52,10 @@ namespace vm {
         {"xor", {"xor", OpArity::TWO}},
         {"and", {"and", OpArity::TWO}},
         {"or",  {"or",  OpArity::TWO}},
+
+        // TRES operandos: movc/movch dest, src, flag
+        {"movc",  {"movc",  OpArity::THREE}},
+        {"movch", {"movch", OpArity::THREE}},
         {"not", {"not", OpArity::ONE}},
 
         {"shl", {"shl", OpArity::TWO}},
@@ -74,7 +78,7 @@ namespace vm {
         {"classname",       {"classname",        OpArity::ONE}},
         {"gcalloc",         {"gcalloc",          OpArity::ONE}},
         {"throw",           {"throw",            OpArity::ONE}},
-        // doc/atributos — ONE operando
+        // doc/atributos - ONE operando
         {"classdoc",        {"classdoc",         OpArity::ONE}},
         {"classattrcount",  {"classattrcount",   OpArity::ONE}},
         {"methodname",      {"methodname",       OpArity::ONE}},
@@ -84,7 +88,7 @@ namespace vm {
         {"fieldname",       {"fieldname",        OpArity::ONE}},
         {"fielddoc",        {"fielddoc",         OpArity::ONE}},
         {"fieldattrcount",  {"fieldattrcount",   OpArity::ONE}},
-        // doc/atributos — TWO operandos (reg, idx)
+        // doc/atributos - TWO operandos (reg, idx)
         {"classattrkey",    {"classattrkey",     OpArity::TWO}},
         {"classattrval",    {"classattrval",     OpArity::TWO}},
         {"methodattrkey",   {"methodattrkey",    OpArity::TWO}},
@@ -563,6 +567,13 @@ namespace vm {
             case OpArity::TWO:
                 operands.emplace_back(parse_operand());
                 expect(TokenType::COMMA, "Se esperaba ',' después de destino");
+                operands.emplace_back(parse_operand());
+                break;
+            case OpArity::THREE:
+                operands.emplace_back(parse_operand());
+                expect(TokenType::COMMA, "Se esperaba ',' después del primer operando");
+                operands.emplace_back(parse_operand());
+                expect(TokenType::COMMA, "Se esperaba ',' después del segundo operando");
                 operands.emplace_back(parse_operand());
                 break;
         }
