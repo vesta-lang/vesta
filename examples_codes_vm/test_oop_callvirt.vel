@@ -1,0 +1,173 @@
+/*
+ * test_oop_callvirt.vel
+ *
+ * Prueba de despacho dinamico via vtable con CALLVIRT.
+ *
+ * Construccion manual en memoria host:
+ *   MethodInfo.code_vaddr = @Absolute("code.method_body")
+ *   ClassInfo.vtable[0]   = MethodInfo*
+ *   ObjectHeader.class_ptr = ClassInfo*
+ *
+ * Flujo:
+ *   1. CALLVIRT r4, 0  ->  dispatch vtable[0] = method_body
+ *   2. method_body: enter 0 / leave / ret
+ *   3. Tras RET el proceso vuelve a la instruccion siguiente al CALLVIRT
+ *   4. mov r13, 1  (marca de exito)
+ *   5. hlt
+ *
+ * Si R13 == 1 al llegar a hlt: test pasado.
+ *
+ * Tambien prueba CALLSUPER: llama directamente a method_body2 via
+ * ClassParent aunque el objeto sea de tipo ClassChild.
+ *
+ * Offsets usados:
+ *   MethodInfo.code_vaddr : offset 24  (qword)
+ *   ClassInfo.vtable      : offset 80  (ptr qword)
+ *   ClassInfo.vtable_size : offset 88  (qword)
+ *   ObjectHeader.class_ptr: offset 0   (qword)
+ *   ObjectHeader.flags    : offset 8   (dword)
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+    // Inicializar pila en zona alta del espacio anonimo
+    mov   rbp, 0x8000
+    mov   rsp, 0x8000
+    mov   r13, 0                // marcador de resultado
+
+// -----------------------------------------------------------------------
+// 1. MethodInfo para method_body  (56 bytes)  -> r1
+// -----------------------------------------------------------------------
+    mov   r3, 56
+    alloc r3
+    mov   r1, r0
+
+    xchg  cur0, r1 ; mov r11, 0 ; mov r12, 7
+zero_mi1:
+    writecur cur0, r11
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    dec  r12 ; jmp.jne @Absolute("code.zero_mi1")
+
+    // code_vaddr (offset 24) = virtual address de method_body
+    mov   r14, r1 ; addu r14, 24 ; xchg cur0, r14
+    mov   r5, @Absolute("code.method_body")
+    writecur cur0, r5
+
+// -----------------------------------------------------------------------
+// 2. MethodInfo para method_body2  (56 bytes)  -> r_mi2 (usamos r9)
+// -----------------------------------------------------------------------
+    mov   r3, 56
+    alloc r3
+    mov   r9, r0
+
+    xchg  cur0, r9 ; mov r11, 0 ; mov r12, 7
+zero_mi2:
+    writecur cur0, r11
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    dec  r12 ; jmp.jne @Absolute("code.zero_mi2")
+
+    mov   r14, r9 ; addu r14, 24 ; xchg cur0, r14
+    mov   r5, @Absolute("code.method_body2")
+    writecur cur0, r5
+
+// -----------------------------------------------------------------------
+// 3. vtable con 2 entradas: [MethodInfo*, MethodInfo2*]  (16 bytes)  -> r6
+// -----------------------------------------------------------------------
+    mov   r3, 16
+    alloc r3
+    mov   r6, r0
+
+    xchg  cur0, r6
+    writecur cur0, r1           // vtable[0] = method_body MethodInfo
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    writecur cur0, r9           // vtable[1] = method_body2 MethodInfo
+
+// -----------------------------------------------------------------------
+// 4. ClassInfo  (136 bytes)  -> r2
+//    vtable = r6, vtable_size = 2
+// -----------------------------------------------------------------------
+    mov   r3, 136
+    alloc r3
+    mov   r2, r0
+
+    xchg  cur0, r2 ; mov r11, 0 ; mov r12, 17
+zero_cls3:
+    writecur cur0, r11
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    dec  r12 ; jmp.jne @Absolute("code.zero_cls3")
+
+    mov   r14, r2 ; addu r14, 80 ; xchg cur0, r14
+    writecur cur0, r6           // ClassInfo.vtable = vtable ptr
+
+    mov   r14, r2 ; addu r14, 88 ; xchg cur0, r14
+    mov   r5, 2 ; writecur cur0, r5  // ClassInfo.vtable_size = 2
+
+// -----------------------------------------------------------------------
+// 5. ObjectHeader  (16 bytes)  -> r4
+// -----------------------------------------------------------------------
+    mov   r3, 16
+    alloc r3
+    mov   r4, r0
+
+    xchg  cur0, r4
+    writecur cur0, r2           // class_ptr = ClassInfo
+
+    mov   r14, r4 ; addu r14, 8 ; xchg cur0, r14
+    mov   r5, 2 ; writecur cur0, r5d  // flags = OBJ_FLAG_RAW_OWNED
+
+// -----------------------------------------------------------------------
+// T1: CALLVIRT r4, 0  ->  method_body  (enter/leave/ret)
+//     Tras el retorno: mov r13, 1
+// -----------------------------------------------------------------------
+    callvirt r4, 0
+
+    mov   r13, 1                // alcanzado solo si CALLVIRT+RET funciono
+
+// -----------------------------------------------------------------------
+// T2: CALLVIRT r4, 1  ->  method_body2
+//     Tras el retorno: addu r13, 1  (r13 debe ser 2 al final)
+// -----------------------------------------------------------------------
+    callvirt r4, 1
+
+    addu  r13, 1                // r13 = 2 si ambas llamadas retornaron
+
+// -----------------------------------------------------------------------
+// T3: CALLSUPER r2, 0  ->  llama vtable[0] de ClassInfo directamente
+//     (omite el objeto; util para super calls)
+// -----------------------------------------------------------------------
+    callsuper r2, 0
+
+    addu  r13, 1                // r13 = 3 si CALLSUPER tambien funciono
+
+    hlt
+
+// -----------------------------------------------------------------------
+// method_body: funcion trivial #1  (pila estandar: enter/leave/ret)
+// -----------------------------------------------------------------------
+method_body:
+    enter 0
+    leave
+    ret
+
+// -----------------------------------------------------------------------
+// method_body2: funcion trivial #2
+// -----------------------------------------------------------------------
+method_body2:
+    enter 0
+    leave
+    ret
+
+end_code:

@@ -1,0 +1,211 @@
+/*
+ * test_oop_exceptions.vel
+ *
+ * Prueba el mecanismo completo de excepcion:
+ *   THROW -> busqueda de handler en FrameHeader -> salto al handler
+ *   RETHROW -> relanza la excepcion activa (vm->current_exception)
+ *
+ * Construccion en memoria host:
+ *
+ *   ExcClassInfo       (ClassInfo para la excepcion)
+ *   ExcObj             (ObjectHeader con class_ptr = ExcClassInfo)
+ *
+ *   HandlerException:
+ *     type       = 0 (catch-all, nullptr)
+ *     start_pc   = 0
+ *     end_pc     = 4   (cubre solo el THROW al offset 0)
+ *     handler_pc = 4   (justo despues del THROW)
+ *
+ *   TryMethodInfo:
+ *     code_vaddr    = @Absolute("code.try_method")
+ *     handlers*     = HandlerException
+ *     handler_count = 1
+ *
+ *   Objeto receptor: ObjectHeader + ClassInfo con vtable[0] = TryMethodInfo
+ *
+ * Secuencia try_method (codigo virtual):
+ *   +0: throw r10      (4 bytes, FIXED_4)   <- bloque try [0, 4)
+ *   +4: catch_handler:
+ *       mov r13, 0x5A  <- marca de exito
+ *       ret
+ *
+ * Flujo esperado:
+ *   CALLVIRT r4, 0  -> push FrameHeader + ret_addr en pila
+ *   throw r10       -> do_throw busca handler, lo encuentra en offset 0
+ *   RIP = try_method + 4 = catch_handler
+ *   R0  = ExcObj, R13 = 0x5A
+ *   ret             -> pop FrameHeader, salta a post-callvirt
+ *   hlt con R13 = 0x5A  => TEST PASADO
+ *
+ * Offsets de HandlerException (32 bytes):
+ *   +0  type* (8B)   +8  start_pc (8B)   +16 end_pc (8B)   +24 handler_pc (8B)
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+    mov   rbp, 0x8000
+    mov   rsp, 0x8000
+    mov   r13, 0                // resultado: 0x5A si el handler se ejecuto
+
+// -----------------------------------------------------------------------
+// 1. ExcClassInfo (ClassInfo para el tipo de excepcion)  -> r_ecls (r9)
+// -----------------------------------------------------------------------
+    mov   r3, 136
+    alloc r3
+    mov   r9, r0
+    xchg  cur0, r9 ; mov r11, 0 ; mov r12, 17
+zero_ecls:
+    writecur cur0, r11
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    dec  r12 ; jmp.jne @Absolute("code.zero_ecls")
+    xchg  cur0, r9
+
+// -----------------------------------------------------------------------
+// 2. ExcObj (ObjectHeader para la excepcion)  -> r_exc (r10)
+//    class_ptr = ExcClassInfo, flags = OBJ_FLAG_RAW_OWNED (2)
+// -----------------------------------------------------------------------
+    mov   r3, 16
+    alloc r3
+    mov   r10, r0
+
+    xchg  cur0, r10
+    writecur cur0, r9           // class_ptr = ExcClassInfo
+
+    mov   r14, r10 ; addu r14, 8 ; xchg cur0, r14
+    mov   r5, 2 ; writecur cur0, r5d
+
+// -----------------------------------------------------------------------
+// 3. HandlerException (32 bytes)  -> r_hnd (r7)
+//    catch-all: start=0, end=4, handler=4
+// -----------------------------------------------------------------------
+    mov   r3, 32
+    alloc r3
+    mov   r7, r0
+
+    xchg  cur0, r7
+
+    mov   r11, 0
+    writecur cur0, r11           // type = null (catch-all)
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+
+    writecur cur0, r11           // start_pc = 0
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+
+    mov   r5, 4
+    writecur cur0, r5            // end_pc = 4
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+
+    writecur cur0, r5            // handler_pc = 4
+
+// -----------------------------------------------------------------------
+// 4. TryMethodInfo (56 bytes)  -> r_mi (r1)
+//    code_vaddr = @try_method, handlers = r7, handler_count = 1
+// -----------------------------------------------------------------------
+    mov   r3, 56
+    alloc r3
+    mov   r1, r0
+
+    xchg  cur0, r1 ; mov r11, 0 ; mov r12, 7
+zero_tmi:
+    writecur cur0, r11
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    dec  r12 ; jmp.jne @Absolute("code.zero_tmi")
+
+    mov   r14, r1 ; addu r14, 24 ; xchg cur0, r14
+    mov   r5, @Absolute("code.try_method")
+    writecur cur0, r5           // code_vaddr = try_method
+
+    mov   r14, r1 ; addu r14, 40 ; xchg cur0, r14
+    writecur cur0, r7           // handlers = HandlerException*
+
+    mov   r14, r1 ; addu r14, 48 ; xchg cur0, r14
+    mov   r5, 1 ; writecur cur0, r5  // handler_count = 1
+
+// -----------------------------------------------------------------------
+// 5. vtable + ClassInfo receptor  -> r_cls (r2)
+// -----------------------------------------------------------------------
+    mov   r3, 8
+    alloc r3
+    mov   r6, r0
+    xchg  cur0, r6
+    writecur cur0, r1           // vtable[0] = TryMethodInfo
+
+    mov   r3, 136
+    alloc r3
+    mov   r2, r0
+    xchg  cur0, r2 ; mov r11, 0 ; mov r12, 17
+zero_rcls:
+    writecur cur0, r11
+    xchg r14, cur0 ; addu r14, 8 ; xchg cur0, r14
+    dec  r12 ; jmp.jne @Absolute("code.zero_rcls")
+
+    mov   r14, r2 ; addu r14, 80 ; xchg cur0, r14
+    writecur cur0, r6
+    mov   r14, r2 ; addu r14, 88 ; xchg cur0, r14
+    mov   r5, 1 ; writecur cur0, r5
+
+// -----------------------------------------------------------------------
+// 6. ObjectHeader receptor  -> r_obj (r4)
+// -----------------------------------------------------------------------
+    mov   r3, 16
+    alloc r3
+    mov   r4, r0
+
+    xchg  cur0, r4
+    writecur cur0, r2
+
+    mov   r14, r4 ; addu r14, 8 ; xchg cur0, r14
+    mov   r5, 2 ; writecur cur0, r5d
+
+// -----------------------------------------------------------------------
+// T1: CALLVIRT + THROW + handler catch-all
+//   Si el handler corre: R13 = 0x5A, luego ret vuelve aqui.
+// -----------------------------------------------------------------------
+    callvirt r4, 0              // entra en try_method, que hace THROW
+
+    // Llegamos aqui solo si el handler capturo la excepcion y hizo RET
+    // R13 debe valer 0x5A
+
+// -----------------------------------------------------------------------
+// T2: RETHROW en contexto limpio
+//   vm->current_exception sigue apuntando a ExcObj (r10).
+//   Aqui no hay FrameHeader activo, por lo que do_throw no encontrara
+//   handler y terminara el proceso con EVT_ERROR.
+//   Este bloque esta comentado para no interrumpir el test de T1.
+//
+//   Para habilitarlo descomenta:
+//   rethrow
+// -----------------------------------------------------------------------
+
+    hlt
+
+// -----------------------------------------------------------------------
+// try_method: codigo virtual con bloque try
+//
+//   +0: throw r10     (4 bytes FIXED_4) <- try [0, 4)
+//   +4: catch_handler
+//       mov r13, 0x5A
+//       ret
+// -----------------------------------------------------------------------
+try_method:
+    throw r10                   // lanza ExcObj (host ptr)
+
+catch_handler:
+    // R0 = ExcObj (puesto por do_throw)
+    mov   r13, 0x5A             // marca de exito
+    ret                         // vuelve al caller del CALLVIRT
+
+end_code:
