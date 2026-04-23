@@ -33,6 +33,10 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::shutdown() {
+    {
+        std::lock_guard lk(tasks_m_);
+        stopping_.store(true);
+    }
     wake_flag_.store(1, std::memory_order_release);
 
 #ifdef WIN32
@@ -41,6 +45,9 @@ void ThreadPool::shutdown() {
     futex_wake(&wake_flag_, workers_.size());
 #endif
 
+    for (auto &t : workers_) {
+        if (t.joinable()) t.join();
+    }
 }
 
 bool ThreadPool::idle() {
