@@ -39,6 +39,11 @@ namespace Assembly::Bytecode {
         FIXED_4,
 
         /**
+         * La instruccion siempre ocupa 6 bytes.
+         */
+        FIXED_6,
+
+        /**
          * La instrucción siempre ocupa 8 bytes.
          */
         FIXED_8,
@@ -237,7 +242,7 @@ namespace Assembly::Bytecode {
      * @return tamaño de la instruccion.
      */
     constexpr size_t instr_size(InstrSizeMode mode) {
-        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1, 2, 4, 8, 10, 11};
+        constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1, 2, 4, 6, 8, 10, 11};
         return table[static_cast<uint8_t>(mode)];
     }
 
@@ -336,6 +341,13 @@ namespace Assembly::Bytecode {
     );
 
     void emit_instr_mov_sib(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    void emit_instr_movc(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,
