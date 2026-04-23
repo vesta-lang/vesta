@@ -1,0 +1,95 @@
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+// indicar que el formato es crudo, aunque de por si el ensamblador
+// lo define asi por defecto
+@Format("raw")
+
+// creamos nuestro espacio de direcciones, como el formato es crudo, no se
+// usara para nada, pero el ensamblador necesita un espacio y una
+// seccion para que tu codigo se pueda generar
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+// creamos la seccion minima para hacer que nuestro codigo se genere,
+// esta bien se podria llamar de cualquier manera
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+// importamos MessageBoxA de user32.dll
+@Import {
+    @Method {
+        @Lib("user32.dll")
+        @Name("MessageBoxA")
+    }
+}
+
+code:
+    // === FASE 1: Crear todos los objetos GC ANTES de hacer gcderef ===
+    // Razon: cualquier newobj puede disparar un minor GC que mueve los objetos,
+    // invalidando punteros raw previamente obtenidos. Los handles (r12, r13)
+    // son siempre estables porque el GC actualiza la HandleTable.
+
+    // Objeto para el texto (8 bytes = "Hello\0\0\0")
+    mov    r1, 8
+    gcalloc r1                          // r0 = GcHandle del buffer texto
+    mov    r12, r0                      // r12 = handle texto (estable, no es puntero)
+
+    // Objeto para el caption (8 bytes = "VestaVM\0")
+    // NOTA: este newobj puede disparar GC, pero r12 sigue siendo valido
+    mov    r1, 8
+    gcalloc r1                          // r0 = GcHandle del buffer caption
+    mov    r13, r0                      // r13 = handle caption
+
+    // === FASE 2: Deref + escritura (sin newobj ni gcrun entre medio) ===
+    // A partir de aqui no se puede llamar a newobj/gcrun hasta despues del calln.
+
+    // Desreferenciar handle texto -> cur0 = puntero raw al payload
+    gcderef cur0, r12
+    mov    r5, 0x0000006F6C6C6548       // "Hello\0\0\0" little-endian
+    writecur cur0, r5                   // escribe en el payload del objeto GC
+    // Extraer el puntero raw a r10 para pasarlo como argumento
+    xchg   cur0, r10                    // r10 = ptr raw texto, cur0 = 0
+
+    // Desreferenciar handle caption -> cur0 = puntero raw al payload
+    gcderef cur0, r13
+    mov    r5, 0x004D566174736556       // "VestaVM\0" little-endian
+    writecur cur0, r5
+    xchg   cur0, r11                    // r11 = ptr raw caption, cur0 = 0
+
+    // === FASE 3: Llamada nativa (no dispara GC) ===
+    // int MessageBoxA(HWND hWnd, LPCSTR lpText, LPCSTR lpCaption, UINT uType)
+    mov    r15, 4
+    mov    r1, 0                        // hWnd = NULL
+    mov    r2, r10                      // lpText  = ptr raw a "Hello\0\0\0"
+    mov    r3, r11                      // lpCaption = ptr raw a "VestaVM\0"
+    mov    r4, 0                        // uType = MB_OK
+    calln  @Method("user32.dll:MessageBoxA")    // r0 = IDOK(1)
+
+    // === FASE 4: Liberar handles (el GC recoger los objetos en el proximo ciclo) ===
+    drop   r12
+    drop   r13
+    hlt
+
+end_code:
+
+align 16
+data:
+    msg db "Hola mundo"
+    msg1 dq 0x123456789abcdef
+end_data:

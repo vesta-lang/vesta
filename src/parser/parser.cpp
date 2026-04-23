@@ -20,6 +20,22 @@ namespace vm {
     static const std::unordered_map<std::string, InstructionPattern> InstructionSet = {
         // TWO operandos
         {"mov", {"mov", OpArity::TWO}},
+        {"xchg", {"xchg", OpArity::TWO}},
+        {"readcur", {"readcur", OpArity::TWO}},
+        {"writecur", {"writecur", OpArity::TWO}},
+        {"gcderef", {"gcderef", OpArity::TWO}},
+        {"realloc", {"realloc", OpArity::TWO}},
+
+        // ONE operando
+        {"newobj", {"newobj", OpArity::ONE}},
+        {"gcconfig", {"gcconfig", OpArity::ONE}},
+        {"drop", {"drop", OpArity::ONE}},
+        {"gcwb", {"gcwb", OpArity::ONE}},
+        {"alloc", {"alloc", OpArity::ONE}},
+        {"free", {"free", OpArity::ONE}},
+
+        // ZERO operandos
+        {"gcrun", {"gcrun", OpArity::ZERO}},
 
         {"addu", {"addu", OpArity::TWO}},
         {"subu", {"subu", OpArity::TWO}},
@@ -35,17 +51,61 @@ namespace vm {
 
         {"xor", {"xor", OpArity::TWO}},
         {"and", {"and", OpArity::TWO}},
-        {"or", {"or", OpArity::TWO}},
+        {"or",  {"or",  OpArity::TWO}},
+
+        // TRES operandos: movc/movch dest, src, flag
+        {"movc",  {"movc",  OpArity::THREE}},
+        {"movch", {"movch", OpArity::THREE}},
+        {"not", {"not", OpArity::ONE}},
+
+        {"shl", {"shl", OpArity::TWO}},
+        {"shr", {"shr", OpArity::TWO}},
+        {"sar", {"sar", OpArity::TWO}},
+
+        // TWO operandos OOP
+        {"newobjraw",   {"newobjraw",   OpArity::TWO}},
+        {"callvirt",    {"callvirt",    OpArity::TWO}},
+        {"callsuper",   {"callsuper",   OpArity::TWO}},
+        {"instanceof",  {"instanceof",  OpArity::TWO}},
+        {"checkcast",   {"checkcast",   OpArity::TWO}},
+        {"getfield",    {"getfield",    OpArity::TWO}},
+        {"getmethod",   {"getmethod",   OpArity::TWO}},
+
+        // ONE operando OOP
+        {"getclass",        {"getclass",        OpArity::ONE}},
+        {"fieldcount",      {"fieldcount",       OpArity::ONE}},
+        {"methodcount",     {"methodcount",      OpArity::ONE}},
+        {"classname",       {"classname",        OpArity::ONE}},
+        {"gcalloc",         {"gcalloc",          OpArity::ONE}},
+        {"throw",           {"throw",            OpArity::ONE}},
+        // doc/atributos - ONE operando
+        {"classdoc",        {"classdoc",         OpArity::ONE}},
+        {"classattrcount",  {"classattrcount",   OpArity::ONE}},
+        {"methodname",      {"methodname",       OpArity::ONE}},
+        {"methoddoc",       {"methoddoc",        OpArity::ONE}},
+        {"methoddesc",      {"methoddesc",       OpArity::ONE}},
+        {"methodattrcount", {"methodattrcount",  OpArity::ONE}},
+        {"fieldname",       {"fieldname",        OpArity::ONE}},
+        {"fielddoc",        {"fielddoc",         OpArity::ONE}},
+        {"fieldattrcount",  {"fieldattrcount",   OpArity::ONE}},
+        // doc/atributos - TWO operandos (reg, idx)
+        {"classattrkey",    {"classattrkey",     OpArity::TWO}},
+        {"classattrval",    {"classattrval",     OpArity::TWO}},
+        {"methodattrkey",   {"methodattrkey",    OpArity::TWO}},
+        {"methodattrval",   {"methodattrval",    OpArity::TWO}},
+        {"fieldattrkey",    {"fieldattrkey",     OpArity::TWO}},
+        {"fieldattrval",    {"fieldattrval",     OpArity::TWO}},
+
+        // ZERO operandos OOP
+        {"rethrow",     {"rethrow",     OpArity::ZERO}},
 
         // ZERO operandos
-        {"throw", {"nop1", OpArity::ZERO}},
         {"nop1", {"nop1", OpArity::ZERO}},
         {"nop2", {"nop2", OpArity::ZERO}},
         {"hlt", {"hlt", OpArity::ZERO}},
         {"ret", {"ret", OpArity::ZERO}},
         {"resbp", {"resbp", OpArity::ZERO}},
         {"leave", {"leave", OpArity::ZERO}},
-        {"enter", {"enter", OpArity::ZERO}},
 
         // ----------------------------------------------------------------------
         // ONE operando
@@ -57,8 +117,18 @@ namespace vm {
 
 
         {"jmp", {"jmp", OpArity::ONE}},
+        {"jmp.je", {"jmp.je", OpArity::ONE}},
+        {"jmp.jne", {"jmp.jne", OpArity::ONE}},
+
+        {"jrel", {"jrel", OpArity::ONE}},
+        {"jrel.je", {"jrel.je", OpArity::ONE}},
+        {"jrel.jne", {"jrel.jne", OpArity::ONE}},
+
         {"calln", {"calln", OpArity::ONE}},
         {"callvm", {"callvm", OpArity::ONE}},
+
+        {"enter", {"enter", OpArity::ONE}},
+
         {"push", {"push", OpArity::ONE}},
         {"pop", {"pop", OpArity::ONE}},
         {"inc", {"inc", OpArity::ONE}},
@@ -427,9 +497,22 @@ namespace vm {
 
 
     std::unique_ptr<ASTNode> Parser::parse_instruction() {
-        std::string opcode   = current.lexeme;
-        auto        it       = InstructionSet.find(opcode);
-        auto        valid_it = it;
+        std::string opcode = current.lexeme;
+        std::string ext_opcode;
+        Token       tok = peek();
+        if (tok.type == TokenType::DOT) {
+            // si el siguiente token es un "." es una instruccion compuesta.
+            advance(); // consumismos el token opcode
+
+            opcode += current.lexeme;
+            advance(); // consumismos el token opcode, el token "."
+
+            // añadimos la siguiente parte de la instruccion compleja.
+            ext_opcode = current.lexeme;
+            opcode += ext_opcode;
+        }
+        auto it       = InstructionSet.find(opcode);
+        auto valid_it = it;
         if (it == InstructionSet.end()) {
             float affinity = 0.0;
             int   dist     = 0;
@@ -441,10 +524,10 @@ namespace vm {
                 affinity = utils::Levenshtein::affinity(opcode, option.first);
 
                 // Top 3 resultados
-                if (dist <= 3 || affinity >= 70) {
-                    // si la distancia es <= 3 o la afinidad es mayor o igual al 70%
+                if (dist <= 3 || affinity >= 80) {
+                    // si la distancia es <= 3 o la afinidad es mayor o igual al 80%
                     warning(current.line, current.column,
-                            "Instruccion '" + current.lexeme + "' desconocida",
+                            "Instruccion '" + opcode + "' desconocida",
                             option.first);
                     opcode   = option.first;
                     valid_it = InstructionSet.find(option.first); // Actualizar
@@ -486,6 +569,13 @@ namespace vm {
                 expect(TokenType::COMMA, "Se esperaba ',' después de destino");
                 operands.emplace_back(parse_operand());
                 break;
+            case OpArity::THREE:
+                operands.emplace_back(parse_operand());
+                expect(TokenType::COMMA, "Se esperaba ',' después del primer operando");
+                operands.emplace_back(parse_operand());
+                expect(TokenType::COMMA, "Se esperaba ',' después del segundo operando");
+                operands.emplace_back(parse_operand());
+                break;
         }
 
         // Usa pattern.opcode para codegen
@@ -521,7 +611,8 @@ namespace vm {
                 next.type == TokenType::REGISTER
                 || is_number_token(next.type)
                 || next.type == TokenType::IDENTIFIER
-                || next.type == TokenType::LBRACKET;
+                || next.type == TokenType::LBRACKET
+                || next.type == TokenType::DOT;
 
         /*
         if (
@@ -532,7 +623,7 @@ namespace vm {
             current.lexeme == "call" && next.type == TokenType::AT
         ) */
         if ((cur_is_id && next_is_operand) ||
-            (current.lexeme == "calln" && next.type == TokenType::AT)) {
+            (current.type == TokenType::IDENTIFIER && next.type == TokenType::AT)) {
             /**
              * Si es identificador + registro       ||
              * Si es identificador + numero         ||
@@ -543,7 +634,7 @@ namespace vm {
         }
 
         // instrucciones de identificador unico sin operandos:
-        static const char *no_operand_instr[] = {"nop1", "nop2", "ret", "hlt"};
+        static const char *no_operand_instr[] = {"nop1", "nop2", "ret", "hlt", "leave"};
 
         for (auto &name: no_operand_instr)
             if (current.lexeme == name)

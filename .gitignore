@@ -27,6 +27,7 @@ diagramas
 
 # Carpeta de documentación generada por Doxygen
 ./doc/doxygen_doc
+doxygen_doc
 
 # est ees un code de prueba de 6 millones de instrucciones
 code_carga_pruebas.vel
@@ -37,8 +38,16 @@ code_carga_pruebas.vel
 *.exe
 *.o
 *.elf
+*.gch
+*.obj
 
 # historiales de ejecución de comandos
 *history.txt
 
 generated_vel_files
+
+# Archivos temp de agentes de AI
+claude*
+chatgpt*
+copilot*
+deepseck*

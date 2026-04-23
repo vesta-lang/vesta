@@ -12,6 +12,7 @@
 #ifndef SYNC_IO_H
 #define SYNC_IO_H
 
+#include <fstream>
 #include <mutex>
 #include <iostream>
 #include <sstream>
@@ -45,8 +46,7 @@ namespace vesta {
      */
     class SyncOStream {
     public:
-        explicit SyncOStream(std::ostream &out_stream = std::cout) : out(out_stream) {
-        }
+        explicit SyncOStream(std::ostream &out_stream = std::cout) : out(out_stream) {}
 
         // Movable, no copiable
         SyncOStream(SyncOStream &&) = default;
@@ -89,7 +89,7 @@ namespace vesta {
 
     private:
         std::ostringstream oss;
-        std::ostream &out;
+        std::ostream &     out;
     };
 
     // helper para obtener un SyncOStream temporal
@@ -99,22 +99,18 @@ namespace vesta {
 
     // Helpers de detección
     template<typename T, typename = void>
-    struct has_to_string : std::false_type {
-    };
+    struct has_to_string : std::false_type {};
 
     template<typename T>
     struct has_to_string<T, std::void_t<decltype(std::declval<const T &>().to_string())> >
-            : std::true_type {
-    };
+            : std::true_type {};
 
     template<typename T, typename = void>
-    struct has_print_ostream : std::false_type {
-    };
+    struct has_print_ostream : std::false_type {};
 
     template<typename T>
     struct has_print_ostream<T, std::void_t<decltype(std::declval<const T &>().print(std::declval<std::ostream &>()))> >
-            : std::true_type {
-    };
+            : std::true_type {};
 
     // Fallback para tipos que no exponen to_string() ni print(ostream&)
     template<typename T>
@@ -165,7 +161,7 @@ namespace vesta {
 
     static std::string hex8(uint8_t v) {
         static const char *lut = "0123456789ABCDEF";
-        std::string s;
+        std::string        s;
         s += lut[(v >> 4) & 0xF];
         s += lut[v & 0xF];
         return s;
@@ -202,6 +198,63 @@ namespace vesta {
             if (((i % 8) == 0)) dump_ += "\n";
         }
         return dump_;
+    }
+
+
+    class DebugLogger {
+    public:
+        DebugLogger() {
+            file_.open("decode_log.txt", std::ios::app);
+        }
+
+        ~DebugLogger() {
+            file_.close();
+        }
+
+        template<typename T>
+        DebugLogger &operator<<(const T &v) {
+            file_ << v;
+            return *this;
+        }
+
+        DebugLogger &operator<<(std::ostream & (*manip)(std::ostream &)) {
+            file_ << manip;
+            return *this;
+        }
+
+        void dump_memory(const void *ptr, size_t size) {
+            const uint8_t *p = static_cast<const uint8_t *>(ptr);
+
+            file_ << "    [MEMORY DUMP] size=" << size << " bytes\n";
+
+            for (size_t i = 0; i < size; i += 16) {
+                file_ << "    " << std::setw(4) << std::setfill('0') << std::hex << i << ": ";
+
+                for (size_t j = 0; j < 16 && i + j < size; ++j) {
+                    file_ << std::setw(2) << std::setfill('0') << std::hex
+                            << (int) p[i + j] << " ";
+                }
+
+                file_ << "\n";
+            }
+
+            file_ << std::dec; // volver a decimal
+        }
+
+    private:
+        std::ofstream file_;
+    };
+
+    template<typename... Args>
+    std::string fmt(Args&&... args) {
+        std::ostringstream oss;
+        (oss << ... << args);
+        return oss.str();
+    }
+
+    inline DebugLogger &scout_decode() {
+        static DebugLogger logger;
+        return logger;
     }
 }
 

@@ -1,0 +1,162 @@
+/*
+ * test_oop_newobjraw.vel
+ *
+ * Prueba NEWOBJRAW y reflexion OOP (sin jerarquia de clases):
+ *   GETCLASS, FIELDCOUNT, METHODCOUNT, CLASSNAME, GETFIELD, GETMETHOD
+ *
+ * NOTA: "xchg cur0, rN" DESTRUYE rN (swap). Para no perder rN:
+ *   usar "mov r14, rN / xchg cur0, r14" (r14 = scratch).
+ *
+ * Offsets REALES (calculados con offsetof en C++):
+ *   ClassInfo (136B): instance_size=+24(d), fields=+64, field_count=+72,
+ *                     methods=+120, method_count=+128
+ *   FieldInfo  (48B): size=+32(d), offset=+36(d)
+ *   MethodInfo(112B): code_vaddr=+72
+ *   ObjectHeader(16B): class_ptr=+0, flags=+8(d), hash_code=+12(d)
+ *
+ * alloc() devuelve memoria zeroeada.
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// 1. FieldInfo (48 bytes)  -> r13
+//    FieldInfo.size (offset 32, dword) = 8
+// -----------------------------------------------------------------------
+    mov   r1, 80
+    alloc r1
+    mov   r13, r0
+
+    mov   r14, r13
+    addu  r14, 32
+    xchg  cur0, r14
+    mov   r5, 8
+    writecur cur0, r5d
+
+// -----------------------------------------------------------------------
+// 2. MethodInfo (112 bytes)  -> r9
+// -----------------------------------------------------------------------
+    mov   r1, 144
+    alloc r1
+    mov   r9, r0
+
+// -----------------------------------------------------------------------
+// 3. ClassInfo (136 bytes)  -> r15
+// -----------------------------------------------------------------------
+    mov   r1, 168
+    alloc r1
+    mov   r15, r0
+
+    // instance_size (offset 24, dword) = 32
+    mov   r14, r15
+    addu  r14, 24
+    xchg  cur0, r14
+    mov   r5, 32
+    writecur cur0, r5d
+
+    // fields (offset 64) = r13
+    mov   r14, r15
+    addu  r14, 64
+    xchg  cur0, r14
+    writecur cur0, r13
+
+    // field_count (offset 72) = 1
+    mov   r14, r15
+    addu  r14, 72
+    xchg  cur0, r14
+    mov   r5, 1
+    writecur cur0, r5
+
+    // methods (offset 120) = r9
+    mov   r14, r15
+    addu  r14, 120
+    xchg  cur0, r14
+    writecur cur0, r9
+
+    // method_count (offset 128) = 1
+    mov   r14, r15
+    addu  r14, 128
+    xchg  cur0, r14
+    mov   r5, 1
+    writecur cur0, r5
+
+// -----------------------------------------------------------------------
+// 4. NEWOBJRAW r15, r6 (tamaño r6=48) -> r8
+// -----------------------------------------------------------------------
+    mov   r6, 48
+    newobjraw r15, r6
+    mov   r8, r0                          // r8 = ObjectHeader ptr
+
+// -----------------------------------------------------------------------
+// 5. Leer ObjectHeader.class_ptr (offset 0) -> r2 (debe == r15)
+//    NOTA: usar r14 como swap-scratch para no destruir r8
+// -----------------------------------------------------------------------
+    mov   r14, r8
+    xchg  cur0, r14                       // cur0 = r8, r14 = old cur0 (discard)
+    readcur r2, cur0                      // r2 = class_ptr (debe == r15)
+
+// -----------------------------------------------------------------------
+// 6. Leer ObjectHeader.flags (offset 8, dword) -> r10 (debe == 2)
+// -----------------------------------------------------------------------
+    mov   r14, r8
+    addu  r14, 8
+    xchg  cur0, r14
+    readcur r10d, cur0                    // r10 = flags dword (debe == 2)
+
+// -----------------------------------------------------------------------
+// 7. GETCLASS r8 -> R0 = ClassInfo* (debe == r15)
+// -----------------------------------------------------------------------
+    getclass r8                           // R0 = ClassInfo*
+    mov   r11, r0
+
+// -----------------------------------------------------------------------
+// 8. FIELDCOUNT / METHODCOUNT -> 1 cada uno
+// -----------------------------------------------------------------------
+    fieldcount  r15                       // R0 = 1
+    mov   r12, r0
+    methodcount r15                       // R0 = 1
+
+// -----------------------------------------------------------------------
+// 9. CLASSNAME (name.data = null) -> R0 = 0
+// -----------------------------------------------------------------------
+    classname r15                         // R0 = 0
+
+// -----------------------------------------------------------------------
+// 10. GETFIELD idx=0 -> R0 = r13 (FieldInfo ptr)
+// -----------------------------------------------------------------------
+    getfield r15, 0
+
+// -----------------------------------------------------------------------
+// 11. GETMETHOD idx=0 -> R0 = r9 (MethodInfo ptr)
+// -----------------------------------------------------------------------
+    getmethod r15, 0
+
+// -----------------------------------------------------------------------
+// 12. Indices fuera de rango -> R0 = 0
+// -----------------------------------------------------------------------
+    getfield  r15, 5                      // R0 = 0
+    getmethod r15, 5                      // R0 = 0
+
+    // Esperado al hlt:
+    //   r2  = r15 (class_ptr correcto)
+    //   r10 = 2   (OBJ_FLAG_RAW_OWNED)
+    //   r11 = r15 (getclass correcto)
+    //   r12 = 1   (field_count)
+    //   R00 = 0   (getmethod out-of-range)
+    hlt
+
+end_code:

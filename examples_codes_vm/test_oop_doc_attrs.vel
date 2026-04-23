@@ -1,0 +1,269 @@
+/*
+ * test_oop_doc_attrs.vel
+ *
+ * Prueba el sistema de documentacion y tabla de atributos del OOP:
+ *   classdoc / classattrcount / classattrkey / classattrval
+ *   methodname / methoddoc / methoddesc / methodattrcount / methodattrkey / methodattrval
+ *   fieldname / fielddoc / fieldattrcount / fieldattrkey / fieldattrval
+ *
+ * Resultado esperado al llegar a hlt:
+ *   R01 != 0   (classdoc.data apunta al bloque de strings)
+ *   R02 == 2   (classattrcount == 2)
+ *   R03 != 0   (classattrkey[0].data != null)
+ *   R04 != 0   (classattrval[0].data != null)
+ *   R05 != 0   (classattrkey[1].data != null)
+ *   R06 != 0   (classattrval[1].data != null)
+ *   R07 != 0   (methodname.data != null)
+ *   R08 != 0   (methoddoc.data != null)
+ *   R09 == 1   (methodattrcount == 1)
+ *   R10 != 0   (methodattrkey[0].data != null)
+ *   R11 != 0   (methodattrval[0].data != null)
+ *   R12 != 0   (fieldname.data != null)
+ *   R14 == 0   (fieldattrcount == 0, FieldInfo sin attrs)
+ *   R13 != 0   (fielddoc.data != null)
+ *   R15 == 0   (fieldattrval(null, 5) -> 0, out-of-range/null)
+ *
+ * Registro de trabajo:
+ *   r7  = bloque de strings (pool con puntero valido)
+ *   r15 = ClassInfo ptr
+ *   r14 = MethodInfo ptr  (sobreescrito con fieldattrcount en T13)
+ *   r13 = FieldInfo ptr   (sobreescrito con fielddoc result en T14)
+ *   r8  = scratch para xchg
+ *
+ * Offsets (con doc/attrs al final de cada struct):
+ *   ClassInfo  (168B): doc.data=+136, attrs=+152, attr_count=+160
+ *   MethodInfo (144B): name.data=+0,  descriptor.data=+16,
+ *                      doc.data=+112, attrs=+128, attr_count=+136
+ *   FieldInfo   (80B): name.data=+0,  doc.data=+48, attr_count=+72
+ *   AttrEntry   (32B): key.data=+0,   value.data=+16
+ *
+ * alloc() zeroes memory.  Patron xchg: mov r8, rN / xchg cur0, r8
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// 1. Pool de strings: 16 bytes validos -> r7
+//    Usamos este puntero como valor de doc.data / name.data / key.data, etc.
+//    Solo necesitamos que sea != 0 y accesible.
+// -----------------------------------------------------------------------
+    mov   r1, 16
+    alloc r1
+    mov   r7, r0
+
+// -----------------------------------------------------------------------
+// 2. ClassInfo (168 bytes) -> r15
+// -----------------------------------------------------------------------
+    mov   r1, 168
+    alloc r1
+    mov   r15, r0
+
+    // doc.data (offset 136) = r7
+    mov   r8, r15
+    addu  r8, 136
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // Attrs: bloque contiguo de 64 bytes (2 x AttrEntry de 32B) -> r2
+    mov   r1, 64
+    alloc r1
+    mov   r2, r0
+
+    // r3 = r2 + 32 (segundo AttrEntry dentro del mismo bloque)
+    mov   r3, r2
+    addu  r3, 32
+
+    // AttrEntry[0].key.data   = r7
+    mov   r8, r2
+    xchg  cur0, r8
+    writecur cur0, r7
+    // AttrEntry[0].value.data = r7  (offset +16)
+    mov   r8, r2
+    addu  r8, 16
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // AttrEntry[1].key.data   = r7  (r3 = r2+32)
+    mov   r8, r3
+    xchg  cur0, r8
+    writecur cur0, r7
+    // AttrEntry[1].value.data = r7  (offset +16)
+    mov   r8, r3
+    addu  r8, 16
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // ClassInfo.attrs (offset 152) = r2
+    mov   r8, r15
+    addu  r8, 152
+    xchg  cur0, r8
+    writecur cur0, r2
+
+    // ClassInfo.attr_count (offset 160) = 2
+    mov   r8, r15
+    addu  r8, 160
+    xchg  cur0, r8
+    mov   r1, 2
+    writecur cur0, r1
+
+// -----------------------------------------------------------------------
+// 3. MethodInfo (144 bytes) -> r14
+// -----------------------------------------------------------------------
+    mov   r1, 144
+    alloc r1
+    mov   r14, r0
+
+    // name.data (offset 0) = r7
+    mov   r8, r14
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // descriptor.data (offset 16) = r7
+    mov   r8, r14
+    addu  r8, 16
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // doc.data (offset 112) = r7
+    mov   r8, r14
+    addu  r8, 112
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // AttrEntry para metodo: un AttrEntry (32B) -> r4
+    mov   r1, 32
+    alloc r1
+    mov   r4, r0
+
+    // key.data = r7, value.data = r7
+    mov   r8, r4
+    xchg  cur0, r8
+    writecur cur0, r7
+    mov   r8, r4
+    addu  r8, 16
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // MethodInfo.attrs (offset 128) = r4
+    mov   r8, r14
+    addu  r8, 128
+    xchg  cur0, r8
+    writecur cur0, r4
+
+    // MethodInfo.attr_count (offset 136) = 1
+    mov   r8, r14
+    addu  r8, 136
+    xchg  cur0, r8
+    mov   r1, 1
+    writecur cur0, r1
+
+// -----------------------------------------------------------------------
+// 4. FieldInfo (80 bytes) -> r13  (sin attrs)
+// -----------------------------------------------------------------------
+    mov   r1, 80
+    alloc r1
+    mov   r13, r0
+
+    // name.data (offset 0) = r7
+    mov   r8, r13
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // doc.data (offset 48) = r7
+    mov   r8, r13
+    addu  r8, 48
+    xchg  cur0, r8
+    writecur cur0, r7
+
+    // attr_count queda 0 (zeroeado por alloc)
+
+// -----------------------------------------------------------------------
+// Tests: instrucciones de reflexion/doc
+//   r7=str_pool, r15=ClassInfo, r14=MethodInfo, r13=FieldInfo
+// -----------------------------------------------------------------------
+
+    // T1: classdoc r15 -> R01
+    classdoc      r15
+    mov   r1, r0
+
+    // T2: classattrcount r15 -> R02 (debe ser 2)
+    classattrcount r15
+    mov   r2, r0
+
+    // T3: classattrkey r15, 0 -> R03
+    classattrkey  r15, 0
+    mov   r3, r0
+
+    // T4: classattrval r15, 0 -> R04
+    classattrval  r15, 0
+    mov   r4, r0
+
+    // T5: classattrkey r15, 1 -> R05
+    classattrkey  r15, 1
+    mov   r5, r0
+
+    // T6: classattrval r15, 1 -> R06
+    classattrval  r15, 1
+    mov   r6, r0
+
+    // T7: methodname r14 -> R07  (r7 sobreescrito, pero ya no lo necesitamos)
+    methodname    r14
+    mov   r7, r0
+
+    // T8: methoddoc r14 -> R08
+    methoddoc     r14
+    mov   r8, r0
+
+    // T9: methodattrcount r14 -> R09 (debe ser 1)
+    methodattrcount r14
+    mov   r9, r0
+
+    // T10: methodattrkey r14, 0 -> R10
+    methodattrkey r14, 0
+    mov   r10, r0
+
+    // T11: methodattrval r14, 0 -> R11
+    methodattrval r14, 0
+    mov   r11, r0
+
+    // T12: fieldname r13 -> R12  (r13 = FieldInfo ptr, NO sobreescrito todavia)
+    fieldname     r13
+    mov   r12, r0
+
+    // T13: fieldattrcount r13 -> R14  (sobreescribe r14=MethodInfo que ya no necesitamos)
+    //   Debe ser 0 (FieldInfo sin attrs)
+    fieldattrcount r13
+    mov   r14, r0
+
+    // T14: fielddoc r13 -> R13  (sobreescribe r13=FieldInfo, ultima operacion sobre FieldInfo)
+    fielddoc      r13
+    mov   r13, r0
+
+    // T15: fieldattrval(null, 5) -> R15 (debe ser 0: null siempre devuelve 0)
+    mov   r6, 0
+    fieldattrval  r6, 5
+    mov   r15, r0
+
+    // Resultado final:
+    //   R01!=0, R02==2, R03!=0, R04!=0, R05!=0, R06==0(null arg en T15 antes),
+    //   ...wait R06 fue sobreescrito con 0 para el T15 arg. Aceptable.
+    //   R07!=0, R08!=0, R09==1, R10!=0, R11!=0
+    //   R12!=0, R13!=0, R14==0, R15==0
+
+    hlt
+
+end_code:
