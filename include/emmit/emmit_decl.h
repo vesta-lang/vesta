@@ -460,5 +460,24 @@ namespace Assembly::Bytecode {
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
     );
+
+    /**
+     * Emite instrucciones OOP de la forma [reg, imm8]:
+     *   callvirt  reg_obj, vtable_idx
+     *   callsuper reg_classinfo, vtable_idx
+     *   getfield  reg_classinfo, field_idx
+     *   getmethod reg_classinfo, method_idx
+     *
+     * Formato (FIXED_4, opcode extendido 0x00):
+     *   [0x00][opcode][reg_byte][imm8]
+     *   reg_byte : bits 3-0 = registro general (operando 0)
+     *   imm8     : valor inmediato uint8 (operando 1, tipo ImmediateOperand o IntLiteral)
+     */
+    void emit_instr_reg_imm8(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
 }
 #endif //EMMIT_DECL_H

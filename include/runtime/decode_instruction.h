@@ -267,6 +267,20 @@ namespace runtime {
     void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * Decodifica instrucciones OOP de la forma [reg, imm8]:
+     *   callvirt  reg_obj, vtable_idx
+     *   callsuper reg_classinfo, vtable_idx
+     *   getfield  reg_classinfo, field_idx
+     *   getmethod reg_classinfo, method_idx
+     *
+     * Formato (FIXED_4, opcode extendido 0x00):
+     *   [0x00][opcode][reg_byte][imm8]
+     *   reg_byte : bits 3-0 = registro general (0-15)
+     *   imm8     : indice de vtable/campo/metodo (0-255), almacenado en reg_data.reg2
+     */
+    void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * Descodifica instrucciones de lectura/escritura a memoria real via cursor:
      *   readcur  dest_reg, curN   - lee de la dirección host en curN
      *   writecur curN, src_reg    - escribe src_reg en la dirección host en curN
