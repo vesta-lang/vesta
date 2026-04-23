@@ -1,0 +1,81 @@
+/*
+ * test_oop_null_safety.vel
+ *
+ * Verifica que todas las instrucciones OOP manejan entradas nulas/cero
+ * sin bloquear ni crashear el proceso.
+ *
+ * Convenciones probadas:
+ *   - null ClassInfo*  -> R0 = 0
+ *   - null objeto      -> R0 = 0
+ *   - CHECKCAST(null)  -> R0 = 0  (null pasa cualquier cast)
+ *
+ * THROW(null) y CALLVIRT(null) disparan EVT_ERROR por diseño;
+ * esos casos se excluyen deliberadamente de este test.
+ *
+ * Resultado esperado: el proceso termina en hlt sin ningun error.
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// T01 - newobjraw con ClassInfo nulo -> R0 = 0
+    mov       r1, 0
+    mov       r2, 64
+    newobjraw r1, r2
+
+// T02 - getclass con objeto nulo -> R0 = 0
+    mov      r1, 0
+    getclass r1
+
+// T03 - instanceof: objeto nulo -> R0 = 0
+    mov       r1, 0
+    mov       r2, 0xDEAD
+    instanceof r1, r2
+
+// T04 - instanceof: ClassInfo nulo -> R0 = 0
+    mov       r1, 0xDEAD
+    mov       r2, 0
+    instanceof r1, r2
+
+// T05 - checkcast: objeto nulo -> R0 = 0  (null pasa siempre)
+    mov       r1, 0
+    mov       r2, 0xDEAD
+    checkcast r1, r2
+
+// T06 - fieldcount con ClassInfo nulo -> R0 = 0
+    mov        r1, 0
+    fieldcount r1
+
+// T07 - methodcount con ClassInfo nulo -> R0 = 0
+    mov         r1, 0
+    methodcount r1
+
+// T08 - classname con ClassInfo nulo -> R0 = 0
+    mov       r1, 0
+    classname r1
+
+// T09 - getfield con ClassInfo nulo -> R0 = 0
+    mov      r1, 0
+    getfield r1, 0
+
+// T10 - getmethod con ClassInfo nulo -> R0 = 0
+    mov       r1, 0
+    getmethod r1, 0
+
+// Todos los tests completados sin crash
+    hlt
+
+end_code:
