@@ -10,9 +10,36 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
+#include "ffi/native_ffi.h"
 #include "runtime/decode_table.h"
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
+
+//#define DEBUG_DECODE_PRINT
+#ifdef DEBUG_DECODE_PRINT
+#define DBG_DECODE(PC, msg, Instr, ...) \
+    do { \
+    vesta::scout_decode() \
+    << "[PC=" << std::setw(6) << (PC) << "] " << msg << " " \
+    << std::string(Instr) << " " << __VA_ARGS__ << std::endl; \
+    } while(0)
+
+#define DBG_DECODE_DUMP(vm, instr, size) \
+do { \
+if (size > 12) {vesta::scout_decode() << "size(" << (uint64_t)size << ") > 10 "; exit(-1);} \
+uint8_t *exit_data = new uint8_t[size]; \
+        vm->vm_mem.read_bytes(\
+            vm->registers.rip.raw(), exit_data, size);\
+vesta::scout_decode().dump_memory(exit_data, size); \
+vesta::scout_decode() << std::endl;\
+    delete [] exit_data; \
+} while(0)
+
+#else
+    #define DBG_DECODE(PC, ...) do {} while(0)
+    #define DBG_DECODE_DUMP(PC, ...) do {} while(0)
+#endif
+
 
 /**
  * version inline para obtener el tiempo
@@ -27,6 +54,50 @@ inline uint64_t now_ns() {
 namespace runtime {
     using clock = std::chrono::high_resolution_clock;
 
+    // -------------------------------------------------------------------------
+    // OOP - decodificador para instrucciones de la forma [reg1, imm8]
+    // Formato: [0x00][opcode][reg_byte][imm8]
+    //   reg_byte bits 3-0 -> reg1 (registro general)
+    //   imm8              -> reg2 (indice de vtable/campo/metodo, 0-255)
+    // -------------------------------------------------------------------------
+    void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // las instrucciones extendidas siempre tienen prefijo 0x00
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint16_t data   = vm->vm_mem.read_u16(offset);
+
+        uint8_t reg_byte = static_cast<uint8_t>(data & 0xFF);        // byte 2
+        uint8_t imm8     = static_cast<uint8_t>((data >> 8) & 0xFF); // byte 3
+
+        instr.data_instruction.reg_data.reg1 = reg_byte & 0x0F; // bits 3-0 = reg general
+        instr.data_instruction.reg_data.reg2 = imm8;            // 0-255 = indice
+    }
+
+    void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // 4 bytes tras los 2 bytes de opcode: ctrl | regs | index | pad
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint32_t data   = vm->vm_mem.read_u32(offset);
+
+        uint8_t ctrl_byte  = static_cast<uint8_t>(data & 0xFF);
+        uint8_t regs_byte  = static_cast<uint8_t>((data >> 8) & 0xFF);
+        uint8_t index_byte = static_cast<uint8_t>((data >> 16) & 0xFF);
+
+        instr.flags_info.mode             = (ctrl_byte >> 6) & 0x3;
+        instr.flags_info._signed_instruct = (ctrl_byte >> 5) & 0x1;
+        instr.flags_info.direction        = (ctrl_byte >> 4) & 0x1;
+        uint8_t scale                     = (ctrl_byte >> 2) & 0x3;
+        uint8_t has_index                 = (ctrl_byte >> 1) & 0x1;
+
+        instr.data_instruction.mem_data.reg_final = regs_byte >> 4;
+        instr.data_instruction.mem_data.reg_base  = regs_byte & 0x0F;
+        instr.data_instruction.mem_data.reg_index = index_byte & 0x0F;
+        // bits 1-0 de scale = escala real (0=x1,1=x2,2=x4,3=x8); bit 2 = has_index
+        instr.data_instruction.mem_data.scale     = scale | (has_index << 2);
+    }
+
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
         // las instrucciones de registro usan tamaño constante.
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
@@ -36,7 +107,7 @@ namespace runtime {
 
         // el offset del resto de datos empieza apartir del opcode,
         // calculamos el offset al resto de datos.
-        uint8_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+        uint64_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
 
         // leemos los dos bytes que ocupa la instrucciones de este tipo
         uint16_t data = vm->vm_mem.read_u16(offset);
@@ -50,54 +121,113 @@ namespace runtime {
         // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   " r" << (int)instr.data_instruction.reg_data.reg1 << ", "
+                   << " r" << (int)instr.data_instruction.reg_data.reg2
+        );
+
+        DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
     void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr) {
-        // los MOV simples ocupan espacio constantes
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
 
-        // el offset del resto de datos empieza apartir del opcode,
-        // calculamos el offset al resto de datos.
-        uint8_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
-
-        // leemos los dos bytes que ocupa la instrucciones de este tipo
-        uint16_t data = vm->vm_mem.read_u16(offset);
+        uint64_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+        uint16_t data   = vm->vm_mem.read_u16(offset);
 
         uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
         uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
 
-        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
-        instr.flags_info.mode = (n1 >> 6) & 0b11;
+        // ctrl byte: mode(2) | signed(1) | dir(1) | 0000
+        instr.flags_info.mode             = (n1 >> 6) & 0b11;
+        instr.flags_info._signed_instruct = (n1 >> 5) & 0b1;
+        instr.flags_info.direction        = (n1 >> 4) & 0b1;
 
-        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        // regs byte: reg2(4) | reg1(4)
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   " r" << (int)instr.data_instruction.reg_data.reg1 << ", "
+                   << " r" << (int)instr.data_instruction.reg_data.reg2
+        );
+        DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
 
     void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr) {
-        // los MOV simples ocupan espacio constantes
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        //instr.flags_info.size_instr =
 
-        // el offset del resto de datos empieza apartir del opcode,
-        // calculamos el offset al resto de datos.
-        uint8_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+        // datos del mov que indican la variante.
+        uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 2];
 
-        // leemos los dos bytes que ocupa la instrucciones de este tipo
-        uint16_t data = vm->vm_mem.read_u16(offset);
-
-        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
-        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
+        // leemos solo 8 byte de datos apartir del segundo opcode y el campo data.
+        // las instrucciones de inmediatos usan longitud variable, para asgurarnos de hacer las menos
+        // lecturas posibles leemos 64 bits primeramente de golpe, luego usamos 1, 2, 4, u 8 bytes de los leeidos.
+        uint64_t inmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 3);
 
         // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
-        instr.flags_info.mode = (n1 >> 6) & 0b11;
+        instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6 (mm)
+        instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5 (s)
+        instr.flags_info.direction             = (data >> 4) & 0b1;  // bit 4 (d)
+        instr.data_instruction.inmmed_data.reg = data & 0b1111;      // bits 3-0 (rrrr)
 
-        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
-        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
-        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
+        // si la direccion es 1 y el signo 1, el mov usa un registro especial
+        // y por tanto siempre se usa 64 bits de inmediato
+        if (instr.flags_info.direction == 1 && instr.flags_info._signed_instruct == 1) {
+            // guardamos el inmediato de 64 bits:
+            instr.data_instruction.inmmed_data.inmmed = inmed;
+
+            // indicamos el tamaño de la instruccion que es 2 bytes de opcode + 1 de datos + 8 de inmediato
+            instr.flags_info.size_instr = 2 + 1 + 8;
+            instr.flags_info.reg_ext    = true; // indicar que usa un registro extendido
+
+            // un registro especial usa el modo como bits adicional para codificar el registro espcial.
+            instr.data_instruction.inmmed_data.reg = instr.flags_info.mode << 4 |
+                    instr.data_instruction.inmmed_data.reg;
+
+            DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, " "
+                       << regs_special[instr.data_instruction.inmmed_data.reg] << ", "
+                       << (uint64_t)instr.data_instruction.inmmed_data.inmmed
+            );
+            DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+
+            return; // debemos salir ya que lo de abajo solo aplica con descodificacion convencional
+        }
+
+        /**
+         * El tamaño de este tipo de instrucciones es variable ya que depende del modo usado, la cantidad
+         * de bytes para el inmediato varia.
+         * solo 3 bytes son constantes, los cuales 2 son opcodes y 1 es metadatos de la instruccion,
+         * los otrs bytes corresponden a la longitud del inmediato que depende del modo codificado.
+         */
+        instr.flags_info.size_instr = 3 + Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
+
+        switch (instr.flags_info.mode) {
+            case 0b00: instr.data_instruction.inmmed_data.inmmed = (uint8_t) inmed; //  8 bits
+                break;
+            case 0b01: instr.data_instruction.inmmed_data.inmmed = (uint16_t) inmed; // 16 bits
+                break;
+            case 0b10: instr.data_instruction.inmmed_data.inmmed = (uint32_t) inmed; // 32 bits
+                break;
+            default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
+                break;
+        }
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, " r"
+                   << (int)instr.data_instruction.inmmed_data.reg << ", "
+                   << (uint64_t) instr.data_instruction.inmmed_data.inmmed
+        );
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
-    void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr) {}
+    void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr) {
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, ""
+        );
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
 
     void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr) {
         VM_ASSERT(
@@ -129,6 +259,33 @@ namespace runtime {
 
         // 0b00`mode`reg -> registro ocupa los ultimos 4 bits
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(data & 0xF);
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   " r"
+                   << (int)instr.data_instruction.reg_data.reg1
+        );
+        DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
+    }
+
+    // MOVC/MOVCH mem-reg: [0x00][0x1E][ctrl][byte4]  (4 bytes total)
+    // ctrl: host(1)|host(1)|d(1)|reg1(5)
+    //   bits 7-6: 0b10 = MOVCH, 0b00 = MOVC  (repurposing mode field)
+    // byte4: flag(3)|reg2(5)
+    void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 4;
+
+        uint64_t base = vm->registers.rip.raw() + 2;
+        uint8_t  ctrl = vm->vm_mem[base];
+        uint8_t  b4   = vm->vm_mem[base + 1];
+
+        // bits 7-6 of ctrl: 0b10 = MOVCH (host), 0b00 = MOVC (vm)
+        uint8_t host_bits               = (ctrl >> 6) & 0b11;
+        instr.flags_info._signed_instruct = (host_bits == 0b10) ? 1 : 0;
+        instr.flags_info.direction        = (ctrl >> 5) & 0b1;
+        instr.flags_info.mode             = 3; // always qword for register moves
+        instr.data_instruction.reg_data.reg1 = ctrl & 0xF;        // reg1 (dest/src)
+        instr.data_instruction.reg_data.reg2 = (b4 >> 5) & 0x7;   // flag code (3 bits)
+        instr.data_instruction.inmmed_data.reg = b4 & 0x1F;        // reg2 (src/dest)
     }
 
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr) {
@@ -172,6 +329,11 @@ namespace runtime {
         }
 
         instr.flags_info.size_instr = 2;
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   " r"
+                   << (int)instr.data_instruction.reg_data.reg1
+        );
+        DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
     void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr) {
@@ -208,10 +370,10 @@ namespace runtime {
         /**
          * Aunque las instrucciones de inmediatos no tiene direccionalidad, el campo
          * direccion permite indicar en este caso si el valor inmediato debe operar a un registro:
-         *      mov reg, 0x1000    -> direccion = 0
+         *      adds reg, 0x1000    -> direccion = 0
          * o si por el contrario el valor inmediato debe operar el valor contenido en la memoria señala por
          * el registro:
-         *      mov [reg], 0x1000  -> direccion = 1
+         *      adds [reg], 0x1000  -> direccion = 1
          */
         instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6 (mm)
         instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5 (s)
@@ -236,11 +398,121 @@ namespace runtime {
             default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
                 break;
         }
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   " r"
+                   << (int)instr.data_instruction.reg_data.reg1 << ", "
+                   << (uint64_t)instr.data_instruction.inmmed_data.inmmed
+        );
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // sumamos 2 por que saltamos el opcode y el byte de flags que aun no
+        // tiene ningun uso
+        uint16_t data = vm->vm_mem.read_u16(vm->registers.rip.raw() + 2);
+
+        auto byte1 = static_cast<uint8_t>(data & 0xFF);
+        auto byte2 = static_cast<uint8_t>(data >> 8);
+
+        instr.data_instruction.regs_data_extent.reg1       = byte1 & 0b11'1111;
+        instr.data_instruction.regs_data_extent.reg1_flags = byte1 >> 6 & 0b1;
+        instr.data_instruction.regs_data_extent.reg2       = byte2 & 0b11'1111;
+        instr.data_instruction.regs_data_extent.reg2_flags = byte2 >> 6 & 0b1;
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // los 2 bytes de datos empiezan tras los 2 bytes de opcode extendido
+        uint64_t  offset = vm->registers.rip.raw() + 2;
+        uint16_t data   = vm->vm_mem.read_u16(offset);
+
+        uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF);
+        uint8_t reg  = static_cast<uint8_t>((data & 0xFF00) >> 8);
+
+        // ctrl_byte: bits 7-6 = mode (tamaño), bits 5-4 = cursor index (0-3)
+        instr.flags_info.mode                = (ctrl >> 6) & 0b11;
+        instr.data_instruction.reg_data.reg2 = (ctrl >> 4) & 0b11; // cursor index
+        instr.data_instruction.reg_data.reg1 = reg & 0xF;          // registro general
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr) {
+        // [opcode][cond_o_reservado][8 bytes addr] = 10 bytes (FIXED_10, opcode primario)
+        instr.data_instruction.inmmed_data.reg    = vm->vm_mem[vm->registers.rip.raw() + 1];
+        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2);
+        instr.flags_info.size_instr               = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        VM_ASSERT(
+            instr.metadata->size <= Assembly::Bytecode::InstrSizeMode::COUNT,
+            "Instruccion con longitud no encontrada: " << (int)Assembly::Bytecode::InstrSizeMode::COUNT
+            , exit(-1);
+        );
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   "["
+                   << (int)instr.data_instruction.inmmed_data.reg << "] "
+                   << (uint64_t)instr.data_instruction.inmmed_data.inmmed
+        );
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr) {
+        // [0x00][0x2D][cond][padding][disp32] - extended FIXED_8
+        instr.data_instruction.inmmed_data.reg = vm->vm_mem[vm->registers.rip.raw() + 2];
+        uint32_t raw_disp                      = 0;
+        vm->vm_mem.read_bytes(vm->registers.rip.raw() + 4, &raw_disp, 4);
+        instr.data_instruction.inmmed_data.inmmed =
+                static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(raw_disp)));
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   "["
+                   << (int)instr.data_instruction.inmmed_data.reg << "] "
+                   << (uint64_t)instr.data_instruction.inmmed_data.inmmed
+        );
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
+        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2);
+
+        // tamaño de la instruccion para luego incrementar rip
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+
+        // argc se cachea en decode para que en exec ambos (fn y argc) vengan del
+        // ICACHE - constantes por PC de instruccion - lo que permite al IBP de la CPU
+        // predecir correctamente el switch(argc) tras la primera ejecucion.
+        instr.data_instruction.inmmed_data.reg = static_cast<uint64_t>(vm->registers.regs[R15].qword());
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
+                   "["
+                   << (int)instr.data_instruction.inmmed_data.reg << "] "
+                   << (uint64_t)instr.data_instruction.inmmed_data.inmmed
+        );
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+
+
     void decode_instruction(ProcessVM *process) {
+        const bool measuring = process->scheduler.has_hooks;
         vm_hook(process, DebugStage::DecodeBegin);
         PROFILE_START
+        const uint64_t t1 = measuring ? now_ns() : 0;
 
         uint64_t pc  = process->registers.rip.raw();
         uint32_t idx = icache_index(pc);
@@ -248,7 +520,7 @@ namespace runtime {
         // -------------------------------------------------------------------------------------------------------
 
         // HIT en caché, si ya se descodifico alguna vez, se devuelve su resultado.
-        // Esto funcionara siempre y cuando las isntrucciones no se modifiquen en run time.
+        // Esto funcionara siempre y cuando las instrucciones no se modifiquen en run time.
         // si la instruccion se modidica en tiempo de ejecuccion, la cache no se vera actualizada
         // de forma automatica por lo que para la VM puede aparentar que la instruccion nunca cambio
         // aunque a nivel de memoria lo alla hecho, en la cache no lo parecera.
@@ -258,6 +530,11 @@ namespace runtime {
             // cache, pero sino hay que realizar una descodificacion por primera vez
 
             process->decoded_ptr = cached; // NO COPIA, SOLO APUNTA
+
+            if (measuring) process->scheduler.time_decode += now_ns() - t1;
+
+            PROFILE_END("DECODER");
+            // realizamos el hook al final de la fase
             vm_hook(process, DebugStage::DecodeEnd);
             return;
         }
@@ -319,7 +596,7 @@ namespace runtime {
 
         // -------------------------------------------------------------------------------------------------------
 
-        // ejecutamos el metodo encarga de descodificar dicha instruccion.
+        // ejecutamos el metodo encargado de descodificar dicha instruccion.
         metadata.decode(process, decode_tmp);
 
         // Guardar en caché, despues de llamara a decode, muy importante el orden.
@@ -332,21 +609,22 @@ namespace runtime {
         // apuntar a la entrada de caché
         process->decoded_ptr = &process->icache[idx];
 
-        PROFILE_END("DECODER");
+        if (measuring) process->scheduler.time_decode += now_ns() - t1;
 
+        PROFILE_END("DECODER");
         // realizamos el hook al final de la fase
         vm_hook(process, DebugStage::DecodeEnd);
     }
 
 
     vm_event execute_instruction(ProcessVM *process) {
+        const bool measuring = process->scheduler.has_hooks;
         // realizamos el hook antes de la ejecuccion
         vm_hook(process, DebugStage::ExecuteBegin);
         PROFILE_START
 
         // --- PROFILER: inicio ---
-        // debemos ponerlo despues de la hook para no contabilizar el tiempo de las hook
-        const uint64_t t1 = now_ns();
+        const uint64_t t1 = measuring ? now_ns() : 0;
         // ------------------------
 
         // ejecutamos la instruccion descodificada. No hacemos aqui
@@ -376,15 +654,11 @@ namespace runtime {
         if (!process->decoded_ptr->flags_info.did_jump)
             // movemos el puntero de instruccion al final de ejecutar la instruccion
             process->registers.rip.qword(process->registers.rip.raw() + process->decoded_ptr->flags_info.size_instr);
-        else process->decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la isntruccion, desmarcamos el salto
+        else process->decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la instruccion, desmarcamos el salto
 
         // --- PROFILER: fin ---
-        const uint64_t t2 = now_ns();
-
-        process->scheduler.profiler_sample++;
-
-        process->scheduler.profiler_instr_counter++; // IPS sampling
-        process->scheduler.time_exec += (t2 - t1);   // tiempo ocupado
+        process->scheduler.profiler_instr_counter++;
+        if (measuring) process->scheduler.time_exec += now_ns() - t1;
 
         // antes de retorna hacemos el hook
         PROFILE_END("EXECUTER");

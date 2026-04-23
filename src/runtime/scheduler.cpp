@@ -81,7 +81,9 @@ namespace runtime {
 
     DECODE_LABEL:
         on_event(EVT_DECODE_DONE);
-        return; //goto *dispatch_table[instance->state];
+        // Cae directo a EXECUTE: una sola llamada cubre decode+execute completo.
+        // 1 llamada = 1 instrucción = 1 reducción (semántica correcta).
+        goto *dispatch_table[instance->state];
 
     EXECUTE_LABEL:
         // si la instruccion ejecuta no es bloqueante, se avanzara en el
@@ -196,25 +198,7 @@ namespace runtime {
     }
 
     bool Scheduler::has_alive_processes() const {
-        for (auto &p: processes) {
-            /*if (this->vm_reference.all_schedulers_dead() == true &&
-                (p->state == DEAD || p->state == HALT || p->state == NEW)) {
-                asm("int3");
-            }*/
-            //vesta::scout()
-            //        << "[Scheduler " << p->pid.scheduler_id
-            //        << "] Estados de procesos:" << std::endl
-            //        << "  PID " << p->pid.local_pid
-            //        << "  state=" << vm_state_to_str(p->state)
-            //        << " " << ready_queue.size()
-            //        << std::endl;
-
-            // los procesos NEW no son marcados como vivos
-            if (p->state != DEAD && p->state != HALT && p->state != NEW) {
-                return true;
-            }
-        }
-        return false;
+        return alive_count > 0;
     }
 
     Scheduler::~Scheduler() {
@@ -246,45 +230,70 @@ namespace runtime {
                     vm_reference.vm_running = false;
                     break; // este scheduler termina
                 }
-                is_waiting = true; {
-                    // Hay procesos vivos pero bloqueados -> idle,
-                    // Esto evita que la VM haga busy-waiting (100% CPU sin hacer nada).
-                    //std::this_thread::yield();
+                is_waiting = true;
+                sem.acquire(); // duerme hasta que haya trabajo (sem.release desde make_ready/stop)
+                is_waiting = false;
 
-                    std::unique_lock lock(mtx);
-                    cv.wait(lock, [&] {
-                        return should_kill
-                                || !vm_reference.vm_running
-                                || !ready_queue.empty();
-                    }); // duerme hasta que haya trabajo
+                // Si nos despertaron porque la VM muere -> salir
+                if (should_kill || !vm_reference.vm_running)
+                    break;
 
-                    is_waiting = false;
-
-                    // Si nos despertaron porque la VM muere -> salir
-                    if (should_kill || !vm_reference.vm_running)
-                        break;
-
-                    // Si nos despertaron porque hay trabajo -> obtener proceso
-                    instance   = schedule_next();
-                }
+                // Si nos despertaron porque hay trabajo -> obtener proceso
+                instance = schedule_next();
 
                 continue;
             }
 
-            // Ejecutar hasta agotar reducciones
-            while (instance->reductions_remaining > 0) {
-                run_fsm_step(instance); // ejecuta UNA instrucción
+            if (!has_hooks) {
+                // === FAST PATH: decode+execute directo, sin FSM ni hooks ===
+                // Los estados READY/RUNNING no tienen acción; saltar directo a DECODE.
+                if (instance->state == READY || instance->state == RUNNING)
+                    instance->state = DECODE;
 
-                instance->reductions_remaining--;
+                while (instance->reductions_remaining > 0) {
+                    decode_instruction(instance);
+                    // El FSM pasa a EXECUTE antes de ejecutar; las instrucciones que
+                    // llaman on_event internamente (ej. HLT) necesitan el estado correcto
+                    // para que sus transiciones (EXECUTE->HALT) funcionen.
+                    instance->state = EXECUTE;
+                    vm_event evt = execute_instruction(instance);
+                    instance->reductions_remaining--;
 
-                if (instance->state == WAIT_IO ||
-                    instance->state == BLOCKED ||
-                    instance->state == DEAD ||
-                    instance->state == HALT) {
-                    instance = nullptr; // eliminar el proceso referenciado
+                    // Camino rápido: instrucción normal completada
+                    if (__builtin_expect(evt == EVT_EXEC_DONE, 1)) {
+                        instance->state = DECODE;
+                        continue;
+                    }
+
+                    // El estado del proceso es autoritativo (HLT lo puso en HALT vía on_event)
+                    if (instance->state == HALT || instance->state == DEAD) {
+                        alive_count--;
+                        instance = nullptr;
+                        break;
+                    }
+                    // IO genuino: estado sigue en EXECUTE, poner en WAIT_IO
+                    instance->state = WAIT_IO;
+                    instance = nullptr;
                     break;
                 }
+            } else {
+                // === SLOW PATH: FSM completo con hooks ===
+                while (instance->reductions_remaining > 0) {
+                    run_fsm_step(instance);
+                    instance->reductions_remaining--;
+
+                    if (instance->state == DEAD || instance->state == HALT) {
+                        alive_count--;
+                        instance = nullptr;
+                        break;
+                    }
+                    if (instance->state == WAIT_IO || instance->state == BLOCKED) {
+                        instance = nullptr;
+                        break;
+                    }
+                }
             }
+
             if (instance == nullptr) {
                 continue;
             }
@@ -295,8 +304,10 @@ namespace runtime {
             }
 
             // Si sigue vivo, vuelve a la cola
-            if (instance->state == READY)
-                ready_queue.push_back(instance->pid);
+            if (instance->state == READY) {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                ready_queue.push_back(instance);
+            }
         }
     }
 
@@ -338,6 +349,7 @@ namespace runtime {
         is_waiting       = false;
         should_kill      = false;
         profiler_running = false;
+        alive_count      = 0;
 
         // Reset de la instancia FSM
         instance = nullptr;
@@ -345,15 +357,14 @@ namespace runtime {
 
 
     ProcessVM *Scheduler::schedule_next() {
+        std::lock_guard<std::mutex> lock(queue_mutex);
         if (ready_queue.empty())
             return nullptr;
 
-        GlobalPID pid = ready_queue.front();
+        ProcessVM *p = ready_queue.front();
         ready_queue.pop_front();
 
-        ProcessVM *p            = pid_index[pid];
         p->reductions_remaining = reductions_remaining_default;
-
         instance = p;
         return p;
     }
@@ -372,29 +383,40 @@ namespace runtime {
 
     void Scheduler::make_ready(GlobalPID pid) {
         ProcessVM *p = pid_index[pid];
-        p->state     = READY;
-        ready_queue.push_back(pid);
 
-        // usar el nuevo prcceso si no hay ninguno
-        /*if (instance == nullptr) {
-            instance = p;
-        }*/
+        // Solo la primera vez que un proceso pasa de NEW a activo se cuenta.
+        // Llamadas posteriores (ej. tras WAIT_IO) no incrementan el contador.
+        if (p->state == NEW || p->state == HALT || p->state == DEAD)
+            // reactivamos el hilo si quedo muerto y se esta intentado
+            // reutilizar.
+            alive_count++;
+
+        p->state = READY;
+
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex);
+            ready_queue.push_back(p);
+        }
     }
 
     void Scheduler::kill(GlobalPID pid) {
-        //on_event(EVT_ERROR);
         auto it = pid_index.find(pid);
         if (it == pid_index.end()) return;
 
         ProcessVM *p = it->second;
 
-        // eliminar del índice
+        // Si el proceso era "vivo" (no NEW/DEAD/HALT), decrementar contador.
+        if (p->state != NEW && p->state != DEAD && p->state != HALT)
+            alive_count--;
+
         pid_index.erase(it);
 
-        // eliminar del vector
+        // swap-and-pop: O(1) en lugar de O(N) shift
         for (size_t i = 0; i < processes.size(); i++) {
             if (processes[i].get() == p) {
-                processes.erase(processes.begin() + i);
+                if (i != processes.size() - 1)
+                    processes[i] = std::move(processes.back());
+                processes.pop_back();
                 break;
             }
         }
@@ -415,8 +437,7 @@ namespace runtime {
 #else
     void vm_hook(ProcessVM *process, DebugStage stage) {
         if (!process->scheduler.has_hooks) return;
-
-        for (auto &hook: process->scheduler.debug_hooks)
+        for (auto &hook : process->scheduler.debug_hooks)
             hook(process, stage);
     }
 #endif

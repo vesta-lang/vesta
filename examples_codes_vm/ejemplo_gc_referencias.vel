@@ -1,0 +1,46 @@
+/*
+ * VestaVM - Máquina Virtual Distribuida
+ *
+ * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("code"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// crear objeto A (contenedor) y objeto B (hijo)
+mov    r1, 32
+gcalloc r1           // R0 = handle A
+mov    r8, r0        // r8 = handle A
+mov    r1, 16
+gcalloc r1           // R0 = handle B
+mov    r9, r0        // r9 = handle B
+// escribir handle B dentro del payload de A
+gcderef cur0, r8     // cur0 = payload de A
+writecur cur0, r9    // A.campo[0] = handle B  (uint32_t embebido)
+gcwb    r8           // <-- OBLIGATORIO: A (OLD) ahora referencia a B (YOUNG)
+// ahora puedes soltar el handle directo de B:
+// A lo mantiene vivo a través del grafo
+t6_ok:
+
+    hlt
+
+end_code:

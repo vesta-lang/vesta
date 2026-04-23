@@ -410,6 +410,12 @@ namespace Assembly::Bytecode::Linker {
                             std::memcpy(&mod.bytecode[rel.offset], &rel64, sizeof(int64_t));
                             break;
                         }
+                        default:
+                            throw std::runtime_error(
+                                "Linker::apply_relocations() Error: la relocalizacion de tipo " + std::to_string(
+                                    (int) rel.type) + " definido por el simbolo " + rel.symbol + " de la seccion " +
+                                rel.section + " con offset en " + std::to_string(rel.offset) + " no existe."
+                            );
                     }
 
 
@@ -424,6 +430,69 @@ namespace Assembly::Bytecode::Linker {
                                               : (rel.type == Type::Relative64)
                                                     ? (uint64_t) rel_address
                                                     : target_addr;
+
+                    report.relocations_log.push_back(entry);
+                }
+                // si es una relocalizacion a un simbolo nativo:
+                else {
+                    // indice de la funcion nativa buscada.
+                    uint64_t index_import_table = 0;
+                    switch (rel.type) {
+                        case Type::Native_Method: // usado unicamente por CALLN
+                        case Type::Absolute64: {
+                            // usado por el resto de instrucciones cuando se usa notacion @Method
+
+                            // obtenemos el index en la tabla de importacion del metodo dado.
+                            auto entry_index = import_lookup.find(rel.symbol);
+                            if (entry_index == import_lookup.end()) {
+                                // error: símbolo no encontrado
+                                throw std::runtime_error(
+                                    "Simbolo " + rel.symbol + " no encontrado en la tabla de importacion."
+                                );
+                            }
+
+                            // indice del simbolo en la tabla de importacion.
+                            index_import_table = entry_index->second;
+
+                            // para Native_Method y Absolute64 size_relocation_emmit(rel.type) siempre sera 8
+
+                            // parcheamos el offset con el valor que queremos
+                            std::memcpy(&mod.bytecode[rel.offset], &index_import_table,
+                                        size_relocation_emmit(rel.type));
+
+                            break;
+                        }
+                        default:
+                            throw std::runtime_error(
+                                "Linker::apply_relocations() Error: la relocalizacion de tipo " + std::to_string(
+                                    (int) rel.type) + " no existe, definido por el simbolo " + rel.symbol +
+                                " de la seccion '" +
+                                rel.section + "' con offset en " + std::to_string(rel.offset) + "."
+                            );
+                    }
+
+                    // creamos una entrada en la tabla de importacion
+                    entry_import_table entry_import;
+                    entry_import.offset_bytecode         = rel.offset;
+                    entry_import.offset_signature_string = index_import_table; // aun no se usa
+
+                    /**
+                     * En esta fase aun la tabla de cadenas no fue construida, ya que se genera en la fase
+                     * de construccion del hader. Debemos almacenar el index del metodo en la tabla import_lookup
+                     * para luego poder parchearlo con los offsets reales mas posteriormente.
+                     */
+                    entry_import.offset_function_string = index_import_table;
+                    entry_import.offset_module_string   = index_import_table;
+
+                    table_import_method.push_back(entry_import);
+
+                    // añadir relocalizacion aplicada al reporte:
+                    RelocReportEntry entry;
+                    entry.module        = mod.name;
+                    entry.symbol        = rel.symbol;
+                    entry.offset        = rel.offset;
+                    entry.type          = rel.type;
+                    entry.value_written = index_import_table;
 
                     report.relocations_log.push_back(entry);
                 }
@@ -457,15 +526,15 @@ namespace Assembly::Bytecode::Linker {
     }
 
     void Linker::merge_sections() {
-        final_executable.clear();
+        final_bytecode.clear();
         final_sections.clear();
 
 
         // Concatenar bytecode de todos los módulos
         for (auto &mod: modules) {
-            final_executable.insert(final_executable.end(),
-                                    mod.bytecode.begin(),
-                                    mod.bytecode.end());
+            final_bytecode.insert(final_bytecode.end(),
+                                  mod.bytecode.begin(),
+                                  mod.bytecode.end());
         }
 
         // Construir final_sections a partir de los Context de cada módulo
@@ -504,7 +573,7 @@ namespace Assembly::Bytecode::Linker {
         final_header.max_v = 0; // 0.0.0 => compatible con futuras
         final_header.min_v = 0; // 0.0.0 => retrocompatible
 
-        final_header.checksum = simple_checksum(final_executable);
+        final_header.checksum = simple_checksum(final_bytecode);
 
         final_header.flags = 0;
 
@@ -577,6 +646,31 @@ namespace Assembly::Bytecode::Linker {
         for (auto &final_section: final_sections) {
             final_section.memory.offset_string = string_offsets[final_section.name];
         }
+
+        /**
+         * La tabla de secciones contiene entradas de (8 * 3) bytes, donde los primeros 8 bytes son para la direccion
+         * virtual de la seccion, los 8 posteriores para la direccion virtual final y los ultimos 8 bytes para el
+         * offset a la tabla de strings.
+         */
+        uint64_t init_bytecode = final_header.table_offset + (8 * 3) * final_header.n_spaces;
+        // inicio del bytecode, es el offset dentro del archivo final donde se encuentra todo el bytecode.
+
+        // offset de inicio de la tabla de importacion
+        uint64_t init_table_import = init_bytecode + final_bytecode.size();
+        final_header.offset_import_table = init_table_import; // offset a la tabla de importacion.
+        final_header.size_import_table = table_import_method.size(); // cantidad de entradas de la tabla de importacion
+        for (auto &entry: table_import_method) {
+            // buscamos el nombre de la libreria del metodo nativo a traves del indice temporal que esta almacenado
+            // en entry.offset_module_string, debemos usar los strings obtenidos para guardar los datos
+            // correctos de la tabla de importacion
+            std::string name_lib    = import_table[entry.offset_module_string].library;
+            std::string name_method = import_table[entry.offset_module_string].function;
+
+            // parchemos los offset a la tabla strings con los valores reales, eliminando los valores temporales
+            // que tenian:
+            entry.offset_function_string = string_offsets[name_method]; // offset al nombre del metodo.
+            entry.offset_module_string   = string_offsets[name_lib];    // offset al nombre de la lib
+        }
     }
 
     void Linker::build_section_strings(uint64_t offset_init) {
@@ -606,7 +700,7 @@ namespace Assembly::Bytecode::Linker {
         }
 
         // Recoger strings de imports (librerías y funciones)
-        for (const auto& imp : import_table) {
+        for (const auto &imp: import_table) {
             string_pool.push_back(imp.library);
             string_pool.push_back(imp.function);
         }
@@ -793,6 +887,12 @@ namespace Assembly::Bytecode::Linker {
         // Indicar el offset a la tabla de labels
         result->emit64(final_header.offset_label_table);
 
+        // Indicar el tamaño de la tabla de importacion
+        result->emit32(final_header.size_import_table);
+
+        // indicar el tamaño de la tabla de etiquetas.
+        result->emit32(final_header.size_label_table);
+
         // el header siempre debe estar alineado a 16 bytes
         while (result->offset % 16 != 0) {
             result->emit8(0x00);
@@ -837,7 +937,14 @@ namespace Assembly::Bytecode::Linker {
         }
 
         // añadir el bytecode al final
-        result->output.insert(result->output.end(), final_executable.begin(), final_executable.end());
+        result->output.insert(result->output.end(), final_bytecode.begin(), final_bytecode.end());
+
+        for (auto &entry: table_import_method) {
+            result->emit32(entry.offset_module_string);
+            result->emit32(entry.offset_function_string);
+            result->emit32(entry.offset_signature_string);
+            result->emit32(entry.offset_bytecode);
+        }
 
         return result->output;
     }
@@ -921,7 +1028,7 @@ namespace Assembly::Bytecode::Linker {
 
         uint64_t offset_space_address = align_up(sizeof(HeaderVELB) - sizeof(table_spaces_address *), 16);
 
-        if (final_executable.size() >= (offset_space_address +
+        if (final_bytecode.size() >= (offset_space_address +
             sizeof(table_spaces_address) * final_header.n_spaces)) {
             f << "=== ADDRESS SPACES ===\n";
             for (uint64_t i = 0; i < final_header.n_spaces; ++i) {
@@ -955,9 +1062,9 @@ namespace Assembly::Bytecode::Linker {
             // Mostrar código hexadecimal
             f << "    HEX:  ";
 
-            if (info.file_offset + info.size <= final_executable.size()) {
+            if (info.file_offset + info.size <= final_bytecode.size()) {
                 for (uint64_t i = 0; i < info.size; ++i) {
-                    uint8_t b = final_executable[info.file_offset + i];
+                    uint8_t b = final_bytecode[info.file_offset + i];
                     f << std::hex << std::setw(2) << std::setfill('0')
                             << (int) b << " ";
                 }
@@ -1009,6 +1116,6 @@ namespace Assembly::Bytecode::Linker {
 
 
         f << "\n=== FINAL SIZE ===\n";
-        f << "Executable size: " << final_executable.size() << " bytes\n" << std::dec;
+        f << "Executable size: " << final_bytecode.size() << " bytes\n" << std::dec;
     }
 }
