@@ -139,7 +139,23 @@ namespace Assembly::Bytecode {
         {"getmethod",  {{0x00, 0xD9, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
         {"fieldcount", {{0x00, 0xDA, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"methodcount",{{0x00, 0xDB, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
-        {"classname",  {{0x00, 0xDC, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"classname",       {{0x00, 0xDC, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        // OOP reflexion/doc (0x00 0xDD..0xEB)
+        {"classdoc",        {{0x00, 0xDD, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"classattrcount",  {{0x00, 0xDE, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"classattrkey",    {{0x00, 0xDF, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"classattrval",    {{0x00, 0xE0, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"methodname",      {{0x00, 0xE1, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"methoddoc",       {{0x00, 0xE2, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"methoddesc",      {{0x00, 0xE3, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"methodattrcount", {{0x00, 0xE4, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"methodattrkey",   {{0x00, 0xE5, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"methodattrval",   {{0x00, 0xE6, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"fieldname",       {{0x00, 0xE7, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"fielddoc",        {{0x00, 0xE8, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"fieldattrcount",  {{0x00, 0xE9, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"fieldattrkey",    {{0x00, 0xEA, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
+        {"fieldattrval",    {{0x00, 0xEB, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
 
         // estas instrucciones no necesitan emitir mas que sus opcodes
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
@@ -319,6 +335,14 @@ namespace Assembly::Bytecode {
                 {0x00, 0x16, InstrSizeMode::FIXED_4, AddressingMode::SIB, emit_instr_mov_sib},
             },
         },
+        {"and", {{0x00, 0x17, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"or",  {{0x00, 0x18, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"xor", {{0x00, 0x19, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"not", {{0x00, 0x1A, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+        {"shl", {{0x00, 0x1B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"shr", {{0x00, 0x1C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"sar", {{0x00, 0x1D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+
         {
             "loop",
             {

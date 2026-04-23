@@ -51,7 +51,12 @@ namespace vm {
 
         {"xor", {"xor", OpArity::TWO}},
         {"and", {"and", OpArity::TWO}},
-        {"or", {"or", OpArity::TWO}},
+        {"or",  {"or",  OpArity::TWO}},
+        {"not", {"not", OpArity::ONE}},
+
+        {"shl", {"shl", OpArity::TWO}},
+        {"shr", {"shr", OpArity::TWO}},
+        {"sar", {"sar", OpArity::TWO}},
 
         // TWO operandos OOP
         {"newobjraw",   {"newobjraw",   OpArity::TWO}},
@@ -63,12 +68,29 @@ namespace vm {
         {"getmethod",   {"getmethod",   OpArity::TWO}},
 
         // ONE operando OOP
-        {"getclass",    {"getclass",    OpArity::ONE}},
-        {"fieldcount",  {"fieldcount",  OpArity::ONE}},
-        {"methodcount", {"methodcount", OpArity::ONE}},
-        {"classname",   {"classname",   OpArity::ONE}},
-        {"gcalloc",     {"gcalloc",     OpArity::ONE}},
-        {"throw",       {"throw",       OpArity::ONE}},
+        {"getclass",        {"getclass",        OpArity::ONE}},
+        {"fieldcount",      {"fieldcount",       OpArity::ONE}},
+        {"methodcount",     {"methodcount",      OpArity::ONE}},
+        {"classname",       {"classname",        OpArity::ONE}},
+        {"gcalloc",         {"gcalloc",          OpArity::ONE}},
+        {"throw",           {"throw",            OpArity::ONE}},
+        // doc/atributos — ONE operando
+        {"classdoc",        {"classdoc",         OpArity::ONE}},
+        {"classattrcount",  {"classattrcount",   OpArity::ONE}},
+        {"methodname",      {"methodname",       OpArity::ONE}},
+        {"methoddoc",       {"methoddoc",        OpArity::ONE}},
+        {"methoddesc",      {"methoddesc",       OpArity::ONE}},
+        {"methodattrcount", {"methodattrcount",  OpArity::ONE}},
+        {"fieldname",       {"fieldname",        OpArity::ONE}},
+        {"fielddoc",        {"fielddoc",         OpArity::ONE}},
+        {"fieldattrcount",  {"fieldattrcount",   OpArity::ONE}},
+        // doc/atributos — TWO operandos (reg, idx)
+        {"classattrkey",    {"classattrkey",     OpArity::TWO}},
+        {"classattrval",    {"classattrval",     OpArity::TWO}},
+        {"methodattrkey",   {"methodattrkey",    OpArity::TWO}},
+        {"methodattrval",   {"methodattrval",    OpArity::TWO}},
+        {"fieldattrkey",    {"fieldattrkey",     OpArity::TWO}},
+        {"fieldattrval",    {"fieldattrval",     OpArity::TWO}},
 
         // ZERO operandos OOP
         {"rethrow",     {"rethrow",     OpArity::ZERO}},

@@ -245,6 +245,11 @@ namespace runtime {
 
     void exec_instr_div_reg(ProcessVM *vm, const DecodedInstr &instr);
 
+    void exec_instr_not_reg(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_shl_reg(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_shr_reg(ProcessVM *vm, const DecodedInstr &instr);
+    void exec_instr_sar_reg(ProcessVM *vm, const DecodedInstr &instr);
+
     // ---------------------------------------------------------------------
 
 
@@ -503,5 +508,40 @@ namespace runtime {
 
     /** CLASSNAME reg_classinfo -> R0 = char* (puntero host a ClassInfo.name.data) */
     void exec_instr_classname(ProcessVM *vm, const DecodedInstr &instr);
+
+    // --- reflexion/documentacion ---
+
+    /** CLASSDOC reg_classinfo -> R0 = char* (ClassInfo.doc.data) */
+    void exec_instr_classdoc(ProcessVM *vm, const DecodedInstr &instr);
+    /** CLASSATTRCOUNT reg_classinfo -> R0 = attr_count */
+    void exec_instr_classattrcount(ProcessVM *vm, const DecodedInstr &instr);
+    /** CLASSATTRKEY reg_classinfo, idx -> R0 = char* (attrs[idx].key.data) */
+    void exec_instr_classattrkey(ProcessVM *vm, const DecodedInstr &instr);
+    /** CLASSATTRVAL reg_classinfo, idx -> R0 = char* (attrs[idx].value.data) */
+    void exec_instr_classattrval(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** METHODNAME reg_methodinfo -> R0 = char* (MethodInfo.name.data) */
+    void exec_instr_methodname(ProcessVM *vm, const DecodedInstr &instr);
+    /** METHODDOC reg_methodinfo -> R0 = char* (MethodInfo.doc.data) */
+    void exec_instr_methoddoc(ProcessVM *vm, const DecodedInstr &instr);
+    /** METHODDESC reg_methodinfo -> R0 = char* (MethodInfo.descriptor.data) */
+    void exec_instr_methoddesc(ProcessVM *vm, const DecodedInstr &instr);
+    /** METHODATTRCOUNT reg_methodinfo -> R0 = attr_count */
+    void exec_instr_methodattrcount(ProcessVM *vm, const DecodedInstr &instr);
+    /** METHODATTRKEY reg_methodinfo, idx -> R0 = char* (attrs[idx].key.data) */
+    void exec_instr_methodattrkey(ProcessVM *vm, const DecodedInstr &instr);
+    /** METHODATTRVAL reg_methodinfo, idx -> R0 = char* (attrs[idx].value.data) */
+    void exec_instr_methodattrval(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** FIELDNAME reg_fieldinfo -> R0 = char* (FieldInfo.name.data) */
+    void exec_instr_fieldname(ProcessVM *vm, const DecodedInstr &instr);
+    /** FIELDDOC reg_fieldinfo -> R0 = char* (FieldInfo.doc.data) */
+    void exec_instr_fielddoc(ProcessVM *vm, const DecodedInstr &instr);
+    /** FIELDATTRCOUNT reg_fieldinfo -> R0 = attr_count */
+    void exec_instr_fieldattrcount(ProcessVM *vm, const DecodedInstr &instr);
+    /** FIELDATTRKEY reg_fieldinfo, idx -> R0 = char* (attrs[idx].key.data) */
+    void exec_instr_fieldattrkey(ProcessVM *vm, const DecodedInstr &instr);
+    /** FIELDATTRVAL reg_fieldinfo, idx -> R0 = char* (attrs[idx].value.data) */
+    void exec_instr_fieldattrval(ProcessVM *vm, const DecodedInstr &instr);
 }
 #endif //EXEC_INSTRUCTION_H
