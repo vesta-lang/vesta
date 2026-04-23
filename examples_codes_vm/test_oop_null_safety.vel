@@ -9,7 +9,7 @@
  *   - null objeto      -> R0 = 0
  *   - CHECKCAST(null)  -> R0 = 0  (null pasa cualquier cast)
  *
- * THROW(null) y CALLVIRT(null) disparan EVT_ERROR por diseño;
+ * THROW(null) y CALLVIRT(null) disparan EVT_ERROR por diseño
  * esos casos se excluyen deliberadamente de este test.
  *
  * Resultado esperado: el proceso termina en hlt sin ningun error.

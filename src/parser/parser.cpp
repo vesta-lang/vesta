@@ -53,8 +53,27 @@ namespace vm {
         {"and", {"and", OpArity::TWO}},
         {"or", {"or", OpArity::TWO}},
 
+        // TWO operandos OOP
+        {"newobjraw",   {"newobjraw",   OpArity::TWO}},
+        {"callvirt",    {"callvirt",    OpArity::TWO}},
+        {"callsuper",   {"callsuper",   OpArity::TWO}},
+        {"instanceof",  {"instanceof",  OpArity::TWO}},
+        {"checkcast",   {"checkcast",   OpArity::TWO}},
+        {"getfield",    {"getfield",    OpArity::TWO}},
+        {"getmethod",   {"getmethod",   OpArity::TWO}},
+
+        // ONE operando OOP
+        {"getclass",    {"getclass",    OpArity::ONE}},
+        {"fieldcount",  {"fieldcount",  OpArity::ONE}},
+        {"methodcount", {"methodcount", OpArity::ONE}},
+        {"classname",   {"classname",   OpArity::ONE}},
+        {"gcalloc",     {"gcalloc",     OpArity::ONE}},
+        {"throw",       {"throw",       OpArity::ONE}},
+
+        // ZERO operandos OOP
+        {"rethrow",     {"rethrow",     OpArity::ZERO}},
+
         // ZERO operandos
-        {"throw", {"nop1", OpArity::ZERO}},
         {"nop1", {"nop1", OpArity::ZERO}},
         {"nop2", {"nop2", OpArity::ZERO}},
         {"hlt", {"hlt", OpArity::ZERO}},

@@ -108,6 +108,14 @@ namespace runtime {
         vm->gc_heap.write_barrier(static_cast<gc::GcHandle>(old_handle));
     }
 
+    void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  rsrc = instr.data_instruction.reg_data.reg1;
+        const uint64_t size = read_reg_table[instr.flags_info.mode](vm, rsrc);
+
+        gc::GcHandle h = vm->gc_heap.alloc(static_cast<size_t>(size));
+        vm->registers.regs[R00].qword(static_cast<uint64_t>(h));
+    }
+
     // -------------------------------------------------------------------------
     // Raw allocator - 0x00 0xB0 .. 0xB2
     // -------------------------------------------------------------------------
