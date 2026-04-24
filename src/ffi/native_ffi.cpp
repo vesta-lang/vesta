@@ -138,4 +138,32 @@ namespace ffi {
         }
     }
 
+    void FFI::call_plugin_inits(const VestaPluginAPI *api) {
+        for (auto &[mod_name, mod_handle] : native_modules) {
+            /* omitir modulos ya inicializados como plugins en sesiones anteriores */
+            if (initialized_plugins.count(mod_name))
+                continue;
+
+            /* buscar el simbolo "vesta_init" en el modulo sin lanzar excepcion si no existe */
+#ifdef _WIN32
+            FARPROC sym = GetProcAddress(static_cast<HMODULE>(mod_handle), "vesta_init");
+            void   *fn  = reinterpret_cast<void *>(sym);
+#else
+            dlerror(); /* limpiar error previo para distinguir NULL real de error */
+            void *fn = dlsym(mod_handle, "vesta_init");
+            if (!fn && dlerror())
+                fn = nullptr; /* solo omitir si fue un error; NULL puede ser simbolo valido en edge cases */
+#endif
+            if (!fn)
+                continue; /* el modulo no es un plugin Vesta */
+
+            /* llamar al punto de entrada del plugin con la API del manager */
+            VestaInitFn init_fn = reinterpret_cast<VestaInitFn>(fn);
+            init_fn(api);
+
+            /* marcar como inicializado para no repetir en cargas sucesivas */
+            initialized_plugins.insert(mod_name);
+        }
+    }
+
 } // namespace ffi
