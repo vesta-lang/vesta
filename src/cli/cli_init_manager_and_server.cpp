@@ -1,18 +1,27 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
+/**
+ * @file cli_init_manager_and_server.cpp
+ * @brief Implementacion de @c ManagerOfManagersAndServer y helpers de inicializacion de VM.
+ *
+ * Implementa los metodos de @c ManagerOfManagersAndServer: @c add_manager(),
+ * @c snapshot(), @c modify_manager<Func>() y @c find_if<Pred>().
+ * Tambien contiene las funciones auxiliares para crear y registrar nuevas
+ * instancias de VM en el manager CLI.
+ */
 #include "cli/cli_init_manager_and_server.h"
 
 /**
- * Añadir la nueva VM al manager CLI
+ * Anadir la nueva VM al manager CLI
  * @param vm manager de instancias inicializado, acepta por valor y lo mueve dentro del vector (por seguridad)
  * @return posicion del manager de instancias en el manager CLI
  */

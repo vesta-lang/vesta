@@ -1,15 +1,24 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file tls_context.cpp
+ * @brief Implementacion de @c TLSContext: contexto SSL/TLS del servidor.
+ *
+ * Crea el contexto OpenSSL (@c SSL_CTX) cargando el certificado PEM y la clave
+ * privada.  Proporciona @c get() para obtener el puntero al contexto, y los
+ * metodos estaticos @c initialize() / @c cleanup() para inicializar y liberar
+ * la biblioteca OpenSSL globalmente.
+ */
 #include "controller/tls_context.h"
 #include <iostream>
 

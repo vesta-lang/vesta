@@ -1,21 +1,29 @@
-/**
- * VestaVM - Máquina Virtual Distribuida
- * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
  * @file parser.h
- * @brief Parser recursivo descendente para el lenguaje VMProject.
+ * @brief Parser recursivo descendente para el lenguaje ensamblador de VestaVM.
  *
- * Convierte secuencias de tokens (generados por Lexer) en un árbol de sintaxis abstracta (AST).
- * Implementa un parser predictivo LL(1) usando Recursive Descent, ideal para la gramática simple
+ * Convierte la secuencia de tokens producida por @c Lexer en un AST de nodos
+ * @c ASTNode mediante un parser LL(1) predictivo con retroceso minimo.
  *
- * Copyright (c) 2026 David López T.
- * Proyecto VMProject - Licencia MIT
+ * Componentes principales:
+ *  - @c remove_underscores() : limpia separadores de digitos ('_') de literales.
+ *  - @c is_valid_number()    : valida literales numericos (hex, bin, oct, dec).
+ *  - @c parse_number()       : convierte un lexema numerico a @c uint64_t.
+ *  - @c OpArity              : enum que describe el numero de operandos de una instruccion.
+ *  - @c InstrSet             : tabla estatica de instrucciones reconocidas por el parser.
+ *  - @c Parser               : clase principal del parser con todos los metodos de produccion.
  */
 
 #ifndef PARSER_H
@@ -51,7 +59,7 @@ namespace vm {
     }
 
     /**
-     * @brief Comprueba si la cadena s es un número válido en los formatos soportados.
+     * @brief Comprueba si la cadena s es un numero valido en los formatos soportados.
      *
      * Soporta:
      *  - Hexadecimal: 0x... o 0X...
@@ -60,7 +68,7 @@ namespace vm {
      *  - Decimal: por defecto
      *
      * Acepta '+' inicial; no acepta '-' (devuelve false).
-     * Permite '_' como separador de dígitos (se ignoran).
+     * Permite '_' como separador de digitos (se ignoran).
      */
     static bool is_valid_number(const std::string &s_in) {
         if (s_in.empty()) return false;
@@ -74,7 +82,7 @@ namespace vm {
 
         // detect prefix
         if (s.size() - pos >= 2 && s[pos] == '0' && (s[pos + 1] == 'x' || s[pos + 1] == 'X')) {
-            // hexadecimal: debe tener al menos un dígito hexadecimal después del prefijo.
+            // hexadecimal: debe tener al menos un digito hexadecimal despues del prefijo.
             if (pos + 2 >= s.size()) return false;
             for (size_t i = pos + 2; i < s.size(); ++i) {
                 char c = s[i];
@@ -108,7 +116,7 @@ namespace vm {
     }
 
     /**
-     * @brief Parsea la cadena y devuelve uint64_t si es válida y no desborda.
+     * @brief Parsea la cadena y devuelve uint64_t si es valida y no desborda.
      *
      * @code{.cpp}
      * auto v1 = parse_number_safe("0xFF");        // 255
@@ -146,7 +154,7 @@ namespace vm {
             return std::nullopt;
         }
 
-        // binario (sin from_chars base 2), analizar manualmente con comprobación de desbordamiento
+        // binario (sin from_chars base 2), analizar manualmente con comprobacion de desbordamiento
         if (s.size() - pos >= 2 && s[pos] == '0' && (s[pos + 1] == 'b' || s[pos + 1] == 'B')) {
             std::string body = s.substr(pos + 2);
             if (body.empty()) return std::nullopt;
@@ -209,11 +217,11 @@ namespace vm {
 
     /**
      * @struct InstructionPattern
-     * @brief Patrón de instrucción para el InstructionSet del parser.
+     * @brief Patron de instruccion para el InstructionSet del parser.
      *
-     * Define las propiedades de una instrucción de la VM para parsing automático:
-     * - Número de operandos requeridos (0, 1, 2)
-     * - Aliases opcionales (sinónimos soportados)
+     * Define las propiedades de una instruccion de la VM para parsing automatico:
+     * - Numero de operandos requeridos (0, 1, 2)
+     * - Aliases opcionales (sinonimos soportados)
      *
      * **Ejemplo uso:**
      * ```
@@ -224,12 +232,12 @@ namespace vm {
     struct InstructionPattern {
         /**
          * @field opcode
-         * @brief Nombre **canónico** de la instrucción (siempre minúsculas).
+         * @brief Nombre **canonico** de la instruccion (siempre minusculas).
          *
          * Usado para:
          * - Codegen (emitir bytes)
          * - Debugging (print AST)
-         * - Serialización
+         * - Serializacion
          *
          * **Ejemplo:** `"mov"`, `"add"`, `"jmp"` (nunca `"MOV"`)
          */
@@ -237,9 +245,9 @@ namespace vm {
 
         /**
          * @field arity
-         * @brief **Aridad** - Número de operandos requeridos.
+         * @brief **Aridad** - Numero de operandos requeridos.
          *
-         * Controla parsing automático:
+         * Controla parsing automatico:
          * - `OpArity::ZERO` -> `nop`, `hlt` (sin operandos)
          * - `OpArity::ONE` -> `jmp label`, `push r0` (1 operando)
          * - `OpArity::TWO` -> `mov r0, 1` (2 operandos)
@@ -255,9 +263,9 @@ namespace vm {
 
         /**
          * @field aliases
-         * @brief Lista de **sinónimos**
+         * @brief Lista de **sinonimos**
          *
-         * **OPCIONAL** - Si vacío, solo `opcode` funciona.
+         * **OPCIONAL** - Si vacio, solo `opcode` funciona.
          *
          * **Ejemplos:**
          * ```
@@ -310,7 +318,7 @@ namespace vm {
      * @brief Parser recursivo descendente (top-down) para el lenguaje VMProject.
      *
      * Implementa un parser predictivo LL(1) que consume tokens del Lexer y genera un AST.
-     * Soporta la gramática:
+     * Soporta la gramatica:
      *
      * ```
      * program     ::= section*
@@ -319,10 +327,10 @@ namespace vm {
      * data_decl   ::= IDENTIFIER "db" STRING
      * ```
      *
-     * **Características:**
-     * - Manejo de errores con línea/columna exacta
-     * - Recuperación de errores (continúa parseando)
-     * - Fácil extensión para nuevas construcciones sintácticas
+     * **Caracteristicas:**
+     * - Manejo de errores con linea/columna exacta
+     * - Recuperacion de errores (continua parseando)
+     * - Facil extension para nuevas construcciones sintacticas
      * - Zero-copy donde posible (referencias a lexemes originales)
      */
     class Parser {
@@ -347,24 +355,24 @@ namespace vm {
         }
 
         /**
-         * @brief Intenta consumir un token de tipo específico.
+         * @brief Intenta consumir un token de tipo especifico.
          * @param type Tipo de token esperado
          * @return `true` si el token actual coincide y se consume, `false` si no
          */
         bool match(TokenType type);
 
         /**
-         * @brief Consume un token específico o reporta error.
+         * @brief Consume un token especifico o reporta error.
          * @param type Tipo de token requerido
          * @param msg Mensaje de error descriptivo
-         * @return `true` si éxito, `false` si error
+         * @return `true` si exito, `false` si error
          */
         bool expect(TokenType type, const std::string &msg);
 
 
         /**
          * @brief Reporta un error de parsing con contexto.
-         * @param tok Token donde ocurrió el error
+         * @param tok Token donde ocurrio el error
          * @param msg Mensaje descriptivo del error
          */
         void error(const Token &tok, const std::string &msg);
@@ -396,7 +404,7 @@ namespace vm {
 
         /**
          * @brief Parsea el programa completo.
-         * @return Árbol de secciones parseadas (AST raíz)
+         * @return Arbol de secciones parseadas (AST raiz)
          *
          * Consume tokens hasta `EndOfFile` generando el AST completo del programa.
          */
@@ -413,8 +421,8 @@ namespace vm {
         std::unique_ptr<ASTNode> parser_end_label();
 
         /**
-         * @brief Parsea una sección (`code:`, `data:`, etc.).
-         * @return Nodo AST de la sección o `nullptr` si no es sección válida
+         * @brief Parsea una seccion (`code:`, `data:`, etc.).
+         * @return Nodo AST de la seccion o `nullptr` si no es seccion valida
          */
         std::unique_ptr<ASTNode> parse_section();
 
@@ -445,7 +453,7 @@ namespace vm {
         }
 
         /**
-         * @brief Parsea un statement de código (`mov r0, 1`).
+         * @brief Parsea un statement de codigo (`mov r0, 1`).
          * @return Nodo `RegisterAssign` u otro statement o `nullptr`
          */
         std::unique_ptr<ASTNode> parse_statement();

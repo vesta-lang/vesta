@@ -531,7 +531,7 @@ namespace gc {
          *
          * Cada palabra de 4 bytes del payload se interpreta como potencial GcHandle.
          * Si apunta a un objeto YOUNG no evacuado, llama a do_evacuate() y lo
-         * añade al worklist para escaneo transitivo posterior (Cheney-style).
+         * anade al worklist para escaneo transitivo posterior (Cheney-style).
          */
         void scan_young_refs(GcHandle h, std::vector<GcHandle> &worklist);
 
@@ -540,7 +540,7 @@ namespace gc {
          *
          * Escanea el payload de @p h. Si alguna palabra de 4 bytes es un handle
          * valido con addr != nullptr que apunta a un objeto OLD WHITE, lo marca
-         * BLACK y lo añade al worklist para propagacion.
+         * BLACK y lo anade al worklist para propagacion.
          */
         void mark_reachable(GcHandle h, std::vector<GcHandle> &worklist);
     };
