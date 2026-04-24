@@ -1,13 +1,22 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
+ */
+/**
+ * @file runtime_api_commands.cpp
+ * @brief Implementacion de la API de comandos de runtime del CLI de VestaVM.
+ *
+ * Implementa @c runtime::run_command_sync(), @c run_command_async(),
+ * @c runtime_init() y @c runtime_shutdown().
+ * Estas funciones actuan como puente entre el REPL del CLI y el motor de ejecucion
+ * de la VM, encolando operaciones con soporte de cancelacion.
  */
 #include "cli/runtime_api_commands.h"
 #include <thread>
@@ -39,7 +48,7 @@ namespace runtime {
         }
     }
 
-    /* Stub de ejecución real; reemplazar por llamada a ManagerRuntime u otro motor. */
+    /* Stub de ejecucion real; reemplazar por llamada a ManagerRuntime u otro motor. */
     static std::string execute_on_engine(const std::string &cmd, CancelToken cancel_token) {
         const int steps = 5;
         for (int i = 0; i < steps; ++i) {

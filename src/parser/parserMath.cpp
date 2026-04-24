@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file parserMath.cpp
+ * @brief Implementacion del parseo de expresiones matematicas del parser de VestaVM.
+ *
+ * Contiene los metodos de @c vm::Parser responsables de reconocer y evaluar
+ * expresiones aritmeticas del AST (@c ExprNode), incluyendo precedencia de operadores,
+ * agrupacion con parentesis y literales numericos en distintas bases.
+ */
 #include "parser/parser.h"
 
 #include <iomanip>

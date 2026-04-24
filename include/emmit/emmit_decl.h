@@ -1,245 +1,290 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
+
+/**
+ * @file emmit_decl.h
+ * @brief Declaraciones de funciones de emision de bytecode y tipos auxiliares del ensamblador.
+ *
+ * Define los tipos y funciones que utiliza el emisor (Assembler) para traducir instrucciones
+ * del AST a bytecode .velb:
+ *
+ *   - InstrSizeMode: enumeracion con los tamanos fijos o variables de cada instruccion.
+ *   - ImmType: tipo del inmediato (tamano y signo).
+ *   - AddressingMode: modos de direccionamiento soportados (REG, MEM, SIB, INMED, NONE).
+ *   - InstrInfo: descriptor completo de una instruccion (opcodes, tamano, modo, funcion de emision).
+ *   - emitInstr: tipo de puntero a funcion de emision.
+ *   - special_reg_encoding: tabla de codificacion de registros especiales.
+ *   - Funciones auxiliares: encode_special_register, detect_imm_type, immtype_bits, mode_to_bits,
+ *     mode_to_bytes, encode_mode, AddressingMode_str, instr_size, is_signed.
+ *   - emit_*: funciones de emision para cada familia de instrucciones.
+ */
+
 #ifndef EMMIT_DECL_H
 #define EMMIT_DECL_H
+
 #include <unordered_set>
+#include <unordered_map>
+#include <optional>
+#include <string>
 
 #include "bytewriter.h"
-#include "runtime/vm_address_space.h" // necesitamos los espacios de direciones por defecto
+#include "runtime/vm_address_space.h"
 #include "parser/parser.h"
 
 namespace Assembly::Bytecode {
-    class Assembler;
+
+    class Assembler; ///< Declaracion adelantada del ensamblador
+
     /**
-     * Metadatos de la instruccion
+     * @brief Tamano en bytes de una instruccion del conjunto de instrucciones Vesta.
+     *
+     * La mayoria de instrucciones tienen tamano fijo; las que usan inmediatos
+     * pueden tener tamano variable (MIXED_SIZE) segun el valor del operando.
      */
     enum class InstrSizeMode {
-        /**
-         * La instrucción siempre ocupa 1 byte.
-         */
-        FIXED_1,
+        FIXED_1  = 0, ///< Instruccion de tamano fijo de 1 byte
+        FIXED_2  = 1, ///< Instruccion de tamano fijo de 2 bytes
+        FIXED_4  = 2, ///< Instruccion de tamano fijo de 4 bytes
+        FIXED_6  = 3, ///< Instruccion de tamano fijo de 6 bytes
+        FIXED_8  = 4, ///< Instruccion de tamano fijo de 8 bytes
+        FIXED_10 = 5, ///< Instruccion de tamano fijo de 10 bytes
+        FIXED_11 = 6, ///< Instruccion de tamano fijo de 11 bytes
+        COUNT,        ///< Numero de variantes de tamano fijo (usar como limite de tabla)
 
         /**
-         * La instrucción siempre ocupa 2 bytes.
-         */
-        FIXED_2,
-
-        /**
-         * La instrucción siempre ocupa 4 bytes.
-         */
-        FIXED_4,
-
-        /**
-         * La instruccion siempre ocupa 6 bytes.
-         */
-        FIXED_6,
-
-        /**
-         * La instrucción siempre ocupa 8 bytes.
-         */
-        FIXED_8,
-
-        /**
-         * La instruccion siempre ocupa 10 bytes
-         */
-        FIXED_10,
-
-        FIXED_11,
-
-        COUNT,
-
-        /**
-         * La instruccion puede tener un tamaño variable como son las instrucciones
-         * que usan valores inmediatos. estos suelen variar entre:
+         * @brief Instruccion con tamano variable segun el inmediato.
          *
+         * Las instrucciones con inmediato pueden tener los siguientes tamanos:
          * @code
-         *  //  Total       opcode      inmediato
-         *  //    4    (    3           + 1),
-         *  //    5    (    3           + 2)
-         *  //    7    (    3           + 4)
-         *  //    11   (    3           + 8)
-         *  //  bytes
+         *   //  Total       opcode      inmediato
+         *   //    4    (    3           + 1)  -- inmediato de 1 byte
+         *   //    5    (    3           + 2)  -- inmediato de 2 bytes
+         *   //    7    (    3           + 4)  -- inmediato de 4 bytes
+         *   //    11   (    3           + 8)  -- inmediato de 8 bytes
          * @endcode
          */
         MIXED_SIZE
     };
 
     /**
-     * Se usa para indicar el tamaño del inmediato y ademas si es con o sin signo.
+     * @brief Tipo de un operando inmediato: tamano (8/16/32/64 bits) y signo.
+     *
+     * Se usa para determinar cuantos bytes debe emitir el ensamblador para
+     * representar el valor inmediato de una instruccion.
      */
     enum class ImmType {
-        U8, S8,
-        U16, S16,
-        U32, S32,
-        U64, S64
+        U8,  ///< Entero sin signo de 8 bits
+        S8,  ///< Entero con signo de 8 bits
+        U16, ///< Entero sin signo de 16 bits
+        S16, ///< Entero con signo de 16 bits
+        U32, ///< Entero sin signo de 32 bits
+        S32, ///< Entero con signo de 32 bits
+        U64, ///< Entero sin signo de 64 bits
+        S64  ///< Entero con signo de 64 bits
     };
 
     /**
-     * Codificacion para registros extendidos o especiales.
+     * @brief Tabla de codificacion de registros especiales o extendidos.
+     *
+     * Los cursores (cur0-cur3), el puntero de instruccion (rip), el puntero de pila
+     * (rsp), el puntero de marco (rbp) y el registro de flags (rflags) se codifican
+     * con valores especificos distintos a los registros generales R00-R15.
      */
     static const std::unordered_map<std::string, uint8_t> special_reg_encoding = {
-        {"cur0", 0b000000},
-        {"cur1", 0b000001},
-        {"cur2", 0b000010},
-        {"cur3", 0b000011},
-
-        {"rip", 0b001000},
-        {"rbp", 0b001001},
-        {"rsp", 0b001010},
-        {"rflags", 0b001011},
+        {"cur0",   0b000000}, ///< Cursor 0: puntero a memoria host
+        {"cur1",   0b000001}, ///< Cursor 1
+        {"cur2",   0b000010}, ///< Cursor 2
+        {"cur3",   0b000011}, ///< Cursor 3
+        {"rip",    0b001000}, ///< Puntero de instruccion (Program Counter)
+        {"rbp",    0b001001}, ///< Puntero de marco de pila (Base Pointer)
+        {"rsp",    0b001010}, ///< Puntero de pila (Stack Pointer)
+        {"rflags", 0b001011}, ///< Registro de flags de condicion
     };
 
     /**
-     * Permite obtener la codificacion de un registro especial/extendido, en caso de no ser uno de estos,
-     * podria ser un registro general u otra cosa.
-     * @param reg supuesto registro especial.
-     * @return codificacion del registro, en caso de no ser un registro especial, devuelve std::nullopt.
+     * @brief Obtiene la codificacion de un registro especial o extendido.
+     *
+     * @param reg Nombre del registro a codificar (p.ej. "rip", "cur0").
+     * @return Codificacion del registro si es especial; std::nullopt si es un registro general.
      */
     inline std::optional<uint8_t> encode_special_register(const std::string &reg) {
         auto it = special_reg_encoding.find(reg);
         if (it != special_reg_encoding.end())
             return it->second;
-
-        return std::nullopt;
+        return std::nullopt; // no es un registro especial
     }
 
-
     /**
-     * Permite obtener el tamaño de un valor y si es con o sin signo
-     * @param value valor a comprobar
-     * @param is_signed si tiene o no tiene signo
-     * @return devuelve la variante que es.
+     * @brief Determina el tipo ImmType de un valor inmediato segun su magnitud y signo.
+     *
+     * Usa el valor mas pequeno que pueda representar el inmediato para minimizar
+     * el tamano de la instruccion emitida.
+     *
+     * @param value     Valor del inmediato (interpretado como int64_t).
+     * @param is_signed true si la instruccion es con signo; false si es sin signo.
+     * @return ImmType correspondiente al tamano minimo necesario.
      */
     inline ImmType detect_imm_type(int64_t value, bool is_signed) {
         if (is_signed) {
-            if ((int8_t) value == value) return ImmType::S8;
+            if ((int8_t)  value == value) return ImmType::S8;
             if ((int16_t) value == value) return ImmType::S16;
             if ((int32_t) value == value) return ImmType::S32;
             return ImmType::S64;
         } else {
             uint64_t v = (uint64_t) value;
-            if ((uint8_t) v == v) return ImmType::U8;
+            if ((uint8_t)  v == v) return ImmType::U8;
             if ((uint16_t) v == v) return ImmType::U16;
             if ((uint32_t) v == v) return ImmType::U32;
             return ImmType::U64;
         }
     }
 
+    /**
+     * @brief Devuelve el numero de bits del tipo de inmediato indicado.
+     *
+     * @param t Tipo de inmediato.
+     * @return 8, 16, 32 o 64 segun el tipo.
+     */
     inline int immtype_bits(ImmType t) {
         switch (t) {
             case ImmType::U8:
-            case ImmType::S8: return 8;
+            case ImmType::S8:  return 8;
             case ImmType::U16:
             case ImmType::S16: return 16;
             case ImmType::U32:
             case ImmType::S32: return 32;
-            default: return 64;
+            default:           return 64;
         }
     }
 
     /**
-     * modo 0(00) -> (0000 1000) 8  bits
-     * modo 1(01) -> (0001 0000) 16 bits
-     * modo 2(10) -> (0010 0000) 32 bits
-     * modo 3(11) -> (0100 0000) 64 bits
-     * @param mode modo a codear
-     * @return tamaño en bits
+     * @brief Convierte el campo mode de 2 bits al tamano en bits del operando.
+     *
+     * Codificacion del campo mode (2 bits):
+     * @code
+     *   modo 0 (0b00) -> 8  bits
+     *   modo 1 (0b01) -> 16 bits
+     *   modo 2 (0b10) -> 32 bits
+     *   modo 3 (0b11) -> 64 bits
+     * @endcode
+     *
+     * @param mode Campo mode de 2 bits (0-3).
+     * @return Tamano en bits del operando.
      */
     inline int mode_to_bits(uint8_t mode) {
-        return 1 << (3 + mode);
+        return 1 << (3 + mode); // 2^(3+mode)
     }
 
     /**
-     * modo 0(00) -> (0000 0001) 1 bytes
-     * modo 1(01) -> (0000 0010) 2 bytes
-     * modo 2(10) -> (0000 0100) 4 bytes
-     * modo 3(11) -> (0000 1000) 8 bytes
-     * @param mode modo a codear
-     * @return tamaño en bits
+     * @brief Convierte el campo mode de 2 bits al tamano en bytes del operando.
+     *
+     * Codificacion del campo mode (2 bits):
+     * @code
+     *   modo 0 (0b00) -> 1 byte
+     *   modo 1 (0b01) -> 2 bytes
+     *   modo 2 (0b10) -> 4 bytes
+     *   modo 3 (0b11) -> 8 bytes
+     * @endcode
+     *
+     * @param mode Campo mode de 2 bits (0-3).
+     * @return Tamano en bytes del operando.
      */
     inline int mode_to_bytes(uint8_t mode) {
-        return 1 << mode;
+        return 1 << mode; // 2^mode
     }
 
     /**
-     * Permie codificar el modo del registro, 0, 1, 2, 3
-     * 0(0b00) = 1(0b1) byte   = 8 bits
-     * 1(0b01) = 2(0b10) bytes  = 16 bits
-     * 2(0b10) = 4(0b100) bytes  = 32 bits
-     * 3(0b11) = 8(0b1000) bytes  = 64 bits
-     * @param size_bits
-     * @return
+     * @brief Codifica el tamano en bits de un registro al campo mode de 2 bits.
+     *
+     * Equivalencia:
+     * @code
+     *   8  bits  (1 byte)  -> mode = 0 (0b00)
+     *   16 bits  (2 bytes) -> mode = 1 (0b01)
+     *   32 bits  (4 bytes) -> mode = 2 (0b10)
+     *   64 bits  (8 bytes) -> mode = 3 (0b11)
+     * @endcode
+     *
+     * @param size_bits Tamano en bits del registro (8, 16, 32 o 64).
+     * @return Campo mode de 2 bits (0-3).
      */
     inline uint8_t encode_mode(int size_bits) {
-        // si da un byte, al desplazar se queda en 0
-        // si da dos bytes, al desplazar queda en 1
-        // si da 4 bytes, al deslazar queda en 2
-        // si da 8 bytes, al desplazar queda en 4 se va 3
-        uint8_t n_mode = (size_bits / 8) >> 1;
-        return (n_mode >= 4) ? 3 : n_mode;
+        uint8_t n_mode = (size_bits / 8) >> 1; // tamano en bytes desplazado a la derecha
+        return (n_mode >= 4) ? 3 : n_mode;     // saturar en 3 para registros de 64 bits
     }
 
     /**
-     * Modos de direccionamiento de la instruccion
+     * @brief Modos de direccionamiento de las instrucciones del ISA Vesta.
+     *
+     * Determina como se codifican y decodifican los operandos de una instruccion.
      */
     enum class AddressingMode {
         /**
-         * Permtie codificar instrucciones y variantes que usan unicamente un registro o varios,
-         * en caso de ser varios, suelen permitir la codifacion del tipo "reg1, reg2" y "reg2, reg1"
-         * con un bit que indica la direccionalidad de la operacion.
+         * @brief Operacion entre registros generales.
+         *
+         * Un bit indica la direccionalidad cuando hay dos registros:
+         *   adds r0, r1   -- reg1, reg2
+         *   adds r1, r0   -- reg2, reg1
          */
         REG,
 
         /**
-         * Permite operaciones unicamente con memoria, o de registro a memoria y al reves:
-         *      adds reg1, [mem]
-         *      adds [mem], reg1
-         *  normalmente un campo indica la direccionalidad de la operacion
+         * @brief Operacion con memoria.
+         *
+         * Incluye operaciones de registro a memoria y de memoria a registro:
+         *   adds reg1, [mem]
+         *   adds [mem], reg1
          */
         MEM,
 
         /**
-         * Permite operaciones o variantes que usan sib con memoria o registros y al reves:
-         *      adds reg, [reg1 * reg2 + reg3]
+         * @brief Operacion con direccionamiento SIB (Scale-Index-Base).
+         *
+         * El segundo operando usa la formula [base + index * scale + despl]:
+         *   adds reg, [reg1 * reg2 + reg3]
          */
         SIB,
 
         /**
-         * Se usa para indicar que la instruccion usa inmediatos o es una variante que lo hace. Una direccion de memoria
-         * constante o un valor se considera inmediato:
-         *      adds r00, 0x1234
+         * @brief Operacion con inmediato.
+         *
+         * El segundo operando es un valor constante o direccion de memoria fija:
+         *   adds r00, 0x1234
          */
         INMED,
 
         /**
-         * Sin modos de direccionamiento
+         * @brief Sin modos de direccionamiento (instruccion sin operandos).
          */
         NONE,
 
-        /**
-         * Solo se usa para contar la cantidad
-         */
-        COUNT
+        COUNT ///< Numero de modos (usar como limite de tabla)
     };
 
+    /**
+     * @brief Convierte un AddressingMode a su representacion en cadena.
+     *
+     * @param mode Modo de direccionamiento a convertir.
+     * @return Cadena con el nombre del modo ("REG", "MEM", "SIB", "INMED" o "NONE").
+     */
     static std::string AddressingMode_str(AddressingMode mode) {
         static const std::string table[(size_t) AddressingMode::COUNT] = {"REG", "MEM", "SIB", "INMED", "NONE"};
         return table[static_cast<uint8_t>(mode)];
     }
 
     /**
-     * Permite obtener el tamaño de una instruccion
-     * @param mode modo o tamaño tambien llamado en algunos casos.
-     * @return tamaño de la instruccion.
+     * @brief Devuelve el tamano en bytes de una instruccion a partir de su InstrSizeMode.
+     *
+     * @param mode Modo de tamano de la instruccion (debe ser un valor FIXED_*).
+     * @return Tamano en bytes de la instruccion.
      */
     constexpr size_t instr_size(InstrSizeMode mode) {
         constexpr size_t table[(size_t) InstrSizeMode::COUNT] = {1, 2, 4, 6, 8, 10, 11};
@@ -247,43 +292,66 @@ namespace Assembly::Bytecode {
     }
 
     /**
-    * Tipo puntero a funcion para emitir la instruccion
-    */
+     * @brief Tipo puntero a funcion de emision de una instruccion.
+     *
+     * Cada familia de instrucciones tiene su propia funcion de emision que recibe
+     * la instruccion del parser, el escritor de bytes, el descriptor de la instruccion
+     * y el contexto global del ensamblador.
+     *
+     * @param instruction_parser Instruccion parseada del AST.
+     * @param code_final         Escritor donde se emite el bytecode.
+     * @param now_instr          Descriptor de la instruccion con opcodes y modo.
+     * @param assembly_ctx       Contexto global del ensamblador (tablas de simbolos, etc.).
+     */
     typedef void (*emitInstr)(
-        const vm::Instruction *,  // instruccion analizar por el parser
-        ByteWriter &,             // lugar donde emitir la instruccion
-        const struct InstrInfo *, // la propia estructura que contiene la informacion de la
-        // instruccion codificada
-        Assembler *assembly_ctx
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const struct InstrInfo *now_instr,
+        Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Descriptor completo de una instruccion del ensamblador Vesta.
+     *
+     * Contiene los opcodes, el tamano, el modo de direccionamiento y la funcion
+     * de emision necesaria para traducir la instruccion del AST a bytecode.
+     */
     typedef struct InstrInfo {
-        /**
-         * En caso de este campo ser 0, se usa como extension de operacion
-         */
-        uint8_t opcode1;
-        uint8_t opcode2; // solo se usa si opcode1 = 0x0
-
-        InstrSizeMode sizeMode;
-
-        AddressingMode mode;
-
-        emitInstr emit;
+        uint8_t        opcode1;  ///< Primer byte de opcode; si es 0x00 se usa el prefijo extendido
+        uint8_t        opcode2;  ///< Segundo byte de opcode (solo valido cuando opcode1 == 0x00)
+        InstrSizeMode  sizeMode; ///< Tamano de la instruccion codificada
+        AddressingMode mode;     ///< Modo de direccionamiento de los operandos
+        emitInstr      emit;     ///< Funcion de emision de la instruccion
     } InstrInfo;
 
+    /**
+     * @brief Conjunto de mnemonicos de instrucciones con signo.
+     *
+     * Permite consultar en O(1) si una instruccion es la variante con signo,
+     * lo que determina como se interpreta el inmediato (int64_t vs uint64_t).
+     */
     static const std::unordered_set<std::string> signed_ops = {
         "adds", "subs", "muls", "divs", "cmps"
     };
 
     /**
-     * Coste O(1) para busqueda de instrucciones con signo
-     * @param opcode nombre de la instruccion a comprobar si es con signo
-     * @return true si fue una instruccion contemplada con signo.
+     * @brief Indica si el mnemonico corresponde a una instruccion con signo.
+     *
+     * @param opcode Nombre del mnemonico a comprobar.
+     * @return true si es una instruccion de la familia "signed" (adds, subs, etc.).
      */
     static bool is_signed(const std::string &opcode) {
-        return signed_ops.count(opcode) > 0;
+        return signed_ops.count(opcode) > 0; // O(1)
     }
 
+    /**
+     * @brief Emite instrucciones PUSH y POP.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_pop_push(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -291,6 +359,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones INC y DEC.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_inc_dec(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -298,6 +374,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones con modo de direccionamiento REG (registro a registro).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_reg(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -305,6 +389,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones con modo de direccionamiento MEM (registro a memoria o viceversa).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_mem(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -312,6 +404,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones con modo de direccionamiento SIB (Scale-Index-Base).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_sib(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -319,6 +419,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite la instruccion XCHG (intercambio de dos registros).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_xchg(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -326,6 +434,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones MOV de registro a registro.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_mov_reg(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -333,6 +449,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones MOV con inmediato (MOV reg, imm).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_mov_inmed(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -340,6 +464,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones MOV con SIB (MOVH y variantes con memoria host).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_mov_sib(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -347,6 +479,14 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite instrucciones MOVC y MOVCH (copia entre memoria VM y host).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
     void emit_instr_movc(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
@@ -355,11 +495,15 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Permite emitir instrucciones de tipo inmediato como son MOV r12, 0x1234 y otras similares
-     * @param instruction_parser
-     * @param code_final
-     * @param now_instr
-     * @param assembly_ctx
+     * @brief Emite instrucciones con inmediato (p.ej. MOV r12, 0x1234, ADD r0, 5).
+     *
+     * Si el segundo operando es una etiqueta o anotacion, delega en
+     * emit_instr_inmed_with_annotation() para registrar la relocalizacion necesaria.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_inmed(
         const vm::Instruction *instruction_parser,
@@ -369,14 +513,17 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Permite emitir instrucciones inmediatas donde el segundo operando es una label o una notacion,
-     * este tipo de instrucciones requiere crear una entrada en la tabla de relocalizaciones que el
-     * linker en run time debera resolver. Este metodo nunca es llamado directamente, sino que lo hara
-     * `emit_instr_inmed` cuando detecte que no es una instruccion convencional de inmediatos.
-     * @param instruction_parser
-     * @param code_final
-     * @param now_instr
-     * @param assembly_ctx
+     * @brief Emite instrucciones con inmediato que es una etiqueta o anotacion.
+     *
+     * Registra una entrada en la tabla de relocalizaciones para que el linker
+     * pueda resolver la referencia en tiempo de enlace o de carga.
+     * No se llama directamente; lo invoca emit_instr_inmed() cuando detecta
+     * que el operando no es un valor literal.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_inmed_with_annotation(
         const vm::Instruction *instruction_parser,
@@ -386,17 +533,16 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Permite emitir una instruccion de tipo CALLN que permite
-     * realizar una llamada nativa con una direccion de host del metodo
-     * a ejecutar. En caso de usarse en el ensamblado, el emisor generar
-     * la instruccion con un placeholder que el linker parchear con un index
-     * a la tabla de metodos importados, esta tabla indicara al loader
-     * que el metodo debe parchearse en lazy loader si existe en la tabla
-     * de importacion.
-     * @param instruction_parser
-     * @param code_final
-     * @param now_instr
-     * @param assembly_ctx
+     * @brief Emite la instruccion CALLN para llamadas a metodos nativos del host.
+     *
+     * Genera la instruccion con un placeholder de 8 bytes que el linker parchea
+     * con el indice de la tabla de importaciones.  En tiempo de carga el loader
+     * aplaza la resolucion de la direccion real del metodo (lazy loading).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_calln_inmmed(
         const vm::Instruction *instruction_parser,
@@ -406,14 +552,21 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Emite instrucciones con un único operando de tipo registro general:
-     *   newobj reg_size, gcconfig reg_threshold, drop reg_handle, gcwb reg_old_handle,
-     *   alloc reg_size, free reg_ptr
+     * @brief Emite instrucciones con un unico operando de tipo registro general.
      *
-     * Formato (FIXED_4, opcode extendido 0x00):
+     * Cubre: newobj, gcconfig, drop, gcwb, alloc, free.
+     *
+     * Formato (FIXED_4, prefijo extendido 0x00):
+     * @code
      *   [0x00][opcode][ctrl_byte][reg_byte]
-     *   ctrl_byte: bits 7-6 = mode (tamaño del registro), bits 5-0 = 0
+     *   ctrl_byte: bits 7-6 = mode (tamano del registro), bits 5-0 = 0
      *   reg_byte:  bits 3-0 = registro general, bits 7-4 = 0
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_one_reg(
         const vm::Instruction *instruction_parser,
@@ -423,11 +576,20 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Emite instrucciones de lectura/escritura a memoria real via cursor:
-     *   readcur  dest_reg, curN   - lee N bytes de la dir. host en curN
-     *   writecur curN, src_reg    - escribe src_reg en la dir. host en curN
+     * @brief Emite instrucciones de lectura/escritura a memoria real via cursor.
      *
-     * ctrl_byte = (mode<<6)|(cur_idx<<4), reg_byte = gen_reg_index
+     * Cubre: readcur dest_reg, curN  y  writecur curN, src_reg.
+     *
+     * Codificacion:
+     * @code
+     *   ctrl_byte = (mode << 6) | (cur_idx << 4)
+     *   reg_byte  = gen_reg_index
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_cursor_rw(
         const vm::Instruction *instruction_parser,
@@ -437,8 +599,18 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Emite la instruccion gcderef curN, handle_reg.
-     * ctrl_byte = (cur_idx<<4), reg_byte = handle_reg_index
+     * @brief Emite la instruccion gcderef curN, handle_reg.
+     *
+     * Codificacion:
+     * @code
+     *   ctrl_byte = (cur_idx << 4)
+     *   reg_byte  = handle_reg_index
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_gcderef(
         const vm::Instruction *instruction_parser,
@@ -448,10 +620,16 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Emite el byte now_instr->opcode2 seguido de una dirección de 64 bits absoluta.
-     * Se usa para callvm, enter y las variantes condicionales de jmp:
-     *   [opcode2][8 bytes addr/valor]
-     * Si el operando es un LabelOperand se crea una relocalización Absolute64.
+     * @brief Emite instrucciones con direccion absoluta de 64 bits.
+     *
+     * Formato emitido: [opcode2][8 bytes de direccion absoluta].
+     * Se usa para: callvm, enter y variantes condicionales de jmp.
+     * Si el operando es un LabelOperand se registra una relocalizacion Absolute64.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_abs64(
         const vm::Instruction *instruction_parser,
@@ -461,10 +639,16 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Emite el cuerpo de una instrucción jrel:
-     *   [cond][pad=0x00][disp32]
-     * La condición se deduce del sufijo del mnemónico (jrel.je, jrel.jne, …).
-     * Si el operando es un LabelOperand se crea una relocalización Relative32.
+     * @brief Emite el cuerpo de la instruccion jrel (salto relativo condicional).
+     *
+     * Formato emitido: [cond][pad=0x00][disp32].
+     * La condicion se deduce del sufijo del mnemonico (jrel.je, jrel.jne, etc.).
+     * Si el operando es un LabelOperand se registra una relocalizacion Relative32.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_jrel(
         const vm::Instruction *instruction_parser,
@@ -474,16 +658,21 @@ namespace Assembly::Bytecode {
     );
 
     /**
-     * Emite instrucciones OOP de la forma [reg, imm8]:
-     *   callvirt  reg_obj, vtable_idx
-     *   callsuper reg_classinfo, vtable_idx
-     *   getfield  reg_classinfo, field_idx
-     *   getmethod reg_classinfo, method_idx
+     * @brief Emite instrucciones OOP de la forma [reg, imm8].
      *
-     * Formato (FIXED_4, opcode extendido 0x00):
+     * Cubre: callvirt, callsuper, getfield, getmethod.
+     *
+     * Formato (FIXED_4, prefijo extendido 0x00):
+     * @code
      *   [0x00][opcode][reg_byte][imm8]
      *   reg_byte : bits 3-0 = registro general (operando 0)
-     *   imm8     : valor inmediato uint8 (operando 1, tipo ImmediateOperand o IntLiteral)
+     *   imm8     : valor inmediato uint8 (operando 1)
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_reg_imm8(
         const vm::Instruction *instruction_parser,
@@ -491,5 +680,7 @@ namespace Assembly::Bytecode {
         const InstrInfo *      now_instr,
         Assembler *            assembly_ctx
     );
-}
-#endif //EMMIT_DECL_H
+
+} // namespace Assembly::Bytecode
+
+#endif // EMMIT_DECL_H

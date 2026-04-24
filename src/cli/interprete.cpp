@@ -1,3 +1,11 @@
+/**
+ * @file interprete.cpp
+ * @brief Implementacion del interprete interactivo @c VestaInterprete del CLI.
+ *
+ * Implementa @c cli::VestaInterprete::run_interprete_execute_code() que
+ * lexifica, parsea y ensambla codigo fuente introducido desde el REPL,
+ * devolviendo el bytecode resultante listo para ejecutarse en la VM.
+ */
 #include "cli/cli.h"
 
 #include <cstdio>
@@ -25,8 +33,8 @@ namespace cli {
         std::istringstream       iss(input);
 
         while (iss >> token) {
-            // ignora espacios múltiples automáticamente
-            // pasar a minúsculas
+            // ignora espacios multiples automaticamente
+            // pasar a minusculas
             std::transform(token.begin(), token.end(), token.begin(),
                            [](unsigned char c) {
                                return std::tolower(c);

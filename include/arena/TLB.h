@@ -1,16 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
- * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#ifndef TLB_H
+/**
+ * @file TLB.h
+ * @brief Declaracion del Translation Lookaside Buffer (TLB) de VestaVM.
+ *
+ * Declara @c LazyHybridTLB: cache de traduccion de direcciones virtuales
+ * a punteros del proceso host, organizado en tres niveles.  Incluye
+ * operaciones de traduccion, insercion, invalidacion y volcado.
+ */#ifndef TLB_H
 #define TLB_H
 
 #include <cstdint>
@@ -26,60 +33,78 @@
 
 #include "arena/arena.h"
 
-#define GET_OFFSET(address)  (address & 0xFFF)
-#define GET_PT(address)      ((address >> 12) & 0xFFF)
-#define GET_PT1(address)     ((address >> 24) & 0xFFFF)
-#define GET_PT2(address)     ((address >> 40) & 0xFFFFFF)
+/**
+ * @defgroup TLB_macros Macros de descomposicion de direccion virtual
+ * @brief Extraen los distintos campos de una direccion virtual de 64 bits.
+ *
+ * La direccion virtual se descompone en cuatro campos:
+ *
+ *   Bits [11: 0]  OFFSET  12 bits  desplazamiento dentro de la pagina
+ *   Bits [23:12]  PT      12 bits  indice en la tabla de paginas nivel 1
+ *   Bits [39:24]  PT1     16 bits  indice en la tabla de paginas nivel 2
+ *   Bits [63:40]  PT2     24 bits  indice en la tabla de paginas nivel 3 (raiz)
+ * @{
+ */
+#define GET_OFFSET(address)  ( (address)        & 0xFFF)     ///< Extrae los 12 bits de offset de pagina
+#define GET_PT(address)      (((address) >> 12) & 0xFFF)     ///< Extrae el indice de tabla de paginas (PT)
+#define GET_PT1(address)     (((address) >> 24) & 0xFFFF)    ///< Extrae el indice PT1 (bits 24-39)
+#define GET_PT2(address)     (((address) >> 40) & 0xFFFFFF)  ///< Extrae el indice PT2 raiz (bits 40-63)
+/** @} */
 
 namespace tlb {
-    struct TLBTable;
 
+    struct TLBTable; // declaracion adelantada necesaria en TLBEntry
+
+    /**
+     * @brief Sobrecarga de operador de salida para vm_map_ptr.
+     *
+     * Escribe la direccion virtual en formato "0x<hex>" al flujo indicado.
+     *
+     * @param os  Flujo de salida destino.
+     * @param ptr Puntero virtual a imprimir.
+     * @return    Referencia al mismo flujo para encadenar operaciones.
+     */
     inline std::ostream &operator<<(std::ostream &os, const vm::vm_map_ptr &ptr) {
         os << "0x" << std::hex << ptr.raw << std::dec;
         return os;
     }
 
     /**
-     * El TLB permite realizar traducciones entre direcciones virtuales
-     * y direcciones reales, sin tener que crear tablar enormes para realizar
-     * la traducion.
+     * @brief Dato almacenado en una hoja del arbol de traduccion (TLB).
      *
-     * **Offset**    = 0xFFF     (`12bits`) [`12bits`] offset
-     * Page Table    = 0xFFF     (`12bits`) [`24bits`] PT
-     * Page Table1   = 0xFFFF    (`16bits`) [`40bits`] PT1
-     * Page Table2   = 0xFFFFFF  (`24bits`) [`64bits`] PT2
+     * Cada entrada hoja del TLB mapea una pagina virtual a su destino real:
+     * puede ser memoria del host (MAPPED_PTR_HOST), otra direccion virtual
+     * local (MAPPED_PTR_VM) o una direccion en un nodo remoto (MAPPED_PTR_REMOTE).
      *
-     * Cada entrada entrada en la PageTable (PT) contiene una estructura TLB_entry
+     * La estructura contiene ademas un metodo de diagnostico to_string() para
+     * volcar el contenido en formato legible.
      */
     typedef struct TLBEntryData {
-        /**
-         * Tipo de direccion mapeada por esta entrada.
-         */
-        vm::type_ptr_mapped type_address = vm::NONE;
+        vm::type_ptr_mapped type_address = vm::NONE; ///< Tipo del destino mapeado (host/vm/remoto)
+        vm::ptr_mapped      address      = {};        ///< Direccion destino (union de los tres tipos)
 
         /**
-         * direccion real que se mapea. En una instancia o en un manager
-         * a nivel remoto o local.
+         * @brief Genera una representacion textual de la entrada para depuracion.
+         *
+         * Muestra el tipo (HOST / GUEST / REMOTE) seguido de la direccion
+         * correspondiente en formato hexadecimal.
+         *
+         * @return Cadena descriptiva de la entrada.
          */
-        vm::ptr_mapped address = {};
-
         [[nodiscard]] std::string to_string() const {
             std::ostringstream oss;
 
-            // TIPO HUMANO
+            // mostrar etiqueta del tipo de mapeo
             switch (type_address) {
-                case vm::MAPPED_PTR_HOST: oss << "HOST";
-                    break;
-                case vm::MAPPED_PTR_VM: oss << "GUEST";
-                    break;
-                case vm::MAPPED_PTR_REMOTE: oss << "REMOTE";
-                    break;
-                default: oss << "NONE(" << (int) type_address << ")";
+                case vm::MAPPED_PTR_HOST:   oss << "HOST";   break;
+                case vm::MAPPED_PTR_VM:     oss << "GUEST";  break;
+                case vm::MAPPED_PTR_REMOTE: oss << "REMOTE"; break;
+                default: oss << "NONE(" << (int)type_address << ")";
             }
 
             oss << "{";
 
-            // DIRECCIONES según tipo
+            // mostrar el valor de la direccion segun su tipo
             switch (type_address) {
                 case vm::MAPPED_PTR_HOST:
                     oss << "host=" << std::hex << address.ptr_host << std::dec;
@@ -89,7 +114,7 @@ namespace tlb {
                     break;
                 case vm::MAPPED_PTR_REMOTE:
                     oss << "remote{id=" << std::hex << address.ptr_remote
-                            << ", offset=" << address.ptr_remote << std::dec << "}";
+                        << ", offset=" << address.ptr_remote << std::dec << "}";
                     break;
                 default:
                     oss << "addr=" << std::hex << address.ptr_host << std::dec;
@@ -100,70 +125,195 @@ namespace tlb {
         }
     } TLBEntryData;
 
-
+    /**
+     * @enum levelEntry
+     * @brief Nivel de un nodo dentro del arbol de traduccion de direcciones.
+     *
+     *   DATA -- hoja: contiene un TLBEntryData con la traduccion final.
+     *   PT   -- nivel 1: tabla de paginas (bits 23-12).
+     *   PT1  -- nivel 2: tabla de paginas de segundo nivel (bits 39-24).
+     *   PT2  -- nivel 3 raiz: tabla de paginas de tercer nivel (bits 63-40).
+     */
     typedef enum levelEntry { DATA, PT, PT1, PT2 } level;
 
+    /**
+     * @brief Nodo del arbol TLB original (estructura plana con union).
+     *
+     * Cada entrada puede ser un nodo intermedio (is_table = true, payload.table)
+     * o una hoja (is_table = false, payload.data).
+     *
+     * @note Esta estructura se mantiene por compatibilidad con codigo legado.
+     *       El TLB activo usa TLBNode y LazyHybridTLB.
+     */
     typedef struct TLBEntry {
-        levelEntry level;
+        levelEntry level;    ///< Nivel del nodo en el arbol
 
         union {
-            TLBEntryData data;
-            TLBTable *   table;
+            TLBEntryData data;  ///< Datos de traduccion si es hoja (DATA)
+            TLBTable    *table; ///< Puntero a tabla hija si es nodo intermedio
         } payload;
 
-        bool is_table = false; // true = table, false = data
+        bool is_table = false; ///< true si payload.table es valido; false si payload.data lo es
 
+        /** @brief Construye una entrada hoja vacia. */
         TLBEntry() : level(DATA), payload({}) {}
 
+        /**
+         * @brief Libera la tabla hija si este nodo es un nodo intermedio.
+         *
+         * El destructor solo actua cuando is_table == true para evitar
+         * liberar memoria union que no fue asignada como tabla.
+         */
         ~TLBEntry() {
             if (is_table && payload.table) {
-                delete payload.table;
+                delete payload.table; // liberar la tabla hija de forma recursiva
             }
         }
     } TLBEntry;
 
+    /**
+     * @brief Tabla de paginas plana (vector de TLBEntry).
+     *
+     * Cada nivel del arbol TLB original usa TLBTable como contenedor de
+     * entradas hijas.  El constructor reserva una entrada inicial para que
+     * el vector nunca este vacio tras la creacion.
+     */
     typedef struct TLBTable {
-        std::vector<TLBEntry> entry;
+        std::vector<TLBEntry> entry; ///< Vector de entradas del nivel de pagina
+
+        /** @brief Crea la tabla con una entrada vacia inicial. */
         TLBTable() : entry(1) {}
     } TLBTable;
 
+    /**
+     * @brief Nodo del arbol TLB lazy con propiedad unica sobre hijos.
+     *
+     * Implementacion moderna que usa unique_ptr para gestionar la memoria
+     * de los hijos automaticamente.  Un nodo con children vacio o con
+     * children[i] == nullptr es un nodo no inicializado (lazy allocation).
+     *
+     * type == DATA indica un nodo hoja cuya traduccion esta en el campo data.
+     * type == PT/PT1/PT2 indica un nodo intermedio cuyos hijos son el siguiente nivel.
+     */
     typedef struct TLBNode {
-        levelEntry                             type = DATA;
-        TLBEntryData                           data;
-        std::vector<std::unique_ptr<TLBNode> > children; // nullptr = leaf (DATA), else table
+        levelEntry                              type = DATA; ///< Nivel de este nodo
+        TLBEntryData                            data;        ///< Datos de traduccion (valido si type == DATA)
+        std::vector<std::unique_ptr<TLBNode>>   children;    ///< Hijos de nivel inferior (nullptr = no inicializado)
 
-        TLBNode() = default;
-
-        ~TLBNode() = default;
+        TLBNode()  = default; ///< Construye nodo DATA con hijos vacios
+        ~TLBNode() = default; ///< Destruye recursivamente los hijos via unique_ptr
     } TLBNode;
 
     /**
-     * Los page table PT, PT1, y PT2 usan todos la misma estructura.
-     * PT2 (TLB_page) -> PT1 (TLB_page) -> PT -> TLB_Entry
+     * @class LazyHybridTLB
+     * @brief Translation Lookaside Buffer (TLB) perezoso de tres niveles.
+     *
+     * Implementa la traduccion de direcciones virtuales de 64 bits a
+     * direcciones reales del host mediante un arbol de nodos creados
+     * bajo demanda (lazy allocation).
+     *
+     * Jerarquia de niveles (de raiz a hoja):
+     *   root (vector de TLBNode)
+     *     -> PT2 (24 bits, hasta 16 M entradas)
+     *       -> PT1 (16 bits, hasta 64 K entradas)
+     *         -> PT  (12 bits, hasta 4 K entradas)
+     *           -> DATA (TLBEntryData con la traduccion real)
+     *
+     * El arbol crece en amplitud solo cuando se accede a una pagina nueva,
+     * manteniendo bajo el coste de memoria en espacios de direcciones dispersos.
+     *
+     * Uso tipico:
+     *   1. translate()                  -- registrar la traduccion de una pagina.
+     *   2. get_entry()                  -- consultar la traduccion de una direccion.
+     *   3. get_real_host_ptr_of_vptr()  -- obtener el puntero de host directamente.
+     *   4. clear_tlb_entry()            -- invalidar una entrada (p.ej. tras unmap).
      */
     class LazyHybridTLB {
-        std::vector<std::unique_ptr<TLBNode> > root{1};
+        std::vector<std::unique_ptr<TLBNode>> root{1}; ///< Nivel raiz PT2; indice 0 inicializado en ctor
 
     public:
-        ~LazyHybridTLB() = default;
+        ~LazyHybridTLB() = default; ///< Destructor; unique_ptr libera el arbol automaticamente
 
+        /**
+         * @brief Registra o actualiza la traduccion de la pagina que contiene @p ptr.
+         *
+         * Crea los nodos intermedios necesarios en los niveles PT2, PT1 y PT,
+         * y almacena la entrada de datos en el nodo hoja correspondiente.
+         *
+         * @param ptr        Direccion virtual a mapear (se usa la pagina que la contiene).
+         * @param type       Tipo de destino (MAPPED_PTR_HOST, MAPPED_PTR_VM, MAPPED_PTR_REMOTE).
+         * @param ptr_mapped Union con la direccion real correspondiente al tipo.
+         */
         void translate(uint64_t ptr, vm::type_ptr_mapped type, vm::ptr_mapped ptr_mapped);
 
+        /**
+         * @brief Invalida la entrada TLB de la pagina indicada.
+         *
+         * Reemplaza la entrada por un mapeo a la direccion virtual cero,
+         * marcandola como MAPPED_PTR_VM con valor 0.  La pagina quedara como
+         * no mapeada hasta que se llame a translate() de nuevo.
+         *
+         * @param page_vaddr Direccion virtual dentro de la pagina a invalidar.
+         */
         void clear_tlb_entry(uint64_t page_vaddr);
 
+        /**
+         * @brief Devuelve un puntero al dato de traduccion de la pagina indicada.
+         *
+         * Recorre el arbol PT2 -> PT1 -> PT buscando la hoja DATA.
+         * Si cualquier nivel no existe devuelve nullptr (lazy miss).
+         *
+         * @param ptr Direccion virtual a consultar.
+         * @return    Puntero al TLBEntryData de la pagina, o nullptr si no esta mapeada.
+         *
+         * @note El puntero devuelto puede quedar invalidado si se llama a translate()
+         *       sobre la misma pagina (la reasignacion puede reubicar el nodo).
+         */
         [[nodiscard]] TLBEntryData *get_entry(uint64_t ptr) const;
 
+        /**
+         * @brief Devuelve el puntero real del host para una direccion virtual.
+         *
+         * Combina get_entry() con el acceso al campo ptr_host de la union.
+         * Solo funciona para entradas de tipo MAPPED_PTR_HOST.
+         *
+         * @param vptr_ Direccion virtual a resolver.
+         * @return      Puntero del host correspondiente, o nullptr si la entrada no
+         *              existe o no es de tipo MAPPED_PTR_HOST.
+         */
         void *get_real_host_ptr_of_vptr(uint64_t vptr_) const;
 
+        /**
+         * @brief Vuelca en stdout la descomposicion de una direccion virtual y su ruta TLB.
+         *
+         * Muestra PT2, PT1, PT y OFFSET de @p vpn_, la ruta de nodos que se
+         * recorreria y el contenido de la hoja si existe.  Util para depuracion.
+         *
+         * @param vpn_ Direccion virtual a inspeccionar.
+         */
         void dump_tree(uint64_t vpn_) const;
 
+        /**
+         * @brief Imprime estadisticas globales del arbol TLB en stdout.
+         *
+         * Contabiliza cuantos nodos PT2, PT1 y entradas DATA existen actualmente.
+         * Util para evaluar el consumo de memoria del TLB en tiempo de ejecucion.
+         */
         void dump_stats() const;
 
+        /**
+         * @brief Constructor: garantiza que el nodo raiz[0] este inicializado.
+         *
+         * El vector root se inicializa con tamanyo 1 pero el unique_ptr queda
+         * a nullptr.  El constructor crea el primer TLBNode para evitar
+         * comprobaciones extra en translate().
+         */
         LazyHybridTLB() {
             if (!root[0])
-                root[0] = std::make_unique<TLBNode>();
+                root[0] = std::make_unique<TLBNode>(); // nodo raiz PT2[0] preiniicializado
         }
     };
-}
 
-#endif //TLB_H
+} // namespace tlb
+
+#endif // TLB_H

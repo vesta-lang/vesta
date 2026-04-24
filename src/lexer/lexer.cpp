@@ -1,15 +1,24 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file lexer.cpp
+ * @brief Implementacion del analizador lexico para el lenguaje ensamblador de VestaVM.
+ *
+ * Implementa @c vm::Lexer: @c next_token() que clasifica el caracter actual
+ * y produce el token correspondiente, @c peek_token() para lookahead sin consumir,
+ * y las funciones auxiliares @c is_register(), @c is_data_directive() y
+ * @c token_type_to_string().
+ */
 #include <utility>
 
 #include "lexer/lexer.h"
@@ -61,7 +70,7 @@ namespace vm {
                 continue;
             }
 
-            break;  // No más whitespace/comentarios
+            break;  // No mas whitespace/comentarios
         }
     }
 
@@ -94,7 +103,7 @@ namespace vm {
             }
 
             if (peek() == '\\') {
-                // escape sequence
+                // secuencia de escape
                 lexeme += advance(); // '\'
                 if (peek() != '\0')
                     lexeme += advance(); // 'n', 't', etc

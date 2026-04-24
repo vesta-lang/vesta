@@ -1,3 +1,40 @@
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
+ * @file loader.h
+ * @brief Loader de ejecutables VELB para VestaVM.
+ *
+ * El loader es responsable de:
+ *  1. Leer y validar el header VELB del archivo binario.
+ *  2. Parsear la tabla de espacios de direcciones y la tabla de secciones.
+ *  3. Parsear la tabla de importaciones (funciones nativas FFI).
+ *  4. Reservar memoria en el @c ArenaManager para cada espacio de direcciones.
+ *  5. Copiar el bytecode de cada seccion al rango de memoria reservado.
+ *  6. Crear un @c ProcessVM con el PC inicializado y los labels cargados.
+ *
+ * Macros de error:
+ *  - @c LOADER_THROW(kind, msg)          : lanza un @c LoaderError directamente.
+ *  - @c LOADER_THROW_AT(kind, msg, rdr)  : incluye el offset del reader en el mensaje.
+ *
+ * Flujo tipico:
+ * @code
+ *   runtime::ManageVM mgr;
+ *   loader::Loader ldr(mgr);
+ *   runtime::ProcessVM *proc = ldr.load_executable(vm_instance, "program.velb");
+ *   vm_instance.make_ready(proc->pid);
+ * @endcode
+ */
+
 #ifndef LOADER_H
 #define LOADER_H
 
@@ -71,10 +108,10 @@ namespace loader {
      * @brief Representa un ejecutable VELB completamente enlazado y listo para cargar en la VM.
      *
      * Esta estructura es el resultado final del linker y la entrada principal del loader.
-     * Contiene toda la información necesaria para:
+     * Contiene toda la informacion necesaria para:
      *  - reservar espacios de memoria
      *  - copiar secciones ensambladas
-     *  - resolver símbolos y labels
+     *  - resolver simbolos y labels
      *  - inicializar el PC
      *  - cargar metadatos y relocaciones
      *
@@ -90,7 +127,7 @@ namespace loader {
         std::string format = "velb";
 
         /**
-         * @brief Versión del formato VELB.
+         * @brief Version del formato VELB.
          *
          * Permite compatibilidad futura entre versiones del loader y del linker.
          */
@@ -120,13 +157,13 @@ namespace loader {
         std::vector<Section *> sections{};
 
         /**
-         * @brief Símbolos globales con dirección absoluta.
+         * @brief Simbolos globales con direccion absoluta.
          *
          * Cada `Label` contiene:
-         *  - nombre del símbolo
-         *  - dirección absoluta final tras el linking
+         *  - nombre del simbolo
+         *  - direccion absoluta final tras el linking
          *
-         * El loader los registra en la tabla de símbolos de la VM.
+         * El loader los registra en la tabla de simbolos de la VM.
          */
         std::vector<Label *> labels{};
 
@@ -144,7 +181,7 @@ namespace loader {
         size_t offset_real_bytecode = 0;
 
         /**
-         * @brief Dirección inicial del PC.
+         * @brief Direccion inicial del PC.
          *
          * Determinada por la directiva `@InitPc` o por el linker.
          * El loader debe asignarla al registro PC de la VM.
@@ -154,21 +191,21 @@ namespace loader {
         /**
          * @brief Cabecera del ejecutable VELB.
          *
-         * Contiene información adicional como:
-         *  - tamaño del ejecutable
+         * Contiene informacion adicional como:
+         *  - tamano del ejecutable
          *  - checksum
          *  - flags
-         *  - versión del linker
+         *  - version del linker
          *  - punto de entrada
          *
-         * Es redundante con algunos campos, pero útil para validación.
+         * Es redundante con algunos campos, pero util para validacion.
          */
         HeaderVELB header{};
 
         /**
          * @brief Relocaciones aplicadas durante el linking.
          *
-         * Normalmente solo se usa para debugging o herramientas de análisis.
+         * Normalmente solo se usa para debugging o herramientas de analisis.
          * El ejecutable final ya tiene todas las direcciones resueltas. En teoria, aunque
          * se puede llamar al linker dinamico.
          */
@@ -180,8 +217,8 @@ namespace loader {
          * Puede incluir:
          *  - autor
          *  - timestamp
-         *  - flags de compilación
-         *  - información de build
+         *  - flags de compilacion
+         *  - informacion de build
          *  - dependencias
          */
         //Sqlite::json metadata;
@@ -208,11 +245,11 @@ namespace loader {
          *    Guardarlo como unique_ptr evita copiar todo_ el objeto al hacer push_back.
          *
          * 2. Estabilidad de direcciones:
-         *    Aunque el vector se realoque internamente, los punteros siguen siendo válidos.
-         *    Esto permite devolver referencias a Executable sin riesgo de que queden inválidas.
+         *    Aunque el vector se realoque internamente, los punteros siguen siendo validos.
+         *    Esto permite devolver referencias a Executable sin riesgo de que queden invalidas.
          *
          * 3. Propiedad clara:
-         *    El Loader es el dueño exclusivo de cada Executable.
+         *    El Loader es el dueno exclusivo de cada Executable.
          *    No hay aliasing, no hay referencias compartidas, no hay riesgo de doble free.
          *
          * 4. Seguridad en multihilo:
@@ -317,16 +354,16 @@ namespace loader {
         /**
          * Permite obtener el ultimo ejecutable agregado al loader.
          *
-         * @warning Esta función NO es thread‑safe. Debe llamarse bajo el mutex externo.
+         * @warning Esta funcion NO es thread?safe. Debe llamarse bajo el mutex externo.
          *
-         * @return referencia al ultimo ejecutable añadido.
+         * @return referencia al ultimo ejecutable anadido.
          */
         Executable &get_last_instance_unlocked();
 
         /**
-         * Esta es la version thread‑safe de get_last_instance_unlocked, usa un mutex
+         * Esta es la version thread?safe de get_last_instance_unlocked, usa un mutex
          * interno.
-         * @return referencia al ultimo ejecutable añadido.
+         * @return referencia al ultimo ejecutable anadido.
          */
         Executable &get_last_instance();
 
