@@ -749,6 +749,166 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    // -------------------------------------------------------------------------
+    // Helpers para registros ZMM (f/xmm/ymm/zmm)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Extrae el indice numerico (0-15) de un nombre de registro ZMM.
+     *
+     * Acepta los prefijos: "f", "xmm", "ymm", "zmm" seguidos de un numero 0-15.
+     * Ejemplo: "xmm3" -> 3, "f7" -> 7, "zmm15" -> 15.
+     *
+     * @param name Nombre del registro (p.ej. "f0", "xmm3", "ymm15").
+     * @return Indice del registro (0-15).
+     * @throws std::runtime_error Si el nombre no es un registro ZMM valido.
+     */
+    inline uint8_t zmm_reg_index(const std::string &name) {
+        size_t prefix_len = 0;
+        if (!name.empty() && name[0] == 'f') prefix_len = 1;
+        else if (name.size() >= 3 && (name.substr(0,3) == "xmm" ||
+                                      name.substr(0,3) == "ymm" ||
+                                      name.substr(0,3) == "zmm")) prefix_len = 3;
+        else throw std::runtime_error("zmm_reg_index: nombre invalido: " + name);
+
+        int idx = std::stoi(name.substr(prefix_len)); // parte numerica
+        if (idx < 0 || idx > 15)
+            throw std::runtime_error("zmm_reg_index: indice fuera de rango: " + name);
+        return static_cast<uint8_t>(idx);
+    }
+
+    /**
+     * @brief Obtiene el campo mode (2 bits) a partir del nombre de un registro ZMM.
+     *
+     * mode 0 = escalar f64  -> prefijo "f"
+     * mode 1 = XMM (128b)   -> prefijo "xmm"
+     * mode 2 = YMM (256b)   -> prefijo "ymm"
+     * mode 3 = ZMM (512b)   -> prefijo "zmm"
+     *
+     * @param name Nombre del registro ZMM.
+     * @return Campo mode de 2 bits (0-3).
+     */
+    inline uint8_t zmm_reg_mode(const std::string &name) {
+        if (!name.empty() && name[0] == 'f')    return 0; // escalar f64
+        if (name.size() >= 3 && name.substr(0,3) == "xmm") return 1; // XMM 128 bits
+        if (name.size() >= 3 && name.substr(0,3) == "ymm") return 2; // YMM 256 bits
+        if (name.size() >= 3 && name.substr(0,3) == "zmm") return 3; // ZMM 512 bits
+        return 0;
+    }
+
+    /**
+     * @brief Comprueba si un nombre de registro pertenece al banco ZMM.
+     * @param name Nombre del registro a comprobar.
+     * @return true si es f0-f15, xmm0-15, ymm0-15 o zmm0-15.
+     */
+    inline bool is_zmm_register(const std::string &name) {
+        if (!name.empty() && name[0] == 'f' && name.size() >= 2 && isdigit((unsigned char)name[1]))
+            return true;
+        if (name.size() >= 4 && (name.substr(0,3) == "xmm" ||
+                                  name.substr(0,3) == "ymm" ||
+                                  name.substr(0,3) == "zmm"))
+            return true;
+        return false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Emision para instrucciones de corutinas y flotante
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Emite una instruccion de registro ZMM-ZMM (fadd, fsub, fmul, etc.).
+     *
+     * Byte ctrl: mode(2) | is_f32(1) | 00000
+     * Byte regs: idx2(4) | idx1(4)
+     *
+     * El campo mode se extrae del nombre del registro (f/xmm/ymm/zmm).
+     * El campo is_f32 se detecta del sufijo del mnemonico (.ps = float, .pd = double).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_freg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite instrucciones ZMM unarias (fsqrt, fabs, fneg) con un solo operando.
+     *
+     * El registro destino actua tambien como fuente: regs = (idx << 4) | idx.
+     * Formato identico a emit_instr_freg pero con un solo operando en el AST.
+     *
+     * @param instruction_parser Instruccion del AST (un operando ZMM).
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_freg_unary(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite la instruccion FMOWI (inmediato IEEE 754 de 64 bits en ZMM).
+     *
+     * Formato (11 bytes tras el prefijo 0x00 0xFA):
+     *   Byte ctrl: mode(2) | is_f32(1) | zmm_idx(4)
+     *   Bytes 1..8: imm64 (IEEE 754 double en bits brutos)
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_fmowi(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite las instrucciones FLOAD y FSTORE (acceso a memoria VM).
+     *
+     * Byte ctrl: mode(2) | 000000
+     * Byte regs: gp_idx(4) | zmm_idx(4)
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_fmem(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite la instruccion FCVT (conversion int<->float entre bancos).
+     *
+     * Byte ctrl: mode(2) | is_f32(1) | direction(1) | 0000
+     * Byte regs: zmm_idx(4) | gp_idx(4)  (o inverso segun direction)
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_fcvt(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
 } // namespace Assembly::Bytecode
 
 #endif // EMMIT_DECL_H

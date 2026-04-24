@@ -1,0 +1,82 @@
+/*
+ * ejemplo_float_unario.vel
+ *
+ * Demuestra las instrucciones unarias de punto flotante:
+ *   fsqrt fDst, fSrc  raiz cuadrada   (fDst = sqrt(fSrc))
+ *   fabs  fDst, fSrc  valor absoluto  (fDst = |fSrc|)
+ *   fneg  fDst, fSrc  negacion        (fDst = -fSrc)
+ *
+ * Las tres instrucciones toman dos operandos ZMM: destino y fuente.
+ * El destino y la fuente pueden ser el mismo registro (operacion in-place).
+ *
+ * Resultado esperado al llegar a hlt:
+ *   f1 == 2.0   (fsqrt f1, f0  con f0=4.0)
+ *   f2 == 3.0   (fsqrt f2, f0  con f0=9.0)
+ *   f3 == 5.0   (fabs  f3, f0  con f0=-5.0)
+ *   f4 == 2.5   (fabs  f4, f0  con f0=2.5, positivo: sin cambio)
+ *   f5 == -4.0  (fneg  f5, f0  con f0=4.0)
+ *   f6 ==  1.0  (fneg  f6, f0  con f0=-1.0)
+ *
+ * Compilar y ejecutar:
+ *   vesta --build ejemplo_float_unario.vel -o ejemplo_float_unario
+ *   vesta --run   ejemplo_float_unario.velb --stats
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// fsqrt fDst, fSrc: raiz cuadrada (fDst = sqrt(fSrc))
+// -----------------------------------------------------------------------
+
+    // f1 = sqrt(4.0) = 2.0
+    fmowi f0, 0x4010000000000000   // f0 = 4.0
+    fsqrt f1, f0                   // f1 = sqrt(f0) = 2.0
+
+    // f2 = sqrt(9.0) = 3.0
+    fmowi f0, 0x4022000000000000   // f0 = 9.0
+    fsqrt f2, f0                   // f2 = sqrt(f0) = 3.0
+
+// -----------------------------------------------------------------------
+// fabs fDst, fSrc: valor absoluto (fDst = |fSrc|)
+// -----------------------------------------------------------------------
+
+    // f3 = fabs(-5.0) = 5.0
+    fmowi f0, 0xC014000000000000   // f0 = -5.0
+    fabs  f3, f0                   // f3 = |f0| = 5.0
+
+    // f4 = fabs(2.5) = 2.5  (positivo: sin cambio)
+    fmowi f0, 0x4004000000000000   // f0 = 2.5
+    fabs  f4, f0                   // f4 = |f0| = 2.5
+
+// -----------------------------------------------------------------------
+// fneg fDst, fSrc: negacion (invierte bit de signo)
+// -----------------------------------------------------------------------
+
+    // f5 = fneg(4.0) = -4.0
+    fmowi f0, 0x4010000000000000   // f0 = 4.0
+    fneg  f5, f0                   // f5 = -f0 = -4.0
+
+    // f6 = fneg(-1.0) = 1.0
+    fmowi f0, 0xBFF0000000000000   // f0 = -1.0
+    fneg  f6, f0                   // f6 = -f0 = 1.0
+
+    // operacion in-place: fneg sobre si mismo
+    fmowi f7, 0x4008000000000000   // f7 = 3.0
+    fneg  f7, f7                   // f7 = -f7 = -3.0  (dst == src)
+
+    hlt
+end_code:

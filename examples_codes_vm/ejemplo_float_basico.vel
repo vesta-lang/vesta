@@ -1,0 +1,81 @@
+/*
+ * ejemplo_float_basico.vel
+ *
+ * Demuestra las instrucciones de punto flotante escalares: fmowi, fmov,
+ * fadd, fsub, fmul, fdiv.
+ *
+ * Registros ZMM (f0..f15) almacenan doubles IEEE 754 de 64 bits.
+ * fmowi carga un inmediato de 64 bits (bits IEEE 754) en un registro ZMM.
+ * fmov  copia el valor de un registro ZMM a otro.
+ * fadd/fsub/fmul/fdiv operan sobre pares de registros ZMM.
+ *
+ * Resultado esperado al llegar a hlt:
+ *   f0 == 1.0   (fmowi con bits 0x3FF0000000000000)
+ *   f1 == 2.0   (fmowi con bits 0x4000000000000000)
+ *   f2 == 3.0   (fadd  f0, f1  ->  1.0 + 2.0)
+ *   f3 == 1.0   (fsub  f2, f1  ->  3.0 - 2.0)
+ *   f4 == 6.0   (fmul  f1, f2  ->  2.0 * 3.0)
+ *   f5 == 2.0   (fdiv  f4, f2  ->  6.0 / 3.0)
+ *   f6 == 2.0   (fmov  f6, f5  ->  copia de f5)
+ *
+ * Compilar y ejecutar:
+ *   vesta --build ejemplo_float_basico.vel -o ejemplo_float_basico
+ *   vesta --run   ejemplo_float_basico.velb --stats
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// Cargar constantes flotantes con fmowi (bits IEEE 754 como inmediato u64)
+// -----------------------------------------------------------------------
+    // f0 = 1.0  (0x3FF0000000000000)
+    fmowi f0, 0x3FF0000000000000
+
+    // f1 = 2.0  (0x4000000000000000)
+    fmowi f1, 0x4000000000000000
+
+// -----------------------------------------------------------------------
+// Suma: f2 = f0 + f1  =>  1.0 + 2.0 = 3.0
+// -----------------------------------------------------------------------
+    fmov  f2, f0        // f2 = f0 (1.0) -- copiar operando antes de operar
+    fadd  f2, f1        // f2 += f1  =>  1.0 + 2.0 = 3.0
+
+// -----------------------------------------------------------------------
+// Resta: f3 = f2 - f1  =>  3.0 - 2.0 = 1.0
+// -----------------------------------------------------------------------
+    fmov  f3, f2        // f3 = f2 (3.0)
+    fsub  f3, f1        // f3 -= f1  =>  3.0 - 2.0 = 1.0
+
+// -----------------------------------------------------------------------
+// Multiplicacion: f4 = f1 * f2  =>  2.0 * 3.0 = 6.0
+// -----------------------------------------------------------------------
+    fmov  f4, f1        // f4 = f1 (2.0)
+    fmul  f4, f2        // f4 *= f2  =>  2.0 * 3.0 = 6.0
+
+// -----------------------------------------------------------------------
+// Division: f5 = f4 / f2  =>  6.0 / 3.0 = 2.0
+// -----------------------------------------------------------------------
+    fmov  f5, f4        // f5 = f4 (6.0)
+    fdiv  f5, f2        // f5 /= f2  =>  6.0 / 3.0 = 2.0
+
+// -----------------------------------------------------------------------
+// Copia de registro: f6 = f5  =>  2.0
+// -----------------------------------------------------------------------
+    fmov  f6, f5        // f6 = f5 (2.0)
+
+    hlt
+end_code:

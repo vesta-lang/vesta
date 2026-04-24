@@ -1,0 +1,82 @@
+/*
+ * ejemplo_float_pipeline.vel
+ *
+ * Ejemplo integrador que combina varias instrucciones de punto flotante
+ * para implementar el calculo de la distancia euclidiana entre dos puntos
+ * 2D: d = sqrt((x2-x1)^2 + (y2-y1)^2)
+ *
+ * Punto A = (1.0, 2.0)
+ * Punto B = (4.0, 6.0)
+ *
+ * Calculo:
+ *   dx = 4.0 - 1.0 = 3.0
+ *   dy = 6.0 - 2.0 = 4.0
+ *   dx2 = dx * dx  = 9.0
+ *   dy2 = dy * dy  = 16.0
+ *   suma = dx2 + dy2 = 25.0
+ *   dist = sqrt(25.0) = 5.0
+ *
+ * Resultado esperado al llegar a hlt:
+ *   f7 == 5.0   (distancia euclidiana entre A y B)
+ *
+ * Compilar y ejecutar:
+ *   vesta --build ejemplo_float_pipeline.vel -o ejemplo_float_pipeline
+ *   vesta --run   ejemplo_float_pipeline.velb --stats
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// Cargar coordenadas de los dos puntos
+// -----------------------------------------------------------------------
+    fmowi f0, 0x3FF0000000000000   // f0 = x1 = 1.0
+    fmowi f1, 0x4000000000000000   // f1 = y1 = 2.0
+    fmowi f2, 0x4010000000000000   // f2 = x2 = 4.0
+    fmowi f3, 0x4018000000000000   // f3 = y2 = 6.0
+
+// -----------------------------------------------------------------------
+// dx = x2 - x1 = 4.0 - 1.0 = 3.0
+// -----------------------------------------------------------------------
+    fmov  f4, f2        // f4 = x2 (4.0)
+    fsub  f4, f0        // f4 -= x1  =>  4.0 - 1.0 = 3.0
+
+// -----------------------------------------------------------------------
+// dy = y2 - y1 = 6.0 - 2.0 = 4.0
+// -----------------------------------------------------------------------
+    fmov  f5, f3        // f5 = y2 (6.0)
+    fsub  f5, f1        // f5 -= y1  =>  6.0 - 2.0 = 4.0
+
+// -----------------------------------------------------------------------
+// dx^2 = 3.0 * 3.0 = 9.0
+// -----------------------------------------------------------------------
+    fmov  f6, f4
+    fmul  f6, f4        // f6 = dx * dx = 9.0
+
+// -----------------------------------------------------------------------
+// dy^2 = 4.0 * 4.0 = 16.0  (acumulado en f6)
+// -----------------------------------------------------------------------
+    fmov  f7, f5
+    fmul  f7, f5        // f7 = dy * dy = 16.0
+    fadd  f6, f7        // f6 = dx^2 + dy^2 = 25.0
+
+// -----------------------------------------------------------------------
+// dist = sqrt(dx^2 + dy^2) = sqrt(25.0) = 5.0
+// -----------------------------------------------------------------------
+    fsqrt f7, f6        // f7 = sqrt(f6) = sqrt(25.0) = 5.0
+
+    hlt
+end_code:

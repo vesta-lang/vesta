@@ -1,0 +1,80 @@
+/*
+ * ejemplo_float_memoria.vel
+ *
+ * Demuestra fstore y fload: escritura y lectura de valores double (f64)
+ * en memoria virtual de la VM.
+ *
+ * fstore rAddr, fSrc  escribe los 8 bytes de fSrc en vm_mem[rAddr]
+ * fload  fDst,  rAddr lee  8 bytes de vm_mem[rAddr] en fDst
+ *
+ * El ejemplo reserva tres buffers de 8 bytes en la seccion de datos y
+ * guarda/carga doubles desde/hacia registros ZMM.
+ *
+ * Resultado esperado al llegar a hlt:
+ *   f4 == 1.5   (round-trip: fstore -> fload de 1.5)
+ *   f5 == -3.0  (round-trip: fstore -> fload de -3.0)
+ *   f6 == 9.0   (round-trip de 9.0 calculado como 3.0*3.0)
+ *
+ * Compilar y ejecutar:
+ *   vesta --build ejemplo_float_memoria.vel -o ejemplo_float_memoria
+ *   vesta --run   ejemplo_float_memoria.velb --stats
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// Guardar y cargar 1.5
+// -----------------------------------------------------------------------
+    fmowi f0, 0x3FF8000000000000       // f0 = 1.5
+    mov   r1, @Absolute("all.slot0")   // r1 = direccion de slot0 en VM memory
+    fstore r1, f0                      // vm_mem[r1] = f0  (1.5)
+
+    fload f4, r1                       // f4 = vm_mem[r1]  (debe ser 1.5)
+
+// -----------------------------------------------------------------------
+// Guardar y cargar -3.0
+// -----------------------------------------------------------------------
+    fmowi f1, 0xC008000000000000       // f1 = -3.0
+    mov   r2, @Absolute("all.slot1")
+    fstore r2, f1                      // vm_mem[r2] = f1  (-3.0)
+
+    fload f5, r2                       // f5 = vm_mem[r2]  (debe ser -3.0)
+
+// -----------------------------------------------------------------------
+// Calcular 3.0 * 3.0 = 9.0 y persistir en memoria
+// -----------------------------------------------------------------------
+    fmowi f2, 0x4008000000000000       // f2 = 3.0
+    fmov  f3, f2
+    fmul  f3, f2                       // f3 = 3.0 * 3.0 = 9.0
+
+    mov   r3, @Absolute("all.slot2")
+    fstore r3, f3                      // vm_mem[r3] = f3  (9.0)
+
+    fload f6, r3                       // f6 = vm_mem[r3]  (debe ser 9.0)
+
+    hlt
+end_code:
+
+align 8
+// espacio de almacenamiento: tres qwords inicializados en cero
+// sintaxis: "etiqueta db byte0, byte1, ..." (8 bytes = 1 qword)
+slot0 db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+end_slot0:
+slot1 db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+end_slot1:
+slot2 db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+end_slot2:

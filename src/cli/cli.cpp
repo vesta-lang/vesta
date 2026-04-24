@@ -36,10 +36,16 @@
 #include "runtime/proceso_runtime.h"
 #include "disasm/disasm.h"
 #include "util/ansi.h"
+#include "util/fs_utils.h"
 #include <cstring>
 #include <iomanip>
 #include <chrono>
 #include <ctime>
+#include <fstream>
+#include <filesystem>
+#ifdef VESTA_HAS_PREPROCESSOR
+#  include "preprocessor/preprocessor.h"
+#endif
 
 #if defined(_WIN32)
 #  include <conio.h>
@@ -308,17 +314,75 @@ namespace cli {
     }
 
     /**
-     * @brief Lista el contenido de un directorio con colores e informacion de cada entrada.
+     * @brief Compara un nombre de archivo contra un patron glob (solo nombre, sin separadores).
+     *
+     * Soporta:
+     *   '*' — cualquier secuencia de caracteres (incluyendo vacia)
+     *   '?' — exactamente un caracter cualquiera
+     *
+     * @param pattern Patron glob (e.g. "*.vel", "test_??.velb", "build*").
+     * @param name    Nombre de archivo a comparar.
+     * @return true si @p name coincide con @p pattern.
+     */
+    static bool glob_match(const std::string &pattern, const std::string &name) {
+        size_t p = 0, n = 0;
+        // posicion del ultimo '*' visto y la posicion en name en ese momento
+        size_t star_p = std::string::npos, star_n = 0;
+        while (n < name.size()) {
+            if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == name[n])) {
+                ++p; ++n;  // caracter literal o '?' coinciden: avanzar ambos
+            } else if (p < pattern.size() && pattern[p] == '*') {
+                star_p = p++;  // guardar posicion del '*' y avanzar patron
+                star_n = n;    // '*' consume cero caracteres inicialmente
+            } else if (star_p != std::string::npos) {
+                p = star_p + 1;  // retroceder al patron tras el ultimo '*'
+                n = ++star_n;    // el '*' consume un caracter mas de name
+            } else {
+                return false;    // sin '*' disponible para retroceder: no coincide
+            }
+        }
+        // consumir '*' finales del patron (e.g. "*.vel*")
+        while (p < pattern.size() && pattern[p] == '*') ++p;
+        return p == pattern.size();
+    }
+
+    /**
+     * @brief Lista el contenido de un directorio con soporte de patrones glob.
      *
      * Directorios en azul brillante, archivos en verde brillante.
      * Columnas: tipo (D/F), tamano, fecha de modificacion, nombre.
      * Orden: directorios primero, luego archivos, ambos alfabeticos.
      *
-     * @param args Ruta del directorio; si esta vacio usa el directorio actual.
+     * Formatos soportados:
+     *   ls                  lista el directorio actual
+     *   ls <dir>            lista <dir>
+     *   ls *.vel            archivos que coincidan con el patron en el dir actual
+     *   ls src/*.velb       archivos que coincidan con el patron en src/
+     *   ls test_??.vel      patron con '?' (un caracter cualquiera)
+     *
+     * @param args Ruta, patron glob, o ruta + patron glob.
      */
     static void command_ls(const std::string &args) {
         namespace fsp = std::filesystem;
-        fsp::path target = args.empty() ? fsp::current_path() : expand_path(args);
+
+        // detectar si el argumento contiene un caracter glob
+        bool has_glob = args.find('*') != std::string::npos ||
+                        args.find('?') != std::string::npos;
+
+        fsp::path   target;
+        std::string pattern;  // vacio = sin filtro
+
+        if (has_glob) {
+            // separar la parte de directorio de la parte de patron
+            // e.g. "src/*.vel" -> parent="src", filename="*.vel"
+            // e.g. "*.vel"     -> parent="",    filename="*.vel"
+            fsp::path raw(args);
+            fsp::path parent = raw.parent_path();
+            pattern = raw.filename().string();
+            target  = parent.empty() ? fsp::current_path() : expand_path(parent.string());
+        } else {
+            target = args.empty() ? fsp::current_path() : expand_path(args);
+        }
 
         if (!fsp::exists(target) || !fsp::is_directory(target)) {
             std::cout << "ls: no es un directorio: " << target.string() << "\n";
@@ -333,10 +397,16 @@ namespace cli {
         };
 
         std::vector<Entry> entries;
-        for (const auto &e : fsp::directory_iterator(target)) {
+        std::error_code    ec;
+        for (const auto &e : fsp::directory_iterator(target, ec)) {
+            std::string fname = e.path().filename().string();
+
+            // aplicar filtro glob si se especifico patron
+            if (!pattern.empty() && !glob_match(pattern, fname)) continue;
+
             Entry ent;
             ent.is_dir     = fsp::is_directory(e);
-            ent.name       = e.path().filename().string();
+            ent.name       = fname;
             ent.size_bytes = 0;
             if (!ent.is_dir) {
                 try { ent.size_bytes = fsp::file_size(e); } catch (...) {}
@@ -362,16 +432,29 @@ namespace cli {
             return a.name < b.name;
         });
 
+        // cabecera: mostrar patron activo si se uso glob
+        if (!pattern.empty()) {
+            std::cout << ansi::c(ansi::DIM)
+                      << "Patron: " << ansi::c(ansi::RESET)
+                      << ansi::c(ansi::BOLD) << pattern << ansi::c(ansi::RESET)
+                      << ansi::c(ansi::DIM) << "  en: " << target.string()
+                      << ansi::c(ansi::RESET) << "\n";
+        }
+
+        if (entries.empty()) {
+            std::cout << ansi::c(ansi::DIM) << "(sin resultados)\n" << ansi::c(ansi::RESET);
+            return;
+        }
+
         // formatea tamano en unidades legibles
         auto fmt_size = [](uintmax_t sz) -> std::string {
-            if (sz < 1024)            return std::to_string(sz) + " B";
-            if (sz < 1024 * 1024)     return std::to_string(sz / 1024) + " KB";
-            return std::to_string(sz / (1024 * 1024)) + " MB";
+            if (sz < 1024)        return std::to_string(sz) + " B";
+            if (sz < 1024*1024)   return std::to_string(sz / 1024) + " KB";
+            return std::to_string(sz / (1024*1024)) + " MB";
         };
 
-        // cabecera
         std::cout << ansi::c(ansi::BOLD)
-                  << std::left << std::setw(4) << "T"
+                  << std::left << std::setw(4)  << "T"
                   << std::setw(12) << "Tamano"
                   << std::setw(20) << "Modificado"
                   << "Nombre" << ansi::c(ansi::RESET) << "\n"
@@ -387,6 +470,14 @@ namespace cli {
                       << std::setw(12) << size_s
                       << std::setw(20) << e.mtime_str
                       << name_s << ansi::c(ansi::RESET) << "\n";
+        }
+
+        // pie con conteo cuando se usa patron
+        if (!pattern.empty()) {
+            std::cout << ansi::c(ansi::DIM)
+                      << std::string(60, '-') << "\n"
+                      << entries.size() << " resultado(s)\n"
+                      << ansi::c(ansi::RESET);
         }
     }
 
@@ -407,6 +498,149 @@ namespace cli {
             std::cout << "[build] OK -> " << out << ".velb\n";
         else
             std::cout << "[build] error (codigo " << rc << ")\n";
+    }
+
+    /**
+     * @brief Preprocesa un archivo .vel con vpp y muestra o guarda el resultado.
+     *
+     * Expande macros, directivas #define/#if/#foreach/#import, etc. sin compilar.
+     * Util para depurar macros y verificar la salida del preprocesador.
+     *
+     * Formato: <archivo.vel> [-o <salida>] [-D NAME[=val]] [-I ruta] [-M ruta]
+     *
+     * @param args Argumentos del comando.
+     */
+    static void command_vpp(const std::string &args) {
+#ifndef VESTA_HAS_PREPROCESSOR
+        vesta::scout() << "[vpp] El preprocesador no esta disponible en esta build "
+                          "(recompilar con VESTA_BUILD_PREPROCESSOR=ON)\n";
+        (void)args;
+#else
+        // --- parsear argumentos ---
+        auto words = split_words(args);
+        if (words.empty()) {
+            vesta::scout() << "Uso: vpp <archivo.vel> [-o <salida>] "
+                              "[-D NAME[=val]] [-I ruta] [-M ruta]\n";
+            return;
+        }
+
+        std::string              src_file;
+        std::string              out_file;   // vacio = stdout del REPL
+        std::vector<std::string> defines;
+        std::vector<std::string> inc_paths;
+        std::vector<std::string> imp_paths;
+
+        for (size_t i = 0; i < words.size(); ++i) {
+            const auto &w = words[i];
+            if (w == "-o" && i + 1 < words.size()) {
+                out_file = words[++i];
+            } else if (w.size() > 2 && w.substr(0, 2) == "-D") {
+                defines.push_back(w.substr(2));
+            } else if (w == "-D" && i + 1 < words.size()) {
+                defines.push_back(words[++i]);
+            } else if (w.size() > 2 && w.substr(0, 2) == "-I") {
+                inc_paths.push_back(w.substr(2));
+            } else if (w == "-I" && i + 1 < words.size()) {
+                inc_paths.push_back(words[++i]);
+            } else if (w.size() > 2 && w.substr(0, 2) == "-M") {
+                imp_paths.push_back(w.substr(2));
+            } else if (w == "-M" && i + 1 < words.size()) {
+                imp_paths.push_back(words[++i]);
+            } else if (src_file.empty()) {
+                src_file = w;
+            }
+        }
+
+        // --- leer el archivo fuente ---
+        std::ifstream ifs(src_file, std::ios::binary);
+        if (!ifs) {
+            vesta::scout() << "[vpp] No se puede abrir: " << src_file << "\n";
+            return;
+        }
+        std::string source((std::istreambuf_iterator<char>(ifs)),
+                            std::istreambuf_iterator<char>());
+
+        // --- configurar el preprocesador ---
+        bool had_error = false;
+        vpp::Preprocessor pp([&had_error](const vpp::Diagnostic &d) {
+            vesta::scout() << d.format() << "\n";
+            if (d.level >= vpp::DiagLevel::ERR) had_error = true;
+        });
+
+        // directorio del archivo fuente para #include relativos
+        std::string src_dir =
+            std::filesystem::path(src_file).parent_path().string();
+        if (src_dir.empty()) src_dir = ".";
+        pp.options().include_paths.push_back(src_dir);
+
+        // rutas de stdlib (igual que en run_worker)
+        std::string exe_dir =
+            std::filesystem::path(fs::get_executable_path()).parent_path().string();
+        pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
+        pp.options().import_paths.push_back(exe_dir + "/include_lib");
+        pp.options().import_paths.push_back(src_dir);
+
+        // rutas adicionales del usuario
+        for (auto &p : inc_paths) pp.options().include_paths.push_back(p);
+        for (auto &p : imp_paths) pp.options().import_paths.push_back(p);
+        for (auto &d : defines)   pp.options().predefines.push_back(d);
+
+        // macros de plataforma
+#ifdef _WIN32
+        pp.options().predefines.push_back("__VPP_WINDOWS__");
+#elif defined(__linux__)
+        pp.options().predefines.push_back("__VPP_LINUX__");
+#elif defined(__APPLE__)
+        pp.options().predefines.push_back("__VPP_MACOS__");
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+        pp.options().predefines.push_back("__VPP_X86_64__");
+#elif defined(__i386__) || defined(_M_IX86)
+        pp.options().predefines.push_back("__VPP_X86_32__");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        pp.options().predefines.push_back("__VPP_AARCH64__");
+#endif
+
+        // --- ejecutar el preprocesador ---
+        std::string result = pp.process(source, src_file);
+
+        if (had_error) {
+            vesta::scout() << "[vpp] preprocesado fallido con "
+                           << pp.diagnostics().error_count() << " error(es)\n";
+            return;
+        }
+
+        if (pp.diagnostics().warning_count() > 0)
+            vesta::scout() << "[vpp] " << pp.diagnostics().warning_count()
+                           << " advertencia(s)\n";
+
+        // --- escribir resultado ---
+        if (out_file.empty()) {
+            // sin -o: imprimir directamente en el REPL con numeracion de lineas
+            std::istringstream ss(result);
+            std::string        line;
+            size_t             n = 1;
+            vesta::scout() << ansi::c(ansi::DIM)
+                           << "--- " << src_file << " (preprocesado) ---\n"
+                           << ansi::c(ansi::RESET);
+            while (std::getline(ss, line)) {
+                vesta::scout() << ansi::c(ansi::DIM)
+                               << std::setw(4) << n++ << "  "
+                               << ansi::c(ansi::RESET)
+                               << line << "\n";
+            }
+            vesta::scout() << ansi::c(ansi::DIM) << "---\n" << ansi::c(ansi::RESET);
+        } else {
+            std::ofstream ofs(out_file, std::ios::binary);
+            if (!ofs) {
+                vesta::scout() << "[vpp] No se puede crear: " << out_file << "\n";
+                return;
+            }
+            ofs << result;
+            vesta::scout() << "[vpp] OK -> " << out_file
+                           << "  (" << result.size() << " bytes)\n";
+        }
+#endif
     }
 
     /**
@@ -1027,11 +1261,12 @@ namespace cli {
      */
     static const CmdEntry cmd_table[] = {
         // nombre      uso                                         descripcion breve                                handler
-        { "ls",     "ls [ruta]",                                 "Listar contenido de directorio",                command_ls     },
+        { "ls",     "ls [ruta|patron]  (e.g. *.vel, src/*.velb)", "Listar directorio con soporte de patrones glob", command_ls     },
         { "vms",    "vms",                                       "Listar managers activos con ID y estado",       command_vms    },
         { "kill",   "kill <id>",                                 "Detener y eliminar manager por ID",             command_kill   },
-        { "build",  "build <archivo.vel> [-o <salida>]",         "Compilar .vel a .velb",                         command_build  },
-        { "disasm", "disasm <archivo.velb>",                     "Desensamblar bytecode VestaVM",                 command_disasm },
+        { "build",  "build <archivo.vel> [-o <salida>]",                       "Compilar .vel a .velb",                                     command_build  },
+        { "vpp",    "vpp <archivo.vel> [-o <salida>] [-D N] [-I r] [-M r]", "Preprocesar .vel y mostrar/guardar resultado expandido",     command_vpp    },
+        { "disasm", "disasm <archivo.velb>",                                 "Desensamblar bytecode VestaVM",                             command_disasm },
         { "exec",   "exec <archivo.velb> [--schedulers N]",      "Ejecutar .velb en background",                  command_exec   },
         { "run",    "run <nombre> <ruta.velb> [--schedulers N] [--stats]", "Ejecutar .velb con manager nombrado (--stats para estadisticas)", command_run },
         { "pwd",    "pwd",                                       "Mostrar directorio de trabajo actual",          command_pwd    },
