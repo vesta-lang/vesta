@@ -29,6 +29,8 @@
 #ifndef PARSER_TO_BYTECODE_H
 #define PARSER_TO_BYTECODE_H
 
+#include <filesystem>
+
 #include "emmit_decl.h"
 #include "annotations.h"
 
@@ -602,43 +604,92 @@ namespace Assembly::Bytecode {
      * @param imported Conjunto de rutas de archivo ya procesadas; se actualiza durante
      *                 la recursion para evitar importaciones duplicadas.
      */
-    static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
-                                std::unordered_set<std::string> &           imported) {
+    /**
+     * @brief Expande recursivamente los nodos ImportNode de un AST.
+     *
+     * Orden de busqueda para cada import relativo:
+     *  1. @p base_dir : directorio del archivo fuente que contiene el import.
+     *  2. @p search_paths : lista adicional de directorios (CWD, dir del ejecutable, etc.).
+     *  3. La ruta tal cual (si es absoluta o el CWD ya la contiene).
+     *
+     * @param ast          AST a expandir; se modifica en el lugar.
+     * @param imported     Rutas ya procesadas (evita reimportaciones y ciclos).
+     * @param base_dir     Directorio del archivo que contiene este AST.
+     * @param search_paths Directorios adicionales donde buscar los imports.
+     */
+    static void resolve_imports(
+        std::vector<std::unique_ptr<vm::ASTNode> > &ast,
+        std::unordered_set<std::string> &           imported,
+        const std::string &                         base_dir    = "",
+        const std::vector<std::string> &            search_paths = {}
+    ) {
         std::vector<std::unique_ptr<vm::ASTNode> > result;
 
         for (auto &node: ast) {
             if (auto imp = dynamic_cast<vm::ImportNode *>(node.get())) {
-                std::string file = imp->filename;
+                const std::string &raw = imp->filename;
+
+                // resolver la ruta del archivo importado con orden de busqueda:
+                std::string resolved;
+                auto try_path = [&](const std::string &dir) {
+                    if (!resolved.empty()) return;
+                    std::filesystem::path p =
+                        (std::filesystem::path(dir) / raw).lexically_normal();
+                    if (std::filesystem::exists(p)) resolved = p.string();
+                };
+
+                // 1. directorio del archivo fuente actual
+                if (!base_dir.empty()) try_path(base_dir);
+                // 2. rutas de busqueda adicionales (CWD, dir del ejecutable, etc.)
+                for (auto &sp : search_paths) try_path(sp);
+                // 3. la ruta tal cual (absoluta o relativa al CWD vigente)
+                if (resolved.empty() && std::filesystem::exists(raw)) resolved = raw;
+
+                if (resolved.empty()) {
+                    std::string searched = base_dir.empty() ? "." : base_dir;
+                    for (auto &sp : search_paths) searched += ", " + sp;
+                    throw std::runtime_error(
+                        "No se pudo encontrar el archivo importado: '" + raw +
+                        "'\n  Directorios buscados: " + searched
+                    );
+                }
 
                 /* evitar importaciones multiples del mismo archivo */
-                if (imported.find(file) != imported.end())
+                if (imported.find(resolved) != imported.end())
                     continue;
-
-                imported.insert(file);
+                imported.insert(resolved);
 
                 /* leer archivo fuente importado */
-                std::ifstream f(file);
-                std::string   code((std::istreambuf_iterator<char>(f)),
-                                   std::istreambuf_iterator<char>());
+                std::ifstream f(resolved);
+                if (!f.is_open()) {
+                    throw std::runtime_error(
+                        "No se pudo abrir el archivo importado: " + resolved);
+                }
+                std::string code((std::istreambuf_iterator<char>(f)),
+                                  std::istreambuf_iterator<char>());
 
                 /* lex + parse del codigo importado */
                 vm::Lexer  lx(code);
                 vm::Parser px(lx);
                 auto       imported_ast = px.parse();
 
-                /* expandir imports anidados recursivamente */
-                resolve_imports(imported_ast, imported);
+                /* directorio del archivo importado como base para sus propios imports */
+                std::string imported_base =
+                    std::filesystem::path(resolved).parent_path().string();
+
+                /* expandir imports anidados con la misma lista de search_paths */
+                resolve_imports(imported_ast, imported, imported_base, search_paths);
 
                 /* insertar nodos del archivo importado en el resultado */
                 for (auto &n: imported_ast)
                     result.push_back(std::move(n));
             } else {
-                /* nodo normal: pasar al AST final sin modificacion */
+                /* nodo normal: copiar directamente al resultado */
                 result.push_back(std::move(node));
             }
         }
 
-        /* reemplazar el AST original por el resultado fusionado */
+        /* sustituir el AST original por el resultado expandido */
         ast = std::move(result);
     }
 
