@@ -1363,14 +1363,23 @@ void emit_instr_abs64(
             throw std::runtime_error("emit_instr_abs64: invalid number: " + num->value);
         code_final.emit64(val_opt.value()); // emitir el valor de 64 bits directamente
     } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
-        // label reference: register an Absolute64 relocation and emit a placeholder
+        // referencia de etiqueta via @Absolute("nombre"): relocalizacion Absolute64
         Relocation rel;
         rel.symbol  = lbl->value;
         rel.section = assembly_ctx->current_section->name;
-        rel.offset  = code_final.offset;   // posicion del placeholder de 8 bytes
-        rel.type    = Type::Absolute64;    // linker will write the absolute 64-bit address
+        rel.offset  = code_final.offset;
+        rel.type    = Type::Absolute64;
         assembly_ctx->ctx.add_relocation(rel);
-        code_final.emit64(0); // placeholder; overwritten by linker
+        code_final.emit64(0);
+    } else if (auto *lbl = dynamic_cast<vm::LabelOperand *>(op)) {
+        // referencia de etiqueta directa: el linker registra simbolos como "seccion.etiqueta"
+        Relocation rel;
+        rel.symbol  = assembly_ctx->current_section->name + "." + lbl->name;
+        rel.section = assembly_ctx->current_section->name;
+        rel.offset  = code_final.offset;
+        rel.type    = Type::Absolute64;
+        assembly_ctx->ctx.add_relocation(rel);
+        code_final.emit64(0);
     } else {
         throw std::runtime_error(
             "emit_instr_abs64: '" + instruction_parser->opcode +
@@ -1638,6 +1647,235 @@ void emit_instr_movc(
     // ctrl: 0b00 | 0 | reg1(4)
     code_final.emit8(r1c & 0xF);                               // emitir byte de control (registro destino)
     code_final.emit8((uint8_t)((flag_code << 5) | (r2c & 0x1F))); // emitir byte4 (flag + source reg)
+}
+
+// =============================================================================
+// Emision de instrucciones del banco ZMM (flotante escalar y vectorial)
+// =============================================================================
+
+/**
+ * @brief Emite una instruccion ZMM registro-registro (fadd, fsub, fmul, etc.).
+ *
+ * Byte ctrl: mode(2) | is_f32(1) | 00000
+ * Byte regs: idx2(4) | idx1(4)
+ *
+ * @param instruction_parser Instruccion del AST.
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Descriptor de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_freg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    (void)assembly_ctx;
+    (void)now_instr;
+
+    auto *r1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *r2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (!r1 || !r2)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": se requieren dos operandos de registro ZMM");
+
+    const uint8_t idx1 = zmm_reg_index(r1->name); // indice ZMM destino (0-15)
+    const uint8_t idx2 = zmm_reg_index(r2->name); // indice ZMM fuente  (0-15)
+    const uint8_t mode = zmm_reg_mode(r1->name);  // ancho deducido del prefijo del destino
+
+    // is_f32 = 1 si el mnemonico tiene sufijo ".ps" (packed single precision float)
+    const bool is_f32 = (instruction_parser->opcode.find(".ps") != std::string::npos);
+
+    const uint8_t ctrl = static_cast<uint8_t>((mode << 6) | (is_f32 ? (1 << 5) : 0)); // byte de control
+    const uint8_t regs = static_cast<uint8_t>((idx2 << 4) | idx1);                    // byte de registros
+
+    code_final.emit8(ctrl); // emitir byte de control
+    code_final.emit8(regs); // emitir byte de registros
+}
+
+/**
+ * @brief Emite instrucciones ZMM unarias (fsqrt, fabs, fneg) con un solo operando.
+ *
+ * El registro destino actua tambien como fuente: el mismo indice ZMM ocupa
+ * tanto el nibble alto como el nibble bajo del byte de registros.
+ * Esto es equivalente a llamar emit_instr_freg con r1 == r2.
+ *
+ * @param instruction_parser Instruccion del AST (un operando ZMM).
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Descriptor de la instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_freg_unary(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    (void)assembly_ctx;
+    (void)now_instr;
+
+    auto *r1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+
+    if (!r1)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": se requiere un operando de registro ZMM");
+
+    const uint8_t idx   = zmm_reg_index(r1->name); // indice ZMM (0-15)
+    const uint8_t mode  = zmm_reg_mode(r1->name);  // ancho del registro
+    const bool    is_f32 = (instruction_parser->opcode.find(".ps") != std::string::npos);
+
+    const uint8_t ctrl = static_cast<uint8_t>((mode << 6) | (is_f32 ? (1 << 5) : 0)); // byte ctrl
+    const uint8_t regs = static_cast<uint8_t>((idx  << 4) | idx);                      // dst=src=mismo reg
+
+    code_final.emit8(ctrl); // emitir byte de control
+    code_final.emit8(regs); // emitir byte de registros (mismo indice en ambos nibbles)
+}
+
+/**
+ * @brief Emite la instruccion FMOWI (carga inmediato IEEE 754 de 64 bits en ZMM).
+ *
+ * Formato del payload (9 bytes):
+ *   Byte  0: ctrl = mode(2) | is_f32(1) | zmm_idx(4)
+ *   Bytes 1-8: bits IEEE 754 del inmediato de 64 bits
+ *
+ * @param instruction_parser Instruccion del AST.
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Descriptor de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_fmowi(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    (void)assembly_ctx;
+    (void)now_instr;
+
+    auto *r1  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *imm = dynamic_cast<vm::NumberOperand   *>(instruction_parser->operands[1].get());
+
+    if (!r1 || !imm)
+        throw std::runtime_error("fmowi: se requiere un registro ZMM y un inmediato de 64 bits");
+
+    const uint8_t idx  = zmm_reg_index(r1->name); // indice ZMM destino (0-15)
+    const uint8_t mode = zmm_reg_mode(r1->name);  // ancho del registro
+    const bool is_f32  = (instruction_parser->opcode.find(".ps") != std::string::npos);
+
+    // parsear el valor inmediato (bits IEEE 754 codificados como entero)
+    auto bits_opt = vm::parse_number_safe(imm->value);
+    if (!bits_opt)
+        throw std::runtime_error("fmowi: inmediato invalido: " + imm->value);
+
+    // empaquetar mode(2), is_f32(1) y zmm_idx(4) en un solo byte de control
+    const uint8_t  ctrl = static_cast<uint8_t>((mode << 6) | (is_f32 ? (1 << 5) : 0) | (idx & 0x0F));
+    const uint64_t bits = *bits_opt; // bits IEEE 754 del inmediato
+
+    code_final.emit8(ctrl);  // byte de control con registro empaquetado
+    code_final.emit64(bits); // inmediato de 64 bits (bits IEEE 754)
+}
+
+/**
+ * @brief Emite las instrucciones FLOAD y FSTORE (acceso a memoria VM).
+ *
+ * Byte ctrl: mode(2) | 000000
+ * Byte regs: gp_idx(4) | zmm_idx(4)
+ *
+ * @param instruction_parser Instruccion del AST.
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Descriptor de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_fmem(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    (void)assembly_ctx;
+    (void)now_instr;
+
+    auto *r1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *r2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (!r1 || !r2)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": se requieren dos operandos de registro");
+
+    // fload:  r1=zmm_dst, r2=gp_addr
+    // fstore: r1=gp_addr, r2=zmm_src
+    const bool is_fstore = (instruction_parser->opcode == "fstore");
+    uint8_t zmm_idx, gp_idx, mode;
+
+    if (is_fstore) {
+        gp_idx  = encode_reg_general(r1->name.c_str()); // GP con la direccion VM
+        zmm_idx = zmm_reg_index(r2->name);              // ZMM fuente
+        mode    = zmm_reg_mode(r2->name);               // ancho del registro ZMM fuente
+    } else {
+        zmm_idx = zmm_reg_index(r1->name);              // ZMM destino
+        gp_idx  = encode_reg_general(r2->name.c_str()); // GP con la direccion VM
+        mode    = zmm_reg_mode(r1->name);               // ancho del registro ZMM destino
+    }
+
+    const uint8_t ctrl = static_cast<uint8_t>(mode << 6);               // byte de control: solo mode
+    const uint8_t regs = static_cast<uint8_t>((gp_idx << 4) | zmm_idx); // GP alto, ZMM bajo
+
+    code_final.emit8(ctrl); // emitir byte de control
+    code_final.emit8(regs); // emitir byte de registros
+}
+
+/**
+ * @brief Emite la instruccion FCVT (conversion int<->float).
+ *
+ * Byte ctrl: mode(2) | is_f32(1) | direction(1) | 0000
+ * Byte regs: gp_idx(4) | zmm_idx(4)
+ *
+ * @param instruction_parser Instruccion del AST.
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Descriptor de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_fcvt(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    (void)assembly_ctx;
+    (void)now_instr;
+
+    auto *r1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *r2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (!r1 || !r2)
+        throw std::runtime_error("fcvt: se requieren dos operandos de registro");
+
+    const bool is_f32 = (instruction_parser->opcode.find(".ps") != std::string::npos);
+
+    uint8_t gp_idx, zmm_idx, mode, direction;
+
+    if (is_zmm_register(r1->name)) {
+        // ZMM(r1) -> GP(r2) : float a int (direction=1)
+        zmm_idx   = zmm_reg_index(r1->name);
+        gp_idx    = encode_reg_general(r2->name.c_str());
+        mode      = zmm_reg_mode(r1->name);
+        direction = 1;
+    } else {
+        // GP(r1) -> ZMM(r2) : int a float (direction=0)
+        gp_idx    = encode_reg_general(r1->name.c_str());
+        zmm_idx   = zmm_reg_index(r2->name);
+        mode      = zmm_reg_mode(r2->name);
+        direction = 0;
+    }
+
+    // ctrl: mode(7:6) | is_f32(5) | direction(4) | 0000
+    const uint8_t ctrl = static_cast<uint8_t>(
+        (mode << 6) | (is_f32 ? (1 << 5) : 0) | (direction << 4));
+    const uint8_t regs = static_cast<uint8_t>((gp_idx << 4) | zmm_idx); // GP alto, ZMM bajo
+
+    code_final.emit8(ctrl); // emitir byte de control
+    code_final.emit8(regs); // emitir byte de registros
 }
 
 } // namespace Assembly::Bytecode

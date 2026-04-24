@@ -816,10 +816,23 @@ namespace runtime {
 
         InstrFormat &metadata = table[index]; // obtener metadatos de la instruccion
 
-        // validar que la instruccion existe y tiene ejecutor/decodificador (solo en modo debug)
+        // instruccion sin implementar o invalida: guardar metadata minima y dejar que
+        // execute_instruction la trate como HLT (evita abortar en procesos spawn con
+        // memoria vacia que leen ceros al inicio de su espacio de direcciones)
+        if (metadata.exec == nullptr || metadata.decode == nullptr ||
+            metadata.mode >= Assembly::Bytecode::AddressingMode::COUNT) {
+            decode_tmp.metadata = &metadata;   // enlazar metadata (exec/decode pueden ser null)
+            process->icache[idx]  = decode_tmp; // cachear para que decoded_ptr sea valido
+            process->decoded_ptr  = &process->icache[idx];
+            if (measuring) process->scheduler.time_decode += now_ns() - t1;
+            PROFILE_END("DECODER")
+            vm_hook(process, DebugStage::DecodeEnd);
+            return; // execute_instruction detectara exec==nullptr y haltara el proceso
+        }
+
+        // validar que el modo de direccionamiento es reconocido (solo en modo debug)
         VM_ASSERT(
-            metadata.mode < Assembly::Bytecode::AddressingMode::COUNT &&
-            metadata.exec != nullptr && metadata.decode != nullptr,
+            metadata.mode < Assembly::Bytecode::AddressingMode::COUNT,
 
             std::string("VM::decode_instruction() Instruccion invalida en RIP[") +
             vesta::hex64(process->registers.rip.raw()) +
@@ -870,7 +883,12 @@ namespace runtime {
 
         const uint64_t t1 = measuring ? now_ns() : 0; // marca de tiempo inicial
 
-        // ejecutar la instruccion descodificada; el campo exec ya fue validado en decode
+        // ejecutar la instruccion descodificada; si exec es null, tratar como HLT (instruccion invalida)
+        if (!process->decoded_ptr->metadata->exec) {
+            process->scheduler.on_event(EVT_HALT); // opcode sin implementacion: detener el proceso
+            vm_hook(process, DebugStage::ExecuteEnd);
+            return EVT_HALT;
+        }
         process->decoded_ptr->metadata->exec(process, *process->decoded_ptr);
 
         /**

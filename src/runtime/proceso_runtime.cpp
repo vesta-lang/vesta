@@ -124,9 +124,10 @@ namespace runtime {
     /**
      * @brief Genera un resumen de diagnostico del proceso en texto.
      *
-     * Incluye PID, registros generales R00-R15, registros cursor CUR0-CUR3,
-     * RIP/RSP/RBP, banderas, reducciones, TSC, estado del icache y bytes
-     * de memoria asignados.  Util para depuracion e informes de crash.
+     * Incluye PID, registros generales R00-R15, registros ZMM f0..f15 con sus
+     * bits IEEE 754 y valor double, registros cursor CUR0-CUR3, RIP/RSP/RBP,
+     * banderas, reducciones, TSC, estado del icache y bytes de memoria asignados.
+     * Util para depuracion e informes de crash.
      *
      * @return Cadena con el resumen formateado del proceso.
      */
@@ -143,6 +144,18 @@ namespace runtime {
             ss << " R" << std::setw(2) << std::setfill('0') << i
                << "=" << vesta::hex64(registers.regs[i].qword());
             if (i % 2 == 1) ss << "\n"; // salto de linea cada dos registros
+        }
+        ss << "\n";
+
+        // registros ZMM f0..f15: bits crudos y valor double (dos por linea)
+        for (int i = 0; i < 16; ++i) {
+            double  dv   = registers.zmm[i].read_f64();   // valor como double IEEE 754
+            uint64_t raw = 0;
+            __builtin_memcpy(&raw, registers.zmm[i].data, 8); // bits crudos
+            ss << " F" << std::setw(2) << std::setfill('0') << i
+               << "=" << vesta::hex64(raw)
+               << " (" << std::setfill(' ') << dv << ")";
+            if (i % 2 == 1) ss << "\n";
         }
         ss << "\n";
 

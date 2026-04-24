@@ -1,0 +1,64 @@
+/*
+ * ejemplo_float_conversion.vel
+ *
+ * Demuestra fcvt: conversion entre registros enteros (GP) y flotantes (ZMM).
+ *
+ * Dos modos controlados por el bit 's' del byte ctrl:
+ *   fcvt   fDst, rSrc   (s=0)  GP entero -> ZMM double   (int64 a f64)
+ *   fcvt.ps rDst, fSrc  (s=1)  ZMM double -> GP entero   (f64 a int64 truncado)
+ *
+ * Resultado esperado al llegar a hlt:
+ *   f0 == 42.0   (fcvt f0, r1  con r1=42)
+ *   f1 == -7.0   (fcvt f1, r2  con r2=-7)
+ *   r3 == 3      (fcvt.ps r3, f2 con f2=3.9 -> truncado a 3)
+ *   r4 == -2     (fcvt.ps r4, f3 con f3=-2.7 -> truncado a -2)
+ *
+ * Nota: la conversion f64->int64 trunca hacia cero (igual que C (int64_t)x).
+ *
+ * Compilar y ejecutar:
+ *   vesta --build ejemplo_float_conversion.vel -o ejemplo_float_conversion
+ *   vesta --run   ejemplo_float_conversion.velb --stats
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+code:
+
+// -----------------------------------------------------------------------
+// fcvt: entero GP -> double ZMM
+// -----------------------------------------------------------------------
+
+    // f0 = (double) 42
+    mov   r1, 42
+    fcvt  f0, r1         // f0 = (f64) r1 = 42.0
+
+    // f1 = (double) (-7)  ; -7 en complemento a dos de 64 bits
+    mov   r2, 0xFFFFFFFFFFFFFFF9
+    fcvt  f1, r2         // f1 = (f64) r2 = -7.0
+
+// -----------------------------------------------------------------------
+// fcvt.ps: double ZMM -> entero GP (truncacion hacia cero)
+// -----------------------------------------------------------------------
+
+    // r3 = (int64_t) 3.9 = 3  (trunca la parte fraccionaria)
+    fmowi f2, 0x400F333333333333   // f2 = 3.9
+    fcvt.ps r3, f2                 // r3 = (i64) f2 = 3
+
+    // r4 = (int64_t)(-2.7) = -2  (trunca hacia cero, no hacia -inf)
+    fmowi f3, 0xC005851EB851EB85   // f3 = -2.7
+    fcvt.ps r4, f3                 // r4 = (i64) f3 = -2
+
+    hlt
+end_code:

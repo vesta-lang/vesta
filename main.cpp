@@ -27,9 +27,13 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "util/sqlite_singleton.h"
+#include "util/fs_utils.h"
 #include "runtime/manager_runtime.h"
 #include "loader/loader.h"
 #include "profiler/timer.h"
+#ifdef VESTA_HAS_PREPROCESSOR
+    #include "preprocessor/preprocessor.h"
+#endif
 
 
 int main(int argc, char *argv[]) {
@@ -57,7 +61,11 @@ int main(int argc, char *argv[]) {
             ("run", "Ejecutar un archivo .velb en la VM", cxxopts::value<std::string>())
             ("build", "Compilar un archivo .vel a .velb", cxxopts::value<std::string>())
             ("schedulers", "Número de schedulers para el comando run", cxxopts::value<size_t>()->default_value("1"))
-            ("stats", "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)");
+            ("stats", "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)")
+#ifdef VESTA_HAS_PREPROCESSOR
+            ("preprocess-only", "Solo preprocesar un .vel y mostrar/guardar el resultado (debug)", cxxopts::value<std::string>())
+#endif
+            ;
 
     auto result = options.parse(argc, argv);
 
@@ -86,6 +94,78 @@ int main(int argc, char *argv[]) {
         for (auto &a: archs.keystone) vesta::scout() << "  " << a << "\n";
         return 0;
     }
+
+#ifdef VESTA_HAS_PREPROCESSOR
+    // Solo preprocesar: expandir macros y directivas sin ensamblar
+    // vm.exe --preprocess-only src/main.vel [-o salida.vel]
+    if (result.count("preprocess-only")) {
+        const std::string& src_path = result["preprocess-only"].as<std::string>();
+
+        // leer el archivo fuente
+        std::ifstream ifs(src_path, std::ios::binary);
+        if (!ifs) {
+            std::cerr << "error: no se puede abrir: " << src_path << "\n";
+            return EXIT_FAILURE;
+        }
+        std::string source((std::istreambuf_iterator<char>(ifs)),
+                            std::istreambuf_iterator<char>());
+
+        // configurar el preprocesador igual que run_worker
+        vpp::Preprocessor pp;
+        std::string source_dir =
+            std::filesystem::path(src_path).parent_path().string();
+        if (source_dir.empty()) source_dir = ".";
+        pp.options().include_paths.push_back(source_dir);
+        std::string exe_dir =
+            std::filesystem::path(fs::get_executable_path()).parent_path().string();
+        pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
+        pp.options().import_paths.push_back(exe_dir + "/include_lib");
+        pp.options().import_paths.push_back(source_dir);
+#ifdef _WIN32
+        pp.options().predefines.push_back("__VPP_WINDOWS__");
+#elif defined(__linux__)
+        pp.options().predefines.push_back("__VPP_LINUX__");
+#elif defined(__APPLE__)
+        pp.options().predefines.push_back("__VPP_MACOS__");
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+        pp.options().predefines.push_back("__VPP_X86_64__");
+#elif defined(__i386__) || defined(_M_IX86)
+        pp.options().predefines.push_back("__VPP_X86_32__");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        pp.options().predefines.push_back("__VPP_AARCH64__");
+#endif
+
+        std::string processed = pp.process(source, src_path);
+
+        // imprimir todos los diagnosticos
+        for (const auto& d : pp.diagnostics().diagnostics()) {
+            std::cerr << d.loc.file << ":" << d.loc.line << ":"
+                      << d.loc.col  << ": "
+                      << (d.level >= vpp::DiagLevel::ERR ? "error: " : "warning: ")
+                      << d.message << "\n";
+        }
+        if (pp.diagnostics().has_errors()) return EXIT_FAILURE;
+
+        // escribir a archivo si se especifico -o, si no a stdout
+        if (!out_prefix.empty() && out_prefix != "out") {
+            // determinar nombre del archivo de salida
+            std::string out_file = out_prefix;
+            if (out_file.find('.') == std::string::npos) out_file += ".vel";
+            std::ofstream ofs(out_file);
+            if (!ofs) {
+                std::cerr << "error: no se puede escribir: " << out_file << "\n";
+                return EXIT_FAILURE;
+            }
+            ofs << processed;
+            vesta::scout() << "[preprocess-only] -> " << out_file << "\n";
+        } else {
+            // sin -o: imprimir a stdout para inspeccion rapida
+            std::cout << processed;
+        }
+        return EXIT_SUCCESS;
+    }
+#endif
 
     // Compilar un archivo como worker
     // vm.exe --worker src/main.vel -o main.velb

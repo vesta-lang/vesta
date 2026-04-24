@@ -109,6 +109,16 @@ target_include_directories(sqlite3 PUBLIC
         libs/SourceCode/sqlite
 )
 
+# Preprocesador vpp (opcional — activado por defecto)
+option(VESTA_BUILD_PREPROCESSOR "Compilar el preprocesador vpp e integrarlo en el ensamblador" ON)
+if(VESTA_BUILD_PREPROCESSOR)
+    # deshabilitar el ejecutable y los tests propios del preprocesador cuando se compila
+    # como submodulo del proyecto principal, para no duplicar binarios
+    set(VPP_BUILD_EXE   OFF CACHE BOOL "" FORCE)
+    set(VPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(preprocessor)
+endif()
+
 # Include directories globales
 set(VM_INCLUDES
         ${CMAKE_SOURCE_DIR}/include
@@ -119,14 +129,19 @@ set(VM_INCLUDES
         libs/SourceCode/keystone/include
         libs/SourceCode/DistanciaLevenshtein
 )
+if(VESTA_BUILD_PREPROCESSOR)
+    list(APPEND VM_INCLUDES ${CMAKE_SOURCE_DIR}/preprocessor/include)
+endif()
 
 # Sources del ejecutable principal
 file(GLOB_RECURSE VM_SOURCES
-        main.cpp
-        src/*.cpp
-        libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
-        libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
+# main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
+# tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
 
 
 set(CAPSTONE_BUILD_STATIC ON CACHE BOOL "" FORCE)
@@ -149,6 +164,19 @@ target_link_libraries(vm
         PRIVATE capstone
         PRIVATE keystone
 )
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(vm PRIVATE vpp_lib)
+    target_compile_definitions(vm PRIVATE VESTA_HAS_PREPROCESSOR=1)
+
+    # copiar include_lib junto al ejecutable para que #import <vesta/...> funcione
+    # sin necesidad de instalar ni configurar rutas manualmente
+    add_custom_command(TARGET vm POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/preprocessor/include_lib"
+            "$<TARGET_FILE_DIR:vm>/include_lib"
+        COMMENT "Copiando stdlib vpp (include_lib) al directorio de salida"
+    )
+endif()
 
 # OpenSSL
 if (WIN32)
@@ -252,6 +280,10 @@ target_link_libraries(vmcore
         PRIVATE capstone
         PRIVATE keystone
 )
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(vmcore PRIVATE vpp_lib)
+    target_compile_definitions(vmcore PRIVATE VESTA_HAS_PREPROCESSOR=1)
+endif()
 
 if (WIN32)
     target_include_directories(vmcore PRIVATE ${OPENSSL_INCLUDE_DIR})

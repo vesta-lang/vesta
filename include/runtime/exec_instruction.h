@@ -695,6 +695,136 @@ namespace runtime {
     /** @brief FIELDATTRVAL: devuelve puntero al valor del atributo del campo. */
     void exec_instr_fieldattrval(ProcessVM *vm, const DecodedInstr &instr);
 
+    // -------------------------------------------------------------------------
+    // Corutinas y fibras  (opcodes extendidos 0xEC-0xEF)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief YIELD: el proceso cede voluntariamente la CPU al scheduler.
+     * @param vm    Proceso virtual que ejecuta YIELD.
+     * @param instr Instruccion descodificada (sin operandos).
+     */
+    void exec_instr_yield(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief RESUME: reactiva un proceso en BLOCKED/WAITING poniendolo en READY.
+     * @param vm    Proceso virtual que ejecuta RESUME.
+     * @param instr reg1 = PID del proceso a reactivar.
+     */
+    void exec_instr_resume(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief SPAWN: crea un nuevo proceso virtual en la direccion del registro.
+     *
+     * El nuevo proceso arranca en PC=reg1; R0 del proceso llamante recibe el PID.
+     *
+     * @param vm    Proceso virtual que ejecuta SPAWN.
+     * @param instr reg1 = direccion de inicio del nuevo proceso.
+     */
+    void exec_instr_spawn(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief SWAPCTX: intercambio de contexto cooperativo entre dos fibras.
+     *
+     * Guarda {PC, SP, BP, R0-R15} en el buffer VM de reg2 y carga desde reg1.
+     * Layout del buffer (152 bytes):
+     *   [0..7]    PC  (8 bytes)
+     *   [8..15]   SP  (8 bytes)
+     *   [16..23]  BP  (8 bytes)
+     *   [24..151] R0..R15 (128 bytes)
+     *
+     * @param vm    Proceso virtual que ejecuta SWAPCTX.
+     * @param instr reg1 = ctx destino, reg2 = ctx origen (VM addresses).
+     */
+    void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Punto flotante escalar y vectorial  (opcodes extendidos 0xF0-0xFC)
+    //
+    // Codificacion del campo mode (2 bits en ctrl byte bits[7:6]):
+    //   0 = escalar f64 (F0-F15, 64 bits)
+    //   1 = XMM packed  (128 bits)
+    //   2 = YMM packed  (256 bits)
+    //   3 = ZMM packed  (512 bits)
+    // Tipo de elemento en _signed_instruct (bit[5]):
+    //   0 = double (f64 por lane)
+    //   1 = float  (f32 por lane)
+    // -------------------------------------------------------------------------
+
+    /** @brief FMOV: copia un registro ZMM a otro respetando el zeroing de aliasing. */
+    void exec_instr_fmov(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FADD: suma flotante (escalar o packed); reg1 += reg2. */
+    void exec_instr_fadd(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FSUB: resta flotante; reg1 -= reg2. */
+    void exec_instr_fsub(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FMUL: multiplicacion flotante; reg1 *= reg2. */
+    void exec_instr_fmul(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FDIV: division flotante; reg1 /= reg2. */
+    void exec_instr_fdiv(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FCMP: comparacion flotante; establece ZF (igual), SF (menor), CF (NaN).
+     * @param vm    Proceso virtual.
+     * @param instr reg1 comparado con reg2 (escalar f64/f32 o primera lane packed).
+     */
+    void exec_instr_fcmp(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FSQRT: raiz cuadrada flotante; reg1 = sqrt(reg2). */
+    void exec_instr_fsqrt(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FABS: valor absoluto flotante; reg1 = |reg2|. */
+    void exec_instr_fabs(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief FNEG: negacion flotante; reg1 = -reg2. */
+    void exec_instr_fneg(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FCVT: conversion entre registro GP y registro ZMM.
+     *
+     * direction == 0: GP(reg1) -> ZMM(reg2)  (int a float/double)
+     * direction == 1: ZMM(reg1) -> GP(reg2)  (float/double a int, truncado)
+     *
+     * @param vm    Proceso virtual.
+     * @param instr reg1 = GP, reg2 = ZMM; direction = sentido de conversion.
+     */
+    void exec_instr_fcvt(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FMOVI: carga un inmediato IEEE 754 en un registro ZMM.
+     * @param vm    Proceso virtual.
+     * @param instr inmmed_data.reg = ZMM destino; inmmed_data.inmmed = bits f64.
+     */
+    void exec_instr_fmovi(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FLOAD: carga datos flotantes desde memoria VM a un registro ZMM.
+     * @param vm    Proceso virtual.
+     * @param instr reg1 = ZMM destino, reg2 = GP con direccion VM; mode = ancho.
+     */
+    void exec_instr_fload(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FSTORE: almacena datos flotantes desde un registro ZMM a memoria VM.
+     * @param vm    Proceso virtual.
+     * @param instr reg1 = GP con direccion VM, reg2 = ZMM fuente; mode = ancho.
+     */
+    void exec_instr_fstore(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Descodifica FMOVI: ctrl_byte con ZMM index empaquetado + imm64.
+     *
+     * Formato (11 bytes): [0x00][0xFA][ctrl][imm64].
+     * ctrl: bits[7:6]=ancho, bit[5]=is_f32, bits[3:0]=zmm_idx.
+     *
+     * @param vm    Proceso virtual.
+     * @param instr Estructura que se rellena con el ZMM index y el inmediato.
+     */
+    void decode_instr_fmowi(ProcessVM *vm, DecodedInstr &instr);
+
 } // namespace runtime
 
 #endif // EXEC_INSTRUCTION_H
