@@ -337,6 +337,29 @@ namespace runtime {
     void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * @brief Descodifica ADDCUR: avance/retroceso del cursor por inmediato con signo.
+     *
+     * Formato: [0x00][0xC3][ctrl][pad][imm_lo][imm_hi] (FIXED_6).
+     *   ctrl bits 5-4 = cur_idx (0-3); bytes 4-5 = imm16 con signo.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_addcur(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
+     * @brief Descodifica VMCOPY y VCOPYH: copia entre VM memory y host memory.
+     *
+     * Formato compartido: [0x00][0xC4|0xC5][byte_A][byte_B] (FIXED_4).
+     *   byte_A bits 5-4 = cur_idx, bits 3-0 = rSrc/rDst.
+     *   byte_B bits 7-4 = rLen.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_vmcopy(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * @brief Descodifica instrucciones SIB (Scale-Index-Base).
      *
      * Formato: [0x00][opcode2][ctrl][regs][index][pad] (FIXED_6).

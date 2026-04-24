@@ -7,6 +7,7 @@
 # CMake build directories
 cmake-build-debug
 cmake-build-release
+cmake-build-*
 build*
 build-windows
 build-linux
@@ -40,6 +41,7 @@ code_carga_pruebas.vel
 *.elf
 *.gch
 *.obj
+*.dll
 
 # historiales de ejecución de comandos
 *history.txt

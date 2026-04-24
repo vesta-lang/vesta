@@ -83,6 +83,12 @@ std::optional<ManageVMSnapshot> ManagerOfManagersAndServer::get_manager_copy(siz
     };
 }
 
+bool ManagerOfManagersAndServer::remove_manager(size_t id) {
+    std::lock_guard lk(mtx);
+    // erase devuelve el numero de elementos eliminados: 1 si existia, 0 si no
+    return managers_map.erase(id) > 0;
+}
+
 bool ManagerOfManagersAndServer::replace_manager(size_t id, std::unique_ptr<runtime::ManageVM> vm) {
     std::lock_guard lk(mtx);
     auto it = managers_map.find(id);

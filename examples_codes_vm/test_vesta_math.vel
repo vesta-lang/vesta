@@ -1,0 +1,982 @@
+/*
+ * test_vesta_math.vel  -  Tests unitarios de vesta_math.dll
+ *
+ * Cada test llama a una funcion de vesta_math con entradas conocidas,
+ * compara el resultado con el valor esperado usando cmpu + jmp.jne,
+ * e imprime "[ OK ] nombre" o "[FAIL] nombre".
+ *
+ * Compilar y ejecutar:
+ *   ./vm --build test_vesta_math.vel -o test_vesta_math
+ *   ./vm --run   test_vesta_math.velb
+ *
+ * Requiere: vesta_io.dll y vesta_math.dll en el directorio de trabajo.
+ *
+ * Registros reservados:
+ *   r12 = contador de tests pasados
+ *   r13 = contador de tests fallidos
+ *   r14 = proc_ptr (resultado de getproc, para llamadas a vesta_io)
+ *   r8  = direccion del nombre del test actual
+ *   r9  = longitud del nombre del test actual
+ *   r10 = valor esperado (para cmpu)
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+@Import {
+    @Method { @Lib("stdlib/native/io/vesta_io")   @Name("vio_print")      }
+    @Method { @Lib("stdlib/native/io/vesta_io")   @Name("vio_println")     }
+    @Method { @Lib("stdlib/native/io/vesta_io")   @Name("vio_print_uint")  }
+    @Method { @Lib("stdlib/native/io/vesta_io")   @Name("vio_print_float") }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_abs")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_min")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_max")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_clamp")     }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_fabs")      }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_sqrt")      }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_pow")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_floor")     }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_ceil")      }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_round")     }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_fmin")      }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_fmax")      }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_sin")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_cos")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_tan")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_log")       }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_log2")      }
+    @Method { @Lib("stdlib/native/math/vesta_math") @Name("vmath_log10")     }
+}
+
+code:
+
+    getproc r14
+    mov     r12, 0
+    mov     r13, 0
+
+    // ===== cabecera =====
+    mov   r1, r14
+    mov   r2, @Absolute("all.s_hdr")
+    mov   r3, 29
+    mov   r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+// ==========================================================
+// TEST 01: vmath_abs(-5) = 5
+// ==========================================================
+    mov  r8, @Absolute("all.t01")
+    mov  r9, 9
+    mov  r1, 0xFFFFFFFFFFFFFFFB       // -5 como uint64 (complemento a dos)
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_abs")
+    mov  r10, 5
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t01_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t01_end")
+t01_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t01_end:
+
+// ==========================================================
+// TEST 02: vmath_abs(5) = 5
+// ==========================================================
+    mov  r8, @Absolute("all.t02")
+    mov  r9, 8
+    mov  r1, 5
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_abs")
+    mov  r10, 5
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t02_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t02_end")
+t02_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t02_end:
+
+// ==========================================================
+// TEST 03: vmath_min(3, 7) = 3
+// ==========================================================
+    mov  r8, @Absolute("all.t03")
+    mov  r9, 10
+    mov  r1, 3
+    mov  r2, 7
+    mov  r15, 2
+    calln @Method("stdlib/native/math/vesta_math:vmath_min")
+    mov  r10, 3
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t03_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t03_end")
+t03_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t03_end:
+
+// ==========================================================
+// TEST 04: vmath_max(3, 7) = 7
+// ==========================================================
+    mov  r8, @Absolute("all.t04")
+    mov  r9, 10
+    mov  r1, 3
+    mov  r2, 7
+    mov  r15, 2
+    calln @Method("stdlib/native/math/vesta_math:vmath_max")
+    mov  r10, 7
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t04_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t04_end")
+t04_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t04_end:
+
+// ==========================================================
+// TEST 05: vmath_clamp(5, 1, 10) = 5  (dentro del rango)
+// ==========================================================
+    mov  r8, @Absolute("all.t05")
+    mov  r9, 16
+    mov  r1, 5
+    mov  r2, 1
+    mov  r3, 10
+    mov  r15, 3
+    calln @Method("stdlib/native/math/vesta_math:vmath_clamp")
+    mov  r10, 5
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t05_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t05_end")
+t05_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t05_end:
+
+// ==========================================================
+// TEST 06: vmath_clamp(0, 1, 10) = 1  (por debajo del minimo)
+// ==========================================================
+    mov  r8, @Absolute("all.t06")
+    mov  r9, 16
+    mov  r1, 0
+    mov  r2, 1
+    mov  r3, 10
+    mov  r15, 3
+    calln @Method("stdlib/native/math/vesta_math:vmath_clamp")
+    mov  r10, 1
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t06_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t06_end")
+t06_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t06_end:
+
+// ==========================================================
+// TEST 07: vmath_clamp(15, 1, 10) = 10  (por encima del maximo)
+// ==========================================================
+    mov  r8, @Absolute("all.t07")
+    mov  r9, 17
+    mov  r1, 15
+    mov  r2, 1
+    mov  r3, 10
+    mov  r15, 3
+    calln @Method("stdlib/native/math/vesta_math:vmath_clamp")
+    mov  r10, 10
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t07_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t07_end")
+t07_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t07_end:
+
+// ==========================================================
+// TEST 08: vmath_fabs(-5.0) = 5.0
+//   -5.0 bits = 0xC014000000000000
+//    5.0 bits = 0x4014000000000000  (mismo salvo el bit de signo)
+// ==========================================================
+    mov  r8, @Absolute("all.t08")
+    mov  r9, 14
+    mov  r1, 0xC014000000000000       // bits IEEE 754 de -5.0
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_fabs")
+    mov  r10, 0x4014000000000000      // bits IEEE 754 de 5.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t08_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t08_end")
+t08_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t08_end:
+
+// ==========================================================
+// TEST 09: vmath_sqrt(4.0) = 2.0
+//   4.0 bits = 0x4010000000000000
+//   2.0 bits = 0x4000000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t09")
+    mov  r9, 13
+    mov  r1, 0x4010000000000000       // bits IEEE 754 de 4.0
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_sqrt")
+    mov  r10, 0x4000000000000000      // bits IEEE 754 de 2.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t09_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t09_end")
+t09_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t09_end:
+
+// ==========================================================
+// TEST 10: vmath_pow(2.0, 10.0) = 1024.0
+//   2.0   bits = 0x4000000000000000
+//   10.0  bits = 0x4024000000000000
+//   1024.0 bits = 0x4090000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t10")
+    mov  r9, 18
+    mov  r1, 0x4000000000000000       // bits IEEE 754 de 2.0
+    mov  r2, 0x4024000000000000       // bits IEEE 754 de 10.0
+    mov  r15, 2
+    calln @Method("stdlib/native/math/vesta_math:vmath_pow")
+    mov  r10, 0x4090000000000000      // bits IEEE 754 de 1024.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t10_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t10_end")
+t10_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t10_end:
+
+// ==========================================================
+// TEST 11: vmath_floor(3.5) = 3.0
+//   3.5 bits = 0x400C000000000000
+//   3.0 bits = 0x4008000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t11")
+    mov  r9, 14
+    mov  r1, 0x400C000000000000       // bits IEEE 754 de 3.5
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_floor")
+    mov  r10, 0x4008000000000000      // bits IEEE 754 de 3.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t11_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t11_end")
+t11_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t11_end:
+
+// ==========================================================
+// TEST 12: vmath_ceil(3.5) = 4.0
+//   3.5 bits = 0x400C000000000000
+//   4.0 bits = 0x4010000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t12")
+    mov  r9, 13
+    mov  r1, 0x400C000000000000       // bits IEEE 754 de 3.5
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_ceil")
+    mov  r10, 0x4010000000000000      // bits IEEE 754 de 4.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t12_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t12_end")
+t12_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t12_end:
+
+// ==========================================================
+// TEST 13: vmath_round(3.5) = 4.0
+//   3.5 bits = 0x400C000000000000
+//   4.0 bits = 0x4010000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t13")
+    mov  r9, 14
+    mov  r1, 0x400C000000000000       // bits IEEE 754 de 3.5
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_round")
+    mov  r10, 0x4010000000000000      // bits IEEE 754 de 4.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t13_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t13_end")
+t13_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t13_end:
+
+// ==========================================================
+// TEST 14: vmath_fmin(2.0, 3.0) = 2.0
+//   2.0 bits = 0x4000000000000000
+//   3.0 bits = 0x4008000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t14")
+    mov  r9, 13
+    mov  r1, 0x4000000000000000       // bits IEEE 754 de 2.0
+    mov  r2, 0x4008000000000000       // bits IEEE 754 de 3.0
+    mov  r15, 2
+    calln @Method("stdlib/native/math/vesta_math:vmath_fmin")
+    mov  r10, 0x4000000000000000      // bits IEEE 754 de 2.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t14_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t14_end")
+t14_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t14_end:
+
+// ==========================================================
+// TEST 15: vmath_fmax(2.0, 3.0) = 3.0
+// ==========================================================
+    mov  r8, @Absolute("all.t15")
+    mov  r9, 13
+    mov  r1, 0x4000000000000000       // bits IEEE 754 de 2.0
+    mov  r2, 0x4008000000000000       // bits IEEE 754 de 3.0
+    mov  r15, 2
+    calln @Method("stdlib/native/math/vesta_math:vmath_fmax")
+    mov  r10, 0x4008000000000000      // bits IEEE 754 de 3.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t15_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t15_end")
+t15_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t15_end:
+
+// ==========================================================
+// TEST 16: vmath_sin(0.0) = 0.0  (exacto por IEEE 754)
+//   0.0 bits = 0x0000000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t16")
+    mov  r9, 8
+    mov  r1, 0x0000000000000000       // bits IEEE 754 de 0.0
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_sin")
+    mov  r10, 0x0000000000000000
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t16_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t16_end")
+t16_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t16_end:
+
+// ==========================================================
+// TEST 17: vmath_cos(0.0) = 1.0  (exacto por IEEE 754)
+//   1.0 bits = 0x3FF0000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t17")
+    mov  r9, 8
+    mov  r1, 0x0000000000000000       // bits IEEE 754 de 0.0
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_cos")
+    mov  r10, 0x3FF0000000000000      // bits IEEE 754 de 1.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t17_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t17_end")
+t17_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t17_end:
+
+// ==========================================================
+// TEST 18: vmath_tan(0.0) = 0.0
+// ==========================================================
+    mov  r8, @Absolute("all.t18")
+    mov  r9, 8
+    mov  r1, 0x0000000000000000
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_tan")
+    mov  r10, 0x0000000000000000
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t18_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t18_end")
+t18_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t18_end:
+
+// ==========================================================
+// TEST 19: vmath_log(1.0) = 0.0  (ln(1) = 0 exacto)
+//   1.0 bits = 0x3FF0000000000000
+// ==========================================================
+    mov  r8, @Absolute("all.t19")
+    mov  r9, 8
+    mov  r1, 0x3FF0000000000000       // bits IEEE 754 de 1.0
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_log")
+    mov  r10, 0x0000000000000000      // bits IEEE 754 de 0.0
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t19_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t19_end")
+t19_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t19_end:
+
+// ==========================================================
+// TEST 20: vmath_log2(1.0) = 0.0
+// ==========================================================
+    mov  r8, @Absolute("all.t20")
+    mov  r9, 9
+    mov  r1, 0x3FF0000000000000
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_log2")
+    mov  r10, 0x0000000000000000
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t20_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t20_end")
+t20_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t20_end:
+
+// ==========================================================
+// TEST 21: vmath_log10(1.0) = 0.0
+// ==========================================================
+    mov  r8, @Absolute("all.t21")
+    mov  r9, 10
+    mov  r1, 0x3FF0000000000000
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_log10")
+    mov  r10, 0x0000000000000000
+    cmpu r0, r10
+    jmp.jne @Absolute("all.t21_fail")
+    adds r12, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_ok")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+    jmp  @Absolute("all.t21_end")
+t21_fail:
+    adds r13, 1
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_fail")
+    mov  r3, 7
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r14
+    mov  r2, r8
+    mov  r3, r9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+t21_end:
+
+    // ===== resumen visual (float) =====
+    // Mostrar valores float calculados para inspeccion visual
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_float_hdr")
+    mov  r3, 29
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    // sin(pi/2) ~ 1.0  (inspeccion visual)
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_sinpi2")
+    mov  r3, 14
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, 0x3FF921FB54442D18       // bits de pi/2
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_sin")
+    mov  r1, r0
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_float")
+
+    // log(e) ~ 1.0  (inspeccion visual)
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_loge")
+    mov  r3, 11
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, 0x4005BF0A8B145769       // bits de e ~2.71828...
+    mov  r15, 1
+    calln @Method("stdlib/native/math/vesta_math:vmath_log")
+    mov  r1, r0
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_float")
+
+    // ===== contador final =====
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_sep")
+    mov  r3, 29
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_passed")
+    mov  r3, 9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r12
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_uint")
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_failed")
+    mov  r3, 9
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+    mov  r1, r13
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_uint")
+
+    hlt
+end_code:
+
+align 16
+data:
+    // prefijos de estado (7 bytes cada uno, sin null)
+    s_ok         db "[ OK ] "
+    s_fail       db "[FAIL] "
+
+    // cabecera y separadores
+    s_hdr        db "=== vesta_math unit tests ==="
+    s_float_hdr  db "--- visual float checks ---  "
+    s_sep        db "============================="
+    s_passed     db "Pasados: "
+    s_failed     db "Fallidos:"
+
+    // etiquetas de inspeccion visual
+    s_sinpi2     db "  sin(pi/2) = "
+    s_loge       db "  log(e) = "
+
+    // nombres de los tests (sin null, longitud indicada arriba)
+    t01          db "abs(-5)=5"
+    t02          db "abs(5)=5"
+    t03          db "min(3,7)=3"
+    t04          db "max(3,7)=7"
+    t05          db "clamp(5,1,10)=5 "
+    t06          db "clamp(0,1,10)=1 "
+    t07          db "clamp(15,1,10)=10"
+    t08          db "fabs(-5.0)=5.0"
+    t09          db "sqrt(4.0)=2.0"
+    t10          db "pow(2.0,10.0)=1024"
+    t11          db "floor(3.5)=3.0"
+    t12          db "ceil(3.5)=4.0"
+    t13          db "round(3.5)=4.0"
+    t14          db "fmin(2,3)=2.0"
+    t15          db "fmax(2,3)=3.0"
+    t16          db "sin(0)=0"
+    t17          db "cos(0)=1"
+    t18          db "tan(0)=0"
+    t19          db "log(1)=0"
+    t20          db "log2(1)=0"
+    t21          db "log10(1)=0"
+end_data:
