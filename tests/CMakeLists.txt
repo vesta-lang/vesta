@@ -46,6 +46,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             PRIVATE sqlite3
             PRIVATE capstone
             PRIVATE keystone
+            PRIVATE synchronization
     )
     
     # OpenSSL

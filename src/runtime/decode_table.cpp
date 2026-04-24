@@ -1,25 +1,41 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#include "runtime/decode_table.h"
+/**
+ * @file decode_table.cpp
+ * @brief Definicion de las tablas de decodificacion de instrucciones de VestaVM.
+ *
+ * Contiene las tablas estaticas de despacho:
+ *   - @c decode_table_primary : instrucciones de un byte (0x01-0xFF)
+ *   - @c decode_table_extended: instrucciones de dos bytes con prefijo 0x00
+ */#include "runtime/decode_table.h"
 
 #include "emmit/emmit_decl.h"
 #include "runtime/exec_instruction.h"
 
 namespace runtime {
     /**
-        * Tabla de opcodes primarios, si no se usa 0x00 siempre se accedera a esta
-        * tabla.
-        */
+     * @brief Tabla de opcodes primarios del bytecode VestaVM.
+     *
+     * Contiene 256 entradas (0x00-0xFF).  Cada instruccion con primer byte
+     * distinto de 0x00 se despacha directamente desde esta tabla.  La entrada
+     * 0x00 (EXT_OPCODE) no se ejecuta directamente; cuando el primer byte es
+     * 0x00 se selecciona decode_table_extended usando el segundo byte como indice.
+     *
+     * Cada entrada es un InstrFormat con: nombre mnemotecnico, modo de
+     * direccionamiento, modo de tamano, puntero al ejecutor y puntero al
+     * decodificador.  Las entradas con exec/decode == nullptr son ranuras
+     * reservadas o no implementadas.
+     */
     InstrFormat decode_table_primary[0X100] = {
         /* 0x00 */{
             // aunque el 0x00 no se usa, lo definimos por seguridad.
@@ -169,14 +185,14 @@ namespace runtime {
         },
 
         /* 0x15 */{
-            // jmpr reg: salta a la dirección almacenada en un registro
+            // jmpr reg: salta a la direccion almacenada en un registro
             "jmpr", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
             exec_instr_jmpr, decode_instr_push_pop
         },
 
         /* 0x16 */{
-            // callvmr reg: callvm con dirección en registro
+            // callvmr reg: callvm con direccion en registro
             "callvmr", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
             exec_instr_callvmr, decode_instr_push_pop
@@ -1828,8 +1844,21 @@ namespace runtime {
     };
 
     /**
-     * Tabla de codigos extendidos, solo se usa si el primer byte de la instruccion
-     * usa 0x00 para extender el opcode1 a dos.
+     * @brief Tabla de opcodes extendidos del bytecode VestaVM.
+     *
+     * Se utiliza cuando el primer byte de la instruccion es 0x00 (prefijo de
+     * extension).  En ese caso el segundo byte actua como opcode2 y se usa como
+     * indice en esta tabla.  Contiene 256 entradas (0x00-0xFF) que cubren las
+     * instrucciones ALU, MOV, SIB, MOVC, saltos relativos, OOP y GC.
+     *
+     * Convenio de rangos destacados:
+     *   0x05-0x13  ALU reg,reg y variantes (ADD/SUB/MUL/DIV/CMP/AND/OR/XOR...)
+     *   0x14-0x1F  MOV, MOVH, SIB, MOVC, XCHG
+     *   0x2D       JREL (salto relativo con desplazamiento de 32 bits con signo)
+     *   0xA0-0xA5  instrucciones GC generacional (GCALLOC/GCRUN/GCCONFIG/GCDROP/GCWB/NEWOBJ)
+     *   0xB0-0xB2  allocator bruto (RAWALLOC/RAWFREE/RAWREALLOC)
+     *   0xC0-0xC2  cursores y GCDEREF (READCUR/WRITECUR/GCDEREF)
+     *   0xD0-0xEB  sistema de objetos (NEWOBJRAW/CALLVIRT/CALLSUPER/THROW/...)
      */
     InstrFormat decode_table_extended[0X100] = {
         /* 0x00 */{

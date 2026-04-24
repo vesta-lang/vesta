@@ -1,22 +1,31 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file parser_to_bytecode.cpp
+ * @brief Implementacion del ensamblador de 3 fases de VestaVM.
+ *
+ * Implementa los metodos de @c Assembly::Bytecode::Assembler:
+ * constructor, @c first_pass(), @c compute_label_sizes(), @c emit_pass(),
+ * @c assemble(), @c emit_instruction(), @c emit_data(), @c select_variant(),
+ * @c eval_expr(), @c eval_operand(), @c apply_annotation() y @c apply_directive().
+ */
 #include "emmit/parser_to_bytecode.h"
 
 #include "cli/sync_io.h"
 
 namespace Assembly::Bytecode {
     uint64_t Assembler::eval_operand(const vm::ASTNode *op) {
-        // número inmediato como operando
+        // numero inmediato como operando
         if (auto num = dynamic_cast<const vm::NumberOperand *>(op)) {
             return vm::parse_number(num->value);
         }
@@ -29,7 +38,7 @@ namespace Assembly::Bytecode {
             return it->second->address;
         }
 
-        // si algún día permitir expresiones como operando:
+        // si algun dia permitir expresiones como operando:
         if (auto expr = dynamic_cast<const vm::ExprNode *>(op)) {
             return eval_expr(const_cast<vm::ExprNode *>(expr));
         }
@@ -82,7 +91,7 @@ namespace Assembly::Bytecode {
                               return a->address < b->address;
                           });
 
-                // Calcular tamaños
+                // Calcular tamanos
                 for (size_t i = 0; i < ordered.size(); ++i) {
                     uint64_t start = ordered[i]->address;
                     uint64_t end;
@@ -90,7 +99,7 @@ namespace Assembly::Bytecode {
                     if (i + 1 < ordered.size())
                         end = ordered[i + 1]->address;
                     else
-                        end = section.size_real; // último label
+                        end = section.size_real; // ultimo label
 
                     ordered[i]->size = end - start;
                 }
@@ -102,7 +111,7 @@ namespace Assembly::Bytecode {
         const std::vector<std::unique_ptr<vm::ASTNode> > &ast) {
         uint64_t offset = 0;
 
-        // por ahora esta seccion y espacio contendra la meta informacion y la añade
+        // por ahora esta seccion y espacio contendra la meta informacion y la anade
         // el ensamblador
         ctx.add_space("MetaSpace", 0x0, 0x0);
         ctx.get_space("MetaSpace")->add_section("strings", 0x0, 0x0);
@@ -115,7 +124,7 @@ namespace Assembly::Bytecode {
         current_label   = nullptr;
 
         // conociendo el offset de cada seccion y label, se puede
-        // calcular el tamaño de cada label
+        // calcular el tamano de cada label
         // compute_label_sizes();
 
         for (auto &node: ast)
@@ -127,7 +136,7 @@ namespace Assembly::Bytecode {
 
         current_offset = 0;
 
-        // 3 Tercera pasada (código)
+        // 3 Tercera pasada (codigo)
         for (auto &node: ast)
             third_pass_code(node.get());*/
 
@@ -150,9 +159,9 @@ namespace Assembly::Bytecode {
                 emit_pass(child.get());
         }
 
-        // Si el nodo es una declaración de datos
+        // Si el nodo es una declaracion de datos
         else if (auto data = dynamic_cast<const vm::DataDecl *>(node)) {
-            emit_data(data); // Llama al manejador específico para datos
+            emit_data(data); // Llama al manejador especifico para datos
         }
 
         // debemos evaluar las notaciones section, para poder averiguar en que seccion
@@ -170,13 +179,13 @@ namespace Assembly::Bytecode {
                 this->current_section = this->ctx.get_section(section_name);
             }
         }
-        // Si el nodo es una instrucción
+        // Si el nodo es una instruccion
         else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
-            // Si la instrucción es una pseudo-instrucción (directiva)
+            // Si la instruccion es una pseudo-instruccion (directiva)
             if (PseudoInstructions.count(instr->opcode)) {
                 apply_directive(instr); // Aplica la directiva correspondiente
             } else {
-                // Si es una instrucción real, emite su código máquina,
+                // Si es una instruccion real, emite su codigo maquina,
                 // se debe conocer la seccion y label
                 emit_instruction(instr);
             }
@@ -193,7 +202,7 @@ namespace Assembly::Bytecode {
             // offset inicial de la label
             uint64_t start = offset;
 
-            // registrar la label en la sección, tamaño temporal = 0
+            // registrar la label en la seccion, tamano temporal = 0
             if (current_section != nullptr) {
                 current_section->add_label(lab->name, offset, 0);
                 current_label = current_section->get_label(lab->name);
@@ -201,7 +210,7 @@ namespace Assembly::Bytecode {
 
             symbol_table[lab->name] = current_label;
 
-            // Guardar sección actual, al usar first_pass puede cambiar
+            // Guardar seccion actual, al usar first_pass puede cambiar
             // si hay un label vacio con una notacion section despues
             Section *saved_section = current_section;
 
@@ -209,10 +218,10 @@ namespace Assembly::Bytecode {
             for (auto &child: lab->body)
                 first_pass(child.get(), offset);
 
-            // ahora offset ha avanzado -> calcular tamaño real
+            // ahora offset ha avanzado -> calcular tamano real
             uint64_t size = offset - start;
 
-            // actualizar tamaño real en la sección
+            // actualizar tamano real en la seccion
             if (saved_section)
                 saved_section->update_label_size(lab->name, size);
         }
@@ -227,12 +236,12 @@ namespace Assembly::Bytecode {
             if (!current_section && ctx.format_output == "velb")
                 throw std::runtime_error("Label fuera de una seccion");
 
-            // Validar que el label no esté vacío
+            // Validar que el label no este vacio
             if (data->label.empty()) {
-                throw std::runtime_error("Error: declaración de datos sin label.");
+                throw std::runtime_error("Error: declaracion de datos sin label.");
             }
 
-            // Validar que el label no esté duplicado
+            // Validar que el label no este duplicado
             if (symbol_table.find(data->label) != symbol_table.end()) {
                 throw std::runtime_error(
                     "Error: label duplicado: '" + data->label + "'");
@@ -242,7 +251,7 @@ namespace Assembly::Bytecode {
             size_t offset_label = offset; // debemos guardar el offset de la label,
             // ya que se modificara en el for el offset global y se perdera la referencia
 
-            // guarda el tamaño real de la label
+            // guarda el tamano real de la label
             size_t size_of_label = 0;
             for (auto &expr: data->values) {
                 if (auto s = dynamic_cast<vm::StringExpr *>(expr.get())) {
@@ -253,7 +262,7 @@ namespace Assembly::Bytecode {
                     offset += elem_size;
                 }
 
-                // guardamos el tamaño real de la seccion
+                // guardamos el tamano real de la seccion
                 if (current_section) {
                     current_section->size_real = offset;
                 }
@@ -264,21 +273,21 @@ namespace Assembly::Bytecode {
                 exit(EXIT_FAILURE);
             }
 
-            // añadir a la sección actual el nuevo label
+            // anadir a la seccion actual el nuevo label
             current_section->add_label(data->label, offset_label, size_of_label);
 
-            // añadimos la label a la seccion, una vez obtenida su tamaño real
+            // anadimos la label a la seccion, una vez obtenida su tamano real
             symbol_table[data->label] = current_section->get_label(data->label);
         }
 
         // --- INSTRUCCIONES Y DIRECTIVAS ---
         else if (auto instr = dynamic_cast<const vm::Instruction *>(node)) {
             {
-                // Es una instrucción real?
+                // Es una instruccion real?
                 auto it = InstrTable.find(instr->opcode);
 
                 if (it == InstrTable.end()) {
-                    // No está en la tabla -> puede ser una pseudo-instrucción (directiva)
+                    // No esta en la tabla -> puede ser una pseudo-instruccion (directiva)
                     // o un error del usuario.
 
                     if (PseudoInstructions.count(instr->opcode)) {
@@ -293,7 +302,7 @@ namespace Assembly::Bytecode {
                             if (align == 0 || (align & (align - 1)) != 0)
                                 throw std::runtime_error("Error: align debe ser potencia de 2.");
 
-                            // alineamos el offset local al tamaño indicado.
+                            // alineamos el offset local al tamano indicado.
                             offset = (offset + align - 1) & ~(align - 1);
                         } else
                             apply_directive(instr);
@@ -304,7 +313,7 @@ namespace Assembly::Bytecode {
                         "Error: instruccion o directiva desconocida: '" + instr->opcode + "'");
                 }
 
-                // Instrucción válida -> sumar su tamaño
+                // Instruccion valida -> sumar su tamano
 
                 const auto &info = select_variant(instr->opcode, instr->operands);
                 switch (info.sizeMode) {
@@ -337,8 +346,8 @@ namespace Assembly::Bytecode {
                         break;
                     }
 
-                    // por ahora este caso solo existe para las instrucciones inmediatas, pues su tamaño
-                    // depende del modo de operacion el usuario elija, se debe examinar que tamaño
+                    // por ahora este caso solo existe para las instrucciones inmediatas, pues su tamano
+                    // depende del modo de operacion el usuario elija, se debe examinar que tamano
                     // escogio el programador
                     case InstrSizeMode::MIXED_SIZE: {
                         auto n0 = instr->operands[0].get();
@@ -381,7 +390,7 @@ namespace Assembly::Bytecode {
         // necesaria para este ensamblador.
         auto it = annotation_handlers.find(annotation->key);
         if (it != annotation_handlers.end()) {
-            it->second(annotation, *this); // Ejecuta la función asociada
+            it->second(annotation, *this); // Ejecuta la funcion asociada
             return;
         }
 

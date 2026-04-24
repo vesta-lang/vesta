@@ -1,16 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#ifndef PROCESO_RUNTIME_H
+/**
+ * @file proceso_runtime.h
+ * @brief Declaracion del contexto de proceso virtual (ProcessVM) de VestaVM.
+ *
+ * Declara @c ProcessVM: registros generales (R00-R15), PC, SP, BP,
+ * flags de estado, pila de llamadas, estado del proceso y campos del
+ * planificador.  Unidad minima de ejecucion dentro de la VM.
+ */#ifndef PROCESO_RUNTIME_H
 #define PROCESO_RUNTIME_H
 
 #include "scheduler.h"
@@ -22,311 +29,331 @@
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
 
+/**
+ * @brief Numero de reducciones por defecto que se le asignan a cada proceso al entrar en ejecucion.
+ *
+ * Una reduccion equivale a ejecutar una instruccion o un paso costoso de la FSM.
+ * Cuando el contador llega a cero el scheduler cambia de proceso (round-robin cooperativo).
+ */
 #define reductions_remaining_default 8192
 
 namespace runtime {
-    struct InstrFormat;
-    class Scheduler;
+    struct InstrFormat; ///< Formato de instruccion con metadatos de descodificacion/ejecucion
+    class Scheduler;    ///< Gestor de procesos que ejecuta el run_loop
 
     /**
-     * Representa la informacion basica que se genera en la descodificacion
-     * y que una instruccion necesita leer para ser ejecutada.
+     * @brief Informacion generada durante la descodificacion de una instruccion.
+     *
+     * Todas las fases de la FSM (DECODE -> EXECUTE) leen y escriben este struct.
+     * Contiene flags de control, los operandos descodificados y un puntero al
+     * descriptor de la instruccion (InstrFormat).
      */
     typedef struct DecodedInstr {
+        /**
+         * @brief Campos de control descodificados del prefijo de la instruccion.
+         *
+         * Todos los campos se inicializan a cero/false en la declaracion del objeto.
+         */
         struct {
-            /**
-             * opcode1
-             */
-            uint8_t is_not_extended: 8;
+            uint8_t is_not_extended: 8; ///< opcode1: 0x00 indica tabla extendida; otro valor indica tabla primaria
+
+            uint8_t opcode_index: 8;    ///< opcode2: indice en la tabla de descodificacion
+
+            uint8_t _signed_instruct: 1; ///< 1 si la instruccion opera con signo; 0 si es sin signo
 
             /**
-             * opcode2
-             */
-            uint8_t opcode_index: 8;
-
-            /**
-             * Indica si la instruccion tiene o no signo
-             */
-            uint8_t _signed_instruct: 1;
-
-
-            /**
-             * Modo de la instruccion, o tamaño tambien llamado en algunos casos.
+             * @brief Modo de la instruccion (tamanyo del operando).
+             *
+             * Codifica el tamanyo del operando:
+             *   0 -> 8 bits, 1 -> 16 bits, 2 -> 32 bits, 3 -> 64 bits.
              */
             uint8_t mode: 2;
 
             /**
-             * Indica si la instrucción ha modificado manualmente el contador de programa (PC).
+             * @brief Indica si la instruccion ha modificado el PC manualmente.
              *
-             * Cuando una instrucción de control de flujo (por ejemplo: saltos, llamadas,
-             * retornos o saltos condicionales) cambia explícitamente el valor del PC,
-             * debe establecer este campo a `true`. Esto evita que la fase de ejecución
-             * (EXECUTE) avance automáticamente el PC al finalizar la instrucción.
-             *
-             * Si el valor es `false`, EXECUTE incrementará el PC en función del tamaño
-             * de la instrucción (`decoded.size`). Si es `true`, se asume que la instrucción
-             * ya ha actualizado el PC y no se realizará el incremento automático.
-             *
-             * Este mecanismo evita avanzar el PC dos veces
-             * en instrucciones que alteran el flujo de ejecución.
+             * Las instrucciones de salto (JMP, CALL, RET) deben poner este campo a true.
+             * Si es false, la fase EXECUTE incrementa el PC en size_instr bytes al terminar.
+             * Si es true, se asume que la instruccion ya actualizo el PC y no se incrementa.
              */
             bool did_jump: 1;
 
-            /**
-             * Indica si la instruccion requiere esperar un I/O o a alguna
-             * accion desbloqueante.
-             */
-            bool blocking: 1;
+            bool blocking: 1; ///< 1 si la instruccion requiere esperar una operacion de E/S desbloqueante
 
             /**
-             * Se usa para indicar que se hace uso de registros extendidos/especiales
-             * como son rbp, rsp, rip, cur0, cur1, ...
+             * @brief 1 si la instruccion usa registros extendidos/especiales (rsp, rbp, rip, cur0..cur3).
              */
             bool reg_ext: 1;
 
             /**
-             * Algunas instrucciones tiene direcciones de operacion:
-             *      adds [reg1 + reg2 * 8], reg3
-             *      adds reg3, [reg1 + reg2 * 8]
+             * @brief Direccion de la operacion de memoria.
              *
-             * Si la instruccion no tiene direccionalidad, este campo se usa en algunos
-             * casos como metadato de seleccion de otras variantes de la misma familia de instrucciones.
+             * Para instrucciones con acceso a memoria:
+             *   0: destino en registro, fuente en memoria  (ej. add r3, [r1 + r2*8])
+             *   1: destino en memoria, fuente en registro  (ej. add [r1 + r2*8], r3)
+             *
+             * En instrucciones sin direccionalidad se usa como metadato de seleccion
+             * de variante dentro de la misma familia.
              */
             uint8_t direction: 1;
 
-            /**
-             * Tamaño de la instruccion, el maximo es 15 bytes
-             */
-            uint8_t size_instr: 4;
+            uint8_t size_instr: 4; ///< Tamanyo en bytes de la instruccion (maximo 15 bytes)
         } flags_info = {
             0, 0, 0, 0,
             false, false, false, 0, 0
-        };
+        }; ///< Campos de control inicializados a cero/false
 
+        /**
+         * @brief Operandos descodificados de la instruccion (union de todos los formatos).
+         *
+         * Solo uno de los campos de la union es valido en cada instruccion; el campo
+         * activo depende del tipo de instruccion indicado por flags_info.
+         */
         union {
             /**
-             * Datos en crudo
+             * @brief Acceso crudo a los 16 bytes de datos de la instruccion.
              */
             struct {
-                uint64_t raw1;
-                uint64_t raw2;
+                uint64_t raw1; ///< Primeros 8 bytes en crudo
+                uint64_t raw2; ///< Segundos 8 bytes en crudo
             } raw_data;
 
             /**
-             * Permite guardar datos para las instrucciones tipo
-             * reg, reg
+             * @brief Operandos para instrucciones de tipo reg, reg.
+             *
+             * Ejemplo: add r0, r1
              */
             struct {
-                uint8_t reg1; // indica cual es el registro 1 que se codifica
-                uint8_t reg2; // indica cual es el registro 2 que se codifica
+                uint8_t reg1; ///< Indice del registro destino (o primer operando)
+                uint8_t reg2; ///< Indice del registro fuente (o segundo operando)
             } reg_data;
 
-            // datos usados unicamente por instrucciones que hacen
-            // uso de codificacion mixta de registros generales y registros
-            // especiales, la instruccion XCHG por ejemplo permite codificar
-            // registros especiales y generales en la misma instruccion para
-            // intercambiar valores entre los registros, el primer registro
-            // puede ser especial/extendido y el segundo no o al reves, por
-            // lo que es necesario un template distinto para almacenar toda la
-            // informacion
+            /**
+             * @brief Operandos para instrucciones con mezcla de registros generales y especiales.
+             *
+             * Usado por instrucciones como XCHG que pueden operar con registros extendidos
+             * y generales en la misma instruccion.  Cada registro tiene un bit de flag que
+             * indica si es extendido (1) o general (0).
+             */
             struct {
-                uint8_t reg1      : 6; // registro 1, puede ser extendido o no
-                uint8_t reg1_flags: 1; // flags, indica normalmente si es o no extendido
-                uint8_t unused1   : 1; // aun no usado
-                uint8_t reg2      : 6; // registro 2, puede ser extendido o no
-                uint8_t reg2_flags: 1; // flags, indica normalmente si es o no extendido
-                uint8_t unused2   : 1; // aun no usado
+                uint8_t reg1      : 6; ///< Indice del registro 1 (general o extendido)
+                uint8_t reg1_flags: 1; ///< 1 si reg1 es extendido/especial
+                uint8_t unused1   : 1; ///< Sin uso por ahora
+                uint8_t reg2      : 6; ///< Indice del registro 2 (general o extendido)
+                uint8_t reg2_flags: 1; ///< 1 si reg2 es extendido/especial
+                uint8_t unused2   : 1; ///< Sin uso por ahora
             } regs_data_extent;
 
             /**
-             * Permite guardar datos de instrucciones del tipo
-             * reg, inmmed o
-             * inmmed, reg
+             * @brief Operandos para instrucciones de tipo reg, imm o imm, reg.
+             *
+             * Ejemplo: add r0, 42
              */
             struct {
-                uint64_t inmmed; // valor inmediato
-                uint8_t  reg;    // registro destino
+                uint64_t inmmed; ///< Valor inmediato codificado en la instruccion
+                uint8_t  reg;    ///< Indice del registro destino o fuente
             } inmmed_data;
 
             /**
-             * Permite guardar datos para las instrucciones de tipo memoria como
-             * son
-             * add [reg2 * 2 + reg1], reg3
-             * A estas instrucciones no les afecta el campo modo mas que al registro
-             * destino u operando que no se usa para acceder a memoria.
+             * @brief Operandos para instrucciones de acceso a memoria con SIB.
              *
-             * adds [r0 * 0 + r1], r3b // en este caso se accede a la direccion r1 y
-             * se obtiene un byte que se guarda en r3.
+             * Codifica la formula de direccion: [reg_base + reg_index * scale].
+             * El campo mode en flags_info determina el tamanyo del acceso.
+             *
+             * Ejemplo: add [r1 + r2 * 2], r3b
+             *   reg_base=r1, reg_index=r2, scale=2, reg_final=r3
              */
             struct {
-                uint8_t reg_base;  // base
-                uint8_t reg_index; // indice
-                uint8_t reg_final;
-                uint8_t scale; // escalar
+                uint8_t reg_base;  ///< Registro base de la direccion de memoria
+                uint8_t reg_index; ///< Registro indice de la formula SIB
+                uint8_t reg_final; ///< Registro destino o fuente de la operacion
+                uint8_t scale;     ///< Factor de escala del registro indice (1, 2, 4 u 8)
             } mem_data;
         } data_instruction = {
             static_cast<uint64_t>(0),
             static_cast<uint64_t>(0)
-        };
+        }; ///< Operandos inicializados a cero
 
-        /**
-         * referencia a la instruccion descodificada con sus meta-datos, la funcion a ejecutar,
-         * el metodo de descodificacion y otros campos utiles.
-         */
-        InstrFormat *metadata = nullptr;
+        InstrFormat *metadata = nullptr; ///< Descriptor de la instruccion: funcion de ejecucion, metadatos, etc.
 
-        /**
-         * Direccion PC donde se encontro la instruccion
-         */
-        uint64_t pc = 0;
+        uint64_t pc = 0; ///< Direccion virtual del PC donde se encontro esta instruccion
     } DecodedInstr;
 
 
     /**
-     * Estados de error de los hilos
+     * @brief Codigos de error que puede almacenar un hilo de proceso virtual.
+     *
+     * El campo err_thread de ProcessVM guarda el ultimo error ocurrido.
+     * Un valor THREAD_NO_ERROR (0) indica que el proceso no ha fallado.
      */
     typedef enum state_err_thread {
-        THREAD_NO_ERROR = 0,        /** Sin error */
-        THREAD_UNKNOWN_ERROR,       /** Error no clasificado */
-        THREAD_SEGMENTATION_FAULT,  /** Un hilo intento acceder a memoria a la cual no tiene permisos */
-        THREAD_ILLEGAL_INSTRUCTION, /** Instruccion no reconocida o prohibida */
-        THREAD_DIVISION_BY_ZERO,    /** Division por cero */
+        THREAD_NO_ERROR          = 0, ///< Sin error
+        THREAD_UNKNOWN_ERROR,         ///< Error no clasificado
+        THREAD_SEGMENTATION_FAULT,    ///< Acceso a memoria sin permisos suficientes
+        THREAD_ILLEGAL_INSTRUCTION,   ///< Instruccion no reconocida o prohibida
+        THREAD_DIVISION_BY_ZERO,      ///< Division entre cero
 
-        THREAD_STACK_OVERFLOW, /** Stack del hilo se desbordo:
-                                         * El tope de pila(sp) se encontro con el limite de pila del hilo.
-                                         * Push mas alla del limite de stack
-                                         */
+        /**
+         * @brief El tope de pila (SP) alcanzo el limite inferior del segmento de pila.
+         *
+         * Ocurre cuando se realiza un PUSH mas alla del limite reservado para la pila.
+         */
+        THREAD_STACK_OVERFLOW,
 
-        THREAD_STACK_UNDERFLOW, /**
-                                         * Stack se leyo cuando estaba vacio( Pop de stack vacio ),
-                                         *  SP se intento decrementar a un valor inferios a BP,
-                                         *  el tope de pila siempre debe de ser superior o igual a
-                                         *  el puntero de la base de pila
-                                         */
-        THREAD_INVALID_SYSCALL, /** Llamada al sistema invalida o no soportada */
+        /**
+         * @brief Se intento leer de una pila vacia o SP quedo por debajo de BP.
+         *
+         * El tope de pila siempre debe ser mayor o igual que el puntero de base.
+         * Un POP de pila vacia o un decremento ilegal de SP genera este error.
+         */
+        THREAD_STACK_UNDERFLOW,
+
+        THREAD_INVALID_SYSCALL, ///< Llamada al sistema invalida o no soportada
     } state_err_thread;
 
     /**
-     * Tamaño de la tabla cache de instrucciones decodificadas.
+     * @brief Numero de entradas de la cache de instrucciones descodificadas.
+     *
+     * Debe ser potencia de dos para que icache_index() pueda usar una mascara AND.
      */
     static constexpr uint32_t ICACHE_SIZE = 1024;
 
     /**
-     * Se usa para realizar el cacheado de las instrucciones descodifcadas
-     * @param pc Direccion PC de la instruccion descodificada.
-     * @return entrada en la tabla cache.
+     * @brief Calcula el indice en la tabla icache para una direccion PC dada.
+     *
+     * Usa una mascara AND (valida solo si ICACHE_SIZE es potencia de dos) para
+     * mapear cualquier PC a un indice dentro del array icache[] del proceso.
+     *
+     * @param pc Direccion del contador de programa de la instruccion.
+     * @return   Indice en el array icache[] (0 .. ICACHE_SIZE-1).
      */
     inline uint32_t icache_index(uint64_t pc) {
-        return pc & (ICACHE_SIZE - 1); // si ICACHE_SIZE es potencia de 2
+        return pc & (ICACHE_SIZE - 1); // mascara AND aprovechando que ICACHE_SIZE es potencia de 2
     }
 
+    /**
+     * @class ProcessVM
+     * @brief Proceso virtual de la maquina virtual VestaVM.
+     *
+     * Cada ProcessVM representa un hilo de ejecucion independiente dentro de
+     * la VM.  Contiene su propio:
+     *   - Conjunto de registros (context_registers_vm).
+     *   - Espacio de memoria privado (ArenaManager + VirtualMemory + TLB).
+     *   - Heap de GC y asignador raw.
+     *   - Cache de instrucciones descodificadas (icache).
+     *   - Estado de la FSM (vm_state).
+     *
+     * El scheduler propietario gestiona el ciclo de vida del proceso.
+     * Para que el proceso sea elegible por el scheduler debe llamarse a
+     * vm->make_ready(proc->pid) tras crearlo.
+     */
     class ProcessVM {
     public:
-        /**
-         * Id del proceso actual
-         */
-        GlobalPID pid;
+        GlobalPID pid; ///< Identificador global del proceso (scheduler_id + local_pid)
 
         /**
-         * ¿Qué es una “reducción”?
-         * Una reducción es una unidad de trabajo, normalmente:
-         *      - ejecutar 1 instrucción
-         *      - o ejecutar 1 operación costosa
-         *      - o avanzar 1 paso en la máquina de estados
+         * @brief Contador de reducciones restantes antes del proximo cambio de contexto.
          *
-         * 1 instrucción ejecutada = 1 reducción
+         * Una reduccion equivale normalmente a ejecutar una instruccion.
+         * Cuando llega a cero el scheduler elige otro proceso (planificacion round-robin).
+         * Se reinicia al valor reductions_remaining_default en cada quantum.
          */
         uint64_t reductions_remaining = reductions_remaining_default;
 
+        context_registers_vm registers; ///< Contexto completo de registros del proceso
 
-        // registros
-        context_registers_vm registers;
-
-        uint64_t tsc{}; // cantidad de instrucciones ejecutadas
-        // -----------------------------------------------------------
-
-
-        uint64_t         time_sleep{}; /** usado para almacenar un valor numerico, el cual es en ns, la hora
-                                     *  a la que despertar el hilo.
-                                     *  Al dormir el hilo, se indica que su estado es BLOCK
-                                     */
-        state_err_thread err_thread = THREAD_NO_ERROR; /**
-                                             * Almcane el ultimo error ocurrido en el hilo.
-                                             */
-
+        uint64_t tsc{}; ///< Contador de instrucciones ejecutadas (Time Stamp Counter virtual)
 
         /**
-         * Contiene el estado de la maquina virtual. Nunca debe ser accesible directamente
-         * ya que la VM usa un hilo para cambiar los estados, si otro hilo modifica el estado
-         * en ejecuccion sin mas puede ocasionar problemas, por eso lo ponemos privado y creamos
-         * un metodo que nos permita cambiar el estado de forma segura.
+         * @brief Marca temporal en nanosegundos a la que debe despertar el proceso.
+         *
+         * Cuando el proceso entra en estado BLOCK (p.ej. por una instruccion sleep),
+         * este campo almacena el instante futuro en el que debe pasar a READY.
+         * Un valor 0 indica que no hay temporizador activo.
+         */
+        uint64_t time_sleep{};
+
+        state_err_thread err_thread = THREAD_NO_ERROR; ///< Ultimo error ocurrido en el proceso
+
+        /**
+         * @brief Estado actual del proceso dentro de la FSM del scheduler.
+         *
+         * Nunca debe modificarse directamente desde fuera del scheduler ya que
+         * los cambios de estado son concurrentes y deben coordinarse a traves
+         * de on_event().
          */
         vm_state state = NEW;
 
-        // -------------------------------------------------------------------------------
-        //               sistema de cache para descodificacion de instrucciones.
-        // -------------------------------------------------------------------------------
-        // 256 entradas de cache maximo
-        DecodedInstr icache[ICACHE_SIZE] = {};
+        // --- Cache de instrucciones descodificadas (icache) ---
+        DecodedInstr icache[ICACHE_SIZE] = {}; ///< Tabla de instrucciones descodificadas indexada por icache_index(PC)
 
-        /**
-         * Contiene los datos de la instruccion descoficada.
-         */
-        DecodedInstr *decoded_ptr = nullptr;
-        // -------------------------------------------------------------------------------
+        DecodedInstr *decoded_ptr = nullptr; ///< Puntero a la entrada icache activa durante DECODE/EXECUTE
 
-        /**
-         * Cada Proceso gestiona su propio memoria (memoria aislada)
-         */
-        vm::ArenaManager manager_mem_priv{};
+        // --- Memoria privada del proceso ---
+        vm::ArenaManager manager_mem_priv{}; ///< Gestor de arenas privadas de este proceso
 
-        tlb::LazyHybridTLB tlb{};
-        vm::VirtualMemory  vm_mem;
+        tlb::LazyHybridTLB tlb{};           ///< TLB privado del proceso
+        vm::VirtualMemory  vm_mem;           ///< Interfaz de memoria virtual (combina TLB + ArenaManager)
 
-        gc::GcHeap       gc_heap{manager_mem_priv, 2 * 1024 * 1024, 8 * 1024 * 1024};
-        gc::RawAllocator raw_alloc{};
+        // --- GC del proceso ---
+        gc::GcHeap       gc_heap{manager_mem_priv, 2 * 1024 * 1024, 8 * 1024 * 1024}; ///< Heap del GC (min 2 MiB, max 8 MiB)
+        gc::RawAllocator raw_alloc{};                                                   ///< Asignador raw sin GC
 
         // --- Sistema de objetos (OOP) ---
+        loader::FrameHeader *frame_stack = nullptr; ///< Cabeza de la cadena de FrameHeaders activos (push en CALLVIRT, pop en RET/THROW)
 
-        /** Cabeza de la cadena de FrameHeaders activos.
-         *  CALLVIRT empuja frames; RET/THROW los desapila. */
-        loader::FrameHeader *frame_stack = nullptr;
+        uint64_t current_exception = 0; ///< Handle de la excepcion activa durante el unwinding (0 = sin excepcion)
 
-        /** Handle/puntero host de la excepcion activa durante el unwinding.
-         *  Valor 0 significa "sin excepcion activa". */
-        uint64_t current_exception = 0;
+        Scheduler &scheduler; ///< Referencia al scheduler propietario de este proceso
 
         /**
-         * Instancia global manejador de este proceso.
+         * @brief Construye un proceso virtual y lo asocia al scheduler indicado.
+         * @param scheduler Scheduler que gestionara este proceso.
+         * @param pid       Identificador global unico del proceso.
          */
-        Scheduler &scheduler;
-
         ProcessVM(Scheduler &scheduler, GlobalPID pid);
 
         /**
-         * Permite invalidar toda la cache del proceso.
+         * @brief Invalida todas las entradas del icache del proceso.
+         *
+         * Debe llamarse cuando el espacio de codigo del proceso cambia (p.ej.
+         * tras JIT o carga dinamica de codigo) para evitar ejecutar instrucciones
+         * descodificadas sobre codigo antiguo.
          */
         void reset_cache();
 
         /**
-         * Permite cargar codigo crudo a un proceso, pone el hilo en un
-         * estado de RUNNING automaticamente.
-         * @param address direccion virtual donde realizar la carga de las instrucciones
-         * @param code codigo a cargar en la direccion virtual.
+         * @brief Carga codigo en bruto en la memoria virtual del proceso.
+         *
+         * Mapea @p code a partir de @p address en el espacio de memoria del
+         * proceso y pone su estado a RUNNING para que el scheduler pueda
+         * comenzar a ejecutarlo.
+         *
+         * @param address Direccion virtual donde se escribira el codigo.
+         * @param code    Vector de bytes con las instrucciones a cargar.
          */
         void load_raw_code(uint64_t address, const std::vector<uint8_t> &code);
 
+        /**
+         * @brief Genera un resumen de estado del proceso en texto.
+         * @return Cadena con los valores mas relevantes del proceso.
+         */
         std::string vm_summary() const;
 
+        /**
+         * @brief Destructor: libera todos los recursos del proceso.
+         */
         ~ProcessVM();
 
+        /**
+         * @brief Genera una representacion textual detallada del proceso.
+         * @return Cadena con el volcado completo del estado del proceso.
+         */
         [[nodiscard]] std::string to_string() const;
 
     private:
     };
-}
 
+} // namespace runtime
 
-
-
-#endif //PROCESO_RUNTIME_H
+#endif // PROCESO_RUNTIME_H

@@ -1,245 +1,372 @@
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
+ * @file VirtualMemory.cpp
+ * @brief Implementacion de la interfaz de memoria virtual de VestaVM.
+ *
+ * Implementa @c VirtualMemory: mapeo de regiones virtuales a arenas del host,
+ * lectura y escritura de bytes a traves del TLB, y relleno de regiones
+ * con un valor constante.
+ */
 #include "arena/VirtualMemory.h"
 
-void vm_memcpy() {
-}
-
 namespace vm {
+
+    /**
+     * @brief Mapea una region de memoria virtual a un bloque real del host.
+     *
+     * Alinea el rango [@p vaddr, @p vaddr + @p size) a limites de pagina (4 KiB),
+     * reserva una sola arena que cubre todo el rango y registra en el TLB una
+     * entrada HOST por cada pagina del rango apuntando a su offset dentro de la arena.
+     *
+     * @param vaddr Direccion virtual de inicio del mapeo (se redondea hacia abajo a 4 KiB).
+     * @param size  Tamanyo en bytes del rango a mapear.
+     * @param perms Permisos de acceso para la arena creada (READ / WRITE / EXEC).
+     * @return      vm_map_ptr con la direccion de inicio alineada a pagina.
+     */
     vm_map_ptr VirtualMemory::map(uint64_t vaddr, size_t size, vm::MemPerm perms) {
-        // Alinear inicio y fin
+        // alinear inicio hacia abajo y fin hacia arriba al limite de pagina
         uint64_t start = vaddr & ~0xFFFULL;
-        uint64_t end = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
-        size_t total_size = end - start;
+        uint64_t end   = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
+        size_t total_size = end - start; // tamanyo total alineado a paginas
 
-        // Crear UNA arena para toda la región
-        uint64_t id = arena_mgr.create_arena(total_size, perms);
-        const Arena *arena = arena_mgr.get_arena(id);
+        // reservar una sola arena contigua para toda la region
+        uint64_t id       = arena_mgr.create_arena(total_size, perms);
+        const Arena *arena = arena_mgr.get_arena(id); // obtener el bloque recien creado
 
-        // Mapear cada página virtual a su offset dentro de la arena
+        // registrar una entrada TLB HOST por cada pagina del rango
         for (uint64_t page = start; page < end; page += 0x1000) {
             ptr_mapped pm{};
-            pm.ptr_host = (uint8_t *) arena->ptr + (page - start);
-            tlb.translate(page, MAPPED_PTR_HOST, pm);
+            pm.ptr_host = (uint8_t *) arena->ptr + (page - start); // offset dentro de la arena
+            tlb.translate(page, MAPPED_PTR_HOST, pm); // registrar traduccion pagina -> host
         }
 
         vm_map_ptr result{};
-        result.raw = start;
+        result.raw = start; // devolver la direccion de inicio alineada
         return result;
     }
 
 
+    /**
+     * @brief Desmapea la region de memoria virtual indicada.
+     *
+     * Itera sobre las paginas del rango, libera la arena asociada a cada una
+     * (usando una busqueda lineal por puntero de host) e invalida la entrada
+     * del TLB para cada pagina liberada.
+     *
+     * @param vaddr Direccion virtual de inicio del rango a desmapear.
+     * @param size  Tamanyo en bytes del rango a desmapear.
+     */
     void VirtualMemory::unmap(uint64_t vaddr, size_t size) {
-        uint64_t end = vaddr + size;
+        uint64_t end = vaddr + size; // limite superior del rango
 
+        // iterar sobre cada pagina del rango
         for (uint64_t page = vaddr & ~0xFFFULL; page < end; page += 0x1000) {
-            // Obtener entrada TLB
-            tlb::TLBEntryData *entry = tlb.get_entry(page);
+            tlb::TLBEntryData *entry = tlb.get_entry(page); // buscar la entrada TLB
             if (!entry || entry->type_address != vm::MAPPED_PTR_HOST) {
-                continue; // Página no mapeada/host
+                continue; // pagina no mapeada o no es HOST, ignorar
             }
 
-            // Liberar arena asociada
+            // localizar la arena a partir del puntero de host (O(N))
             int arena_id = arena_mgr.find_arena_id_for_ptr(entry->address.ptr_host);
             if (arena_id != -1) {
-                arena_mgr.free_arena(arena_id);
+                arena_mgr.free_arena(arena_id); // liberar la arena del SO
             }
 
-            // Eliminar entrada TLB (marcar inválida)
-            tlb.clear_tlb_entry(page);
+            tlb.clear_tlb_entry(page); // invalidar la entrada TLB de la pagina
         }
     }
 
 
+    /**
+     * @brief Copia datos desde memoria del host a memoria virtual.
+     *
+     * Recorre las paginas de destino creandolas si no existen (auto-map RW)
+     * y copia @p size bytes de @p src_host byte a byte respetando los limites
+     * de pagina.
+     *
+     * @param dest_vaddr Direccion virtual destino de la copia.
+     * @param src_host   Puntero en memoria del host con los datos a copiar.
+     * @param size       Numero de bytes a copiar.
+     */
     void VirtualMemory::vm_to_host_memcpy(uint64_t dest_vaddr,
                                           const void *src_host, size_t size) {
-        const uint8_t *src = (const uint8_t *) src_host;
-        uint64_t vaddr = dest_vaddr & ~0xFFFULL; // Primera página
+        const uint8_t *src = (const uint8_t *) src_host; // cursor de lectura en el host
+        uint64_t vaddr     = dest_vaddr & ~0xFFFULL;      // primera pagina del rango
 
         while (size > 0) {
-            // Obtener HOST real de página virtual
+            // resolver el puntero de host para la pagina actual
             void *host_dest = this->tlb.get_real_host_ptr_of_vptr(vaddr);
             if (!host_dest) {
-                // Auto-mapear página si no existe
+                // pagina no existe: crearla con permisos RW
                 this->map(vaddr, 4096, vm::MemPerm::READ | vm::MemPerm::WRITE);
-                host_dest = this->tlb.get_real_host_ptr_of_vptr(vaddr);
+                host_dest = this->tlb.get_real_host_ptr_of_vptr(vaddr); // releer tras mapeo
             }
 
-            // Calcular bytes a copiar en esta página
-            size_t offset = dest_vaddr & 0xFFF;
-            size_t page_avail = 4096 - offset;
-            size_t copy_size = std::min(size, page_avail);
+            // calcular cuantos bytes caben en lo que resta de la pagina actual
+            size_t offset    = dest_vaddr & 0xFFF;           // desplazamiento dentro de la pagina
+            size_t page_avail = 4096 - offset;               // bytes disponibles en esta pagina
+            size_t copy_size  = std::min(size, page_avail);  // bytes a copiar en esta iteracion
 
-            // MEMCPY REAL página a página
-            memcpy((uint8_t *) host_dest + offset, src, copy_size);
+            memcpy((uint8_t *) host_dest + offset, src, copy_size); // copiar fragmento
 
-            // Siguiente página
-            src += copy_size;
-            size -= copy_size;
+            // avanzar cursores para la siguiente pagina
+            src       += copy_size;
+            size      -= copy_size;
             dest_vaddr += copy_size;
-            vaddr = dest_vaddr & ~0xFFFULL;
+            vaddr      = dest_vaddr & ~0xFFFULL; // recalcular la pagina actual
         }
     }
 
+    /**
+     * @brief Rellena una region de memoria virtual con un valor de byte.
+     *
+     * Equivalente a memset() sobre el espacio de direcciones virtual.
+     * Crea las paginas que no existan antes de escribir.
+     *
+     * @param dest_vaddr Direccion virtual de inicio del relleno.
+     * @param value      Valor de byte (0-255) a escribir en cada posicion.
+     * @param size       Numero de bytes a rellenar.
+     */
     void VirtualMemory::vm_to_host_memset(uint64_t dest_vaddr, int value, size_t size) {
-        uint64_t vaddr = dest_vaddr & ~0xFFFULL;
+        uint64_t vaddr = dest_vaddr & ~0xFFFULL; // primera pagina del rango
 
         while (size > 0) {
-            // Obtener HOST real de página virtual
+            // resolver el puntero de host para la pagina actual
             void *host_dest = tlb.get_real_host_ptr_of_vptr(vaddr);
             if (!host_dest) {
-                // Auto-mapear página si no existe (RW)
+                // pagina no existe: crearla con permisos RW
                 map(vaddr, 4096, vm::MemPerm::READ | vm::MemPerm::WRITE);
-                host_dest = tlb.get_real_host_ptr_of_vptr(vaddr);
+                host_dest = tlb.get_real_host_ptr_of_vptr(vaddr); // releer tras mapeo
             }
 
-            // Calcular bytes a llenar en esta página
-            size_t offset = dest_vaddr & 0xFFF;
-            size_t page_avail = 4096 - offset;
-            size_t fill_size = std::min(size, page_avail);
+            // calcular cuantos bytes rellenar en esta pagina
+            size_t offset    = dest_vaddr & 0xFFF;         // desplazamiento dentro de la pagina
+            size_t page_avail = 4096 - offset;             // bytes disponibles en esta pagina
+            size_t fill_size  = std::min(size, page_avail); // bytes a rellenar en esta iteracion
 
-            // MEMSET REAL página a página
-            memset((uint8_t *) host_dest + offset, value, fill_size);
+            memset((uint8_t *) host_dest + offset, value, fill_size); // rellenar fragmento
 
-            // Siguiente página
-            size -= fill_size;
+            // avanzar cursores para la siguiente pagina
+            size       -= fill_size;
             dest_vaddr += fill_size;
-            vaddr = dest_vaddr & ~0xFFFULL;
+            vaddr       = dest_vaddr & ~0xFFFULL; // recalcular la pagina actual
         }
     }
 
+    /**
+     * @brief Lee @p size bytes desde la memoria virtual a un buffer del host.
+     *
+     * Gestiona la traduccion TLB y los cruces de pagina automaticamente.
+     * En caso de miss (pagina no mapeada) realiza una asignacion perezosa con permsDefault.
+     *
+     * Optimizacion: cuando el offset dentro de la pagina esta alineado a 16 bytes
+     * se activa un fast-path con __builtin_assume_aligned para que el compilador
+     * pueda emitir instrucciones SIMD alineadas (movaps/vmovaps).
+     *
+     * @param vaddr Direccion virtual de inicio de la lectura.
+     * @param dst   Buffer del host donde se almacenan los bytes leidos.
+     * @param size  Numero de bytes a leer.
+     */
     void VirtualMemory::read_bytes(uint64_t vaddr, void *dst, size_t size) {
-        uint8_t *out = static_cast<uint8_t *>(dst);
+        uint8_t *out = static_cast<uint8_t *>(dst); // cursor de escritura en el buffer destino
 
         while (size > 0) {
-            uint64_t page_vaddr = vaddr & ~0xFFFULL;
-            size_t offset = vaddr & 0xFFFULL;
-            size_t chunk = std::min<size_t>(4096 - offset, size);
+            uint64_t page_vaddr = vaddr & ~0xFFFULL;           // direccion base de la pagina actual
+            size_t offset       = vaddr & 0xFFFULL;            // offset dentro de la pagina
+            size_t chunk        = std::min<size_t>(4096 - offset, size); // bytes a leer en esta iteracion
 
-            tlb::TLBEntryData *entry = tlb.get_entry(vaddr);
+            tlb::TLBEntryData *entry = tlb.get_entry(vaddr); // consultar el TLB
 
-            // MISS -> lazy allocation solo si corresponde
+            // MISS: pagina no mapeada -> asignar perezosamente con los permisos por defecto
             if (!entry || entry->type_address == NONE) {
                 void *host_mem = get_ptr_arena(
-                    arena_mgr, arena_mgr.create_arena(4096, permsDefault));
+                    arena_mgr, arena_mgr.create_arena(4096, permsDefault)); // reservar pagina nueva
 
                 ptr_mapped pm{};
-                pm.ptr_host = host_mem;
+                pm.ptr_host = host_mem; // apuntar al bloque recien reservado
 
-                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm);
-                entry = tlb.get_entry(vaddr);
+                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm); // registrar traduccion
+                entry = tlb.get_entry(vaddr); // releer la entrada tras el registro
             }
 
             switch (entry->type_address) {
                 case MAPPED_PTR_HOST: {
-                    uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
-                    // FAST-PATH: puntero alineado a 16 bytes
+                    uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host); // base de la pagina en el host
+
+                    // FAST-PATH: offset alineado a 16 bytes -> el compilador puede usar SIMD
                     if ((offset & 0xF) == 0) {
                         uint8_t *aligned = (uint8_t *) __builtin_assume_aligned(base + offset, 16);
-                        memcpy(out, aligned, chunk);
+                        memcpy(out, aligned, chunk); // copia potencialmente vectorizada
                     } else {
-                        // fallback seguro
-                        memcpy(out, base + offset, chunk);
+                        memcpy(out, base + offset, chunk); // copia estandar sin alineacion
                     }
                     break;
                 }
 
                 default:
+                    // tipo de mapeo no soportado en lectura
                     std::cout << "Modo de acceso no implementado: "
                             << entry->type_address << std::endl;
                     exit(-1);
             }
 
+            // avanzar cursores para la siguiente pagina
             vaddr += chunk;
-            out += chunk;
-            size -= chunk;
+            out   += chunk;
+            size  -= chunk;
         }
     }
 
+    /**
+     * @brief Escribe @p size bytes desde un buffer del host a memoria virtual.
+     *
+     * Simetrico de read_bytes().  Gestiona cruces de pagina y asignacion
+     * perezosa del mismo modo.  El fast-path SIMD tambien se activa cuando
+     * el offset esta alineado a 16 bytes.
+     *
+     * @param vaddr Direccion virtual de inicio de la escritura.
+     * @param src   Buffer del host con los datos a escribir.
+     * @param size  Numero de bytes a escribir.
+     */
     void VirtualMemory::write_bytes(uint64_t vaddr, const void *src, size_t size) {
-        const uint8_t *in = static_cast<const uint8_t *>(src);
+        const uint8_t *in = static_cast<const uint8_t *>(src); // cursor de lectura en el buffer fuente
 
         while (size > 0) {
-            uint64_t page_vaddr = vaddr & ~0xFFFULL;
-            size_t offset = vaddr & 0xFFFULL;
-            size_t chunk = std::min<size_t>(4096 - offset, size);
+            uint64_t page_vaddr = vaddr & ~0xFFFULL;           // direccion base de la pagina actual
+            size_t offset       = vaddr & 0xFFFULL;            // offset dentro de la pagina
+            size_t chunk        = std::min<size_t>(4096 - offset, size); // bytes a escribir en esta iteracion
 
-            tlb::TLBEntryData *entry = tlb.get_entry(vaddr);
+            tlb::TLBEntryData *entry = tlb.get_entry(vaddr); // consultar el TLB
 
-            // MISS -> lazy allocation
+            // MISS: pagina no mapeada -> asignar perezosamente con los permisos por defecto
             if (!entry || entry->type_address == NONE) {
                 void *host_mem = get_ptr_arena(
-                    arena_mgr, arena_mgr.create_arena(4096, permsDefault));
+                    arena_mgr, arena_mgr.create_arena(4096, permsDefault)); // reservar pagina nueva
 
                 ptr_mapped pm{};
-                pm.ptr_host = host_mem;
+                pm.ptr_host = host_mem; // apuntar al bloque recien reservado
 
-                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm);
-                entry = tlb.get_entry(vaddr);
+                tlb.translate(page_vaddr, MAPPED_PTR_HOST, pm); // registrar traduccion
+                entry = tlb.get_entry(vaddr); // releer la entrada tras el registro
             }
 
             switch (entry->type_address) {
                 case MAPPED_PTR_HOST: {
-                    uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
+                    uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host); // base de la pagina en el host
 
-                    // FAST-PATH: alineado a 16 bytes
+                    // FAST-PATH: offset alineado a 16 bytes -> el compilador puede usar SIMD
                     if ((offset & 0xF) == 0) {
                         uint8_t *aligned = (uint8_t *) __builtin_assume_aligned(base + offset, 16);
-                        memcpy(aligned, in, chunk);
+                        memcpy(aligned, in, chunk); // escritura potencialmente vectorizada
                     } else {
-                        memcpy(base + offset, in, chunk);
+                        memcpy(base + offset, in, chunk); // escritura estandar sin alineacion
                     }
                     break;
                 }
 
                 default:
+                    // tipo de mapeo no soportado en escritura
                     std::cout << "Modo de acceso no implementado: "
                             << entry->type_address << std::endl;
                     exit(-1);
             }
 
+            // avanzar cursores para la siguiente pagina
             vaddr += chunk;
-            in += chunk;
-            size -= chunk;
+            in    += chunk;
+            size  -= chunk;
         }
     }
 
+    /**
+     * @brief Escribe un byte en la direccion virtual indicada.
+     * @param vaddr Direccion virtual destino.
+     * @param value Byte a escribir.
+     */
     void VirtualMemory::write_u8(uint64_t vaddr, uint8_t value) {
-        write_bytes(vaddr, &value, sizeof(value));
+        write_bytes(vaddr, &value, sizeof(value)); // delegar en write_bytes para manejar TLB y paginas
     }
 
+    /**
+     * @brief Escribe dos bytes (little-endian) en la direccion virtual indicada.
+     * @param vaddr Direccion virtual destino.
+     * @param value Valor de 16 bits a escribir.
+     */
     void VirtualMemory::write_u16(uint64_t vaddr, uint16_t value) {
-        write_bytes(vaddr, &value, sizeof(value));
+        write_bytes(vaddr, &value, sizeof(value)); // delegar en write_bytes para manejar TLB y paginas
     }
 
+    /**
+     * @brief Escribe cuatro bytes (little-endian) en la direccion virtual indicada.
+     * @param vaddr Direccion virtual destino.
+     * @param value Valor de 32 bits a escribir.
+     */
     void VirtualMemory::write_u32(uint64_t vaddr, uint32_t value) {
-        write_bytes(vaddr, &value, sizeof(value));
+        write_bytes(vaddr, &value, sizeof(value)); // delegar en write_bytes para manejar TLB y paginas
     }
 
+    /**
+     * @brief Escribe ocho bytes (little-endian) en la direccion virtual indicada.
+     * @param vaddr Direccion virtual destino.
+     * @param value Valor de 64 bits a escribir.
+     */
     void VirtualMemory::write_u64(uint64_t vaddr, uint64_t value) {
-        write_bytes(vaddr, &value, sizeof(value));
+        write_bytes(vaddr, &value, sizeof(value)); // delegar en write_bytes para manejar TLB y paginas
     }
 
+    /**
+     * @brief Lee un byte desde la direccion virtual indicada.
+     * @param vaddr Direccion virtual fuente.
+     * @return      Byte leido.
+     */
     uint8_t VirtualMemory::read_u8(uint64_t vaddr) {
         uint8_t x;
-        read_bytes(vaddr, &x, sizeof(x));
+        read_bytes(vaddr, &x, sizeof(x)); // delegar en read_bytes para manejar TLB y paginas
         return x;
     }
 
+    /**
+     * @brief Lee dos bytes (little-endian) desde la direccion virtual indicada.
+     * @param vaddr Direccion virtual fuente.
+     * @return      Valor de 16 bits leido.
+     */
     uint16_t VirtualMemory::read_u16(uint64_t vaddr) {
         uint16_t x;
-        read_bytes(vaddr, &x, sizeof(x));
+        read_bytes(vaddr, &x, sizeof(x)); // delegar en read_bytes para manejar TLB y paginas
         return x;
     }
 
-
+    /**
+     * @brief Lee cuatro bytes (little-endian) desde la direccion virtual indicada.
+     * @param vaddr Direccion virtual fuente.
+     * @return      Valor de 32 bits leido.
+     */
     uint32_t VirtualMemory::read_u32(uint64_t vaddr) {
         uint32_t x;
-        read_bytes(vaddr, &x, sizeof(x));
+        read_bytes(vaddr, &x, sizeof(x)); // delegar en read_bytes para manejar TLB y paginas
         return x;
     }
 
+    /**
+     * @brief Lee ocho bytes (little-endian) desde la direccion virtual indicada.
+     * @param vaddr Direccion virtual fuente.
+     * @return      Valor de 64 bits leido.
+     */
     uint64_t VirtualMemory::read_u64(uint64_t vaddr) {
         uint64_t x;
-        read_bytes(vaddr, &x, sizeof(x));
+        read_bytes(vaddr, &x, sizeof(x)); // delegar en read_bytes para manejar TLB y paginas
         return x;
     }
-}
+
+} // namespace vm

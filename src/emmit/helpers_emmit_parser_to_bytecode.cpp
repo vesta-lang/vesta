@@ -1,15 +1,24 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file helpers_emmit_parser_to_bytecode.cpp
+ * @brief Funciones auxiliares de emision de bytecode del ensamblador de VestaVM.
+ *
+ * Contiene las implementaciones de las funciones @c emit_inc_dec(),
+ * @c emit_instr_reg(), @c emit_instr_inmed(), @c emit_instr_sib(),
+ * @c emit_instr_movc(), @c emit_jrel(), @c emit_cursor_rw(), @c emit_gcderef()
+ * y otras funciones de emision referenciadas en @c InstrTable.
+ */
 #include "emmit/parser_to_bytecode.h"
 
 namespace Assembly::Bytecode {
@@ -19,7 +28,7 @@ namespace Assembly::Bytecode {
         if (dir == "dd") return 4;
         if (dir == "dq") return 8;
 
-        // Puntero del tamaño de la VM (64 bits)
+        // Puntero del tamano de la VM (64 bits)
         if (dir == "ptr") return sizeof(uint64_t);
 
         throw std::runtime_error("Unknown data directive: " + dir);
@@ -28,7 +37,7 @@ namespace Assembly::Bytecode {
     /**
      * 1 Recibir el valor final (ya evaluado)
      * 2 Escribirlo en little-endian
-     * 3 Usar el tamaño correcto según la directiva
+     * 3 Usar el tamano correcto segun la directiva
      *
      * @param dir
      * @param value
@@ -53,7 +62,7 @@ namespace Assembly::Bytecode {
                 continue;
             }
 
-            // Para números, labels, expresiones:
+            // Para numeros, labels, expresiones:
             uint64_t v = eval_expr(expr.get());
             emit_directive(data->directive, v);
         }
@@ -134,7 +143,7 @@ namespace Assembly::Bytecode {
             if (auto s = dynamic_cast<vm::NumberOperand *>(ops[0].get())) {
                 mode = AddressingMode::INMED;
             } else if (auto s = dynamic_cast<vm::LabelOperand *>(ops[0].get())) {
-                // un label como destino de salto se trata como inmediato (dirección absoluta)
+                // un label como destino de salto se trata como inmediato (direccion absoluta)
                 mode = AddressingMode::INMED;
             } else if (auto s = dynamic_cast<vm::AnnotationNode *>(ops[0].get())) {
                 // si el segundo operando es una notacion
@@ -200,8 +209,8 @@ namespace Assembly::Bytecode {
         if (info.opcode1 == 0x00)
             output.emit8(info.opcode2);
 
-        // 3 resto de campos según la instrucción (flags, reg, SIB, addr, etc.)
-        //    aquí ya mirar los operandos y generar el encoding real.
+        // 3 resto de campos segun la instruccion (flags, reg, SIB, addr, etc.)
+        //    aqui ya mirar los operandos y generar el encoding real.
         if (info.emit != nullptr) {
             info.emit(instr, output, &info, this);
         } else {

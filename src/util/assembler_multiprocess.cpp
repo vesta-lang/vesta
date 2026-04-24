@@ -2,20 +2,20 @@
  * @file assembler_multiprocess.cpp
  * @brief Infraestructura para ensamblado paralelo usando multiproceso + multihilo.
  *
- * Este módulo implementa el modelo "driver + workers" de VestaVM:
+ * Este modulo implementa el modelo "driver + workers" de VestaVM:
  *
- *  - El **driver** ejecuta múltiples hilos (ThreadPool).
+ *  - El **driver** ejecuta multiples hilos (ThreadPool).
  *  - Cada hilo lanza un **worker** como proceso independiente (`vm.exe --worker`).
  *  - El driver captura la salida de cada worker, registra tiempos y errores,
  *    y finalmente ejecuta el linker global.
  *
  * Ventajas del modelo:
  *  - Aislamiento total entre workers (cada uno es un proceso separado).
- *  - Uso eficiente de todos los núcleos (multihilo en el driver).
+ *  - Uso eficiente de todos los nucleos (multihilo en el driver).
  *  - Seguridad: un worker que falla no afecta al driver.
  *  - Escalabilidad: miles de archivos pueden ensamblarse en paralelo.
  *
- * @note Este header solo declara la interfaz; la implementación está en el .cpp.
+ * @note Este header solo declara la interfaz; la implementacion esta en el .cpp.
  */
 #include "util/assembler_multiprocess.h"
 #include "profiler/timer.h"
@@ -96,10 +96,10 @@ namespace asm_multi_process {
         Timer t_linker;
         Linker::Linker linker(opts);
 
-        // Añadir el ensamblado crudo
+        // Anadir el ensamblado crudo
         linker.add_assembly_unit(bytecode, &asmblr.ctx);
 
-        // añadir objetos externos
+        // anadir objetos externos
         // linker.add_object_file("libmath.velo");
         // linker.add_static_library("stdlib.vela");
 
@@ -208,7 +208,7 @@ namespace asm_multi_process {
         // Encolar tareas
         for (int i = 0; i < files.size(); i++) {
             std::string f = files[i];
-            int index = i; // i es el índice del archivo en el vector files
+            int index = i; // i es el indice del archivo en el vector files
             pool.enqueue([&, index, f] {
                 worker_current_file[index] = f; {
                     std::lock_guard lk(progress_mutex);
@@ -267,7 +267,7 @@ namespace asm_multi_process {
         progress_running = false;
         progress_thread.join();
 
-        vesta::scout() << "\n\n===== LOGS DE COMPILACIÓN =====\n";
+        vesta::scout() << "\n\n===== LOGS DE COMPILACION =====\n";
 
         for (auto &log: logs) {
             vesta::scout() << "\n=== OUTPUT de " << log.file << " ===\n";
@@ -291,7 +291,7 @@ namespace asm_multi_process {
 
 
         if (error) {
-            std::cerr << "Falló la compilación paralela.\n";
+            std::cerr << "Fallo la compilacion paralela.\n";
             std::cout << "\n[Tiempo total driver] " << global.us() << " us "
                     << global.ms() << " ms\n";
             return EXIT_FAILURE;

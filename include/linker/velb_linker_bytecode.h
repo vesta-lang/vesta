@@ -1,13 +1,50 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
+ * @file velb_linker_bytecode.h
+ * @brief Definicion del formato binario VELB/VELA y la clase Linker de VestaVM.
+ *
+ * Contiene:
+ *  - Tipos y estructuras del formato de archivo @b VELB (VestaLangBinary):
+ *      Header, tabla de secciones, tabla de espacios de direcciones, tablas de
+ *      labels e importaciones.
+ *  - Tipos y estructuras del formato de libreria estatica @b VELA.
+ *  - Clase @c Linker que combina multiples modulos objeto en un ejecutable final.
+ *  - Estructuras de reporte (@c LinkerReport, @c LinkerError, @c LinkerWarning).
+ *
+ * Formato VELB (layout del header, 88 bytes):
+ * @verbatim
+ *   Offset  Size  Campo
+ *   ------  ----  -----
+ *      0      4   magic          ("VELB" en LE / "BLEV" en BE)
+ *      4      4   format_v       (version del formato)
+ *      8      4   max_v          (version maxima de VM compatible)
+ *     12      4   min_v          (version minima de VM compatible)
+ *     16      8   checksum       (checksum del ejecutable)
+ *     24      8   flags          (meta-informacion del ejecutable)
+ *     32      8   timestamp      (marca de tiempo de compilacion)
+ *     40      4   arch           (arquitectura objetivo)
+ *     44      4   count          (numero de secciones)
+ *     48      8   table_offset   (offset a la tabla de secciones)
+ *     56      8   n_spaces       (numero de espacios de direcciones)
+ *     64      8   offset_section_strings
+ *     72      8   start_pc       (PC inicial del programa)
+ *     80      8   offset_import_table
+ *     88      8   offset_label_table
+ * @endverbatim
+ *
+ * @note Todas las estructuras usan @c __attribute__((packed)) / @c pragma pack(push,1)
+ *       para garantizar un layout binario sin padding y seguro para serializar.
  */
 
 #ifndef VELB_LINKER_BYTECODE_H
@@ -41,7 +78,7 @@ extern "C" {
 
 /**
  * A traves del numero magico, se puede conocer el endian de la maquina que
- * genero el bytecode. ENçn caso de ser little‑endian (LE) en el ejecutable pondra
+ * genero el bytecode. EN?n caso de ser little?endian (LE) en el ejecutable pondra
  * "VELB", pero en caso de ser big-endian (BE), pondra BLEV
  */
 typedef union velb_magic {
@@ -50,42 +87,42 @@ typedef union velb_magic {
 } velb_magic;
 
 /**
- * ``4 bytes`` para la versión del formato.
+ * ``4 bytes`` para la version del formato.
  */
 typedef uint32_t velb_version_format;
 
 /**
- * ``4 bytes`` con la máxima versión compatible en la
- * que el código puede ser ejecutado en una VM.
+ * ``4 bytes`` con la maxima version compatible en la
+ * que el codigo puede ser ejecutado en una VM.
  */
 typedef uint32_t max_vm_version;
 
 /**
- *  ``4 bytes`` con la mínima versión
- *  compatible en la que el código puede ser ejecutado en una VM.
+ *  ``4 bytes`` con la minima version
+ *  compatible en la que el codigo puede ser ejecutado en una VM.
  */
 typedef uint32_t min_vm_version;
 
 /**
- * ``8 bytes`` para indicar un checksum del código, sino
+ * ``8 bytes`` para indicar un checksum del codigo, sino
  * coincide, no se ejecuta.
  */
 typedef uint64_t velb_checksum;
 
 /**
- * para indicar características del ejecutable
- * (meta-información adicional del ejecutable).
+ * para indicar caracteristicas del ejecutable
+ * (meta-informacion adicional del ejecutable).
  */
 typedef uint64_t velb_flags;
 
 /**
- * ``8 bytes`` de marca de tiempo para indicar la fecha de compilación.
+ * ``8 bytes`` de marca de tiempo para indicar la fecha de compilacion.
  */
 typedef uint64_t build_timestamp;
 
 /**
  * ``4 bytes`` para indicar la
- * arquitectura en la que se realizo la compilación del ejecutable.
+ * arquitectura en la que se realizo la compilacion del ejecutable.
  */
 typedef uint32_t target_arch;
 
@@ -96,13 +133,13 @@ typedef uint32_t section_count;
 
 /**
  * ``8 bytes`` de desplazamiento respecto a la
- * dirección base para indicar la tabla de secciones.
+ * direccion base para indicar la tabla de secciones.
  */
 typedef uint64_t section_table_offset;
 
 /**
  * 8 bytes para indicar la cantidad de espacio de
- * direcciones de la tabla que viene a continuación.
+ * direcciones de la tabla que viene a continuacion.
  */
 typedef uint64_t number_spaces_address;
 
@@ -202,7 +239,7 @@ typedef struct PACKED entry_label_table {
     uint32_t index_section;
 
     /**
-     * Tamaño de la label en el bytecode
+     * Tamano de la label en el bytecode
      */
     uint32_t size_label;
 } entry_label_table;
@@ -223,7 +260,7 @@ typedef struct PACKED entry_import_table {
     uint32_t offset_function_string = 0;
 
     /**
-     * La firma sirve para describir los tipos de argumentos y el tipo de retorno de la función nativa.
+     * La firma sirve para describir los tipos de argumentos y el tipo de retorno de la funcion nativa.
      *      - (i32,i32)->i32
      *      - (f64)->f64
      *      - (str)->void
@@ -240,8 +277,8 @@ typedef struct PACKED entry_import_table {
 
 typedef struct PACKED HeaderVELA {
     char     magic[4]            = {'V', 'E', 'L', 'A'}; // "VELA"
-    uint32_t version             = VERSION_VELA;         // versión del formato
-    uint32_t module_count        = 0;                    // número de módulos
+    uint32_t version             = VERSION_VELA;         // version del formato
+    uint32_t module_count        = 0;                    // numero de modulos
     uint64_t module_table_offset = 0;
 } HeaderVELA;
 
@@ -255,8 +292,8 @@ typedef struct PACKED section_range_memory {
 } section_range_memory;
 
 typedef struct PACKED VELA_ModuleEntry {
-    uint64_t offset                  = 0; // offset al módulo
-    uint64_t size                    = 0; // tamaño del módulo
+    uint64_t offset                  = 0; // offset al modulo
+    uint64_t size                    = 0; // tamano del modulo
     uint32_t symbol_count            = 0;
     uint64_t symbol_table_offset     = 0;
     uint32_t relocation_count        = 0;
@@ -264,15 +301,15 @@ typedef struct PACKED VELA_ModuleEntry {
 } VELA_ModuleEntry;
 
 typedef struct PACKED VELA_Symbol {
-    uint64_t offset   = 0; // offset dentro del módulo
+    uint64_t offset   = 0; // offset dentro del modulo
     uint8_t  type     = 0; // FUNC, DATA, GLOBAL, LOCAL
     char     name[32] = {};
 } VELA_Symbol;
 
 typedef struct PACKED VELA_Relocation {
-    uint64_t offset     = 0;  // dónde aplicar la relocación
+    uint64_t offset     = 0;  // donde aplicar la relocacion
     uint8_t  type       = 0;  // ABS64, REL32, REL64
-    char     symbol[32] = {}; // símbolo a resolver
+    char     symbol[32] = {}; // simbolo a resolver
 } VELA_Relocation;
 
 /**
@@ -293,7 +330,7 @@ static bool ranges_overlap(const range_memory *a, const range_memory *b) {
 
 
 //#ifdef __cplusplus
-// Código exclusivo de C++ (clases, métodos, namespaces, etc.)
+// Codigo exclusivo de C++ (clases, metodos, namespaces, etc.)
 
 #include <unordered_map>
 #include <vector>
@@ -348,7 +385,7 @@ namespace Assembly::Bytecode::Linker {
         std::string message;
 
         /**
-         * @brief Representación textual del error.
+         * @brief Representacion textual del error.
          * @return string con formato "[Type] message"
          */
         [[nodiscard]] std::string to_string() const {
@@ -393,7 +430,7 @@ namespace Assembly::Bytecode::Linker {
         LinkerWarning(Type t, std::string m) : type(t), message(std::move(m)) {}
 
         /**
-         * @brief Representación textual del warning.
+         * @brief Representacion textual del warning.
          * @return string con formato "[Type] message"
          */
         [[nodiscard]] std::string to_string() const {
@@ -435,7 +472,7 @@ namespace Assembly::Bytecode::Linker {
     }
 
     /**
-     * Un informe final con estadísticas del linking.
+     * Un informe final con estadisticas del linking.
      */
     struct LinkerReport {
         /**
@@ -482,7 +519,7 @@ namespace Assembly::Bytecode::Linker {
         }
 
         /**
-         * @brief Añade un error estructurado al reporte.
+         * @brief Anade un error estructurado al reporte.
          * @param err datos del error
          */
         void add_error(LinkerError err) {
@@ -490,7 +527,7 @@ namespace Assembly::Bytecode::Linker {
         }
 
         /**
-         * @brief Añade un error estructurado al reporte.
+         * @brief Anade un error estructurado al reporte.
          * @param type Tipo del error (LinkerError::Type).
          * @param message Mensaje descriptivo.
          */
@@ -500,7 +537,7 @@ namespace Assembly::Bytecode::Linker {
 
 
         /**
-         * @brief Añade un warning estructurado al reporte.
+         * @brief Anade un warning estructurado al reporte.
          * @param war datos del warning
          */
         void add_warning(LinkerWarning war) {
@@ -508,7 +545,7 @@ namespace Assembly::Bytecode::Linker {
         }
 
         /**
-         * @brief Añade un warning al reporte.
+         * @brief Anade un warning al reporte.
          * @param message Mensaje del warning.
          */
         void add_warning(LinkerWarning::Type type, const std::string &message) {
@@ -517,7 +554,7 @@ namespace Assembly::Bytecode::Linker {
 
 
         /**
-         * @brief Versión con contexto (archivo/clave/valor) para errores no ligados al código.
+         * @brief Version con contexto (archivo/clave/valor) para errores no ligados al codigo.
          * @param type Tipo del error.
          * @param message Mensaje principal.
          * @param context Texto corto con contexto (p.ej. "config:assembler.conf:line 12").
@@ -530,7 +567,7 @@ namespace Assembly::Bytecode::Linker {
         }
 
         /**
-         * @brief Añade un warning con contexto.
+         * @brief Anade un warning con contexto.
          */
         void add_warning_with_context(LinkerWarning::Type type,
                                       const std::string & message, const std::string &context) {
@@ -573,8 +610,8 @@ namespace Assembly::Bytecode::Linker {
     };
 
     /**
-     * @brief Añade un error formateado (printf-like).
-     * @note Implementación simple usando snprintf.
+     * @brief Anade un error formateado (printf-like).
+     * @note Implementacion simple usando snprintf.
      */
     template<typename... Args>
     static void add_errorf(LinkerReport &rpt, LinkerError::Type type, const char *fmt, Args &&... args) {
@@ -589,7 +626,7 @@ namespace Assembly::Bytecode::Linker {
     }
 
     /**
-     * @brief Añade un warning formateado (printf-like).
+     * @brief Anade un warning formateado (printf-like).
      * @param rpt reporte destino
      * @param type tipo de warning (LinkerWarning::Type)
      * @param fmt formato printf
@@ -609,7 +646,7 @@ namespace Assembly::Bytecode::Linker {
 
 
     /**
-     * Una librería estática es simplemente un contenedor de módulos.
+     * Una libreria estatica es simplemente un contenedor de modulos.
      */
     struct StaticLibrary {
         std::string                        path;
@@ -635,11 +672,11 @@ namespace Assembly::Bytecode::Linker {
     struct SymbolInfo {
         std::string space;
         std::string section;
-        uint64_t    relative;    // offset dentro de la sección
-        uint64_t    absolute;    // dirección virtual absoluta
-        uint64_t    file_offset; // se rellena después en build_section_table()
-        std::string module;      // módulo donde se definió
-        uint64_t    size;        // tamaño del label, algunas no tienen
+        uint64_t    relative;    // offset dentro de la seccion
+        uint64_t    absolute;    // direccion virtual absoluta
+        uint64_t    file_offset; // se rellena despues en build_section_table()
+        std::string module;      // modulo donde se definio
+        uint64_t    size;        // tamano del label, algunas no tienen
     };
 
     typedef struct section_info_linker {
@@ -651,8 +688,8 @@ namespace Assembly::Bytecode::Linker {
      * clase Linker va a cumplir dos roles muy distintos:
      *
      * - Linker tradicional
-     *      Recibe varios ejecutables parciales (objetos, módulos, librerías) y
-     *      resuelve símbolos, funciones externas, imports, etc.
+     *      Recibe varios ejecutables parciales (objetos, modulos, librerias) y
+     *      resuelve simbolos, funciones externas, imports, etc.
      *
      * - Builder de ejecutables VELB
      *      Recibe un bytecode crudo + contexto generado por
@@ -660,13 +697,13 @@ namespace Assembly::Bytecode::Linker {
      *
      * Linker tiene 3 fases:
      *      1. Entrada
-     *          - Cargar módulos objeto (.velo)
-     *          - Cargar librerías estáticas (.vela)
+     *          - Cargar modulos objeto (.velo)
+     *          - Cargar librerias estaticas (.vela)
      *          - Cargar ensamblados crudos (bytecode + contexto)
      *
      *      2. Proceso
-     *          - Resolver símbolos
-     *          - Seleccionar módulos necesarios
+     *          - Resolver simbolos
+     *          - Seleccionar modulos necesarios
      *          - Aplicar relocaciones
      *          - Optimizar bytecode
      *          - Fusionar secciones y espacios de direcciones
@@ -691,15 +728,15 @@ namespace Assembly::Bytecode::Linker {
          *      - Validar formato
          *      - Leer header
          *      - Leer secciones
-         *      - Leer tabla de símbolos
+         *      - Leer tabla de simbolos
          *      - Leer relocaciones
          *      - Convertirlo en un Module
-         *      - Añadirlo a modules
+         *      - Anadirlo a modules
          *
          *  Errores posibles
          *      - Archivo no encontrado
-         *      - Formato inválido
-         *      - Símbolos duplicados dentro del módulo
+         *      - Formato invalido
+         *      - Simbolos duplicados dentro del modulo
          *
          * @param path path donde se encuentra el archivo
          */
@@ -708,10 +745,10 @@ namespace Assembly::Bytecode::Linker {
         /**
          * Igual que add_object_file pero desde memoria.
          *      Responsabilidades
-         *          - Interpretar el buffer como un módulo objeto
+         *          - Interpretar el buffer como un modulo objeto
          *          - Validar header
-         *          - Extraer símbolos y relocaciones
-         *          - Añadir a modules
+         *          - Extraer simbolos y relocaciones
+         *          - Anadir a modules
          *
          * @param data buffer del archivo
          */
@@ -720,31 +757,31 @@ namespace Assembly::Bytecode::Linker {
         void merge_space_address(Space &dest, const Space &src);
 
         /**
-         * @brief Registra una entrada de importación en la tabla global del linker.
+         * @brief Registra una entrada de importacion en la tabla global del linker.
          *
-         * Este metodo toma una entrada de importación generada por un módulo
-         * (compuesta por nombre de librería y nombre de función) y la inserta
+         * Este metodo toma una entrada de importacion generada por un modulo
+         * (compuesta por nombre de libreria y nombre de funcion) y la inserta
          * en la tabla global de importaciones del linker.
          *
-         * Si la combinación <lib:func> ya existe en la tabla global, no se crea
-         * una nueva entrada y simplemente se devuelve el índice previamente
+         * Si la combinacion <lib:func> ya existe en la tabla global, no se crea
+         * una nueva entrada y simplemente se devuelve el indice previamente
          * asignado.
          *
-         * Si no existe, se añade una nueva entrada a `import_table`, se genera
-         * un índice único y se actualiza `import_lookup` para permitir búsquedas
+         * Si no existe, se anade una nueva entrada a `import_table`, se genera
+         * un indice unico y se actualiza `import_lookup` para permitir busquedas
          * O(1) mediante la clave "lib:function".
          *
-         * @param imp Entrada de importación local del módulo, que contiene
-         *            el nombre de la librería y el nombre del metodo.
+         * @param imp Entrada de importacion local del modulo, que contiene
+         *            el nombre de la libreria y el nombre del metodo.
          *
          * @return uint64_t
-         *         Índice global dentro de la tabla de importaciones del linker.
-         *         Este índice es el que debe usarse en las relocaciones de tipo
+         *         Indice global dentro de la tabla de importaciones del linker.
+         *         Este indice es el que debe usarse en las relocaciones de tipo
          *         import (por ejemplo, para instrucciones CALLN).
          *
          * @note Este metodo garantiza que no existan duplicados en la tabla
-         *       global de importaciones, incluso si varios módulos importan
-         *       la misma función nativa.
+         *       global de importaciones, incluso si varios modulos importan
+         *       la misma funcion nativa.
          *
          * @see import_table
          * @see import_lookup
@@ -758,7 +795,7 @@ namespace Assembly::Bytecode::Linker {
          *      Crear un Module con:
          *         - bytecode crudo
          *         - contexto (secciones, labels, espacios)
-         *         - símbolos locales
+         *         - simbolos locales
          *         - relocaciones generadas por el ensamblador
          *     Marcarlo como is_object = false (es un ensamblado directo)
          * @param bytecode
@@ -771,13 +808,13 @@ namespace Assembly::Bytecode::Linker {
           * Carga un archivo .vela.
           * Responsabilidades
           *     - Leer header VELA
-          *     - Leer tabla de módulos
-          *     - NO cargar todos los módulos todavía
-          *     - Guardar la librería en libraries
-          *     - Los módulos se cargarán solo si se necesitan para resolver símbolos
+          *     - Leer tabla de modulos
+          *     - NO cargar todos los modulos todavia
+          *     - Guardar la libreria en libraries
+          *     - Los modulos se cargaran solo si se necesitan para resolver simbolos
           *
           * Comportamiento tipo ar/ld
-          *     - Si un símbolo requerido está en la librería -> se extrae ese módulo
+          *     - Si un simbolo requerido esta en la libreria -> se extrae ese modulo
           *     - Si no -> se ignora
          * @param path archivo vela a cargar
          */
@@ -787,31 +824,31 @@ namespace Assembly::Bytecode::Linker {
 
         /**
          * Responsabilidades
-         *     - Construir la tabla global de símbolos
-         *     - Detectar símbolos duplicados
-         *     - Detectar símbolos indefinidos
-         *     - Extraer módulos necesarios de librerías .vela
-         *     - Repetir hasta que no falten símbolos
+         *     - Construir la tabla global de simbolos
+         *     - Detectar simbolos duplicados
+         *     - Detectar simbolos indefinidos
+         *     - Extraer modulos necesarios de librerias .vela
+         *     - Repetir hasta que no falten simbolos
          *
          * Algoritmo (como ld/LLD)
-         *     - Insertar símbolos de módulos ya cargados
-         *     - Mientras existan símbolos indefinidos:
-         *         * Buscar en librerías .vela
-         *         * Si un módulo contiene el símbolo -> cargarlo
-         *         * Añadir sus símbolos
+         *     - Insertar simbolos de modulos ya cargados
+         *     - Mientras existan simbolos indefinidos:
+         *         * Buscar en librerias .vela
+         *         * Si un modulo contiene el simbolo -> cargarlo
+         *         * Anadir sus simbolos
          *
-         *     - Si al final quedan símbolos indefinidos:
+         *     - Si al final quedan simbolos indefinidos:
          *         * Error (a menos que allow_undefined_symbols = true)
          */
         void resolve_symbols();
 
         /**
-         * Aplica las relocaciones de cada módulo.
+         * Aplica las relocaciones de cada modulo.
          *
          * Responsabilidades
-         *     Para cada relocación:
-         *         - Buscar el símbolo en global_symbols
-         *         - Calcular la dirección final
+         *     Para cada relocacion:
+         *         - Buscar el simbolo en global_symbols
+         *         - Calcular la direccion final
          *         - Escribir el valor en el bytecode
          *
          *     Tipos soportados:
@@ -820,7 +857,7 @@ namespace Assembly::Bytecode::Linker {
          *         - REL64
          *
          * Errores
-         *     Símbolo no encontrado
+         *     Simbolo no encontrado
          *     Offset fuera de rango
          */
         void apply_relocations();
@@ -835,7 +872,7 @@ namespace Assembly::Bytecode::Linker {
          *     - Reordenar instrucciones si es seguro
          *
          * Resultado
-         *     - Bytecode más pequeño
+         *     - Bytecode mas pequeno
          *     - Mejor rendimiento en la VM
          */
         void optimize_modules();
@@ -865,13 +902,13 @@ namespace Assembly::Bytecode::Linker {
         /**
          * Permite generar un archivo velb-map:
          * Y dentro:
-         *   - listar módulos incluidos
-         *   - listar símbolos globales
+         *   - listar modulos incluidos
+         *   - listar simbolos globales
          *   - listar relocaciones aplicadas
          *   - listar secciones finales
          *   - listar espacios de direcciones
          *   - listar optimizaciones aplicadas
-         *   - Escribir tamaño final del ejecutable
+         *   - Escribir tamano final del ejecutable
          * @param path
          */
         void write_map_file(const std::string &path);
@@ -891,16 +928,16 @@ namespace Assembly::Bytecode::Linker {
          * // error con ruta (usar c_str() para std::string)
          * std::string path = "/tmp/module.velb";
          * add_errorf(rpt, LinkerError::Type::FileNotFound,
-         *            "No se encontró el fichero '%s'", path.c_str());
+         *            "No se encontro el fichero '%s'", path.c_str());
          *
          * // error con entero (hex)
          * uint64_t addr = 0x1000;
          * add_errorf(rpt, LinkerError::Type::RelocationError,
          *            "Relocation failed at 0x%llx (section %s)", (unsigned long long)addr, "text");
          *
-         * // warning con tipo específico
+         * // warning con tipo especifico
          * add_warningf(rpt, LinkerWarning::Type::DeprecatedOption,
-         *              "La opción %s está obsoleta y será removida en la próxima versión", "--fast-link");
+         *              "La opcion %s esta obsoleta y sera removida en la proxima version", "--fast-link");
          *
          * // imprimir resultado
          * rpt.print_report(std::cout);
@@ -912,7 +949,7 @@ namespace Assembly::Bytecode::Linker {
         ByteWriter *result;
 
     private:
-        // Interno: lista de módulos cargados
+        // Interno: lista de modulos cargados
         struct Module {
             std::string          name;
             std::vector<uint8_t> bytecode;
@@ -990,7 +1027,7 @@ namespace Assembly::Bytecode::Linker {
         std::unordered_map<std::string, uint64_t> string_offsets;
 
         /**
-         * contenido final de la sección "strings"
+         * contenido final de la seccion "strings"
          * "code\0data\0stack\0main\0foo\0bar\0"
          */
         std::vector<uint8_t> string_blob;
@@ -1008,7 +1045,7 @@ namespace Assembly::Bytecode::Linker {
         std::unordered_map<std::string, Space> spaces_address;
 
         /**
-         * Fusiona los espacios de direcciones de todos los módulos.
+         * Fusiona los espacios de direcciones de todos los modulos.
          * Responsabilidades
          *     - Unir rangos de memoria
          *     - Detectar solapamientos
@@ -1018,13 +1055,13 @@ namespace Assembly::Bytecode::Linker {
         void merge_address_spaces();
 
         /**
-         * Fusiona secciones de todos los módulos.
+         * Fusiona secciones de todos los modulos.
          *
          * Responsabilidades
          *     - Concatenar .code
          *     - Concatenar .data
-         *     - Alinear secciones según reglas
-         *     - Actualizar offsets de símbolos
+         *     - Alinear secciones segun reglas
+         *     - Actualizar offsets de simbolos
          */
         void merge_sections();
 
@@ -1033,11 +1070,11 @@ namespace Assembly::Bytecode::Linker {
           * Responsabilidades
           *     Escribir:
           *         - magic "VELB"
-          *         - versión
+          *         - version
           *         - checksum
           *         - timestamp
           *         - arquitectura
-          *         - número de secciones
+          *         - numero de secciones
           *         - tabla de espacios de direcciones
           *     Calcular checksum del ejecutable
          */
@@ -1066,10 +1103,10 @@ namespace Assembly::Bytecode::Linker {
          * Construye la tabla de secciones del ejecutable.
          * Responsabilidades
          *     Escribir:
-         *         - nombre de sección (16 bytes)
+         *         - nombre de seccion (16 bytes)
          *         - rango de memoria
          *         - offset en el archivo
-         *         - tamaño
+         *         - tamano
          */
         void build_section_table();
     };
