@@ -1,0 +1,310 @@
+/*
+ * test_vesta_io.vel  -  Tests de vesta_io.dll
+ *
+ * Cada seccion imprime una etiqueta indicando la funcion probada y lo que
+ * se espera ver, seguida de la salida real de la funcion.  La verificacion
+ * es visual: el operador compara la etiqueta con la linea de salida.
+ *
+ * La seccion de operaciones de fichero escribe un fichero temporal, lee su
+ * contenido de vuelta a la memoria VM y lo imprime para confirmar round-trip.
+ *
+ * Compilar y ejecutar:
+ *   ./vm --build test_vesta_io.vel -o test_vesta_io
+ *   ./vm --run   test_vesta_io.velb
+ *
+ * Requiere vesta_io.dll en el directorio de trabajo.
+ * Genera (y luego lee) el fichero temporal "test_io_out.txt".
+ *
+ * Registros reservados:
+ *   r14 = proc_ptr (resultado de getproc)
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+@Import {
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_print")      }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_println")     }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_print_int")   }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_print_uint")  }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_print_hex")   }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_print_float") }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_fopen")       }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_fclose")      }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_fread")       }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_fwrite")      }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_fflush")      }
+    @Method { @Lib("stdlib/native/io/vesta_io") @Name("vio_read_line")   }
+}
+
+code:
+
+    getproc r14
+
+    // ===== cabecera =====
+    mov   r1, r14
+    mov   r2, @Absolute("all.s_hdr")
+    mov   r3, 26
+    mov   r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+// ----------------------------------------------------------
+// TEST: vio_print  (sin salto de linea)
+// Espera ver en una sola linea: "Hello World!"
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_print")
+    mov  r3, 38
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.str_hello")
+    mov  r3, 6
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")    // imprime "Hello " sin '\n'
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.str_world")
+    mov  r3, 6
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")  // imprime "World!" con '\n'
+
+// ----------------------------------------------------------
+// TEST: vio_println  (con salto de linea automatico)
+// Espera ver: "Standalone println"
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_println")
+    mov  r3, 46
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.str_standalone")
+    mov  r3, 18
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+// ----------------------------------------------------------
+// TEST: vio_print_int  (entero con signo)
+// Espera ver: -42
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_int")
+    mov  r3, 33
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, 0xFFFFFFFFFFFFFFD6        // -42 en complemento a dos
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_int")
+
+// ----------------------------------------------------------
+// TEST: vio_print_uint  (entero sin signo)
+// Espera ver: 18446744073709551615   (UINT64_MAX)
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_uint")
+    mov  r3, 51
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, 0xFFFFFFFFFFFFFFFF        // UINT64_MAX
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_uint")
+
+// ----------------------------------------------------------
+// TEST: vio_print_hex  (hexadecimal con prefijo 0x)
+// Espera ver: 0x00000000000000FF
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_hex")
+    mov  r3, 48
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, 0xFF
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_hex")
+
+// ----------------------------------------------------------
+// TEST: vio_print_float  (double IEEE 754 como bits)
+// Espera ver: 1.5
+//   1.5 bits = 0x3FF8000000000000
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_float")
+    mov  r3, 35
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, 0x3FF8000000000000        // bits IEEE 754 de 1.5
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_float")
+
+// ----------------------------------------------------------
+// TEST: vio_fflush  (vaciado de buffer)
+// Espera ver: 0   (fflush retorna 0 si OK)
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_fflush")
+    mov  r3, 36
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, 0                         // handle=0 -> fflush(NULL)
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_fflush")
+    mov  r1, r0                        // imprimir el codigo de retorno
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_print_uint")
+
+// ----------------------------------------------------------
+// TEST: vio_fopen + vio_fwrite + vio_fclose + vio_fopen + vio_fread
+//
+// Flujo:
+//   1. Abrir "test_io_out.txt" en modo "w"
+//   2. Escribir "VestaFileTest\n" (14 bytes) desde memoria VM
+//   3. Cerrar el fichero
+//   4. Abrir en modo "r"
+//   5. Leer 14 bytes a un buffer VM
+//   6. Imprimir el buffer con vio_print
+//      Esperado: "VestaFileTest" seguido de salto de linea
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_file")
+    mov  r3, 46
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    // abrir para escritura
+    mov  r1, r14
+    mov  r2, @Absolute("all.filepath")
+    mov  r3, 15
+    mov  r4, @Absolute("all.mode_w")
+    mov  r5, 1
+    mov  r15, 5
+    calln @Method("stdlib/native/io/vesta_io:vio_fopen")
+    mov  r11, r0                       // guardar handle de escritura
+
+    // escribir 14 bytes desde VM memory
+    mov  r1, r14
+    mov  r2, @Absolute("all.filedata")
+    mov  r3, 14
+    mov  r4, r11
+    mov  r15, 4
+    calln @Method("stdlib/native/io/vesta_io:vio_fwrite")
+
+    // cerrar fichero de escritura
+    mov  r1, r11
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_fclose")
+
+    // abrir para lectura
+    mov  r1, r14
+    mov  r2, @Absolute("all.filepath")
+    mov  r3, 15
+    mov  r4, @Absolute("all.mode_r")
+    mov  r5, 1
+    mov  r15, 5
+    calln @Method("stdlib/native/io/vesta_io:vio_fopen")
+    mov  r11, r0                       // guardar handle de lectura
+
+    // leer 14 bytes al buffer VM (readbuf)
+    mov  r1, r14
+    mov  r2, @Absolute("all.readbuf")
+    mov  r3, 14
+    mov  r4, r11
+    mov  r15, 4
+    calln @Method("stdlib/native/io/vesta_io:vio_fread")
+    mov  r6, r0                        // bytes leidos
+
+    // cerrar fichero de lectura
+    mov  r1, r11
+    mov  r15, 1
+    calln @Method("stdlib/native/io/vesta_io:vio_fclose")
+
+    // imprimir contenido leido (deberia ser "VestaFileTest\n")
+    mov  r1, r14
+    mov  r2, @Absolute("all.readbuf")
+    mov  r3, r6
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_print")
+
+// ----------------------------------------------------------
+// TEST: vio_println  longitud 0  (linea vacia)
+// Espera ver: una linea en blanco
+// ----------------------------------------------------------
+    mov  r1, r14
+    mov  r2, @Absolute("all.lbl_emptyln")
+    mov  r3, 47
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.str_hello")    // vm_addr no importa si len=0
+    mov  r3, 0                              // len=0 -> linea vacia
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    // ===== pie =====
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_sep")
+    mov  r3, 27
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    mov  r1, r14
+    mov  r2, @Absolute("all.s_done")
+    mov  r3, 21
+    mov  r15, 3
+    calln @Method("stdlib/native/io/vesta_io:vio_println")
+
+    hlt
+end_code:
+
+align 16
+data:
+    // cabecera y pie
+    s_hdr       db "=== vesta_io I/O tests ==="
+    s_sep       db "==========================="
+    s_done      db "Tests IO completados."
+
+    // etiquetas de seccion (lo que espera el operador)
+    lbl_print    db "-- vio_print: esperado -> Hello World!"
+    lbl_println  db "-- vio_println: esperado -> Standalone println"
+    lbl_int      db "-- vio_print_int: esperado -> -42"
+    lbl_uint     db "-- vio_print_uint: esperado -> 18446744073709551615"
+    lbl_hex      db "-- vio_print_hex: esperado -> 0x00000000000000FF"
+    lbl_float    db "-- vio_print_float: esperado -> 1.5"
+    lbl_fflush   db "-- vio_fflush(stdout): esperado -> 0"
+    lbl_file     db "-- vio_fwrite/fread: esperado -> VestaFileTest"
+    lbl_emptyln  db "-- vio_println len=0: esperado -> [linea vacia]"
+
+    // cadenas de prueba para vio_print / vio_println
+    str_hello      db "Hello "
+    str_world      db "World!"
+    str_standalone db "Standalone println"
+
+    // operaciones de fichero
+    filepath    db "test_io_out.txt"
+    mode_w      db "w"
+    mode_r      db "r"
+    filedata    db "VestaFileTest", 0x0A   // 13 chars + '\n' = 14 bytes
+
+    // buffer de lectura (16 bytes a cero, se sobreescribe con vio_fread)
+    readbuf     db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+end_data:

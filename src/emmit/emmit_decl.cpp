@@ -1211,6 +1211,127 @@ void emit_gcderef(
 }
 
 // =========================================================================
+// addcur / vmcopy / vcopyh emission
+// =========================================================================
+
+/**
+ * @brief Emite dos bytes de datos para la instruccion addcur curN, imm16.
+ *
+ * addcur curN, imm16  ->  [ctrl][0x00][imm_lo][imm_hi]
+ *   ctrl = (cur_idx << 4)
+ *
+ * El operando imm puede ser un literal entero (positivo o negativo).
+ *
+ * @param instruction_parser Instruccion parseada (operandos: curN, imm).
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_addcur(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto *cur_op = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *imm_op = dynamic_cast<vm::NumberOperand *>(instruction_parser->operands[1].get());
+
+    if (!cur_op || !imm_op)
+        throw std::runtime_error("addcur: requiere (curN, imm16)");
+
+    std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
+    if (!opt_cur || opt_cur.value() > 3)
+        throw std::runtime_error("addcur: primer operando debe ser cur0-cur3");
+
+    uint8_t cur_idx = opt_cur.value() & 0x3;
+
+    // el campo value de NumberOperand es una cadena; parsear a numerico
+    auto imm_opt = vm::parse_number_safe(imm_op->value);
+    if (!imm_opt)
+        throw std::runtime_error("addcur: inmediato invalido: " + imm_op->value);
+    int16_t imm16 = static_cast<int16_t>(imm_opt.value()); // truncar a 16 bits con signo
+
+    code_final.emit8(static_cast<uint8_t>(cur_idx << 4)); // ctrl: bits 5-4 = cur_idx
+    code_final.emit8(0x00);                                // padding
+    code_final.emit8(static_cast<uint8_t>(imm16 & 0xFF));        // imm_lo
+    code_final.emit8(static_cast<uint8_t>((imm16 >> 8) & 0xFF)); // imm_hi
+}
+
+/**
+ * @brief Emite dos bytes de datos para vmcopy curN, rSrc, rLen.
+ *
+ * vmcopy curN, rSrc, rLen  ->  [byte_A][byte_B]
+ *   byte_A = (cur_idx << 4) | rSrc
+ *   byte_B = (rLen    << 4)
+ *
+ * @param instruction_parser Instruccion parseada (operandos: curN, rSrc, rLen).
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_vmcopy(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto *cur_op  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *src_op  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+    auto *len_op  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[2].get());
+
+    if (!cur_op || !src_op || !len_op)
+        throw std::runtime_error("vmcopy: requiere (curN, rSrc, rLen) todos registros");
+
+    std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
+    if (!opt_cur || opt_cur.value() > 3)
+        throw std::runtime_error("vmcopy: primer operando debe ser cur0-cur3");
+
+    uint8_t cur_idx = opt_cur.value() & 0x3;
+    uint8_t r_src   = encode_reg_general(src_op->name.c_str());
+    uint8_t r_len   = encode_reg_general(len_op->name.c_str());
+
+    code_final.emit8(static_cast<uint8_t>((cur_idx << 4) | (r_src & 0xF))); // byte_A
+    code_final.emit8(static_cast<uint8_t>(r_len << 4));                      // byte_B
+}
+
+/**
+ * @brief Emite dos bytes de datos para vcopyh rDst, curN, rLen.
+ *
+ * vcopyh rDst, curN, rLen  ->  [byte_A][byte_B]
+ *   byte_A = (cur_idx << 4) | rDst
+ *   byte_B = (rLen    << 4)
+ *
+ * @param instruction_parser Instruccion parseada (operandos: rDst, curN, rLen).
+ * @param code_final         Escritor de bytecode.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_vcopyh(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto *dst_op  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto *cur_op  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+    auto *len_op  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[2].get());
+
+    if (!dst_op || !cur_op || !len_op)
+        throw std::runtime_error("vcopyh: requiere (rDst, curN, rLen) todos registros");
+
+    std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
+    if (!opt_cur || opt_cur.value() > 3)
+        throw std::runtime_error("vcopyh: segundo operando debe ser cur0-cur3");
+
+    uint8_t cur_idx = opt_cur.value() & 0x3;
+    uint8_t r_dst   = encode_reg_general(dst_op->name.c_str());
+    uint8_t r_len   = encode_reg_general(len_op->name.c_str());
+
+    code_final.emit8(static_cast<uint8_t>((cur_idx << 4) | (r_dst & 0xF))); // byte_A
+    code_final.emit8(static_cast<uint8_t>(r_len << 4));                      // byte_B
+}
+
+// =========================================================================
 // Absolute 64-bit instruction emission (callvm, enter, jmp abs)
 // =========================================================================
 

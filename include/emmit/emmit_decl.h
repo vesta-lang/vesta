@@ -620,6 +620,74 @@ namespace Assembly::Bytecode {
     );
 
     /**
+     * @brief Emite la instruccion addcur curN, imm16.
+     *
+     * Suma un inmediato con signo de 16 bits al registro cursor indicado.
+     * Avanzar: imm > 0.  Retroceder: imm < 0.
+     *
+     * Codificacion (FIXED_6):
+     * @code
+     *   [0x00][0xC3][ctrl][0x00][imm_lo][imm_hi]
+     *   ctrl: bits 5-4 = cur_idx, resto = 0
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_addcur(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite la instruccion vmcopy curN, rSrc, rLen (VM memory -> host memory).
+     *
+     * Codificacion (FIXED_4):
+     * @code
+     *   [0x00][0xC4][byte_A][byte_B]
+     *   byte_A: bits 5-4 = cur_idx, bits 3-0 = rSrc
+     *   byte_B: bits 7-4 = rLen,    bits 3-0 = 0
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_vmcopy(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite la instruccion vcopyh rDst, curN, rLen (host memory -> VM memory).
+     *
+     * Codificacion (FIXED_4):
+     * @code
+     *   [0x00][0xC5][byte_A][byte_B]
+     *   byte_A: bits 5-4 = cur_idx, bits 3-0 = rDst
+     *   byte_B: bits 7-4 = rLen,    bits 3-0 = 0
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_vcopyh(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
      * @brief Emite instrucciones con direccion absoluta de 64 bits.
      *
      * Formato emitido: [opcode2][8 bytes de direccion absoluta].

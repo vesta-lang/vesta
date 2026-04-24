@@ -492,6 +492,69 @@ namespace runtime {
      */
     void exec_instr_gcderef(ProcessVM *vm, const DecodedInstr &instr);
 
+    /**
+     * @brief Ejecuta ADDCUR: suma un inmediato con signo al registro cursor indicado.
+     *
+     * Permite avanzar (imm > 0) o retroceder (imm < 0) el cursor en un numero
+     * arbitrario de bytes sin necesidad del patron xchg/adds/xchg.
+     *
+     * Formato: [0x00][0xC3][ctrl][pad][imm_lo][imm_hi]  (FIXED_6)
+     *   ctrl bits 5-4 = cur_idx (0-3); imm16 = desplazamiento con signo.
+     */
+    void exec_instr_addcur(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta VMCOPY: copia bytes de VM memory a host memory (cursor).
+     *
+     * Copia mem_data.reg_base bytes desde VM memory[rSrc] a host memory[curN].
+     * Tras la copia avanza automaticamente curN y rSrc en rLen bytes.
+     * Usa la ruta SIMD mas rapida disponible (AVX-512, AVX2, SSE2 o memcpy).
+     *
+     * Formato: [0x00][0xC4][byte_A][byte_B]  (FIXED_4)
+     *   byte_A bits 5-4 = cur_idx, bits 3-0 = rSrc; byte_B bits 7-4 = rLen.
+     */
+    void exec_instr_vmcopy(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta VCOPYH: copia bytes de host memory (cursor) a VM memory.
+     *
+     * Inverso de VMCOPY: copia rLen bytes desde host memory[curN] a VM memory[rDst].
+     * Avanza curN y rDst en rLen bytes tras la copia.
+     *
+     * Formato: [0x00][0xC5][byte_A][byte_B]  (FIXED_4)
+     *   byte_A bits 5-4 = cur_idx, bits 3-0 = rDst; byte_B bits 7-4 = rLen.
+     */
+    void exec_instr_vcopyh(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta GETPROC rN: carga el puntero al proceso actual en rN.
+     *
+     * El valor almacenado es el ProcessVM* del proceso que ejecuta la instruccion,
+     * reinterpretado como uint64_t.  Puede pasarse a una funcion nativa via calln
+     * para que acceda a la memoria VM del proceso a traves de la VestaPluginAPI.
+     *
+     * Formato: [0x00][0xC6][ctrl][0x00]  (FIXED_4, ctrl bits 7-4 = reg_dst)
+     */
+    void exec_instr_getproc(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta GETVM rN: carga el puntero a la instancia VM propietaria en rN.
+     *
+     * Sigue la cadena ProcessVM -> Scheduler::vm_reference para obtener la VM*.
+     *
+     * Formato: [0x00][0xC7][ctrl][0x00]  (FIXED_4, ctrl bits 7-4 = reg_dst)
+     */
+    void exec_instr_getvm(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta GETMGR rN: carga el puntero al ManageVM del gestor en rN.
+     *
+     * Sigue la cadena ProcessVM -> Scheduler::vm_reference -> VM::mgr_vm.
+     *
+     * Formato: [0x00][0xC8][ctrl][0x00]  (FIXED_4, ctrl bits 7-4 = reg_dst)
+     */
+    void exec_instr_getmgr(ProcessVM *vm, const DecodedInstr &instr);
+
     // =========================================================================
     //  Ejecutores: GC generacional (0x00 0xA0 .. 0xA5)
     // =========================================================================

@@ -21,10 +21,6 @@
 #include "profiler/timer.h"
 #include "util/fs_utils.h"
 
-#ifdef _WIN32
-    #define popen _popen
-    #define pclose _pclose
-#endif
 
 namespace asm_multi_process {
     int run_worker(const std::string &file_name,
@@ -68,9 +64,19 @@ namespace asm_multi_process {
         }
         vesta::scout() << "[Tiempo parser] " << t_parser.us() << " us " << t_parser.ms() << " ms\n";
 
-        // Resolver imports
+        // Resolver imports con orden de busqueda:
+        //   1. Directorio del archivo fuente (relativo al .vel que se compila)
+        //   2. Directorio de trabajo actual (CWD, compatibilidad con invocaciones legacy)
+        //   3. Directorio del ejecutable (libreria estandar instalada junto al binario)
         std::unordered_set<std::string> imported_files;
-        Assembly::Bytecode::resolve_imports(program, imported_files);
+        std::string source_base =
+            std::filesystem::path(file_name).parent_path().string();
+        std::vector<std::string> import_search_paths = {
+            std::filesystem::current_path().string(),
+            std::filesystem::path(fs::get_executable_path()).parent_path().string(),
+        };
+        Assembly::Bytecode::resolve_imports(
+            program, imported_files, source_base, import_search_paths);
 
         // Ensamblar
         Assembler asmblr;
@@ -154,14 +160,29 @@ namespace asm_multi_process {
         std::string result;
         char buffer[256];
 
+        // En Windows, _popen ejecuta "cmd.exe /C <cmd>".
+        // cmd.exe /C aplica quote-stripping: si el primer y ultimo caracter de <cmd>
+        // son comillas dobles, las elimina. Esto rompe rutas con espacios como
+        // "C:\Program Files\vesta.exe" --worker "f.vel" -> C:\Program Files\... (mal).
+        // La solucion es envolver el comando completo en un par extra de comillas para
+        // que tras el stripping quede: "C:\Program Files\vesta.exe" --worker "f.vel".
+#ifdef _WIN32
+        std::string w32_cmd = "\"" + cmd + "\"";
+        FILE *pipe = _popen(w32_cmd.c_str(), "r");
+#else
         FILE *pipe = popen(cmd.c_str(), "r");
+#endif
         if (!pipe) return "ERROR: no se pudo ejecutar el comando\n";
 
         while (fgets(buffer, sizeof(buffer), pipe)) {
             result += buffer;
         }
 
+#ifdef _WIN32
+        _pclose(pipe);
+#else
         pclose(pipe);
+#endif
         return result;
     }
 
@@ -215,15 +236,22 @@ namespace asm_multi_process {
                 }
 
                 std::string out = f + ".obj";
-                std::string cmd = fs::get_executable_path();
+                // comillas obligatorias: la ruta del ejecutable puede contener espacios
+                // (p.ej. C:\Program Files\VestaVM\vesta.exe)
+                std::string cmd = "\"" + fs::get_executable_path() + "\"";
                 cmd += (" --worker \"" + f + "\" -o \"" + out + "\"");
+                // redirigir stderr al stdout capturado para que los errores del worker
+                // no se mezclen con la barra de progreso del driver en la consola
+                cmd += " 2>&1";
 
                 std::string output_comand = run_and_capture(cmd); {
                     std::lock_guard lk(results_m);
 
                     bool failed =
                             output_comand.find("ERROR") != std::string::npos ||
-                            output_comand.find("Parse error") != std::string::npos;
+                            output_comand.find("Parse error") != std::string::npos ||
+                            output_comand.find("terminate called") != std::string::npos ||
+                            output_comand.find("No se pudo abrir") != std::string::npos;
 
                     size_t pos = output_comand.find("__VESTA_TIMES__");
                     long parser_us = 0, assembler_us = 0, linker_us = 0, total_us = 0;
@@ -297,10 +325,10 @@ namespace asm_multi_process {
             return EXIT_FAILURE;
         }
 
-        // Llamar al linker
-        std::string cmd = fs::get_executable_path(); // obtenemos el nombre del ejecutable
-        for (auto &o: obj_files) cmd += "\"" + o + "\" ";
-        cmd += "-o \"" + output + "\"";
+        // Llamar al linker (la ruta del ejecutable puede contener espacios)
+        std::string cmd = "\"" + fs::get_executable_path() + "\"";
+        for (auto &o: obj_files) cmd += " \"" + o + "\"";
+        cmd += " -o \"" + output + "\"";
 
         std::string output_comand = run_and_capture(cmd);
         vesta::scout() << output << "\n";
