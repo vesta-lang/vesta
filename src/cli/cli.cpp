@@ -36,10 +36,16 @@
 #include "runtime/proceso_runtime.h"
 #include "disasm/disasm.h"
 #include "util/ansi.h"
+#include "util/fs_utils.h"
 #include <cstring>
 #include <iomanip>
 #include <chrono>
 #include <ctime>
+#include <fstream>
+#include <filesystem>
+#ifdef VESTA_HAS_PREPROCESSOR
+#  include "preprocessor/preprocessor.h"
+#endif
 
 #if defined(_WIN32)
 #  include <conio.h>
@@ -407,6 +413,149 @@ namespace cli {
             std::cout << "[build] OK -> " << out << ".velb\n";
         else
             std::cout << "[build] error (codigo " << rc << ")\n";
+    }
+
+    /**
+     * @brief Preprocesa un archivo .vel con vpp y muestra o guarda el resultado.
+     *
+     * Expande macros, directivas #define/#if/#foreach/#import, etc. sin compilar.
+     * Util para depurar macros y verificar la salida del preprocesador.
+     *
+     * Formato: <archivo.vel> [-o <salida>] [-D NAME[=val]] [-I ruta] [-M ruta]
+     *
+     * @param args Argumentos del comando.
+     */
+    static void command_vpp(const std::string &args) {
+#ifndef VESTA_HAS_PREPROCESSOR
+        vesta::scout() << "[vpp] El preprocesador no esta disponible en esta build "
+                          "(recompilar con VESTA_BUILD_PREPROCESSOR=ON)\n";
+        (void)args;
+#else
+        // --- parsear argumentos ---
+        auto words = split_words(args);
+        if (words.empty()) {
+            vesta::scout() << "Uso: vpp <archivo.vel> [-o <salida>] "
+                              "[-D NAME[=val]] [-I ruta] [-M ruta]\n";
+            return;
+        }
+
+        std::string              src_file;
+        std::string              out_file;   // vacio = stdout del REPL
+        std::vector<std::string> defines;
+        std::vector<std::string> inc_paths;
+        std::vector<std::string> imp_paths;
+
+        for (size_t i = 0; i < words.size(); ++i) {
+            const auto &w = words[i];
+            if (w == "-o" && i + 1 < words.size()) {
+                out_file = words[++i];
+            } else if (w.size() > 2 && w.substr(0, 2) == "-D") {
+                defines.push_back(w.substr(2));
+            } else if (w == "-D" && i + 1 < words.size()) {
+                defines.push_back(words[++i]);
+            } else if (w.size() > 2 && w.substr(0, 2) == "-I") {
+                inc_paths.push_back(w.substr(2));
+            } else if (w == "-I" && i + 1 < words.size()) {
+                inc_paths.push_back(words[++i]);
+            } else if (w.size() > 2 && w.substr(0, 2) == "-M") {
+                imp_paths.push_back(w.substr(2));
+            } else if (w == "-M" && i + 1 < words.size()) {
+                imp_paths.push_back(words[++i]);
+            } else if (src_file.empty()) {
+                src_file = w;
+            }
+        }
+
+        // --- leer el archivo fuente ---
+        std::ifstream ifs(src_file, std::ios::binary);
+        if (!ifs) {
+            vesta::scout() << "[vpp] No se puede abrir: " << src_file << "\n";
+            return;
+        }
+        std::string source((std::istreambuf_iterator<char>(ifs)),
+                            std::istreambuf_iterator<char>());
+
+        // --- configurar el preprocesador ---
+        bool had_error = false;
+        vpp::Preprocessor pp([&had_error](const vpp::Diagnostic &d) {
+            vesta::scout() << d.format() << "\n";
+            if (d.level >= vpp::DiagLevel::ERR) had_error = true;
+        });
+
+        // directorio del archivo fuente para #include relativos
+        std::string src_dir =
+            std::filesystem::path(src_file).parent_path().string();
+        if (src_dir.empty()) src_dir = ".";
+        pp.options().include_paths.push_back(src_dir);
+
+        // rutas de stdlib (igual que en run_worker)
+        std::string exe_dir =
+            std::filesystem::path(fs::get_executable_path()).parent_path().string();
+        pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
+        pp.options().import_paths.push_back(exe_dir + "/include_lib");
+        pp.options().import_paths.push_back(src_dir);
+
+        // rutas adicionales del usuario
+        for (auto &p : inc_paths) pp.options().include_paths.push_back(p);
+        for (auto &p : imp_paths) pp.options().import_paths.push_back(p);
+        for (auto &d : defines)   pp.options().predefines.push_back(d);
+
+        // macros de plataforma
+#ifdef _WIN32
+        pp.options().predefines.push_back("__VPP_WINDOWS__");
+#elif defined(__linux__)
+        pp.options().predefines.push_back("__VPP_LINUX__");
+#elif defined(__APPLE__)
+        pp.options().predefines.push_back("__VPP_MACOS__");
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+        pp.options().predefines.push_back("__VPP_X86_64__");
+#elif defined(__i386__) || defined(_M_IX86)
+        pp.options().predefines.push_back("__VPP_X86_32__");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+        pp.options().predefines.push_back("__VPP_AARCH64__");
+#endif
+
+        // --- ejecutar el preprocesador ---
+        std::string result = pp.process(source, src_file);
+
+        if (had_error) {
+            vesta::scout() << "[vpp] preprocesado fallido con "
+                           << pp.diagnostics().error_count() << " error(es)\n";
+            return;
+        }
+
+        if (pp.diagnostics().warning_count() > 0)
+            vesta::scout() << "[vpp] " << pp.diagnostics().warning_count()
+                           << " advertencia(s)\n";
+
+        // --- escribir resultado ---
+        if (out_file.empty()) {
+            // sin -o: imprimir directamente en el REPL con numeracion de lineas
+            std::istringstream ss(result);
+            std::string        line;
+            size_t             n = 1;
+            vesta::scout() << ansi::c(ansi::DIM)
+                           << "--- " << src_file << " (preprocesado) ---\n"
+                           << ansi::c(ansi::RESET);
+            while (std::getline(ss, line)) {
+                vesta::scout() << ansi::c(ansi::DIM)
+                               << std::setw(4) << n++ << "  "
+                               << ansi::c(ansi::RESET)
+                               << line << "\n";
+            }
+            vesta::scout() << ansi::c(ansi::DIM) << "---\n" << ansi::c(ansi::RESET);
+        } else {
+            std::ofstream ofs(out_file, std::ios::binary);
+            if (!ofs) {
+                vesta::scout() << "[vpp] No se puede crear: " << out_file << "\n";
+                return;
+            }
+            ofs << result;
+            vesta::scout() << "[vpp] OK -> " << out_file
+                           << "  (" << result.size() << " bytes)\n";
+        }
+#endif
     }
 
     /**
@@ -1030,8 +1179,9 @@ namespace cli {
         { "ls",     "ls [ruta]",                                 "Listar contenido de directorio",                command_ls     },
         { "vms",    "vms",                                       "Listar managers activos con ID y estado",       command_vms    },
         { "kill",   "kill <id>",                                 "Detener y eliminar manager por ID",             command_kill   },
-        { "build",  "build <archivo.vel> [-o <salida>]",         "Compilar .vel a .velb",                         command_build  },
-        { "disasm", "disasm <archivo.velb>",                     "Desensamblar bytecode VestaVM",                 command_disasm },
+        { "build",  "build <archivo.vel> [-o <salida>]",                       "Compilar .vel a .velb",                                     command_build  },
+        { "vpp",    "vpp <archivo.vel> [-o <salida>] [-D N] [-I r] [-M r]", "Preprocesar .vel y mostrar/guardar resultado expandido",     command_vpp    },
+        { "disasm", "disasm <archivo.velb>",                                 "Desensamblar bytecode VestaVM",                             command_disasm },
         { "exec",   "exec <archivo.velb> [--schedulers N]",      "Ejecutar .velb en background",                  command_exec   },
         { "run",    "run <nombre> <ruta.velb> [--schedulers N] [--stats]", "Ejecutar .velb con manager nombrado (--stats para estadisticas)", command_run },
         { "pwd",    "pwd",                                       "Mostrar directorio de trabajo actual",          command_pwd    },

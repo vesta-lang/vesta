@@ -20,6 +20,10 @@
 #include "util/assembler_multiprocess.h"
 #include "profiler/timer.h"
 #include "util/fs_utils.h"
+#include "linker/velb_linker_bytecode.h"
+#ifdef VESTA_HAS_PREPROCESSOR
+    #include "preprocessor/preprocessor.h"
+#endif
 
 
 namespace asm_multi_process {
@@ -47,6 +51,52 @@ namespace asm_multi_process {
             std::cerr << "ERROR: Archivo vacio\n";
             return 1;
         }
+
+#ifdef VESTA_HAS_PREPROCESSOR
+        // Preprocesado: expandir macros, directivas #define/#if/#foreach/#import, etc.
+        {
+            vpp::Preprocessor pp;
+
+            // configurar rutas de busqueda para #include y #import
+            std::string source_dir =
+                std::filesystem::path(file_name).parent_path().string();
+            pp.options().include_paths.push_back(source_dir);
+
+            // ruta de la libreria estandar de macros vpp (junto al ejecutable)
+            std::string exe_dir =
+                std::filesystem::path(fs::get_executable_path()).parent_path().string();
+            pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
+            pp.options().import_paths.push_back(exe_dir + "/include_lib");
+            pp.options().import_paths.push_back(source_dir);
+
+            // macros de plataforma predefinidas para vesta/platform.vph
+#ifdef _WIN32
+            pp.options().predefines.push_back("__VPP_WINDOWS__");
+#elif defined(__linux__)
+            pp.options().predefines.push_back("__VPP_LINUX__");
+#elif defined(__APPLE__)
+            pp.options().predefines.push_back("__VPP_MACOS__");
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+            pp.options().predefines.push_back("__VPP_X86_64__");
+#elif defined(__i386__) || defined(_M_IX86)
+            pp.options().predefines.push_back("__VPP_X86_32__");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+            pp.options().predefines.push_back("__VPP_AARCH64__");
+#endif
+
+            std::string processed = pp.process(code, file_name);
+            if (pp.diagnostics().has_errors()) {
+                for (const auto& d : pp.diagnostics().diagnostics()) {
+                    std::cerr << d.loc.file << ":" << d.loc.line << ": "
+                              << (d.level == vpp::DiagLevel::ERR ? "error: " : "warning: ")
+                              << d.message << "\n";
+                }
+                return 1;
+            }
+            code = std::move(processed);
+        }
+#endif
 
         // Lexer + Parser
 
@@ -325,13 +375,20 @@ namespace asm_multi_process {
             return EXIT_FAILURE;
         }
 
-        // Llamar al linker (la ruta del ejecutable puede contener espacios)
-        std::string cmd = "\"" + fs::get_executable_path() + "\"";
-        for (auto &o: obj_files) cmd += " \"" + o + "\"";
-        cmd += " -o \"" + output + "\"";
-
-        std::string output_comand = run_and_capture(cmd);
-        vesta::scout() << output << "\n";
+        // Invocar el linker directamente via C++ para evitar spawnar un subproceso
+        // sin flag reconocido (que arrancaria el REPL y bloquearia indefinidamente).
+        try {
+            Assembly::Bytecode::Linker::Linker linker;
+            for (auto &o : obj_files) linker.add_object_file(o);
+            linker.build_executable();
+            linker.write_to_file(output);
+            vesta::scout() << output << "\n";
+        } catch (const std::exception &e) {
+            std::cerr << "ERROR: Linker: " << e.what() << "\n";
+            std::cout << "\n[Tiempo total driver] " << global.us() << " us "
+                      << global.ms() << " ms\n";
+            return EXIT_FAILURE;
+        }
 
         std::cout << "\n[Tiempo total driver] " << global.us() << " us "
                 << global.ms() << " ms\n";
