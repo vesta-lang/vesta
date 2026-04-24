@@ -1,316 +1,296 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#ifndef VM_STATE_EVENT_H
+/**
+ * @file vm_state_event.h
+ * @brief Definicion de los estados y eventos del proceso virtual de VestaVM.
+ *
+ * Define la enumeracion @c VMStateEvent que representa las transiciones
+ * de estado de un proceso: NEW, READY, RUNNING, BLOCKED, WAITING, DEAD.
+ */#ifndef VM_STATE_EVENT_H
 #define VM_STATE_EVENT_H
 
 namespace runtime {
-    class ProcessVM;
+    class ProcessVM; ///< Proceso virtual (declaracion adelantada)
 
     /**
-     * @brief Representa los posibles estados de los hilos de la VM.
+     * @brief Estados posibles de un proceso virtual en la FSM del scheduler.
      *
-     * Cada hilo dentro de la VM puede encontrarse en uno de estos estados,
-     * lo cual permite al planificador (scheduler) controlar su ejecución,
-     * suspensión, bloqueo y finalización.
+     * La FSM del scheduler controla el ciclo de vida de cada proceso virtual.
+     * Los estados se organizan segun la fase del ciclo de instruccion o la
+     * condicion de bloqueo del proceso:
+     *
+     *   NEW -> READY -> RUNNING -> DECODE -> EXECUTE -> READY (ciclo normal)
+     *                           -> EXECUTE -> WAIT_IO -> READY (I/O)
+     *                           -> EXECUTE -> BLOCKED -> READY (temporizador/evento)
+     *                           -> EXECUTE -> HALT (fin normal)
+     *                           -> EXECUTE -> DEAD (error fatal)
      */
     typedef enum vm_state {
         /**
-         * @brief El hilo está listo para ejecutarse, pero no está corriendo.
+         * @brief El proceso esta listo para ejecutarse pero no tiene la CPU virtual.
          *
-         * @details
-         * Se usa cuando:
-         *  - El hilo ha sido creado y ya tiene su contexto inicial preparado.
-         *  - El hilo ha cedido voluntariamente la CPU (yield).
-         *  - El hilo ha sido desbloqueado tras un evento o temporizador.
+         * Condiciones de entrada:
+         *   - El proceso fue creado y su contexto esta preparado.
+         *   - El proceso cedio la CPU (yield) voluntariamente.
+         *   - El proceso fue desbloqueado tras un evento o temporizador.
          *
-         * Implica:
-         *  - El scheduler puede seleccionarlo para ejecutarse?
+         * Desde READY el scheduler puede seleccionar el proceso para ejecutarlo.
          */
         READY,
 
-
         /**
-         * @brief El hilo está actualmente ejecutándose.
+         * @brief El proceso tiene actualmente la CPU virtual asignada.
          *
-         * @details
-         * Se usa cuando:
-         *  - El scheduler selecciona este hilo en un tick.
+         * Condiciones de entrada:
+         *   - El scheduler selecciono este proceso en su quantum.
          *
-         * Implica:
-         *  - El hilo tiene el control de la "CPU" virtual.
-         *  - Puede cambiar a otro estado según avance la ejecución.
+         * El proceso puede cambiar a DECODE, WAIT_IO, BLOCKED, HALT o DEAD
+         * segun el resultado de la instruccion en curso.
          */
         RUNNING,
 
         /**
-         * @brief El hilo está bloqueado esperando un evento, tiempo o señal.
+         * @brief El proceso esta bloqueado esperando un evento, tiempo o senal externa.
          *
-         * @details
-         * Se usa cuando:
-         *  - El hilo recién creado aún no está listo para ejecutarse.
-         *  - El hilo espera un evento externo (I/O, sincronización, etc.).
-         *  - El hilo espera un temporizador o condición.
+         * Condiciones de entrada:
+         *   - El proceso espera un evento de sincronizacion.
+         *   - El proceso espera un temporizador (time_sleep).
          *
-         * Implica:
-         *  - El hilo no será ejecutado hasta que sea desbloqueado.
+         * El proceso no sera ejecutado hasta que sea desbloqueado por el evento esperado.
          */
         BLOCKED,
 
         /**
-         * @brief El hilo ha terminado su ejecución permanentemente.
+         * @brief El proceso ha terminado su ejecucion de forma permanente por error fatal.
          *
-         * @details
-         * Se usa cuando:
-         *  - La función principal del hilo retorna.
-         *  - El hilo finaliza por un error fatal.
-         *  - El hilo se cierra explícitamente.
+         * Condiciones de entrada:
+         *   - La funcion principal del proceso retorno.
+         *   - El proceso encontro un error irrecuperable (SEGFAULT, instruccion ilegal, etc.).
+         *   - El proceso fue terminado explicitamente.
          *
-         * Implica:
-         *  - El hilo no volverá a ejecutarse.
-         *  - Su stack y recursos pueden ser liberados.
+         * Un proceso DEAD no volvera a ejecutarse; sus recursos pueden liberarse.
          */
         DEAD,
 
         /**
-         * @brief La VM está decodificando la instrucción obtenida.
+         * @brief El scheduler esta descodificando la instruccion actual del proceso.
          *
-         * @details
-         * Se usa cuando:
-         *  - La instrucción ya fue leída y ahora se interpreta.
+         * Condiciones de entrada:
+         *   - El proceso paso de RUNNING/READY a la fase de descodificacion.
          *
-         * Implica:
-         *  - Se determina el opcode, operandos y modo de direccionamiento.
-         *  - Se preparan los datos necesarios para la ejecución.
+         * En este estado se determina el opcode, los operandos y el modo de
+         * direccionamiento de la instruccion en PC.
          */
         DECODE,
 
         /**
-         * @brief La VM está ejecutando la instrucción decodificada.
+         * @brief El scheduler esta ejecutando la instruccion ya descodificada.
          *
-         * @details
-         * Se usa cuando:
-         *  - La instrucción ya fue decodificada y se está ejecutando.
+         * Condiciones de entrada:
+         *   - La fase DECODE completo con exito (EVT_DECODE_DONE).
          *
-         * Implica:
-         *  - Se modifican registros, memoria o estado interno.
-         *  - Puede generar cambios de estado (WAIT_IO, BLOCKED, etc.).
+         * La ejecucion puede modificar registros, memoria o el estado interno
+         * del proceso, y puede generar los eventos EVT_EXEC_DONE, EVT_IO_WAIT,
+         * EVT_HALT o EVT_ERROR.
          */
         EXECUTE,
 
-
         /**
-         * @brief La VM está esperando una operación de entrada/salida.
+         * @brief El proceso esta esperando la finalizacion de una operacion de E/S.
          *
-         * @details
-         * Se usa cuando:
-         *  - La instrucción requiere esperar un dispositivo o evento externo.
+         * Condiciones de entrada:
+         *   - La instruccion en EXECUTE detecto que necesita esperar un dispositivo externo.
          *
-         * Implica:
-         *  - El hilo no puede continuar hasta que la operación I/O termine.
-         *  - El scheduler puede ejecutar otros "hilos" mientras tanto.
+         * El scheduler puede ejecutar otros procesos mientras este espera.
+         * Cuando la E/S termina se genera EVT_IO_READY y el proceso vuelve a READY.
          */
         WAIT_IO,
 
         /**
-         * @brief La VM ha detenido su ejecución.
+         * @brief El proceso detendio su ejecucion por una instruccion HALT o parada explicita.
          *
-         * @details
-         * Se usa cuando:
-         *  - La VM recibe una instrucción HALT.
-         *  - Se detiene explícitamente por el usuario o el sistema.
+         * Condiciones de entrada:
+         *   - La instruccion HALT fue encontrada.
+         *   - El sistema solicito la parada del proceso.
          *
-         * Implica:
-         *  - La VM no ejecutará más instrucciones.
-         *  - Puede ser reiniciada o destruida.
+         * Un proceso HALT no ejecutara mas instrucciones pero puede ser reiniciado.
          */
         HALT,
 
         /**
-         * El proceso es nuevo y a sido creado, no se a puesto aun en ejecuccion hasta que se marque como READY.
+         * @brief El proceso fue recien creado y no esta listo para ejecutarse.
+         *
+         * Permanece en este estado hasta que se llama a make_ready(pid),
+         * que lo pone en READY y lo inserta en la cola del scheduler.
          */
         NEW,
 
         /**
-         * Este no es un estado real, sino que se usa para obtener cuantos estados
-         * existen en nuestra maquina de estados.
+         * @brief Centinela que indica el numero total de estados.
+         *
+         * No es un estado real; se usa para dimensionar la tabla de transiciones
+         * fsm[NUM_STATES][NUM_EVENTS].
          */
         NUM_STATES
     } vm_state;
 
     /**
-     * @brief Eventos que disparan transiciones en la máquina de estados de la VM.
+     * @brief Eventos que disparan transiciones en la FSM del scheduler.
      *
-     * Cada evento representa un suceso interno del ciclo de ejecución
-     * o una condición externa que obliga a cambiar de estado.
+     * Cada evento representa un suceso interno del ciclo de instruccion o
+     * una condicion externa que obliga a cambiar el estado del proceso.
      */
     enum vm_event {
         /**
-         * @brief El scheduler ha seleccionado este hilo para ejecutarse.
+         * @brief El scheduler selecciono este proceso para ejecutarse.
          *
-         * @details
-         * Este evento es generado por el planificador (scheduler) cuando decide
-         * que la VM debe reanudar su ejecución. Normalmente se dispara cuando:
-         *
-         *  - La VM estaba en estado READY esperando turno.
-         *  - La VM ha sido desbloqueada tras un WAIT_IO.
-         *  - El sistema decide asignarle tiempo de CPU.
-         *
-         * Implica:
-         *  - La VM pasa del estado READY al estado RUNNING.
-         *  - El hilo virtual obtiene control de la "CPU" virtual.
-         *  - El siguiente estado típico es FETCH, donde comienza el ciclo de instrucción.
-         *
-         * Este evento no es generado por la VM internamente, sino por el
-         * scheduler externo que gestiona múltiples instancias de VM?
+         * Generado por el planificador cuando decide asignar la CPU virtual al proceso.
+         * Transicion habitual: READY -> RUNNING.
          */
         EVT_SCHEDULED,
 
         /**
-         * Permite ceder control a otro proceso de forma voluntaria.
+         * @brief El proceso cede voluntariamente la CPU al scheduler.
+         *
+         * Permite que otros procesos tengan turno sin que el proceso actual haya
+         * agotado sus reducciones.
          */
         EVT_YIELD,
 
         /**
-         * @brief La instrucción ha sido decodificada correctamente.
+         * @brief La instruccion fue descodificada correctamente.
          *
-         * @details
-         * Se dispara cuando:
-         *  - La fase DECODE identifica el opcode, operandos y modo de direccionamiento.
-         *
-         * Implica:
-         *  - La VM puede pasar a EXECUTE para ejecutar la instrucción.
+         * Se dispara al final de la fase DECODE cuando el opcode, operandos
+         * y modo de direccionamiento ya estan disponibles en decoded_ptr.
+         * Transicion habitual: DECODE -> EXECUTE.
          */
         EVT_DECODE_DONE,
 
         /**
-         * @brief La instrucción ha sido ejecutada completamente.
+         * @brief La instruccion se ejecuto completamente sin bloquear.
          *
-         * @details
-         * Se dispara cuando:
-         *  - La fase EXECUTE finaliza sin requerir I/O ni bloquearse.
-         *
-         * Implica:
-         *  - La VM puede volver a FETCH para obtener la siguiente instrucción.
+         * Se dispara al final de la fase EXECUTE cuando no se requiere E/S
+         * ni sincronizacion adicional.
+         * Transicion habitual: EXECUTE -> DECODE (siguiente instruccion).
          */
         EVT_EXEC_DONE,
 
         /**
-         * @brief La instrucción requiere esperar una operación de entrada/salida.
+         * @brief La instruccion necesita esperar una operacion de E/S.
          *
-         * @details
-         * Se dispara cuando:
-         *  - La ejecución detecta que necesita esperar un dispositivo o evento externo.
-         *
-         * Implica:
-         *  - La VM debe pasar a WAIT_IO hasta que el evento se complete.
+         * Se dispara dentro de EXECUTE cuando la instruccion detecta que
+         * debe esperar un dispositivo o evento externo.
+         * Transicion habitual: EXECUTE -> WAIT_IO.
          */
         EVT_IO_WAIT,
 
         /**
-         * @brief La operación de entrada/salida ha finalizado.
+         * @brief La operacion de E/S ha finalizado y el proceso puede continuar.
          *
-         * @details
-         * Se dispara cuando:
-         *  - Un dispositivo, hilo externo o evento notifica que la I/O terminó.
-         *
-         * Implica:
-         *  - La VM puede volver a READY para ser planificada nuevamente.
+         * Generado por el subsistema de E/S cuando la operacion esperada termino.
+         * Transicion habitual: WAIT_IO -> READY.
          */
         EVT_IO_READY,
 
         /**
-         * @brief Se ha ejecutado una instrucción HALT o se solicita detener la VM.
+         * @brief Se encontro una instruccion HALT o se solicito detener el proceso.
          *
-         * @details
-         * Se dispara cuando:
-         *  - La instrucción HALT es encontrada.
-         *  - El sistema solicita detener la ejecución.
-         *
-         * Implica:
-         *  - La VM pasa al estado HALT y no ejecutará más instrucciones.
+         * Generado por la instruccion HALT o por una parada explicita del sistema.
+         * Transicion habitual: EXECUTE -> HALT.
          */
         EVT_HALT,
 
         /**
-         * @brief Ha ocurrido un error fatal durante la ejecución.
+         * @brief Ocurrio un error fatal durante la ejecucion del proceso.
          *
-         * @details
-         * Se dispara cuando:
-         *  - Se detecta un error irrecuperable (memoria inválida, instrucción ilegal, etc.).
-         *
-         * Implica:
-         *  - La VM pasa al estado DEAD.
-         *  - Se liberan recursos y se detiene la ejecución.
+         * Se dispara cuando se detecta un error irrecuperable (acceso de memoria invalido,
+         * instruccion desconocida, division por cero, etc.).
+         * Transicion habitual: cualquier estado -> DEAD.
          */
         EVT_ERROR,
 
         /**
-         * @brief Número total de eventos (no es un evento real).
+         * @brief Centinela que indica el numero total de eventos.
+         *
+         * No es un evento real; se usa para dimensionar la tabla de transiciones
+         * fsm[NUM_STATES][NUM_EVENTS].
          */
         NUM_EVENTS
     };
 
+    /**
+     * @brief Devuelve el nombre legible de un evento de la FSM.
+     *
+     * Util para mensajes de traza y depuracion.
+     *
+     * @param e Evento de la FSM.
+     * @return  Cadena con el nombre del evento, o "UNKNOWN_EVENT" si no se reconoce.
+     */
     static const char *event_name(vm_event e) {
         switch (e) {
-            case EVT_DECODE_DONE: return "EVT_DECODE_DONE";
-            case EVT_EXEC_DONE: return "EVT_EXEC_DONE";
-            case EVT_IO_WAIT: return "EVT_IO_WAIT";
-            case EVT_IO_READY: return "EVT_IO_READY";
-            case EVT_HALT: return "EVT_HALT";
-            case EVT_ERROR: return "EVT_ERROR";
-            case EVT_SCHEDULED: return "EVT_SCHEDULED";
-            default: return "UNKNOWN_EVENT";
+            case EVT_DECODE_DONE: return "EVT_DECODE_DONE"; // descodificacion completada
+            case EVT_EXEC_DONE:   return "EVT_EXEC_DONE";   // ejecucion completada
+            case EVT_IO_WAIT:     return "EVT_IO_WAIT";     // esperando E/S
+            case EVT_IO_READY:    return "EVT_IO_READY";    // E/S lista
+            case EVT_HALT:        return "EVT_HALT";         // instruccion HALT
+            case EVT_ERROR:       return "EVT_ERROR";        // error fatal
+            case EVT_SCHEDULED:   return "EVT_SCHEDULED";   // proceso seleccionado
+            default:              return "UNKNOWN_EVENT";    // evento desconocido
         }
     }
 
     /**
-     * Estados de la la FSM(Maquina de estasdos finitio) en la VM
-     * @param state estado de la VM
-     * @return representacion string
+     * @brief Devuelve el nombre legible de un estado de la FSM.
+     *
+     * @param state Estado de la FSM.
+     * @return      Cadena con el nombre del estado, o "UNKNOWN" si no se reconoce.
      */
     static const char *vm_state_to_str(vm_state state) {
         switch (state) {
-            case READY: return "READY";
-            case RUNNING: return "RUNNING";
-            case BLOCKED: return "BLOCKED";
-            case DECODE: return "DECODE";
-            case EXECUTE: return "EXECUTE";
-            case WAIT_IO: return "WAIT_IO";
-            case HALT: return "HALT";
-            case DEAD: return "DEAD";
-            case NEW: return "NEW";
-            default: return "UNKNOWN";
+            case READY:    return "READY";    // listo para ejecutarse
+            case RUNNING:  return "RUNNING";  // ejecutandose
+            case BLOCKED:  return "BLOCKED";  // bloqueado esperando evento
+            case DECODE:   return "DECODE";   // descodificando instruccion
+            case EXECUTE:  return "EXECUTE";  // ejecutando instruccion
+            case WAIT_IO:  return "WAIT_IO";  // esperando operacion de E/S
+            case HALT:     return "HALT";     // detenido por HALT
+            case DEAD:     return "DEAD";     // terminado permanentemente
+            case NEW:      return "NEW";      // recien creado, no listo
+            default:       return "UNKNOWN";  // estado desconocido
         }
     }
 
-
     /**
-     * Estructura que representa una transicion de la maquina de estados.
+     * @brief Entrada de la tabla de transiciones de la FSM.
+     *
+     * Cada celda fsm[estado][evento] contiene el estado siguiente y la accion
+     * opcional que debe ejecutarse al dispararse el evento.
      */
     typedef struct Transition {
-        vm_state next;
+        vm_state next;             ///< Estado al que debe pasar el proceso tras el evento
 
-        void (*action)(ProcessVM *);
+        void (*action)(ProcessVM *); ///< Accion a ejecutar durante la transicion (puede ser nullptr)
 
         /**
-         * Constructor de transicion, si no es especifica el estado siempre
-         * sera READY.
-         * @param n estado de transicion
-         * @param a accion de transicion.
+         * @brief Construye una transicion con el estado y la accion indicados.
+         *
+         * @param n Estado siguiente (por defecto READY).
+         * @param a Accion a ejecutar durante la transicion (por defecto nullptr).
          */
         Transition(vm_state n = READY, void (*a)(ProcessVM *) = nullptr)
             : next(n), action(a) {}
     } Transition;
-}
 
-#endif //VM_STATE_EVENT_H
+} // namespace runtime
+
+#endif // VM_STATE_EVENT_H

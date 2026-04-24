@@ -1,1294 +1,1523 @@
-#include "emmit/emmit_decl.h"
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia VMProject
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
+ * PROHIBIDO lucro sin permiso escrito.
+ *
+ * Descargo: Autor no responsable por modificaciones.
+ */
+/**
+ * @file emmit_decl.cpp
+ * @brief Implementacion de las funciones de emision de bytecode para VestaVM.
+ *
+ * Implementa todas las funciones emit_* que generan bytes de instrucciones:
+ *  - @c emit_ctrl_byte()              : byte de control [modo|s|d|reg]
+ *  - @c encode_reg_general()          : codifica nombre de registro a indice 4-bit
+ *  - @c emit_inc_dec()                : INC/DEC con byte de datos combinado
+ *  - @c emit_instr_reg()              : instruccion binaria registro-registro
+ *  - @c emit_instr_inmed()            : instruccion con operando inmediato
+ *  - @c emit_instr_inmed_with_annotation(): inmediato con relocalizacion por anotacion
+ *  - @c emit_instr_mem()              : instruccion con operando de memoria (etiqueta relativa)
+ *  - @c emit_instr_sib()              : instruccion con direccionamiento SIB
+ *  - @c emit_mov_sib()                : variante MOV/MOVH con SIB
+ *  - @c emit_movc()                   : MOVC/MOVCH (copia de memoria con codigo de flags)
+ *  - @c emit_movc_reg()               : MOVC registro-registro
+ *  - @c emit_jcc()                    : saltos condicionales
+ *  - @c emit_jmp()                    : salto incondicional
+ *  - @c emit_call()                   : llamada a funcion
+ *  - @c emit_ret()                    : retorno de funcion
+ *  - @c emit_push() / @c emit_pop()   : operaciones de pila
+ *  - @c emit_nop()                    : instruccion NOP
+ *  - @c emit_hlt()                    : instruccion HLT
+ *  - @c emit_syscall()                : llamada al sistema
+ *  - @c emit_int()                    : interrupcion software
+ *  - @c emit_gcnew() / @c emit_gcfree(): instrucciones GC
+ *  - @c emit_new() / @c emit_free()   : instrucciones OOP
+ */#include "emmit/emmit_decl.h"
 
 #include "emmit/parser_to_bytecode.h"
 
 #ifdef DEBUG_EMIT
 #define DEBUG_PRINT(...) printf(__VA_ARGS__)
 #else
-#define DEBUG_PRINT(...) if (0) {printf(__VA_ARGS__);}
+#define DEBUG_PRINT(...) if (0) { printf(__VA_ARGS__); }
 #endif
 
-
 /**
- * La instruccion de emision emiten el resto de bytes faltantes,
- * el opcode/s ya debio ser emitido por a funcion llamadora del metodo de emision.
+ *  las funciones emit_* generan los bytes restantes de una instruccion
+ * El llamante (emit_instruction) es responsable de emitir el/los bytes de opcode primero.
  */
 namespace Assembly::Bytecode {
-    /**
-     * Permite codificar el registro unicamente, independientemente del "modo"/tamaño de este,
-     * ya que r00, r00d, r00w y r00b usando el mismo valor para coficarse, 0, pero cambia el modo.
-     *
-     * @param name nombre del registro a codear
-     * @return registro coficado, si es de proposito general, no se incluye el modo
-     */
-    uint8_t encode_reg_general(const char *const name) {
-        uint8_t n_reg = 0;
 
-        if (name[0] == 'r' || name[0] == 'R') {
-            // si despues de la r va un digito, entonces puede ser una instruccion
-            // con un solo digito
-            if (name[1] && isdigit(static_cast<unsigned char>(name[1]))) {
-                n_reg = name[1] - '0'; // obtenmos el primer digito
+// =========================================================================
+// Funciones auxiliares internas
+// =========================================================================
 
-                // en este caso de que haya segundo digito, se analiza
-                if (name[2] && isdigit(static_cast<unsigned char>(name[2]))) {
-                    // evitamos si codifican el registro como r01
-                    if (n_reg != 0) {
-                        // obtenmos el segundo digito y multiplicamos al anterior
-                        // para obtener el valor final
-                        return (n_reg * 10) + (name[2] - '0');
-                    }
+/**
+ * @brief Emite un byte de control con el layout estandar [modo|s|d|reg].
+ *
+ * Layout de bits:  bits[7:6] = modo (ancho de operando)
+ *              bit[5]    = s    (flag de signo o marcador de registro especial)
+ *              bit[4]    = d    (direccion: 0=destino reg, 1=destino mem)
+ *              bits[3:0] = reg  (codigo de registro de 4 bits, nibble bajo)
+ *
+ * @param out  Escritor de bytes de salida.
+ * @param mode Codigo de ancho de 2 bits (0=8b, 1=16b, 2=32b, 3=64b).
+ * @param s    Flag de 1 bit signo/especial.
+ * @param d    Flag de direccion de 1 bit.
+ * @param reg  Codigo de registro (solo los 4 bits bajos).
+ */
+static void emit_ctrl_byte(ByteWriter &out, uint8_t mode, uint8_t s, uint8_t d, uint8_t reg) {
+    out.emit8(static_cast<uint8_t>(
+        (mode << 6) |    // modo ocupa bits 7-6
+        (s    << 5) |    // s ocupa el bit 5
+        (d    << 4) |    // d ocupa el bit 4
+        (reg  & 0xF)     // reg ocupa bits 3-0 (nibble bajo)
+    ));
+}
 
-                    // al ser r01, retornamo el segundo digito unicamente
-                    return (name[2] - '0');
+// =========================================================================
+// Codificacion de registros
+// =========================================================================
+
+/**
+ * @brief Codifica un nombre de registro (rN / rNN) a su codigo numerico de 4 bits.
+ *
+ * r0-r9   -> 0-9    (un digito despues de 'r')
+ * r10-r15 -> 10-15  (dos digitos; la forma r01 se acepta como r1)
+ *
+ * @param name  Nombre de registro terminado en nulo (ej: "r07", "r15").
+ * @return      Codigo de registro de 4 bits (0-15).
+ * @throws std::runtime_error Si el nombre no coincide con el patron esperado.
+ */
+uint8_t encode_reg_general(const char *const name) {
+    uint8_t n_reg = 0; // acumula el indice numerico del registro
+
+    if (name[0] == 'r' || name[0] == 'R') {
+        if (name[1] && isdigit(static_cast<unsigned char>(name[1]))) {
+            n_reg = name[1] - '0'; // primer digito despues de 'r'
+            if (name[2] && isdigit(static_cast<unsigned char>(name[2]))) {
+                if (n_reg != 0) {
+                    // numero de dos digitos, ej: r10, r15
+                    return (n_reg * 10) + (name[2] - '0');
                 }
-                return n_reg;
+                // forma r01 con cero inicial: devolver solo el segundo digito
+                return (name[2] - '0');
             }
-            throw std::runtime_error("Registro inválido: falta número tras 'r'");
+            return n_reg; // registro de un digito, ej: r7
         }
-        throw std::runtime_error("Registro inválido: debe comenzar por 'r'");
+        throw std::runtime_error("Invalid register: missing digit after 'r'");
     }
+    throw std::runtime_error("Invalid register: name must start with 'r'");
+}
 
+// =========================================================================
+// Emision de INC / DEC
+// =========================================================================
 
-    void emit_inc_dec(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        // si el opcode es un dec, entonces, el segundo byte tiene el bit dos activo
-        uint8_t reg = (instruction_parser->opcode == "inc") ? 0 : 0b01000000;
+/**
+ * @brief Emite el byte de datos para una instruccion INC o DEC.
+ *
+ * Layout del byte:  bits[7:6] = modo (ancho de operando)
+ *               bit[6]    = b    (0 = INC, 1 = DEC; almacenado como bit 0x40)
+ *               bits[3:0] = codigo de registro
+ *
+ * @param instruction_parser Nodo de instruccion parseado.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion (opcode, modo de tamano).
+ * @param assembly_ctx       Contexto del ensamblador (no usado, requerido por la firma).
+ */
+void emit_inc_dec(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    // bit 6: 0=INC, 1=DEC
+    uint8_t reg = (instruction_parser->opcode == "inc") ? 0 : 0b01000000;
 
-        // INC solo usa un operando de tipo registro
-        if (auto s = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get())) {
-            // 0b0 b mode reg
-            // b -> INC / DEC
-            // mode = 0b00 -> dos bits para tamaño de red
-            // reg =  0b0000 -> 4 bits para registro
-            uint8_t mode = encode_mode(s->size_bits);
-            reg += mode << 4;                           // se desplaza 4 bits
-            reg += encode_reg_general(s->name.c_str()); // codificamos el registro
-            code_final.emit8(reg);
-        } else {
-            throw std::runtime_error("Registro inválido: esta instruccion INC / DEC espera un registro");
-        }
-        DEBUG_PRINT("Emitiendo INC / DEC 0x%x REG: 0x%x, Size: %llu\n",
-                    now_instr->opcode1, reg,
-                    instr_size(now_instr->sizeMode)
-        );
-    }
+    auto s = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    if (s == nullptr)
+        throw std::runtime_error("INC/DEC: operand must be a register");
 
-    void emit_instr_reg(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+    uint8_t mode = encode_mode(s->size_bits); // codigo de ancho de 2 bits
+    reg += mode << 4;                          // modo ocupa bits 5-4
+    reg += encode_reg_general(s->name.c_str()); // codigo de registro en bits 3-0
+    code_final.emit8(reg);                     // emitir el byte de datos combinado
 
-        if (reg1 == nullptr || reg2 == nullptr) {
-            throw std::runtime_error(
-                "Error, la instruccion " + instruction_parser->opcode + " esperaba dos registros"
-            );
-        }
+    DEBUG_PRINT("Emitiendo INC/DEC 0x%x REG: 0x%x, Size: %llu\n",
+                now_instr->opcode1, reg, instr_size(now_instr->sizeMode));
+}
 
-        if (reg1->size_bits != reg2->size_bits) {
-            throw std::runtime_error(
-                "Error, la instruccion " + instruction_parser->opcode + " " +
-                reg1->name + " " + reg2->name + " tiene sizes distintos en los " +
-                "registros, deben tener el mismo size."
-            );
-        }
-        bool is_a_signed = is_signed(instruction_parser->opcode);
+// =========================================================================
+// Emision de instruccion binaria generica (reg, reg)
+// =========================================================================
 
-        uint8_t mode = encode_mode(reg1->size_bits);
+/**
+ * @brief Emite dos bytes de datos para instruccion binaria registro-registro.
+ *
+ * Byte 1 (ctrl):  [modo(2) | signo(1) | 0 | 0000]
+ * Byte 2 (regs):  [reg2(4) | reg1(4)]
+ *
+ * Ambos registros deben tener el mismo size_bits.
+ *
+ * @param instruction_parser Nodo de instruccion parseado.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_reg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
 
-        // 0b`mode`sd0000 -> modo ocupa el los primeros 2 bits
-        code_final.emit8((mode << 6) | ((is_a_signed) ? 1 : 0) << 5);
+    if (reg1 == nullptr || reg2 == nullptr)
+        throw std::runtime_error(
+            "Instruction " + instruction_parser->opcode + " requires two register operands");
 
-        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
-        code_final.emit8(
-            encode_reg_general(reg2->name.c_str()) << 4 | encode_reg_general(reg1->name.c_str())
-        );
+    if (reg1->size_bits != reg2->size_bits)
+        throw std::runtime_error(
+            "Instruction " + instruction_parser->opcode + " " +
+            reg1->name + " " + reg2->name +
+            ": operands must have the same size");
 
-        DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
-                    instruction_parser->opcode.c_str(),
-                    now_instr->opcode1,
-                    now_instr->opcode2,
-                    reg1->name.c_str(), encode_reg_general(reg2->name.c_str()) << 4,
-                    reg2->name.c_str(), encode_reg_general(reg1->name.c_str()),
-                    mode
-        );
-    }
+    bool    is_a_signed = is_signed(instruction_parser->opcode); // detectar variante con signo
+    uint8_t mode        = encode_mode(reg1->size_bits);           // codigo de ancho de 2 bits
 
-    void emit_instr_inmed_with_annotation(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        bool is_a_signed = is_signed(instruction_parser->opcode);
+    // byte ctrl: modo | signo | 0 | 0000
+    emit_ctrl_byte(code_final, mode, is_a_signed ? 1 : 0, 0, 0);
 
-        auto reg              = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        auto label_annotacion = instruction_parser->operands[1].get();
+    // byte reg: reg2 en nibble alto, reg1 en nibble bajo
+    code_final.emit8(
+        encode_reg_general(reg2->name.c_str()) << 4 |
+        encode_reg_general(reg1->name.c_str())
+    );
 
-        auto annotacion = dynamic_cast<vm::AnnotationNode *>(label_annotacion);
+    DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
+                instruction_parser->opcode.c_str(),
+                now_instr->opcode1, now_instr->opcode2,
+                reg1->name.c_str(), encode_reg_general(reg2->name.c_str()) << 4,
+                reg2->name.c_str(), encode_reg_general(reg1->name.c_str()),
+                mode);
+}
 
-        if (annotacion == nullptr) {
-            throw std::runtime_error(
-                "emit_instr_inmed_with_annotation(): Se debe implementar: " + instruction_parser->opcode + " ");
-        }
+// =========================================================================
+// Instruccion con inmediato y anotacion (referencia a etiqueta)
+// =========================================================================
 
+/**
+ * @brief Emite un byte ctrl + placeholder de relocalizacion para instruccion con anotacion.
+ *
+ * Maneja tres tipos de anotacion:
+ *   - "Method"   -> absolute pointer-sized relocation using the machine word size.
+ *   - "Relative" -> relative relocation sized to the register width.
+ *   - "Absolute" -> absolute relocation sized to the register width.
+ *
+ * El valor placeholder emitido es siempre 0; el enlazador lo parchea al enlazar.
+ *
+ * @param instruction_parser Nodo parseado (operandos[0]=reg, operandos[1]=anotacion).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador (propietario de la tabla de relocalizaciones).
+ */
+void emit_instr_inmed_with_annotation(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    bool is_a_signed = is_signed(instruction_parser->opcode); // detectar variante con signo
 
-        if (annotacion->key == "Method") {
-            // el modo siempre es del tamaño de palabra de la cpu para direcciones,
-            // se multiplica * 8 para obtener la cantidad de bit que ocupa un puntero.
-            uint8_t mode     = encode_mode(sizeof(void *) * 8);
-            bool    mem_dest = false; // el destino siempre es un registro, por eso false
-            code_final.emit8(
-                (mode << 6) |                    // mode
-                (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
-                mem_dest << 4 |
-                encode_reg_general(reg->name.c_str()) // reg
-            );
+    auto reg         = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto annotacion  = dynamic_cast<vm::AnnotationNode *>(instruction_parser->operands[1].get());
 
+    if (annotacion == nullptr)
+        throw std::runtime_error(
+            "emit_instr_inmed_with_annotation(): expected annotation operand for: " +
+            instruction_parser->opcode);
 
-            // creamos el valor
-            Relocation rel;
-            rel.symbol  = annotacion->value;
-            rel.section = assembly_ctx->current_section->name;
-            rel.offset  = code_final.offset /*- 8*/; // el -8 se pone si se emite antes la direccion
-            rel.type    = size_ptr_in_this_machine;  // relocalizacion absoluta segun el tamaño de palabra de la maquina
+    if (annotacion->key == "Method") {
+        // anotacion Method: usar el ancho del puntero maquina
+        uint8_t mode     = encode_mode(sizeof(void *) * 8); // modo de tamano de puntero
+        bool    mem_dest = false;                            // el destino siempre es un registro
 
-            assembly_ctx->ctx.add_relocation(rel);
+        emit_ctrl_byte(code_final, mode, is_a_signed ? 1 : 0, mem_dest ? 1 : 0,
+                       encode_reg_general(reg->name.c_str())); // emitir byte de control
 
-            // siempre se emite 64 bits si la cpu es de 64 bits, ya que se parcheara la instruccion
-            // con un puntero real dependiente del tamaño de palabra de la cpu
-            if (size_ptr_in_this_machine == Type::Absolute64) {
-                code_final.emit64(0);
-            } else if (size_ptr_in_this_machine == Type::Absolute32) {
-                code_final.emit32(0);
-            } else if (size_ptr_in_this_machine == Type::Absolute16) {
-                code_final.emit16(0);
-            } else if (size_ptr_in_this_machine == Type::Absolute8) {
-                code_final.emit8(0);
-            } else {
-                throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
-                    "emision de instrucciones inmediatas con direcciones para tamaños de: " + sizeof(void *));
-            }
-        } else {
-            // si no es una notacion Method, entonces debe ser una
-            // Absolute o una Relative
-            uint8_t mode = encode_mode(reg->size_bits);
-
-            // tenemos en cuenta el tamaño del registro usado
-            int  instr_mode_bits = mode_to_bits(mode);
-            bool mem_dest        = false; // el destino siempre es un registro, por eso false
-
-
-            code_final.emit8(
-                (mode << 6) |                    // mode
-                (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
-                mem_dest << 4 |
-                encode_reg_general(reg->name.c_str()) // reg
-            );
-
-            // creamos el valor
-            Relocation rel;
-            rel.symbol  = annotacion->value;
-            rel.section = assembly_ctx->current_section->name;
-            rel.offset  = code_final.offset /*- 8*/; // el -8 se pone si se emite antes la direccion
-
-            // indicamos el tipo de relocalizacion que es
-            if (annotacion->key == "Relative") {
-                switch (mode_to_bytes(mode)) {
-                    case 1: {
-                        rel.type = Type::Relative8;
-                        break;
-                    }
-                    case 2: {
-                        rel.type = Type::Relative16;
-                        break;
-                    }
-                    case 4: {
-                        rel.type = Type::Relative32;
-                        break;
-                    }
-                    case 8: {
-                        rel.type = Type::Relative64;
-                        break;
-                    }
-                    default: {
-                        goto error_notation;
-                    }
-                }
-            } else if (annotacion->key == "Absolute") {
-                switch (mode_to_bytes(mode)) {
-                    case 1: {
-                        rel.type = Type::Absolute8;
-                        break;
-                    }
-                    case 2: {
-                        rel.type = Type::Absolute16;
-                        break;
-                    }
-                    case 4: {
-                        rel.type = Type::Absolute32;
-                        break;
-                    }
-                    case 8: {
-                        rel.type = Type::Absolute64;
-                        break;
-                    }
-                    default: {
-                        goto error_notation;
-                    }
-                }
-            } else {
-            error_notation:
-                throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
-                    "notacion: " + annotacion->key);
-            }
-
-            assembly_ctx->ctx.add_relocation(rel);
-
-            uint64_t val_inmmed = 0; // siempre 0 por que sera remplazado por el
-            // linker
-
-            size_t size_in_bytes = mode_to_bytes(mode);
-            // emitimos el resto de bytes de la instruccion dependiendo del modo/tamaño
-            code_final.emit_bytes(&val_inmmed, size_in_bytes);
-        }
-    }
-
-    void emit_instr_inmed(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        if (now_instr->opcode1 != 0x00) {
-            throw std::runtime_error("Error instruccion != 0x00 no implementada");
-        }
-        bool is_a_signed = is_signed(instruction_parser->opcode);
-
-        auto n0 = instruction_parser->operands[0].get();
-        auto n1 = instruction_parser->operands[1].get();
-
-        auto inmmed_str = dynamic_cast<vm::NumberOperand *>(n1);
-
-        auto reg      = dynamic_cast<vm::RegisterOperand *>(n0);
-        auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);
-        bool mem_dest = reg == nullptr; // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
-
-        if ((mem == nullptr) || inmmed_str == nullptr) {
-            // si no es un operando de tipo memoria, ni registro, entonces puede ser uno de tipo anotacion:
-            if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
-                emit_instr_inmed_with_annotation(instruction_parser, code_final, now_instr, assembly_ctx);
-                return;
-            }
-
-            // si ni es una notacion, ni es memoria ni es un inmediato:
-            if (mem == nullptr && inmmed_str == nullptr) {
-                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
-                    " no pudo situar un registro, inmediato por alguna razon, posiblemente usted cometio un error de sintaxis o logico");
-            }
-        }
-
-        auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
-        if (inmmed_opt == std::nullopt) {
-            throw std::runtime_error("Error el valor: " + inmmed_str->value +
-                " no pudo convertirse en un numero.");
-        }
-        uint64_t val_inmmed = inmmed_opt.value();
-        // detectamos el tipo de inmediato que es
-        ImmType type = detect_imm_type((int64_t) val_inmmed, is_a_signed);
-        if (mem_dest) {
-            reg = static_cast<vm::RegisterOperand *>(mem->expr.get());
-            if (reg == nullptr) {
-                std::cout << "Error instruccion: " + instruction_parser->opcode +
-                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: " << std::endl;
-                mem->expr->print(0);
-                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode);
-            }
-        }
-        uint8_t mode = encode_mode(reg->size_bits);
-
-
-        // validamos si los tamaños del modo y el inmediato son iguales
-        int instr_imm_bits  = immtype_bits(type);
-        int instr_mode_bits = mode_to_bits(mode);
-
-        if (instr_imm_bits > instr_mode_bits) {
-            throw std::runtime_error(
-                "emit_instr_inmed(): Error: el inmediato " + std::to_string(val_inmmed) +
-                " (" + std::to_string(instr_imm_bits) + " bits) no cabe en el modo " +
-                std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)."
-            );
-        }
-
-        // 0b `mode` s d reg -> modo ocupa el los primeros 2 bits
-        code_final.emit8(
-            (mode << 6) |                    // mode
-            (((is_a_signed) ? 1 : 0) << 5) | // s -> signed
-            mem_dest << 4 |
-            encode_reg_general(reg->name.c_str()) // reg
-        );
-        // el campo d siempre es 0 ya que se usa para codificar otro tipo de inmediatos.
-
-        // emitimos el resto de bytes de la instruccion dependiendo del modo/tamaño
-        code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
-
-        DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, INMED 0x%llx TYPE_INMED: %d MODE: %d\n",
-                    instruction_parser->opcode.c_str(),
-                    now_instr->opcode1,
-                    now_instr->opcode2,
-                    reg->name.c_str(), encode_reg_general(reg->name.c_str()),
-                    val_inmmed,
-                    type,
-                    mode
-        );
-    }
-
-    void emit_instr_mem(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        if (now_instr->opcode1 != 0x00) {
-            throw std::runtime_error("Error instruccion != 0x00 no implementada");
-        }
-        bool is_a_signed = is_signed(instruction_parser->opcode);
-
-        auto n0 = instruction_parser->operands[0].get();
-        auto n1 = instruction_parser->operands[1].get();
-
-        uint8_t direccion = 1; // [mem], reg
-        auto    mem       = dynamic_cast<vm::MemoryOperand *>(n0);
-        auto    reg       = dynamic_cast<vm::RegisterOperand *>(n1);
-
-        // si el op1 no era de memoria o el op2 no era de tipo registro, probar al reves:
-        if (mem == nullptr || reg == nullptr) {
-            direccion = 0; // reg, [mem]
-            mem       = dynamic_cast<vm::MemoryOperand *>(n1);
-            reg       = dynamic_cast<vm::RegisterOperand *>(n0);
-        }
-
-        if (mem == nullptr || reg == nullptr) {
-            throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
-                " no pudo situar un operando de tipo memoria, mas de otro operando de tipo registro.");
-        }
-        uint8_t mode = encode_mode(reg->size_bits);
-
-        /**
-         * mode       = 01 << 6 = 0100 0000
-         * signed     = 1  << 5 = 0010 0000
-         * direccion  = 0  << 4 = 0000 0000
-         * reg (7)    = 0000 0111
-         *
-         * Resultado:   0110 0111   = 0x67
-         * [ mode(2) | signed(1) | direccion(1) | reg(4) ]
-         */
-        uint8_t byte = (mode << 6) |
-                (is_a_signed << 5) |
-                (direccion << 4) |
-                encode_reg_general(reg->name.c_str());
-        code_final.emit8(byte);
-
-        // por ahora supondremos que solo se introdujo operando de memoria de un solo label tipo [my_label]
-        auto lalbel = dynamic_cast<vm::LabelOperand *>(mem->expr.get());
-
+        // registrar la relocalizacion para que el enlazador parchee el placeholder
         Relocation rel;
-        rel.symbol  = lalbel->name;
+        rel.symbol  = annotacion->value;                // symbol name (e.g. "kernel32.dll:Func")
         rel.section = assembly_ctx->current_section->name;
-        rel.offset  = code_final.offset /*- 5*/; // el -5 se pone si se emite antes la direccion
-        rel.type    = Type::Relative40;
-
-        assembly_ctx->ctx.add_relocation(rel);
-
-        // esto es un placeholder que luego el linker debe corregir realizando una relocalizacion.
-        code_final.emit40(0x1122334455);
-    }
-
-    // The parser stores non-ExprNode objects (RegisterOperand, NumberOperand) as ExprNode* via UB
-    // static_cast. To safely recover the actual type, we must cast through void* to ASTNode* first
-    // (since RegisterOperand/NumberOperand ARE ASTNode subclasses), then dynamic_cast to the target.
-    template<typename T>
-    static const T *sib_cast(const vm::ExprNode *node) {
-        return dynamic_cast<const T *>(static_cast<const vm::ASTNode *>(static_cast<const void *>(node)));
-    }
-
-    static uint8_t parse_scale(const vm::ExprNode *node) {
-        auto *sc = sib_cast<vm::NumberOperand>(node);
-        if (!sc) return 0;
-        int sv = std::stoi(sc->value, nullptr, 0);
-        return (sv <= 1) ? 0 : (sv == 2) ? 1 : (sv == 4) ? 2 : 3;
-    }
-
-    // Walk [base + index*scale] or [base + index] or [base] from MemoryOperand expr.
-    static void parse_sib_expr(
-        const vm::ASTNode *expr,
-        uint8_t &base, uint8_t &index, uint8_t &scale
-    ) {
-        base = 0; index = 0; scale = 0;
-
-        if (auto *reg = dynamic_cast<const vm::RegisterOperand *>(expr)) {
-            base = encode_reg_general(reg->name.c_str());
-            return;
-        }
-
-        auto *bin = dynamic_cast<const vm::BinaryExpr *>(expr);
-        if (!bin) throw std::runtime_error("SIB: expresion de memoria no soportada");
-
-        if (bin->op == '*') {
-            // [index*scale] sin base
-            auto *idx = sib_cast<vm::RegisterOperand>(bin->left.get());
-            auto *sc  = bin->left.get();
-            if (!idx) { idx = sib_cast<vm::RegisterOperand>(bin->right.get()); sc = bin->left.get(); }
-            else       { sc  = bin->right.get(); }
-            if (idx) index = encode_reg_general(idx->name.c_str());
-            scale = parse_scale(sc);
-            return;
-        }
-
-        if (bin->op == '+') {
-            auto *left_reg  = sib_cast<vm::RegisterOperand>(bin->left.get());
-            auto *left_mul  = dynamic_cast<const vm::BinaryExpr *>(bin->left.get());
-            auto *right_reg = sib_cast<vm::RegisterOperand>(bin->right.get());
-            auto *right_mul = dynamic_cast<const vm::BinaryExpr *>(bin->right.get());
-
-            if (left_reg && right_reg) {
-                // [base + index] scale=1
-                base  = encode_reg_general(left_reg->name.c_str());
-                index = encode_reg_general(right_reg->name.c_str());
-                scale = 0;
-            } else if (left_reg && right_mul && right_mul->op == '*') {
-                // [base + index*scale]
-                base = encode_reg_general(left_reg->name.c_str());
-                auto *idx = sib_cast<vm::RegisterOperand>(right_mul->left.get());
-                auto *sc  = right_mul->right.get();
-                if (!idx) { idx = sib_cast<vm::RegisterOperand>(right_mul->right.get()); sc = right_mul->left.get(); }
-                if (idx) index = encode_reg_general(idx->name.c_str());
-                scale = parse_scale(sc);
-            } else if (left_mul && left_mul->op == '*' && right_reg) {
-                // [index*scale + base]
-                base = encode_reg_general(right_reg->name.c_str());
-                auto *idx = sib_cast<vm::RegisterOperand>(left_mul->left.get());
-                auto *sc  = left_mul->right.get();
-                if (!idx) { idx = sib_cast<vm::RegisterOperand>(left_mul->right.get()); sc = left_mul->left.get(); }
-                if (idx) index = encode_reg_general(idx->name.c_str());
-                scale = parse_scale(sc);
-            } else {
-                throw std::runtime_error("SIB: forma de expresion de memoria no reconocida");
-            }
-            return;
-        }
-
-        throw std::runtime_error("SIB: operador de memoria no soportado");
-    }
-
-    void emit_instr_sib(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        bool is_a_signed = is_signed(instruction_parser->opcode);
-
-        auto *op0 = instruction_parser->operands[0].get();
-        auto *op1 = instruction_parser->operands[1].get();
-
-        vm::RegisterOperand *reg_op = nullptr;
-        vm::MemoryOperand   *mem_op = nullptr;
-        uint8_t direction = 0;
-
-        if (auto *r = dynamic_cast<vm::RegisterOperand *>(op0)) {
-            reg_op    = r;
-            mem_op    = dynamic_cast<vm::MemoryOperand *>(op1);
-            direction = 0;
-        } else {
-            mem_op    = dynamic_cast<vm::MemoryOperand *>(op0);
-            reg_op    = dynamic_cast<vm::RegisterOperand *>(op1);
-            direction = 1;
-        }
-
-        if (!reg_op || !mem_op)
-            throw std::runtime_error("SIB: la instruccion " + instruction_parser->opcode +
-                " requiere un registro y un operando de memoria SIB");
-
-        uint8_t base = 0, index = 0, scale = 0;
-        parse_sib_expr(mem_op->expr.get(), base, index, scale);
-
-        // has_index=1 si la expresion tiene base+index (BinaryExpr),
-        // has_index=0 si es solo un registro base sin indice.
-        uint8_t has_index = (dynamic_cast<const vm::BinaryExpr *>(mem_op->expr.get()) != nullptr) ? 1 : 0;
-
-        uint8_t mode    = encode_mode(reg_op->size_bits);
-        uint8_t dst_reg = encode_reg_general(reg_op->name.c_str());
-
-        // byte2: mode(2) | signed(1) | dir(1) | scale(2) | has_index(1) | 0
-        uint8_t ctrl = (uint8_t)((mode << 6) | ((is_a_signed ? 1 : 0) << 5) | (direction << 4) | ((scale & 0x3) << 2) | (has_index << 1));
-        code_final.emit8(ctrl);
-
-        // byte3: dst_reg(4) | base_reg(4)
-        code_final.emit8((dst_reg << 4) | (base & 0xF));
-
-        // byte4: index_reg(4) | 0000
-        code_final.emit8(index & 0xF);
-
-        // byte5: padding
-        code_final.emit8(0x00);
-    }
-
-    void emit_xchg(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
-
-        if (reg1 == nullptr) {
-            throw std::runtime_error("Error la instruccion: " + instruction_parser->opcode +
-                " no encontro un registro 1");
-        }
-
-        if (reg2 == nullptr) {
-            throw std::runtime_error("Error la instruccion: " + instruction_parser->opcode +
-                " no encontro un registro 2");
-        }
-
-        uint8_t flags = 0; // aun no se usa, pero se debe emitir.
-        code_final.emit8(flags);
-
-        // miramos si algunos de los registros son especiales, si no los son, o si lo son ambos
-        std::optional<uint8_t> opt_special1 = encode_special_register(reg1->name);
-        std::optional<uint8_t> opt_special2 = encode_special_register(reg2->name);
-
-        // codificamos el primer byte de registros
-        uint8_t byte1 = 0b0000'0000;
-        if (opt_special1) {
-            // si es un registro especial, se debe indicar con el segundo bit, en caso
-            // de ser registro general, no se activa este bit
-            byte1 = 0b0100'0000;
-            byte1 = byte1 | opt_special1.value(); // 6 bits para indicar el registro
-        } else {
-            uint8_t mode     = encode_mode(reg1->size_bits);           // 2 bits
-            uint8_t reg_code = encode_reg_general(reg1->name.c_str()); // 4 bits
-            byte1            = byte1 | (mode << 4 | reg_code);
-        }
-
-        // codificamos el segundo byte de registros
-        uint8_t byte2 = 0b0000'0000;
-        if (opt_special2) {
-            // si es un registro especial, se debe indicar con el segundo bit, en caso
-            // de ser registro general, no se activa este bit
-            byte2 = 0b0100'0000;
-            byte2 = byte2 | opt_special2.value(); // 6 bits para indicar el registro
-        } else {
-            uint8_t mode     = encode_mode(reg2->size_bits);           // 2 bits
-            uint8_t reg_code = encode_reg_general(reg2->name.c_str()); // 4 bits
-            byte2            = byte2 | (mode << 4 | reg_code);
-        }
-
-        // emitimos los bytes de los registros
-        code_final.emit8(byte1);
-        code_final.emit8(byte2);
-    }
-
-    void emit_pop_push(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        //bool is_push = instruction_parser->opcode == "push";
-        auto n0  = instruction_parser->operands[0].get();
-        auto reg = dynamic_cast<vm::RegisterOperand *>(n0);
-
-        if (reg == nullptr) {
-            throw std::runtime_error("Error instruccion: " + instruction_parser->opcode +
-                " no encontro un registro cuando se esperaba uno.");
-        }
-
-        std::optional<uint8_t> opt_special = encode_special_register(reg->name);
-        uint8_t                reg_ext = 0; // registro extendido usado
-        uint8_t                mode = 0; // modo/tamaño del registro general, si reg_ext = 1, este campo no se usa
-        uint8_t                byte = 0x0; // byte final a emitir
-        uint8_t                reg_code = 0;
-
-        if (opt_special) {
-            // ------------------------------
-            //   REGISTRO ESPECIAL/EXTENDIDO (reg_ext=1)
-            // ------------------------------
-            reg_code = opt_special.value(); // 6 bits
-            reg_ext  = 1;                   // bit 7
-
-            byte = (reg_ext << 6) | reg_code;
-        } else {
-            // ------------------------------
-            //   REGISTRO GENERAL (reg_ext=0)
-            // ------------------------------
-            reg_ext = 0; // bit 7
-
-            mode     = encode_mode(reg->size_bits);           // 2 bits
-            reg_code = encode_reg_general(reg->name.c_str()); // 4 bits
-
-            // Formato: [reg_ext][mode:2][reg:4]
-            byte = (reg_ext << 6) | (mode << 4) | reg_code;
-        }
-
-        code_final.emit8(byte);
-    }
-
-    void emit_instr_mov_reg(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
-
-        if (reg1 == nullptr || reg2 == nullptr) {
-            throw std::runtime_error(
-                "Error, la instruccion " + instruction_parser->opcode + " esperaba dos registros"
-            );
-        }
-
-        if (reg1->size_bits != reg2->size_bits) {
-            throw std::runtime_error(
-                "Error, la instruccion " + instruction_parser->opcode + " " +
-                reg1->name + " " + reg2->name + " tiene sizes distintos en los " +
-                "registros, deben tener el mismo size."
-            );
-        }
-
-        // miramos si los registros son especiales/extendidos
-        std::optional<uint8_t> opt_reg1_special = encode_special_register(reg1->name);
-        std::optional<uint8_t> opt_reg2_special = encode_special_register(reg2->name);
-
-        bool r1_special = opt_reg1_special.has_value();
-        bool r2_special = opt_reg2_special.has_value();
-
-        if (r1_special && r2_special) {
-            throw std::runtime_error(
-                "emit_instr_mov_reg() Error, la instruccion " + instruction_parser->opcode +
-                " no permite usar dos registros extendidos/especiales"
-            );
-        }
-
-        uint8_t mode        = 0;
-        uint8_t is_a_signed = 0;
-        uint8_t direction   = 0;
-        uint8_t reg_special = 0; // guarda cual es el registro especial/extendido usado
-        // ninguno de los dos registros era ext/especial
-        uint8_t reg_general = 0; // en caso de usar un reg especial, debemos almacenar tmb el reg general.
-
-        if (r1_special == false && r2_special == false) {
-            // sacamos el tamaño de los registros:
-            mode = encode_mode(reg1->size_bits);
-
-            // ``MOV reg1, reg2``, is_a_signed siempre es 0 aqui.
-            // direction << 4, direction = 0 por que la direccion
-            // siempre es 0 al no haber direccion.
-
-            // 0b`mode`sd0000 -> modo ocupa el los primeros 2 bits
-            code_final.emit8((mode << 6) | (((is_a_signed) ? 1 : 0) << 5) | (direction << 4));
-
-            // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
-            code_final.emit8(
-                encode_reg_general(reg2->name.c_str()) << 4 | encode_reg_general(reg1->name.c_str())
-            );
-            DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
-                        instruction_parser->opcode.c_str(),
-                        now_instr->opcode1,
-                        now_instr->opcode2,
-                        reg1->name.c_str(), encode_reg_general(reg2->name.c_str()) << 4,
-                        reg2->name.c_str(), encode_reg_general(reg1->name.c_str()),
-                        mode
-            );
-            return;
-        }
-        /**
-         * | MOV reg_ext, reg    |   0x0   |  0x14   |  0b`mode`1d0000    d = 0  |
-         * | :------------------ | :-----: | :-----: | :-----------------------: |
-         * | MOV reg, reg_ext    |   0x0   |  0x14   |  0b`mode`1d0000    d = 1  |
-         *
-         * Estas instrucciones siempre tienen is_a_signed = 1 que es el bit entre "mode" y "d".
-         * El modo en este caso, es el modo del registro especial, mas no indica tamaño del registro
-         * general en este caso.
-         */
-        is_a_signed = 1;
-
-        reg_general = r1_special
-                          ? encode_reg_general(reg2->name.c_str())
-                          : encode_reg_general(reg1->name.c_str());
-        reg_special = r1_special ? opt_reg1_special.value() : opt_reg2_special.value();
-
-        // direction   = 0; // MOV reg_ext, reg
-        // direction   = 1; // MOV reg, reg_ext
-        direction = r1_special ? 0 : 1;
-
-        // un registro espcial o extendido normalmente codifica el campo modo
-        // como bits extras del registro, lo que hace que ocupe 2 + 4 = 6bits,
-        // debemos separa el modo y el registro
-        mode = (reg_special >> 4) & 0b11;
-
-        // 0b`mode`sd0000 -> modo ocupa el los primeros 2 bits
-        code_final.emit8((mode << 6) | (((is_a_signed) ? 1 : 0) << 5) | (direction << 4));
-
-        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
-        code_final.emit8(
-            (reg_special & 0x0F) << 4 | (reg_general & 0x0F)
-        );
-
-        DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
-                    instruction_parser->opcode.c_str(),
-                    now_instr->opcode1,
-                    now_instr->opcode2,
-                    reg1->name.c_str(), reg_special,
-                    reg2->name.c_str(), reg_general,
-                    mode
-        );
-    }
-
-    void emit_instr_mov_inmed(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        uint8_t is_a_signed = 0;
-        uint8_t mode        = 0;
-        uint8_t direction   = 0;
-        uint8_t size_bytes  = 0;
-
-        // unicos modos permitidos:
-        /**
-         * | ``MOV reg1, inmmed``   |   0x0   |  0x15   | 0b`mode`0d`reg1`<br>d = 0 |
-         * |                        |   0x0   |  0x15   | 0b`mode`0d`reg1`<br>d = 1 |
-         * | ``MOV [reg], inmmed``  |   0x0   |  0x15   | 0b`mode`1d`reg1`<br>d = 0 |
-         * | ``MOV reg_ext, inmmed``|   0x0   |  0x15   | 0b`mode`1d`reg1`<br>d = 1 |
-         */
-
-        auto n0 = instruction_parser->operands[0].get();
-        auto n1 = instruction_parser->operands[1].get();
-
-        // el segundo operando debe ser siempre un inmediato, si no es una notacion
-        auto     inmmed_str = dynamic_cast<vm::NumberOperand *>(n1);
-        uint64_t val_inmmed = 0;
-        if (inmmed_str != nullptr) {
-            auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
-            if (inmmed_opt == std::nullopt) {
-                throw std::runtime_error("Error el valor: " + inmmed_str->value +
-                    " no pudo convertirse en un numero.");
-            }
-            val_inmmed = inmmed_opt.value();
-        }
-
-        // el primer operando puede ser un registro general, especial, o memoria.
-        auto reg      = dynamic_cast<vm::RegisterOperand *>(n0);
-        auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);
-        bool mem_dest = reg == nullptr; // si no se obtuvo un registro, y se obtuvo un operando memoria esto es true.
-
-        if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
-            if (annotacion->key == "Method") {
-                if (reg != nullptr) {
-                    // si se usa una notacion Method, se debe usar un tamaño multiplo de
-                    // palabra.
-                    reg->size_bits = sizeof(void *) * 8;
-                } else if (mem != nullptr) {
-                    reg            = static_cast<vm::RegisterOperand *>(mem->expr.get());
-                    reg->size_bits = sizeof(void *) * 8;
-                }
-
-                // creamos el valor
-                Relocation rel;
-                rel.symbol  = annotacion->value;
-                rel.section = assembly_ctx->current_section->name;
-                rel.offset  = code_final.offset + 1;
-                // se debe sumar 1 ya que aun no se emitio el byte de data(informacion de campos)
-                rel.type = size_ptr_in_this_machine; // relocalizacion absoluta segun el tamaño de palabra de la maquina
-
-                assembly_ctx->ctx.add_relocation(rel);
-            } else {
-                uint8_t mode = 0;
-                if (reg != nullptr) {
-                    mode = encode_mode(reg->size_bits);
-                } else if (mem != nullptr) {
-                    reg  = static_cast<vm::RegisterOperand *>(mem->expr.get());
-                    mode = encode_mode(reg->size_bits);
-                }
-
-                // creamos el valor
-                Relocation rel;
-                rel.symbol  = annotacion->value;
-                rel.section = assembly_ctx->current_section->name;
-                rel.offset  = code_final.offset + 1;
-                // se debe sumar 1 ya que aun no se emitio el byte de data(informacion de campos)
-
-                // obtener tipo de relocalizacion:
-                if (annotacion->key == "Relative") {
-                    rel.type = mode_to_type_relocation_rel(mode);
-                } else if (annotacion->key == "Absolute") {
-                    rel.type = mode_to_type_relocation_abs(mode);
-                } else {
-                error_notation:
-                    throw std::runtime_error("emit_instr_inmed_with_annotation(): No se sopora la "
-                        "notacion: " + annotacion->key);
-                }
-
-                if (rel.type == Type::NO_VALID) goto error_notation;
-
-                assembly_ctx->ctx.add_relocation(rel);
-                val_inmmed = 0; // siempre 0 por que sera remplazado por el
-                // linker
-            }
-        }
-
-        // si el destino es memoria:
-        if (mem_dest) {
-            // signed = 1 si es memoria o reg extendido
-            is_a_signed = 1;
-
-            // obtenemos el registro donde se apunta para escribir
-            reg = static_cast<vm::RegisterOperand *>(mem->expr.get());
-            if (reg == nullptr) {
-                std::cout << "Error instruccion: " + instruction_parser->opcode +
-                        " esperaba un registro para acceder a memoria pero obtuvo algo distinto: " << std::endl;
-                mem->expr->print(0);
-                throw std::runtime_error("Error instruccion: " + instruction_parser->opcode);
-            }
-        } else {
-            std::optional<uint8_t> opt_reg_special = encode_special_register(reg->name);
-
-            // si es un registro especial, signo es 1, sino, es 0 y es un registro general
-            is_a_signed = opt_reg_special.has_value();
-
-
-            // si fue 1, entonces es un registro especial
-            if (is_a_signed == 1) {
-                uint8_t reg_special = opt_reg_special.value();
-                // un registro espcial o extendido normalmente codifica el campo modo
-                // como bits extras del registro, lo que hace que ocupe 2 + 4 = 6bits,
-                // debemos separa el modo y el registro
-                mode = (reg_special >> 4) & 0b11;
-
-                direction = 1; // si es un registro especial, se debe indicar 1.
-                code_final.emit8(
-                    (mode << 6) |
-                    (((is_a_signed) ? 1 : 0) << 5) |
-                    (direction << 4) |
-                    (reg_special & 0x0F)
-                );
-                // Se emite una cantidad de bytes de 64bits para q siempre entre un puntero.
-                // esto en un futuro puede dar problemas con SP y BP y otros registros especiales
-                // al intentar usarlo en 32 bits tal vez.
-                size_bytes = sizeof(uint64_t);
-                code_final.emit_bytes(&val_inmmed, size_bytes);
-                return;
-            }
-        }
-        // si es registro general + inmediato
-
-        // se debe sacar el modo del registro general.
-        mode = encode_mode(reg->size_bits);
-
-        // validamos si los tamaños del modo y el inmediato son iguales
-        ImmType type            = detect_imm_type((int64_t) val_inmmed, is_a_signed);
-        int     instr_imm_bits  = immtype_bits(type);
-        int     instr_mode_bits = mode_to_bits(mode);
-
-        if (instr_imm_bits > instr_mode_bits) {
-            throw std::runtime_error(
-                "emit_instr_mov_inmed() Error: el inmediato " + std::to_string(val_inmmed) +
-                " (" + std::to_string(instr_imm_bits) + " bits) no cabe en el modo " +
-                std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)."
-            );
-        }
-
-        // el signo y la direccion en este caso siempre es 0 segun la expecificacion.
-        // is_a_signed = 0; // no descomentar, si se usa memoria, esto sera 1.
-        direction = 0;
-
-        code_final.emit8(
-            (mode << 6) |
-            (((is_a_signed) ? 1 : 0) << 5) |
-            (direction << 4) |
-            encode_reg_general(reg->name.c_str())
-        );
-
-        // emitimos tantos bytes de inmediato como se especificara segun el tamaño del registro general
-        code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
-    }
-
-    void emit_instr_calln_inmmed(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        auto method_annotation_node = instruction_parser->operands[0].get();
-        auto method                 = dynamic_cast<vm::AnnotationNode *>(method_annotation_node);
-        if (method == nullptr) {
-            throw std::runtime_error(
-                "emit_instr_calln_inmmed() Error: la instruccion " + instruction_parser->opcode +
-                " esperaba una notacion del tipo @Method con el metodo a llamar, pero no se pudo situar"
-                "una notacion de este tipo."
-            );
-        }
-
-        Relocation rel;
-        rel.symbol = method->value; // nombre del metodo con la libreria que lo contiene
-        // Ejemplo: @Method("kernel32.dll:GetTickCount"), value contiene "kernel32.dll:GetTickCount"
-        rel.section = assembly_ctx->current_section->name;
-        rel.type    = Type::Native_Method; // es un metodo nativo
-        // el offset debe obtenerse antes de emitir los bytes del placeholder
-        rel.offset = code_final.offset;
-
-        uint64_t placeholder = 0x1122334455667788;
-        code_final.emit_bytes(&placeholder, size_relocation_emmit(rel.type));
-
-        assembly_ctx->ctx.add_relocation(rel);
-    }
-
-    void emit_instr_mov_sib(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        emit_instr_sib(instruction_parser, code_final, now_instr, assembly_ctx);
-    }
-
-    void emit_instr_one_reg(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        auto reg = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        if (reg == nullptr) {
-            throw std::runtime_error(
-                "Error: " + instruction_parser->opcode + " requiere un operando de tipo registro"
-            );
-        }
-
-        uint8_t mode = encode_mode(reg->size_bits);
-
-        // ctrl_byte: bits 7-6 = mode, resto = 0
-        code_final.emit8(static_cast<uint8_t>(mode << 6));
-        // reg_byte:  bits 3-0 = registro, bits 7-4 = 0
-        code_final.emit8(encode_reg_general(reg->name.c_str()));
-    }
-
-    void emit_cursor_rw(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        auto reg0 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
-
-        if (reg0 == nullptr || reg1 == nullptr) {
-            throw std::runtime_error(
-                "Error: " + instruction_parser->opcode + " requiere dos operandos registro"
-            );
-        }
-
-        std::optional<uint8_t> opt0 = encode_special_register(reg0->name);
-        std::optional<uint8_t> opt1 = encode_special_register(reg1->name);
-
-        uint8_t cur_idx, gen_reg, mode;
-
-        if (opt0) {
-            // writecur curN, src_reg - primer operando es el cursor
-            if (opt0.value() > 3) {
-                throw std::runtime_error("writecur: primer operando debe ser cur0-cur3, no rip/rbp/rsp/rflags");
-            }
-            cur_idx = opt0.value() & 0b11;
-            gen_reg = encode_reg_general(reg1->name.c_str());
-            mode    = encode_mode(reg1->size_bits);
-        } else {
-            // readcur dest_reg, curN - segundo operando es el cursor
-            if (!opt1) {
-                throw std::runtime_error(
-                    instruction_parser->opcode + ": uno de los operandos debe ser cur0-cur3"
-                );
-            }
-            gen_reg = encode_reg_general(reg0->name.c_str());
-            cur_idx = opt1.value() & 0b11;
-            mode    = encode_mode(reg0->size_bits);
-        }
-
-        // ctrl_byte: bits 7-6 = mode, bits 5-4 = cursor index
-        code_final.emit8(static_cast<uint8_t>((mode << 6) | (cur_idx << 4)));
-        code_final.emit8(gen_reg);
-    }
-
-    void emit_gcderef(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        // gcderef curN, handle_reg
-        auto cur_op    = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
-        auto handle_op = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
-
-        if (cur_op == nullptr || handle_op == nullptr) {
-            throw std::runtime_error("gcderef: requiere dos operandos registro");
-        }
-
-        std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
-        if (!opt_cur) {
-            throw std::runtime_error("gcderef: primer operando debe ser cur0-cur3");
-        }
-
-        uint8_t cur_idx    = opt_cur.value() & 0b11;
-        uint8_t handle_reg = encode_reg_general(handle_op->name.c_str());
-
-        // ctrl_byte: bits 5-4 = cursor index (mode no aplica para gcderef)
-        code_final.emit8(static_cast<uint8_t>(cur_idx << 4));
-        code_final.emit8(handle_reg);
-    }
-
-    void emit_instr_abs64(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        // segundo byte: condición (para jmp) o reservado 0x00 (para callvm/enter)
-        code_final.emit8(now_instr->opcode2);
-
-        auto *op = instruction_parser->operands[0].get();
-
-        if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
-            auto val_opt = vm::parse_number_safe(num->value);
-            if (!val_opt)
-                throw std::runtime_error("emit_instr_abs64: valor numerico invalido: " + num->value);
-            uint64_t val = val_opt.value();
-            code_final.emit64(val);
-        } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
-            Relocation rel;
-            rel.symbol  = lbl->value;
-            rel.section = assembly_ctx->current_section->name;
-            rel.offset  = code_final.offset;
-            rel.type    = Type::Absolute64;
-            assembly_ctx->ctx.add_relocation(rel);
-            code_final.emit64(0);
-        } else {
-            throw std::runtime_error(
-                "emit_instr_abs64: operando invalido para '" + instruction_parser->opcode +
-                "': se esperaba un numero o label"
-            );
-        }
-    }
-
-    static uint8_t suffix_to_cond(const std::string &opcode) {
-        size_t dot = opcode.find('.');
-        if (dot == std::string::npos) return 0x0F; // incondicional
-        std::string s = opcode.substr(dot + 1);
-        if (s == "je"  || s == "jz")  return 0x00;
-        if (s == "jne" || s == "jnz") return 0x01;
-        if (s == "jcs" || s == "jae") return 0x02;
-        if (s == "jcc" || s == "jb")  return 0x03;
-        if (s == "jmi")               return 0x04;
-        if (s == "jpl")               return 0x05;
-        if (s == "jvs")               return 0x06;
-        if (s == "jvc")               return 0x07;
-        if (s == "jhi")               return 0x08;
-        if (s == "jls")               return 0x09;
-        if (s == "jge")               return 0x0A;
-        if (s == "jlt")               return 0x0B;
-        if (s == "jgt")               return 0x0C;
-        if (s == "jle")               return 0x0D;
-        return 0x0F;
-    }
-
-    void emit_jrel(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        // emit_instruction ya emitió [0x00][0x2D]; aquí emitimos [cond][pad][disp32]
-        code_final.emit8(suffix_to_cond(instruction_parser->opcode));
-        code_final.emit8(0x00); // padding
-
-        auto *op = instruction_parser->operands[0].get();
-
-        if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
-            auto val_opt = vm::parse_number_safe(num->value);
-            if (!val_opt)
-                throw std::runtime_error("emit_jrel: valor numérico inválido: " + num->value);
-            int32_t disp = static_cast<int32_t>(val_opt.value());
-            code_final.emit32(static_cast<uint32_t>(disp));
-        } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
-            Relocation rel;
-            rel.symbol  = lbl->value;
-            rel.section = assembly_ctx->current_section->name;
-            rel.offset  = code_final.offset;
-            rel.type    = Type::Relative32;
-            assembly_ctx->ctx.add_relocation(rel);
-            code_final.emit32(0);
-        } else {
-            throw std::runtime_error(
-                "emit_jrel: operando invalido para '" + instruction_parser->opcode +
-                "': se esperaba un número o label"
-            );
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // OOP - emit_instr_reg_imm8
-    // Emite [reg_byte][imm8] para instrucciones callvirt/callsuper/getfield/getmethod
-    // -------------------------------------------------------------------------
-    void emit_instr_reg_imm8(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            assembly_ctx
-    ) {
-        if (instruction_parser->operands.size() < 2) {
-            throw std::runtime_error(
-                "emit_instr_reg_imm8: '" + instruction_parser->opcode +
-                "' requiere dos operandos (reg, imm8)"
-            );
-        }
-
-        auto *reg_op = dynamic_cast<vm::RegisterOperand *>(
-            instruction_parser->operands[0].get());
-        if (reg_op == nullptr) {
-            throw std::runtime_error(
-                "emit_instr_reg_imm8: primer operando de '" +
-                instruction_parser->opcode + "' debe ser un registro"
-            );
-        }
-
-        auto *num_op = dynamic_cast<vm::NumberOperand *>(
-            instruction_parser->operands[1].get());
-        if (num_op == nullptr) {
-            throw std::runtime_error(
-                "emit_instr_reg_imm8: segundo operando de '" +
-                instruction_parser->opcode + "' debe ser un inmediato entero (0-255)"
-            );
-        }
-
-        uint8_t reg_byte = encode_reg_general(reg_op->name.c_str()) & 0x0F;
-        // parse_unsigned del valor; NumberOperand almacena el valor en .value
-        auto val_opt = vm::parse_number_safe(num_op->value);
-        if (!val_opt)
-            throw std::runtime_error(
-                "emit_instr_reg_imm8: valor numerico invalido: " + num_op->value);
-
-        uint8_t imm8 = static_cast<uint8_t>(val_opt.value() & 0xFF);
-
-        code_final.emit8(reg_byte);
-        code_final.emit8(imm8);
-
-        DEBUG_PRINT("Emitiendo %s 0x%02x reg=%d imm8=%d\n",
-                    instruction_parser->opcode.c_str(),
-                    now_instr->opcode2, reg_byte, imm8);
-    }
-
-    // flag name -> 3-bit code (SF=0, ZF=1, CF=2, OF=3, DM=4)
-    static uint8_t encode_flag(const std::string &name) {
-        if (name == "SF") return 0;
-        if (name == "ZF") return 1;
-        if (name == "CF") return 2;
-        if (name == "OF") return 3;
-        if (name == "DM") return 4;
-        throw std::runtime_error("emit_instr_movc: flag desconocido: " + name);
-    }
-
-    // MOVC/MOVCH — 4 bytes: [0x00][opcode2][ctrl][byte4]
-    // Soporta:
-    //   movc  reg1, [reg2], flag   (0x1E, host=0, d=0)
-    //   movc  [reg1], reg2, flag   (0x1E, host=0, d=1)
-    //   movch reg1, [reg2], flag   (0x1E, host=1, d=0)
-    //   movch [reg1], reg2, flag   (0x1E, host=1, d=1)
-    //   movc  reg1, reg2, flag     (0x1F, host=0, d=0)
-    void emit_instr_movc(
-        const vm::Instruction *instruction_parser,
-        ByteWriter &           code_final,
-        const InstrInfo *      now_instr,
-        Assembler *            /*assembly_ctx*/
-    ) {
-        if (instruction_parser->operands.size() != 3)
-            throw std::runtime_error("emit_instr_movc: se requieren 3 operandos");
-
-        auto *op0 = instruction_parser->operands[0].get();
-        auto *op1 = instruction_parser->operands[1].get();
-        auto *op2 = instruction_parser->operands[2].get();
-
-        // 3er operando debe ser un flag (LabelOperand o IDENTIFIER)
-        std::string flag_name;
-        if (auto *lab = dynamic_cast<vm::LabelOperand *>(op2))
-            flag_name = lab->name;
+        rel.offset  = code_final.offset;                // posicion de escritura actual
+        rel.type    = size_ptr_in_this_machine;         // relocalizacion absoluta al ancho del puntero
+
+        assembly_ctx->ctx.add_relocation(rel);          // registrar relocalizacion
+
+        // emitir bytes placeholder (el enlazador los parcheara)
+        if      (size_ptr_in_this_machine == Type::Absolute64) code_final.emit64(0);
+        else if (size_ptr_in_this_machine == Type::Absolute32) code_final.emit32(0);
+        else if (size_ptr_in_this_machine == Type::Absolute16) code_final.emit16(0);
+        else if (size_ptr_in_this_machine == Type::Absolute8)  code_final.emit8(0);
         else
-            throw std::runtime_error("emit_instr_movc: 3er operando debe ser un flag (ZF/SF/CF/OF/DM)");
+            throw std::runtime_error(
+                "emit_instr_inmed_with_annotation(): unsupported pointer size for Method annotation");
 
-        uint8_t flag_code = encode_flag(flag_name);
-        bool    is_movch  = (instruction_parser->opcode == "movch");
+    } else {
+        // anotacion Relative/Absolute: tamano de relocalizacion sigue ancho del registro
+        uint8_t mode        = encode_mode(reg->size_bits); // ancho de 2 bits segun tamano del registro
+        bool    mem_dest    = false;                        // el destino siempre es un registro
 
-        auto *reg0 = dynamic_cast<vm::RegisterOperand *>(op0);
-        auto *mem0 = dynamic_cast<vm::MemoryOperand *>(op0);
-        auto *reg1 = dynamic_cast<vm::RegisterOperand *>(op1);
-        auto *mem1 = dynamic_cast<vm::MemoryOperand *>(op1);
+        emit_ctrl_byte(code_final, mode, is_a_signed ? 1 : 0, mem_dest ? 1 : 0,
+                       encode_reg_general(reg->name.c_str())); // emitir byte de control
 
-        // ---- MOVC/MOVCH con operando memoria (opcode2 = 0x1E) ----
-        if (now_instr->opcode2 == 0x1E) {
-            uint8_t d;
-            const vm::RegisterOperand *reg_a; // siempre el reg dentro de []
-            const vm::RegisterOperand *reg_b; // el otro operando
+        Relocation rel;
+        rel.symbol  = annotacion->value;
+        rel.section = assembly_ctx->current_section->name;
+        rel.offset  = code_final.offset; // posicion de escritura despues del byte ctrl
 
-            if (mem0 != nullptr && reg1 != nullptr) {
-                // movc [reg1_in_mem0], reg1, flag  -> d=1
-                d     = 1;
-                reg_a = dynamic_cast<vm::RegisterOperand *>(mem0->expr.get());
-                reg_b = reg1;
-            } else if (reg0 != nullptr && mem1 != nullptr) {
-                // movc reg0, [reg1_in_mem1], flag  -> d=0
-                d     = 0;
-                reg_a = dynamic_cast<vm::RegisterOperand *>(mem1->expr.get());
-                reg_b = reg0;
-            } else {
-                throw std::runtime_error("emit_instr_movc (0x1E): un operando debe ser memoria y otro registro");
-            }
-            if (!reg_a)
-                throw std::runtime_error("emit_instr_movc (0x1E): la expresion en [] debe ser un registro");
-
-            uint8_t r_mem = encode_reg_general(reg_a->name.c_str());
-            uint8_t r_reg = encode_reg_general(reg_b->name.c_str());
-
-            // ctrl: host(1)|host(1)|d(1)|reg_mem/reg_src(5)
-            // bits 7-6: 0b10 = MOVCH, 0b00 = MOVC
-            uint8_t host_bits = is_movch ? 0b10 : 0b00;
-            // d=0: reg_b=destino, reg_a=fuente (addr)  -> ctrl tiene el "otro" registro
-            // d=1: reg_a=destino (addr), reg_b=fuente  -> ctrl tiene el "otro" registro
-            // En ambos: reg1 de ctrl = el reg que NO está dentro de []
-            uint8_t ctrl = (uint8_t)((host_bits << 6) | (d << 5) | (r_reg & 0xF));
-            uint8_t b4   = (uint8_t)((flag_code << 5) | (r_mem & 0x1F));
-            code_final.emit8(ctrl);
-            code_final.emit8(b4);
-            return;
+        // derivar tipo de relocalizacion desde la clave de anotacion
+        if (annotacion->key == "Relative") {
+            rel.type = mode_to_type_relocation_rel(mode); // e.g. Relative32 for mode=2
+        } else if (annotacion->key == "Absolute") {
+            rel.type = mode_to_type_relocation_abs(mode); // e.g. Absolute64 for mode=3
+        } else {
+            throw std::runtime_error(
+                "emit_instr_inmed_with_annotation(): unsupported annotation: " + annotacion->key);
         }
 
-        // ---- MOVC reg, reg, flag (opcode2 = 0x1F) ----
-        if (!reg0 || !reg1)
-            throw std::runtime_error("emit_instr_movc (0x1F): ambos operandos deben ser registros");
+        if (rel.type == Type::NO_VALID)
+            throw std::runtime_error(
+                "emit_instr_inmed_with_annotation(): unsupported annotation: " + annotacion->key);
 
-        uint8_t r1c = encode_reg_general(reg0->name.c_str());
-        uint8_t r2c = encode_reg_general(reg1->name.c_str());
-        // ctrl: 0b00 | 0 | reg1(4)
-        code_final.emit8(r1c & 0xF);
-        code_final.emit8((uint8_t)((flag_code << 5) | (r2c & 0x1F)));
+        assembly_ctx->ctx.add_relocation(rel); // registrar relocalizacion
+
+        uint64_t val_inmmed    = 0;                    // placeholder: el enlazador sobreescribira
+        size_t   size_in_bytes = mode_to_bytes(mode);  // numero de bytes placeholder a emitir
+        code_final.emit_bytes(&val_inmmed, size_in_bytes); // emitir placeholder
     }
 }
+
+// =========================================================================
+// Emision generica de instruccion con inmediato
+// =========================================================================
+
+/**
+ * @brief Emite un byte ctrl + valor inmediato para instruccion con operando inmediato.
+ *
+ * Maneja tres sub-casos:
+ *   1. operands[1] is an annotation -> delegates to emit_instr_inmed_with_annotation.
+ *   2. operands[0] is a register    -> direction=0 (register destination).
+ *   3. operands[0] is memory        -> direction=1 (memory destination).
+ *
+ * El valor inmediato se valida para que quepa en el ancho del registro.
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_inmed(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (now_instr->opcode1 != 0x00)
+        throw std::runtime_error("emit_instr_inmed: opcode1 != 0x00 not implemented");
+
+    bool is_a_signed = is_signed(instruction_parser->opcode); // detectar variante con signo
+
+    auto n0         = instruction_parser->operands[0].get(); // primer operando
+    auto n1         = instruction_parser->operands[1].get(); // segundo operando
+
+    auto inmmed_str = dynamic_cast<vm::NumberOperand *>(n1); // intentar leer el valor inmediato
+
+    auto reg      = dynamic_cast<vm::RegisterOperand *>(n0); // destino registro
+    auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);   // destino memoria
+    bool mem_dest = reg == nullptr;                           // verdadero cuando el destino es memoria
+
+    if ((mem == nullptr) || inmmed_str == nullptr) {
+        // verificar si el segundo operando es una referencia de anotacion
+        if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
+            emit_instr_inmed_with_annotation(instruction_parser, code_final, now_instr, assembly_ctx);
+            return;
+        }
+
+        // ni anotacion ni combinacion valida inmediato/memoria
+        if (mem == nullptr && inmmed_str == nullptr)
+            throw std::runtime_error(
+                "emit_instr_inmed: " + instruction_parser->opcode +
+                ": could not locate a register or immediate operand; check syntax");
+    }
+
+    // parsear el valor inmediato numerico
+    auto inmmed_opt = vm::parse_number_safe(inmmed_str->value);
+    if (inmmed_opt == std::nullopt)
+        throw std::runtime_error("emit_instr_inmed: invalid number: " + inmmed_str->value);
+
+    uint64_t val_inmmed = inmmed_opt.value();                          // valor inmediato parseado
+    ImmType  type       = detect_imm_type((int64_t)val_inmmed, is_a_signed); // clasificar por ancho de bits
+
+    if (mem_dest) {
+        // destino memoria: extract the base register from the memory operand
+        reg = static_cast<vm::RegisterOperand *>(mem->expr.get());
+        if (reg == nullptr) {
+            std::cout << "emit_instr_inmed: " << instruction_parser->opcode
+                      << ": expected register inside memory operand\n";
+            mem->expr->print(0);
+            throw std::runtime_error("emit_instr_inmed: " + instruction_parser->opcode);
+        }
+    }
+
+    uint8_t mode = encode_mode(reg->size_bits); // codigo de ancho de 2 bits del registro
+
+    // validar que el inmediato cabe en el ancho del registro
+    int instr_imm_bits  = immtype_bits(type);    // bits requeridos para el inmediato
+    int instr_mode_bits = mode_to_bits(mode);    // bits del modo de registro
+
+    if (instr_imm_bits > instr_mode_bits)
+        throw std::runtime_error(
+            "emit_instr_inmed: immediate " + std::to_string(val_inmmed) +
+            " (" + std::to_string(instr_imm_bits) + " bits) exceeds mode " +
+            std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)");
+
+    // byte ctrl: modo | signo | dest_mem | reg
+    emit_ctrl_byte(code_final, mode, is_a_signed ? 1 : 0, mem_dest ? 1 : 0,
+                   encode_reg_general(reg->name.c_str()));
+
+    // emitir bytes del inmediato segun ancho del registro
+    code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode));
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG(%s): 0x%02x, INMED 0x%llx TYPE: %d MODE: %d\n",
+                instruction_parser->opcode.c_str(),
+                now_instr->opcode1, now_instr->opcode2,
+                reg->name.c_str(), encode_reg_general(reg->name.c_str()),
+                val_inmmed, type, mode);
+}
+
+// =========================================================================
+// Emision de instruccion con operando de memoria (etiqueta relativa)
+// =========================================================================
+
+/**
+ * @brief Emite un byte ctrl + relocalizacion relativa de 40 bits para instruccion con etiqueta.
+ *
+ * Espera exactamente un operando de memoria (con etiqueta) y un operando de registro.
+ * El placeholder de 40 bits es parcheado por el enlazador con relocalizacion Relative40.
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_mem(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (now_instr->opcode1 != 0x00)
+        throw std::runtime_error("emit_instr_mem: opcode1 != 0x00 not implemented");
+
+    bool is_a_signed = is_signed(instruction_parser->opcode); // detectar variante con signo
+
+    auto n0 = instruction_parser->operands[0].get(); // primer operando
+    auto n1 = instruction_parser->operands[1].get(); // segundo operando
+
+    uint8_t direccion = 1;                                // default: [mem], reg
+    auto    mem       = dynamic_cast<vm::MemoryOperand *>(n0);
+    auto    reg       = dynamic_cast<vm::RegisterOperand *>(n1);
+
+    // intentar el layout inverso si el primer operando no es memoria
+    if (mem == nullptr || reg == nullptr) {
+        direccion = 0;                                    // reversed: reg, [mem]
+        mem       = dynamic_cast<vm::MemoryOperand *>(n1);
+        reg       = dynamic_cast<vm::RegisterOperand *>(n0);
+    }
+
+    if (mem == nullptr || reg == nullptr)
+        throw std::runtime_error(
+            "emit_instr_mem: " + instruction_parser->opcode +
+            ": requires one memory operand and one register operand");
+
+    uint8_t mode = encode_mode(reg->size_bits); // ancho de 2 bits segun tamano del registro
+
+    // byte ctrl: codifica modo, signo, direccion y registro
+    emit_ctrl_byte(code_final, mode, is_a_signed ? 1 : 0, direccion, // nota: el orden de campos es s, d aqui
+                   encode_reg_general(reg->name.c_str()));
+    // Note: the emit_ctrl_byte layout is mode|s|d|reg; 'direccion' maps to the 'd' bit.
+
+    // extraer el nombre de etiqueta de la expresion de memoria
+    auto lalbel = dynamic_cast<vm::LabelOperand *>(mem->expr.get());
+
+    Relocation rel;
+    rel.symbol  = lalbel->name;                        // etiqueta destino
+    rel.section = assembly_ctx->current_section->name; // seccion que contiene esta instruccion
+    rel.offset  = code_final.offset;                   // posicion de escritura del placeholder
+    rel.type    = Type::Relative40;                    // relocalizacion relativa de 40 bits
+
+    assembly_ctx->ctx.add_relocation(rel); // registrar relocalizacion para el enlazador
+
+    // emitir placeholder de 40 bits (5 bytes, parcheado por enlazador)
+    code_final.emit40(0x1122334455);
+}
+
+// =========================================================================
+// Funciones auxiliares para parsear expresiones SIB
+// =========================================================================
+
+/**
+ * @brief Convierte un ExprNode* a un subtipo AST concreto via void* para evitar UB.
+ *
+ * El parser almacena a veces objetos no-ExprNode (RegisterOperand, NumberOperand)
+ * como ExprNode* via static_cast. Este helper recupera el tipo original de forma segura
+ * pasando por void* -> ASTNode* primero, luego dynamic_cast a T.
+ *
+ * @tparam T Tipo destino (debe ser subclase de ASTNode).
+ * @param  node Puntero ExprNode (puede apuntar a un T).
+ * @return      Puntero a T, o nullptr si la conversion falla.
+ */
+template<typename T>
+static const T *sib_cast(const vm::ExprNode *node) {
+    // reinterpretar via void* para romper la suposicion ExprNode*, luego dynamic_cast
+    return dynamic_cast<const T *>(static_cast<const vm::ASTNode *>(static_cast<const void *>(node)));
+}
+
+/**
+ * @brief Extrae el desplazamiento de escala de un nodo de escala (NumberOperand).
+ *
+ * Convierte el entero bruto (1/2/4/8) al encoding de desplazamiento de 2 bits:
+ *   1 -> 0,  2 -> 1,  4 -> 2,  8 -> 3.
+ *
+ * @param  node ExprNode que se espera sea un NumberOperand.
+ * @return      Valor de desplazamiento de 2 bits, o 0 si el nodo no es un numero.
+ */
+static uint8_t parse_scale(const vm::ExprNode *node) {
+    auto *sc = sib_cast<vm::NumberOperand>(node); // intentar leer la escala como numero
+    if (!sc) return 0;                             // sin escala: tratar como *1 (shift=0)
+    int sv = std::stoi(sc->value, nullptr, 0);    // parsear el valor de escala
+    return (sv <= 1) ? 0 : (sv == 2) ? 1 : (sv == 4) ? 2 : 3; // mapear a desplazamiento de 2 bits
+}
+
+/**
+ * @brief Recorre el AST de una expresion de memoria y extrae base, indice y escala.
+ *
+ * Formas soportadas:
+ *   [base]               -> base establecido, index=0, scale=0
+ *   [base + index]       -> base e indice establecidos, scale=0
+ *   [base + index*scale] -> los tres establecidos
+ *   [index*scale + base] -> igual, operandos intercambiados
+ *   [index*scale]        -> sin base, solo indice y escala
+ *
+ * @param  expr  Raiz del AST de la expresion de direccion de memoria.
+ * @param  base  [out] Indice del registro base codificado.
+ * @param  index [out] Indice del registro indice codificado.
+ * @param  scale [out] Desplazamiento de escala de 2 bits.
+ */
+static void parse_sib_expr(
+    const vm::ASTNode *expr,
+    uint8_t &base, uint8_t &index, uint8_t &scale
+) {
+    base = 0; index = 0; scale = 0; // inicializar a cero (sin base/indice/escala)
+
+    if (auto *reg = dynamic_cast<const vm::RegisterOperand *>(expr)) {
+        base = encode_reg_general(reg->name.c_str()); // forma simple [base]
+        return;
+    }
+
+    auto *bin = dynamic_cast<const vm::BinaryExpr *>(expr);
+    if (!bin) throw std::runtime_error("SIB: unsupported memory expression");
+
+    if (bin->op == '*') {
+        // [index*scale] -- no base register
+        auto *idx = sib_cast<vm::RegisterOperand>(bin->left.get()); // try left as index
+        auto *sc  = bin->left.get();                                 // tentatively left as scale
+        if (!idx) {
+            idx = sib_cast<vm::RegisterOperand>(bin->right.get()); // el indice esta a la derecha
+            sc  = bin->left.get();                                  // la escala esta a la izquierda
+        } else {
+            sc = bin->right.get(); // la escala esta a la derecha
+        }
+        if (idx) index = encode_reg_general(idx->name.c_str()); // encode index register
+        scale = parse_scale(sc);                                  // extract 2-bit scale
+        return;
+    }
+
+    if (bin->op == '+') {
+        auto *left_reg  = sib_cast<vm::RegisterOperand>(bin->left.get());    // try left as register
+        auto *left_mul  = dynamic_cast<const vm::BinaryExpr *>(bin->left.get());   // try left as multiply
+        auto *right_reg = sib_cast<vm::RegisterOperand>(bin->right.get());   // try right as register
+        auto *right_mul = dynamic_cast<const vm::BinaryExpr *>(bin->right.get());  // try right as multiply
+
+        if (left_reg && right_reg) {
+            // [base + index] with scale=1
+            base  = encode_reg_general(left_reg->name.c_str());
+            index = encode_reg_general(right_reg->name.c_str());
+            scale = 0; // shift=0 means *1
+        } else if (left_reg && right_mul && right_mul->op == '*') {
+            // [base + index*scale]
+            base = encode_reg_general(left_reg->name.c_str());
+            auto *idx = sib_cast<vm::RegisterOperand>(right_mul->left.get()); // index on left
+            auto *sc  = right_mul->right.get();                                // scale on right
+            if (!idx) {
+                idx = sib_cast<vm::RegisterOperand>(right_mul->right.get());   // index on right
+                sc  = right_mul->left.get();                                   // scale on left
+            }
+            if (idx) index = encode_reg_general(idx->name.c_str()); // encode index
+            scale = parse_scale(sc);                                  // extract scale
+        } else if (left_mul && left_mul->op == '*' && right_reg) {
+            // [index*scale + base]
+            base = encode_reg_general(right_reg->name.c_str());
+            auto *idx = sib_cast<vm::RegisterOperand>(left_mul->left.get()); // index on left
+            auto *sc  = left_mul->right.get();                               // scale on right
+            if (!idx) {
+                idx = sib_cast<vm::RegisterOperand>(left_mul->right.get());  // index on right
+                sc  = left_mul->left.get();                                  // scale on left
+            }
+            if (idx) index = encode_reg_general(idx->name.c_str()); // encode index
+            scale = parse_scale(sc);                                  // extract scale
+        } else {
+            throw std::runtime_error("SIB: unrecognised memory expression form");
+        }
+        return;
+    }
+
+    throw std::runtime_error("SIB: unsupported memory operator");
+}
+
+// =========================================================================
+// Emision de instrucciones SIB
+// =========================================================================
+
+/**
+ * @brief Emite cuatro bytes para una instruccion con direccionamiento SIB.
+ *
+ * Disposicion de bytes:
+ *   byte2 (ctrl):    mode(2) | signed(1) | dir(1) | scale(2) | has_index(1) | 0
+ *   byte3 (regs):    dst_reg(4) | base_reg(4)
+ *   byte4 (index):   index_reg(4) | 0000
+ *   byte5 (pad):     0x00
+ *
+ * @param instruction_parser Instruccion parseada (un registro y un operando de memoria).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_sib(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    bool is_a_signed = is_signed(instruction_parser->opcode); // detectar variante con signo
+
+    auto *op0 = instruction_parser->operands[0].get(); // primer operando
+    auto *op1 = instruction_parser->operands[1].get(); // segundo operando
+
+    vm::RegisterOperand *reg_op   = nullptr;
+    vm::MemoryOperand   *mem_op   = nullptr;
+    uint8_t              direction = 0; // 0 = reg, [mem] ; 1 = [mem], reg
+
+    if (auto *r = dynamic_cast<vm::RegisterOperand *>(op0)) {
+        reg_op    = r;                                    // register on the left
+        mem_op    = dynamic_cast<vm::MemoryOperand *>(op1); // memory on the right
+        direction = 0;                                    // el destino es el registro
+    } else {
+        mem_op    = dynamic_cast<vm::MemoryOperand *>(op0); // memory on the left
+        reg_op    = dynamic_cast<vm::RegisterOperand *>(op1); // register on the right
+        direction = 1;                                    // el destino es memoria
+    }
+
+    if (!reg_op || !mem_op)
+        throw std::runtime_error("SIB: " + instruction_parser->opcode +
+            " requires one register and one SIB memory operand");
+
+    uint8_t base = 0, index = 0, scale = 0;
+    parse_sib_expr(mem_op->expr.get(), base, index, scale); // decodificar la expresion de direccion
+
+    // has_index is set whenever the expression is a BinaryExpr (base+index form)
+    uint8_t has_index = (dynamic_cast<const vm::BinaryExpr *>(mem_op->expr.get()) != nullptr) ? 1 : 0;
+
+    uint8_t mode    = encode_mode(reg_op->size_bits);              // codigo de ancho de 2 bits
+    uint8_t dst_reg = encode_reg_general(reg_op->name.c_str());    // 4-bit destination register code
+
+    // ctrl: mode(2) | signed(1) | dir(1) | scale(2) | has_index(1) | 0
+    uint8_t ctrl = (uint8_t)(
+        (mode        << 6) |   // operand width
+        ((is_a_signed ? 1 : 0) << 5) | // signed flag
+        (direction   << 4) |   // direction: 0=reg dst, 1=mem dst
+        ((scale & 0x3) << 2) | // 2-bit scale shift (0=*1, 1=*2, 2=*4, 3=*8)
+        (has_index   << 1)     // 1=has index register
+    );
+    code_final.emit8(ctrl);                          // emitir byte de control
+
+    code_final.emit8((dst_reg << 4) | (base & 0xF)); // emit reg/base byte
+    code_final.emit8(index & 0xF);                   // emit index register byte (low nibble)
+    code_final.emit8(0x00);                           // emit padding byte
+}
+
+// =========================================================================
+// XCHG instruction emission
+// =========================================================================
+
+/**
+ * @brief Emite los bytes de datos para una instruccion XCHG.
+ *
+ * Disposicion de bytes:
+ *   byte1 (flags):  0x00  (reserved, not yet used)
+ *   byte2 (reg1):   special-bit(1) | mode(2) | reg_code(4)   or  special-bit(1) | special_code(6)
+ *   byte3 (reg2):   same encoding as byte2
+ *
+ * El bit especial (bit 6) distingue registros generales de especiales/extendidos.
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_xchg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (reg1 == nullptr)
+        throw std::runtime_error("XCHG: missing first register operand");
+    if (reg2 == nullptr)
+        throw std::runtime_error("XCHG: missing second register operand");
+
+    uint8_t flags = 0;       // flags byte is reserved and always 0 for now
+    code_final.emit8(flags); // emit flags byte
+
+    // determine whether each register is special/extended
+    std::optional<uint8_t> opt_special1 = encode_special_register(reg1->name);
+    std::optional<uint8_t> opt_special2 = encode_special_register(reg2->name);
+
+    // codificar el primer byte de registro
+    uint8_t byte1 = 0;
+    if (opt_special1) {
+        byte1 = 0b0100'0000;                    // set special-register marker bit
+        byte1 = byte1 | opt_special1.value();   // lower 6 bits = special register code
+    } else {
+        uint8_t mode     = encode_mode(reg1->size_bits);           // codigo de ancho de 2 bits
+        uint8_t reg_code = encode_reg_general(reg1->name.c_str()); // 4-bit register code
+        byte1            = byte1 | (mode << 4 | reg_code);          // pack mode and register
+    }
+
+    // codificar el segundo byte de registro
+    uint8_t byte2 = 0;
+    if (opt_special2) {
+        byte2 = 0b0100'0000;                    // set special-register marker bit
+        byte2 = byte2 | opt_special2.value();   // lower 6 bits = special register code
+    } else {
+        uint8_t mode     = encode_mode(reg2->size_bits);           // codigo de ancho de 2 bits
+        uint8_t reg_code = encode_reg_general(reg2->name.c_str()); // 4-bit register code
+        byte2            = byte2 | (mode << 4 | reg_code);          // pack mode and register
+    }
+
+    code_final.emit8(byte1); // emit first operand byte
+    code_final.emit8(byte2); // emit second operand byte
+}
+
+// =========================================================================
+// PUSH / POP emission
+// =========================================================================
+
+/**
+ * @brief Emite un byte de datos para una instruccion PUSH o POP.
+ *
+ * Disposicion de bytes:
+ *   General register:  0 | mode(2) | reg_code(4)
+ *   Special register:  1 | special_code(6)
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_pop_push(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto n0  = instruction_parser->operands[0].get();
+    auto reg = dynamic_cast<vm::RegisterOperand *>(n0);
+
+    if (reg == nullptr)
+        throw std::runtime_error("PUSH/POP: expected a register operand");
+
+    std::optional<uint8_t> opt_special = encode_special_register(reg->name); // verificar si es registro especial
+    uint8_t byte = 0x00; // final encoded byte
+
+    if (opt_special) {
+        // special/extended register: bit 6 set, lower 6 bits = register code
+        uint8_t reg_ext  = 1;
+        uint8_t reg_code = opt_special.value();
+        byte = (reg_ext << 6) | reg_code; // [1 | special_code(6)]
+    } else {
+        // general register: bit 6 clear, next 2 bits = mode, lower 4 bits = register
+        uint8_t reg_ext  = 0;
+        uint8_t mode     = encode_mode(reg->size_bits);           // 2-bit width
+        uint8_t reg_code = encode_reg_general(reg->name.c_str()); // 4-bit register code
+        byte = (reg_ext << 6) | (mode << 4) | reg_code;           // [0 | mode(2) | reg(4)]
+    }
+
+    code_final.emit8(byte); // emitir el byte codificado
+}
+
+// =========================================================================
+// MOV reg, reg emission (with special/extended register support)
+// =========================================================================
+
+/**
+ * @brief Emite dos bytes de datos para MOV con dos operandos de registro.
+ *
+ * Forma estandar (ambos generales):
+ *   byte1 (ctrl):  mode(2) | 0 | 0 | 0000   (is_a_signed=0, direction=0)
+ *   byte2 (regs):  reg2(4) | reg1(4)
+ *
+ * Forma con registro especial (uno general, uno especial/extendido):
+ *   is_a_signed=1 se usa como marca de uso de registro especial.
+ *   direction=0 -> MOV reg_ext, reg   (escribir especial desde general)
+ *   direction=1 -> MOV reg, reg_ext   (leer especial a general)
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_mov_reg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto reg2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (reg1 == nullptr || reg2 == nullptr)
+        throw std::runtime_error("MOV: requires two register operands");
+
+    if (reg1->size_bits != reg2->size_bits)
+        throw std::runtime_error(
+            "MOV " + reg1->name + " " + reg2->name + ": registers must be the same size");
+
+    std::optional<uint8_t> opt_reg1_special = encode_special_register(reg1->name);
+    std::optional<uint8_t> opt_reg2_special = encode_special_register(reg2->name);
+
+    bool r1_special = opt_reg1_special.has_value(); // verdadero si reg1 es un registro especial
+    bool r2_special = opt_reg2_special.has_value(); // verdadero si reg2 es un registro especial
+
+    if (r1_special && r2_special)
+        throw std::runtime_error("MOV: cannot use two special/extended registers");
+
+    if (!r1_special && !r2_special) {
+        // standard MOV reg1, reg2 (both general registers)
+        uint8_t mode        = encode_mode(reg1->size_bits); // 2-bit width
+        uint8_t is_a_signed = 0;                            // s=0 signals general-register form
+        uint8_t direction   = 0;                            // d=0, no direction concept here
+
+        emit_ctrl_byte(code_final, mode, is_a_signed, direction, 0); // emit ctrl (lower nibble unused)
+        code_final.emit8(                                              // emit register pair byte
+            encode_reg_general(reg2->name.c_str()) << 4 |
+            encode_reg_general(reg1->name.c_str())
+        );
+
+        DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
+                    instruction_parser->opcode.c_str(),
+                    now_instr->opcode1, now_instr->opcode2,
+                    reg1->name.c_str(), encode_reg_general(reg2->name.c_str()) << 4,
+                    reg2->name.c_str(), encode_reg_general(reg1->name.c_str()),
+                    mode);
+        return;
+    }
+
+    // One operand is a special register.
+    // is_a_signed=1 marks the special-register variant (see exec_instr_mov_reg).
+    uint8_t is_a_signed = 1;
+
+    // determine which is the general and which is the special register
+    uint8_t reg_general = r1_special
+                              ? encode_reg_general(reg2->name.c_str())  // reg2 is general
+                              : encode_reg_general(reg1->name.c_str()); // reg1 is general
+    uint8_t reg_special = r1_special ? opt_reg1_special.value() : opt_reg2_special.value();
+
+    // direction=0: MOV reg_ext, reg  (write special <- general)
+    // direction=1: MOV reg, reg_ext  (write general <- special)
+    uint8_t direction = r1_special ? 0 : 1;
+
+    // special registers encode mode in bits[5:4]; extract it to reconstruct the ctrl byte
+    uint8_t mode = (reg_special >> 4) & 0b11;
+
+    emit_ctrl_byte(code_final, mode, is_a_signed, direction, 0); // ctrl: mode | 1 | direction | 0000
+
+    // byte2: special register code in high nibble, general register in low nibble
+    code_final.emit8((reg_special & 0x0F) << 4 | (reg_general & 0x0F));
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x 0x%02x REG1(%s): 0x%02x, REG2(%s): 0x%02x MODE: %d\n",
+                instruction_parser->opcode.c_str(),
+                now_instr->opcode1, now_instr->opcode2,
+                reg1->name.c_str(), reg_special,
+                reg2->name.c_str(), reg_general,
+                mode);
+}
+
+// =========================================================================
+// MOV reg/mem, immed emission
+// =========================================================================
+
+/**
+ * @brief Emite el byte ctrl y los bytes inmediatos para una instruccion MOV inmediato.
+ *
+ * Formas soportadas:
+ *   MOV reg,      imm    -> s=0, d=0, general register destination
+ *   MOV [reg],    imm    -> s=1, d=0, memory destination (register holds address)
+ *   MOV reg_ext,  imm    -> s=1, d=1, special register destination
+ *   MOV reg, @Annotation -> relocation placeholder (Method / Relative / Absolute)
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_mov_inmed(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    uint8_t is_a_signed = 0; // s bit: 0=general, 1=memory/special
+    uint8_t mode        = 0; // 2-bit operand width
+    uint8_t direction   = 0; // d bit
+    uint8_t size_bytes  = 0; // numero de bytes inmediatos a emitir
+
+    auto n0 = instruction_parser->operands[0].get(); // destination operand
+    auto n1 = instruction_parser->operands[1].get(); // source operand (immediate or annotation)
+
+    auto     inmmed_str = dynamic_cast<vm::NumberOperand *>(n1); // intentar leer inmediato numerico
+    uint64_t val_inmmed = 0;                                      // will be set below if numeric
+
+    if (inmmed_str != nullptr) {
+        auto inmmed_opt = vm::parse_number_safe(inmmed_str->value); // parsear la cadena numerica
+        if (inmmed_opt == std::nullopt)
+            throw std::runtime_error("MOV imm: invalid number: " + inmmed_str->value);
+        val_inmmed = inmmed_opt.value(); // store parsed value
+    }
+
+    auto reg      = dynamic_cast<vm::RegisterOperand *>(n0); // try general/special register
+    auto mem      = dynamic_cast<vm::MemoryOperand *>(n0);   // try memory operand
+    bool mem_dest = reg == nullptr;                           // verdadero cuando el primer operando es memoria
+
+    if (auto annotacion = dynamic_cast<vm::AnnotationNode *>(n1)) {
+        // annotation operand: set up a relocation
+        if (annotacion->key == "Method") {
+            // Method annotation: adjust register size to pointer width
+            if (reg != nullptr) {
+                reg->size_bits = sizeof(void *) * 8; // force pointer-sized mode
+            } else if (mem != nullptr) {
+                reg            = static_cast<vm::RegisterOperand *>(mem->expr.get());
+                reg->size_bits = sizeof(void *) * 8; // force pointer-sized mode
+            }
+
+            Relocation rel;
+            rel.symbol  = annotacion->value;              // e.g. "kernel32.dll:GetTickCount"
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset + 1;          // +1 skips the ctrl byte emitted later
+            rel.type    = size_ptr_in_this_machine;        // absolute pointer-sized relocation
+
+            assembly_ctx->ctx.add_relocation(rel);         // registrar relocalizacion
+
+        } else {
+            // Relative or Absolute annotation: use register size for relocation width
+            if (reg != nullptr) {
+                mode = encode_mode(reg->size_bits); // derive mode from register
+            } else if (mem != nullptr) {
+                reg  = static_cast<vm::RegisterOperand *>(mem->expr.get());
+                mode = encode_mode(reg->size_bits); // derive mode from register inside memory
+            }
+
+            Relocation rel;
+            rel.symbol  = annotacion->value;
+            rel.section = assembly_ctx->current_section->name;
+            rel.offset  = code_final.offset + 1; // +1 skips ctrl byte
+
+            // choose relocation type based on annotation key
+            if (annotacion->key == "Relative") {
+                rel.type = mode_to_type_relocation_rel(mode); // sized relative relocation
+            } else if (annotacion->key == "Absolute") {
+                rel.type = mode_to_type_relocation_abs(mode); // sized absolute relocation
+            } else {
+                throw std::runtime_error(
+                    "emit_instr_mov_inmed: unsupported annotation: " + annotacion->key);
+            }
+
+            if (rel.type == Type::NO_VALID)
+                throw std::runtime_error(
+                    "emit_instr_mov_inmed: unsupported annotation: " + annotacion->key);
+
+            assembly_ctx->ctx.add_relocation(rel); // registrar relocalizacion
+            val_inmmed = 0;                         // placeholder: el enlazador sobreescribira
+        }
+    }
+
+    if (mem_dest) {
+        // destino memoria: s=1 to distinguish from general-register form
+        is_a_signed = 1;
+        reg = static_cast<vm::RegisterOperand *>(mem->expr.get()); // base register of [reg]
+        if (reg == nullptr) {
+            std::cout << "MOV imm: " << instruction_parser->opcode
+                      << ": expected register inside memory operand\n";
+            mem->expr->print(0);
+            throw std::runtime_error("MOV imm: " + instruction_parser->opcode);
+        }
+    } else {
+        std::optional<uint8_t> opt_reg_special = encode_special_register(reg->name);
+        is_a_signed = opt_reg_special.has_value() ? 1 : 0; // s=1 for special registers
+
+        if (is_a_signed == 1) {
+            // special/extended register destination
+            uint8_t reg_special = opt_reg_special.value();
+            mode      = (reg_special >> 4) & 0b11; // extract mode from special register encoding
+            direction = 1;                          // d=1 for special register forms
+
+            emit_ctrl_byte(code_final, mode, is_a_signed, direction,
+                           reg_special & 0x0F); // emit ctrl with special register in low nibble
+
+            size_bytes = sizeof(uint64_t);                         // siempre emitir inmediato de 64 bits para registros especiales
+            code_final.emit_bytes(&val_inmmed, size_bytes);        // emit immediate placeholder
+            return;
+        }
+    }
+
+    // general register (or memory) destination
+    mode = encode_mode(reg->size_bits); // ancho de 2 bits segun tamano del registro
+
+    // validar que el inmediato cabe en el ancho del registro
+    ImmType type            = detect_imm_type((int64_t)val_inmmed, is_a_signed); // clasificar inmediato
+    int     instr_imm_bits  = immtype_bits(type);   // required bits for the immediate
+    int     instr_mode_bits = mode_to_bits(mode);   // bits available in the register mode
+
+    if (instr_imm_bits > instr_mode_bits)
+        throw std::runtime_error(
+            "emit_instr_mov_inmed: immediate " + std::to_string(val_inmmed) +
+            " (" + std::to_string(instr_imm_bits) + " bits) exceeds mode " +
+            std::to_string(mode) + " (" + std::to_string(instr_mode_bits) + " bits)");
+
+    direction = 0; // d=0 for general register / memory destination
+
+    emit_ctrl_byte(code_final, mode, is_a_signed, direction,
+                   encode_reg_general(reg->name.c_str())); // emitir byte de control
+
+    code_final.emit_bytes(&val_inmmed, mode_to_bytes(mode)); // emit immediate bytes
+}
+
+// =========================================================================
+// CALLN immediate emission
+// =========================================================================
+
+/**
+ * @brief Emite el marcador de llamada nativa para una instruccion CALLN @Metodo().
+ *
+ * The 8-byte placeholder (0x1122334455667788) is patched by the linker using
+ * a Native_Method relocation that encodes the library and function names.
+ *
+ * @param instruction_parser Instruccion parseada (operands[0] = anotacion @Metodo).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_calln_inmmed(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto method = dynamic_cast<vm::AnnotationNode *>(instruction_parser->operands[0].get());
+    if (method == nullptr)
+        throw std::runtime_error(
+            "CALLN: expected @Method(\"lib:func\") annotation as first operand");
+
+    Relocation rel;
+    rel.symbol  = method->value;                       // e.g. "kernel32.dll:GetTickCount"
+    rel.section = assembly_ctx->current_section->name;
+    rel.type    = Type::Native_Method;                 // native call relocation type
+    rel.offset  = code_final.offset;                   // capture offset before emitting placeholder
+
+    uint64_t placeholder = 0x1122334455667788;         // recognisable sentinel patched by linker
+    code_final.emit_bytes(&placeholder, size_relocation_emmit(rel.type)); // emitir placeholder
+
+    assembly_ctx->ctx.add_relocation(rel); // registrar para parcheo del enlazador
+}
+
+// =========================================================================
+// MOV SIB emission (delegates to emit_instr_sib)
+// =========================================================================
+
+/**
+ * @brief Emite una instruccion MOV con direccionamiento SIB.
+ *        Delegates entirely to emit_instr_sib; the s-bit selects VM vs host memory at runtime.
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_mov_sib(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    emit_instr_sib(instruction_parser, code_final, now_instr, assembly_ctx); // emisor SIB compartido
+}
+
+// =========================================================================
+// One-register instruction emission (NOT, etc.)
+// =========================================================================
+
+/**
+ * @brief Emite dos bytes para una instruccion de un solo registro.
+ *
+ * Byte 1 (ctrl):  modo(2) | 000000   (bits 5-0 son cero)
+ * Byte 2 (reg):   0000 | reg(4)
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_one_reg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto reg = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    if (reg == nullptr)
+        throw std::runtime_error(instruction_parser->opcode + ": requires a register operand");
+
+    uint8_t mode = encode_mode(reg->size_bits);        // codigo de ancho de 2 bits
+    code_final.emit8(static_cast<uint8_t>(mode << 6)); // byte ctrl: solo bits de modo activos, el resto cero
+    code_final.emit8(encode_reg_general(reg->name.c_str())); // byte reg: nibble bajo = registro
+}
+
+// =========================================================================
+// Cursor read/write (readcur / writecur) emission
+// =========================================================================
+
+/**
+ * @brief Emite dos bytes para una instruccion de lectura o escritura de cursor.
+ *
+ * Byte 1 (ctrl):  modo(2) | indice_cursor(2) | 0000
+ * Byte 2 (reg):   codigo del registro general
+ *
+ * writecur curN, reg -> primer operando es un cursor (cur0-cur3)
+ * readcur  reg, curN -> segundo operando es un cursor
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_cursor_rw(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto reg0 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto reg1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (reg0 == nullptr || reg1 == nullptr)
+        throw std::runtime_error(instruction_parser->opcode + ": requires two register operands");
+
+    std::optional<uint8_t> opt0 = encode_special_register(reg0->name); // verificar si reg0 es cursor
+    std::optional<uint8_t> opt1 = encode_special_register(reg1->name); // verificar si reg1 es cursor
+
+    uint8_t cur_idx, gen_reg, mode;
+
+    if (opt0) {
+        // writecur curN, src_reg: first operand is the cursor
+        if (opt0.value() > 3)
+            throw std::runtime_error("writecur: first operand must be cur0-cur3");
+        cur_idx = opt0.value() & 0b11;                     // extract 2-bit cursor index
+        gen_reg = encode_reg_general(reg1->name.c_str());  // general register code
+        mode    = encode_mode(reg1->size_bits);             // ancho desde el registro general
+    } else {
+        // readcur dest_reg, curN: second operand is the cursor
+        if (!opt1)
+            throw std::runtime_error(instruction_parser->opcode +
+                ": one operand must be cur0-cur3");
+        gen_reg = encode_reg_general(reg0->name.c_str());  // general register code
+        cur_idx = opt1.value() & 0b11;                     // extract 2-bit cursor index
+        mode    = encode_mode(reg0->size_bits);             // ancho desde el registro general
+    }
+
+    // ctrl byte: mode(2) | cursor_index(2) | 0000
+    code_final.emit8(static_cast<uint8_t>((mode << 6) | (cur_idx << 4)));
+    code_final.emit8(gen_reg); // register byte
+}
+
+// =========================================================================
+// GC dereference (gcderef) emission
+// =========================================================================
+
+/**
+ * @brief Emite dos bytes para una instruccion gcderef.
+ *
+ * gcderef curN, handle_reg
+ *
+ * Byte 1 (ctrl):  0000 | indice_cursor(2) | 00   (el modo no aplica)
+ * Byte 2 (reg):   codigo del registro handle
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_gcderef(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto cur_op    = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto handle_op = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+
+    if (cur_op == nullptr || handle_op == nullptr)
+        throw std::runtime_error("gcderef: requires two register operands (curN, handle_reg)");
+
+    std::optional<uint8_t> opt_cur = encode_special_register(cur_op->name);
+    if (!opt_cur)
+        throw std::runtime_error("gcderef: first operand must be cur0-cur3");
+
+    uint8_t cur_idx    = opt_cur.value() & 0b11;                   // 2-bit cursor index
+    uint8_t handle_reg = encode_reg_general(handle_op->name.c_str()); // handle register code
+
+    // ctrl byte: bits 5-4 hold the cursor index; mode is not used for gcderef
+    code_final.emit8(static_cast<uint8_t>(cur_idx << 4));
+    code_final.emit8(handle_reg); // handle register byte
+}
+
+// =========================================================================
+// Absolute 64-bit instruction emission (callvm, enter, jmp abs)
+// =========================================================================
+
+/**
+ * @brief Emite el byte de condicion/opcode2 seguido de una direccion absoluta de 8 bytes.
+ *
+ * Usada por callvm, enter e instrucciones de salto absoluto.
+ * El operando puede ser un literal numerico o una anotacion @Label (reubicacion Absolute64).
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Instruction metadata (opcode2 is used as the condition byte).
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_abs64(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    code_final.emit8(now_instr->opcode2); // emit condition byte (or opcode2 for callvm/enter)
+
+    auto *op = instruction_parser->operands[0].get(); // single operand
+
+    if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
+        // numeric immediate: parse and emit 64 bits
+        auto val_opt = vm::parse_number_safe(num->value);
+        if (!val_opt)
+            throw std::runtime_error("emit_instr_abs64: invalid number: " + num->value);
+        code_final.emit64(val_opt.value()); // emitir el valor de 64 bits directamente
+    } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
+        // label reference: register an Absolute64 relocation and emit a placeholder
+        Relocation rel;
+        rel.symbol  = lbl->value;
+        rel.section = assembly_ctx->current_section->name;
+        rel.offset  = code_final.offset;   // posicion del placeholder de 8 bytes
+        rel.type    = Type::Absolute64;    // linker will write the absolute 64-bit address
+        assembly_ctx->ctx.add_relocation(rel);
+        code_final.emit64(0); // placeholder; overwritten by linker
+    } else {
+        throw std::runtime_error(
+            "emit_instr_abs64: '" + instruction_parser->opcode +
+            "': expected a number or label operand");
+    }
+}
+
+// =========================================================================
+// Relative jump (jrel) emission
+// =========================================================================
+
+/**
+ * @brief Mapea el sufijo de un salto condicional a su codigo de condicion de 1 byte.
+ *
+ * El sufijo sigue a un punto: ej. "jmp.je", "callvm.jlt".
+ * Devuelve 0x0F para saltos incondicionales (sin sufijo).
+ *
+ * @param opcode Cadena completa del opcode incluyendo el sufijo opcional.
+ * @return       Codigo de condicion de 1 byte (0x00-0x0D condicional, 0x0F incondicional).
+ */
+static uint8_t suffix_to_cond(const std::string &opcode) {
+    size_t dot = opcode.find('.'); // localizar el separador de punto
+    if (dot == std::string::npos) return 0x0F; // no suffix -> unconditional
+
+    std::string s = opcode.substr(dot + 1); // extract suffix after the dot
+    if (s == "je"  || s == "jz")  return 0x00; // equal / zero
+    if (s == "jne" || s == "jnz") return 0x01; // not equal / not zero
+    if (s == "jcs" || s == "jae") return 0x02; // carry activo / mayor o igual
+    if (s == "jcc" || s == "jb")  return 0x03; // carry clear / below
+    if (s == "jmi")               return 0x04; // minus (sign set)
+    if (s == "jpl")               return 0x05; // plus (sign clear)
+    if (s == "jvs")               return 0x06; // overflow set
+    if (s == "jvc")               return 0x07; // overflow clear
+    if (s == "jhi")               return 0x08; // higher (unsigned greater)
+    if (s == "jls")               return 0x09; // lower or same (unsigned)
+    if (s == "jge")               return 0x0A; // greater or equal (signed)
+    if (s == "jlt")               return 0x0B; // less than (signed)
+    if (s == "jgt")               return 0x0C; // greater than (signed)
+    if (s == "jle")               return 0x0D; // less or equal (signed)
+    return 0x0F;                               // unknown suffix: treated as unconditional
+}
+
+/**
+ * @brief Emite los bytes restantes para una instruccion de salto relativo.
+ *
+ * Disposicion (despues de que el llamante ya emitio [0x00][0x2D]):
+ *   byte3: codigo de condicion (de suffix_to_cond)
+ *   byte4: relleno 0x00
+ *   bytes5-8: desplazamiento con signo de 32 bits (o marcador de reubicacion)
+ *
+ * @param instruction_parser Instruccion parseada (operands[0] = numero o etiqueta).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_jrel(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    code_final.emit8(suffix_to_cond(instruction_parser->opcode)); // condition code byte
+    code_final.emit8(0x00);                                        // padding byte
+
+    auto *op = instruction_parser->operands[0].get(); // displacement or label operand
+
+    if (auto *num = dynamic_cast<vm::NumberOperand *>(op)) {
+        auto val_opt = vm::parse_number_safe(num->value);
+        if (!val_opt)
+            throw std::runtime_error("emit_jrel: invalid number: " + num->value);
+        int32_t disp = static_cast<int32_t>(val_opt.value()); // truncar a 32 bits con signo
+        code_final.emit32(static_cast<uint32_t>(disp));        // emit displacement
+    } else if (auto *lbl = dynamic_cast<vm::AnnotationNode *>(op)) {
+        // label reference: register a Relative32 relocation and emit a placeholder
+        Relocation rel;
+        rel.symbol  = lbl->value;
+        rel.section = assembly_ctx->current_section->name;
+        rel.offset  = code_final.offset; // position of the 4-byte displacement placeholder
+        rel.type    = Type::Relative32;  // linker will patch with PC-relative offset
+        assembly_ctx->ctx.add_relocation(rel);
+        code_final.emit32(0); // placeholder; overwritten by linker
+    } else {
+        throw std::runtime_error(
+            "emit_jrel: '" + instruction_parser->opcode +
+            "': expected a number or label operand");
+    }
+}
+
+// =========================================================================
+// OOP instructions: reg + imm8 (callvirt, callsuper, getfield, getmethod)
+// =========================================================================
+
+/**
+ * @brief Emite [byte_reg][imm8] para instrucciones OOP que toman un registro y un indice de 8 bits.
+ *
+ * reg_byte: los 4 bits inferiores = codigo de registro (bits 7-4 son cero).
+ * imm8:     los 8 bits inferiores del valor inmediato.
+ *
+ * @param instruction_parser Instruccion parseada (operands[0]=reg, operands[1]=imm8).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_reg_imm8(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (instruction_parser->operands.size() < 2)
+        throw std::runtime_error(
+            "emit_instr_reg_imm8: '" + instruction_parser->opcode +
+            "' requires (reg, imm8)");
+
+    auto *reg_op = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    if (reg_op == nullptr)
+        throw std::runtime_error(
+            "emit_instr_reg_imm8: '" + instruction_parser->opcode +
+            "': first operand must be a register");
+
+    auto *num_op = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[1].get());
+    if (num_op == nullptr)
+        throw std::runtime_error(
+            "emit_instr_reg_imm8: '" + instruction_parser->opcode +
+            "': second operand must be an integer (0-255)");
+
+    uint8_t reg_byte = encode_reg_general(reg_op->name.c_str()) & 0x0F; // 4-bit register code
+
+    auto val_opt = vm::parse_number_safe(num_op->value); // parse immediate value
+    if (!val_opt)
+        throw std::runtime_error("emit_instr_reg_imm8: invalid number: " + num_op->value);
+
+    uint8_t imm8 = static_cast<uint8_t>(val_opt.value() & 0xFF); // truncate to 8 bits
+
+    code_final.emit8(reg_byte); // emit register byte
+    code_final.emit8(imm8);     // emit 8-bit immediate
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x reg=%d imm8=%d\n",
+                instruction_parser->opcode.c_str(), now_instr->opcode2, reg_byte, imm8);
+}
+
+// =========================================================================
+// MOVC / MOVCH -- conditional move based on a flag
+// =========================================================================
+
+/**
+ * @brief Codifica el nombre de un flag a su codigo de 3 bits usado en instrucciones MOVC/MOVCH.
+ *
+ * Flag codes: SF=0, ZF=1, CF=2, OF=3, DM=4 (must match read_flag() in exec_instruction_alu.cpp).
+ *
+ * @param name  Flag name string ("SF", "ZF", "CF", "OF", or "DM").
+ * @return      3-bit flag code (0-4).
+ * @throws std::runtime_error for unknown flag names.
+ */
+static uint8_t encode_flag(const std::string &name) {
+    if (name == "SF") return 0; // sign flag
+    if (name == "ZF") return 1; // zero flag
+    if (name == "CF") return 2; // carry flag
+    if (name == "OF") return 3; // overflow flag
+    if (name == "DM") return 4; // direction/mode flag
+    throw std::runtime_error("emit_instr_movc: unknown flag: " + name);
+}
+
+/**
+ * @brief Emite la codificacion para instrucciones MOVC / MOVCH.
+ *
+ * Supports:
+ *   movc  reg1, [reg2], flag  (0x1E, host=0, d=0) -- load from VM memory if flag set
+ *   movc  [reg1], reg2, flag  (0x1E, host=0, d=1) -- store to VM memory if flag set
+ *   movch reg1, [reg2], flag  (0x1E, host=1, d=0) -- load from host memory if flag set
+ *   movch [reg1], reg2, flag  (0x1E, host=1, d=1) -- store to host memory if flag set
+ *   movc  reg1, reg2, flag    (0x1F, host=0, d=0) -- register-to-register if flag set
+ *
+ * Encoding for 0x1E:
+ *   ctrl:  host_bits(2) | d(1) | r_nonbracket(5)  (bits[7:6]: 0b10=MOVCH, 0b00=MOVC)
+ *   byte4: flag_code(3) | r_bracket(5)
+ *
+ * Encoding for 0x1F:
+ *   ctrl:  0b00 | 0 | reg1(4)
+ *   byte4: flag_code(3) | reg2(5)
+ *
+ * @param instruction_parser Instruccion parseada (3 operandos: op0, op1, etiqueta_flag).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion (opcode2 selecciona variante 0x1E vs 0x1F).
+ * @param assembly_ctx       Contexto del ensamblador (no usado; requerido por la firma de funcion).
+ */
+void emit_instr_movc(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            /*assembly_ctx*/
+) {
+    if (instruction_parser->operands.size() != 3)
+        throw std::runtime_error("emit_instr_movc: requires exactly 3 operands");
+
+    auto *op0 = instruction_parser->operands[0].get(); // primer operando
+    auto *op1 = instruction_parser->operands[1].get(); // segundo operando
+    auto *op2 = instruction_parser->operands[2].get(); // third operand (flag name)
+
+    // third operand must be a flag identifier (LabelOperand)
+    std::string flag_name;
+    if (auto *lab = dynamic_cast<vm::LabelOperand *>(op2))
+        flag_name = lab->name; // e.g. "ZF", "CF"
+    else
+        throw std::runtime_error(
+            "emit_instr_movc: third operand must be a flag name (ZF/SF/CF/OF/DM)");
+
+    uint8_t flag_code = encode_flag(flag_name);                           // 3-bit flag selector
+    bool    is_movch  = (instruction_parser->opcode == "movch");          // true if host memory
+
+    auto *reg0 = dynamic_cast<vm::RegisterOperand *>(op0); // op0 as register
+    auto *mem0 = dynamic_cast<vm::MemoryOperand *>(op0);   // op0 as memory
+    auto *reg1 = dynamic_cast<vm::RegisterOperand *>(op1); // op1 as register
+    auto *mem1 = dynamic_cast<vm::MemoryOperand *>(op1);   // op1 as memory
+
+    // ---- 0x1E: one operand is memory ----
+    if (now_instr->opcode2 == 0x1E) {
+        uint8_t d;                                    // direction bit
+        const vm::RegisterOperand *reg_a = nullptr;  // register inside []
+        const vm::RegisterOperand *reg_b = nullptr;  // the other register
+
+        if (mem0 != nullptr && reg1 != nullptr) {
+            // movc [reg_a], reg_b, flag  -> d=1 (memory is destination)
+            d     = 1;
+            reg_a = dynamic_cast<vm::RegisterOperand *>(mem0->expr.get()); // unwrap [...]
+            reg_b = reg1;
+        } else if (reg0 != nullptr && mem1 != nullptr) {
+            // movc reg_b, [reg_a], flag  -> d=0 (register is destination)
+            d     = 0;
+            reg_a = dynamic_cast<vm::RegisterOperand *>(mem1->expr.get()); // unwrap [...]
+            reg_b = reg0;
+        } else {
+            throw std::runtime_error(
+                "emit_instr_movc (0x1E): one operand must be memory and the other a register");
+        }
+
+        if (!reg_a)
+            throw std::runtime_error(
+                "emit_instr_movc (0x1E): the expression inside [] must be a register");
+
+        uint8_t r_mem = encode_reg_general(reg_a->name.c_str()); // register used as address
+        uint8_t r_reg = encode_reg_general(reg_b->name.c_str()); // the non-bracketed register
+
+        // ctrl: host_bits(2) | d(1) | r_reg(5)
+        // bits[7:6]: 0b10 = MOVCH, 0b00 = MOVC
+        uint8_t host_bits = is_movch ? 0b10 : 0b00;
+        uint8_t ctrl = (uint8_t)((host_bits << 6) | (d << 5) | (r_reg & 0xF)); // empaquetar campos
+        uint8_t b4   = (uint8_t)((flag_code << 5) | (r_mem & 0x1F));           // flag y registro de direccion
+
+        code_final.emit8(ctrl); // emitir byte de control
+        code_final.emit8(b4);   // emitir byte4
+        return;
+    }
+
+    // ---- 0x1F: ambos operandos son registros ----
+    if (!reg0 || !reg1)
+        throw std::runtime_error(
+            "emit_instr_movc (0x1F): both operands must be registers");
+
+    uint8_t r1c = encode_reg_general(reg0->name.c_str()); // codigo de registro destino
+    uint8_t r2c = encode_reg_general(reg1->name.c_str()); // codigo de registro fuente
+
+    // ctrl: 0b00 | 0 | reg1(4)
+    code_final.emit8(r1c & 0xF);                               // emitir byte de control (registro destino)
+    code_final.emit8((uint8_t)((flag_code << 5) | (r2c & 0x1F))); // emitir byte4 (flag + source reg)
+}
+
+} // namespace Assembly::Bytecode
+

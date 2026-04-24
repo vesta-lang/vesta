@@ -1,3 +1,13 @@
+/**
+ * @file loader.cpp
+ * @brief Implementacion del loader de ejecutables VELB para VestaVM.
+ *
+ * Implementa @c loader::Loader: @c parse_velb_header(), @c parse_table_spaces(),
+ * @c parser_table_sections(), @c parser_import_table(), @c parse_velb(),
+ * @c load_executable() y @c create_vm_instance().
+ * Valida el header, reserva memoria en el @c ArenaManager y crea el @c ProcessVM
+ * con el PC inicializado segun @c init_pc del ejecutable.
+ */
 #include "loader/loader.h"
 
 #include "emmit/bytereader.h"
@@ -6,13 +16,13 @@
 
 /*
  *  Loader
- *  ├── load_executable(path)
- *  │     ├── parse_velb_header()
- *  │     ├── load_spaces()
- *  │     ├── load_sections()
- *  │     ├── resolve_labels()
- *  │     └── build_runtime_context()
- *  └── create_vm_instance()
+ *  ??? load_executable(path)
+ *  ?     ??? parse_velb_header()
+ *  ?     ??? load_spaces()
+ *  ?     ??? load_sections()
+ *  ?     ??? resolve_labels()
+ *  ?     ??? build_runtime_context()
+ *  ??? create_vm_instance()
  */
 namespace loader {
     Loader::Loader(
@@ -76,13 +86,13 @@ namespace loader {
     void Loader::parse_velb_header(Executable &exe, ByteReader &reader) {
         if (reader.input.size() < sizeof(HeaderVELB)) {
             throw_error_at(ErrorKind::TruncatedHeader,
-                           "El ejecutable es demasiado pequeño para contener un header VELB", reader);
+                           "El ejecutable es demasiado pequeno para contener un header VELB", reader);
         }
 
         exe.header.magic.firma = reader.read32();
         if (exe.header.magic.firma != MAGIC_NUMBER_VELB) {
             throw_error_at(ErrorKind::InvalidMagic,
-                           "Magic number VELB inválido", reader);
+                           "Magic number VELB invalido", reader);
         }
 
         exe.header.format_v = reader.read32();
@@ -95,7 +105,7 @@ namespace loader {
             );
         }
 
-        // La versión de la VM debe estar dentro del rango [min_v, max_v] exigido por el ejecutable.
+        // La version de la VM debe estar dentro del rango [min_v, max_v] exigido por el ejecutable.
         exe.header.max_v = reader.read32();
         exe.header.min_v = reader.read32();
         if (exe.header.max_v < VERSION_VM || exe.header.min_v > VERSION_VM) {
@@ -247,10 +257,10 @@ namespace loader {
                 );
             }
 
-            // calcular file offset de la sección
+            // calcular file offset de la seccion
             sec.file_offset = space->file_offset + (sec.memory.address_init - space->range.address_init);
 
-            // Insertar la sección en el espacio correspondiente
+            // Insertar la seccion en el espacio correspondiente
             space->add_section(sec);
             exe.sections.push_back(&space->table_section[sec.name]);
         }
@@ -331,7 +341,7 @@ namespace loader {
         parse_table_spaces(*exe, reader);
 
         // parseamos la tabla de secciones, requiere haber parseado previamente la tabla
-        // de espacios de direcciones, ya que se va a añadir a estos.
+        // de espacios de direcciones, ya que se va a anadir a estos.
         parser_table_sections(*exe, reader);
 
         // parseamos la tabla de importacion.
@@ -352,7 +362,7 @@ namespace loader {
             std::istreambuf_iterator<char>()
         );
 
-        // Delegar en la versión bytecode
+        // Delegar en la version bytecode
         return load_executable(vm, bytecode);
     }
 

@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file parser.cpp
+ * @brief Implementacion principal del parser recursivo descendente de VestaVM.
+ *
+ * Implementa @c vm::Parser: el metodo @c parse() que genera el AST completo,
+ * @c parse_instruction(), @c parse_operand(), @c parse_annotation() y demas
+ * metodos de produccion.  Tambien implementa @c is_valid_number() y @c parse_number().
+ */
 #include "parser/parser.h"
 
 #include <iomanip>
@@ -18,7 +26,7 @@
 
 namespace vm {
     static const std::unordered_map<std::string, InstructionPattern> InstructionSet = {
-        // TWO operandos
+        // DOS operandos
         {"mov", {"mov", OpArity::TWO}},
         {"xchg", {"xchg", OpArity::TWO}},
         {"readcur", {"readcur", OpArity::TWO}},
@@ -26,7 +34,7 @@ namespace vm {
         {"gcderef", {"gcderef", OpArity::TWO}},
         {"realloc", {"realloc", OpArity::TWO}},
 
-        // ONE operando
+        // UN operando
         {"newobj", {"newobj", OpArity::ONE}},
         {"gcconfig", {"gcconfig", OpArity::ONE}},
         {"drop", {"drop", OpArity::ONE}},
@@ -34,7 +42,7 @@ namespace vm {
         {"alloc", {"alloc", OpArity::ONE}},
         {"free", {"free", OpArity::ONE}},
 
-        // ZERO operandos
+        // CERO operandos
         {"gcrun", {"gcrun", OpArity::ZERO}},
 
         {"addu", {"addu", OpArity::TWO}},
@@ -53,7 +61,7 @@ namespace vm {
         {"and", {"and", OpArity::TWO}},
         {"or",  {"or",  OpArity::TWO}},
 
-        // TRES operandos: movc/movch dest, src, flag
+        // TRES operandos: movc/movch destino, fuente, flag
         {"movc",  {"movc",  OpArity::THREE}},
         {"movch", {"movch", OpArity::THREE}},
         {"not", {"not", OpArity::ONE}},
@@ -62,7 +70,7 @@ namespace vm {
         {"shr", {"shr", OpArity::TWO}},
         {"sar", {"sar", OpArity::TWO}},
 
-        // TWO operandos OOP
+        // DOS operandos OOP
         {"newobjraw",   {"newobjraw",   OpArity::TWO}},
         {"callvirt",    {"callvirt",    OpArity::TWO}},
         {"callsuper",   {"callsuper",   OpArity::TWO}},
@@ -71,14 +79,14 @@ namespace vm {
         {"getfield",    {"getfield",    OpArity::TWO}},
         {"getmethod",   {"getmethod",   OpArity::TWO}},
 
-        // ONE operando OOP
+        // UN operando OOP
         {"getclass",        {"getclass",        OpArity::ONE}},
         {"fieldcount",      {"fieldcount",       OpArity::ONE}},
         {"methodcount",     {"methodcount",      OpArity::ONE}},
         {"classname",       {"classname",        OpArity::ONE}},
         {"gcalloc",         {"gcalloc",          OpArity::ONE}},
         {"throw",           {"throw",            OpArity::ONE}},
-        // doc/atributos - ONE operando
+        // doc/atributos - UN operando
         {"classdoc",        {"classdoc",         OpArity::ONE}},
         {"classattrcount",  {"classattrcount",   OpArity::ONE}},
         {"methodname",      {"methodname",       OpArity::ONE}},
@@ -88,7 +96,7 @@ namespace vm {
         {"fieldname",       {"fieldname",        OpArity::ONE}},
         {"fielddoc",        {"fielddoc",         OpArity::ONE}},
         {"fieldattrcount",  {"fieldattrcount",   OpArity::ONE}},
-        // doc/atributos - TWO operandos (reg, idx)
+        // doc/atributos - DOS operandos (reg, idx)
         {"classattrkey",    {"classattrkey",     OpArity::TWO}},
         {"classattrval",    {"classattrval",     OpArity::TWO}},
         {"methodattrkey",   {"methodattrkey",    OpArity::TWO}},
@@ -96,10 +104,10 @@ namespace vm {
         {"fieldattrkey",    {"fieldattrkey",     OpArity::TWO}},
         {"fieldattrval",    {"fieldattrval",     OpArity::TWO}},
 
-        // ZERO operandos OOP
+        // CERO operandos OOP
         {"rethrow",     {"rethrow",     OpArity::ZERO}},
 
-        // ZERO operandos
+        // CERO operandos
         {"nop1", {"nop1", OpArity::ZERO}},
         {"nop2", {"nop2", OpArity::ZERO}},
         {"hlt", {"hlt", OpArity::ZERO}},
@@ -108,7 +116,7 @@ namespace vm {
         {"leave", {"leave", OpArity::ZERO}},
 
         // ----------------------------------------------------------------------
-        // ONE operando
+        // UN operando
 
         // aunque no es una instruccion, se detectara como una
         {"org", {"org", OpArity::ONE}},
@@ -174,7 +182,7 @@ namespace vm {
         if (!warnings.empty()) {
             std::cout << "\n" << warnings.size() << " warnings encontrados:\n";
             for (const auto &w: warnings) {
-                std::cout << "    Línea " << w.line << ":" << w.column
+                std::cout << "    Linea " << w.line << ":" << w.column
                         << " - " << w.what()
                         << (w.suggestion.empty() ? "" : " (sugerencia: " + w.suggestion + ")")
                         << std::endl;
@@ -188,12 +196,12 @@ namespace vm {
         while (current.type != TokenType::EndOfFile) {
             std::unique_ptr<ASTNode> node = nullptr;
             Token                    next = peek();
-            // IDENTIFIER + COLON? -> SECCIÓN
+            // IDENTIFICADOR + COLON? -> SECCION
             if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
                 node = parse_section();
             }
-            // IDENTIFIER solo? -> INSTRUCCIÓN
-            // IDENTIFIER IDENTIFIER? -> posible instruccion de dos identificadores
+            // IDENTIFICADOR solo? -> INSTRUCCION
+            // IDENTIFICADOR IDENTIFICADOR? -> posible instruccion de dos identificadores
             else if (
                 (current.type == TokenType::IDENTIFIER) ||
                 (current.type == TokenType::IDENTIFIER) && peek().type == TokenType::IDENTIFIER
@@ -206,7 +214,7 @@ namespace vm {
                 node = parse_annotation();
             }
 
-            // Skip tokens inválidos
+            // Omitir tokens invalidos
             else {
                 std::cerr << "linea: " << current.line << ":" << current.column <<
                         " Parser ERROR: " << "Skipping invalid token: " + token_type_to_string(current.type) +
@@ -263,22 +271,22 @@ namespace vm {
             return expr;
         }
 
-        // REGISTRO
+        // tipo REGISTRO
         if (current.type == TokenType::REGISTER) {
             return parse_operand(); // ya devuelve RegisterOperand
         }
 
-        // NÚMERO
+        // tipo NUMERO
         if (is_number_token(current.type)) {
             return parse_operand(); // devuelve NumberOperand
         }
 
-        // LABEL
+        // tipo ETIQUETA
         if (current.type == TokenType::IDENTIFIER) {
             return parse_operand(); // devuelve LabelOperand
         }
 
-        error(current, "Expresión de memoria inválida");
+        error(current, "Expresion de memoria invalida");
         return nullptr;
     }
 
@@ -295,13 +303,13 @@ namespace vm {
         while (current.type != TokenType::EndOfFile) {
             std::unique_ptr<ASTNode> node = nullptr;
             Token                    next = peek();
-            // IDENTIFIER + COLON? -> SECCIÓN
+            // IDENTIFICADOR + COLON? -> SECCION
             if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
                 //node = parse_section();
                 break;
             }
-            // IDENTIFIER solo? -> INSTRUCCIÓN
-            // IDENTIFIER IDENTIFIER? -> posible instruccion de dos identificadores
+            // IDENTIFICADOR solo? -> INSTRUCCION
+            // IDENTIFICADOR IDENTIFICADOR? -> posible instruccion de dos identificadores
             if (
                 (current.type == TokenType::IDENTIFIER) ||
                 (current.type == TokenType::IDENTIFIER) && peek().type == TokenType::IDENTIFIER
@@ -317,7 +325,7 @@ namespace vm {
                 break;
             }
 
-            // Skip tokens inválidos
+            // Omitir tokens invalidos
             else {
                 std::cerr << "linea: " << current.line << ":" << current.column <<
                         " Parser ERROR: " << "Skipping invalid token: " + token_type_to_string(current.type) +
@@ -370,12 +378,12 @@ namespace vm {
                 std::string reg = current.lexeme;
                 advance();
 
-                // Decodificar tamaño (r0b=8bit, r0w=16bit, etc.)
+                // Decodificar tamano (r0b=8bit, r0w=16bit, etc.)
                 int size_bits = 64; // Default 64-bit
                 if (reg.size() > 2) {
                     char suffix = reg.back();
 
-                    // Solo quitar el sufijo si realmente es un sufijo válido
+                    // Solo quitar el sufijo si realmente es un sufijo valido
                     if (suffix == 'b' || suffix == 'w' || suffix == 'd') {
                         reg.pop_back();
                         switch (suffix) {
@@ -419,7 +427,7 @@ namespace vm {
                 // '['
                 advance(); // consumir '['
 
-                // Parsear la expresión dentro de los corchetes
+                // Parsear la expresion dentro de los corchetes
                 auto expr = parse_mem_expression();
 
                 if (current.type != TokenType::RBRACKET)
@@ -436,7 +444,7 @@ namespace vm {
 
             default:
                 error(current, "Operando invalido");
-                advance(); // Skip
+                advance(); // omitir token invalido
                 return nullptr;
         }
     }
@@ -485,7 +493,7 @@ namespace vm {
 
             // Coma opcional
             if (match(TokenType::COMMA)) {
-                continue; // Más datos
+                continue; // Mas datos
             }
             break; // Fin de datos
         }
@@ -507,7 +515,7 @@ namespace vm {
             opcode += current.lexeme;
             advance(); // consumismos el token opcode, el token "."
 
-            // añadimos la siguiente parte de la instruccion compleja.
+            // anadimos la siguiente parte de la instruccion compleja.
             ext_opcode = current.lexeme;
             opcode += ext_opcode;
         }
@@ -518,7 +526,7 @@ namespace vm {
             int   dist     = 0;
 
 
-            // intentamos recuperarnos del error ¿de sintaxis?
+            // intentamos recuperarnos del error ?de sintaxis?
             for (auto &option: InstructionSet) {
                 dist     = utils::Levenshtein::distance(opcode, option.first);
                 affinity = utils::Levenshtein::affinity(opcode, option.first);
@@ -554,7 +562,7 @@ namespace vm {
             return nullptr;
         }
     exit_error:
-        const auto &pattern = valid_it->second; // SIEMPRE válido
+        const auto &pattern = valid_it->second; // SIEMPRE valido
 
         advance(); // consumir el opcode
 
@@ -566,14 +574,14 @@ namespace vm {
                 break;
             case OpArity::TWO:
                 operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' después de destino");
+                expect(TokenType::COMMA, "Se esperaba ',' despues de destino");
                 operands.emplace_back(parse_operand());
                 break;
             case OpArity::THREE:
                 operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' después del primer operando");
+                expect(TokenType::COMMA, "Se esperaba ',' despues del primer operando");
                 operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' después del segundo operando");
+                expect(TokenType::COMMA, "Se esperaba ',' despues del segundo operando");
                 operands.emplace_back(parse_operand());
                 break;
         }
@@ -646,7 +654,7 @@ namespace vm {
         }
 
         error(current, "Token no esperado: " + current.lexeme);
-        advance(); // Skip
+        advance(); // omitir token no reconocido
         return nullptr;
     }
 }

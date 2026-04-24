@@ -1,15 +1,25 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file velb_linker_bytecode.cpp
+ * @brief Implementacion del linker de bytecode VELB para VestaVM.
+ *
+ * Implementa la clase @c Assembly::Bytecode::Linker::Linker:
+ * carga de modulos objeto (@c add_object_file, @c add_assembly_unit),
+ * resolucion de simbolos (@c resolve_symbols), aplicacion de relocalizaciones
+ * (@c apply_relocations), optimizacion (@c optimize_modules),
+ * y construccion del ejecutable final VELB (@c build_executable, @c write_to_file).
+ */
 #include "linker/velb_linker_bytecode.h"
 
 #include "emmit/bytereader.h"
@@ -39,15 +49,15 @@ namespace Assembly::Bytecode::Linker {
             return;
         }
 
-        // TODO: aquí parsear formato .velo/.velb parcial.
-        // Por ahora, lo tratamos como un módulo con bytecode plano y sin contexto real.
+        // TODO: aqui parsear formato .velo/.velb parcial.
+        // Por ahora, lo tratamos como un modulo con bytecode plano y sin contexto real.
 
         Module m;
         m.name      = path;
         m.bytecode  = std::move(data);
         m.is_object = true;
 
-        // TODO: rellenar m.ctx, m.local_symbols, m.relocations según el formato real.
+        // TODO: rellenar m.ctx, m.local_symbols, m.relocations segun el formato real.
 
         modules.push_back(std::move(m));
         report.modules_linked++;
@@ -77,7 +87,7 @@ namespace Assembly::Bytecode::Linker {
             return;
         }
 
-        // TODO: parsear header VELA, tabla de módulos, etc.
+        // TODO: parsear header VELA, tabla de modulos, etc.
         // Por ahora solo registramos la ruta.
 
         StaticLibrary lib;
@@ -86,7 +96,7 @@ namespace Assembly::Bytecode::Linker {
     }
 
     /**
-     * - calcular el offset base donde se añadirá la nueva sección
+     * - calcular el offset base donde se anadira la nueva seccion
      * - desplazar labels
      * - desplazar relocaciones
      * - concatenar bytecode
@@ -108,7 +118,7 @@ namespace Assembly::Bytecode::Linker {
                              src.bytecode.begin(),
                              src.bytecode.end());
 
-        // Actualizar tamaño
+        // Actualizar tamano
         dest.size_real += src.size_real;
     }*/
 
@@ -126,7 +136,7 @@ namespace Assembly::Bytecode::Linker {
             auto it = dest.table_section.find(secName);
 
             if (it == dest.table_section.end()) {
-                // No existe, copiar sección completa
+                // No existe, copiar seccion completa
                 dest.table_section[secName] = sec;
             } else {
                 // Ya existe, fusionar secciones
@@ -138,10 +148,10 @@ namespace Assembly::Bytecode::Linker {
     uint64_t Linker::register_import(const ImportEntry &imp) {
         std::string key = imp.library + ":" + imp.function;
 
-        // ¿Ya existe?
+        // ?Ya existe?
         auto it = import_lookup.find(key);
         if (it != import_lookup.end()) {
-            return it->second; // devolver índice existente
+            return it->second; // devolver indice existente
         }
 
         // Crear nueva entrada
@@ -165,7 +175,7 @@ namespace Assembly::Bytecode::Linker {
          *      - 2 La posibilidad de que dos archivos (modulos) contengan el mismo espacio de direcciones
          *          con un mismo nombre, si ese caso se da, fusionamos los espacios de direcciones.
          *      - 3 Este problema es causado por la solucion del segundo problema, al fusionar espacios de
-         *          direcciones, estamos espandiendo el tamaño del espacio en uno de los modulos, donde
+         *          direcciones, estamos espandiendo el tamano del espacio en uno de los modulos, donde
          *          otras secciones de este podria esperar existir en ese rango de direcciones, lo que causara
          *          un solapamiento de los espacios de direcciones.
          *          La solucion a este problema puede ser reubicar el siguiente espacio de direcciones, pero
@@ -179,7 +189,7 @@ namespace Assembly::Bytecode::Linker {
         m.ctx       = *ctx; // copia del contexto
         m.is_object = false;
 
-        // añadir las relocalizaciones del modulo a todo_ el linker
+        // anadir las relocalizaciones del modulo a todo_ el linker
         m.relocations.insert(
             m.relocations.end(),
             ctx->relocations.begin(),
@@ -190,24 +200,24 @@ namespace Assembly::Bytecode::Linker {
             uint64_t global_index = register_import(imp);
 
             // IMPORTANTE:
-            // Debe actualizar las relocaciones del módulo que usen este import.
+            // Debe actualizar las relocaciones del modulo que usen este import.
             // Ejemplo: CALLN <local_index> -> CALLN <global_index>
         }
 
 
 
-        // Fusionar espacios del módulo en el linker
+        // Fusionar espacios del modulo en el linker
         for (const auto &[spaceName, space]: ctx->space_address) {
             // Comprobar si se solapa con otros espacios ya existentes
             for (const auto &[existingName, existingSpace]: spaces_address) {
                 /**
                  * Si el espacio que estamos revisando (existingName)
-                 * tiene el mismo nombre que el espacio que estamos añadiendo (spaceName),
+                 * tiene el mismo nombre que el espacio que estamos anadiendo (spaceName),
                  * entonces NO debemos comprobar solapamiento entre ellos.
                  * Porque:
                  *   - Si tienen el mismo nombre, no son espacios distintos.
-                 *   - Son dos partes del mismo espacio lógico (por ejemplo, ambos son "code").
-                 *   - Esos espacios no deben compararse entre sí, sino fusionarse.
+                 *   - Son dos partes del mismo espacio logico (por ejemplo, ambos son "code").
+                 *   - Esos espacios no deben compararse entre si, sino fusionarse.
                  */
                 if (existingName == spaceName)
                     continue; // este se fusiona, no se compara
@@ -260,7 +270,7 @@ namespace Assembly::Bytecode::Linker {
                 for (const auto &[sectionName, section]: space.table_section) {
                     uint64_t base = section.memory.address_init;
 
-                    // Extraer labels de la sección en un vector ordenado
+                    // Extraer labels de la seccion en un vector ordenado
                     std::vector<std::pair<std::string, const Label *> > ordered;
 
                     for (const auto &[labelName, label]: section.table_label) {
@@ -273,7 +283,7 @@ namespace Assembly::Bytecode::Linker {
                                   return a.second->address < b.second->address;
                               });
 
-                    // Calcular tamaño de cada label
+                    // Calcular tamano de cada label
                     for (size_t i = 0; i < ordered.size(); ++i) {
                         const auto &[labelName, label] = ordered[i];
 
@@ -293,27 +303,27 @@ namespace Assembly::Bytecode::Linker {
                         // Construir nombre completo
                         std::string fullName = sectionName + "." + labelName;
 
-                        // Dirección absoluta
+                        // Direccion absoluta
                         uint64_t absolute = base + start;
 
                         //
                         // Duplicados
                         if (global_symbols.count(fullName)) {
-                            add_errorf(report, LinkerError::Type::DuplicateSymbol, ("Símbolo duplicado: " + fullName +
-                                           " en módulo " + mod.name).c_str());
+                            add_errorf(report, LinkerError::Type::DuplicateSymbol, ("Simbolo duplicado: " + fullName +
+                                           " en modulo " + mod.name).c_str());
                             continue;
                         }
 
-                        // Registrar símbolo global
+                        // Registrar simbolo global
                         global_symbols[fullName] = absolute;
 
-                        // Registrar información extendida
+                        // Registrar informacion extendida
                         SymbolInfo info;
                         info.space       = spaceName;
                         info.section     = sectionName;
                         info.relative    = start;
                         info.absolute    = absolute;
-                        info.file_offset = 0; // se rellenará después
+                        info.file_offset = 0; // se rellenara despues
                         info.size        = size;
                         info.module      = mod.name;
 
@@ -325,28 +335,28 @@ namespace Assembly::Bytecode::Linker {
             }
         }
 
-        // TODO: resolver símbolos indefinidos
+        // TODO: resolver simbolos indefinidos
     }
 
 
     void Linker::apply_relocations() {
-        // Recorrer todos los módulos cargados
-        // Cada módulo tiene:
+        // Recorrer todos los modulos cargados
+        // Cada modulo tiene:
         // su propio bytecode
         // su propia tabla de relocaciones
         // su propio nombre (para logs)
         for (auto &mod: modules) {
-            // Recorre todas las relocaciones del módulo.
+            // Recorre todas las relocaciones del modulo.
             // Cada rel contiene:
-            // rel.symbol -> nombre del símbolo a resolver
-            // rel.offset -> posición en el bytecode donde escribir la dirección
-            // rel.type -> tipo de relocación (ABS64, REL32, REL64)
+            // rel.symbol -> nombre del simbolo a resolver
+            // rel.offset -> posicion en el bytecode donde escribir la direccion
+            // rel.type -> tipo de relocacion (ABS64, REL32, REL64)
             for (const auto &rel: mod.relocations) {
-                // Busca el símbolo en la tabla global
+                // Busca el simbolo en la tabla global
                 auto it = global_symbols.find(rel.symbol);
 
                 bool import_code = false;
-                // Si no existe, error de símbolo no resuelto.
+                // Si no existe, error de simbolo no resuelto.
                 // equivalente a: ld: undefined reference to `foo'
                 if (it == global_symbols.end()) {
                     // si no es un simbolo global que hace referencia a codigo
@@ -363,9 +373,9 @@ namespace Assembly::Bytecode::Linker {
                 }
 
                 if (import_code == false) {
-                    // Obtiene la dirección final del símbolo
-                    // Esta dirección ya fue calculada previamente por el linker al:
-                    //     concatenar módulos
+                    // Obtiene la direccion final del simbolo
+                    // Esta direccion ya fue calculada previamente por el linker al:
+                    //     concatenar modulos
                     //     aplicar alineaciones
                     //     asignar direcciones virtuales
                     //     resolver secciones
@@ -379,16 +389,16 @@ namespace Assembly::Bytecode::Linker {
                     uint64_t rel_address = 0;
 
                     switch (rel.type) {
-                        // Escribe la dirección absoluta de 64 bits.
-                        // mov rax, [foo]   ->   se escribe la dirección absoluta de foo
+                        // Escribe la direccion absoluta de 64 bits.
+                        // mov rax, [foo]   ->   se escribe la direccion absoluta de foo
                         case Type::Absolute64: {
                             std::memcpy(&mod.bytecode[rel.offset], &target_addr, sizeof(uint64_t));
                             break;
                         }
 
-                        // Esto es un PC-relative displacement, típico de:
+                        // Esto es un PC-relative displacement, tipico de:
                         // call foo; jmp bar
-                        // El +4 es porque la instrucción ya habrá avanzado 4 bytes cuando se evalúa el PC.
+                        // El +4 es porque la instruccion ya habra avanzado 4 bytes cuando se evalua el PC.
                         // int32_t rel32 = target_addr - (rel.offset + 4);
                         case Type::Relative32: {
                             // offset relativo simplificado (suponemos PC en rel.offset + 4)
@@ -419,7 +429,7 @@ namespace Assembly::Bytecode::Linker {
                     }
 
 
-                    // añadir relocalizacion aplicada al reporte:
+                    // anadir relocalizacion aplicada al reporte:
                     RelocReportEntry entry;
                     entry.module        = mod.name;
                     entry.symbol        = rel.symbol;
@@ -445,7 +455,7 @@ namespace Assembly::Bytecode::Linker {
                             // obtenemos el index en la tabla de importacion del metodo dado.
                             auto entry_index = import_lookup.find(rel.symbol);
                             if (entry_index == import_lookup.end()) {
-                                // error: símbolo no encontrado
+                                // error: simbolo no encontrado
                                 throw std::runtime_error(
                                     "Simbolo " + rel.symbol + " no encontrado en la tabla de importacion."
                                 );
@@ -486,7 +496,7 @@ namespace Assembly::Bytecode::Linker {
 
                     table_import_method.push_back(entry_import);
 
-                    // añadir relocalizacion aplicada al reporte:
+                    // anadir relocalizacion aplicada al reporte:
                     RelocReportEntry entry;
                     entry.module        = mod.name;
                     entry.symbol        = rel.symbol;
@@ -508,7 +518,7 @@ namespace Assembly::Bytecode::Linker {
 
         for (auto &mod: modules) {
             // TODO: implementar optimizaciones reales de bytecode. Usaria Optimizer
-            // Por ahora, no hacemos nada, solo contamos el módulo.
+            // Por ahora, no hacemos nada, solo contamos el modulo.
             // Ejemplo: eliminar NOPs, fusionar instrucciones triviales, etc.
 
             report.optimizations_applied++;
@@ -516,7 +526,7 @@ namespace Assembly::Bytecode::Linker {
     }
 
     void Linker::merge_address_spaces() {
-        // Aquí debería usar Context para fusionar los espacios de direcciones
+        // Aqui deberia usar Context para fusionar los espacios de direcciones
         // de todos los modulos. Por ahora, lo simplificamos:
         //
         // - asumimos un unico espacio de direcciones
@@ -530,14 +540,14 @@ namespace Assembly::Bytecode::Linker {
         final_sections.clear();
 
 
-        // Concatenar bytecode de todos los módulos
+        // Concatenar bytecode de todos los modulos
         for (auto &mod: modules) {
             final_bytecode.insert(final_bytecode.end(),
                                   mod.bytecode.begin(),
                                   mod.bytecode.end());
         }
 
-        // Construir final_sections a partir de los Context de cada módulo
+        // Construir final_sections a partir de los Context de cada modulo
         for (auto &mod: modules) {
             // para cada espacio de direcciones del modulo
             for (const auto &[spaceName, space]: mod.ctx.space_address) {
@@ -602,7 +612,7 @@ namespace Assembly::Bytecode::Linker {
         // Copiar al header en orden de direcciones
         final_header.address_spaces = new table_spaces_address[final_header.n_spaces];
 
-        // La tabla de secciones irá justo después del header, es necesario
+        // La tabla de secciones ira justo despues del header, es necesario
         // haber asignado primero final_header.n_spaces, o esta funcion fallara,
         // ya que para calcular el offset de la tabla, es necesario conocercuantas entradas
         // de espacio de direcciones hay
@@ -642,7 +652,7 @@ namespace Assembly::Bytecode::Linker {
             ];
         }
 
-        // añadir a cada seccion el offset al nombre de su stirng
+        // anadir a cada seccion el offset al nombre de su stirng
         for (auto &final_section: final_sections) {
             final_section.memory.offset_string = string_offsets[final_section.name];
         }
@@ -699,7 +709,7 @@ namespace Assembly::Bytecode::Linker {
             }
         }
 
-        // Recoger strings de imports (librerías y funciones)
+        // Recoger strings de imports (librerias y funciones)
         for (const auto &imp: import_table) {
             string_pool.push_back(imp.library);
             string_pool.push_back(imp.function);
@@ -726,7 +736,7 @@ namespace Assembly::Bytecode::Linker {
             offset += s.size() + 1;
         }
 
-        // Crear sección especial "strings"
+        // Crear seccion especial "strings"
         //sec.bytecode = string_blob;
         Section *sec = &spaces_address["MetaSpace"].table_section["strings"];
         // Insertar en el espacio "meta"
@@ -737,10 +747,10 @@ namespace Assembly::Bytecode::Linker {
 
     uint64_t Linker::compute_sections_base_offset() const {
         // el espacio real de todo_ el header es la cantidad de espacios de direcciones
-        // po el tamaño de una entrada de rango de memoria (16 bytes para inicio y fin)
+        // po el tamano de una entrada de rango de memoria (16 bytes para inicio y fin)
         const uint64_t size_table_space_address = (final_header.n_spaces * sizeof(table_spaces_address));
 
-        // se resta el tamaño del puntero de table_spaces_address, ya que en el archivo,
+        // se resta el tamano del puntero de table_spaces_address, ya que en el archivo,
         // la tabla va espacio de direcciones va direcamente incrustado, en lugar de
         // ser un puntero.
         const uint32_t relative_size_header = sizeof(HeaderVELB) - sizeof(table_spaces_address *);
@@ -789,14 +799,14 @@ namespace Assembly::Bytecode::Linker {
             throw std::runtime_error("No hay secciones para construir la tabla.");
         }
 
-        // Ordenar por dirección virtual
+        // Ordenar por direccion virtual
         std::sort(final_sections.begin(), final_sections.end(),
                   [](const section_info_linker &a,
                      const section_info_linker &b) {
                       return a.memory.address.address_init < b.memory.address.address_init;
                   });
 
-        // debemos restar el tamaño de la seccion de cadenas.
+        // debemos restar el tamano de la seccion de cadenas.
         compute_symbol_file_offsets();
 
         // Validar que no se solapan, primero debemos a ver calculado los offset de cada string anteriormente
@@ -806,7 +816,7 @@ namespace Assembly::Bytecode::Linker {
             if (final_sections[i].memory.address.address_init <
                 final_sections[i - 1].memory.address.address_final) {
                 // si es el espacio de direcciones especiales, entonces, lo ignoramos aunque
-                // se solape siempre y cuando sus direcciones tengas tamaño 0 (no se usa dentro
+                // se solape siempre y cuando sus direcciones tengas tamano 0 (no se usa dentro
                 // de la VM) por el codigo
                 if ((
                         (n2 == "strings") &&
@@ -815,7 +825,7 @@ namespace Assembly::Bytecode::Linker {
                             final_sections[i].memory.address.address_init) == 0
                     ) || (n1 == "strings")
                         // si lo agrego el ensamblador, entonces el espacio deberia ser 0,
-                        // si lo añadio el usuario, y no asigno
+                        // si lo anadio el usuario, y no asigno
                         // estos espacios, se debera analizar
                 )
                     continue;
@@ -826,8 +836,8 @@ namespace Assembly::Bytecode::Linker {
         }
 
 
-        //    NO asignamos offsets aquí (eso lo hace build_executable)
-        //    porque depende del tamaño del header y de la tabla misma.
+        //    NO asignamos offsets aqui (eso lo hace build_executable)
+        //    porque depende del tamano del header y de la tabla misma.
     }
 
 
@@ -887,10 +897,10 @@ namespace Assembly::Bytecode::Linker {
         // Indicar el offset a la tabla de labels
         result->emit64(final_header.offset_label_table);
 
-        // Indicar el tamaño de la tabla de importacion
+        // Indicar el tamano de la tabla de importacion
         result->emit32(final_header.size_import_table);
 
-        // indicar el tamaño de la tabla de etiquetas.
+        // indicar el tamano de la tabla de etiquetas.
         result->emit32(final_header.size_label_table);
 
         // el header siempre debe estar alineado a 16 bytes
@@ -936,7 +946,7 @@ namespace Assembly::Bytecode::Linker {
             result->write64_at(patched, field_pos);
         }
 
-        // añadir el bytecode al final
+        // anadir el bytecode al final
         result->output.insert(result->output.end(), final_bytecode.begin(), final_bytecode.end());
 
         for (auto &entry: table_import_method) {
@@ -1016,7 +1026,7 @@ namespace Assembly::Bytecode::Linker {
             f << "[" << i << "] " << modules[i].name << "\n";
         f << "\n";
 
-        // Ordenar símbolos por VA
+        // Ordenar simbolos por VA
         std::vector<std::pair<std::string, SymbolInfo> > sorted;
         for (auto &p: symbol_info)
             sorted.push_back(p);
@@ -1047,7 +1057,7 @@ namespace Assembly::Bytecode::Linker {
         std::string current_section;
 
         for (auto &[name, info]: sorted) {
-            // Cambio de sección -> imprimir encabezado
+            // Cambio de seccion -> imprimir encabezado
             if (info.section != current_section) {
                 current_section = info.section;
                 f << "\n[SECTION " << current_section << "]\n";
@@ -1059,7 +1069,7 @@ namespace Assembly::Bytecode::Linker {
             f << "    REL:  0x" << info.relative << "\n";
             f << "    SIZE: " << std::dec << info.size << " bytes\n";
 
-            // Mostrar código hexadecimal
+            // Mostrar codigo hexadecimal
             f << "    HEX:  ";
 
             if (info.file_offset + info.size <= final_bytecode.size()) {

@@ -1,16 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
- * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#ifndef ARENA_H
+/**
+ * @file arena.h
+ * @brief Definicion de tipos y primitivas de memoria de arena de VestaVM.
+ *
+ * Define: MemPerm, round_to_page(), allocate_memory(), free_memory(),
+ * MemBlock, vm_map_ptr, MappedPtr, RemotePtr y los niveles de la tabla
+ * de paginas virtual.  Base del subsistema de memoria de la VM.
+ */#ifndef ARENA_H
 #define ARENA_H
 
 #include <cstddef>
@@ -28,300 +35,419 @@
 
 #include "net/net.h"
 
+/**
+ * @brief Redondea un valor al multiplo de pagina de 4 KiB mas cercano por arriba.
+ *
+ * La mascara ~4095ULL elimina los 12 bits de offset para obtener la
+ * direccion de inicio de pagina; sumando 4095 antes de enmascarar
+ * garantiza el redondeo hacia arriba.
+ */
 #define ALIGN_4K(x) (((x) + 4095) & ~4095ULL)
 
 namespace vm {
+
     /**
      * @enum MemPerm
-     * @brief Permisos de memoria para buffers ejecutables o mapeos.
+     * @brief Permisos de acceso a memoria para bloques de arena y mapeos virtuales.
      *
-     * Representa permisos de memoria que se pueden combinar mediante operaciones
-     * bit a bit. Usado en funciones de asignacion y proteccion de memoria.
+     * Cada constante ocupa un bit distinto del byte subyacente para permitir
+     * combinaciones mediante OR de bits.  Usado en allocate_memory() y en
+     * ArenaManager::create_arena().
      *
-     * @note Cada valor ocupa un bit en un uint8_t:
-     *       - NONE  = 0
-     *       - READ  = 0x1
-     *       - WRITE = 0x2
-     *       - EXEC  = 0x4
+     * Tabla de valores:
+     *   NONE  = 0x00  -- sin permisos
+     *   READ  = 0x01  -- lectura
+     *   WRITE = 0x02  -- escritura
+     *   EXEC  = 0x04  -- ejecucion (necesario para JIT)
      *
      * @example
-     * MemPerm p = MemPerm::READ | MemPerm::WRITE; // Lectura y escritura
+     *   MemPerm rw = MemPerm::READ | MemPerm::WRITE;
+     *   MemPerm rwx = MemPerm::READ | MemPerm::WRITE | MemPerm::EXEC;
      */
     enum class MemPerm : uint8_t {
-        NONE = 0,
-        READ = 1 << 0,
-        WRITE = 1 << 1,
-        EXEC = 1 << 2,
+        NONE  = 0,        ///< Sin ningun permiso
+        READ  = 1 << 0,   ///< Permiso de lectura
+        WRITE = 1 << 1,   ///< Permiso de escritura
+        EXEC  = 1 << 2,   ///< Permiso de ejecucion (paginas JIT)
     };
 
     /**
-     * @brief Operador bit a bit OR para combinar permisos.
+     * @brief Combina dos valores MemPerm mediante OR de bits.
      *
-     * Permite combinar multiples permisos de MemPerm usando `|`.
+     * Permite escribir expresiones como:
+     *   MemPerm p = MemPerm::READ | MemPerm::WRITE;
      *
-     * @param a Primer permiso
-     * @param b Segundo permiso
-     * @return MemPerm Resultado de la combinacion bit a bit
-     *
-     * @example
-     * MemPerm p = MemPerm::READ | MemPerm::WRITE; // Combina READ y WRITE
+     * @param a Primer conjunto de permisos.
+     * @param b Segundo conjunto de permisos.
+     * @return  Union de los permisos indicados.
      */
     inline MemPerm operator|(MemPerm a, MemPerm b) {
         return static_cast<MemPerm>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
     }
 
     /**
-     * @brief Comprueba si un conjunto de permisos contiene un permiso especifico.
+     * @brief Comprueba si un permiso especifico esta activo en un conjunto de permisos.
      *
-     * Esta funcion hace una comparacion bit a bit entre los permisos actuales
-     * y el permiso que se desea verificar.
+     * Realiza una comprobacion AND de bits entre el conjunto actual y el permiso
+     * que se desea verificar.
      *
-     * @param perms Conjunto de permisos actuales (MemPerm), por ejemplo READ | WRITE.
-     * @param test Permiso especifico que queremos verificar si esta activo.
-     * @return true Si el permiso @p test esta activo dentro de @p perms.
-     * @return false Si el permiso @p test no esta presente.
-     *
-     * @note MemPerm se espera que sea un enum con valores que representen bits individuales:
-     *       por ejemplo: READ = 0x1, WRITE = 0x2, EXEC = 0x4.
+     * @param perms Conjunto de permisos a examinar (p.ej. READ | WRITE).
+     * @param test  Permiso individual que se quiere verificar.
+     * @return true  si el bit de @p test esta activo en @p perms.
+     * @return false si el bit de @p test no esta presente.
      *
      * @example
-     * MemPerm p = MemPerm::READ | MemPerm::WRITE;
-     * bool can_exec = has_perm(p, MemPerm::EXEC); // false
-     * bool can_write = has_perm(p, MemPerm::WRITE); // true
+     *   MemPerm p = MemPerm::READ | MemPerm::WRITE;
+     *   has_perm(p, MemPerm::EXEC);  // false
+     *   has_perm(p, MemPerm::WRITE); // true
      */
     inline bool has_perm(MemPerm perms, MemPerm test) {
+        // La operacion AND extrae el bit del permiso buscado; si es != 0 esta presente
         return (static_cast<uint8_t>(perms) & static_cast<uint8_t>(test)) != 0;
     }
 
     /**
-     * @brief Asigna memoria de manera portatil con permisos especificados.
+     * @brief Reserva memoria del sistema con los permisos indicados.
      *
-     * Esta funcion reserva un bloque de memoria de tamaño `size` redondeado
-     * a multiplo de la pagina (4 KB) y establece los permisos de lectura,
-     * escritura y ejecucion segun `perms`. Funciona tanto en Windows
-     * como en sistemas POSIX.
+     * El tamano se redondea automaticamente al multiplo de pagina del sistema
+     * (4 KiB en x86/x64 tipicamente).  Internamente usa VirtualAlloc en Windows
+     * y mmap(MAP_PRIVATE | MAP_ANONYMOUS) en POSIX.
      *
-     * @param size Tamaño de memoria a reservar (en bytes)
-     * @param perms Permisos de memoria (MemPerm::READ, MemPerm::WRITE, MemPerm::EXEC)
-     * @return void* Puntero a la memoria reservada, o nullptr si falla.
+     * La memoria obtenida debe liberarse con free_memory() pasando el mismo
+     * tamano original (antes del redondeo).
      *
-     * @note En Windows usa VirtualAlloc, en POSIX mmap.
-     *       La memoria debe liberarse con free_memory().
+     * @param size  Numero de bytes a reservar.
+     * @param perms Combinacion de MemPerm que determina READ / WRITE / EXEC.
+     * @return      Puntero al bloque reservado, o nullptr si la asignacion falla.
      *
-     * @example
-     * void* buf = allocate_memory(4096, MemPerm::READ | MemPerm::WRITE);
+     * @note En Windows, la combinacion EXEC+WRITE sin READ se traduce a
+     *       PAGE_EXECUTE_READWRITE porque no existe PAGE_EXECUTE_WRITE.
      */
     inline void *allocate_memory(size_t size, MemPerm perms) {
-        if (size == 0) return nullptr;
+        if (size == 0) return nullptr; // tamanyo nulo: nada que reservar
 
-        // Redondear al multiplo de pagina
+        // Redondear al multiplo de pagina del sistema operativo
 #ifdef _WIN32
         SYSTEM_INFO si{};
-        GetSystemInfo(&si);
-        size = (size + si.dwPageSize - 1) & ~(si.dwPageSize - 1);
+        GetSystemInfo(&si);                                                 // obtener info del sistema
+        size = (size + si.dwPageSize - 1) & ~(si.dwPageSize - 1);          // redondeo hacia arriba
 #else
-    long pagesize = sysconf(_SC_PAGESIZE);
-    size = (size + pagesize - 1) & ~(pagesize - 1);
+        long pagesize = sysconf(_SC_PAGESIZE);                             // tamanyo de pagina en POSIX
+        size = (size + pagesize - 1) & ~(pagesize - 1);                    // redondeo hacia arriba
 #endif
 
 #ifdef _WIN32
+        // Traducir permisos MemPerm a constantes PAGE_* de VirtualAlloc
         DWORD flProtect = 0;
         if (has_perm(perms, MemPerm::EXEC)) {
-            if (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_EXECUTE_READWRITE;
-            else if (has_perm(perms, MemPerm::READ)) flProtect = PAGE_EXECUTE_READ;
-            else if (has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_EXECUTE_READWRITE; // no hay EXEC+WRITE solo
-            else flProtect = PAGE_EXECUTE;
+            // Paginas ejecutables
+            if      (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE))
+                flProtect = PAGE_EXECUTE_READWRITE;   // RWX
+            else if (has_perm(perms, MemPerm::READ))
+                flProtect = PAGE_EXECUTE_READ;        // RX
+            else if (has_perm(perms, MemPerm::WRITE))
+                flProtect = PAGE_EXECUTE_READWRITE;   // WX -> no existe WX solo, se usa RWX
+            else
+                flProtect = PAGE_EXECUTE;             // solo ejecucion
         } else {
-            if (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_READWRITE;
-            else if (has_perm(perms, MemPerm::READ)) flProtect = PAGE_READONLY;
-            else if (has_perm(perms, MemPerm::WRITE)) flProtect = PAGE_READWRITE; // no hay solo WRITE
-            else flProtect = PAGE_NOACCESS;
+            // Paginas sin ejecucion
+            if      (has_perm(perms, MemPerm::READ) && has_perm(perms, MemPerm::WRITE))
+                flProtect = PAGE_READWRITE;           // RW
+            else if (has_perm(perms, MemPerm::READ))
+                flProtect = PAGE_READONLY;            // R
+            else if (has_perm(perms, MemPerm::WRITE))
+                flProtect = PAGE_READWRITE;           // W -> no existe solo W, se usa RW
+            else
+                flProtect = PAGE_NOACCESS;            // sin acceso
         }
 
         void *mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, flProtect);
         if (!mem) {
+            // Obtener y mostrar el mensaje de error de Windows
             DWORD err = GetLastError();
-
             LPVOID msg;
             FormatMessageA(
                 FORMAT_MESSAGE_ALLOCATE_BUFFER |
                 FORMAT_MESSAGE_FROM_SYSTEM |
                 FORMAT_MESSAGE_IGNORE_INSERTS,
-                NULL,
-                err,
+                NULL, err,
                 MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                (LPSTR) &msg,
-                0,
-                NULL
+                (LPSTR)&msg, 0, NULL
             );
-
             std::cerr << "VirtualAlloc fallo. Codigo: " << err
-                    << " - " << (msg ? (char *) msg : "Error desconocido") << "\n";
-
-            if (msg) LocalFree(msg);
+                      << " - " << (msg ? (char*)msg : "Error desconocido") << "\n";
+            if (msg) LocalFree(msg); // liberar el buffer de mensaje
             return nullptr;
         }
         return mem;
 #else
-    int prot = 0;
-    if (has_perm(perms, MemPerm::READ)) prot |= PROT_READ;
-    if (has_perm(perms, MemPerm::WRITE)) prot |= PROT_WRITE;
-    if (has_perm(perms, MemPerm::EXEC)) prot |= PROT_EXEC;
+        // Construir mascara de proteccion POSIX
+        int prot = 0;
+        if (has_perm(perms, MemPerm::READ))  prot |= PROT_READ;   // permiso de lectura
+        if (has_perm(perms, MemPerm::WRITE)) prot |= PROT_WRITE;  // permiso de escritura
+        if (has_perm(perms, MemPerm::EXEC))  prot |= PROT_EXEC;   // permiso de ejecucion
 
-    void* mem = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (mem == MAP_FAILED) {
-        std::cerr << "mmap fallo: " << std::strerror(errno) << "\n";
-        return nullptr;
-    }
-    return mem;
+        void *mem = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mem == MAP_FAILED) {
+            std::cerr << "mmap fallo: " << std::strerror(errno) << "\n"; // mostrar error de sistema
+            return nullptr;
+        }
+        return mem;
 #endif
     }
 
     /**
-     * @brief Libera memoria previamente asignada con allocate_memory().
+     * @brief Libera memoria previamente reservada con allocate_memory().
      *
-     * @param mem Puntero a la memoria a liberar
-     * @param size Tamaño de la memoria (debe coincidir con allocate_memory)
+     * El parametro @p size debe ser el mismo valor original pasado a
+     * allocate_memory() antes del redondeo interno.  En Windows el tamanyo
+     * no se usa (VirtualFree con MEM_RELEASE no lo requiere); en POSIX
+     * munmap necesita el tamanyo alineado a pagina.
      *
-     * @note Redondea el tamaño a multiplo de pagina automaticamente.
+     * @param mem  Puntero al bloque a liberar (devuelto por allocate_memory).
+     * @param size Tamanyo original del bloque (antes del redondeo).
      */
     inline void free_memory(void *mem, size_t size) {
 #ifdef _WIN32
-        VirtualFree(mem, 0, MEM_RELEASE);
+        VirtualFree(mem, 0, MEM_RELEASE);  // libera todo el rango reservado; tamanyo ignorado
 #else
-    long pagesize = sysconf(_SC_PAGESIZE);
-    size = (size + pagesize - 1) & ~(pagesize - 1);
-    munmap(mem, size);
+        long pagesize = sysconf(_SC_PAGESIZE);                         // tamanyo de pagina
+        size = (size + pagesize - 1) & ~(pagesize - 1);                // redondear igual que en allocate
+        munmap(mem, size);                                              // desmapear rango
 #endif
     }
 
+    /**
+     * @brief Bloque de memoria contigua con permisos asociados.
+     *
+     * Una Arena representa la unidad minima de gestion de memoria dentro de
+     * ArenaManager.  Cada arena tiene un identificador unico, un puntero al
+     * bloque real del sistema y los permisos con los que fue reservado.
+     */
     typedef struct Arena {
-        void *ptr = nullptr; //< puntero al bloque
-        size_t size = 0; //< tamaño del bloque
-        MemPerm perms = MemPerm::NONE; //< permisos
+        void    *ptr   = nullptr;       ///< Puntero al inicio del bloque de memoria del sistema
+        size_t   size  = 0;             ///< Tamanyo del bloque en bytes (multiplo de pagina)
+        MemPerm  perms = MemPerm::NONE; ///< Permisos de acceso (READ / WRITE / EXEC)
     } Arena;
 
-
     /**
-     * tipo de dato para punteros reales a mapear a la VM
+     * @brief Alias para punteros reales del proceso anfitrio (host).
+     *
+     * Se usa para distinguir punteros del sistema operativo nativo
+     * de los punteros virtuales de la VM (vm_map_ptr).
      */
     typedef void *host_ptr;
 
     /**
-     * punteros virtuales de la VM.
+     * @enum PageLevel
+     * @brief Niveles de la tabla de paginas virtual de la VM.
      *
-     * **Offset**    = 0xFFF     (`12bits`) [`12bits`] offset
-     * Page Table    = 0xFFF     (`12bits`) [`24bits`] PT
-     * Page Table1   = 0xFFFF    (`16bits`) [`40bits`] PT1
-     * Page Table2   = 0xFFFFFF  (`24bits`) [`64bits`] PT2
+     * La direccion virtual de 64 bits se descompone en cuatro campos:
+     *
+     *   Bits [11: 0] OFFSET (12 bits) -- desplazamiento dentro de la pagina
+     *   Bits [23:12] PT     (12 bits) -- indice en la tabla de paginas nivel 1
+     *   Bits [39:24] PT1    (16 bits) -- indice en la tabla de paginas nivel 2
+     *   Bits [63:40] PT2    (24 bits) -- indice en la tabla de paginas nivel 3 (raiz)
      */
-    enum class PageLevel : uint8_t { OFFSET = 0, PT, PT1, PT2 };
+    enum class PageLevel : uint8_t {
+        OFFSET = 0, ///< Desplazamiento dentro de la pagina (bits 0-11)
+        PT,         ///< Tabla de paginas nivel 1 (bits 12-23)
+        PT1,        ///< Tabla de paginas nivel 2 (bits 24-39)
+        PT2         ///< Tabla de paginas nivel 3 raiz (bits 40-63)
+    };
 
+    /**
+     * @brief Direccion virtual interna de la maquina virtual.
+     *
+     * Empaqueta 64 bits en un valor bruto e implementa metodos de acceso
+     * por nivel de tabla de paginas (OFFSET, PT, PT1, PT2).
+     *
+     * Estructura de bits:
+     *   [63:40] PT2    24 bits
+     *   [39:24] PT1    16 bits
+     *   [23:12] PT     12 bits
+     *   [11: 0] OFFSET 12 bits
+     */
     struct vm_map_ptr {
-        uint64_t raw = 0;
+        uint64_t raw = 0; ///< Valor bruto de 64 bits de la direccion virtual
 
+        /**
+         * @brief Extrae el campo del nivel indicado de la direccion virtual.
+         *
+         * @param level Nivel de la tabla de paginas a extraer.
+         * @return      Valor del campo correspondiente.
+         */
         [[nodiscard]] uint64_t get(PageLevel level) const {
             switch (level) {
-                case PageLevel::OFFSET: return raw & 0xFFF;
-                case PageLevel::PT: return (raw >> 12) & 0xFFF;
-                case PageLevel::PT1: return (raw >> 24) & 0xFFFF;
-                case PageLevel::PT2: return (raw >> 40) & 0xFFFFFF;
+                case PageLevel::OFFSET: return raw & 0xFFF;                // bits 11-0
+                case PageLevel::PT:     return (raw >> 12) & 0xFFF;        // bits 23-12
+                case PageLevel::PT1:    return (raw >> 24) & 0xFFFF;       // bits 39-24
+                case PageLevel::PT2:    return (raw >> 40) & 0xFFFFFF;     // bits 63-40
             }
+            return 0; // nunca alcanzado; silencia advertencias del compilador
         }
 
+        /**
+         * @brief Escribe un campo del nivel indicado en la direccion virtual.
+         *
+         * Solo los bits del nivel seleccionado son modificados; el resto
+         * de la direccion permanece intacto.
+         *
+         * @param level Nivel de la tabla de paginas a modificar.
+         * @param value Nuevo valor para el campo (los bits extra son ignorados).
+         */
         void set(PageLevel level, uint64_t value) {
             switch (level) {
                 case PageLevel::OFFSET:
-                    raw = (raw & ~0xFFFULL) | (value & 0xFFFULL);
+                    raw = (raw & ~0xFFFULL) | (value & 0xFFFULL);                   // actualizar bits 11-0
                     break;
                 case PageLevel::PT:
-                    raw = (raw & ~(0xFFFULL << 12)) | ((value & 0xFFFULL) << 12);
+                    raw = (raw & ~(0xFFFULL << 12)) | ((value & 0xFFFULL) << 12);   // actualizar bits 23-12
                     break;
                 case PageLevel::PT1:
-                    raw = (raw & ~(0xFFFFULL << 24)) | ((value & 0xFFFFULL) << 24);
+                    raw = (raw & ~(0xFFFFULL << 24)) | ((value & 0xFFFFULL) << 24); // actualizar bits 39-24
                     break;
                 case PageLevel::PT2:
-                    raw = (raw & ~(0xFFFFFFULL << 40)) | ((value & 0xFFFFFFULL) << 40);
+                    raw = (raw & ~(0xFFFFFFULL << 40)) | ((value & 0xFFFFFFULL) << 40); // actualizar bits 63-40
                     break;
             }
         }
     };
 
     /**
-     * Los punteros remotos son direcciones virtuales en la practica.
+     * @brief Alias semantico para punteros remotos.
+     *
+     * Un puntero remoto es en la practica una direccion virtual (vm_map_ptr)
+     * que pertenece a otra instancia de VestaVM accesible via red.
      */
     typedef vm_map_ptr remote_ptr;
 
-
     /**
-     * Puntero mapeado, puede ser de 3 tipos.
-     * - Se puede mapear memoria local.
-     * - Se puede mapear memoria remota.
-     * - Se puede mapear memoria virtual (otra direccion virtual).
+     * @brief Union de los tres tipos de destino que puede referenciar un puntero mapeado.
+     *
+     * Un puntero de la VM puede apuntar a:
+     *   - Memoria virtual local  (ptr_vm)
+     *   - Memoria real del host  (ptr_host)
+     *   - Memoria de un nodo remoto (ptr_remote, identificado por IP)
      */
     typedef union ptr_mapped {
-        vm_map_ptr ptr_vm; // para mapear una direccion virtual.
-        host_ptr ptr_host; // direccion real de la memoria mapeada
-        remote_ptr ptr_remote; // direccion remota de la memoria
+        vm_map_ptr ptr_vm;      ///< Direccion virtual local de la VM
+        host_ptr   ptr_host;    ///< Puntero real en el proceso del host
+        remote_ptr ptr_remote;  ///< Direccion virtual en una VM remota
     } ptr_mapped;
 
+    /**
+     * @enum type_ptr_mapped
+     * @brief Discriminante que identifica el tipo de puntero almacenado en ptr_mapped.
+     *
+     * Usado junto con la union ptr_mapped para determinar que campo es valido
+     * sin incurrir en comportamiento indefinido al acceder al campo incorrecto.
+     */
     typedef enum type_ptr_mapped {
-        NONE,
-        MAPPED_PTR_VM,
-        MAPPED_PTR_HOST,
-        MAPPED_PTR_REMOTE
+        NONE             = 0, ///< Sin mapeo activo
+        MAPPED_PTR_VM    = 1, ///< Apunta a memoria virtual local
+        MAPPED_PTR_HOST  = 2, ///< Apunta a memoria real del proceso host
+        MAPPED_PTR_REMOTE = 3 ///< Apunta a memoria en una VM remota
     } type_ptr_mapped;
 
     /**
-     * Los punteros de la maquina virtual se mapean a memoria real, pero no tiene por que estar seguida
-     * las arenas unas de otras. Hay una variante de este tipo de punteros donde se indica la direccion
-     * IP de la maquina objetivo a la que dicha direccion pertenece. (MappedPtrRemote)
+     * @brief Par (direccion virtual, destino mapeado) que describe un mapeo de memoria.
+     *
+     * Las arenas de la VM no son necesariamente contiguas en la memoria fisica del
+     * host.  Esta estructura relaciona cada direccion virtual con su destino real,
+     * ya sea memoria local del host, otra direccion virtual o un nodo remoto.
+     *
+     * La variante MappedPtrRemoteIpv4/6 extiende este concepto anadiendo la
+     * direccion IP del nodo propietario de la memoria remota.
      */
     typedef struct MappedPtr {
-        vm_map_ptr ptr_vm{}; // direccion virtual de la memoria
-        ptr_mapped mapped{}; // direccion mapeada
+        vm_map_ptr ptr_vm{};  ///< Direccion virtual de la VM
+        ptr_mapped mapped{};  ///< Destino real (host, VM local o remoto)
 
-        // devuelve representación textual
+        /**
+         * @brief Genera una representacion textual del mapeo.
+         *
+         * Muestra la direccion virtual, la direccion mapeada y el puntero
+         * host en formato hexadecimal de 16 digitos.
+         *
+         * @return Cadena con el estado completo del mapeo.
+         */
         std::string to_string() const;
 
-        // imprime en un ostream (útil para integración con SyncOStream)
+        /**
+         * @brief Escribe la representacion textual en un flujo de salida.
+         *
+         * @param os Flujo destino (p.ej. std::cout).
+         */
         void print(std::ostream &os) const;
 
-
+        /**
+         * @brief Avanza la direccion virtual y la mapeada en @p offset bytes.
+         *
+         * Modifica tanto ptr_vm.raw como mapped.ptr_vm.raw de manera consistente
+         * para que el par siga siendo valido tras el desplazamiento.
+         *
+         * @param offset Numero de bytes a avanzar.
+         * @return Referencia a este mismo objeto tras la modificacion.
+         */
         MappedPtr &operator+=(uint64_t offset) {
-            // Actualiza la dirección virtual
-            ptr_vm.raw += offset;
-
-            // Actualiza la dirección mapeada
-            mapped.ptr_vm.raw += offset;
+            ptr_vm.raw        += offset; // avanzar la direccion virtual
+            mapped.ptr_vm.raw += offset; // avanzar el destino mapeado en paralelo
             return *this;
         }
 
+        /**
+         * @brief Incrementa la direccion en 1 byte (prefijo).
+         * @return Referencia a este mismo objeto.
+         */
         MappedPtr &operator++() {
             return (*this += 1);
         }
 
+        /**
+         * @brief Decrementa la direccion en 1 byte (prefijo).
+         * @return Referencia a este mismo objeto.
+         */
         MappedPtr &operator--() {
-            return (*this += -1);
+            return (*this += static_cast<uint64_t>(-1)); // equivale a -1 en aritmetica de 64 bits
         }
 
-        //
+        /**
+         * @brief Devuelve una copia del mapeo avanzado en @p offset bytes.
+         *
+         * No modifica el objeto original.
+         *
+         * @param offset Numero de bytes de desplazamiento.
+         * @return Nueva instancia con la direccion desplazada.
+         */
         MappedPtr operator+(uint64_t offset) const {
-            MappedPtr tmp = *this;
-            tmp += offset;
+            MappedPtr tmp = *this; // copia del estado actual
+            tmp += offset;         // aplicar desplazamiento
             return tmp;
         }
     } MappedPtr;
 
-
+    /**
+     * @brief Mapeo de una direccion virtual a un nodo remoto identificado por IPv4.
+     *
+     * Empaquetado sin relleno (__attribute__((packed))) para que el tamanyo
+     * sea predecible al serializar/deserializar mensajes de red.
+     */
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv4 {
-        vm_map_ptr ptr_vm{}; // direccion virtual en una maquina remota
-        HostIpv4 host_ipv4{}; // direccion de la maquina a la que pertenece la direccion
+        vm_map_ptr ptr_vm{};    ///< Direccion virtual en la maquina remota
+        HostIpv4   host_ipv4{}; ///< Direccion IPv4 del nodo propietario
     } MappedPtrRemoteIpv4;
 
+    /**
+     * @brief Mapeo de una direccion virtual a un nodo remoto identificado por IPv6.
+     *
+     * Empaquetado sin relleno (__attribute__((packed))) para serialization de red.
+     */
     typedef struct __attribute__((packed)) MappedPtrRemoteIpv6 {
-        vm_map_ptr ptr_vm{}; // direccion virtual en una maquina remota
-        HostIpv6 host_ipv6{}; // direccion de la maquina a la que pertenece la direccion
+        vm_map_ptr ptr_vm{};    ///< Direccion virtual en la maquina remota
+        HostIpv6   host_ipv6{}; ///< Direccion IPv6 del nodo propietario
     } MappedPtrRemote6;
+
 } // namespace vm
+
 #endif // ARENA_H

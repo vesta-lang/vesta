@@ -1,25 +1,35 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+* VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file ThreadPool.cpp
+ * @brief Implementacion del pool de hilos de VestaVM.
+ *
+ * Implementa el constructor, destructor, shutdown(), idle() y worker_loop()
+ * de la clase @c ThreadPool.  La notificacion de tareas usa futex en Linux
+ * y WaitOnAddress/WakeByAddressAll en Windows.
+ */
 #include "util/ThreadPool.h"
 
 #include <iostream>
 #include <utility>
 
 ThreadPool::ThreadPool(size_t n) {
+    /* si n==0 usar todos los nucleos disponibles; garantizar al menos 1 */
     if (n == 0) {
         n = std::max<size_t>(1, std::thread::hardware_concurrency());
     }
     workers_.reserve(n);
+    /* lanzar cada hilo worker apuntando a worker_loop() */
     for (size_t i = 0; i < n; ++i) {
         workers_.emplace_back([this] {
             this->worker_loop();
@@ -28,53 +38,68 @@ ThreadPool::ThreadPool(size_t n) {
 }
 
 ThreadPool::~ThreadPool() {
-    //std::cout << "Destruyendo ThreadPool\n";
-    shutdown();
+    shutdown(); /* espera que todos los workers terminen antes de destruir */
 }
 
 void ThreadPool::shutdown() {
-    bool expected = false;
-    if (!stopping_.compare_exchange_strong(expected, true)) return; // ya cerrando
     {
         std::lock_guard lk(tasks_m_);
-        // marcar cerrado; no se añaden más tareas
+        stopping_.store(true); /* señal de parada a todos los workers */
     }
-    tasks_cv_.notify_all();
-    for (auto &t: workers_) if (t.joinable()) t.join();
-    workers_.clear();
+    /* despertar a todos los workers para que noten stopping_==true */
+    wake_flag_.store(1, std::memory_order_release);
+
+#ifdef WIN32
+    WakeByAddressAll(&wake_flag_);      /* Windows: despertar todos */
+#else
+    futex_wake(&wake_flag_, workers_.size()); /* Linux: despertar N hilos */
+#endif
+
+    /* esperar a que cada hilo termine su iteracion actual */
+    for (auto &t : workers_) {
+        if (t.joinable()) t.join();
+    }
 }
 
 bool ThreadPool::idle() {
-    // No tareas pendientes y ningún worker ejecutando nada
     std::lock_guard lk(tasks_m_);
-    return tasks_.empty();
+    return tasks_.empty(); /* true solo si no hay tareas pendientes en cola */
 }
 
 void ThreadPool::worker_loop() {
     while (true) {
-        std::function<void()> task; {
-            std::unique_lock lk(tasks_m_);
+        std::function<void()> task;
 
-            tasks_cv_.wait(lk, [this] {
-                return stopping_.load() || !tasks_.empty();
-            });
+        /* bucle de espera: bloquear hasta que haya tarea o se deba parar */
+        while (true) {
+            int expected = 0;
 
-            // si estamos parando y no hay tareas -> salir
-            if (stopping_.load() && tasks_.empty())
-                return;
+            /* comprobar cola SIN dormir, con mutex */
+            {
+                std::lock_guard lk(tasks_m_);
+                if (!tasks_.empty()) break;    /* hay tarea: salir del bucle interno */
+                if (stopping_.load()) return;  /* pool parando: terminar el hilo */
+            }
 
-            // si no hay tareas, continuar esperando
-            if (tasks_.empty())
-                continue;
+            /* resetear flag antes de dormir para no perder señales */
+            wake_flag_.store(0, std::memory_order_relaxed);
 
-            task = std::move(tasks_.front());
-            tasks_.pop();
+#ifdef WIN32
+            WaitOnAddress(&wake_flag_, &expected, sizeof(int), INFINITE);
+#else
+            futex_wait(&wake_flag_, expected);
+#endif
         }
-        //try {
-        task();
-        //} catch (...) {
-        // No propagar excepción fuera del hilo worker.
-        // Opcional: loggear?
-        //}
+
+        /* extraer la tarea del frente de la cola */
+        {
+            std::lock_guard lk(tasks_m_);
+            if (!tasks_.empty()) {
+                task = std::move(tasks_.front());
+                tasks_.pop();
+            }
+        }
+
+        if (task) task(); /* ejecutar la tarea; las excepciones se capturan si usa packaged_task */
     }
 }
