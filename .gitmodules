@@ -13,3 +13,6 @@
 [submodule "doc/VMdoc"]
 	path = doc/VMdoc
 	url = https://github.com/desmonHak/VMdoc.git
+[submodule "preprocessor"]
+	path = preprocessor
+	url = https://github.com/desmonHak/preprocessor.git
