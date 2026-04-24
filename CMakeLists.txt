@@ -162,7 +162,8 @@ if (WIN32)
     target_link_libraries(vm PRIVATE
             libssl
             libcrypto
-            ws2_32        # Esto es crucial para sockets en windwos
+            ws2_32           # sockets en Windows
+            synchronization  # WaitOnAddress / WakeByAddress* (ThreadPool)
     )
 
     # es necesario en windows

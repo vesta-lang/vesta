@@ -1,15 +1,24 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file annotations.cpp
+ * @brief Implementacion de los manejadores de anotaciones del ensamblador de VestaVM.
+ *
+ * Implementa las funciones @c apply_space_address(), @c apply_section(),
+ * @c apply_format(), @c apply_init_pc(), @c apply_import() y otras funciones
+ * del mapa @c annotation_handlers.  Tambien implementa @c print_context() y
+ * @c print_context_with_bytes() para depuracion del contexto del ensamblador.
+ */
 #include "emmit/annotations.h"
 
 #include "cli/sync_io.h"
@@ -30,7 +39,7 @@ namespace Assembly::Bytecode {
 
 
     /**
-     * Función auxiliar para buscar un hijo por nombre. No es obligatorio que exista
+     * Funcion auxiliar para buscar un hijo por nombre. No es obligatorio que exista
      * @param node Nodo padre
      * @param key nombre del nodo hijo
      * @return nodo hijo que coindice
@@ -43,7 +52,7 @@ namespace Assembly::Bytecode {
     }
 
     /**
-     * Función auxiliar para buscar un hijo por nombre, este debe existir o genera
+     * Funcion auxiliar para buscar un hijo por nombre, este debe existir o genera
      * una excepcion.
      * @param node Nodo padre
      * @param key nombre del nodo hijo
@@ -82,13 +91,13 @@ namespace Assembly::Bytecode {
             auto func_name     = expect_find_child(method_node.get(), "Name"); // nombre del metodo
 
 
-            // clave única para evitar duplicados
+            // clave unica para evitar duplicados
             std::string key = lib_name_node->value + ":" + func_name->value;
 
-            // ¿ya existe?
+            // ?ya existe?
             auto it = assembler.ctx.import_lookup.find(key);
             if (it != assembler.ctx.import_lookup.end()) {
-                continue; // ya está registrado
+                continue; // ya esta registrado
             }
 
             // crear nueva entrada
@@ -164,7 +173,7 @@ namespace Assembly::Bytecode {
     }
 
     void apply_section(const vm::AnnotationNode *node, Assembler &assembler) {
-        // Obtener el nombre de la sección
+        // Obtener el nombre de la seccion
         const vm::AnnotationNode *nameNode     = expect_find_child(node, "Name");
         std::string               section_name = nameNode->value;
 
@@ -185,7 +194,7 @@ namespace Assembly::Bytecode {
             );
         }
 
-        // Crear la sección
+        // Crear la seccion
         Section sec;
         sec.name = section_name;
 

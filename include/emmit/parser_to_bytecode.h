@@ -1,13 +1,29 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
+ * @file parser_to_bytecode.h
+ * @brief Ensamblador de 3 fases: convierte un AST generado por el parser en bytecode ejecutable.
+ *
+ * Contiene:
+ *  - @c PseudoInstructions : conjunto de directivas de preprocesado (global, extern, bits, align, org).
+ *  - @c InstrTable         : tabla completa de instrucciones con sus variantes de codificacion.
+ *  - @c Assembler          : clase principal del ensamblador (3 fases).
+ *  - @c resolve_imports()  : funcion estatica que expande recursivamente los nodos @c ImportNode.
+ *
+ * Proceso de ensamblado (3 fases):
+ *  1. Primera pasada  (@c first_pass)  : recoleccion de simbolos, labels y calculo de offsets.
+ *  2. Segunda pasada  (@c emit_pass)   : emision de datos y evaluacion de expresiones.
+ *  3. Tercera pasada  (fusionada en 2) : emision de instrucciones y resolucion de saltos.
  */
 
 #ifndef PARSER_TO_BYTECODE_H
@@ -16,16 +32,21 @@
 #include "emmit_decl.h"
 #include "annotations.h"
 
-/**
- * La conversion de AST generado por al parser a bytecode usa 3 etapas:
- *      - Primera pasada: recolectar símbolos (labels, offsets, tamaños)
- *      - Segunda pasada: evaluar expresiones y generar datos (expresiones es 2+3 Por ejemplo)
- *      - Tercera pasada: generar instrucciones y resolver saltos
- */
-
 namespace Assembly::Bytecode {
+
     /**
-     * Tabla de directivas, estas deben ir siempre en el inicio del programa
+     * @brief Conjunto de pseudo-instrucciones (directivas de preprocesado).
+     *
+     * Estas directivas deben aparecer siempre al inicio del programa, antes de
+     * cualquier instruccion ejecutable.  El ensamblador las procesa en la primera
+     * pasada y no generan bytecode directo.
+     *
+     * Directivas soportadas:
+     *  - @c global : exporta un simbolo al scope global.
+     *  - @c extern : declara un simbolo externo (importado).
+     *  - @c bits   : establece el ancho de los operandos (8, 16, 32, 64).
+     *  - @c align  : alinea el offset actual a un multiplo de N bytes.
+     *  - @c org    : fija la direccion base del ensamblado.
      */
     static const std::unordered_set<std::string> PseudoInstructions = {
         "global",
@@ -36,25 +57,61 @@ namespace Assembly::Bytecode {
     };
 
     /**
-     * Tabla de instrucciones con metadatos correspondientes
+     * @brief Tabla de instrucciones: mapea cada mnemotecnico a sus variantes de codificacion.
+     *
+     * Cada entrada asocia un nombre de instruccion con un vector de @c InstrInfo.
+     * Cuando una instruccion tiene multiples variantes (por ejemplo, ADD con reg+reg,
+     * reg+inmediato o reg+SIB), el ensamblador llama a @c select_variant() para elegir
+     * la correcta segun los operandos del nodo AST.
+     *
+     * Grupos de instrucciones:
+     *  - Informacion de VM      : vminfo, vminfomanager.
+     *  - Aritmetica con/sin signo: adds/addu, subs/subu, muls/mulu, divs/divu, cmps/cmpu.
+     *  - Transferencia          : mov (reg/inmed/SIB), movc, movch.
+     *  - Logica                 : and, or, xor, not, shl, shr, sar.
+     *  - Saltos absolutos       : jmp (incondicional + 14 condicionales), jmpr.
+     *  - Saltos relativos       : jrel (incondicional + 14 condicionales).
+     *  - Pila                   : push, pop, xchg.
+     *  - Llamadas               : callvm, callvmr, calln, callnr.
+     *  - Control de flujo       : enter, leave, ret, loop.
+     *  - GC generacional        : newobj, gcrun, gcconfig, drop, gcwb, gcalloc.
+     *  - Asignador raw          : alloc, free, realloc.
+     *  - Cursores               : readcur, writecur, gcderef.
+     *  - OOP                    : newobjraw, callvirt, callsuper, throw, rethrow,
+     *                             getclass, instanceof, checkcast, getfield, getmethod,
+     *                             fieldcount, methodcount, classname.
+     *  - Reflexion/doc OOP      : classdoc, classattrcount, classattrkey, classattrval,
+     *                             methodname, methoddoc, methoddesc, methodattrcount,
+     *                             methodattrkey, methodattrval, fieldname, fielddoc,
+     *                             fieldattrcount, fieldattrkey, fieldattrval.
+     *  - NOP                    : nop1 (1 byte), nop2 (2 bytes).
+     *  - Protocolo distribuido  : edmw4, edmw6, edm, hlt.
+     *
+     * Formato de cada variante (@c InstrInfo):
+     * @code
+     * { opcode1, opcode2, InstrSizeMode, AddressingMode, emit_fn }
+     * @endcode
+     * Si opcode1 == 0x00 la instruccion es extendida (2 bytes de opcode).
      */
     static const std::unordered_map<std::string, std::vector<InstrInfo> > InstrTable = {
-        {"vminfo", {{0x01, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
-        {"vminfomanager", {{0x02, 0x00, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        /* --- Informacion de VM --- */
+        {"vminfo",       {{0x01, 0x00, InstrSizeMode::FIXED_2,  AddressingMode::NONE,  nullptr}}},
+        {"vminfomanager",{{0x02, 0x00, InstrSizeMode::FIXED_2,  AddressingMode::NONE,  nullptr}}},
 
-        // INC y DEC usan la misma subrutina de emision por que se codifcan igual, cambiando solo el
-        // segundo byte
+        /* INC y DEC usan la misma subrutina de emision porque se codifican igual,
+           cambiando solo el segundo byte. */
         {"inc", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
         {"dec", {{0x04, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_inc_dec}}},
 
-        // callvm <label|addr> - llama a función interna empujando retorno en pila
+        /* callvm <label|addr>  - llama a funcion interna empujando retorno en pila. */
         {"callvm",  {{0x10, 0x00, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
-        // callvmr <reg> - igual que callvm pero la dirección viene de un registro
+        /* callvmr <reg>        - igual que callvm pero la direccion viene de un registro. */
         {"callvmr", {{0x16, 0x00, InstrSizeMode::FIXED_2,  AddressingMode::REG,   emit_pop_push}}},
 
-        // jmp incondicional
+        /* --- Saltos absolutos (opcode1 = 0x11) --- */
+        /* jmp incondicional: opcode2 = 0x0F */
         {"jmp",     {{0x11, 0x0F, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
-        // jmp condicionales (sufijo determina condición, opcode2 = código de condición)
+        /* jmp condicionales: sufijo determina la condicion, opcode2 = codigo de condicion. */
         {"jmp.je",  {{0x11, 0x00, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jz",  {{0x11, 0x00, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jne", {{0x11, 0x01, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
@@ -74,10 +131,10 @@ namespace Assembly::Bytecode {
         {"jmp.jgt", {{0x11, 0x0C, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jle", {{0x11, 0x0D, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
 
-        // jmpr <reg> - salto incondicional por registro
+        /* jmpr <reg>  - salto incondicional por registro. */
         {"jmpr",    {{0x15, 0x00, InstrSizeMode::FIXED_2,  AddressingMode::REG,   emit_pop_push}}},
 
-        // jrel - salto relativo con desplazamiento de 32 bits (opcode extendido 0x00 0x2D)
+        /* --- Saltos relativos con desplazamiento de 32 bits (opcode extendido 0x00 0x2D) --- */
         {"jrel",     {{0x00, 0x2D, InstrSizeMode::FIXED_8, AddressingMode::INMED, emit_jrel}}},
         {"jrel.je",  {{0x00, 0x2D, InstrSizeMode::FIXED_8, AddressingMode::INMED, emit_jrel}}},
         {"jrel.jz",  {{0x00, 0x2D, InstrSizeMode::FIXED_8, AddressingMode::INMED, emit_jrel}}},
@@ -98,17 +155,17 @@ namespace Assembly::Bytecode {
         {"jrel.jgt", {{0x00, 0x2D, InstrSizeMode::FIXED_8, AddressingMode::INMED, emit_jrel}}},
         {"jrel.jle", {{0x00, 0x2D, InstrSizeMode::FIXED_8, AddressingMode::INMED, emit_jrel}}},
 
-        // enter <frame_size> - crea stack frame reservando N bytes de locales
+        /* enter <frame_size> - crea stack frame reservando N bytes para variables locales. */
         {"enter", {{0x28, 0x00, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
-        // leave - destruye el frame actual (sin operandos)
+        /* leave - destruye el frame actual (sin operandos). */
         {"leave", {{0x29, 0x00, InstrSizeMode::FIXED_1,  AddressingMode::NONE,  nullptr}}},
 
+        /* --- Pila --- */
         {"push", {{0x12, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
-        {"pop", {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
-
+        {"pop",  {{0x13, 0x00, InstrSizeMode::FIXED_2, AddressingMode::REG, emit_pop_push}}},
         {"xchg", {{0x14, 0x00, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_xchg}}},
 
-        // GC generacional (0x00 0xA0 .. 0xA4)
+        /* --- GC generacional (opcode extendido 0x00 0xA0..0xA5) --- */
         {"newobj",   {{0x00, 0xA0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"gcrun",    {{0x00, 0xA1, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
         {"gcconfig", {{0x00, 0xA2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
@@ -116,17 +173,17 @@ namespace Assembly::Bytecode {
         {"gcwb",     {{0x00, 0xA4, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"gcalloc",  {{0x00, 0xA5, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
 
-        // Raw allocator (0x00 0xB0 .. 0xB2)
-        {"alloc",    {{0x00, 0xB0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
-        {"free",     {{0x00, 0xB1, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
-        {"realloc",  {{0x00, 0xB2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        /* --- Asignador raw (opcode extendido 0x00 0xB0..0xB2) --- */
+        {"alloc",   {{0x00, 0xB0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"free",    {{0x00, 0xB1, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        {"realloc", {{0x00, 0xB2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
 
-        // Cursor - acceso a memoria real (0x00 0xC0 .. 0xC2)
+        /* --- Cursores: acceso a memoria real (opcode extendido 0x00 0xC0..0xC2) --- */
         {"readcur",  {{0x00, 0xC0, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
         {"writecur", {{0x00, 0xC1, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
         {"gcderef",  {{0x00, 0xC2, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_gcderef}}},
 
-        // OOP - sistema de objetos (0x00 0xD0 .. 0xDC)
+        /* --- OOP: sistema de objetos (opcode extendido 0x00 0xD0..0xDC) --- */
         {"newobjraw",  {{0x00, 0xD0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
         {"callvirt",   {{0x00, 0xD1, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
         {"callsuper",  {{0x00, 0xD2, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
@@ -139,8 +196,9 @@ namespace Assembly::Bytecode {
         {"getmethod",  {{0x00, 0xD9, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
         {"fieldcount", {{0x00, 0xDA, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"methodcount",{{0x00, 0xDB, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
-        {"classname",       {{0x00, 0xDC, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
-        // OOP reflexion/doc (0x00 0xDD..0xEB)
+        {"classname",  {{0x00, 0xDC, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+
+        /* --- Reflexion/documentacion OOP (opcode extendido 0x00 0xDD..0xEB) --- */
         {"classdoc",        {{0x00, 0xDD, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
         {"classattrcount",  {{0x00, 0xDE, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
         {"classattrkey",    {{0x00, 0xDF, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
@@ -157,199 +215,144 @@ namespace Assembly::Bytecode {
         {"fieldattrkey",    {{0x00, 0xEA, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
         {"fieldattrval",    {{0x00, 0xEB, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_instr_reg_imm8}}},
 
-        // estas instrucciones no necesitan emitir mas que sus opcodes
+        /* --- NOP --- */
         {"nop1", {{0x33, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
         {"nop2", {{0x00, 0x33, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
-        {
-            "callnr",
-            {
-                {0x55, 0x00, InstrSizeMode::FIXED_1, AddressingMode::REG, nullptr},
-            },
-        },
+        /* callnr <reg>  - llamada nativa por registro (sin retorno). */
+        {"callnr", {{0x55, 0x00, InstrSizeMode::FIXED_1, AddressingMode::REG, nullptr}}},
 
+        /* ret - retorna de una subrutina. */
         {"ret", {{0xC3, 0x00, InstrSizeMode::FIXED_1, AddressingMode::NONE, nullptr}}},
 
-        // Extensión (opcode1 = 0x00)
+        /* --- Protocolo distribuido (opcode extendido 0x00 0x00..0x03) --- */
         {"edmw4", {{0x00, 0x00, InstrSizeMode::FIXED_4, AddressingMode::NONE, nullptr}}},
         {"edmw6", {{0x00, 0x01, InstrSizeMode::FIXED_4, AddressingMode::NONE, nullptr}}},
-        {"edm", {{0x00, 0x02, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
-        {"hlt", {{0x00, 0x03, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"edm",   {{0x00, 0x02, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        {"hlt",   {{0x00, 0x03, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
 
-        /**
-         * ADD tiene 3 variantes.
-         * buscar con:
-         * auto& variants = InstrTable["add"];
+        /*
+         * Instrucciones aritmeticas con multiples variantes.
+         * Ejemplo de busqueda de variante:
          *
-         * for (auto& v : variants) {
-         *      if (matches_operands(v.sizeMode, operands))
-         *      return v; // esta es la variante correcta
-         * }
+         *   auto& variants = InstrTable["adds"];
+         *   for (auto& v : variants) {
+         *       if (matches_operands(v.sizeMode, operands))
+         *           return v;
+         *   }
+         *
+         * Cada grupo expone 3 variantes:
+         *   1. reg, reg    -> FIXED_4 / REG
+         *   2. reg, [mem]  -> MIXED_SIZE / INMED
+         *   3. reg, SIB    -> FIXED_6 / SIB
          */
+
+        /* --- ADDS / ADDU (suma con/sin signo) --- */
         {
             "adds", {
-                // addu/adds
-                // reg, reg
-                {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x05, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x06, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x07, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
         {
             "addu", {
-                // addu
-                // reg, reg
-                {0x00, 0x05, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x05, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x06, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x07, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x07, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
 
+        /* --- SUBS / SUBU (resta con/sin signo) --- */
         {
             "subu", {
-                // subu/subs
-                // reg, reg
-                {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x08, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x09, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x0A, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
         {
             "subs", {
-                // subu/subs
-                // reg, reg
-                {0x00, 0x08, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x08, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x09, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x0A, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x0A, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
+
+        /* --- MULS / MULU (multiplicacion con/sin signo) --- */
         {
             "muls", {
-                // mulu/muls
-                // reg, reg
-                {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x0B, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x0C, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x0D, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
         {
             "mulu", {
-                // mulu/muls
-                // reg, reg
-                {0x00, 0x0B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x0B, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x0C, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x0D, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x0D, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
+
+        /* --- DIVS / DIVU (division con/sin signo) --- */
         {
             "divu", {
-                // divu/divs
-                // reg, reg
-                {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x0E, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x0F, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x10, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
         {
             "divs", {
-                // divu/divs
-                // reg, reg
-                {0x00, 0x0E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+                {0x00, 0x0E, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x0F, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x10, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib}
+                {0x00, 0x10, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
             }
         },
+
+        /* --- CMPS / CMPU (comparacion con/sin signo) --- */
         {
-            "cmpu",
-            {
-                // cmpu/cmps
-                // reg, reg
-                {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+            "cmpu", {
+                {0x00, 0x11, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x12, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib},
+                {0x00, 0x13, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib},
             },
         },
         {
-            "cmps",
-            {
-                // cmpu/cmps
-                // reg, reg
-                {0x00, 0x11, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg},
-
-                // reg, [mem] || [mem], reg
+            "cmps", {
+                {0x00, 0x11, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
                 {0x00, 0x12, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x13, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_sib},
+                {0x00, 0x13, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib},
             },
         },
 
+        /* --- MOV: transferencia de datos --- */
         {
-            "mov",
-            {
-                // por definir
-                // mov
-                // reg, reg
-                {0x00, 0x14, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_mov_reg},
-
-                // reg, [mem] || [mem], reg
+            "mov", {
+                {0x00, 0x14, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_mov_reg},
                 {0x00, 0x15, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_mov_inmed},
-
-                // REG, SIB || SIB, REG
-                {0x00, 0x16, InstrSizeMode::FIXED_6, AddressingMode::SIB, emit_instr_mov_sib},
+                {0x00, 0x16, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_mov_sib},
             },
         },
+
+        /* --- MOVC / MOVCH: movimiento con bandera de modo (VM mem / host mem) --- */
         {
             "movc", {
-                // movc reg1, [reg2], flag  ||  movc [reg1], reg2, flag
+                /* movc reg1, [reg2], flag  ||  movc [reg1], reg2, flag -> acceso memoria VM */
                 {0x00, 0x1E, InstrSizeMode::FIXED_4, AddressingMode::MEM, emit_instr_movc},
-                // movc reg1, reg2, flag
+                /* movc reg1, reg2, flag -> modo registro a registro */
                 {0x00, 0x1F, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_movc},
             }
         },
         {
             "movch", {
-                // movch reg1, [reg2], flag  ||  movch [reg1], reg2, flag
+                /* movch reg1, [reg2], flag  ||  movch [reg1], reg2, flag -> acceso memoria host */
                 {0x00, 0x1E, InstrSizeMode::FIXED_4, AddressingMode::MEM, emit_instr_movc},
             }
         },
 
+        /* --- Logica bit a bit --- */
         {"and", {{0x00, 0x17, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
         {"or",  {{0x00, 0x18, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
         {"xor", {{0x00, 0x19, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
@@ -358,242 +361,287 @@ namespace Assembly::Bytecode {
         {"shr", {{0x00, 0x1C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
         {"sar", {{0x00, 0x1D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
 
+        /* loop <label>  - decrementa contador y salta si != 0. */
         {
-            "loop",
-            {
+            "loop", {
                 {0x00, 0x31, InstrSizeMode::FIXED_8, AddressingMode::INMED, nullptr},
             },
         },
 
+        /* calln <addr>  - llamada a funcion nativa por direccion inmediata. */
         {
-            "calln",
-            {
+            "calln", {
                 {0x00, 0x55, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_calln_inmmed},
             },
         },
-
     };
 
     /**
      * @class Assembler
      * @brief Convierte un AST generado por el parser en bytecode ejecutable para la VM.
      *
-     * El ensamblado se realiza en 3 fases:
-     *  - Primera pasada: recolección de símbolos (labels, offsets, tamaños).
-     *  - Segunda pasada: evaluación de expresiones y emisión de datos.
-     *  - Tercera pasada: emisión de instrucciones y resolución de saltos.
+     * El ensamblado se realiza en 3 fases conceptuales (la 2.a y 3.a estan fusionadas):
+     *  1. Primera pasada  (@c first_pass)  : recorre el AST para registrar todos los
+     *     simbolos (labels, secciones, directivas @e global / @e extern) y calcular
+     *     sus offsets definitivos.  Sin esta fase no es posible resolver saltos forward.
+     *  2. Segunda+tercera pasada (@c emit_pass) : emite datos (directivas @e db/dw/dd/dq)
+     *     e instrucciones en el mismo recorrido, ahora que los simbolos ya tienen
+     *     direccion conocida.
+     *
+     * Las relocalizaciones pendientes (saltos a simbolos de otros espacios) se
+     * registran en @c ctx y se resuelven durante el enlazado posterior.
+     *
+     * @note El ensamblador genera un unico buffer de bytecode secuencial.  El linker
+     *       es responsable de combinar multiples buffers en un ejecutable final.
      */
     class Assembler {
     public:
-        /// Tabla de símbolos generada en la primera pasada.
+        /// Tabla de simbolos construida en la primera pasada: nombre -> puntero a Label.
         std::unordered_map<std::string, Label *> symbol_table;
 
-        /// Buffer de salida donde se escribe el bytecode final.
+        /// Buffer de salida donde se escribe el bytecode final byte a byte.
         ByteWriter output;
 
-        /**
-         * Contexto del ensamblador
-         */
+        /// Contexto global del ensamblador: espacios, secciones, labels y relocalizaciones.
         Context ctx{};
 
-        /**
-         * Seccion que inspeccion actualmente, esto va cambiando a lo largo del programa
-         */
+        /// Seccion actualmente activa; cambia al procesar directivas @e @Section.
         Section *current_section = nullptr;
 
-        /**
-         * Label analizada actualmente por el ensamblador, esta variable va cambiando a lo largo de la ejecuccion
-         * del ensamblador y solo se uso de cursor interno
-         */
+        /// Label actualmente analizada; se usa como cursor interno durante la emision.
         Label *current_label = nullptr;
 
         /**
          * @brief Constructor del ensamblador.
          *
-         * Inicializa las estructuras internas, limpia buffers y establece
-         * la dirección base por defecto.
+         * Inicializa las estructuras internas, vacia el buffer de salida y
+         * establece la direccion base por defecto (0x0000).
          */
         Assembler();
 
+        /**
+         * @brief Calcula el tamano final de cada label tras la primera pasada.
+         *
+         * Debe llamarse despues de @c first_pass y antes de @c emit_pass para
+         * que cada label conozca cuantos bytes ocupa en el bytecode.
+         */
         void compute_label_sizes();
 
         /**
-         * @brief Ensambla un AST completo en un buffer de bytecode.
+         * @brief Ensambla un AST completo y devuelve el bytecode resultante.
          *
-         * Ejecuta las 3 fases del ensamblado:
-         *  1. Recolección de símbolos.
-         *  2. Emisión de datos.
-         *  3. Emisión de instrucciones.
+         * Ejecuta las 3 fases en orden:
+         *  1. @c first_pass  sobre cada nodo raiz.
+         *  2. @c compute_label_sizes.
+         *  3. @c emit_pass sobre cada nodo raiz.
          *
-         *  la 2 y 3 ahora se han fusionado
-         *
-         * @param ast Lista de nodos raíz del AST.
-         * @return Vector de bytes con el bytecode final.
+         * @param ast Lista de nodos raiz del AST generado por el parser.
+         * @return Vector de bytes con el bytecode listo para enlazar o ejecutar.
          */
         std::vector<uint8_t> assemble(const std::vector<std::unique_ptr<vm::ASTNode> > &ast);
 
         /**
-         * Aqui se han fusionado la segunda y tercera fase. La primera debe
-         * hacerse aparte ya que primero hay que saber el tamaño de las cosas
-         * para poder calcular los desplazamientos y offsets
-         * @param node Nodo actual del AST.
+         * @brief Segunda+tercera pasada: emite datos e instrucciones en el buffer.
+         *
+         * La segunda y tercera fase estan fusionadas porque, una vez que todos los
+         * simbolos tienen offsets definitivos (tras @c first_pass), datos e
+         * instrucciones pueden emitirse en un unico recorrido.
+         *
+         * @param node Nodo actual del AST a procesar.
          */
         void emit_pass(const vm::ASTNode *node);
 
         /**
-         * @brief Obtiene el tamaño en bytes de una directiva de datos.
+         * @brief Devuelve el tamano en bytes de una directiva de datos.
          *
-         * @param dir Nombre de la directiva (db, dw, dd, dq, ptr).
-         * @return Tamaño en bytes de un elemento de esa directiva.
+         * @param dir Nombre de la directiva: "db" (1), "dw" (2), "dd" (4), "dq" (8), "ptr" (8).
+         * @return Numero de bytes que ocupa un elemento de esa directiva.
          */
         size_t size_of_directive(const std::string &dir) const;
 
         /**
-         * @brief Emite un valor numérico según la directiva especificada.
+         * @brief Emite un valor numerico segun la directiva indicada.
          *
-         * El valor se escribe en little-endian y se avanza el offset interno.
+         * El valor se escribe en formato little-endian en el buffer de salida
+         * y se avanza el offset interno del ensamblador.
          *
-         * @param dir Directiva de datos (db, dw, dd, dq, ptr).
-         * @param value Valor numérico ya evaluado.
+         * @param dir   Directiva de datos ("db", "dw", "dd", "dq", "ptr").
+         * @param value Valor numerico ya evaluado que se escribira.
          */
         void emit_directive(const std::string &dir, uint64_t value);
 
         /**
-         * @brief Emite los datos de una declaración de datos (DataDecl).
+         * @brief Emite los datos de un nodo @c DataDecl del AST.
          *
-         * Las cadenas se emiten carácter a carácter.
-         * Las expresiones numéricas se evalúan y se emiten con emit_directive().
+         * Las cadenas de texto se emiten caracter a caracter (sin nulo terminal
+         * a menos que sea explicito).  Las expresiones numericas se evaluan con
+         * @c eval_expr y se pasan a @c emit_directive.
          *
-         * @param data Nodo DataDecl del AST.
+         * @param data Nodo @c DataDecl del AST con la lista de valores a emitir.
          */
         void emit_data(const vm::DataDecl *data);
 
         /**
-         * @brief Selecciona la variante correcta de una instrucción según sus operandos.
+         * @brief Selecciona la variante correcta de una instruccion segun sus operandos.
          *
-         * Cada mnemónico puede tener múltiples variantes (diferentes opcodes y tamaños).
-         * Esta función elige la variante adecuada.
+         * Varias instrucciones (mov, add, sub...) tienen multiples codificaciones.
+         * Esta funcion recorre el vector de variantes en @c InstrTable y elige la que
+         * coincide con el modo de direccionamiento de los operandos proporcionados.
          *
-         * @param mnemonic Nombre de la instrucción (add, sub, jmp, etc.).
-         * @param ops Lista de operandos de la instrucción.
-         * @return Referencia a la variante seleccionada.
+         * @param mnemonic Nombre de la instruccion (p.ej. "adds", "mov", "jmp").
+         * @param ops      Lista de operandos del nodo instruccion en el AST.
+         * @return Referencia constante a la @c InstrInfo de la variante seleccionada.
+         * @throws std::runtime_error si no existe ninguna variante compatible.
          */
         const InstrInfo &select_variant(const std::string &                               mnemonic,
                                         const std::vector<std::unique_ptr<vm::ASTNode> > &ops) const;
 
         /**
-         * @brief Emite una instrucción al buffer de salida.
+         * @brief Emite una instruccion completa al buffer de salida.
          *
-         * Escribe opcode1, opcionalmente opcode2, y luego los operandos
-         * según el formato de la VM.
+         * Escribe opcode1, luego opcode2 si la instruccion es extendida (opcode1==0x00),
+         * y a continuacion los operandos segun el formato definido en @c InstrInfo.
          *
-         * @param instr Nodo Instruction del AST.
+         * @param instr Nodo @c Instruction del AST con mnemotecnico y operandos.
          */
         void emit_instruction(const vm::Instruction *instr);
 
+        /**
+         * @brief Evalua un operando del AST y devuelve su valor numerico de 64 bits.
+         *
+         * Resuelve registros, inmediatos, referencias a labels y expresiones
+         * compuestas delegando en @c eval_expr cuando el operando es un @c ExprNode.
+         *
+         * @param op Nodo operando del AST.
+         * @return Valor numerico de 64 bits sin signo del operando evaluado.
+         */
         uint64_t eval_operand(const vm::ASTNode *op);
 
         /**
-         * @brief Evalúa una expresión del AST y devuelve su valor numérico.
+         * @brief Evalua una expresion del AST y devuelve su valor numerico.
          *
          * Soporta:
-         *  - Literales numéricos
-         *  - Labels
-         *  - Expresiones binarias (+, -, *, /)
+         *  - Literales numericos enteros y hexadecimales.
+         *  - Referencias a labels (se sustituyen por su offset).
+         *  - Expresiones binarias con operadores: +, -, *, /.
          *
-         * @param expr Nodo de expresión.
-         * @return Valor numérico resultante.
+         * @param expr Nodo @c ExprNode del AST que representa la expresion.
+         * @return Valor numerico de 64 bits resultado de la evaluacion.
+         * @throws std::runtime_error si la expresion contiene un operador no soportado.
          */
         uint64_t eval_expr(vm::ExprNode *expr);
 
         /**
-         * @brief Primera pasada: recolección de símbolos.
+         * @brief Primera pasada: recoleccion de simbolos y calculo de offsets.
          *
-         * Asigna direcciones a labels, datos y bloques de código.
+         * Recorre el AST y registra en @c ctx todas las labels, secciones y
+         * espacios, asignando a cada uno su offset definitivo en el bytecode.
+         * Tambien procesa directivas pseudo-instruccion (@e global, @e extern, etc.).
          *
-         * @param node Nodo actual del AST.
-         * @param offset Offset acumulado.
+         * @param node   Nodo actual del AST a analizar.
+         * @param offset Offset acumulado (se actualiza en cada llamada recursiva).
          */
         void first_pass(const vm::ASTNode *node, uint64_t &offset);
 
+        /**
+         * @brief Aplica una anotacion del AST al contexto del ensamblador.
+         *
+         * Despacha el procesado de la anotacion a traves de @c annotation_handlers,
+         * que modifica @c ctx segun la directiva anotacion (@e @SpaceAddress,
+         * @e @Section, @e @Format, @e @InitPc, @e @Import...).
+         *
+         * @param annotation Nodo @c AnnotationNode del AST con nombre y argumentos.
+         */
         void apply_annotation(const vm::AnnotationNode *annotation);
 
+        /**
+         * @brief Procesa una directiva pseudo-instruccion (global, extern, bits...).
+         *
+         * Interpreta el nodo instruccion como una directiva de control del ensamblador
+         * en lugar de una instruccion ejecutable y actualiza el estado interno del
+         * ensamblador en consecuencia.
+         *
+         * @param instr Nodo @c Instruction del AST cuyo mnemotecnico esta en
+         *              @c PseudoInstructions.
+         */
         void apply_directive(const vm::Instruction *instr);
 
     private:
     };
 
     /**
-     * Crea una ast nuevo, combinando el ast original y el de los archivos importados. Para
-     * esto
-     *    - Solo movimientos.
-     *    - No se duplica memoria, no se duplican nodos, solo se mueven.
-     *    - Los imports desaparecen y son reemplazados por los nodos reales
-     *          del archivo importado.
+     * @brief Expande recursivamente los nodos @c ImportNode de un AST, sustituyendolos
+     *        por los nodos del archivo importado.
      *
-     *  Significa:
-     *      - Toma el AST original.
-     *      - Toma el AST importado.
-     *      - Los fusiona en un nuevo vector result.
-     *      - Mueve todos los nodos al nuevo AST.
-     *      - Reemplaza el AST original por el nuevo.
+     * Algoritmo (solo movimientos, sin copias ni duplicacion de nodos):
+     *  1. Recorre @p ast nodo a nodo.
+     *  2. Si encuentra un @c ImportNode cuyo archivo no ha sido procesado todavia:
+     *     a. Lee el archivo fuente.
+     *     b. Lo lexifica y parsea obteniendo un nuevo AST.
+     *     c. Llama a @c resolve_imports recursivamente sobre el AST importado
+     *        (para resolver imports anidados).
+     *     d. Inserta todos los nodos resultantes en el AST final.
+     *  3. Si el archivo ya fue importado (@p imported contiene su ruta), lo ignora
+     *     para evitar inclusiones multiples e importaciones ciclicas.
+     *  4. Los nodos que no son @c ImportNode se copian directamente al resultado.
+     *  5. Al terminar, @p ast es reemplazado por el vector resultado fusionado.
      *
-     *      AST original:
-     *          [A, B, import C, D]
+     * Ejemplo:
+     * @verbatim
+     *   AST original : [A, B, import C, D]
+     *   AST de C     : [X, Y, Z]
+     *   AST final    : [A, B, X, Y, Z, D]
+     * @endverbatim
      *
-     *      AST de C:
-     *          [X, Y, Z]
+     * @warning Si algun nodo guarda punteros laterales a otros nodos del mismo AST
+     *          (no solo a sus hijos), esas referencias quedaran invalidadas tras el
+     *          movimiento.  En un AST puramente jerarquico esto no supone ningun problema.
      *
-     *      AST final:
-     *          [A, B, X, Y, Z, D]
-     *
-     * Si algún nodo del AST guarda punteros a otros nodos, este metodo rompe esas referencias.
-     * Pero si el AST es puramente jerárquico (cada nodo solo conoce a sus hijos), entonces no hay problema
-     *
-     * @param ast archivo original que import
-     * @param imported
+     * @param ast      AST original que puede contener nodos @c ImportNode; se modifica
+     *                 in-place reemplazando su contenido por el AST expandido.
+     * @param imported Conjunto de rutas de archivo ya procesadas; se actualiza durante
+     *                 la recursion para evitar importaciones duplicadas.
      */
     static void resolve_imports(std::vector<std::unique_ptr<vm::ASTNode> > &ast,
                                 std::unordered_set<std::string> &           imported) {
         std::vector<std::unique_ptr<vm::ASTNode> > result;
 
         for (auto &node: ast) {
-            // si se encontro un nodo de tipo Import
             if (auto imp = dynamic_cast<vm::ImportNode *>(node.get())) {
                 std::string file = imp->filename;
 
-                // mirar si ya se añadio
+                /* evitar importaciones multiples del mismo archivo */
                 if (imported.find(file) != imported.end())
-                    continue; // evitar múltiples inclusiones
+                    continue;
 
                 imported.insert(file);
 
-                // Leer archivo
+                /* leer archivo fuente importado */
                 std::ifstream f(file);
                 std::string   code((std::istreambuf_iterator<char>(f)),
                                    std::istreambuf_iterator<char>());
 
-                // Lex + parse del codigo importado
+                /* lex + parse del codigo importado */
                 vm::Lexer  lx(code);
                 vm::Parser px(lx);
                 auto       imported_ast = px.parse();
 
-                // Expandir imports recursivamente
+                /* expandir imports anidados recursivamente */
                 resolve_imports(imported_ast, imported);
 
-                // Insertar nodos importados
+                /* insertar nodos del archivo importado en el resultado */
                 for (auto &n: imported_ast)
                     result.push_back(std::move(n));
-            }
-            // Si el nodo NO es un import, lo copia al AST final.
-            else {
+            } else {
+                /* nodo normal: pasar al AST final sin modificacion */
                 result.push_back(std::move(node));
             }
         }
 
-        // Reemplazar AST original
+        /* reemplazar el AST original por el resultado fusionado */
         ast = std::move(result);
     }
-}
+
+} // namespace Assembly::Bytecode
 
 #endif // PARSER_TO_BYTECODE_H

@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file connection.cpp
+ * @brief Implementacion de la clase base @c Connection para sockets TCP en VestaVM.
+ *
+ * Implementa el ciclo de vida basico: constructor con descriptor de socket,
+ * destructor que llama a @c stop(), y los metodos @c start() y @c stop().
+ * Las subclases (@c TLSConnection) sobreescriben @c read_data() y @c write_data().
+ */
 #include "net/connection.h"
 #include <iostream>
 
@@ -50,9 +58,9 @@ void Connection::handle() {
         int n = read_data(buffer);
         if (n <= 0) break;
 
-        buffer.resize(n); // recorta el buffer al tamaño real recibido
+        buffer.resize(n); // recorta el buffer al tamano real recibido
         process_request(buffer);
-        buffer.resize(4096); // vuelve al tamaño inicial para la proxima lectura
+        buffer.resize(4096); // vuelve al tamano inicial para la proxima lectura
     }
 
     stop();

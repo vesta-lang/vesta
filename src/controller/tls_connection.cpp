@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file tls_connection.cpp
+ * @brief Implementacion de @c TLSConnection: conexion TCP con capa TLS/SSL.
+ *
+ * Extiende @c Connection redefiniendo @c read_data() y @c write_data() para
+ * usar @c SSL_read() / @c SSL_write() en lugar de @c recv() / @c send().
+ * El handshake TLS se realiza antes de crear el objeto @c TLSConnection.
+ */
 #include "controller/tls_connection.h"
 #include <iostream>
 

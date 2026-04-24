@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file tcp_server.cpp
+ * @brief Implementacion del servidor TCP (con soporte TLS opcional) de VestaVM.
+ *
+ * Implementa @c TCPServer: apertura del socket servidor, bucle de aceptacion
+ * de conexiones entrantes, creacion de objetos @c Connection (o @c TLSConnection),
+ * y shutdown ordenado.  Usa OpenSSL si el servidor se construye con TLS habilitado.
+ */
 #include "net/tcp_server.h"
 #include <iostream>
 #include <cstring>

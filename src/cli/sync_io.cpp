@@ -1,20 +1,28 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+* VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
 
+/**
+ * @file sync_io.cpp
+ * @brief Implementacion de las utilidades de E/S sincronizada de VestaVM.
+ *
+ * Implementa @c vesta::SyncOStream, @c vesta::DebugLogger y las funciones
+ * auxiliares de formateo y volcado hexadecimal del namespace @c vesta.
+ * Garantiza salida thread-safe mediante @c cout_mutex.
+ */
 #include "cli/sync_io.h"
 
 namespace vesta {
-    // Definición del mutex global
+    // Definicion del mutex global
     std::mutex cout_mutex;
 
     void print_threadsafe(const std::string &s) {

@@ -1,16 +1,25 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
- * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
-#ifndef RUNTIME_H
+
+/**
+ * @file runtime.h
+ * @brief Declaracion de la maquina virtual principal de VestaVM.
+ *
+ * Declara @c VM: punto de entrada del runtime; gestiona el pool de hilos,
+ * los schedulers, la memoria compartida y el ciclo de vida de los
+ * procesos virtuales (carga, arranque, parada).
+ */#ifndef RUNTIME_H
 #define RUNTIME_H
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -30,213 +39,202 @@
 
 #include "runtime/pid.h"
 
+/** @brief Version actual del formato de bytecode .velb soportado por esta VM. */
 #define VERSION_VM 0
 
 namespace loader {
-    class Loader;
+    class Loader; ///< Cargador de archivos .velb (declaracion adelantada)
 }
 
 namespace runtime {
-    class ManageVM;
-    class VM;
-    class Scheduler;
-    class ProcessVM;
+    class ManageVM;  ///< Gestor de multiples instancias VM (declaracion adelantada)
+    class VM;        ///< Instancia de la maquina virtual (declaracion adelantada)
+    class Scheduler; ///< Planificador de procesos (declaracion adelantada)
+    class ProcessVM; ///< Proceso virtual (declaracion adelantada)
 
     /**
-     * Esta clase representa una instancia de VM.
-     * Cada instancia de VM usa un hilo real para ejecutar el codigo dado.
-     * Por cada instancia de VM tendremos un hilo por tanto tendremos tantos
-     * hilos como instancias, ademas de un hilo principal que sera el que envie y reciba
-     * datos a maquina externas e internas.
+     * @class VM
+     * @brief Instancia de la maquina virtual VestaVM.
      *
-     * El hilo principal puede crear nuevas instancias o el usuario podra crear nuevas
+     * Cada objeto VM gestiona un conjunto de schedulers (hilos nativos) que
+     * ejecutan procesos virtuales en paralelo.  La VM no es el proceso: es el
+     * contenedor que coordina N schedulers a traves de un ThreadPool.
+     *
+     * Ciclo de vida tipico:
+     *   1. VM vm(mgr, id, n_schedulers) -- construir la instancia.
+     *   2. vm.start()                   -- lanzar los schedulers (no bloquea).
+     *   3. vm.spawn_process()           -- crear un proceso virtual.
+     *   4. vm.make_ready(pid)           -- poner el proceso en estado READY.
+     *   5. vm.wait()                    -- bloquear hasta que los schedulers terminen.
+     *   6. vm.stop()                    -- senyal de parada cooperativa.
      */
     class VM {
     public:
-        /**
-         * Pool de hilos para los gestores de procesos
-         */
-        ThreadPool pool;
+        ThreadPool pool; ///< Pool de hilos que ejecuta los schedulers
 
         /**
-         * Siguiente gestor de procesos, los procesos se reparten de forma
-         * igualitaria entre todos los gestores de procesos.
+         * @brief Indice del proximo scheduler al que se asignara un proceso nuevo.
+         *
+         * Se incrementa en modulo num_schedulers para distribuir procesos de forma
+         * round-robin entre los schedulers disponibles.
          */
         size_t next_sched = 0;
 
+        std::vector<std::unique_ptr<Scheduler>> schedulers; ///< Schedulers de esta instancia (uno por hilo nativo)
+
         /**
-         * Gestores de procesos de la instancia de la VM
+         * @brief Futures de los schedulers generados en start().
+         *
+         * Cada future representa la tarea del ThreadPool asociada a un scheduler.
+         * Se usan en wait() para bloquear hasta que todos terminen.
          */
-        std::vector<std::unique_ptr<Scheduler> > schedulers;
+        std::vector<std::shared_future<void>> scheduler_futures;
+
+        vm::ArenaManager &manager_mem_public; ///< Gestor de memoria publica compartido con el ManageVM
+
+        std::unique_ptr<loader::Loader> loader_priv; ///< Cargador privado de esta instancia VM
+
+        loader::Loader &loader_public; ///< Cargador publico del ManageVM que contiene esta instancia
+
+        uint64_t id; ///< Identificador unico de esta instancia VM dentro del ManageVM
+
+        ManageVM &mgr_vm; ///< Referencia al gestor de instancias que posee esta VM
 
         /**
-         * Futures de cada gestor de procesos, se generar al llamar
-         * a start junto a los valores del vector schedulers
-         */
-        std::vector<std::shared_future<void> > scheduler_futures;
-
-        /**
-         * Manager de memoria "publico" del manager de instancias
-         */
-        vm::ArenaManager &manager_mem_public;
-
-        /**
-         * Cada instancia de loader permite manejar sus propias cargas
-         */
-        std::unique_ptr<loader::Loader> loader_priv;
-
-        /**
-         * Loader "publico" del manager de instancias.
-         */
-        loader::Loader &loader_public;
-
-        uint64_t id;
-
-        /**
-         * Cada instancia tiene asignada un manager general de instancias
-         */
-        ManageVM &mgr_vm;
-
-        /**
-         * Permite inicializar todos los gestores de procesos indicados.
-         * Se ponen en ejecuccion al llamar a start.
-         * @param mgr_vm manager publico que contiene esta instancia
-         * @param id_vm id de la instancia.
-         * @param num_schedulers numero de hilos nativos que usar para gestionar
-         * procesos virtuales.
+         * @brief Construye la instancia VM e inicializa los schedulers.
+         *
+         * Crea @p num_schedulers schedulers y los deja listos para lanzar con start().
+         *
+         * @param mgr_vm         Gestor de instancias que posee esta VM.
+         * @param id_vm          Identificador unico de esta instancia.
+         * @param num_schedulers Numero de schedulers (hilos nativos) a crear.
          */
         VM(ManageVM &mgr_vm, uint64_t id_vm, size_t num_schedulers);
 
+        /**
+         * @brief Genera una representacion textual de la instancia VM.
+         * @return Cadena con el ID y el estado de los schedulers.
+         */
         [[nodiscard]] std::string to_string() const;
 
         /**
-         * @brief Imprime estado completo de la VM (debug)
+         * @brief Imprime el estado completo de la VM en stdout (uso en depuracion).
          */
         void print();
 
         /**
-         * @brief Inicia la máquina virtual y lanza los schedulers.
+         * @brief Lanza todos los schedulers y comienza la ejecucion de procesos.
          *
-         *
-         * Este metodo NO bloquea. Para esperar a que la VM finalice,
-         * debe llamarse posteriormente a `wait()`.
-         *
-         * @param num_schedulers Número de schedulers a crear y lanzar.
+         * Este metodo NO bloquea.  Para esperar a que la VM finalice debe
+         * llamarse a wait() despues.
          */
         void start();
 
+        /**
+         * @brief Solicita la parada cooperativa de todos los schedulers.
+         *
+         * Pone should_kill=true en cada scheduler y despierta a los que esten
+         * bloqueados en el semaforo de espera.
+         */
         void stop();
 
         /**
-         * @brief Obtiene un puntero al proceso asociado a un PID global.
+         * @brief Devuelve un puntero al proceso con el PID global indicado.
          *
-         * El PID global contiene:
-         *   - `scheduler_id`: identifica el scheduler propietario del proceso.
-         *   - `local_pid`: identifica el proceso dentro de ese scheduler.
+         * Localiza el scheduler propietario usando pid.scheduler_id y delega en
+         * el en la busqueda del proceso local.  No verifica la validez del PID.
          *
-         * Este metodo localiza el scheduler correspondiente y devuelve
-         * el proceso asociado. No realiza comprobaciones de validez del PID.
-         *
-         * @param pid PID global del proceso.
-         * @return Puntero al proceso, o nullptr si no existe.
+         * @param pid PID global del proceso a buscar.
+         * @return    Puntero al proceso, o nullptr si no existe.
          */
         ProcessVM *get_process(GlobalPID pid);
 
         /**
-         * @brief Bloquea el hilo que creó la VM hasta que todos los schedulers finalicen.
+         * @brief Bloquea el hilo llamante hasta que todos los schedulers finalicen.
          *
-         * Este mwtodo espera a que todas las tareas asociadas a los schedulers
-         * hayan terminado su ejecución. La VM puede finalizar por:
-         *
-         * Este mwtodo es el equivalente a `join()` en un sistema de hilos.
+         * Equivale a join() sobre el conjunto de scheduler_futures.
+         * La VM puede finalizar porque todos sus procesos terminaron o porque
+         * se llamo a stop().
          */
         void wait();
 
         /**
-         * @brief Indica si todos los gestores de procesos (schedulers) han finalizado su ejecución.
+         * @brief Indica si todos los schedulers han terminado su ejecucion.
          *
-         * Este metodo consulta el estado interno del ThreadPool asociado a la VM para determinar
-         * si ya no queda ninguna tarea en ejecución ni tareas pendientes. Dado que cada scheduler
-         * se ejecuta como una tarea dentro del ThreadPool, el estado "idle" del pool implica que:
+         * Consulta el estado idle del ThreadPool.  Un pool idle implica que:
+         *   - Todos los schedulers salieron de run_loop().
+         *   - No hay procesos en ejecucion dentro de la VM.
+         *   - No hay tareas pendientes en el pool.
          *
-         *   - Todos los schedulers han salido de su metodo run_loop().
-         *   - No quedan procesos en ejecución dentro de la VM.
-         *   - No existen tareas pendientes relacionadas con la planificación.
-         *
-         * Este metodo es especialmente útil para:
-         *   - Detectar cuándo la VM ha terminado completamente su actividad.
-         *   - Implementar un apagado limpio (shutdown) sin hilos colgados.
-         *   - Evitar estados inconsistentes donde la VM aparenta estar viva
-         *     aunque los schedulers ya hayan terminado.
-         *
-         * @note Este metodo es thread-safe siempre que ThreadPool::idle() lo sea.
-         * @note No bloquea: simplemente inspecciona el estado actual del ThreadPool.
-         *
-         * @return true  si no queda ningún scheduler activo ni tareas pendientes.
-         * @return false si aún hay schedulers ejecutándose o tareas en cola.
+         * @note No bloquea; inspecciona el estado actual del pool.
+         * @return true si no queda ningun scheduler activo ni tareas pendientes.
          */
         bool all_schedulers_dead();
 
         /**
-         * Permite saber si hay procesos vivos en la VM aun
-         * @return true si aun hay procesos vivos, en caso contrario false.
+         * @brief Indica si existe al menos un proceso vivo en algun scheduler.
+         * @return true si algun proceso esta en un estado distinto a DEAD o HALT.
          */
         bool has_alive_processes();
 
         /**
-         * @brief Marca un proceso como listo para ejecutarse.
+         * @brief Marca un proceso como READY para que el scheduler pueda ejecutarlo.
          *
-         * Inserta el PID en la cola de procesos listos del scheduler correspondiente.
-         * Esto permite que el proceso sea seleccionado por el planificador en la
-         * siguiente iteración del run loop.
+         * Inserta el PID en la cola ready_queue del scheduler propietario.
+         * Puede llamarse desde cualquier hilo (es thread-safe).
          *
          * @param pid PID global del proceso que debe pasar a estado READY.
          */
         void make_ready(GlobalPID pid);
 
-
         /**
-         * Permite crear un nuevo proceso en un gestor de procesos.
-         * @return PID del proceso creado en ese gestro de procesos.
+         * @brief Crea un nuevo proceso virtual en el scheduler con menos carga.
+         *
+         * Elige el scheduler segun next_sched (round-robin) y llama a spawn()
+         * en ese scheduler.
+         *
+         * @return PID global del proceso recien creado.
          */
         GlobalPID spawn_process();
 
+        /**
+         * @brief Reinicia el estado interno de la VM sin destruirla.
+         */
         void reset();
 
+        /**
+         * @brief Genera un resumen compacto de la instancia VM.
+         * @return Cadena con el ID en hexadecimal.
+         */
         std::string vm_summary() const {
             std::ostringstream ss;
-
-            ss << "ID=" << vesta::hex64((uint64_t) id) << "\n";
-
+            ss << "ID=" << vesta::hex64((uint64_t) id) << "\n"; // mostrar ID en hexadecimal
             return ss.str();
         }
 
-        /**
-         * Almacena el estado actual de la instancia, si es true, tiene gestores
-         * de procesos ejecutandose, pero si es false, entonces es que la maquina
-         * no se ejecuta y por tanto no hay hilos en ejecuccion.
-         */
-        std::atomic<bool> vm_running{true};
+        std::atomic<bool> vm_running{true}; ///< true mientras haya schedulers en ejecucion
 
-        /**
-         * Numero de gestores de procesos a crear, cada gestor de proceso
-         * usa un hilo nativo.
-         */
-        size_t num_schedulers;
+        size_t num_schedulers; ///< Numero de schedulers creados al inicializar la VM
 
     private:
-        /**
-         * Mutex unico para cada instancia de VM. Con esto tenemos seguridad de que solo un hilo
-         * modifique el estado a la vez.
-         */
-        std::mutex state_lock;
+        std::mutex state_lock; ///< Mutex para serializar cambios de estado de la instancia
     };
 
 
+    /**
+     * @brief Vuelca en stdout el contenido de una region de memoria virtual.
+     *
+     * Itera las paginas del rango [@p vaddr, @p vaddr + @p size) resolviendo
+     * cada una a traves del TLB e imprimiendo su direccion de host y los primeros
+     * bytes en formato hexdump.  Las paginas no mapeadas se marcan como "not mapped".
+     *
+     * @param tlb   TLB del proceso cuya memoria se quiere volcar.
+     * @param vaddr Direccion virtual de inicio del rango.
+     * @param size  Tamanyo en bytes del rango a volcar.
+     */
     static void dump_vm_region(tlb::LazyHybridTLB *tlb, uint64_t vaddr, size_t size) {
-        uint64_t start = vaddr & ~0xFFFULL; // Alinear a página
-        uint64_t end   = (vaddr + size + 0xFFFULL) & ~0xFFFULL;
-
+        uint64_t start = vaddr & ~0xFFFULL;                    // alinear inicio a limite de pagina
+        uint64_t end   = (vaddr + size + 0xFFFULL) & ~0xFFFULL; // alinear fin al siguiente limite de pagina
 
         vesta::scout() << "==================== VM Memory Dump ====================\n";
         vesta::scout() << "Virtual region: 0x" << std::hex << start
@@ -244,27 +242,25 @@ namespace runtime {
                 << "  (" << std::dec << size << " bytes)\n\n";
 
         for (uint64_t page = start; page < end; page += 0x1000) {
-            void *host = tlb->get_real_host_ptr_of_vptr(page);
+            void *host = tlb->get_real_host_ptr_of_vptr(page); // resolver pagina a puntero de host
 
             if (!host) {
-                vesta::scout() << "  [0x" << std::hex << page << "]  ->  <not mapped>\n";
+                vesta::scout() << "  [0x" << std::hex << page << "]  ->  <not mapped>\n"; // pagina no mapeada
                 continue;
             }
 
-            vesta::scout() << "  [0x" << std::hex << page << "]  ->  host=" << host << "\n";
+            vesta::scout() << "  [0x" << std::hex << page << "]  ->  host=" << host << "\n"; // mostrar puntero de host
 
-            // Mostrar primeros 16 bytes en formato hexdump
-            const auto *p = static_cast<uint8_t *>(host);
+            const auto *p = static_cast<uint8_t *>(host); // puntero de lectura al inicio de la pagina
 
             vesta::scout() << "       data: ";
-
-            vesta::scout() << vesta::dump(p, size);
-
+            vesta::scout() << vesta::dump(p, size); // volcar bytes en formato hexdump
             vesta::scout() << "\n";
         }
 
         vesta::scout() << "================== End VM Memory Dump ==================\n";
     }
-}
 
-#endif //RUNTIME_H
+} // namespace runtime
+
+#endif // RUNTIME_H
