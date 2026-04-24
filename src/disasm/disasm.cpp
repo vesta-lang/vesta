@@ -23,7 +23,10 @@
  *   - Tabla primaria (1 byte): inc/dec (0x04), callvm (0x10), jmp (0x11), push (0x12),
  *     pop (0x13), xchg (0x14), jmpr (0x15), callvmr (0x16).
  *   - Tabla extendida (prefijo 0x00): MOV reg-reg (0x14), MOV imm (0x15), MOV SIB (0x16),
- *     ALU con tres modos (0x05-0x13), logica (0x17-0x1D), MOVC/MOVCH (0x1E-0x1F), HLT (0x03).
+ *     ALU con tres modos (0x05-0x13), logica (0x17-0x1D), MOVC/MOVCH (0x1E-0x1F), HLT (0x03),
+ *     corutinas yield/resume/spawn/swapctx (0xEC-0xEF),
+ *     flotante ZMM: fmow/fmov/fadd/fsub/fmul/fdiv/fcmp/fsqrt/fabs/fneg/fcvt/fmowi/fload/fstore
+ *     (0xF0-0xFC).
  *
  * Codificacion XCHG (primario 0x14):
  *   byte[2] y byte[3] codifican cada operando:
@@ -103,7 +106,43 @@ static std::string fmt_xchg_operand(uint8_t b) {
 }
 
 /**
+ * @brief Devuelve true si el opcode extendido es una instruccion ZMM-ZMM binaria.
+ *
+ * Instrucciones binarias ZMM: fmov (0xF0), fadd (0xF1), fsub (0xF2),
+ * fmul (0xF3), fdiv (0xF4), fcmp (0xF5).
+ *
+ * @param opc Segundo byte del opcode extendido.
+ * @return true si la instruccion opera sobre dos registros ZMM.
+ */
+static bool is_zmm_binary(uint8_t opc) {
+    return opc >= 0xF0 && opc <= 0xF5;
+}
+
+/**
+ * @brief Devuelve true si el opcode extendido es una instruccion ZMM unaria.
+ *
+ * Instrucciones unarias ZMM: fsqrt (0xF6), fabs (0xF7), fneg (0xF8).
+ *
+ * @param opc Segundo byte del opcode extendido.
+ * @return true si la instruccion opera sobre un unico registro ZMM.
+ */
+static bool is_zmm_unary(uint8_t opc) {
+    return opc >= 0xF6 && opc <= 0xF8;
+}
+
+/**
  * @brief Formatea los operandos de una instruccion extendida (prefijo 0x00).
+ *
+ * Cubre todas las instrucciones de la tabla extendida, incluyendo:
+ *   - ALU/MOV/MOVC (opcodes 0x03..0x1F)
+ *   - GETPROC/GETVM/GETMGR (0xC6..0xC8)
+ *   - Corutinas Modelo A: yield (0xEC), resume (0xED), spawn (0xEE)
+ *   - Fibras: swapctx (0xEF)
+ *   - Flotante ZMM-ZMM: fmov (0xF0), fadd-fcmp (0xF1..0xF5)
+ *   - Flotante unario:   fsqrt/fabs/fneg (0xF6..0xF8)
+ *   - Conversion:        fcvt/fcvt.ps (0xF9)
+ *   - Inmediato ZMM:     fmowi (0xFA, FIXED_11)
+ *   - Memoria ZMM:       fload (0xFB), fstore (0xFC)
  *
  * @param opc  Segundo byte de la instruccion (opcode extendido).
  * @param fmt  Descriptor del formato de instruccion.
@@ -121,7 +160,25 @@ static std::string fmt_ext_operands(
 
     switch (fmt->mode) {
         case AddressingMode::NONE:
-            break; // instrucciones sin operandos
+            break; // instrucciones sin operandos (yield, hlt, nop...)
+
+        case AddressingMode::INMED:
+            // fmowi: FIXED_11 = [0x00][0xFA][ctrl][imm64 LE (8 bytes)]
+            // ctrl (raw[2]): bits 7-6 = mode, bit 5 = is_f32, bits 3-0 = zmm_idx
+            // bytes raw[3..10] = bits IEEE 754 del double en little-endian
+            if (opc == 0xFA && isz >= 11) {
+                uint8_t  zmm_dst = raw[2] & 0x0F; // nibble bajo de ctrl = indice ZMM
+                uint64_t bits    = 0;
+                __builtin_memcpy(&bits, raw + 3, 8); // inmediato de 64 bits a partir de raw[3]
+                double   dval    = 0.0;
+                __builtin_memcpy(&dval, &bits, 8);   // reinterpretar como double IEEE 754
+                snprintf(buf, sizeof(buf),
+                         "f%u, 0x%016llx  ; %.17g",
+                         zmm_dst,
+                         (unsigned long long)bits,
+                         dval);
+            }
+            break;
 
         case AddressingMode::REG:
             if (opc == 0x1F || opc == 0x1E) {
@@ -133,8 +190,50 @@ static std::string fmt_ext_operands(
                 uint8_t r2   = b4 & 0x1F;          // registro de memoria
                 if (dir == 0) snprintf(buf, sizeof(buf), "r%u, [r%u], flag=%u", r1, r2, flag);
                 else          snprintf(buf, sizeof(buf), "[r%u], r%u, flag=%u", r2, r1, flag);
+            } else if (is_zmm_binary(opc) && isz == 4) {
+                // fmov, fadd, fsub, fmul, fdiv, fcmp: dos registros ZMM
+                // nibble bajo de raw[3] = ZMM destino
+                // nibble alto de raw[3] = ZMM fuente
+                uint8_t zmm_dst = raw[3] & 0xF;
+                uint8_t zmm_src = raw[3] >> 4;
+                snprintf(buf, sizeof(buf), "f%u, f%u", zmm_dst, zmm_src);
+            } else if (is_zmm_unary(opc) && isz == 4) {
+                // fsqrt fDst, fSrc / fabs fDst, fSrc / fneg fDst, fSrc
+                // nibble bajo de raw[3] = ZMM destino, nibble alto = ZMM fuente
+                uint8_t zmm_dst = raw[3] & 0xF;
+                uint8_t zmm_src = raw[3] >> 4;
+                snprintf(buf, sizeof(buf), "f%u, f%u", zmm_dst, zmm_src);
+            } else if (opc == 0xF9 && isz == 4) {
+                // fcvt / fcvt.ps: conversion GP<->ZMM
+                // bit 2 de ctrl (raw[2]) = s: 0=GP->ZMM, 1=ZMM->GP
+                // nibble bajo  de raw[3] = ZMM
+                // nibble alto  de raw[3] = GP
+                uint8_t s       = (raw[2] >> 2) & 0x1;
+                uint8_t zmm_reg = raw[3] & 0xF;
+                uint8_t gp_reg  = raw[3] >> 4;
+                if (s == 0) snprintf(buf, sizeof(buf), "f%u, r%u", zmm_reg, gp_reg);
+                else        snprintf(buf, sizeof(buf), "r%u, f%u", gp_reg,  zmm_reg);
+            } else if (opc == 0xFB && isz == 4) {
+                // fload fDst, rAddr: ZMM nibble bajo, GP nibble alto
+                uint8_t zmm_dst = raw[3] & 0xF;
+                uint8_t gp_addr = raw[3] >> 4;
+                snprintf(buf, sizeof(buf), "f%u, r%u", zmm_dst, gp_addr);
+            } else if (opc == 0xFC && isz == 4) {
+                // fstore rAddr, fSrc: GP nibble alto, ZMM nibble bajo
+                uint8_t zmm_src = raw[3] & 0xF;
+                uint8_t gp_addr = raw[3] >> 4;
+                snprintf(buf, sizeof(buf), "r%u, f%u", gp_addr, zmm_src);
+            } else if ((opc == 0xED || opc == 0xEE) && isz == 4) {
+                // resume rPID / spawn rAddr: un solo registro GP en nibble bajo
+                uint8_t r1 = raw[3] & 0xF;
+                snprintf(buf, sizeof(buf), "r%u", r1);
+            } else if (opc == 0xEF && isz == 4) {
+                // swapctx rDst, rSrc: nibble alto = destino, nibble bajo = origen
+                uint8_t r_src = raw[3] & 0xF;
+                uint8_t r_dst = raw[3] >> 4;
+                snprintf(buf, sizeof(buf), "r%u, r%u", r_dst, r_src);
             } else if (isz == 4) {
-                // instruccion reg-reg: ctrl[2] (mode 7-6), regs[3] (r1 nibble bajo, r2 nibble alto)
+                // instruccion reg-reg generica: ctrl[2] (mode 7-6), regs[3]
                 uint8_t ctrl = raw[2], regs = raw[3];
                 uint8_t mode = (ctrl >> 6) & 0x3;
                 uint8_t r1   = regs & 0xF, r2 = regs >> 4;

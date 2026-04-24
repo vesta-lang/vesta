@@ -97,6 +97,41 @@ namespace vm {
             return false; /* mas de un caracter tras el numero: no es registro */
         }
 
+        /* registros vectoriales escalares: f[0-15] */
+        if (lexeme[0] == 'f' && lexeme.size() >= 2) {
+            size_t i = 1;
+            while (i < lexeme.size() && isdigit((unsigned char)lexeme[i]))
+                i++;
+            if (i == lexeme.size() && i > 1) {
+                int n = std::stoi(lexeme.substr(1));
+                return (n >= 0 && n <= 15);
+            }
+        }
+
+        /* registros XMM (128 bits): xmm[0-15] */
+        if (lexeme.size() >= 4 && lexeme.substr(0, 3) == "xmm") {
+            try {
+                int n = std::stoi(lexeme.substr(3));
+                return (n >= 0 && n <= 15 && lexeme == "xmm" + std::to_string(n));
+            } catch (...) { return false; }
+        }
+
+        /* registros YMM (256 bits): ymm[0-15] */
+        if (lexeme.size() >= 4 && lexeme.substr(0, 3) == "ymm") {
+            try {
+                int n = std::stoi(lexeme.substr(3));
+                return (n >= 0 && n <= 15 && lexeme == "ymm" + std::to_string(n));
+            } catch (...) { return false; }
+        }
+
+        /* registros ZMM (512 bits): zmm[0-15] */
+        if (lexeme.size() >= 4 && lexeme.substr(0, 3) == "zmm") {
+            try {
+                int n = std::stoi(lexeme.substr(3));
+                return (n >= 0 && n <= 15 && lexeme == "zmm" + std::to_string(n));
+            } catch (...) { return false; }
+        }
+
         return false;
     }
 

@@ -1,0 +1,77 @@
+/*
+ * ejemplo_coro_spawn.vel
+ *
+ * Demuestra la instruccion SPAWN del Modelo A de concurrencia cooperativa.
+ *
+ * SPAWN crea un nuevo ProcessVM dentro del mismo scheduler, establece su
+ * PC a la direccion indicada y lo pone en estado READY.  El proceso padre
+ * continua ejecutandose; el hijo es planificado de forma cooperativa por
+ * el mismo scheduler.
+ *
+ * El PID del proceso hijo se codifica en 64 bits y se devuelve en R0:
+ *   bits 63..32 = scheduler_id
+ *   bits 31.. 0 = local_pid
+ *
+ * Limitacion actual: el proceso hijo comparte el scheduler del padre pero
+ * no hereda su espacio de memoria.  Para que el hijo ejecute codigo, la
+ * instruccion spawn recibe la direccion absoluta del punto de entrada
+ * (resuelta en tiempo de enlace con @Absolute).
+ *
+ * Patron de uso:
+ *   mov   r1, @Absolute("all.fn_hijo")
+ *   spawn r1         ; r0 = PID codificado del hijo  (!=0 si tuvo exito)
+ *   ; guardar PID si se va a usar con resume mas adelante
+ *   mov   r10, r0
+ *   hlt              ; el padre termina; el hijo sigue en la cola
+ *
+ * Resultado esperado al llegar a hlt:
+ *   r0 != 0   (PID codificado del proceso hijo, distinto de cero)
+ *   r1  tiene la direccion de fn_hijo (preservada antes del spawn)
+ *
+ * Compilar y ejecutar:
+ *   vesta --build ejemplo_coro_spawn.vel -o ejemplo_coro_spawn
+ *   vesta --run   ejemplo_coro_spawn.velb --stats
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+// -----------------------------------------------------------------------
+// Proceso padre
+// -----------------------------------------------------------------------
+code:
+    // Cargar la direccion de entrada del proceso hijo
+    mov   r1, @Absolute("all.fn_hijo")
+
+    // Crear el proceso hijo; r0 recibe el PID codificado (!=0)
+    spawn r1
+
+    // En este punto:
+    //   r0 = PID del hijo  (scheduler_id<<32 | local_pid)
+    //   El hijo esta en la cola READY esperando su turno
+    hlt
+end_code:
+
+// -----------------------------------------------------------------------
+// Punto de entrada del proceso hijo
+// Nota: el hijo no hereda la memoria del padre; en un uso real se debe
+// proveer codigo en su espacio de direcciones o usar un mecanismo de
+// memoria compartida.  Este stub simplemente para para ilustrar el patron.
+// -----------------------------------------------------------------------
+fn_hijo:
+    // El hijo puede realizar trabajo cooperativo con yield antes de haltar
+    mov   r0, 0xCAFE     // valor de identificacion del hijo
+    yield                // ceder CPU al planificador
+    hlt
+end_fn_hijo:

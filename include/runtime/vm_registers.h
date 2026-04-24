@@ -214,6 +214,73 @@ namespace runtime {
     };
 
     /**
+     * @brief Registro vectorial de 512 bits con aliasing jerarquico ZMM/YMM/XMM/F.
+     *
+     * Almacena 64 bytes alineados a 64 bytes.  Modelo de aliasing identico a AVX-512:
+     *   - Escritura F   (64  bits): pone a cero bytes [8..63].
+     *   - Escritura XMM (128 bits): pone a cero bytes [16..63].
+     *   - Escritura YMM (256 bits): pone a cero bytes [32..63].
+     *   - Escritura ZMM (512 bits): sobreescribe todos los bytes.
+     *
+     * ZMM0-ZMM15 se indexan igual que los registros generales R00-R15.
+     */
+    struct ZmmRegister {
+        alignas(64) uint8_t data[64] = {}; ///< Almacenamiento de 512 bits alineado a cache line
+
+        /** @brief Lee el escalar double (IEEE 754 f64) de los bytes [0..7]. */
+        [[nodiscard]] double read_f64() const {
+            double v; __builtin_memcpy(&v, data, 8); return v;
+        }
+
+        /** @brief Escribe double y pone a cero bytes [8..63] (zeroing upper). */
+        void write_f64(double v) {
+            __builtin_memcpy(data, &v, 8);
+            __builtin_memset(data + 8, 0, 56);
+        }
+
+        /** @brief Lee el escalar float (IEEE 754 f32) de los bytes [0..3]. */
+        [[nodiscard]] float read_f32() const {
+            float v; __builtin_memcpy(&v, data, 4); return v;
+        }
+
+        /** @brief Escribe float y pone a cero bytes [4..63]. */
+        void write_f32(float v) {
+            __builtin_memcpy(data, &v, 4);
+            __builtin_memset(data + 4, 0, 60);
+        }
+
+        /** @brief Lee 128 bits (XMM) al buffer @p dst (>= 16 bytes). */
+        void read_xmm(void *dst) const { __builtin_memcpy(dst, data, 16); }
+
+        /** @brief Escribe 128 bits y pone a cero bytes [16..63]. */
+        void write_xmm(const void *src) {
+            __builtin_memcpy(data, src, 16);
+            __builtin_memset(data + 16, 0, 48);
+        }
+
+        /** @brief Lee 256 bits (YMM) al buffer @p dst (>= 32 bytes). */
+        void read_ymm(void *dst) const { __builtin_memcpy(dst, data, 32); }
+
+        /** @brief Escribe 256 bits y pone a cero bytes [32..63]. */
+        void write_ymm(const void *src) {
+            __builtin_memcpy(data, src, 32);
+            __builtin_memset(data + 32, 0, 32);
+        }
+
+        /** @brief Lee 512 bits (ZMM) al buffer @p dst (>= 64 bytes). */
+        void read_zmm(void *dst) const { __builtin_memcpy(dst, data, 64); }
+
+        /** @brief Escribe 512 bits completos sin zeroing. */
+        void write_zmm(const void *src) { __builtin_memcpy(data, src, 64); }
+
+        /** @brief Puntero mutable al almacenamiento raw. */
+        uint8_t       *raw()       { return data; }
+
+        /** @brief Puntero constante al almacenamiento raw. */
+        const uint8_t *raw() const { return data; }
+    };
+
+    /**
      * @brief Contexto completo de registros de un proceso virtual.
      *
      * Agrupa todos los registros que definen el estado de ejecucion de un
@@ -235,6 +302,8 @@ namespace runtime {
         GeneralRegister regs[16]; ///< Registros de proposito general R00..R15
 
         GeneralRegister cur[4]; ///< Registros cursor cur0..cur3 para uso interno
+
+        ZmmRegister zmm[16]; ///< Banco vectorial ZMM0..ZMM15 (512 bits cada uno, aliasing YMM/XMM/F)
     } context_registers_vm;
 
 } // namespace runtime
