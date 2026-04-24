@@ -29,9 +29,15 @@ namespace vm {
         // DOS operandos
         {"mov", {"mov", OpArity::TWO}},
         {"xchg", {"xchg", OpArity::TWO}},
-        {"readcur", {"readcur", OpArity::TWO}},
+        {"readcur",  {"readcur",  OpArity::TWO}},
         {"writecur", {"writecur", OpArity::TWO}},
-        {"gcderef", {"gcderef", OpArity::TWO}},
+        {"gcderef",  {"gcderef",  OpArity::TWO}},
+        {"addcur",   {"addcur",   OpArity::TWO}},
+        {"vmcopy",   {"vmcopy",   OpArity::THREE}},
+        {"vcopyh",   {"vcopyh",   OpArity::THREE}},
+        {"getproc",  {"getproc",  OpArity::ONE}},
+        {"getvm",    {"getvm",    OpArity::ONE}},
+        {"getmgr",   {"getmgr",   OpArity::ONE}},
         {"realloc", {"realloc", OpArity::TWO}},
 
         // UN operando

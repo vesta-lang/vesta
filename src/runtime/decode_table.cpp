@@ -3239,45 +3239,45 @@ namespace runtime {
         },
 
         /* 0xC3 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // addcur curN, imm16  - suma imm16 con signo al registro cursor curN
+            "addcur", Assembly::Bytecode::AddressingMode::INMED,
+            Assembly::Bytecode::InstrSizeMode::FIXED_6,
+            exec_instr_addcur, decode_instr_addcur
         },
 
         /* 0xC4 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // vmcopy curN, rSrc, rLen  - copia rLen bytes de VM memory[rSrc] -> host[curN]
+            "vmcopy", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_vmcopy, decode_instr_vmcopy
         },
 
         /* 0xC5 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // vcopyh rDst, curN, rLen  - copia rLen bytes de host[curN] -> VM memory[rDst]
+            "vcopyh", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_vcopyh, decode_instr_vmcopy
         },
 
         /* 0xC6 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // getproc rN  - almacena el puntero ProcessVM* del proceso actual en rN
+            "getproc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getproc, decode_instr_two_op_reg
         },
 
         /* 0xC7 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // getvm rN  - almacena el puntero VM* de la instancia propietaria en rN
+            "getvm", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getvm, decode_instr_two_op_reg
         },
 
         /* 0xC8 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // getmgr rN  - almacena el puntero ManageVM* del gestor de instancias en rN
+            "getmgr", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getmgr, decode_instr_two_op_reg
         },
 
         /* 0xC9 */{
