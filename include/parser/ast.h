@@ -1,23 +1,34 @@
-/** 
- * VestaVM - Máquina Virtual Distribuida
- * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+/*
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
- *
+ */
+
+/**
  * @file ast.h
- * @brief Árboles de Sintaxis Abstracta (AST) para el lenguaje VMProject.
+ * @brief Arboles de Sintaxis Abstracta (AST) para el lenguaje ensamblador de VestaVM.
  *
- * Define la estructura jerárquica del AST que representa el código parseado.
- * Cada nodo hereda de `ASTNode` base y representa una construcción sintáctica
- * específica del lenguaje (etiquetas, asignaciones de registros, declaraciones de datos).
+ * Define la jerarquia de nodos del AST que representa el codigo parseado.
+ * Cada nodo concreto hereda de @c ASTNode e implementa @c print() para depuracion.
  *
- * Copyright (c) 2026 David López T.
- * Proyecto VMProject - Licencia MIT
+ * Tipos de nodo disponibles:
+ *  - @c LabelDecl        : declaracion de label (p.ej. @c code:).
+ *  - @c Instruction      : instruccion con mnemotecnico y lista de operandos.
+ *  - @c DataDecl         : directiva de datos (db, dw, dd, dq, ptr).
+ *  - @c RegisterNode     : referencia a un registro de la VM.
+ *  - @c NumberLiteral    : literal numerico (entero o flotante).
+ *  - @c StringLiteral    : literal de cadena.
+ *  - @c ExprNode         : expresion binaria (+, -, *, /).
+ *  - @c MemRefNode       : referencia a memoria ([reg] o [reg+off]).
+ *  - @c SIBNode          : direccionamiento SIB (base + index*scale + disp).
+ *  - @c AnnotationNode   : anotacion de metadatos (@SpaceAddress, @Section, ...).
+ *  - @c ImportNode       : directiva de importacion de archivo (.vel externo).
  */
 
 #ifndef AST_H
@@ -40,12 +51,12 @@ namespace vm {
     struct ExprNode;
     /**
      * @struct ASTNode
-     * @brief Nodo base abstracto del Árbol de Sintaxis Abstracta (AST).
+     * @brief Nodo base abstracto del Arbol de Sintaxis Abstracta (AST).
      *
      * Todos los nodos del AST heredan de esta clase base proporcionando:
-     * - Polimorfismo para visitors/generación de código
-     * - Gestión automática de memoria (RAII)
-     * - Extensibilidad para nuevas construcciones sintácticas
+     * - Polimorfismo para visitors/generacion de codigo
+     * - Gestion automatica de memoria (RAII)
+     * - Extensibilidad para nuevas construcciones sintacticas
      */
     struct ASTNode {
         /**
@@ -56,8 +67,8 @@ namespace vm {
         virtual ~ASTNode() = default;
 
         /**
-         * @brief Imprime el nodo con indentación para visualización jerárquica.
-         * @param indent Nivel de indentación (espacios)
+         * @brief Imprime el nodo con indentacion para visualizacion jerarquica.
+         * @param indent Nivel de indentacion (espacios)
          */
         virtual void print(int indent) const {
             std::cout << "ASTNode";
@@ -66,7 +77,7 @@ namespace vm {
 
     /**
      * @struct LabelDecl
-     * @brief Declaración de etiqueta/label (`code:`, `data:`, `end_code:`, etc.).
+     * @brief Declaracion de etiqueta/label (`code:`, `data:`, `end_code:`, etc.).
      *
      * Representa las secciones delimitadoras del lenguaje:
      * ```
@@ -79,7 +90,7 @@ namespace vm {
         std::string name; ///< Nombre de la etiqueta (`code`, `data`, `end_code`, etc.)
 
         /**
-         * @brief Constructor implícito de LabelDecl.
+         * @brief Constructor implicito de LabelDecl.
          * @param n Nombre de la etiqueta
          */
         LabelDecl(std::string n) : name(std::move(n)) {}
@@ -91,7 +102,7 @@ namespace vm {
 
     /**
  * @struct Instruction
- * @brief Instrucción genérica de la VM (mov, add, jmp, call, etc.)
+ * @brief Instruccion generica de la VM (mov, add, jmp, call, etc.)
  */
     struct Instruction : ASTNode {
         std::string                            opcode;   // "mov", "add", "jmp", "db"
@@ -104,7 +115,7 @@ namespace vm {
             std::cout << std::string(indent, ' ') << "INSTR: " << opcode;
             for (const auto &op: operands) {
                 std::cout << " ";
-                if (op) op->print(0); // Sin indentación extra
+                if (op) op->print(0); // Sin indentacion extra
                 else std::cout << "NULL";
             }
             std::cout << std::endl;
@@ -138,10 +149,10 @@ namespace vm {
 
     /**
      * @struct ExprNode
-     * @brief Nodo base para representar expresiones aritméticas en directivas de datos.
+     * @brief Nodo base para representar expresiones aritmeticas en directivas de datos.
      *
      * Las expresiones pueden incluir:
-     * - Literales numéricos
+     * - Literales numericos
      * - Labels
      * - Operadores binarios (+, -, *, /)
      * - Operadores unarios (+, -)
@@ -150,8 +161,8 @@ namespace vm {
         ~ExprNode() override = default;
 
         /**
-         * @brief Imprime el nodo de expresión.
-         * @param indent Nivel de indentación
+         * @brief Imprime el nodo de expresion.
+         * @param indent Nivel de indentacion
          */
         void print(int indent) const override {
             std::cout << std::string(indent, ' ') << "EXPR";
@@ -172,7 +183,7 @@ namespace vm {
 
     /**
      * @struct NumberExpr
-     * @brief Expresión que representa un literal numérico.
+     * @brief Expresion que representa un literal numerico.
      */
     struct NumberExpr : ExprNode {
         std::string value;
@@ -188,7 +199,7 @@ namespace vm {
 
     /**
      * @struct LabelExpr
-     * @brief Expresión que representa un identificador (label).
+     * @brief Expresion que representa un identificador (label).
      */
     struct LabelExpr : ExprNode {
         std::string name;
@@ -203,7 +214,7 @@ namespace vm {
 
     /**
      * @struct BinaryExpr
-     * @brief Expresión binaria (expr + expr, expr - expr, etc.).
+     * @brief Expresion binaria (expr + expr, expr - expr, etc.).
      */
     struct BinaryExpr : ExprNode {
         char op;
@@ -224,7 +235,7 @@ namespace vm {
 
     /**
      * @struct UnaryExpr
-     * @brief Expresión unaria (+expr, -expr).
+     * @brief Expresion unaria (+expr, -expr).
      */
     struct UnaryExpr : ExprNode {
         char op;
@@ -242,18 +253,18 @@ namespace vm {
 
     /**
      * @struct DataDecl
-     * @brief Declaración de datos estáticos (`msg db "Hola"`, `size dw label1 - label2`).
+     * @brief Declaracion de datos estaticos (`msg db "Hola"`, `size dw label1 - label2`).
      *
      * Ahora soporta expresiones completas gracias a ExprNode.
      */
     struct DataDecl : ASTNode {
-        std::string label;   ///< Nombre del símbolo (msg, bytes, count)
+        std::string label;   ///< Nombre del simbolo (msg, bytes, count)
         std::string directive; ///< Directiva de datos (db, dw, dd, dq, ptr)
         std::vector<std::unique_ptr<ExprNode>> values; ///< Lista de expresiones
 
         /**
          * @brief Constructor de DataDecl.
-         * @param l Nombre del símbolo
+         * @param l Nombre del simbolo
          * @param d Directiva de datos
          * @param vals Lista de expresiones parseadas
          */
@@ -264,7 +275,7 @@ namespace vm {
               values(std::move(vals)) {}
 
         /**
-         * @brief Imprime la declaración de datos y sus expresiones.
+         * @brief Imprime la declaracion de datos y sus expresiones.
          */
         void print(int indent) const override {
             std::cout << std::string(indent, ' ')
@@ -352,7 +363,7 @@ namespace vm {
      * -> [r1 + r2 * 4 + 0x100]
      */
     struct MemoryOperand : ASTNode {
-        std::unique_ptr<ASTNode> expr; // expresión dentro de los corchetes
+        std::unique_ptr<ASTNode> expr; // expresion dentro de los corchetes
 
         MemoryOperand(std::unique_ptr<ASTNode> e)
             : expr(std::move(e)) {}

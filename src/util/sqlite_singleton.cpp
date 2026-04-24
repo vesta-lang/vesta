@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file sqlite_singleton.cpp
+ * @brief Implementacion del singleton SQLite thread-safe de VestaVM.
+ *
+ * Implementa @c SqliteSingleton::get_instance(), @c cleanup(),
+ * @c execute() y @c execute_json() de la clase @c SqliteSingleton.
+ * La inicializacion es lazy y protegida por @c db_mutex.
+ */
 #include "util/sqlite_singleton.h"
 #include <iostream>
 #include <sstream>
@@ -39,7 +47,7 @@ namespace Sqlite {
                 sqlite3_close(raw_db);
                 return nullptr;
             }
-            db_instance.reset(raw_db); // Transfer ownership
+            db_instance.reset(raw_db); // transferir propiedad
             // SqliteDeleter() se ejecuta
             initialized = true;
             std::cout << "SQLite conectado: " << db_path << std::endl;
@@ -62,14 +70,14 @@ namespace Sqlite {
     bool SqliteSingleton::execute(const std::string &sql, std::string *err) {
         sqlite3 *db = get_instance();
         if (!db) {
-            if (err) *err = "No database connection";
+            if (err) *err = "Sin conexion a la base de datos";
             return false;
         }
 
         char *err_msg = nullptr;
         int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err_msg);
         if (rc != SQLITE_OK) {
-            if (err) *err = err_msg ? std::string(err_msg) : "Unknown sqlite error";
+            if (err) *err = err_msg ? std::string(err_msg) : "Error desconocido de sqlite";
             if (err_msg) sqlite3_free(err_msg);
             return false;
         }
@@ -79,7 +87,7 @@ namespace Sqlite {
     json SqliteSingleton::execute_json(const std::string &sql) {
         sqlite3 *db = get_instance();
         if (!db) {
-            return json{{"error", "No database connection"}};
+            return json{{"error", "Sin conexion a la base de datos"}};
         }
 
         json result = json::array();

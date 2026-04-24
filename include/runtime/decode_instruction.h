@@ -1,24 +1,50 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
+
+/**
+ * @file decode_instruction.h
+ * @brief Declaraciones del pipeline de descodificacion y ejecucion de instrucciones VestaVM.
+ *
+ * Define:
+ *   - InstrFormat: metadatos de una instruccion (nombre, modo, tamano, exec, decode).
+ *   - Macros de profiling PROFILE_START/PROFILE_END (activos con -DVM_PROFILE).
+ *   - Macro VM_ASSERT (activo con -DVM_DEBUG_CHECKS): aborta con mensaje si falla una condicion.
+ *   - Declaraciones de todos los descodificadores especializados.
+ *   - Declaraciones de decode_instruction() y execute_instruction().
+ */
+
 #ifndef DECODE_INSTRUCTION_H
 #define DECODE_INSTRUCTION_H
+
 #include <cstdint>
 #include "decode_table.h"
 #include "runtime.h"
 #include "emmit/emmit_decl.h"
 
-// para mediciones de tiempo ultraprecisas.
+// --- Macros de profiling de alta precision (activos solo con -DVM_PROFILE) ---
 #ifdef VM_PROFILE
+    /**
+     * @brief Inicia una medicion de tiempo con resolucion de nanosegundos.
+     *
+     * Define la variable __t0 con la marca de tiempo actual usando
+     * std::chrono::high_resolution_clock.  Debe ir seguido de PROFILE_END().
+     */
     #define PROFILE_START auto __t0 = clock::now();
+
+    /**
+     * @brief Finaliza una medicion e imprime la duracion en nanosegundos.
+     *
+     * @param label Etiqueta de texto que identifica el bloque medido en la salida.
+     */
     #define PROFILE_END(label) \
     do { \
     auto __t1 = clock::now(); \
@@ -27,20 +53,25 @@
     << " ns\n"; \
     } while(0)
 #else
-#define PROFILE_START
-#define PROFILE_END(label)
+    #define PROFILE_START       ///< No-op en modo release: sin overhead de medicion
+    #define PROFILE_END(label)  ///< No-op en modo release: sin overhead de medicion
 #endif
 
 /**
- * Permite indicar si se quiere realizar comprobaciones de seguridad o no.
- * En caso de VM_DEBUG_CHECKS == 1 se añadira comprobaciones en la compilacion
- * para hacer validaciones durante el desarollo de la VM.
+ * @defgroup VM_ASSERT Macro de asercion de depuracion VM
+ * @{
  *
- * Se recomienda desactivar la flag poniendole el valor 0 para tener el maximo
- * rendimiento en las funciones que son Hot-path como la fase de descodificacion
- * y ejecuccion.
+ * VM_ASSERT verifica una condicion durante la descodificacion y ejecucion.
+ * Si la condicion falla en modo debug (VM_DEBUG_CHECKS activo) imprime
+ * el mensaje, ejecuta el bloque de codigo de recuperacion y llama a abort().
+ *
+ * Se desactiva completamente en release para maximizar el rendimiento en las
+ * fases de decode/execute que son hot-path.
+ *
+ * @param cond Condicion booleana que debe ser verdadera.
+ * @param msg  Mensaje de error (puede contener operador << de stream).
+ * @param code Bloque de codigo de diagnostico adicional (se ejecuta antes de abort()).
  */
-
 #ifdef VM_DEBUG_CHECKS
 #pragma message("VM_DEBUG_CHECKS fue activada")
 #define VM_ASSERT(cond, msg, code) \
@@ -52,284 +83,306 @@
     } \
     } while (0)
 #else
-#define VM_ASSERT(cond, msg, code) do {} while (0)
+#define VM_ASSERT(cond, msg, code) do {} while (0) ///< No-op en release
 #endif
+/** @} */
 
 namespace runtime {
-    struct DecodedInstr;
-    class ProcessVM;
+
+    struct DecodedInstr; ///< Declaracion adelantada de la instruccion descodificada
+    class  ProcessVM;    ///< Declaracion adelantada del proceso virtual
 
     /**
-     * Contiene la informacion minima para descoficiar las instrucciones
+     * @brief Metadatos de una instruccion del bytecode VestaVM.
+     *
+     * Cada entrada de decode_table_primary y decode_table_extended es un
+     * InstrFormat.  El par (exec, decode) forma el contrato de la instruccion:
+     *   - decode() extrae los operandos del flujo de bytes y los almacena en DecodedInstr.
+     *   - exec()   aplica la semantica de la instruccion sobre el estado del proceso.
+     *
+     * Las entradas con mode == AddressingMode::COUNT o exec/decode == nullptr son
+     * ranuras no implementadas o reservadas; el descodificador abortara si las
+     * encuentra (solo en modo VM_DEBUG_CHECKS).
      */
     typedef struct InstrFormat {
         /**
-         * Nombre de la instruccion, HLT, MOV, ADD, ETC
+         * @brief Nombre mnemotecnico de la instruccion (p.ej. "add", "mov", "hlt").
+         *
+         * Usado solo para diagnostico y mensajes de error; no influye en la ejecucion.
          */
         const char *name;
 
         /**
-        * Modo de direccionamiento de la instruccion. Usamos COUNT por defecto para indicar que la metadata
-         * de la instruccion no esta bien formada. Ya que COUNT no es un modo valido por lo que si se
-         * encuentro al descodificar la instruccion, posiblemente fue por que la tabla de metainformacion
-         * decode_table_primary y decode_table_extended no estaban bien formadas o falto definir alguna
-         * entrada de forma correcta.
+         * @brief Modo de direccionamiento de la instruccion.
+         *
+         * Indica como se codifican los operandos en el flujo de bytes.
+         * El valor COUNT se usa como centinela de entrada invalida: si el
+         * descodificador encuentra una entrada con mode == COUNT significa que
+         * la tabla no esta completamente inicializada o hay un opcode incorrecto.
          */
         Assembly::Bytecode::AddressingMode mode = Assembly::Bytecode::AddressingMode::COUNT;
 
         /**
-         * Tamaño de la instruccion
+         * @brief Modo de tamano de la instruccion (numero de bytes que ocupa).
+         *
+         * Determina cuantos bytes debe avanzar el PC tras la ejecucion.
+         * Los modos posibles son FIXED_1, FIXED_2, FIXED_4, FIXED_6, FIXED_8,
+         * FIXED_10 y VAR (longitud variable).
          */
         Assembly::Bytecode::InstrSizeMode size = Assembly::Bytecode::InstrSizeMode::FIXED_1;
 
         /**
-         * Puntero a la función que implementa la semántica de la instrucción.
+         * @brief Puntero a la funcion que implementa la semantica de la instruccion.
          *
-         * Esta función se invoca durante la fase de ejecución (EXECUTE) y es la
-         * responsable de aplicar los efectos de la instrucción sobre el estado de la
-         * máquina virtual: modificar registros, memoria, banderas, el contador de
-         * programa (PC) o cualquier otro componente interno.
+         * Se invoca durante la fase EXECUTE del pipeline.  Es responsable de
+         * modificar registros, memoria, banderas u otros componentes de la VM.
+         * No debe avanzar el PC; si la instruccion realiza un salto debe marcar
+         * decoded_ptr->flags_info.did_jump = true para que execute_instruction()
+         * no avance el PC automaticamente.
          *
-         * La función recibe un puntero a la VM para acceder y modificar su estado.
-         * No debe realizar tareas de decodificación ni avanzar el PC; estas acciones
-         * son responsabilidad de otras fases del pipeline. Si la instrucción modifica
-         * explícitamente el PC (por ejemplo, saltos, llamadas o retornos), debe
-         * establecer el campo `did_jump` en el `DecodedInstr` para evitar que EXECUTE
-         * avance automáticamente el PC.
-         *
-         * @param vm Puntero a la máquina virtual sobre la que se ejecuta la instrucción.
+         * @param vm    Proceso virtual sobre el que se ejecuta la instruccion.
+         * @param instr Instruccion descodificada con todos sus operandos.
          */
         void (*exec)(ProcessVM *, const DecodedInstr &) = nullptr;
 
         /**
-         * Metodo que permite descodificar una instruccion.
+         * @brief Puntero a la funcion que descodifica los operandos de la instruccion.
+         *
+         * Se invoca durante la fase DECODE del pipeline.  Lee los bytes del flujo
+         * a partir del PC actual y rellena los campos de la estructura DecodedInstr.
+         * No debe modificar el estado visible del proceso (registros, memoria...).
+         *
+         * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+         * @param instr Estructura de instruccion que se rellena con los operandos.
          */
         void (*decode)(ProcessVM *, DecodedInstr &) = nullptr;
     } InstrFormat;
 
 
+    // =========================================================================
+    //  Descodificadores especializados por tipo de instruccion
+    // =========================================================================
+
     /**
-     * Se usa para descodificar instrucciones del tipo:
-     *      reg1, reg2 o
-     *      reg2, reg1
+     * @brief Descodifica una instruccion de dos operandos registro-registro.
+     *
+     * Cubre ADD/SUB/MUL/DIV/CMP/AND/OR/XOR reg,reg y similares.
+     * Lee mode (bits 7-6 del byte de control) y los dos registros del byte de regs.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Se usa para descodificar instrucciones con un solo operando de tipo
-     * registro, donde el opcode que indica el registro tiene tambien el
-     * modo contenido como es el caso de INC y DEC:
+     * @brief Descodifica una instruccion de un solo registro con modo (INC/DEC).
      *
-     * | Instrucción | opcode1 | byte (relleno o extensión o registro) | total bytes |
-     * | :---------: | :-----: | :-----------------------------------: | :---------: |
-     * |     INC     |   0x4   |             `0b00` `reg`              |      2      |
+     * Formato: [opcode1][byte]
+     *   byte: bits 5-4 = mode, bit 6 = variante (0=INC, 1=DEC), bits 3-0 = registro.
      *
-     * | Instrucción | opcode1 | byte (relleno o extensión o registro) | total bytes |
-     * | :---------: | :-----: | :-----------------------------------: | :---------: |
-     * |     DEC     |   0x4   |             `0b01` `reg`              |      2      |
+     * Solo aplica a instrucciones de la tabla primaria (sin prefijo 0x00).
      *
-     * En estos casos reg contiene 2 primeros bits para el "modo" (si el reg es de 1, 2, 4 u 8 bytes)
-     * mientras que los otros 4 bits se usa para indicar el registro general a usar que puede ser de
-     * r0 a r15.
-     *
-     * Estas instrucciones no deben usar 0x00 (extension de opcode), debe ser una instruccion
-     * mono-opcode.
-     *
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
-     *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Permite descodificar instrucciones MOV de tipo registro. Es muy parecida a decode_instr_two_op_reg,
-     * pero se prefiere tener una func aparte solo para el mov ya que algunos campos pueden no ser necesarios
-     * de extraer, o la forma de descoficiar pued cambiar en el futuro.
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * @brief Descodifica una instruccion MOV registro-registro con byte de control.
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * Similar a decode_instr_two_op_reg pero extrae ademas _signed_instruct y
+     * direction del byte de control para soportar las variantes con extension
+     * de signo y con direccion inversa.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Se usa para descodificar instrucciones simples que no requieren de
-     * ningun tipo de analisis profundo como son los NOP, HLT y instrucciones
-     * similares que no toman parametros o no requieren descodificar los
-     * parametros en los opcodes.
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * @brief Descodifica instrucciones de un solo byte sin operandos (NOP, HLT...).
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * Solo fija size_instr a partir de los metadatos; no lee bytes adicionales.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Permite descodificar instrucciones del tipo inmediato como son:
-     *      - adds r0d, 0x12345678
-     *      - adds [r1w], 0x1234
-     * se supone que todas las instrucciones de este tipo usan extension de opcode.
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * @brief Descodifica instrucciones ALU inmediato-registro (ADD/SUB/MUL/DIV/CMP imm,reg).
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * Solo aplica a instrucciones de la tabla extendida (prefijo 0x00).
+     * Longitud variable: 3 bytes fijos + longitud del inmediato segun el modo.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Permite descodificar una instruccion de tipo CALLN
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * @brief Descodifica una instruccion CALLN (llamada a funcion nativa).
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * Lee la direccion de la funcion nativa (8 bytes) y cachea argc desde R15
+     * para que el predictor de saltos de la CPU pueda optimizar el switch(argc).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Permite descodificar instrucciones como PUSH/POP donde pueden usar registros
-     * extendidos o generales.
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * @brief Descodifica PUSH/POP con soporte de registros generales y especiales.
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * Formato: [opcode][byte]
+     *   bit 6 del byte == 1 -> registro especial (codigo de 6 bits).
+     *   bit 6 del byte == 0 -> registro general (mode en bits 5-4, reg en bits 3-0).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Permite descodificar una instruccion de tipo MOV inmediato de la forma:
-     * mov:
-     *      - reg, 0x1000 ||
-     *      -  [reg], 0x1000 ||
-     *      - reg_ext, 0x1000
+     * @brief Descodifica MOV con inmediato de longitud variable.
      *
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * Tres variantes segun direction y _signed_instruct:
+     *   1. d=1, s=1 -> registro especial + imm64 (11 bytes).
+     *   2. d=0, s=0 -> mov reg, imm (longitud variable segun modo).
+     *   3. d=1, s=0 -> mov [reg], imm (longitud variable segun modo).
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr);
 
+    /**
+     * @brief Descodifica MOVC/MOVCH: movimiento entre registro y memoria (4 bytes fijos).
+     *
+     * Formato: [0x00][0x1E][ctrl][byte4]
+     *   bits 7-6 del ctrl: 0b10 = MOVCH (host), 0b00 = MOVC (VM).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
     void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Permite descodificar una instruccion de tipo xchg de la forma:
-     * xchg:
-     *      - xchg r0, cur0
-     *      - xchg cur1, cur0
-     *      - xchg cur0, r1
-     *      - xchg r2, r1
+     * @brief Descodifica XCHG con operandos mixtos (generales y/o especiales).
      *
-     * @param vm maquina virtual al momento de descodificar la instruccion, requiere que los opcodes
-     * hayan sido procesador y el apuntador de descodificacion contenga los metadatos necesarios
-     * para esta instruccion.
+     * Cada byte de datos codifica: bits 5-0 = codigo de registro,
+     * bit 6 = flag de tipo (0=general, 1=especial).
      *
-     * @param instr meta-datos de la instruccion, en caso de ser inc seran sus meta-datos, cada instruccion
-     * tiene sus propios metadatos.
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Descodifica instrucciones de salto (JMP, Jcc) y llamada (CALLVM).
-     * Formato FIXED_10 (opcode primario):
-     *   [opcode][cond_o_reservado][8 bytes dirección destino]
+     * @brief Descodifica JMP/Jcc y CALLVM (salto absoluto, 10 bytes fijos).
      *
-     * El byte cond_o_reservado se almacena en inmmed_data.reg:
-     *   JMP : 0x0F = incondicional; 0x00-0x0D = condicional (Jcc).
-     *   CALLVM : reservado (ignorado en exec).
+     * Formato: [opcode][cond_o_reservado][8 bytes addr]
+     *   cond 0x0F (o no reconocido) = salto incondicional.
+     *   cond 0x00-0x0D = salto condicional Jcc.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Decodificador para instrucciones sin operandos (RET, LEAVE).
-     * Solo establece el tamaño de la instrucción según los metadatos.
+     * @brief Descodifica instrucciones sin operandos (RET, LEAVE).
+     *
+     * Solo fija size_instr a partir de los metadatos de la tabla.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Decodifica JREL (salto relativo condicional).
-     * Formato extendido FIXED_8: [0x00][0x2D][cond_byte][padding][disp32]
-     *   cond_byte -> inmmed_data.reg
-     *   disp32 sign-extended a 64 bits -> inmmed_data.inmmed
+     * @brief Descodifica JREL: salto relativo condicional (FIXED_8 extendido).
+     *
+     * Formato: [0x00][0x2D][cond][padding][disp32] = 8 bytes.
+     * El disp32 se extiende con signo a 64 bits para soportar saltos hacia atras.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Decodifica instrucciones OOP de la forma [reg, imm8]:
-     *   callvirt  reg_obj, vtable_idx
-     *   callsuper reg_classinfo, vtable_idx
-     *   getfield  reg_classinfo, field_idx
-     *   getmethod reg_classinfo, method_idx
+     * @brief Descodifica instrucciones OOP de la forma [reg, imm8].
      *
-     * Formato (FIXED_4, opcode extendido 0x00):
-     *   [0x00][opcode][reg_byte][imm8]
-     *   reg_byte : bits 3-0 = registro general (0-15)
-     *   imm8     : indice de vtable/campo/metodo (0-255), almacenado en reg_data.reg2
+     * Cubre CALLVIRT, CALLSUPER, GETFIELD, GETMETHOD.
+     * Formato: [0x00][opcode][reg_byte][imm8] (FIXED_4).
+     *   reg_byte bits 3-0 = registro general.
+     *   imm8 = indice de vtable/campo/metodo (0-255).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Descodifica instrucciones de lectura/escritura a memoria real via cursor:
-     *   readcur  dest_reg, curN   - lee de la dirección host en curN
-     *   writecur curN, src_reg    - escribe src_reg en la dirección host en curN
-     *   gcderef  curN, handle_reg - convierte GcHandle a puntero raw en curN
+     * @brief Descodifica instrucciones de lectura/escritura via cursor (READCUR/WRITECUR/GCDEREF).
      *
-     * Formato (FIXED_4, opcode extendido 0x00):
-     *   [0x00][opcode][ctrl_byte][reg_byte]
-     *   ctrl_byte: bits 7-6 = mode (tamaño), bits 5-4 = cursor index (0-3)
-     *   reg_byte:  bits 3-0 = registro general
+     * Formato: [0x00][opcode][ctrl_byte][reg_byte] (FIXED_4).
+     *   ctrl_byte bits 7-6 = mode, bits 5-4 = cursor index (0-3).
+     *   reg_byte  bits 3-0 = registro general.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr);
 
     /**
-     * Decodifica instrucciones SIB (Scale-Index-Base): adds/subs/muls/divs/cmps/mov con [base+index*scale].
-     * Formato extendido FIXED_6: [0x00][opcode2][ctrl][regs][index][pad]
-     *   ctrl:  bits 7-6 = mode, bit 5 = signed, bit 4 = direction, bits 3-2 = scale, bits 1-0 = 0
-     *   regs:  bits 7-4 = dst_reg, bits 3-0 = base_reg
-     *   index: bits 3-0 = index_reg
-     * Rellena mem_data: reg_final=dst, reg_base=base, reg_index=index, scale=scale
+     * @brief Descodifica instrucciones SIB (Scale-Index-Base).
+     *
+     * Formato: [0x00][opcode2][ctrl][regs][index][pad] (FIXED_6).
+     *   ctrl: mode(2) | signed(1) | direction(1) | scale(2) | has_index(1) | 0
+     *   regs: dst(4) | base(4)
+     *   index: bits 3-0 = registro indice
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr);
 
+    // =========================================================================
+    //  Funciones principales del pipeline
+    // =========================================================================
+
     /**
-     * Ejecuta la instrucción actualmente decodificada y devuelve el evento
-     * que debe procesar la máquina virtual como resultado de dicha ejecución.
+     * @brief Ejecuta la instruccion descodificada apuntada por decoded_ptr del proceso.
      *
-     * En lugar de un valor booleano, este metodo devuelve directamente un
-     * vm_event que representa la transición que debe realizar la FSM.
+     * Llama a metadata->exec() y, si no hubo salto ni bloqueo, avanza el RIP.
+     * Si la instruccion es bloqueante retorna EVT_IO_WAIT sin avanzar el PC.
+     * Acumula tiempo de ejecucion en scheduler.time_exec si has_hooks esta activo.
      *
-     * Esto permite que una instrucción genere múltiples tipos de eventos:
-     *  - EVT_EXEC_DONE  -> La instrucción terminó correctamente.
-     *  - EVT_IO_WAIT    -> La instrucción es bloqueante y requiere esperar E/S.
-     *  - EVT_HALT       -> La instrucción solicita detener la VM.
-     *  - EVT_ERROR      -> Se produjo un error fatal durante la ejecución.
-     *  - Otros eventos específicos según la arquitectura de la VM.
+     * Posibles valores de retorno:
+     *   - EVT_EXEC_DONE  -> instruccion completada correctamente.
+     *   - EVT_IO_WAIT    -> instruccion bloqueante; no avanzar el PC.
+     *   - EVT_HALT       -> instruccion HLT; detener el proceso.
+     *   - EVT_ERROR      -> error fatal durante la ejecucion.
      *
-     * El metodo también se encarga de avanzar el contador de programa (PC)
-     * si la instrucción no ha modificado explícitamente su valor (campo did_jump).
-     *
-     * @return  Evento que la FSM debe procesar tras ejecutar la instrucción.
+     * @param process Proceso virtual cuya instruccion descodificada se ejecuta.
+     * @return Evento que la FSM del scheduler debe procesar.
      */
     vm_event execute_instruction(ProcessVM *process);
 
     /**
-     * Permite descodificar una instruccion en un proceso
-     * @param process proceso que quiere realizar la descodificacion de instruccion.
+     * @brief Descodifica la instruccion apuntada por el RIP del proceso.
+     *
+     * Implementa un ciclo de descodificacion con icache:
+     *   - HIT:  si icache[PC % ICACHE_SIZE].pc == PC se reutiliza la entrada.
+     *   - MISS: selecciona tabla primaria o extendida, llama al descodificador
+     *           especializado y guarda el resultado en la icache.
+     *
+     * @param process Proceso virtual cuyo RIP apunta a la instruccion a descodificar.
      */
     void decode_instruction(ProcessVM *process);
-}
-#endif //DECODE_INSTRUCTION_H
+
+} // namespace runtime
+
+#endif // DECODE_INSTRUCTION_H

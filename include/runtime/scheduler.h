@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
-#ifndef SCHEDULER_H
+
+/**
+ * @file scheduler.h
+ * @brief Declaracion del planificador de procesos de VestaVM.
+ *
+ * Declara @c Scheduler: asignacion de @c ProcessVM a hilos nativos,
+ * bucle de ejecucion con balance de carga, ganchos de temporalizacion
+ * y transiciones de estado READY -> RUNNING -> BLOCKED/DEAD.
+ */#ifndef SCHEDULER_H
 #define SCHEDULER_H
 
 #include <atomic>
@@ -29,443 +37,371 @@
 #include "runtime/pid.h"
 
 namespace runtime {
-    class ProcessVM;
-    struct Transition;
-    class VM;
+    class ProcessVM; ///< Proceso virtual (declaracion adelantada)
+    struct Transition; ///< Transicion de la FSM (declaracion adelantada)
+    class VM;          ///< Instancia VM (declaracion adelantada)
 
-    // Polyfill de std::counting_semaphore para GCC < 11.
-    // Drop-in: reemplazar con std::counting_semaphore<> al actualizar el compilador.
+    /**
+     * @brief Semaforo binario compatible con GCC < 11.
+     *
+     * Polyfill de std::counting_semaphore<1> implementado con mutex y
+     * condition_variable.  La API es identica a la del estandar C++20:
+     *   - release() desbloquea un waiter o incrementa el contador.
+     *   - acquire() bloquea hasta que el contador sea > 0.
+     *
+     * @note Debe reemplazarse por std::counting_semaphore<> al actualizar el compilador a GCC >= 11.
+     */
     struct BinarySemaphore {
+        /**
+         * @brief Incrementa el contador y notifica a un waiter bloqueado.
+         */
         void release() {
-            std::lock_guard lock(mtx_);
-            ++count_;
-            cv_.notify_one();
+            std::lock_guard lock(mtx_); // proteger el incremento del contador
+            ++count_;                   // senyal disponible
+            cv_.notify_one();           // despertar a un waiter
         }
+
+        /**
+         * @brief Bloquea el hilo hasta que el contador sea > 0 y lo decrementa.
+         */
         void acquire() {
             std::unique_lock lock(mtx_);
-            cv_.wait(lock, [&]{ return count_ > 0; });
-            --count_;
+            cv_.wait(lock, [&]{ return count_ > 0; }); // esperar hasta que haya senal
+            --count_;                                   // consumir la senyal
         }
+
     private:
-        std::mutex mtx_;
-        std::condition_variable cv_;
-        int count_ = 0;
+        std::mutex              mtx_;     ///< Mutex que protege count_
+        std::condition_variable cv_;      ///< Variable de condicion para bloqueo/notificacion
+        int                     count_ = 0; ///< Contador de senales disponibles
     };
 
     /**
-     * Estados de depuracion
+     * @brief Fases del ciclo de ejecucion en las que se disparan los hooks de depuracion.
+     *
+     * Cada valor indica el punto del pipeline donde se invoca el DebugHook:
+     *   - DecodeBegin / DecodeEnd:   inicio y fin de la fase de descodificacion.
+     *   - ExecuteBegin / ExecuteEnd: inicio y fin de la fase de ejecucion.
+     *   - OnEventBegin / OnEventEnd: antes y despues del cambio de estado en la FSM.
      */
     enum class DebugStage {
-        /**
-         * realizar la depuracion en fase de descoficacion de instruccion.
-         *
-         */
-        DecodeBegin,
-        DecodeEnd,
-
-        /**
-         * permite realiza la depuracion en la fase previa a la ejecuccion de la
-         * instruccion.
-         */
-        ExecuteBegin,
-
-        /**
-         * permite realizar la depuracion en la fase final de la ejecuccion de la instruccion.
-         */
-        ExecuteEnd,
-
-        /**
-         * Permite hacer el hook antes de hacer el cambio de un estado a taves de un
-         * evento
-         */
-        OnEventBegin,
-
-        /**
-         * Permite hacer el hook despues del cambio de estado y el desencadenamiento del
-         * evento.
-         */
-        OnEventEnd,
+        DecodeBegin,   ///< Inicio de la descodificacion de la instruccion actual
+        DecodeEnd,     ///< Fin de la descodificacion de la instruccion actual
+        ExecuteBegin,  ///< Inicio de la ejecucion de la instruccion descodificada
+        ExecuteEnd,    ///< Fin de la ejecucion de la instruccion descodificada
+        OnEventBegin,  ///< Antes del cambio de estado de la FSM
+        OnEventEnd,    ///< Despues del cambio de estado de la FSM
     };
 
+    /** @brief Tipo de callback de depuracion: recibe el proceso y la fase actual. */
     using DebugHook = void(*)(ProcessVM *vm, DebugStage stage);
 
+    /**
+     * @class Scheduler
+     * @brief Planificador de procesos virtuales sobre un hilo nativo.
+     *
+     * Cada Scheduler ejecuta un run_loop() en un hilo del ThreadPool de la VM.
+     * Implementa un modelo de planificacion cooperativa/preemptiva inspirado en
+     * Erlang/BEAM:
+     *   - Round-robin con reducciones: cada proceso tiene un numero maximo de
+     *     instrucciones por quantum (reductions_remaining_default).
+     *   - FSM por proceso: los estados NEW -> READY -> DECODE -> EXECUTE -> ...
+     *     se gestionan mediante la tabla de transiciones fsm[][].
+     *   - Semaforo de espera: si no hay procesos listos el scheduler duerme con
+     *     sem.acquire() y se despierta cuando llega un make_ready().
+     */
     class Scheduler {
     public:
         /**
-         * ID del gestor de procesos, un gestor de procesos, es un hilo nativo, no se permite tener mas de
-         * 2**32 gestores de procesos.
-         * **Es asignado por la VM**.
+         * @brief Identificador unico del scheduler dentro de su VM.
+         *
+         * Asignado por la VM en el momento de la construccion.
+         * El maximo es 2^32-1 schedulers por VM.
          */
         const uint32_t id_scheduler;
 
         /**
-         * Se usa para realizar depuracion o realizar ciertas acciones antes
-         * de una fase, especificada
+         * @brief Lista de callbacks de depuracion registrados para este scheduler.
+         *
+         * Cada hook se invoca en los puntos indicados por DebugStage.
+         * Los hooks deben ser rapidos y no bloqueantes para no penalizar el rendimiento.
          */
         std::vector<DebugHook> debug_hooks;
 
-        /**
-         * Contador PID de procesos.
-         */
-        uint64_t next_pid = 0;
+        uint64_t next_pid = 0; ///< Contador monotonico para generar PIDs locales unicos
+
+        ProcessVM *instance = nullptr; ///< Puntero al proceso actualmente en ejecucion
 
         /**
-         * Apunta a un proceso en actual ejecuccion de la tabla process_vm
-         */
-        ProcessVM *instance = nullptr;
-
-        /**
-         * Contador de instrucciones ejecutadas actualmente por el proceso en ejecuccion, cuando se alcanze
-         * las "reducciones" indicadas por el proceso, se procede con el siguiente.
+         * @brief Instrucciones ejecutadas por el proceso actual en el quantum en curso.
+         *
+         * Cuando alcanza reductions_remaining del proceso activo, el scheduler
+         * elige el siguiente proceso de la cola ready_queue.
          */
         uint64_t reductions_now = 0;
 
         /**
-         * Contiene todos los procesos de la instancia virtual.
+         * @brief Tabla de procesos de este scheduler.
          *
-         *  ¿Por qué unique_ptr en el vector de procesos?
-         *      - La VM es la dueña de los procesos
-         *
-         * Los procesos nacen y mueren dentro de la VM.
-         * No deben tener múltiples dueños.
-         * - unique_ptr deja claro quién es el propietario
-         *     La VM crea el proceso
-         *     La VM lo destruye
-         *     Nadie más puede borrarlo accidentalmente
-         * - Evita fugas de memoria
-         *
-         * - Cuando un proceso muere, simplemente:
-         *      processes.erase(it);
-         *
-         * Y el unique_ptr libera todo_.
+         * Cada proceso es propiedad exclusiva del scheduler (unique_ptr).
+         * La VM crea y destruye los procesos; ningun otro modulo puede borrarlos.
          */
-        std::vector<std::unique_ptr<ProcessVM> > processes;
+        std::vector<std::unique_ptr<ProcessVM>> processes;
+
+        std::unordered_map<GlobalPID, ProcessVM *> pid_index; ///< Indice PID -> proceso para busqueda O(1)
+
+        Transition fsm[NUM_STATES][NUM_EVENTS]; ///< Tabla de transiciones de la FSM [estado][evento]
 
         /**
-         * Tabla de procesos con su correspondiente PID.
-         */
-        std::unordered_map<GlobalPID, ProcessVM *> pid_index;
-
-        /**
-         * Tabla de transiciones
-         */
-        Transition fsm[NUM_STATES][NUM_EVENTS];
-
-        /**
-         * Permite transiccionar de estado-
+         * @brief Ejecuta la transicion de estado correspondiente al evento @p e.
          *
-         *  Ejemplo:
-         *      1. Mira el estado actual -> EXECUTE
-         *      2. Mira el evento recibido -> EVT_EXEC_DONE
-         *      3. Busca en la tabla -> fsm[EXECUTE][EVT_EXEC_DONE]
+         * Consulta la tabla fsm[estado_actual][e] del proceso activo (instance),
+         * ejecuta la accion asociada y actualiza el estado del proceso.
          *
-         *      Esto te da:
-         *          - el siguiente estado
-         *          - la acción a ejecutar
+         * Ejemplo de flujo:
+         *   estado=EXECUTE, evento=EVT_EXEC_DONE -> fsm[EXECUTE][EVT_EXEC_DONE]
+         *   -> nuevo estado + accion (p.ej. incrementar PC).
          *
-         * @param e nuevo estado para la maquina virtual
+         * @param e Evento que desencadena la transicion.
          */
         void on_event(vm_event e);
 
-        /**
-         * Referencia a la maquina virtual
-         */
-        VM &vm_reference;
+        VM &vm_reference; ///< Referencia a la instancia VM que posee este scheduler
 
+        /**
+         * @brief Construye el scheduler y lo asocia a la VM indicada.
+         * @param id_scheduler Identificador unico dentro de la VM.
+         * @param vm_reference Referencia a la instancia VM propietaria.
+         */
         Scheduler(uint32_t id_scheduler, VM &vm_reference);
 
         /**
-         * Lista de procesos listos para la ejecuccion:
-         * ¿Por qué deque?
-         *      - push_back O(1)
-         *      - pop_front O(1)
-         *      - ideal para round-robin
-         *      - no mueve memoria como un vector
+         * @brief Cola de procesos listos para ejecutarse (FIFO).
          *
-         * Almacena punteros directos para evitar el hash lookup en pid_index
-         * en cada ciclo de schedule_next().
+         * Usa std::deque por sus garantias de complejidad O(1) para push_back y
+         * pop_front, ideales para round-robin.  Almacena punteros directos para
+         * evitar el hash lookup en pid_index en cada ciclo.
          *
-         * Protegida por queue_mutex: make_ready() puede ser llamado desde
-         * hilos externos (ej. completion de IO), mientras run_loop() opera
-         * sobre la cola desde el hilo del scheduler.
+         * Protegida por queue_mutex: make_ready() puede ser llamado desde hilos
+         * externos mientras run_loop() lee la cola desde el hilo del scheduler.
          */
         std::deque<ProcessVM*> ready_queue;
 
-        /**
-         * Mutex que protege ready_queue ante accesos concurrentes entre
-         * el hilo del scheduler (schedule_next, re-enqueue tras yield) y
-         * hilos externos (make_ready desde IO o el hilo principal).
-         */
-        std::mutex queue_mutex;
+        std::mutex queue_mutex; ///< Mutex que protege ready_queue ante accesos concurrentes
 
         /**
-         * Numero de procesos "vivos" en este scheduler, es decir, procesos
-         * que no estan en estado NEW, DEAD ni HALT.
-         * Se incrementa al hacer make_ready sobre un proceso NEW.
-         * Se decrementa cuando un proceso alcanza DEAD o HALT.
+         * @brief Numero de procesos vivos en este scheduler.
+         *
+         * Un proceso es "vivo" si su estado no es NEW, DEAD ni HALT.
+         * Se incrementa en make_ready() y se decrementa cuando un proceso alcanza DEAD o HALT.
          * Permite implementar has_alive_processes() en O(1).
          */
         std::atomic<int> alive_count{0};
 
-
         /**
-         * @brief Ejecuta un único paso de la máquina de estados (FSM) para un proceso.
+         * @brief Ejecuta un unico paso de la FSM para el proceso indicado.
          *
-         * Este metodo implementa la ejecución *atómica* de un estado dentro del ciclo
-         * de instrucción de un proceso virtual. A diferencia de un bucle monolítico,
-         * este metodo ejecuta **solo una transición** de la FSM y devuelve el control
-         * al planificador (scheduler), permitiendo el cambio de proceso.
+         * Implementa la ejecucion atomica de un estado del ciclo de instruccion:
+         *   1. Despacha al bloque de codigo del estado actual (tabla de despacho).
+         *   2. Ejecuta la accion del estado (DECODE, EXECUTE, WAIT_IO, etc.).
+         *   3. Determina el evento resultante (EVT_DECODE_DONE, EVT_EXEC_DONE, ...).
+         *   4. Llama a on_event() para actualizar el estado segun la FSM.
+         *   5. Retorna inmediatamente al scheduler.
          *
-         * @details
-         * El metodo realiza las siguientes operaciones:
+         * Este metodo no contiene bucles; ejecuta exactamente una transicion.
+         * La seleccion de procesos y la gestion de reducciones son responsabilidad
+         * exclusiva de run_loop().
          *
-         *  1. Selecciona el bloque de código asociado al estado actual del proceso
-         *     mediante una tabla de despacho basada en "computed goto". Esto elimina
-         *     la necesidad de `switch` o `if`, reduciendo la penalización por
-         *     predicción de ramas y acelerando el intérprete.
-         *
-         *  2. Ejecuta la acción correspondiente al estado:
-         *        - READY / RUNNING -> transición programada por el scheduler.
-         *        - DECODE -> decodificación de la instrucción actual.
-         *        - EXECUTE -> ejecución de la instrucción decodificada.
-         *        - WAIT_IO -> el proceso no avanza hasta recibir EVT_IO_READY.
-         *        - NEW -> proceso recién creado, no ejecutable aún.
-         *
-         *  3. Determina el evento resultante de la acción (por ejemplo:
-         *     `EVT_DECODE_DONE`, `EVT_EXEC_DONE`, `EVT_IO_WAIT`, etc.).
-         *
-         *  4. Llama a `on_event(evento, proceso)`, que consulta la tabla de
-         *     transiciones `fsm[][]` y actualiza el estado del proceso según la
-         *     lógica declarativa definida en la FSM.
-         *
-         *  5. Finaliza inmediatamente tras procesar la transición, devolviendo el
-         *     control al scheduler para permitir:
-         *        - aplicar reducción de instrucciones,
-         *        - cambiar de proceso,
-         *        - reinsertar el proceso en la cola READY,
-         *        - o suspenderlo si está bloqueado.
-         *
-         * Importante:
-         *  - Este metodo **no contiene bucles**. Ejecuta exactamente un paso de la FSM.
-         *  - No selecciona procesos ni gestiona reducciones; eso es responsabilidad
-         *    exclusiva del scheduler.
-         *  - Si el proceso entra en un estado terminal (HALT o DEAD), el metodo
-         *    simplemente retorna y el scheduler decidirá cómo gestionarlo.
-         *
-         * @param process Proceso sobre el que se ejecutará un paso de la FSM.
+         * @param process Proceso sobre el que se ejecutara el paso de la FSM.
          */
         void run_fsm_step(ProcessVM *process);
 
-
         /**
-         * @brief Bucle principal del planificador (scheduler) de procesos.
+         * @brief Bucle principal del planificador de procesos.
          *
-         * Este metodo implementa el ciclo de planificación cooperativa/preemptiva
-         * de la máquina virtual. Se ejecuta típicamente en un hilo del thread pool
-         * de la VM y es responsable de seleccionar procesos, aplicar reducciones
-         * y ejecutar pasos individuales de la máquina de estados.
+         * Se ejecuta en un hilo del ThreadPool de la VM e implementa el ciclo
+         * de planificacion cooperativa/preemptiva:
+         *   1. Llama a schedule_next() para obtener el proximo proceso listo.
+         *      Si no hay procesos, duerme en el semaforo sem.acquire().
+         *   2. Inicializa el contador de reducciones del proceso.
+         *   3. Ejecuta run_fsm_step() hasta agotar las reducciones o que el
+         *      proceso entre en un estado bloqueante o terminal.
+         *   4. Si el proceso sigue ejecutable, lo reintroduce en ready_queue.
+         *   5. Repite hasta que should_kill sea true.
          *
-         * @details
-         * El bucle realiza repetidamente las siguientes operaciones:
-         *
-         *  1. Selecciona el siguiente proceso listo para ejecutarse mediante
-         *     `schedule_next()`. Si no hay procesos listos, el scheduler cede
-         *     temporalmente la CPU (`yield`) y continúa.
-         *
-         *  2. Inicializa el contador de reducciones del proceso. Cada reducción
-         *     representa la ejecución de un paso de la FSM (una instrucción o
-         *     transición significativa).
-         *
-         *  3. Mientras el proceso tenga reducciones disponibles:
-         *        - Llama a `run_fsm_step(proceso)` para ejecutar un único paso.
-         *        - Decrementa el contador de reducciones.
-         *        - Si el proceso entra en un estado bloqueante (WAIT_IO, BLOCKED)
-         *          o terminal (HALT, DEAD), se detiene la ejecución del proceso.
-         *
-         *  4. Si el proceso sigue en un estado ejecutable (READY o RUNNING),
-         *     se reintroduce en la cola READY para ser ejecutado nuevamente
-         *     en futuras iteraciones del scheduler.
-         *
-         *  5. El bucle continúa hasta que `should_kill` sea verdadero, lo que
-         *     indica que la VM debe detener su ejecución.
-         *
-         * Importante:
-         *  - Este metodo **no ejecuta instrucciones directamente**; delega toda la
-         *    lógica de ejecución a `run_fsm_step()`.
-         *  - Implementa un modelo de planificación similar al de Erlang/BEAM,
-         *    permitiendo miles de procesos ligeros con cambios de contexto rápidos.
-         *  - Garantiza que ningún proceso monopolice la CPU virtual gracias al
-         *    sistema de reducciones.
-         *
-         * @note Este metodo debe ejecutarse en un hilo dedicado del thread pool
-         *       de la VM. No debe ser llamado desde el hilo principal.
+         * @note Debe ejecutarse en un hilo dedicado; no llamar desde el hilo principal.
          */
         void run_loop();
 
+        /**
+         * @brief Genera una representacion textual del scheduler para depuracion.
+         * @return Cadena con el ID y el numero de procesos.
+         */
         std::string to_string() const;
 
+        /**
+         * @brief Reinicia el estado interno del scheduler sin destruirlo.
+         */
         void reset();
 
-
         /**
-         * Inicializa la tabla de transicicones.
+         * @brief Inicializa la tabla de transiciones de la FSM (fsm[][]).
+         *
+         * Debe llamarse una vez antes de que el scheduler comience a ejecutar
+         * procesos.  Define los pares (nuevo_estado, accion) para cada combinacion
+         * de estado x evento posible.
          */
         void init_fsm();
 
         /**
-         * Permite saber si aun hay procesos vivos en ejecuccion.
-         * @return true si quedan procesos vivos u en otro estados
-         * distinto a DEAD. Este metodo tiene un coste O(N)
+         * @brief Indica si hay al menos un proceso vivo en este scheduler.
+         *
+         * Comprueba el contador alive_count en O(1).
+         *
+         * @return true si alive_count > 0.
          */
         bool has_alive_processes() const;
 
         /**
-         * Permite ejecutar el siguiente proceso de la VM
-         * @return devuelve un puntero al proceso que esta en ejecuccion
+         * @brief Selecciona el proximo proceso de la cola ready_queue.
+         *
+         * Extrae el primer proceso de la cola (FIFO / round-robin) y lo devuelve.
+         * Si la cola esta vacia devuelve nullptr y el scheduler deberia esperar.
+         *
+         * @return Puntero al proximo proceso listo, o nullptr si la cola esta vacia.
          */
         ProcessVM *schedule_next();
 
         /**
-         * Permite eliminar un proceso del gestor de procesos.
+         * @brief Elimina el proceso con el PID indicado de este scheduler.
+         *
+         * Transiciona el proceso a DEAD, lo elimina de pid_index y del vector
+         * processes.  Decrementa alive_count.
+         *
+         * @param pid PID global del proceso a eliminar.
          */
         void kill(GlobalPID pid);
 
         /**
-         * Permite crear un proceso nuevo dentro del gestor de procesos.
-         * @return pid del nuevo proceso creado.
+         * @brief Crea un nuevo proceso virtual dentro de este scheduler.
+         *
+         * Asigna un PID local, construye el ProcessVM y lo registra en pid_index.
+         * El proceso nace en estado NEW y no es ejecutable hasta llamar a make_ready().
+         *
+         * @return PID global del nuevo proceso creado.
          */
         GlobalPID spawn();
 
         /**
-         * Permite marcar un proceso como listo
-         * @param pid PID del proceso que esta listo.
+         * @brief Pone el proceso con el PID indicado en estado READY.
+         *
+         * Inserta el proceso en ready_queue y llama a sem.release() para
+         * despertar al scheduler si esta esperando.  Es thread-safe.
+         *
+         * @param pid PID global del proceso que debe pasar a estado READY.
          */
         void make_ready(GlobalPID pid);
 
         /**
-         * Permite indicar internamete que la VM debe morir o deberia estar
-         * muerta, esto lo hacemos ya que no se puede llamar a on_event desde
-         * dentro de la propio VM ni se puede llamar a kill() el cual llama a on_event.
+         * @brief Bandera de parada cooperativa del scheduler.
+         *
+         * Cuando es true el run_loop() termina al final del quantum actual.
+         * Se activa desde VM::stop() para un apagado limpio.
          */
         bool should_kill = false;
 
         /**
-         * Permite poner un evento en la cola
-         * @param e evento a realizar, se pondra a la cola y se realizara cuando sea
-         * necesario.
-         */
-        //void emit_event(vm_event e);
-
-        /**
-         * Permite agregar una nueva hook a la VM, esta funcion no es thread-safe,
-         * asi que no se debe usar para añadir un hook mientras la VM se ejecuta, a
-         * no ser que se haga uso de algun mecanismo de sincronizacion. Se recomienda usar
-         * la version safe-thread la cual es "add_debug_hook" y añade un mutex que permite
-         * añadir hooks en run time mientras la VM se ejecuta.
-         * @param hook funcion hook que añadir a la cola de hooks.
+         * @brief Registra un hook de depuracion sin ningun mecanismo de sincronizacion.
+         *
+         * Solo debe usarse antes de que el scheduler comience a ejecutar procesos.
+         * Para uso en tiempo de ejecucion usar add_debug_hook() que protege con mutex.
+         *
+         * @param hook Callback de depuracion a anadir.
          */
         void free_add_debug_hook(DebugHook hook);
 
+        /**
+         * @brief Registra un hook de depuracion de forma thread-safe.
+         *
+         * Usa un mutex interno para que el hook pueda anadirse mientras el scheduler
+         * esta en ejecucion sin causar condiciones de carrera.
+         *
+         * @param hook Callback de depuracion a anadir.
+         */
         void add_debug_hook(DebugHook hook);
 
         /**
-         * Permite activar y desactivar hooks, al añadir un hook
-         * usando add_debug_hook automaticamente esta flag se activa,
-         * se puede desactivar en cualquier momento para que los hooks
-         * no interfieran en la ejecuccion de la VM.
+         * @brief Habilita o deshabilita la ejecucion de los hooks de depuracion.
+         *
+         * Se activa automaticamente al registrar el primer hook con add_debug_hook().
+         * Puede desactivarse en cualquier momento para eliminar la penalizacion de
+         * rendimiento de los hooks sin necesidad de eliminarlos.
          */
         bool has_hooks = false;
 
+        /** @brief Destructor: libera todos los procesos y recursos del scheduler. */
         ~Scheduler();
 
-        /**
-         * Cola de eventos pendientes, si alguna instruccion o algo externo
-         * quiero generar algun evento, se debe poner a la cola y hasta que la VM
-         * no termine su evento actual no se podra realizar los eventos de la cola.
-         */
-        //std::queue<vm_event> pending_events;
+        Timer debug_timer{}; ///< Temporizador para medir la duracion de cada fase en modo depuracion
 
-        Timer debug_timer{}; // mide la fase actual en el modo de depuracion
+        uint64_t time_decode = 0; ///< Tiempo acumulado en la fase de descodificacion (en ns)
+        uint64_t time_event  = 0; ///< Tiempo acumulado en las transiciones de la FSM (en ns)
+        uint64_t time_exec   = 0; ///< Tiempo acumulado en la fase de ejecucion (en ns)
 
-        /**
-         * toiempo tardado en el decoder
-         */
-        uint64_t time_decode = 0;
+        // --- Contadores del profiler por hilo ---
+        uint64_t profiler_sample        = 0; ///< Contador de muestras del profiler
+        uint64_t profiler_instr_counter = 0; ///< Se incrementa cada 256 instrucciones ejecutadas
 
-        /**
-         * tiempo de transicion de eventos.
-         */
-        uint64_t time_event = 0;
+        std::atomic<bool> profiler_running = true; ///< true mientras el profiler deba ejecutarse
+
+        std::atomic<bool> is_waiting { false }; ///< true mientras el scheduler esta bloqueado en sem.acquire()
 
         /**
-         * tiempo tardado en la ejecuccion
-         */
-        uint64_t time_exec = 0;
-
-        // --- PROFILER POR HILO / VM---
-        uint64_t profiler_sample        = 0; // contador de instrucciones
-        uint64_t profiler_instr_counter = 0; // incrementa cada 256 instrucciones
-        // --- PROFILER POR HILO / VM ---
-
-        /**
-         * permite indicar que se puede seguir ejecutado las funcionalidades
-         * de "profiler" internas o externas a la VM.
-         */
-        std::atomic<bool> profiler_running = true;
-
-        /**
-         * Permite saber si esta a la espera.
-         */
-        std::atomic<bool> is_waiting { false };
-
-        /**
-         * Permite reactivar un gestor de procesos que se haya quedado esperando.
-         * API idéntica a std::counting_semaphore: sem.acquire() bloquea,
-         * sem.release() despierta desde cualquier hilo (make_ready/stop).
+         * @brief Semaforo binario que permite al scheduler dormir cuando no hay procesos listos.
+         *
+         * API identica a std::counting_semaphore:
+         *   - sem.acquire() bloquea hasta recibir una senyal.
+         *   - sem.release() despierta al scheduler desde cualquier hilo (make_ready/stop).
          */
         BinarySemaphore sem;
 
     private:
     };
 
+    /**
+     * @brief Devuelve el nombre legible de una fase de depuracion.
+     *
+     * Util para imprimir mensajes de traza junto al valor de DebugStage.
+     *
+     * @param s Fase de depuracion.
+     * @return  Cadena con el nombre de la fase.
+     */
     static const char *debug_stage_name(DebugStage s) {
         switch (s) {
-            case DebugStage::DecodeBegin: return "DECODE_BEGIN";
-            case DebugStage::DecodeEnd: return "DECODE_END";
-            case DebugStage::ExecuteBegin: return "EXEC_BEGIN";
-            case DebugStage::ExecuteEnd: return "EXEC_END";
-            case DebugStage::OnEventBegin: return "EVENT_BEGIN";
-            case DebugStage::OnEventEnd: return "EVENT_END";
-            default: return "UNKNOWN";
+            case DebugStage::DecodeBegin:  return "DECODE_BEGIN";  // inicio de descodificacion
+            case DebugStage::DecodeEnd:    return "DECODE_END";    // fin de descodificacion
+            case DebugStage::ExecuteBegin: return "EXEC_BEGIN";    // inicio de ejecucion
+            case DebugStage::ExecuteEnd:   return "EXEC_END";      // fin de ejecucion
+            case DebugStage::OnEventBegin: return "EVENT_BEGIN";   // antes del cambio de estado
+            case DebugStage::OnEventEnd:   return "EVENT_END";     // despues del cambio de estado
+            default:                       return "UNKNOWN";        // fase desconocida
         }
     }
 
-
-
     /**
-     * @brief Ejecuta todos los hooks de depuración registrados para la máquina virtual.
+     * @brief Invoca todos los hooks de depuracion registrados en el scheduler del proceso.
      *
-     * Esta función se invoca en distintos puntos del ciclo de ejecución de la VM
-     * (fetch, decode, execute, eventos del FSM, etc.) y permite que múltiples
-     * callbacks externos reaccionen a cada fase sin interferir con la lógica
-     * interna del intérprete.
+     * Se llama en cada punto del pipeline indicado por @p stage.  Permite
+     * implementar trazas, breakpoints, stepping e integracion con depuradores
+     * externos sin modificar la logica interna del interprete.
      *
-     * Cada hook registrado en `vm->debug_hooks` recibe el puntero a la VM y el
-     * estado de depuración actual, permitiendo implementar:
-     *  - trazas de ejecución,
-     *  - breakpoints,
-     *  - stepping,
-     *  - inspección del estado interno,
-     *  - profiling por instrucción o por evento,
-     *  - integración con debuggers externos.
+     * Cada hook debe ser rapido y no bloqueante para no degradar el rendimiento.
      *
-     * @param vm    Puntero a la máquina virtual que está ejecutando el ciclo.
-     * @param stage Fase del pipeline o del FSM en la que se dispara el hook.
+     * @note Cuando PROFILE_FAST esta definido esta funcion se reemplaza por una
+     *       macro vacia para eliminar toda penalizacion de rendimiento.
      *
-     * @note Esta función no realiza comprobaciones adicionales: si un hook lanza
-     *       una excepción o produce efectos secundarios inesperados, puede afectar
-     *       al flujo de depuración. Se recomienda que los hooks sean seguros y
-     *       no bloqueantes.
+     * @param process Proceso cuyo scheduler contiene los hooks registrados.
+     * @param stage   Fase del pipeline en la que se disparan los hooks.
      */
     //#define PROFILE_FAST
 #ifdef PROFILE_FAST
@@ -475,42 +411,28 @@ namespace runtime {
 #endif
 
     /**
-     * @brief Hilo de perfilado para una instancia de VM.
+     * @brief Hilo de perfilado continuo para un scheduler de la VM.
      *
-     * Este hilo se ejecuta en paralelo a la VM y se encarga de:
-     *   - Calcular las instrucciones por segundo (IPS) usando muestreo.
-     *   - Calcular el porcentaje de CPU consumido por la VM.
-     *   - Imprimir los resultados usando vesta::scout() (thread-safe).
+     * Se ejecuta en paralelo al scheduler y calcula:
+     *   - Instrucciones por segundo (IPS): delta de profiler_instr_counter * 256 / segundo.
+     *   - Porcentaje de CPU: time_exec (ns acumulados) / 1e9 * 100 por segundo.
      *
-     * El cálculo funciona así:
-     *   - Cada 256 instrucciones ejecutadas, la VM incrementa profiler_instr_counter.
-     *   - Cada segundo, este hilo lee ese contador y calcula:
-     *         IPS = delta * 256
-     *   - El tiempo ocupado (busy time) se acumula en vm->time_exec (ns).
-     *         CPU% = (time_exec / 1e9) * 100
+     * Interpretacion de resultados:
+     *   - IPS alto + CPU bajo  -> VM idle o pocas instrucciones por segundo.
+     *   - IPS alto + CPU alto  -> bucle caliente (hot loop).
+     *   - IPS bajo + CPU alto  -> instrucciones costosas.
      *
-     *  IPS alto + CPU bajo -> la VM está idle o ejecuta pocas instrucciones por segundo.
-     *  IPS alto + CPU alto -> la VM está ejecutando un bucle caliente.
-     *  IPS bajo + CPU alto -> la VM está haciendo trabajo costoso por instrucción.
+     * Se detiene cuando should_kill o !profiler_running son true.
      *
-     * Podemos ejecutar un profiler como se ve a continuacion:
-     *
+     * Uso tipico:
      * @code{.cpp}
-     * std::thread(&runtime::profiler_thread, vm).detach();
+     * std::thread(&runtime::profiler_thread, scheduler).detach();
      * @endcode
      *
-     * profiler_thread depende de la flag interna vm->should_kill que indica
-     * si la VM va a morir o deberia morir y de vm->profiler_running que
-     * indica si la VM desea que se haga profiler no, en el caso de
-     * esta funcion se debe cumplir la siguiente condicion:
-     * @code{.cpp}
-     *      !vm->should_kill && vm->profiler_running
-     * @endcode
-     * En caso de que alguna cambiem el profiler se detendra.
-     *
-     * @param vm Puntero a la instancia de VM que se está perfilando.
+     * @param scheduler Puntero al scheduler cuyas estadisticas se van a perfilar.
      */
     void profiler_thread(Scheduler *scheduler);
-}
 
-#endif //SCHEDULER_H
+} // namespace runtime
+
+#endif // SCHEDULER_H

@@ -1,22 +1,36 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#include "ffi/native_ffi.h"
+/**
+ * @file decode_instruction.cpp
+ * @brief Implementacion del decodificador de instrucciones de VestaVM.
+ *
+ * Implementa la funcion principal de decodificacion que convierte bytes del
+ * bytecode en estructuras DecodedInstr, resolviendo la tabla primaria y la
+ * tabla extendida (prefijo 0x00) de instrucciones.
+ */#include "ffi/native_ffi.h"
 #include "runtime/decode_table.h"
 #include "runtime/dispatch_table.h"
 #include "runtime/runtime.h"
 
+// Activar con -DDEBUG_DECODE_PRINT para volcar cada instruccion descodificada
 //#define DEBUG_DECODE_PRINT
 #ifdef DEBUG_DECODE_PRINT
+/**
+ * @brief Imprime informacion de descodificacion de la instruccion en curso.
+ *
+ * Escribe por la salida de depuracion el PC, un mensaje, el nombre de la
+ * instruccion y los argumentos variadicos adicionales.
+ */
 #define DBG_DECODE(PC, msg, Instr, ...) \
     do { \
     vesta::scout_decode() \
@@ -24,6 +38,12 @@
     << std::string(Instr) << " " << __VA_ARGS__ << std::endl; \
     } while(0)
 
+/**
+ * @brief Vuelca en hexadecimal los @p size bytes a partir del PC actual.
+ *
+ * Lee los bytes de la memoria virtual del proceso y los imprime con dump_memory().
+ * Sale con codigo -1 si @p size supera 12 (limite de seguridad).
+ */
 #define DBG_DECODE_DUMP(vm, instr, size) \
 do { \
 if (size > 12) {vesta::scout_decode() << "size(" << (uint64_t)size << ") > 10 "; exit(-1);} \
@@ -36,19 +56,25 @@ vesta::scout_decode() << std::endl;\
 } while(0)
 
 #else
+    // En release ambos macros se reducen a no-ops para eliminar todo overhead
     #define DBG_DECODE(PC, ...) do {} while(0)
     #define DBG_DECODE_DUMP(PC, ...) do {} while(0)
 #endif
 
 
 /**
- * version inline para obtener el tiempo
- * @return devuelve el tiempo actual, se usa para mediciones.
+ * @brief Devuelve la marca de tiempo actual en nanosegundos.
+ *
+ * Implementacion inline que usa CLOCK_MONOTONIC para medir intervalos de
+ * tiempo de alta resolucion.  Solo se invoca cuando has_hooks esta activo
+ * para evitar penalizacion en el hot-path de produccion.
+ *
+ * @return Tiempo monotono actual expresado en nanosegundos.
  */
 inline uint64_t now_ns() {
     timespec ts{};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t) ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+    clock_gettime(CLOCK_MONOTONIC, &ts);                           // leer reloj monotono del SO
+    return (uint64_t) ts.tv_sec * 1000000000ULL + ts.tv_nsec;     // convertir a nanosegundos totales
 }
 
 namespace runtime {
@@ -60,65 +86,98 @@ namespace runtime {
     //   reg_byte bits 3-0 -> reg1 (registro general)
     //   imm8              -> reg2 (indice de vtable/campo/metodo, 0-255)
     // -------------------------------------------------------------------------
+
+    /**
+     * @brief Descodifica una instruccion OOP del tipo [reg, imm8].
+     *
+     * Lee el byte de registro y el inmediato de 8 bits situados en las
+     * posiciones PC+2 y PC+3 respectivamente.  El nibble bajo del byte de
+     * registro contiene el numero de registro general; el imm8 codifica el
+     * indice de vtable, campo o metodo (rango 0-255).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_oop_reg_imm8(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // fijar longitud de instruccion
 
-        // las instrucciones extendidas siempre tienen prefijo 0x00
+        // las instrucciones extendidas siempre tienen prefijo 0x00, por eso el offset es +2
         uint64_t offset = vm->registers.rip.raw() + 2;
-        uint16_t data   = vm->vm_mem.read_u16(offset);
+        uint16_t data   = vm->vm_mem.read_u16(offset); // leer reg_byte e imm8 de una sola lectura
 
-        uint8_t reg_byte = static_cast<uint8_t>(data & 0xFF);        // byte 2
-        uint8_t imm8     = static_cast<uint8_t>((data >> 8) & 0xFF); // byte 3
+        uint8_t reg_byte = static_cast<uint8_t>(data & 0xFF);        // byte 2: contiene el registro
+        uint8_t imm8     = static_cast<uint8_t>((data >> 8) & 0xFF); // byte 3: indice de vtable/campo
 
-        instr.data_instruction.reg_data.reg1 = reg_byte & 0x0F; // bits 3-0 = reg general
-        instr.data_instruction.reg_data.reg2 = imm8;            // 0-255 = indice
+        instr.data_instruction.reg_data.reg1 = reg_byte & 0x0F; // bits 3-0 = numero de registro general
+        instr.data_instruction.reg_data.reg2 = imm8;            // 0-255 = indice de metodo o campo
     }
 
+    /**
+     * @brief Descodifica una instruccion con direccionamiento SIB.
+     *
+     * Lee 4 bytes tras los 2 bytes de opcode extendido y extrae los campos:
+     *   - ctrl_byte: mode (2 bits), signed (1 bit), direction (1 bit), scale (2 bits), has_index (1 bit)
+     *   - regs_byte: reg_final (nibble alto), reg_base (nibble bajo)
+     *   - index_byte: reg_index (nibble bajo)
+     *
+     * La escala efectiva se codifica como scale | (has_index << 2) en mem_data.scale
+     * para que el ejecutor pueda distinguir si existe un registro indice.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // fijar longitud
 
         // 4 bytes tras los 2 bytes de opcode: ctrl | regs | index | pad
         uint64_t offset = vm->registers.rip.raw() + 2;
-        uint32_t data   = vm->vm_mem.read_u32(offset);
+        uint32_t data   = vm->vm_mem.read_u32(offset); // lectura de bloque de 4 bytes
 
-        uint8_t ctrl_byte  = static_cast<uint8_t>(data & 0xFF);
-        uint8_t regs_byte  = static_cast<uint8_t>((data >> 8) & 0xFF);
-        uint8_t index_byte = static_cast<uint8_t>((data >> 16) & 0xFF);
+        uint8_t ctrl_byte  = static_cast<uint8_t>(data & 0xFF);         // byte de control SIB
+        uint8_t regs_byte  = static_cast<uint8_t>((data >> 8) & 0xFF);  // registro base/final
+        uint8_t index_byte = static_cast<uint8_t>((data >> 16) & 0xFF); // registro indice
 
-        instr.flags_info.mode             = (ctrl_byte >> 6) & 0x3;
-        instr.flags_info._signed_instruct = (ctrl_byte >> 5) & 0x1;
-        instr.flags_info.direction        = (ctrl_byte >> 4) & 0x1;
-        uint8_t scale                     = (ctrl_byte >> 2) & 0x3;
-        uint8_t has_index                 = (ctrl_byte >> 1) & 0x1;
+        // extraer subcampos del byte de control
+        instr.flags_info.mode             = (ctrl_byte >> 6) & 0x3; // modo de acceso (tamano)
+        instr.flags_info._signed_instruct = (ctrl_byte >> 5) & 0x1; // operacion con signo
+        instr.flags_info.direction        = (ctrl_byte >> 4) & 0x1; // direccion lectura/escritura
+        uint8_t scale                     = (ctrl_byte >> 2) & 0x3; // escala del indice (0=x1,1=x2,2=x4,3=x8)
+        uint8_t has_index                 = (ctrl_byte >> 1) & 0x1; // si hay registro indice
 
-        instr.data_instruction.mem_data.reg_final = regs_byte >> 4;
-        instr.data_instruction.mem_data.reg_base  = regs_byte & 0x0F;
-        instr.data_instruction.mem_data.reg_index = index_byte & 0x0F;
-        // bits 1-0 de scale = escala real (0=x1,1=x2,2=x4,3=x8); bit 2 = has_index
+        // extraer registros de los bytes correspondientes
+        instr.data_instruction.mem_data.reg_final = regs_byte >> 4;   // nibble alto = registro destino/fuente
+        instr.data_instruction.mem_data.reg_base  = regs_byte & 0x0F; // nibble bajo = registro base
+        instr.data_instruction.mem_data.reg_index = index_byte & 0x0F;// nibble bajo = registro indice
+        // bits 1-0 de scale = escala real; bit 2 = has_index para indicar presencia del indice
         instr.data_instruction.mem_data.scale     = scale | (has_index << 2);
     }
 
+    /**
+     * @brief Descodifica una instruccion de dos operandos registro-registro.
+     *
+     * Cubre ADD, SUB, MUL, DIV, MOV y similares de la forma "OP reg1, reg2".
+     * Lee 2 bytes tras el opcode: el primero contiene el modo (bits 7-6) y el
+     * segundo contiene ambos registros codificados como nibble alto/bajo.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr) {
-        // las instrucciones de registro usan tamaño constante.
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano constante
 
-        // suponiendo que sea un add, mov, sub, div, mul u otro
-        // del estilo, se puede usar este modo de descodificacion.
-
-        // el offset del resto de datos empieza apartir del opcode,
-        // calculamos el offset al resto de datos.
+        // calcular offset al primer byte de datos segun si es opcode extendido o primario
         uint64_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
 
-        // leemos los dos bytes que ocupa la instrucciones de este tipo
+        // leer los dos bytes de datos de la instruccion
         uint16_t data = vm->vm_mem.read_u16(offset);
 
-        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
-        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
+        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF); // byte de modo
+        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8); // byte de registros
 
-        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
+        // extraer modo de los bits 7-6 del byte de control
         instr.flags_info.mode = (n1 >> 6) & 0b11;
 
-        // los dos registros se codifica en el mismo byte (en el cuarto normalmente), el modo en el tercero
+        // los dos registros se codifican en el mismo byte: nibble bajo = reg1, nibble alto = reg2
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
         instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
 
@@ -130,23 +189,38 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
+    /**
+     * @brief Descodifica una instruccion MOV registro-registro con byte de control.
+     *
+     * Similar a decode_instr_two_op_reg pero extrae ademas los campos
+     * _signed_instruct y direction del byte de control para soportar las
+     * variantes MOV con extension de signo y MOV con direccion inversa.
+     *
+     * Formato del byte de control (n1):
+     *   bits 7-6 -> mode
+     *   bit  5   -> signed (_signed_instruct)
+     *   bit  4   -> direction
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_simple_mov(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // fijar longitud
 
         uint64_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
-        uint16_t data   = vm->vm_mem.read_u16(offset);
+        uint16_t data   = vm->vm_mem.read_u16(offset); // leer byte de control y byte de registros
 
-        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);
-        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8);
+        uint8_t n1 = static_cast<uint8_t>(data & 0x00FF);        // byte de control
+        uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8); // byte de registros
 
         // ctrl byte: mode(2) | signed(1) | dir(1) | 0000
-        instr.flags_info.mode             = (n1 >> 6) & 0b11;
-        instr.flags_info._signed_instruct = (n1 >> 5) & 0b1;
-        instr.flags_info.direction        = (n1 >> 4) & 0b1;
+        instr.flags_info.mode             = (n1 >> 6) & 0b11; // modo de acceso a memoria
+        instr.flags_info._signed_instruct = (n1 >> 5) & 0b1;  // extension de signo
+        instr.flags_info.direction        = (n1 >> 4) & 0b1;  // direccion del movimiento
 
         // regs byte: reg2(4) | reg1(4)
-        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
-        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);  // nibble bajo = reg destino
+        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>(n2 >> 4);   // nibble alto = reg fuente
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                    " r" << (int)instr.data_instruction.reg_data.reg1 << ", "
@@ -155,35 +229,46 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
-
+    /**
+     * @brief Descodifica una instruccion MOV con operando inmediato de longitud variable.
+     *
+     * El byte de datos en PC+2 controla el modo, signo, direccion y numero de registro.
+     * La longitud del inmediato depende del modo codificado (1/2/4/8 bytes).
+     *
+     * Caso especial: si direction==1 y signed==1, se usa un registro especial de 6 bits
+     * (combinando mode<<4 | reg) con un inmediato fijo de 64 bits.
+     *
+     * Formato del byte de datos (PC+2):
+     *   bits 7-6 -> mode  (0=8b, 1=16b, 2=32b, 3=64b)
+     *   bit  5   -> signed
+     *   bit  4   -> direction
+     *   bits 3-0 -> registro
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_inmed_mov(ProcessVM *vm, DecodedInstr &instr) {
-        //instr.flags_info.size_instr =
-
-        // datos del mov que indican la variante.
+        // leer el byte de metadatos en PC+2
         uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 2];
 
-        // leemos solo 8 byte de datos apartir del segundo opcode y el campo data.
-        // las instrucciones de inmediatos usan longitud variable, para asgurarnos de hacer las menos
-        // lecturas posibles leemos 64 bits primeramente de golpe, luego usamos 1, 2, 4, u 8 bytes de los leeidos.
+        // leer 8 bytes del inmediato de golpe; se usaran 1, 2, 4 u 8 segun el modo
         uint64_t inmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 3);
 
-        // 0b`mode`0d0000 -> modo ocupa el los primeros 2 bits
-        instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6 (mm)
-        instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5 (s)
-        instr.flags_info.direction             = (data >> 4) & 0b1;  // bit 4 (d)
-        instr.data_instruction.inmmed_data.reg = data & 0b1111;      // bits 3-0 (rrrr)
+        // extraer los campos del byte de datos
+        instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6: modo (tamano del inmediato)
+        instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5: operacion con signo
+        instr.flags_info.direction             = (data >> 4) & 0b1;  // bit 4: direccion del movimiento
+        instr.data_instruction.inmmed_data.reg = data & 0b1111;      // bits 3-0: numero de registro
 
-        // si la direccion es 1 y el signo 1, el mov usa un registro especial
-        // y por tanto siempre se usa 64 bits de inmediato
+        // caso especial: direction=1 y signed=1 -> registro especial de 6 bits con inmediato de 64 bits
         if (instr.flags_info.direction == 1 && instr.flags_info._signed_instruct == 1) {
-            // guardamos el inmediato de 64 bits:
-            instr.data_instruction.inmmed_data.inmmed = inmed;
+            instr.data_instruction.inmmed_data.inmmed = inmed; // guardar inmediato de 64 bits
 
-            // indicamos el tamaño de la instruccion que es 2 bytes de opcode + 1 de datos + 8 de inmediato
+            // 2 bytes opcode + 1 byte datos + 8 bytes inmediato = 11 bytes totales
             instr.flags_info.size_instr = 2 + 1 + 8;
-            instr.flags_info.reg_ext    = true; // indicar que usa un registro extendido
+            instr.flags_info.reg_ext    = true; // indicar que usa un registro extendido especial
 
-            // un registro especial usa el modo como bits adicional para codificar el registro espcial.
+            // combinar mode (bits adicionales) con reg para formar el codigo de 6 bits del registro especial
             instr.data_instruction.inmmed_data.reg = instr.flags_info.mode << 4 |
                     instr.data_instruction.inmmed_data.reg;
 
@@ -193,26 +278,21 @@ namespace runtime {
             );
             DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
 
-            return; // debemos salir ya que lo de abajo solo aplica con descodificacion convencional
+            return; // salir: el resto del codigo solo aplica a la descodificacion convencional
         }
 
         /**
-         * El tamaño de este tipo de instrucciones es variable ya que depende del modo usado, la cantidad
-         * de bytes para el inmediato varia.
-         * solo 3 bytes son constantes, los cuales 2 son opcodes y 1 es metadatos de la instruccion,
-         * los otrs bytes corresponden a la longitud del inmediato que depende del modo codificado.
+         * Longitud variable: 3 bytes fijos (2 opcode + 1 datos) mas la longitud del inmediato
+         * que depende del modo codificado.
          */
         instr.flags_info.size_instr = 3 + Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
 
+        // recortar el inmediato leido al numero de bytes que corresponde al modo
         switch (instr.flags_info.mode) {
-            case 0b00: instr.data_instruction.inmmed_data.inmmed = (uint8_t) inmed; //  8 bits
-                break;
-            case 0b01: instr.data_instruction.inmmed_data.inmmed = (uint16_t) inmed; // 16 bits
-                break;
-            case 0b10: instr.data_instruction.inmmed_data.inmmed = (uint32_t) inmed; // 32 bits
-                break;
-            default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
-                break;
+            case 0b00: instr.data_instruction.inmmed_data.inmmed = (uint8_t)  inmed; break; //  8 bits
+            case 0b01: instr.data_instruction.inmmed_data.inmmed = (uint16_t) inmed; break; // 16 bits
+            case 0b10: instr.data_instruction.inmmed_data.inmmed = (uint32_t) inmed; break; // 32 bits
+            default:   instr.data_instruction.inmmed_data.inmmed = inmed;            break; // 64 bits
         }
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, " r"
@@ -222,13 +302,31 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion de un solo byte sin operandos relevantes.
+     *
+     * Simplemente fija size_instr a partir de los metadatos de la tabla de
+     * descodificacion y emite el volcado de depuracion si esta activo.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_simple(ProcessVM *vm, DecodedInstr &instr) {
-        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, ""
-        );
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion de un solo registro (INC/DEC y similares).
+     *
+     * Verifica que la instruccion tiene exactamente 2 bytes de longitud.
+     * El unico byte de datos codifica mode (bits 5-4), la variante INC/DEC
+     * (bit 6) y el numero de registro (bits 3-0).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_one_op_reg(ProcessVM *vm, DecodedInstr &instr) {
         VM_ASSERT(
             instr_size(instr.metadata->size) == 2,
@@ -238,26 +336,22 @@ namespace runtime {
             ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
             "decode_instr_one_op_reg() Error la instruccion encontrada no tiene size 2 sino un size: "
             << instr_size(instr.metadata->size) << "\n"
-            //<< vm->to_string(),
             , {
             vesta::scout() << vesta::dump(vm->vm_mem, vm->registers.rip.raw(), 64) << std::endl;
             }
         );
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano siempre 2
 
-        // leemos solo 1 byte de datos pues se supone que la instruccion a
-        // descodificar es de longitud 2.
+        // leer el unico byte de datos (byte opcode+1)
         uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 1];
 
-        // 0b00`mode`0000 -> modo ocupa el los primeros 2 bits
+        // bits 5-4: modo de acceso (tamano del operando)
         instr.flags_info.mode = (data >> 4) & 0b11;
 
-        // el septimo bit indica si es INC o DIC
-        // 0b0000 0000 -> INC
-        // 0b0100 0000 -> DEC
+        // bit 6: 0 = INC, 1 = DEC
         instr.flags_info._signed_instruct = (data >> 6) & 0b1;
 
-        // 0b00`mode`reg -> registro ocupa los ultimos 4 bits
+        // bits 3-0: numero de registro a operar
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(data & 0xF);
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
@@ -267,27 +361,46 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
-    // MOVC/MOVCH mem-reg: [0x00][0x1E][ctrl][byte4]  (4 bytes total)
-    // ctrl: host(1)|host(1)|d(1)|reg1(5)
-    //   bits 7-6: 0b10 = MOVCH, 0b00 = MOVC  (repurposing mode field)
-    // byte4: flag(3)|reg2(5)
+    /**
+     * @brief Descodifica una instruccion MOVC o MOVCH de acceso a memoria (4 bytes).
+     *
+     * Formato: [0x00][0x1E][ctrl][byte4]
+     *   ctrl: host(2 bits) | direction(1 bit) | reg1(4 bits)
+     *     bits 7-6 == 0b10 -> MOVCH (acceso a memoria del host)
+     *     bits 7-6 == 0b00 -> MOVC  (acceso a memoria virtual de la VM)
+     *   byte4: flag_code(3 bits en bits 7-5) | reg2(5 bits)
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_movc(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = 4;
+        instr.flags_info.size_instr = 4; // MOVC/MOVCH es siempre de 4 bytes
 
-        uint64_t base = vm->registers.rip.raw() + 2;
-        uint8_t  ctrl = vm->vm_mem[base];
-        uint8_t  b4   = vm->vm_mem[base + 1];
+        uint64_t base = vm->registers.rip.raw() + 2; // offset al byte de control
+        uint8_t  ctrl = vm->vm_mem[base];             // byte de control de la instruccion
+        uint8_t  b4   = vm->vm_mem[base + 1];         // cuarto byte: codigo de flag y reg2
 
-        // bits 7-6 of ctrl: 0b10 = MOVCH (host), 0b00 = MOVC (vm)
+        // bits 7-6 del ctrl: 0b10 = MOVCH (host), 0b00 = MOVC (vm)
         uint8_t host_bits               = (ctrl >> 6) & 0b11;
-        instr.flags_info._signed_instruct = (host_bits == 0b10) ? 1 : 0;
-        instr.flags_info.direction        = (ctrl >> 5) & 0b1;
-        instr.flags_info.mode             = 3; // always qword for register moves
-        instr.data_instruction.reg_data.reg1 = ctrl & 0xF;        // reg1 (dest/src)
-        instr.data_instruction.reg_data.reg2 = (b4 >> 5) & 0x7;   // flag code (3 bits)
-        instr.data_instruction.inmmed_data.reg = b4 & 0x1F;        // reg2 (src/dest)
+        instr.flags_info._signed_instruct = (host_bits == 0b10) ? 1 : 0; // 1 = modo host
+        instr.flags_info.direction        = (ctrl >> 5) & 0b1;            // bit 5: direccion
+        instr.flags_info.mode             = 3;                             // siempre qword para movimientos de registro
+        instr.data_instruction.reg_data.reg1   = ctrl & 0xF;              // nibble bajo ctrl = reg1 (destino o fuente)
+        instr.data_instruction.reg_data.reg2   = (b4 >> 5) & 0x7;         // bits 7-5 de byte4 = codigo de flag
+        instr.data_instruction.inmmed_data.reg = b4 & 0x1F;               // bits 4-0 de byte4 = reg2
     }
 
+    /**
+     * @brief Descodifica una instruccion PUSH o POP.
+     *
+     * Verifica que la instruccion tiene 2 bytes.  El byte de datos distingue
+     * entre registro general y registro especial mediante el bit 6:
+     *   - bit 6 == 0 -> registro general: mode (bits 5-4), reg (bits 3-0)
+     *   - bit 6 == 1 -> registro especial: codigo de 6 bits (bits 5-0)
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_push_pop(ProcessVM *vm, DecodedInstr &instr) {
         VM_ASSERT(
             instr_size(instr.metadata->size) == 2,
@@ -297,38 +410,34 @@ namespace runtime {
             ") opcode2(" + vesta::hex64(instr.flags_info.opcode_index) + ")\n" <<
             "decode_instr_push_pop() Error la instruccion encontrada no tiene size 2 sino un size: "
             << instr_size(instr.metadata->size) << "\n"
-            //<< vm->to_string(),
             , {
             vesta::scout() << vesta::dump(vm->vm_mem, vm->registers.rip.raw(), 64) << std::endl;
             }
         );
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // siempre 2 bytes
 
-        // leemos solo 1 byte de datos pues se supone que la instruccion a
-        // descodificar es de longitud 2.
+        // leer el unico byte de datos tras el opcode
         uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 1];
 
-        // bit 7 -> registro extendido (especial)
+        // bit 6: indica si el operando es un registro especial
         uint8_t reg_ext          = (data >> 6) & 0b1;
         instr.flags_info.reg_ext = reg_ext;
 
         if (reg_ext == 1) {
-            //   REGISTRO ESPECIAL (6 bits)
+            // REGISTRO ESPECIAL: codigo de 6 bits en bits 5-0
             uint8_t reg_code                     = data & 0b00111111; // bits 0..5
             instr.data_instruction.reg_data.reg1 = reg_code;
-
-            // modo no aplica
-            instr.flags_info.mode = 0;
+            instr.flags_info.mode = 0; // modo no aplicable para registros especiales
         } else {
-            //   REGISTRO GENERAL (mode + reg) (6 bits)
-            uint8_t mode     = (data >> 4) & 0b11; // bits 4..5
-            uint8_t reg_code = data & 0b1111;      // bits 0..3
+            // REGISTRO GENERAL: modo en bits 5-4, codigo de registro en bits 3-0
+            uint8_t mode     = (data >> 4) & 0b11; // bits 4..5 = modo
+            uint8_t reg_code = data & 0b1111;       // bits 0..3 = registro
 
             instr.flags_info.mode                = mode;
             instr.data_instruction.reg_data.reg1 = reg_code;
         }
 
-        instr.flags_info.size_instr = 2;
+        instr.flags_info.size_instr = 2; // confirmar longitud fija
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                    " r"
                    << (int)instr.data_instruction.reg_data.reg1
@@ -336,6 +445,23 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
     }
 
+    /**
+     * @brief Descodifica una instruccion ALU con inmediato de longitud variable y registro.
+     *
+     * Esta funcion solo aplica a instrucciones de la tabla extendida (prefijo 0x00).
+     * El byte de datos en PC+2 codifica modo, signo, direccion y registro.
+     * El campo direction indica si el inmediato opera sobre el registro directamente
+     * o sobre la memoria apuntada por dicho registro.
+     *
+     * Formato del byte de datos (PC+2):
+     *   bits 7-6 -> mode   (0=8b, 1=16b, 2=32b, 3=64b)
+     *   bit  5   -> signed
+     *   bit  4   -> direction (0=reg, 1=[reg])
+     *   bits 3-0 -> numero de registro
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_inmed_reg(ProcessVM *vm, DecodedInstr &instr) {
         VM_ASSERT(
             instr.flags_info.is_not_extended == false,
@@ -346,57 +472,45 @@ namespace runtime {
             "decode_instr_inmed_reg() instr.is_not_extended == false " <<
             "Error la instruccion encontrada deberia usar extension de signo pero no lo hace por algun motivo: "
             << std::to_string(instr.flags_info.is_not_extended) << "\n"
-            //<< vm->to_string(),
             , {
             vesta::scout() << vesta::dump(vm->vm_mem, vm->registers.rip.raw(), 64) << std::endl;
             }
         );
 
         /**
-         * data contiene los campos encodeados:
-         * 0b mm s d rrrr
-         *    │  │ │ └─── reg (4 bits)
-         *    │  │ └───── d (1 bit)
-         *    │  └─────── s (1 bit)
-         *    └────────── mode (2 bits)
+         * Byte de datos en PC+2 con el siguiente layout de campos:
+         *   0b mm s d rrrr
+         *      |  | | +--- reg   (4 bits): numero de registro
+         *      |  | +----- d     (1 bit):  direccion (0=reg, 1=[reg])
+         *      |  +------- s     (1 bit):  signo
+         *      +----------- mode (2 bits): tamano del inmediato
          */
-        uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 2];
+        uint8_t data = vm->vm_mem[vm->registers.rip.raw() + 2]; // byte de control
 
-        // leemos solo 8 byte de datos apartir del segundo opcode y el campo data.
-        // las instrucciones de inmediatos usan longitud variable, para asgurarnos de hacer las menos
-        // lecturas posibles leemos 64 bits primeramente de golpe, luego usamos 1, 2, 4, u 8 bytes de los leeidos.
+        // leer 8 bytes del inmediato; se recortaran al modo elegido
         uint64_t inmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 3);
 
         /**
-         * Aunque las instrucciones de inmediatos no tiene direccionalidad, el campo
-         * direccion permite indicar en este caso si el valor inmediato debe operar a un registro:
-         *      adds reg, 0x1000    -> direccion = 0
-         * o si por el contrario el valor inmediato debe operar el valor contenido en la memoria señala por
-         * el registro:
-         *      adds [reg], 0x1000  -> direccion = 1
+         * direction=0: opera sobre el registro        (adds reg, 0x1000)
+         * direction=1: opera sobre la memoria de reg  (adds [reg], 0x1000)
          */
-        instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6 (mm)
-        instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5 (s)
-        instr.flags_info.direction             = (data >> 4) & 0b1;  // bit 4 (d)
-        instr.data_instruction.inmmed_data.reg = data & 0b1111;      // bits 3-0 (rrrr)
+        instr.flags_info.mode                  = (data >> 6) & 0b11; // bits 7-6: modo (tamano inmediato)
+        instr.flags_info._signed_instruct      = (data >> 5) & 0b1;  // bit 5: signo
+        instr.flags_info.direction             = (data >> 4) & 0b1;  // bit 4: modo de acceso
+        instr.data_instruction.inmmed_data.reg = data & 0b1111;      // bits 3-0: registro
 
         /**
-         * El tamaño de este tipo de instrucciones es variable ya que depende del modo usado, la cantidad
-         * de bytes para el inmediato varia.
-         * solo 3 bytes son constantes, los cuales 2 son opcodes y 1 es metadatos de la instruccion,
-         * los otrs bytes corresponden a la longitud del inmediato que depende del modo codificado.
+         * Longitud variable: 3 bytes fijos (2 opcode + 1 datos) mas la longitud del inmediato
+         * segun el modo codificado en los bits 7-6 del byte de datos.
          */
         instr.flags_info.size_instr = 3 + Assembly::Bytecode::mode_to_bytes(instr.flags_info.mode);
 
+        // recortar el inmediato leido al numero de bytes que corresponde al modo
         switch (instr.flags_info.mode) {
-            case 0b00: instr.data_instruction.inmmed_data.inmmed = (uint8_t) inmed; //  8 bits
-                break;
-            case 0b01: instr.data_instruction.inmmed_data.inmmed = (uint16_t) inmed; // 16 bits
-                break;
-            case 0b10: instr.data_instruction.inmmed_data.inmmed = (uint32_t) inmed; // 32 bits
-                break;
-            default: instr.data_instruction.inmmed_data.inmmed = inmed; // 64 bits
-                break;
+            case 0b00: instr.data_instruction.inmmed_data.inmmed = (uint8_t)  inmed; break; //  8 bits
+            case 0b01: instr.data_instruction.inmmed_data.inmmed = (uint16_t) inmed; break; // 16 bits
+            case 0b10: instr.data_instruction.inmmed_data.inmmed = (uint32_t) inmed; break; // 32 bits
+            default:   instr.data_instruction.inmmed_data.inmmed = inmed;            break; // 64 bits
         }
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
@@ -407,49 +521,80 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion XCHG con operandos mixtos (general o especial).
+     *
+     * Lee 2 bytes tras el prefijo 0x00 y el opcode (offset PC+2).
+     * Cada byte codifica un operando: bits 5-0 = codigo de registro,
+     * bit 6 = flag que indica si es registro especial (1) o general (0).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_xchg(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
-        // sumamos 2 por que saltamos el opcode y el byte de flags que aun no
-        // tiene ningun uso
+        // leer los 2 bytes de datos saltando el opcode extendido (PC+2)
         uint16_t data = vm->vm_mem.read_u16(vm->registers.rip.raw() + 2);
 
-        auto byte1 = static_cast<uint8_t>(data & 0xFF);
-        auto byte2 = static_cast<uint8_t>(data >> 8);
+        auto byte1 = static_cast<uint8_t>(data & 0xFF);  // byte del primer operando
+        auto byte2 = static_cast<uint8_t>(data >> 8);    // byte del segundo operando
 
-        instr.data_instruction.regs_data_extent.reg1       = byte1 & 0b11'1111;
-        instr.data_instruction.regs_data_extent.reg1_flags = byte1 >> 6 & 0b1;
-        instr.data_instruction.regs_data_extent.reg2       = byte2 & 0b11'1111;
-        instr.data_instruction.regs_data_extent.reg2_flags = byte2 >> 6 & 0b1;
+        // bits 5-0 = codigo de registro, bit 6 = flag de tipo (0=general, 1=especial)
+        instr.data_instruction.regs_data_extent.reg1       = byte1 & 0b11'1111; // codigo registro 1
+        instr.data_instruction.regs_data_extent.reg1_flags = byte1 >> 6 & 0b1;  // tipo registro 1
+        instr.data_instruction.regs_data_extent.reg2       = byte2 & 0b11'1111; // codigo registro 2
+        instr.data_instruction.regs_data_extent.reg2_flags = byte2 >> 6 & 0b1;  // tipo registro 2
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion de lectura/escritura de registros cursor.
+     *
+     * Lee 2 bytes tras los 2 bytes de opcode extendido (offset PC+2).
+     * El byte de control codifica el modo de acceso (bits 7-6) y el indice
+     * del cursor (bits 5-4).  El segundo byte contiene el numero de registro
+     * general (nibble bajo).
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_cursor_rw(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
         // los 2 bytes de datos empiezan tras los 2 bytes de opcode extendido
         uint64_t  offset = vm->registers.rip.raw() + 2;
-        uint16_t data   = vm->vm_mem.read_u16(offset);
+        uint16_t data    = vm->vm_mem.read_u16(offset); // leer byte de control y byte de registro
 
-        uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF);
-        uint8_t reg  = static_cast<uint8_t>((data & 0xFF00) >> 8);
+        uint8_t ctrl = static_cast<uint8_t>(data & 0x00FF);        // byte de control
+        uint8_t reg  = static_cast<uint8_t>((data & 0xFF00) >> 8); // byte de registro general
 
-        // ctrl_byte: bits 7-6 = mode (tamaño), bits 5-4 = cursor index (0-3)
-        instr.flags_info.mode                = (ctrl >> 6) & 0b11;
-        instr.data_instruction.reg_data.reg2 = (ctrl >> 4) & 0b11; // cursor index
-        instr.data_instruction.reg_data.reg1 = reg & 0xF;          // registro general
+        // ctrl_byte: bits 7-6 = mode (tamano del acceso), bits 5-4 = indice del cursor (0-3)
+        instr.flags_info.mode                = (ctrl >> 6) & 0b11; // modo de acceso
+        instr.data_instruction.reg_data.reg2 = (ctrl >> 4) & 0b11; // indice del cursor destino/fuente
+        instr.data_instruction.reg_data.reg1 = reg & 0xF;           // numero del registro general
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion de salto absoluto (10 bytes fijos).
+     *
+     * Formato: [opcode][cond_o_reservado][8 bytes addr] = 10 bytes (FIXED_10).
+     * El campo reg del inmediato almacena la condicion de salto y el campo
+     * inmmed guarda la direccion absoluta de destino.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_jump(ProcessVM *vm, DecodedInstr &instr) {
         // [opcode][cond_o_reservado][8 bytes addr] = 10 bytes (FIXED_10, opcode primario)
-        instr.data_instruction.inmmed_data.reg    = vm->vm_mem[vm->registers.rip.raw() + 1];
-        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2);
-        instr.flags_info.size_instr               = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.data_instruction.inmmed_data.reg    = vm->vm_mem[vm->registers.rip.raw() + 1];          // codigo de condicion
+        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2); // direccion absoluta de destino
+        instr.flags_info.size_instr               = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
 
         VM_ASSERT(
             instr.metadata->size <= Assembly::Bytecode::InstrSizeMode::COUNT,
@@ -465,20 +610,40 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion sin operandos.
+     *
+     * Fija size_instr a partir de los metadatos y emite el volcado de
+     * depuracion.  Usada por instrucciones como NOP, RET, HALT, etc.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_no_operands(ProcessVM *vm, DecodedInstr &instr) {
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano segun tabla
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion de salto relativo (FIXED_8 extendido).
+     *
+     * Formato: [0x00][0x2D][cond][padding][disp32] (8 bytes totales).
+     * El desplazamiento de 32 bits se lee en little-endian desde PC+4 y se
+     * extiende con signo a 64 bits para soportar saltos hacia atras.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_jrel(ProcessVM *vm, DecodedInstr &instr) {
         // [0x00][0x2D][cond][padding][disp32] - extended FIXED_8
-        instr.data_instruction.inmmed_data.reg = vm->vm_mem[vm->registers.rip.raw() + 2];
+        instr.data_instruction.inmmed_data.reg = vm->vm_mem[vm->registers.rip.raw() + 2]; // byte de condicion
         uint32_t raw_disp                      = 0;
-        vm->vm_mem.read_bytes(vm->registers.rip.raw() + 4, &raw_disp, 4);
+        vm->vm_mem.read_bytes(vm->registers.rip.raw() + 4, &raw_disp, 4); // leer desplazamiento de 32 bits
+        // extension de signo: int32 -> int64 -> uint64 para preservar el signo en la aritmetica de punteros
         instr.data_instruction.inmmed_data.inmmed =
                 static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(raw_disp)));
-        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // 8 bytes fijos
 
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                    "["
@@ -488,15 +653,27 @@ namespace runtime {
         DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
     }
 
+    /**
+     * @brief Descodifica una instruccion de llamada a funcion nativa (CALLN).
+     *
+     * Lee la direccion de la funcion nativa desde PC+2 (8 bytes).  El numero
+     * de argumentos (argc) se cachea directamente desde R15 en la fase de
+     * descodificacion para que tanto el puntero de funcion como argc esten
+     * disponibles desde la icache; esto permite al predictor de saltos de la
+     * CPU nativa predecir correctamente el switch(argc) tras la primera
+     * ejecucion del mismo PC.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
-        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2);
+        instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2); // direccion de la funcion nativa
 
-        // tamaño de la instruccion para luego incrementar rip
+        // tamano de la instruccion para luego incrementar rip tras la ejecucion
         instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size);
 
-        // argc se cachea en decode para que en exec ambos (fn y argc) vengan del
-        // ICACHE - constantes por PC de instruccion - lo que permite al IBP de la CPU
-        // predecir correctamente el switch(argc) tras la primera ejecucion.
+        // argc se cachea en decode para que exec pueda obtenerlo sin acceder a registros:
+        // al ser constante por PC, el IBP de la CPU predecira bien el switch(argc) tras la primera ejecucion
         instr.data_instruction.inmmed_data.reg = static_cast<uint64_t>(vm->registers.regs[R15].qword());
         DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name,
                    "["
@@ -507,74 +684,71 @@ namespace runtime {
     }
 
 
-
+    /**
+     * @brief Descodifica la instruccion apuntada por el RIP del proceso.
+     *
+     * Implementa un ciclo de descodificacion con icache de un nivel:
+     *   - HIT:  si icache[PC % ICACHE_SIZE].pc == PC se reutiliza la entrada existente.
+     *   - MISS: se selecciona la tabla de descodificacion (primaria o extendida),
+     *           se obtienen los metadatos, se llama al metodo decode() de la instruccion
+     *           y se guarda el resultado en la icache.
+     *
+     * Si has_hooks esta activo se acumula el tiempo de descodificacion en
+     * scheduler.time_decode y se llaman los hooks de DebugStage::DecodeBegin/End.
+     *
+     * @param process Proceso virtual cuyo RIP apunta a la instruccion a descodificar.
+     */
     void decode_instruction(ProcessVM *process) {
-        const bool measuring = process->scheduler.has_hooks;
-        vm_hook(process, DebugStage::DecodeBegin);
+        const bool measuring = process->scheduler.has_hooks; // activar medicion solo si hay hooks
+        vm_hook(process, DebugStage::DecodeBegin);            // hook de inicio de fase
         PROFILE_START
-        const uint64_t t1 = measuring ? now_ns() : 0;
+        const uint64_t t1 = measuring ? now_ns() : 0; // marca de tiempo inicial (solo si se mide)
 
-        uint64_t pc  = process->registers.rip.raw();
-        uint32_t idx = icache_index(pc);
+        uint64_t pc  = process->registers.rip.raw(); // PC actual del proceso
+        uint32_t idx = icache_index(pc);              // indice en la icache para este PC
 
-        // -------------------------------------------------------------------------------------------------------
-
-        // HIT en caché, si ya se descodifico alguna vez, se devuelve su resultado.
-        // Esto funcionara siempre y cuando las instrucciones no se modifiquen en run time.
-        // si la instruccion se modidica en tiempo de ejecuccion, la cache no se vera actualizada
-        // de forma automatica por lo que para la VM puede aparentar que la instruccion nunca cambio
-        // aunque a nivel de memoria lo alla hecho, en la cache no lo parecera.
+        // --- CACHE HIT ---
+        // Si la entrada de la icache corresponde a este PC se reutiliza el resultado anterior.
+        // Importante: la icache no detecta modificaciones en tiempo de ejecucion del codigo.
         DecodedInstr *cached = &process->icache[idx];
         if (cached->pc == pc && process->decoded_ptr != nullptr) {
-            // si ya se descodifico alguna vez una instruccion, se puede usar
-            // cache, pero sino hay que realizar una descodificacion por primera vez
+            process->decoded_ptr = cached; // apuntar al cache sin copiar
 
-            process->decoded_ptr = cached; // NO COPIA, SOLO APUNTA
-
-            if (measuring) process->scheduler.time_decode += now_ns() - t1;
+            if (measuring) process->scheduler.time_decode += now_ns() - t1; // acumular tiempo
 
             PROFILE_END("DECODER");
-            // realizamos el hook al final de la fase
-            vm_hook(process, DebugStage::DecodeEnd);
+            vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
             return;
         }
+
         /**
-         * Prefetch de la siguiente instrucción
-         * __builtin_prefetch(addr, rw, locality)
-         *      - rw = 0 -> lectura
-         *      - rw = 1 -> escritura
-         *      - locality = 0 -> no lo voy a usar mucho l1
-         *      - locality = 1 -> lo usaré pronto l2
-         *      - locality = 3 -> mantenlo en caché el máximo tiempo l3
+         * Prefetch de la siguiente instruccion para aprovechar el tiempo de descodificacion:
+         *   rw=0 -> lectura, locality=1 -> mantener en L2
          */
         __builtin_prefetch(&process->vm_mem[pc + 16], 0, 1);
 
-        DecodedInstr decode_tmp{}; // decodificamos en un temporal
-        decode_tmp.pc                         = pc;
-        decode_tmp.flags_info.is_not_extended = process->vm_mem[pc];
+        DecodedInstr decode_tmp{};                              // buffer temporal de descodificacion
+        decode_tmp.pc                         = pc;             // guardar PC de la instruccion
+        decode_tmp.flags_info.is_not_extended = process->vm_mem[pc]; // leer primer byte (0x00 = extendido)
 
         if (decode_tmp.flags_info.is_not_extended == 0x00) {
-            decode_tmp.flags_info.opcode_index = process->vm_mem[pc + 1];
+            decode_tmp.flags_info.opcode_index = process->vm_mem[pc + 1]; // leer segundo byte del opcode extendido
         }
 
-        // -------------------------------------------------------------------------------------------------------
-        // MISS -> decodificar desde cero
+        // --- CACHE MISS: descodificar desde cero ---
 
-        InstrFormat *table = decode_table_primary;
-        // decoded ya tiene los dos opcodes. leeidos
-        uint8_t index = decode_tmp.flags_info.is_not_extended;
+        InstrFormat *table = decode_table_primary;               // tabla de opcodes por defecto
+        uint8_t index      = decode_tmp.flags_info.is_not_extended; // indice en la tabla primaria
 
-        // seleccionamos la tabla de opcodes en base a si el primer byte es 0x00 o no,
-        // en caso de ser 0x00 se usa la tabla extendida (decode_table_extended).
+        // si el primer byte es 0x00 se selecciona la tabla extendida
         if (decode_tmp.flags_info.is_not_extended == 0x00) {
             table = decode_table_extended;
             index = decode_tmp.flags_info.opcode_index;
         }
 
-        // obtenemos los metadatos de la instruccion.
-        InstrFormat &metadata = table[index];
+        InstrFormat &metadata = table[index]; // obtener metadatos de la instruccion
 
-        // Validación de instrucción (solo en modo debug)
+        // validar que la instruccion existe y tiene ejecutor/decodificador (solo en modo debug)
         VM_ASSERT(
             metadata.mode < Assembly::Bytecode::AddressingMode::COUNT &&
             metadata.exec != nullptr && metadata.decode != nullptr,
@@ -585,86 +759,75 @@ namespace runtime {
             ") opcode2(" + vesta::hex64(decode_tmp.flags_info.opcode_index) + ")" <<
             "Bytes64: " <<
             "\n"
-            //<< process->to_string(),
             ,
             vesta::scout() << vesta::dump(process->vm_mem, process->registers.rip.raw(), 64) << std::endl;
             vm_hook(process, DebugStage::DecodeEnd);
         );
 
-        // obtenemos los metadatos de la instruccion.
-        decode_tmp.metadata = &metadata;
+        decode_tmp.metadata = &metadata; // enlazar metadatos al temporal de descodificacion
 
-        // -------------------------------------------------------------------------------------------------------
-
-        // ejecutamos el metodo encargado de descodificar dicha instruccion.
+        // llamar al metodo especializado de descodificacion de la instruccion
         metadata.decode(process, decode_tmp);
 
-        // Guardar en caché, despues de llamara a decode, muy importante el orden.
-        // los metodos de metadata.decode modifican la estructura metadata.decoded
-        // que luego copiamos a la cache.
-
-        // guardar en caché
+        // guardar el resultado en la icache (muy importante: despues de llamar a decode)
         process->icache[idx] = decode_tmp;
 
-        // apuntar a la entrada de caché
+        // apuntar decoded_ptr a la entrada de la icache (sin copiar)
         process->decoded_ptr = &process->icache[idx];
 
-        if (measuring) process->scheduler.time_decode += now_ns() - t1;
+        if (measuring) process->scheduler.time_decode += now_ns() - t1; // acumular tiempo de descodificacion
 
         PROFILE_END("DECODER");
-        // realizamos el hook al final de la fase
-        vm_hook(process, DebugStage::DecodeEnd);
+        vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
     }
 
 
+    /**
+     * @brief Ejecuta la instruccion descodificada apuntada por decoded_ptr del proceso.
+     *
+     * Llama al metodo exec() de los metadatos de la instruccion y, si no hubo
+     * salto ni bloqueo, avanza el RIP en size_instr bytes.  Si la instruccion
+     * es bloqueante retorna EVT_IO_WAIT sin avanzar el PC.
+     *
+     * Acumula el tiempo de ejecucion en scheduler.time_exec si has_hooks esta
+     * activo, e invoca los hooks de DebugStage::ExecuteBegin/End.
+     *
+     * @param process Proceso virtual cuya instruccion descodificada se ejecuta.
+     * @return EVT_IO_WAIT si la instruccion es bloqueante; EVT_EXEC_DONE en caso contrario.
+     */
     vm_event execute_instruction(ProcessVM *process) {
-        const bool measuring = process->scheduler.has_hooks;
-        // realizamos el hook antes de la ejecuccion
-        vm_hook(process, DebugStage::ExecuteBegin);
+        const bool measuring = process->scheduler.has_hooks; // activar medicion solo si hay hooks
+        vm_hook(process, DebugStage::ExecuteBegin);           // hook antes de ejecutar
         PROFILE_START
 
-        // --- PROFILER: inicio ---
-        const uint64_t t1 = measuring ? now_ns() : 0;
-        // ------------------------
+        const uint64_t t1 = measuring ? now_ns() : 0; // marca de tiempo inicial
 
-        // ejecutamos la instruccion descodificada. No hacemos aqui
-        // validacion del campo "exec" por que se supone que ya hemos comprobado en la fase de decode
-        // que la instruccion tiene un metodo ejecutor. Entonces no queremos realizar mas comprobaciones para
-        // no consumir mas ciclos de reloj.
+        // ejecutar la instruccion descodificada; el campo exec ya fue validado en decode
         process->decoded_ptr->metadata->exec(process, *process->decoded_ptr);
-        //execute_instr(this, *decoded_ptr);
 
         /**
-         * Si la instrucción requiere esperar I/O u otra.
-         * Retornamos aqui y no despues de incrementar PC para que el flujo
-         * de codigo no avance, ya que hasta que esta instruccion no deje de
-         * estar bloqueada, no podemos avanzar el registro PC.
+         * Si la instruccion requiere esperar E/S u otro recurso, no avanzar el PC:
+         * la instruccion debe volver a ejecutarse cuando el bloqueo se resuelva.
          */
         if (process->decoded_ptr->flags_info.blocking) {
             vm_hook(process, DebugStage::ExecuteEnd);
-            return EVT_IO_WAIT; // EVT_IO_WAIT
+            return EVT_IO_WAIT; // indicar bloqueo al scheduler
         }
-        //if (process->should_kill) {
-        //    vm_hook(process, DebugStage::ExecuteEnd);
-        //    return EVT_ERROR; // matar a la VM
-        //}
 
-        // Si la instrucción NO modificó el PC, lo avanzamos, esto siempre pasara a no ser que sea un jmp o un call.
-        // o una instruccion similar que modifique PC por su cuenta.
+        // si la instruccion NO modifico el PC (no es un salto), avanzarlo manualmente
         if (!process->decoded_ptr->flags_info.did_jump)
-            // movemos el puntero de instruccion al final de ejecutar la instruccion
+            // avanzar el puntero de instruccion al siguiente opcode
             process->registers.rip.qword(process->registers.rip.raw() + process->decoded_ptr->flags_info.size_instr);
-        else process->decoded_ptr->flags_info.did_jump = false; // ejecuta una vez la instruccion, desmarcamos el salto
+        else
+            process->decoded_ptr->flags_info.did_jump = false; // desmarcar salto para la proxima iteracion
 
-        // --- PROFILER: fin ---
+        // actualizar contadores de profiling
         process->scheduler.profiler_instr_counter++;
-        if (measuring) process->scheduler.time_exec += now_ns() - t1;
+        if (measuring) process->scheduler.time_exec += now_ns() - t1; // acumular tiempo de ejecucion
 
-        // antes de retorna hacemos el hook
         PROFILE_END("EXECUTER");
-        vm_hook(process, DebugStage::ExecuteEnd);
+        vm_hook(process, DebugStage::ExecuteEnd); // hook tras ejecutar
 
-        // indicamos que la ejecuccion tuvo exito y no se requiere bloquear la VM.
-        return EVT_EXEC_DONE; // si se puede seguir ejecutando instrucciones
+        return EVT_EXEC_DONE; // indicar exito al scheduler
     }
 }

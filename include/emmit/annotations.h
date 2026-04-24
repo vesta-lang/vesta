@@ -1,21 +1,42 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file annotations.h
+ * @brief Manejadores de anotaciones del ensamblador Vesta.
+ *
+ * Las anotaciones son directivas con prefijo '@' en el codigo fuente Vesta que
+ * controlan el ensamblado: definen espacios de direcciones, secciones, formato de
+ * salida, punto de inicio, importaciones y relocalizaciones.
+ *
+ * Define:
+ *   - AnnotationHandler: tipo alias de la funcion manejadora de cada anotacion.
+ *   - apply_*(): funciones que procesan cada tipo de anotacion concreta.
+ *   - annotation_handlers: tabla de despacho nombre -> manejador.
+ *   - annotation_allow_doc: conjunto de anotaciones permitidas en bloques de documentacion.
+ *   - print_context(): imprime el contexto del ensamblador en stdout.
+ *   - print_context_with_bytes(): imprime contexto mas volcado de bytes de cada seccion.
+ */
+
 #ifndef ANNOTATIONS_H
 #define ANNOTATIONS_H
+
 #include <cstring>
 #include <functional>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
+#include <iomanip>
+#include <iostream>
 
 #include "assembly/assembly.h"
 #include "linker/velb_linker_bytecode.h"
@@ -23,151 +44,160 @@
 #include "emmit/struct_context.h"
 
 namespace vm {
-    struct AnnotationNode;
+    struct AnnotationNode; ///< Declaracion adelantada del nodo de anotacion del AST
 }
 
 namespace Assembly::Bytecode {
-    class Assembler;
 
+    class Assembler; ///< Declaracion adelantada del ensamblador
 
     /**
-     * Alias de tipo funcion
+     * @brief Tipo de funcion manejadora de una anotacion.
+     *
+     * Cada manejador recibe el nodo de anotacion del AST y el contexto del ensamblador,
+     * y aplica el efecto de la anotacion sobre el contexto (por ejemplo, crear una seccion
+     * o registrar un punto de inicio).
      */
     using AnnotationHandler = std::function<void(const vm::AnnotationNode *, Assembler &)>;
 
     /**
-     * Permite aplicar una anotacion de tipo "SpaceAddress" que permite definir un espacio
-     * de direcciones para las secciones.
-     * @param node nodo padre
-     * @param ctx contexto global del ensamblador
+     * @brief Procesa la anotacion \@SpaceAddress para definir un espacio de direcciones.
+     *
+     * Un espacio de direcciones delimita un rango de memoria virtual donde se ubicaran
+     * una o mas secciones.  Esta anotacion inicializa la entrada correspondiente en
+     * Context::space_address.
+     *
+     * @param node Nodo AST de la anotacion con los argumentos (nombre, rango).
+     * @param ctx  Contexto global del ensamblador que se modifica.
      */
     void apply_space_address(const vm::AnnotationNode *node, Assembler &ctx);
 
     /**
-     * Permite crear una seccion asociada a un espacio de direcciones. Las secciones
-     * pueden contener cualquier tipo de informacion, ya sea codigo datos u otro.
-     * @param node nodo padre
-     * @param ctx contexto global del ensamblador
+     * @brief Procesa la anotacion \@Section para crear una seccion dentro de un espacio.
+     *
+     * Las secciones pueden contener codigo, datos u otro tipo de informacion.
+     * Se asocian al espacio de direcciones activo y tienen su propio rango de memoria
+     * y tabla de etiquetas.
+     *
+     * @param node Nodo AST de la anotacion con los argumentos (nombre, espacio, alineacion).
+     * @param ctx  Contexto global del ensamblador que se modifica.
      */
     void apply_section(const vm::AnnotationNode *node, Assembler &ctx);
 
     /**
-     * Permite indicar al ensamblador el formato final del archivo que se quiere
-     * ensamblar. No es estrictamente necesario definir el formato, pero todo dependera
-     * del objetivo, sino se define formato, el codigo generado final sera plano, sin secciones
-     * ni otro tipo de informacion que no sea el dispuesto por el usuario.
-     * @param node nodo padre
-     * @param ctx contexto global del ensamblador
+     * @brief Procesa la anotacion \@Format para indicar el formato de salida del binario.
+     *
+     * Si no se define el formato, el codigo generado sera plano (sin cabeceras ni secciones).
+     * Con formato definido (p.ej. "velb") el emision incluye las cabeceras y tablas del
+     * formato .velb del linker.
+     *
+     * @param node Nodo AST de la anotacion con el nombre del formato.
+     * @param ctx  Contexto global del ensamblador que se modifica.
      */
     void apply_format(const vm::AnnotationNode *node, Assembler &ctx);
 
     /**
-     * Permite configurar el valor PC de inicio, se recomienda inicializar el valor para indicar donde empezar la
-     * ejecuccion, sino se configura la ejecucion siempre comenzara en la direccion 0x000000.
-     * Esta notacion permite recibir un label donde se calculara la direccion de inicio, o se le puede
-     * especificar una direccion cruda directamente si se conoce.
-     * En caso de especificarle una label, la label debe estar previamente declarada, un ejemplo:
+     * @brief Procesa la anotacion \@InitPc para establecer el punto de inicio de ejecucion.
      *
-     * @code{.cpp}
-     * code:
-     *     @InitPc(code)
-     *     adds r0, 3
+     * Acepta una etiqueta o una direccion cruda.  Si se reciben multiples \@InitPc,
+     * el ultimo definido prevalece.  Si no se define, la ejecucion comienza en 0x000000.
+     *
+     * Ejemplo de uso con etiqueta:
+     * @code
+     *   code:
+     *       @InitPc(code)
+     *       adds r0, 3
      * @endcode
      *
-     * En caso de encontrarse varios InitPc, se usara el ultimo definido.
-     *
-     * @param node nodo padre
-     * @param assembler contexto global del ensamblador
+     * @param node      Nodo AST de la anotacion con la etiqueta o direccion.
+     * @param assembler Contexto global del ensamblador que se modifica.
      */
     void apply_init_pc(const vm::AnnotationNode *node, Assembler &assembler);
 
     /**
-     * Permite aplicar una importacion en la tabla de importaciones para el linker
-     * @param node nodo padre
-     * @param assembler contexto global del ensamblador
+     * @brief Procesa la anotacion \@Import para registrar una importacion en el linker.
+     *
+     * Anade el simbolo importado a la tabla de importaciones del fichero objeto,
+     * permitiendo al linker resolver la referencia al enlazar multiples objetos.
+     *
+     * @param node      Nodo AST de la anotacion con el nombre del simbolo importado.
+     * @param assembler Contexto global del ensamblador que se modifica.
      */
     void apply_import(const vm::AnnotationNode *node, Assembler &assembler);
 
     /**
-     * Permite obtener una direccion relativa de una etiqueta. Depende de la posicion
-     * en la que se use la notacion, se debe calcular la direccion relativa en base
-     * a la direccion de la instruccion que la uso, esto permite codigo PIC.
-     * No se aplica la notacion de forma directa, estas se usan en el emisor para
-     * indicarle que se quiere hacer una relocalizacion de un tipo u otro.
-     * @param node nodo padre
-     * @param assembler contexto global del ensamblador
+     * @brief Procesa la anotacion \@Relative para indicar una relocalizacion relativa.
+     *
+     * Calcula la direccion relativa de una etiqueta respecto a la instruccion que usa
+     * la anotacion, lo que permite generar codigo PIC (Position Independent Code).
+     * La anotacion no se aplica directamente; el emisor la usa para registrar la
+     * relocalizacion en la tabla correspondiente.
+     *
+     * @param node      Nodo AST de la anotacion con la etiqueta referenciada.
+     * @param assembler Contexto global del ensamblador que se modifica.
      */
     void apply_relative(const vm::AnnotationNode *node, Assembler &assembler);
 
     /**
-     * Permite obtener una direccion absoluta de un etiqueta. No se aplica la notacion
-     * de forma directa, estas se usan en el emisor para indicarle que se quiere
-     * hacer una relocalizacion de un tipo u otro.
-     * @param node nodo padre
-     * @param assembler contexto global del ensamblador
+     * @brief Procesa la anotacion \@Absolute para indicar una relocalizacion absoluta.
+     *
+     * Calcula la direccion absoluta de una etiqueta.  La anotacion no se aplica
+     * directamente; el emisor la usa para registrar la relocalizacion en la tabla.
+     *
+     * @param node      Nodo AST de la anotacion con la etiqueta referenciada.
+     * @param assembler Contexto global del ensamblador que se modifica.
      */
     void apply_absolute(const vm::AnnotationNode *node, Assembler &assembler);
 
+    /**
+     * @brief Tabla de despacho de anotaciones: nombre -> funcion manejadora.
+     *
+     * Mapea el nombre de cada anotacion reconocida por el ensamblador a su funcion
+     * de procesamiento correspondiente.  Las entradas con lambdas vacias estan
+     * reservadas para futura implementacion.
+     */
     static std::unordered_map<std::string, AnnotationHandler> annotation_handlers = {
-        {
-            "SpaceAddress", apply_space_address
-        },
-        {
-            "Format", apply_format
-        },
-        {
-            "Section", apply_section
-        },
-        {
-            "InitPc", apply_init_pc
-        },
-        {
-            "IniAddress", [](const vm::AnnotationNode *a, Assembler &ctx) {
-                /* ... */
-            }
-        },
-        {
-            "EndAddress", [](const vm::AnnotationNode *a, Assembler &ctx) {
-                /* ... */
-            }
-        },
-        {
-            "Name", [](const vm::AnnotationNode *a, Assembler &ctx) {
-                /* ... */
-            }
-        },
-        {
-            "Import", apply_import
-        },
-        {
-            "Relative", apply_relative
-        },
-        {
-            "Absolute", apply_absolute
-        }
-
+        { "SpaceAddress", apply_space_address }, ///< Define un espacio de direcciones
+        { "Format",       apply_format        }, ///< Establece el formato de salida
+        { "Section",      apply_section       }, ///< Crea una seccion dentro de un espacio
+        { "InitPc",       apply_init_pc       }, ///< Establece el punto de entrada
+        { "IniAddress",   [](const vm::AnnotationNode *a, Assembler &ctx) { /* pendiente */ } },
+        { "EndAddress",   [](const vm::AnnotationNode *a, Assembler &ctx) { /* pendiente */ } },
+        { "Name",         [](const vm::AnnotationNode *a, Assembler &ctx) { /* pendiente */ } },
+        { "Import",       apply_import        }, ///< Registra una importacion para el linker
+        { "Relative",     apply_relative      }, ///< Relocalizacion relativa (PIC)
+        { "Absolute",     apply_absolute      }, ///< Relocalizacion absoluta
     };
 
+    /**
+     * @brief Conjunto de nombres de anotacion permitidos en bloques de documentacion.
+     *
+     * Las anotaciones de documentacion describen clases, metodos, campos, etc. y
+     * no generan bytecode; solo enriquecen los metadatos del fichero objeto.
+     */
     static std::unordered_set<std::string> annotation_allow_doc = {
-        "Args"
+        "Args",
         "Class",
-        "Method"
+        "Method",
         "Description",
         "Access",
         "Extends",
         "Interface",
         "Field",
-        "Description",
         "Name",
         "Offset",
         "Type",
-        "Size"
+        "Size",
         "Warning"
     };
 
     /**
-     * Permite imprimir el contexto generado por el ensamblador
-     * @param ctx contexto del ensamblador
+     * @brief Imprime el contexto del ensamblador en stdout.
+     *
+     * Muestra el formato de salida, los espacios de direcciones, las secciones
+     * con sus rangos y las etiquetas definidas en cada seccion.
+     *
+     * @param ctx Contexto del ensamblador a mostrar.
      */
     static void print_context(const Context &ctx) {
         std::cout << "=== CONTEXT ===\n";
@@ -179,6 +209,7 @@ namespace Assembly::Bytecode {
                     << std::hex << space.range.address_init
                     << ", 0x" << space.range.address_final << "]\n";
 
+            // imprimir nombre de la seccion (hasta 16 bytes, terminado en nulo)
             std::cout << "  Nombre seccion (16 bytes): ";
             for (int i = 0; i < 16; i++) {
                 if (space.name_section[i] == 0) break;
@@ -186,23 +217,21 @@ namespace Assembly::Bytecode {
             }
             std::cout << "\n";
 
-
-            // Recorrer secciones
+            // recorrer secciones del espacio
             for (const auto &[secName, sec]: space.table_section) {
                 std::cout << "  -- Section: " << secName << " Alineacion: 0x" << sec.size_align_section << " --\n";
                 std::cout << "     Rango: [0x"
                         << std::hex << sec.memory.address_init
                         << ", 0x" << sec.memory.address_final << "]\n";
 
-                // Recorrer labels
+                // mostrar etiquetas de la seccion
                 if (sec.table_label.empty()) {
                     std::cout << "     (sin labels)\n";
                 } else {
                     std::cout << "     Labels:\n";
                     for (const auto &[labelName, label]: sec.table_label) {
                         std::cout << "       * " << labelName
-                                << " @ offset 0x" << std::hex << label.address
-                                << "\n";
+                                << " @ offset 0x" << std::hex << label.address << "\n";
                     }
                 }
             }
@@ -211,6 +240,16 @@ namespace Assembly::Bytecode {
         }
     }
 
+    /**
+     * @brief Imprime el contexto del ensamblador junto con el volcado de bytes de cada seccion.
+     *
+     * Ademas de la informacion mostrada por print_context(), muestra los bytes reales
+     * de cada seccion extraidos del vector @p bytes, con formato de 16 bytes por linea
+     * y offset en hexadecimal.
+     *
+     * @param ctx   Contexto del ensamblador a mostrar.
+     * @param bytes Vector con los bytes del binario generado.
+     */
     static void print_context_with_bytes(const Context &             ctx,
                                          const std::vector<uint8_t> &bytes) {
         std::cout << "=== CONTEXT + BYTES ===\n";
@@ -222,6 +261,7 @@ namespace Assembly::Bytecode {
                     << std::hex << space.range.address_init
                     << ", 0x" << space.range.address_final << "]\n";
 
+            // imprimir nombre de la seccion (hasta 16 bytes, terminado en nulo)
             std::cout << "  Nombre seccion (16 bytes): ";
             for (int i = 0; i < 16; i++) {
                 if (space.name_section[i] == 0) break;
@@ -229,7 +269,7 @@ namespace Assembly::Bytecode {
             }
             std::cout << "\n";
 
-            // Recorrer secciones
+            // recorrer secciones del espacio
             for (const auto &[secName, sec]: space.table_section) {
                 std::cout << "  -- Section: " << secName
                         << " (align 0x" << std::hex << sec.size_align_section << ") --\n";
@@ -238,7 +278,7 @@ namespace Assembly::Bytecode {
                         << std::hex << sec.memory.address_init
                         << ", 0x" << sec.memory.address_final << "]\n";
 
-                // Mostrar labels
+                // mostrar etiquetas de la seccion
                 if (sec.table_label.empty()) {
                     std::cout << "     (sin labels)\n";
                 } else {
@@ -249,10 +289,9 @@ namespace Assembly::Bytecode {
                     }
                 }
 
-                // Mostrar bytes reales de la sección
+                // calcular rango de bytes de la seccion dentro del binario
                 std::cout << "     Bytes:\n";
-
-                uint64_t start = sec.memory.address_init - space.range.address_init;
+                uint64_t start = sec.memory.address_init  - space.range.address_init;
                 uint64_t end   = sec.memory.address_final - space.range.address_init;
 
                 if (start >= bytes.size()) {
@@ -262,15 +301,15 @@ namespace Assembly::Bytecode {
 
                 end = std::min<uint64_t>(end, bytes.size());
 
-                const size_t BYTES_PER_LINE = 16;
+                const size_t BYTES_PER_LINE = 16; // bytes por fila en el volcado
 
                 for (uint64_t i = start; i < end; i++) {
                     if ((i - start) % BYTES_PER_LINE == 0) {
+                        // imprimir offset de fila al inicio de cada linea
                         std::cout << "\n       "
                                 << std::setw(8) << std::setfill('0') << std::hex << i
                                 << ": ";
                     }
-
                     std::cout << std::setw(2) << std::setfill('0')
                             << std::hex << (int) bytes[i] << " ";
                 }
@@ -281,6 +320,7 @@ namespace Assembly::Bytecode {
             std::cout << "\n";
         }
     }
-}
 
-#endif //ANNOTATIONS_H
+} // namespace Assembly::Bytecode
+
+#endif // ANNOTATIONS_H

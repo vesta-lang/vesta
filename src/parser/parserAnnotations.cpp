@@ -1,15 +1,23 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  * 
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file parserAnnotations.cpp
+ * @brief Implementacion del parseo de anotaciones del parser de VestaVM.
+ *
+ * Contiene los metodos de @c vm::Parser responsables de reconocer y construir
+ * nodos @c AnnotationNode del AST (directivas @SpaceAddress, @Section, @Format,
+ * @InitPc, @Import, etc.).
+ */
 #include "parser/parser.h"
 
 #include <iomanip>
@@ -30,7 +38,7 @@ namespace vm {
 
             while (current.type != TokenType::RBRACE && peek().type != TokenType::EndOfFile) {
                 if (current.type == TokenType::AT) {
-                    node->add_child(parse_annotation()); // recursión
+                    node->add_child(parse_annotation()); // recursion
                 } else {
                     advance(); // ignorar tokens irrelevantes
                 }

@@ -1,17 +1,37 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file struct_context.h
+ * @brief Estructuras de datos del contexto del ensamblador Vesta.
+ *
+ * Define todas las estructuras que modelan el estado del ensamblador durante
+ * la emision de bytecode:
+ *
+ *   - Type: enumeracion de tipos de relocalizacion (Relative*, Absolute*, Native_Method).
+ *   - Relocation: entrada individual en la tabla de relocalizaciones.
+ *   - Label: etiqueta con nombre, offset relativo y tamano.
+ *   - Section: seccion con rango de memoria, etiquetas y tamano real.
+ *   - Space: espacio de direcciones con secciones ordenadas.
+ *   - ImportEntry: entrada de la tabla de importaciones.
+ *   - Context: contexto global del ensamblador (espacios, relocalizaciones, importaciones).
+ *   - LabelLookupResult: resultado de busqueda de etiqueta en el contexto.
+ *   - Funciones auxiliares: align_down, align_up, size_relocation_emmit,
+ *     mode_to_type_relocation_abs/rel, compute_space_size, find_label_in_context*.
+ */
+
 #ifndef STRUCT_CONTEXT_H
 #define STRUCT_CONTEXT_H
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -20,243 +40,211 @@
 #include <unordered_map>
 #include <optional>
 #include <system_error>
+#include <vector>
 
 #include "emmit_decl.h"
 #include "linker/velb_linker_bytecode.h"
-#include "linker/velb_linker_bytecode.h"
 
 namespace Assembly::Bytecode {
+
     /**
-     * Permite realizar una alineacion hacia abajo.
-     * @param value valor a alinear
-     * @param alignment valor al que debemos realizar la alineacion.
-     * @return valor alineado hacia abajo.
+     * @brief Alinea @p value hacia abajo al multiplo de @p alignment mas proximo.
+     *
+     * @param value     Valor a alinear.
+     * @param alignment Alineacion objetivo (debe ser potencia de 2).
+     * @return Valor alineado hacia abajo.
      */
     static inline uint64_t align_down(uint64_t value, uint64_t alignment) {
-        return value & ~(alignment - 1);
+        return value & ~(alignment - 1); // mascara para alinear hacia abajo
     }
 
     /**
-     * Permite realizar una alineacion hacia arriba, necesario para hacer
-     * alineaciones de pagina.
-     * @param value valor a alinear
-     * @param alignment valor al que debemos realizar la alineacion, en caso de paginas suelen ser 4096 bytes.
-     * @return
+     * @brief Alinea @p value hacia arriba al multiplo de @p alignment mas proximo.
+     *
+     * Necesario para calcular el inicio de la siguiente pagina o seccion alineada.
+     *
+     * @param value     Valor a alinear.
+     * @param alignment Alineacion objetivo (debe ser potencia de 2, p.ej. 4096 para paginas).
+     * @return Valor alineado hacia arriba.
      */
     static inline uint64_t align_up(uint64_t value, uint64_t alignment) {
-        return (value + alignment - 1) & ~(alignment - 1);
+        return (value + alignment - 1) & ~(alignment - 1); // redondear y alinear
     }
 
     /**
-     * Tipo de relocalizaciones, esto puede cambiar en el futuro segun
-     * las necesidades del conjunto de instrucciones.
+     * @brief Tipo de relocalizacion en el modulo objeto .velb.
+     *
+     * Las relocalizaciones permiten al linker o al loader parchearlo el binario
+     * con las direcciones correctas tras resolver los simbolos.
      */
     typedef enum class Type {
         /**
-         * "Escribe en este campo el desplazamiento relativo desde esta instrucción hasta el símbolo."
-         * Es decir:
-         *      offset = destino - (PC + tamaño_del_campo)
-         *      - x86: CALL rel32
-         *      - x86: JMP rel32
-         *      - ARM64: ADR, B, BL
+         * @brief Desplazamiento relativo de 64 bits.
          *
-         *      Características:
-         *          - No almacena una dirección absoluta.
-         *          - Almacena un delta.
-         *          - Permite que el código sea position-independent (PIC).
-         *          - El loader puede mover el código sin romper nada.
+         * El campo contiene: destino - (PC + tamano_del_campo).
+         * Permite codigo position-independent (PIC); el loader puede mover el codigo
+         * sin romper las referencias.
          *
-         *  Si estás en:
-         *      PC = 0x1000
-         *  Y quieres saltar a:
-         *      destino = 0x2000
-         *  Entonces:
-         *      offset = 0x2000 - (0x1000 + 4) = 0xFFC
-         *
-         *  El campo contiene 0xFFC, no la dirección 0x2000.
+         * Ejemplo:
+         * @code
+         *   PC = 0x1000, destino = 0x2000
+         *   offset = 0x2000 - (0x1000 + 4) = 0xFFC  -- el campo contiene 0xFFC
+         * @endcode
          */
         Relative64,
 
-        Relative40, // desplazamiento relativo de 40 bits
+        Relative40, ///< Desplazamiento relativo de 40 bits
 
         /**
-         * Este modo normalmente se usa para CALL y JMP, y no Relative64 por que;
+         * @brief Desplazamiento relativo de 32 bits.
          *
-         * En la práctica real, no existe casi nunca.
-         *   Porque:
-         *   - x86 usa rel32
-         *   - ARM64 usa rel26
-         *   - RISC-V usa rel20 + rel12
-         *   - WASM usa índices, no offsets
-         *   - PE/ELF no usan rel64 para saltos
+         * Es el tipo mas comun para saltos y llamadas en la practica (equivale a
+         * x86 rel32, ARM64 rel26 reescalado, etc.).
          */
         Relative32,
-        Relative16,
-        Relative8,
+
+        Relative16, ///< Desplazamiento relativo de 16 bits
+        Relative8,  ///< Desplazamiento relativo de 8 bits
 
         /**
-         * Las Absolute64 son punteros de 64bits, una direccion absoluta es lo siguiente:
-         * "Escribe en este campo la dirección absoluta del símbolo."
-         * Si el símbolo GetTickCount de kernel32 por ejemplo puede estar en: 0x7FFB12340000
-         * El linker escribe esa dirección exacta en el binario.
+         * @brief Direccion absoluta de 64 bits.
+         *
+         * El campo contiene la direccion exacta del simbolo en el espacio de
+         * direcciones final, p.ej. una direccion de funcion importada de una DLL.
          */
         Absolute64,
-        Absolute40, // dirección absoluta de 40 bits, para sub, add y etc
-        Absolute32,
-        Absolute16,
-        Absolute8,
+
+        Absolute40, ///< Direccion absoluta de 40 bits (para instrucciones ALU con SIB)
+        Absolute32, ///< Direccion absoluta de 32 bits
+        Absolute16, ///< Direccion absoluta de 16 bits
+        Absolute8,  ///< Direccion absoluta de 8 bits
 
         /**
-         * Reloc para indicar metodos nativos
+         * @brief Relocalizacion para metodos nativos del host.
+         *
+         * El campo es un indice de 8 bytes en la tabla de importaciones que el
+         * loader resuelve en tiempo de carga con la direccion real del metodo.
          */
         Native_Method,
 
-        // para indicar errores o que no es valido
-        NO_VALID
+        NO_VALID ///< Valor de error o no inicializado
     } Type;
 
     /**
-     * Permite obtener la cantidad de bytes que es necesario emitir para un tipo dado
-     * de relocalizacion, por ejemplo una relocalizacion de tipo Native_Method necesita
-     * emitir 8 bytes ya que una direccion de sistema operativo de 64 bits ocupa este espacio.
-     * @param type tipo de relocalizacion de la que obtener el tamaño
-     * @return retorna el tamaño de la relocalizacion dada.
+     * @brief Devuelve el numero de bytes que se deben reservar en el bytecode para una relocalizacion.
+     *
+     * @param type Tipo de relocalizacion.
+     * @return Tamano en bytes del campo de relocalizacion (1, 2, 4, 5 u 8).
+     * @throws std::runtime_error si el tipo es NO_VALID o desconocido.
      */
     static uint8_t size_relocation_emmit(Type type) {
         switch (type) {
             case Type::Relative64:
             case Type::Absolute64:
-            case Type::Native_Method:
-                return 8;
+            case Type::Native_Method:  return 8;
             case Type::Relative40:
-            case Type::Absolute40:
-                return 5;
+            case Type::Absolute40:     return 5;
             case Type::Relative32:
-            case Type::Absolute32:
-                return 4;
+            case Type::Absolute32:     return 4;
             case Type::Relative16:
-            case Type::Absolute16:
-                return 2;
+            case Type::Absolute16:     return 2;
             case Type::Relative8:
-            case Type::Absolute8:
-                return 1;
+            case Type::Absolute8:      return 1;
             default:
                 throw std::runtime_error("size_relocation_emmit(Type type): Unknown type");
         }
     }
 
     /**
-     * Permtie obtener un tipo de relocalizacion absoluta en base al modo
-     * @param mode mode del que obtener el tipo de relocalizacion absoluta
-     * @return tipo de relocalizacion
+     * @brief Obtiene el tipo de relocalizacion absoluta correspondiente a un campo mode de 2 bits.
+     *
+     * @param mode Campo mode de 2 bits (0=1B, 1=2B, 2=4B, 3=8B).
+     * @return Tipo de relocalizacion absoluta; NO_VALID si el modo no es valido.
      */
     static Type mode_to_type_relocation_abs(uint8_t mode) {
         switch (mode_to_bytes(mode)) {
-            case 1: {
-                return Type::Absolute8;
-            }
-            case 2: {
-                return Type::Absolute16;
-            }
-            case 4: {
-                return Type::Absolute32;
-            }
-            case 8: {
-                return Type::Absolute64;
-            }
-            default: {
-                return Type::NO_VALID;
-            }
+            case 1: return Type::Absolute8;
+            case 2: return Type::Absolute16;
+            case 4: return Type::Absolute32;
+            case 8: return Type::Absolute64;
+            default: return Type::NO_VALID;
         }
     }
 
     /**
-     * Permtie obtener un tipo de relocalizacion relativa en base al modo
-     * @param mode mode del que obtener el tipo de relocalizacion absoluta
-     * @return tipo de relocalizacion
+     * @brief Obtiene el tipo de relocalizacion relativa correspondiente a un campo mode de 2 bits.
+     *
+     * @param mode Campo mode de 2 bits (0=1B, 1=2B, 2=4B, 3=8B).
+     * @return Tipo de relocalizacion relativa; NO_VALID si el modo no es valido.
      */
     static Type mode_to_type_relocation_rel(uint8_t mode) {
         switch (mode_to_bytes(mode)) {
-            case 1: {
-                return Type::Relative8;
-            }
-            case 2: {
-                return Type::Relative16;
-            }
-            case 4: {
-                return Type::Relative32;
-            }
-            case 8: {
-                return Type::Relative64;
-            }
-            default: {
-                return Type::NO_VALID;
-            }
+            case 1: return Type::Relative8;
+            case 2: return Type::Relative16;
+            case 4: return Type::Relative32;
+            case 8: return Type::Relative64;
+            default: return Type::NO_VALID;
         }
     }
 
     /**
-     * Estructura basica para representar una relocalizacion
+     * @brief Entrada en la tabla de relocalizaciones del modulo objeto.
      */
     typedef struct Relocation {
-        std::string symbol;     // símbolo a resolver
-        std::string section;    // sección donde ocurre
-        uint64_t    offset = 0; // offset dentro de la sección
-        Type        type;       // tipo de relocación
+        std::string symbol;     ///< Nombre del simbolo a resolver por el linker
+        std::string section;    ///< Nombre de la seccion donde ocurre la relocalizacion
+        uint64_t    offset = 0; ///< Offset dentro de la seccion donde parchelar
+        Type        type;       ///< Tipo de relocalizacion (tamano y modo relativo/absoluto)
     } Relocation;
 
+    /**
+     * @brief Tipo de relocalizacion del tamano de puntero en la maquina actual.
+     *
+     * Se inicializa segun sizeof(void*): Absolute64, Absolute32, Absolute16 o Absolute8.
+     */
     static Type size_ptr_in_this_machine =
-            (sizeof(void *) == 8)
-                ? Type::Absolute64
-                : (sizeof(void *) == 4)
-                      ? Type::Absolute32
-                      : (sizeof(void *) == 2)
-                            ? Type::Absolute16
-                            : (sizeof(void *) == 1)
-                                  ? Type::Absolute8
-                                  : Type::NO_VALID; // fallback
+            (sizeof(void *) == 8) ? Type::Absolute64 :
+            (sizeof(void *) == 4) ? Type::Absolute32 :
+            (sizeof(void *) == 2) ? Type::Absolute16 :
+            (sizeof(void *) == 1) ? Type::Absolute8  :
+                                    Type::NO_VALID;
 
     /**
-     * Estructura basica que define los campos de un label
+     * @brief Etiqueta (label) con nombre, offset relativo a la seccion y tamano.
+     *
+     * El offset es relativo al inicio de la seccion que contiene la etiqueta,
+     * no al espacio de direcciones global.
      */
     typedef struct Label {
-        std::string name;      // nombre de la etiqueta
-        uint64_t    address{}; // offset relativo dentro de la sección
-        uint64_t    size{};    // tamaño de la etiqueta
+        std::string name;       ///< Nombre de la etiqueta (identificador unico en la seccion)
+        uint64_t    address{};  ///< Offset relativo al inicio de la seccion
+        uint64_t    size{};     ///< Tamano del bloque de codigo/datos asociado a la etiqueta
     } Label;
 
+    /**
+     * @brief Seccion dentro de un espacio de direcciones.
+     *
+     * Una seccion puede contener codigo, datos u otro tipo de informacion.
+     * Tiene su propio rango de memoria virtual, una tabla de etiquetas y un
+     * tamano real de bytes generados.
+     */
     typedef struct Section {
-        /**
-         * offset en el archivo al usar el loader.
-         */
-        uint64_t file_offset = 0;
+        uint64_t    file_offset = 0;        ///< Offset en el fichero binario (usado por el loader)
+        std::string name;                   ///< Nombre de la seccion
+        range_memory memory{};              ///< Rango de memoria virtual de la seccion
+        uint64_t    size_real = 0;          ///< Tamano real en bytes de bytecode generado
+        uint32_t    size_align_section = 0; ///< Alineacion de la seccion en bytes (p.ej. 4096)
 
         /**
-         * nombre de la seccion
-         */
-        std::string name;
-
-        /**
-         * rango de operacion de la seccion, es relativo al espacio de direcciones al generarse el ejecutable.
-         */
-        range_memory memory{};
-
-        uint64_t size_real = 0; // tamaño real de bytes generados
-
-        /**
-         * tamaño al que alinear la seccion
-         */
-        uint32_t size_align_section = 0;
-
-        /**
-         * Las secciones contienen labels
+         * @brief Tabla de etiquetas de la seccion (nombre -> Label).
          */
         std::unordered_map<std::string, Label> table_label;
 
         /**
-         * Permite cambiar el rango de operacion de una seccion.
-         * @param init valor donde inicia la seccion
-         * @param final direccion final de la seccion.
+         * @brief Establece el rango de memoria virtual de la seccion.
+         *
+         * @param init  Direccion virtual de inicio de la seccion.
+         * @param final Direccion virtual de fin de la seccion.
          */
         void set_range(uint64_t init, uint64_t final) {
             memory.address_init  = init;
@@ -264,42 +252,45 @@ namespace Assembly::Bytecode {
         }
 
         /**
-         * Permite añadir un label a una seccion. Las direcciones usadas en los labels son relativas a las secciones.
-         * @param name Nombre de la etiqueta.
-         * @param address direcciones relativas.
-         * @param size tamaño del label.
+         * @brief Anade una etiqueta a la seccion con su offset y tamano.
+         *
+         * Las direcciones de las etiquetas son relativas al inicio de la seccion.
+         *
+         * @param name    Nombre de la etiqueta.
+         * @param address Offset relativo al inicio de la seccion.
+         * @param size    Tamano del bloque asociado a la etiqueta.
          */
         void add_label(const std::string &name, uint64_t address, uint64_t size) {
             table_label[name] = Label{name, address, size};
         }
 
         /**
-         * Obtener una etiqueta o label por su identificador.
-         * @param name nombre de la etiqueta
-         * @return en caso de encontrarse se devuelve un puntero a este, en caso contrario se devuelve un nullptr.
+         * @brief Busca una etiqueta por nombre en la seccion.
+         *
+         * @param name Nombre de la etiqueta a buscar.
+         * @return Puntero a la Label si existe; nullptr si no se encuentra.
          */
         Label *get_label(const std::string &name) {
             auto it = table_label.find(name);
-            if (it == table_label.end())
-                return nullptr;
+            if (it == table_label.end()) return nullptr;
             return &it->second;
         }
 
         /**
-         * Permite computar el rango de inicio y final de una seccion, para
-         * esta tarea, se debe haber mapeado antes todos los labels, luego obtenemos
-         * el offset mas pequeño y el mas grande y al sumarlo a la direccion base,
-         * obtenemos el rango de memoria virutal.
-         * @param base_address direccion base del espacio de memoria o de la ultima seccion
-         * @param bytes_aligned bytes a alinear, normalmente 4096 para el formato VELB
+         * @brief Calcula el rango de memoria virtual de la seccion.
+         *
+         * Toma el @p base_address como inicio, anade size_real y aplica la
+         * alineacion @p bytes_aligned para calcular el fin de la seccion.
+         *
+         * @param base_address Direccion base a partir de la que inicia esta seccion.
+         * @param bytes_aligned Numero de bytes para la alineacion (p.ej. 4096).
          */
         void compute_range(uint64_t base_address, uint64_t bytes_aligned) {
             uint64_t start    = base_address;
             uint64_t end_real = base_address + size_real;
 
             uint64_t aligned_init = align_down(start, bytes_aligned);
-            if (aligned_init < base_address)
-                aligned_init = base_address;
+            if (aligned_init < base_address) aligned_init = base_address;
 
             uint64_t aligned_end = align_up(end_real, size_align_section);
 
@@ -308,9 +299,11 @@ namespace Assembly::Bytecode {
         }
 
         /**
-         * Permtie actualizar el tamaño de una label en base al nombre de esta
-         * @param name nombre de la label en la seccion.
-         * @param size nuevo tamaño para la label
+         * @brief Actualiza el tamano de una etiqueta existente en la seccion.
+         *
+         * @param name Nombre de la etiqueta a actualizar.
+         * @param size Nuevo tamano en bytes.
+         * @throws std::runtime_error si la etiqueta no se encuentra.
          */
         void update_label_size(const std::string &name, uint64_t size) {
             auto it = table_label.find(name);
@@ -321,49 +314,46 @@ namespace Assembly::Bytecode {
         }
     } Section;
 
+    /**
+     * @brief Espacio de direcciones que contiene una o mas secciones.
+     *
+     * Un espacio de direcciones delimita un rango continuo de memoria virtual.
+     * Las secciones dentro de el se ordenan por direccion de inicio y sus rangos
+     * se calculan de forma contigua.
+     */
     typedef struct Space {
-        /**
-         * offset en el archivo al usar el linker.
-         */
-        uint64_t file_offset = 0;
+        uint64_t     file_offset = 0;   ///< Offset en el fichero (usado por el linker)
+        range_memory range;             ///< Rango de memoria virtual del espacio
+        std::string  name_section;      ///< Nombre del espacio (almacenado en metadatos .velb)
 
         /**
-         * Rango de memoria para el espacio de direcciones.
-         */
-        range_memory range;
-
-        /**
-         * nombre de la seccion
-         */
-        std::string name_section;
-
-        /**
-         * tabla de secciones key(nombre): valor(seccion)
+         * @brief Tabla de secciones del espacio (nombre -> Section).
          */
         std::unordered_map<std::string, Section> table_section;
 
         /**
-         * Vector de secciones, los usamos para saber cual es el orden de las secciones.
+         * @brief Vector de punteros a secciones en orden de insercion.
+         *
+         * Se usa para calcular los rangos en el orden correcto de las secciones.
          */
         std::vector<Section *> ordered_sections;
 
         /**
-         * Añadir sección nueva, estas secciones se suelen almacenar en un espacio de direcciones, y una seccion
-         * suele tener una tabla con labels.
-         * @param sec seccion a aladir
+         * @brief Anade una seccion al espacio y la registra en el vector ordenado.
+         *
+         * @param sec Seccion a anadir (se copia a la tabla interna).
          */
         void add_section(const Section &sec) {
             table_section[sec.name] = sec;
-            // añadimos la referencia a la tabla de secciones para mantener el orden
-            ordered_sections.push_back(&table_section[sec.name]);
+            ordered_sections.push_back(&table_section[sec.name]); // mantener orden
         }
 
         /**
-         * Añadir sección nueva, estas secciones se suelen almacenar en un espacio de direcciones, y una seccion
-         * suele tener una tabla con labels.
-         * @param name nombre de la nueva seccion.
-         * @param init direccion inicial de la seccion, relativa al espacio de direcciones.
-         * @param final direccion final de la seccion, relativa al espacio de direcciones.
+         * @brief Crea y anade una seccion con nombre y rango de direcciones.
+         *
+         * @param name  Nombre de la nueva seccion.
+         * @param init  Direccion virtual de inicio (relativa al espacio).
+         * @param final Direccion virtual de fin (relativa al espacio).
          */
         void add_section(const std::string &name, uint64_t init, uint64_t final) {
             Section sec;
@@ -372,156 +362,159 @@ namespace Assembly::Bytecode {
             sec.memory.address_final = final;
             sec.size_real            = 0;
             sec.size_align_section   = 1;
-
-            // añadimos la seccion a la tabla de secciones.
             add_section(sec);
         }
 
         /**
-         * Establecer nombre de sección
-         * @param name nombre de la seccion. El nombre de la seccion sera almacenada en la tabla de metadatos del
-         * ejecutabe VELB.
+         * @brief Establece el nombre identificativo del espacio de direcciones.
+         *
+         * El nombre se almacena en la tabla de metadatos del ejecutable .velb.
+         *
+         * @param name Nombre del espacio de direcciones.
          */
         void set_name(const std::string &name) {
             name_section = name;
         }
 
         /**
-         * Liberar memoria interna
+         * @brief Libera todas las secciones del espacio.
          */
         void clear() {
             table_section.clear();
         }
 
         /**
-         * Computar el rango de direcciones de cada seccion del espacio de direcciones.
+         * @brief Calcula el rango de memoria de cada seccion del espacio de forma contigua.
          *
-         * @param bytes_aligned cantidad de bytes a usar para alinear la seccion
+         * Ordena las secciones por direccion de inicio y llama a compute_range()
+         * sobre cada una usando la direccion final de la anterior como base.
+         *
+         * @param bytes_aligned Alineacion en bytes para cada seccion (p.ej. 4096).
          */
         void compute_sections_ranges(uint64_t bytes_aligned) {
-            // ordenamos las secciones segun se añadieron para poder computar los rangos
-            // de las secciones en su correspondiente orden.
-            std::sort(ordered_sections.begin(),
-                      ordered_sections.end(),
+            // ordenar secciones por direccion de inicio para computar en orden
+            std::sort(ordered_sections.begin(), ordered_sections.end(),
                       [](const Section *a, const Section *b) {
                           return a->memory.address_init < b->memory.address_init;
                       });
 
-
-            // el inicio de toda seccion es la direccion de inicio del espacio de direcciones
-            uint64_t start = range.address_init;
+            uint64_t start = range.address_init; // base del espacio de direcciones
             for (Section *sec: ordered_sections) {
                 sec->compute_range(start, bytes_aligned);
-
-                // a la direccion base actual se suma el tamaño de la seccion para calcular
-                // el base address de la siguiente seccion.
-                start += sec->size_real;
+                start += sec->size_real; // la siguiente seccion empieza tras el final real
             }
         }
     } Space;
 
     /**
-     * Permite calcula el tamaño real del espacio de direcciones usando
-     * el bytecode contenido en todas las secciones del espacio de direcciones
-     * @param s un espacio de direcciones con secciones y cada una con su tamaño real.
-     * @return tamaño real del espacio de direcciones.
+     * @brief Calcula el tamano real total de un espacio de direcciones.
+     *
+     * Suma los tamanos reales de todas sus secciones.
+     *
+     * @param s Espacio de direcciones a medir.
+     * @return Tamano real total en bytes.
      */
     static uint64_t compute_space_size(const Space &s) {
         uint64_t total = 0;
         for (auto &[name, sec]: s.table_section) {
-            total += sec.size_real;
+            total += sec.size_real; // acumular tamano de cada seccion
         }
         return total;
     }
 
     /**
-     * Representa una entrada en la tabla de importaciones para el contexto
+     * @brief Entrada en la tabla de importaciones del contexto del ensamblador.
+     *
+     * Cada entrada representa un simbolo externo que el loader debe resolver
+     * en tiempo de carga consultando la biblioteca indicada.
      */
     struct ImportEntry {
-        std::string library;  // "kernel32.dll"
-        std::string function; // "GetTickCount"
-        uint32_t    index;    // índice en la tabla de imports
+        std::string library;   ///< Nombre de la biblioteca (p.ej. "kernel32.dll")
+        std::string function;  ///< Nombre del simbolo importado (p.ej. "GetTickCount")
+        uint32_t    index;     ///< Indice en la tabla de importaciones del fichero objeto
     };
 
+    /**
+     * @brief Contexto global del ensamblador durante la emision de bytecode.
+     *
+     * Agrupa todos los datos necesarios para un proceso de ensamblado completo:
+     *   - Espacios de direcciones con sus secciones y etiquetas.
+     *   - Tabla de relocalizaciones para el linker.
+     *   - Tabla de importaciones para el loader dinamico.
+     *   - Formato de salida y alineacion de secciones.
+     */
     typedef struct Context {
         /**
-         * Valor PC de inicio para el linker, este valor es necesario al generar el bytecode para indicar
-         * a la VM donde iniciar la ejecucion, si el usuario no define donde iniciar usando la notacion
-         * @InitPc(label) entonces se definiria por defecto iniciar en la direccion 0 de la memoria virtual.
+         * @brief Punto de inicio de ejecucion (valor del PC al cargar el modulo).
+         *
+         * Se define con la anotacion \@InitPc.  Si no se define, la VM comienza
+         * en la direccion 0 del espacio de memoria virtual.
          */
         uint64_t start_pc{};
 
         /**
-         * Tabla de importacion con nombres de los metodos y nombre de las
-         * librerias usadas. Se recomienda usar la tabla `import_lookup` para
-         * examinar si existe un simbolo dado de forma rapida, ya que esta via
-         * tiene un coste O(1), en caso contrario usando otros metodos de buqyedas
-         * perdera mas tiempo.
+         * @brief Tabla de importaciones (vector de ImportEntry).
+         *
+         * Usar import_lookup para busquedas O(1) por clave "lib:funcion".
          */
         std::vector<ImportEntry> import_table;
 
         /**
-         * Tabla de importacion de tipo clave: valor para acceso rapido,
-         * ejemplo de clave:
-         * "kernel32.dll:GetTickCount". el valor es el indice de la entrada
-         * dentro de la tabla "import_table".
+         * @brief Indice rapido de importaciones: "lib:funcion" -> indice en import_table.
+         *
+         * Permite verificar en O(1) si un simbolo ya esta importado antes de anadirlo.
          */
         std::unordered_map<std::string, uint64_t> import_lookup;
 
         /**
-         * espacio de direcciones key(nombre): valor(espacio)
+         * @brief Tabla de espacios de direcciones (nombre -> Space).
          */
         std::unordered_map<std::string, Space> space_address;
 
         /**
-         * tabla de tipo vector que contiene las tablas de relocalizaciones
+         * @brief Tabla de relocalizaciones del modulo (todas las entradas en orden).
          */
-        std::vector<Relocation> relocations; // todas las relocaciones del módulo
+        std::vector<Relocation> relocations;
 
         /**
-         * relocalizacion por "nombre simbolo": "indice en la tabla de relocalizaciones (relocations)"
+         * @brief Indice de relocalizaciones por simbolo: nombre -> lista de indices en relocations.
+         *
+         * Permite encontrar rapidamente todas las referencias a un simbolo dado.
          */
         std::unordered_map<std::string, std::vector<size_t> > reloc_by_symbol;
 
         /**
-         * Añade una relocalizacion a la tabla de relocalizaciones en el contexto del ensamblador. Esta relocalizacion
-         * puede resolverse en el linker si es una relozalizacion dentro del propio codigo, en caso de ser una
-         * llamada a una libreria o api externa, la relocalizacion se hara en run time con el linker dinamico, por
-         * lo que la relocalizacion se añadira a la tabla de relocalizaciones del ejecutable.
-         * @param rel relocalizacion a almacenar.
+         * @brief Anade una relocalizacion a la tabla y la indexa por simbolo.
+         *
+         * La relocalizacion puede resolverse en el linker (si el simbolo es local)
+         * o en el loader en tiempo de ejecucion (si es externo).
+         *
+         * @param rel Relocalizacion a registrar.
          */
         void add_relocation(const Relocation &rel) {
-            // Guardar índice
-            size_t index = relocations.size();
-
-            // Añadir al vector principal
-            relocations.push_back(rel);
-
-            // Añadir al índice por símbolo
-            reloc_by_symbol[rel.symbol].push_back(index);
+            size_t index = relocations.size(); // indice de la nueva entrada
+            relocations.push_back(rel);        // anadir al vector principal
+            reloc_by_symbol[rel.symbol].push_back(index); // indexar por simbolo
         }
 
         /**
-         * Permite obtener todas las relocaciones de un símbolo
-         * @param symbol nombre del simbolo del que obtener todas las relocalizaciones
-         * @return tabla de relocalizaciones para ese simbolo
+         * @brief Devuelve todos los punteros a las relocalizaciones de un simbolo.
+         *
+         * @param symbol Nombre del simbolo cuyas relocalizaciones se buscan.
+         * @return Vector de punteros constantes a Relocation; vacio si no hay entradas.
          */
         std::vector<const Relocation *> get_relocations_for(const std::string &symbol) const {
             std::vector<const Relocation *> result;
-
             auto it = reloc_by_symbol.find(symbol);
-            if (it == reloc_by_symbol.end())
-                return result;
-
+            if (it == reloc_by_symbol.end()) return result;
             for (size_t idx: it->second) {
                 result.push_back(&relocations[idx]);
             }
-
             return result;
         }
 
         /**
-         * Metodo para limpiar relocaciones
+         * @brief Limpia las tablas de relocalizaciones (vector e indice).
          */
         void clear_relocations() {
             relocations.clear();
@@ -529,36 +522,39 @@ namespace Assembly::Bytecode {
         }
 
         /**
-         * Permite saber si un simbolo tiene relocalizaciones
-         * @param symbol simbolo del que averiguar si tiene relocalizaciones
-         * @return true si hay relocalizaciones.
+         * @brief Indica si el simbolo indicado tiene alguna relocalizacion registrada.
+         *
+         * @param symbol Nombre del simbolo a consultar.
+         * @return true si existe al menos una relocalizacion para el simbolo.
          */
         bool has_relocations(const std::string &symbol) const {
             return reloc_by_symbol.count(symbol) > 0;
         }
 
         /**
-         * Formato de salida, por defecto el fortmato es plano o crudo.
-         * Este variable puede ser alterada usando la notacion "Format",
-         * pero solo surge efecto la ultima anotacion definida de este tipo
-         * en una misma unidad de traducion.
+         * @brief Formato de salida del bytecode generado.
+         *
+         * Por defecto "raw" (codigo plano sin cabeceras).  Se puede cambiar
+         * con la anotacion \@Format; solo la ultima definicion surte efecto.
          */
         std::string format_output = "raw";
 
         /**
-         * Tamnaño al que alinear cada seccion, si es el formato VELB,
-         * debe ser 4096
+         * @brief Alineacion en bytes de cada seccion del binario.
+         *
+         * Para el formato .velb debe ser 4096 (tamano de pagina).
+         * El valor por defecto 1 significa sin alineacion.
          */
         uint32_t bytes_aligned = 0x1;
 
         /**
-         * Crear y añadir un espacio de memoria para el contexto.
-         * @param name nombre del espacio de memoria
-         * @param init direccion inicial del espacio
-         * @param final direccion final
+         * @brief Crea un nuevo espacio de direcciones y lo anade al contexto.
+         *
+         * @param name  Nombre identificativo del espacio.
+         * @param init  Direccion virtual de inicio del espacio.
+         * @param final Direccion virtual de fin del espacio.
          */
-        void add_space(const std::string &name,
-                       uint64_t           init, uint64_t final) {
+        void add_space(const std::string &name, uint64_t init, uint64_t final) {
             Space sp;
             sp.range.address_init  = init;
             sp.range.address_final = final;
@@ -567,43 +563,43 @@ namespace Assembly::Bytecode {
         }
 
         /**
-         * Obtener un espacio (si existe).
-         * @param name nombre del espacio de direcciones a buscar
-         * @return devuelve el espacio de direcciones si existe, en caso contrario devuelve nullptr.
+         * @brief Busca un espacio de direcciones por nombre.
+         *
+         * @param name Nombre del espacio a buscar.
+         * @return Puntero al Space si existe; nullptr si no se encuentra.
          */
         Space *get_space(const std::string &name) {
             auto it = space_address.find(name);
-            if (it != space_address.end())
-                return &it->second;
+            if (it != space_address.end()) return &it->second;
             return nullptr;
         }
 
         /**
-         * Liberar toda la memoria
+         * @brief Libera todos los espacios de direcciones del contexto.
          */
         void clear() {
-            for (auto &kv: space_address)
-                kv.second.clear(); // limpia secciones internas
-
+            for (auto &kv: space_address) kv.second.clear();
             space_address.clear();
         }
 
         /**
-         * obtener una sección por nombre
-         * @param name nombre de la seccion a buscar
-         * @return si la seccion existe la devuelve, en caso contrario se retorna nullptr
+         * @brief Busca una seccion por nombre en todos los espacios de direcciones.
+         *
+         * @param name Nombre de la seccion a buscar.
+         * @return Puntero a la Section si existe; nullptr si no se encuentra.
          */
         Section *get_section(const std::string &name) {
             for (auto &[spaceName, space]: space_address) {
                 auto it = space.table_section.find(name);
-                if (it != space.table_section.end())
-                    return &it->second;
+                if (it != space.table_section.end()) return &it->second;
             }
             return nullptr;
         }
 
         /**
-         * Computar todos los rangos de direcciones de cada seccion
+         * @brief Calcula los rangos de memoria de todas las secciones en todos los espacios.
+         *
+         * Llama a Space::compute_sections_ranges() para cada espacio usando bytes_aligned.
          */
         void compute_all_ranges() {
             for (auto &[name, sp]: space_address) {
@@ -613,40 +609,45 @@ namespace Assembly::Bytecode {
     } Context;
 
     /**
-     * @brief Resultado de una búsqueda de label en el contexto.
+     * @brief Resultado de una busqueda de etiqueta en el contexto del ensamblador.
+     *
+     * Contiene punteros directos a la Label, la Section y el Space encontrados,
+     * ademas de la direccion absoluta calculada si los rangos estan disponibles.
      */
     struct LabelLookupResult {
-        Label *                 label   = nullptr; ///< puntero al label (dentro de Section::table_label)
-        Section *               section = nullptr; ///< puntero a la sección que contiene el label
-        Space *                 space   = nullptr; ///< puntero al espacio que contiene la sección
-        std::string             space_name;        ///< nombre del espacio (clave)
-        std::string             section_name;      ///< nombre de la sección (clave)
-        std::optional<uint64_t> absolute_address;  ///< dirección absoluta si se pudo calcular
-        [[nodiscard]] bool      found() const {
-            return label != nullptr;
-        }
+        Label *                 label   = nullptr; ///< Puntero a la etiqueta encontrada
+        Section *               section = nullptr; ///< Seccion que contiene la etiqueta
+        Space *                 space   = nullptr; ///< Espacio que contiene la seccion
+        std::string             space_name;        ///< Nombre del espacio (clave del mapa)
+        std::string             section_name;      ///< Nombre de la seccion (clave del mapa)
+        std::optional<uint64_t> absolute_address;  ///< Direccion absoluta calculada si disponible
+
+        /**
+         * @brief Indica si la busqueda encontro la etiqueta.
+         *
+         * @return true si label != nullptr.
+         */
+        [[nodiscard]] bool found() const { return label != nullptr; }
     };
 
     /**
-     * @brief Busca un label por nombre en todas las spaces del Context.
+     * @brief Busca una etiqueta por nombre en todos los espacios del contexto.
      *
-     * Recorre todas las spaces y sus secciones buscando el label con clave `label_name`.
-     * Devuelve el primer match encontrado (orden de búsqueda: iteración de unordered_map).
+     * Recorre todos los espacios y sus secciones en orden de iteracion del mapa
+     * (no determinista) y devuelve el primer resultado encontrado.
      *
-     * @param ctx Contexto que contiene space_address.
-     * @param label_name Nombre del label a buscar.
-     * @return LabelLookupResult con punteros y dirección absoluta si es posible.
-     *
-     * @note Complejidad: O(#sections + #labels en secciones) en el peor caso.
+     * Complejidad: O(num_secciones + num_etiquetas) en el peor caso.
      *
      * @code{.cpp}
      * auto res = find_label_in_context(ctx, "start");
      * if (res.found()) {
-     *     std::cout << "Encontrado en space=" << res.space_name
-     *               << " section=" << res.section_name << "\n";
-     *     if (res.absolute_address) std::cout << "Addr abs: " << *res.absolute_address << "\n";
+     *     if (res.absolute_address) std::cout << "Addr: " << *res.absolute_address << "\n";
      * }
      * @endcode
+     *
+     * @param ctx        Contexto donde buscar.
+     * @param label_name Nombre de la etiqueta.
+     * @return LabelLookupResult con los punteros y direccion; found() == false si no existe.
      */
     static LabelLookupResult find_label_in_context(Context &ctx, const std::string &label_name) {
         LabelLookupResult out;
@@ -663,11 +664,11 @@ namespace Assembly::Bytecode {
                     out.space        = &space;
                     out.space_name   = space_name;
                     out.section_name = section_name;
-                    // intentar calcular dirección absoluta si los rangos están definidos
-                    std::error_code ec;
+                    // calcular direccion absoluta si los rangos estan definidos
                     if (space.range.address_init != 0 || sec.memory.address_init != 0) {
-                        // Dirección absoluta = base del espacio + inicio de la sección (relativo al espacio) + offset del label (relativo a la sección)
-                        uint64_t abs         = space.range.address_init + sec.memory.address_init + it->second.address;
+                        uint64_t abs = space.range.address_init
+                                     + sec.memory.address_init
+                                     + it->second.address;
                         out.absolute_address = abs;
                     }
                     return out;
@@ -678,9 +679,14 @@ namespace Assembly::Bytecode {
     }
 
     /**
-     * @brief Versión const de la búsqueda (no modifica el Context).
+     * @brief Version const de find_label_in_context (no modifica el contexto).
+     *
+     * @param ctx        Contexto donde buscar (const).
+     * @param label_name Nombre de la etiqueta.
+     * @return LabelLookupResult con los punteros; found() == false si no existe.
      */
-    static LabelLookupResult find_label_in_context_const(const Context &ctx, const std::string &label_name) {
+    static LabelLookupResult find_label_in_context_const(const Context &ctx,
+                                                          const std::string &label_name) {
         LabelLookupResult out;
         for (const auto &space_kv: ctx.space_address) {
             const Space &      space      = space_kv.second;
@@ -690,13 +696,14 @@ namespace Assembly::Bytecode {
                 const std::string &section_name = sec_kv.first;
                 auto               it           = sec.table_label.find(label_name);
                 if (it != sec.table_label.end()) {
-                    // cast away const only for pointers in result? prefer to return non-const pointers as nullptr if const context
-                    out.label            = const_cast<Label *>(&it->second);
-                    out.section          = const_cast<Section *>(&sec);
-                    out.space            = const_cast<Space *>(&space);
-                    out.space_name       = space_name;
-                    out.section_name     = section_name;
-                    uint64_t abs         = space.range.address_init + sec.memory.address_init + it->second.address;
+                    out.label        = const_cast<Label *>(&it->second);
+                    out.section      = const_cast<Section *>(&sec);
+                    out.space        = const_cast<Space *>(&space);
+                    out.space_name   = space_name;
+                    out.section_name = section_name;
+                    uint64_t abs     = space.range.address_init
+                                     + sec.memory.address_init
+                                     + it->second.address;
                     out.absolute_address = abs;
                     return out;
                 }
@@ -706,36 +713,41 @@ namespace Assembly::Bytecode {
     }
 
     /**
-     * @brief Busca un label dentro de una space concreta por nombre de sección y label.
+     * @brief Busca una etiqueta por nombre dentro de un espacio de direcciones concreto.
      *
-     * @param ctx Contexto
-     * @param space_name Nombre del espacio donde buscar
-     * @param label_name Nombre del label a buscar
-     * @return LabelLookupResult con resultado o vacío si no existe.
+     * @param ctx        Contexto donde buscar.
+     * @param space_name Nombre del espacio donde se limita la busqueda.
+     * @param label_name Nombre de la etiqueta.
+     * @return LabelLookupResult con los punteros; found() == false si no existe.
      */
-    static LabelLookupResult find_label_in_space(Context &          ctx, const std::string &space_name,
-                                                 const std::string &label_name) {
+    static LabelLookupResult find_label_in_space(Context &ctx,
+                                                  const std::string &space_name,
+                                                  const std::string &label_name) {
         LabelLookupResult out;
-        auto              it_space = ctx.space_address.find(space_name);
-        if (it_space == ctx.space_address.end()) return out;
+        auto it_space = ctx.space_address.find(space_name);
+        if (it_space == ctx.space_address.end()) return out; // espacio no encontrado
+
         Space &space = it_space->second;
         for (auto &sec_kv: space.table_section) {
             Section &          sec          = sec_kv.second;
             const std::string &section_name = sec_kv.first;
             auto               it           = sec.table_label.find(label_name);
             if (it != sec.table_label.end()) {
-                out.label            = &it->second;
-                out.section          = &sec;
-                out.space            = &space;
-                out.space_name       = space_name;
-                out.section_name     = section_name;
-                uint64_t abs         = space.range.address_init + sec.memory.address_init + it->second.address;
+                out.label        = &it->second;
+                out.section      = &sec;
+                out.space        = &space;
+                out.space_name   = space_name;
+                out.section_name = section_name;
+                uint64_t abs     = space.range.address_init
+                                 + sec.memory.address_init
+                                 + it->second.address;
                 out.absolute_address = abs;
                 return out;
             }
         }
         return out;
     }
-}
 
-#endif //STRUCT_CONTEXT_H
+} // namespace Assembly::Bytecode
+
+#endif // STRUCT_CONTEXT_H

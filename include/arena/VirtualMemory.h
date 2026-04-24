@@ -1,156 +1,283 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
-#ifndef VIRTUALMEMORY_H
+/**
+ * @file VirtualMemory.h
+ * @brief Declaracion de la interfaz de memoria virtual de VestaVM.
+ *
+ * Declara @c VirtualMemory: mapeo de rangos de direcciones virtuales a
+ * arenas del host, lectura/escritura a traves del TLB y relleno de
+ * regiones con un valor de byte constante.
+ */#ifndef VIRTUALMEMORY_H
 #define VIRTUALMEMORY_H
+
 #include <cstdint>
 
 #include "arena_manager.h"
 #include "TLB.h"
 
 namespace vm {
+
+    /**
+     * @class VirtualMemory
+     * @brief Interfaz de acceso a la memoria virtual de un proceso de la VM.
+     *
+     * VirtualMemory combina un ArenaManager (bloques de memoria real) y un
+     * LazyHybridTLB (tabla de traduccion de direcciones) para ofrecer una
+     * vista uniforme del espacio de direcciones virtual de la VM.
+     *
+     * Operaciones principales:
+     *   - map()    / unmap()         -- gestionar regiones de memoria.
+     *   - read_*() / write_*()       -- acceso tipado a memoria virtual.
+     *   - read_bytes() / write_bytes() -- acceso por bloques con cruce de pagina.
+     *   - read_any<T>() / write_any<T>() -- despacho en tiempo de compilacion por tipo.
+     *   - operator[]                 -- acceso byte a byte por direccion virtual.
+     *
+     * Todas las traducciones pasan por el TLB.  Si una pagina no esta
+     * mapeada, read_bytes() y write_bytes() realizan una asignacion perezosa
+     * (lazy allocation) usando permsDefault.
+     */
     class VirtualMemory {
     private:
-        tlb::LazyHybridTLB &tlb;
-        ArenaManager &arena_mgr;
-        MemPerm permsDefault = MemPerm::NONE;
+        tlb::LazyHybridTLB &tlb;               ///< TLB compartido con el proceso propietario
+        ArenaManager       &arena_mgr;          ///< Gestor de bloques de memoria real
+        MemPerm             permsDefault;        ///< Permisos usados en lazy allocation (RWX por defecto)
 
     public:
+        /**
+         * @brief Construye la interfaz de memoria virtual.
+         *
+         * Los permisos por defecto para la asignacion perezosa se establecen
+         * a READ | WRITE | EXEC para que el codigo JIT y los datos funcionen
+         * sin necesidad de especificar permisos en cada acceso.
+         *
+         * @param tlb_    Referencia al TLB del proceso.
+         * @param arena   Referencia al ArenaManager del proceso.
+         */
         VirtualMemory(tlb::LazyHybridTLB &tlb_, vm::ArenaManager &arena)
-            : tlb(tlb_), arena_mgr(arena), permsDefault(MemPerm::EXEC | MemPerm::READ | MemPerm::WRITE) {
-        }
+            : tlb(tlb_), arena_mgr(arena),
+              permsDefault(MemPerm::EXEC | MemPerm::READ | MemPerm::WRITE) {}
 
         /**
-         * Permite crear un bloque de memoria plana grande
+         * @brief Mapea una region de memoria virtual a un bloque real del host.
+         *
+         * Crea una sola Arena de tamanyo @p size (redondeado a paginas) para
+         * cubrir todo el rango [@p vaddr, @p vaddr + @p size).  Cada pagina
+         * del rango queda registrada en el TLB apuntando a su offset dentro
+         * de la arena.
+         *
+         * @param vaddr Direccion virtual de inicio del mapeo.
+         * @param size  Tamanyo en bytes del rango a mapear.
+         * @param perms Permisos de acceso para la arena creada.
+         * @return      vm_map_ptr con la direccion de inicio alineada a pagina.
          */
         vm_map_ptr map(uint64_t vaddr, size_t size, MemPerm perms);
 
+        /**
+         * @brief Copia datos desde memoria del host a memoria virtual.
+         *
+         * Recorre las paginas de destino creandolas si no existen (auto-map RW)
+         * y copia @p size bytes de @p src_host.
+         *
+         * @param dest_vaddr Direccion virtual destino.
+         * @param src_host   Puntero en memoria del host con los datos a copiar.
+         * @param size       Numero de bytes a copiar.
+         */
         void vm_to_host_memcpy(uint64_t dest_vaddr, const void *src_host, size_t size);
 
+        /**
+         * @brief Rellena una region de memoria virtual con un valor de byte.
+         *
+         * Equivalente a memset() sobre el espacio de direcciones virtual.
+         * Crea las paginas que no existan antes de escribir.
+         *
+         * @param dest_vaddr Direccion virtual de inicio.
+         * @param value      Valor de byte (0-255) a escribir en cada posicion.
+         * @param size       Numero de bytes a rellenar.
+         */
         void vm_to_host_memset(uint64_t dest_vaddr, int value, size_t size);
 
         /**
-         * Lee un bloque de memoria virtual y lo copia en un buffer destino.
+         * @brief Lee @p size bytes desde la memoria virtual a un buffer del host.
          *
-         * Esta función permite realizar lecturas multibyte eficientes sobre memoria
-         * virtual, gestionando automáticamente la traducción mediante la TLB y
-         * resolviendo saltos de página cuando el rango solicitado abarca más de una
-         * página de 4 KiB.
+         * Gestiona automaticamente la traduccion TLB y los cruces de pagina.
+         * En caso de miss (pagina no mapeada) realiza una asignacion perezosa
+         * con permsDefault.
          *
-         * Si una dirección virtual no está presente en la TLB y el tipo de mapeo lo
-         * permite (MAPPED_PTR_HOST o NONE), se realiza una asignación perezosa
-         * (lazy allocation) creando una nueva página en el arena manager y
-         * registrándola en la TLB. Para otros tipos de mapeo, la función delega en la
-         * lógica correspondiente o genera un error si el modo no está implementado.
+         * Optimizacion: cuando el puntero fisico resultante esta alineado a 16 bytes
+         * se activa un fast-path con __builtin_assume_aligned para que el compilador
+         * pueda emitir instrucciones SIMD alineadas (movaps/vmovaps).  De lo contrario
+         * se usa memcpy() estandar.
          *
-         * Optimización:
-         *  - Cuando el puntero físico resultante está alineado a 16 bytes, se activa
-         *    un *fast‑path* que permite al compilador generar accesos alineados
-         *    mediante `__builtin_assume_aligned()`. Esto habilita instrucciones SIMD
-         *    alineadas (movaps/vmovaps o equivalentes NEON/AVX), reduciendo el coste
-         *    de copia en bloques grandes. Si la alineación no está garantizada, la
-         *    función recurre automáticamente al camino seguro tradicional.
-         *
-         * Esta optimización es transparente para el usuario y mantiene compatibilidad
-         * total con la versión anterior.
-         *
-         * @param vaddr Dirección virtual inicial desde la que se desea leer.
-         * @param dst   Puntero al buffer destino donde se almacenarán los bytes leídos.
-         * @param size  Número de bytes a leer desde memoria virtual.
+         * @param vaddr Direccion virtual de inicio de la lectura.
+         * @param dst   Buffer del host donde se almacenan los bytes leidos.
+         * @param size  Numero de bytes a leer.
          */
         void read_bytes(uint64_t vaddr, void *dst, size_t size);
 
+        /**
+         * @brief Escribe @p size bytes desde un buffer del host a memoria virtual.
+         *
+         * Simetrico de read_bytes().  Gestiona cruces de pagina y asignacion
+         * perezosa del mismo modo.
+         *
+         * @param vaddr Direccion virtual de inicio de la escritura.
+         * @param src   Buffer del host con los datos a escribir.
+         * @param size  Numero de bytes a escribir.
+         */
         void write_bytes(uint64_t vaddr, const void *src, size_t size);
 
+        /**
+         * @brief Escribe un byte en la direccion virtual indicada.
+         * @param vaddr Direccion virtual destino.
+         * @param value Byte a escribir.
+         */
         void write_u8(uint64_t vaddr, uint8_t value);
 
+        /**
+         * @brief Escribe dos bytes (little-endian) en la direccion virtual indicada.
+         * @param vaddr Direccion virtual destino.
+         * @param value Valor de 16 bits a escribir.
+         */
         void write_u16(uint64_t vaddr, uint16_t value);
 
+        /**
+         * @brief Escribe cuatro bytes (little-endian) en la direccion virtual indicada.
+         * @param vaddr Direccion virtual destino.
+         * @param value Valor de 32 bits a escribir.
+         */
         void write_u32(uint64_t vaddr, uint32_t value);
 
+        /**
+         * @brief Escribe ocho bytes (little-endian) en la direccion virtual indicada.
+         * @param vaddr Direccion virtual destino.
+         * @param value Valor de 64 bits a escribir.
+         */
         void write_u64(uint64_t vaddr, uint64_t value);
 
+        /**
+         * @brief Lee un byte desde la direccion virtual indicada.
+         * @param vaddr Direccion virtual fuente.
+         * @return      Byte leido.
+         */
         uint8_t read_u8(uint64_t vaddr);
 
+        /**
+         * @brief Lee dos bytes (little-endian) desde la direccion virtual indicada.
+         * @param vaddr Direccion virtual fuente.
+         * @return      Valor de 16 bits leido.
+         */
         uint16_t read_u16(uint64_t vaddr);
 
         /**
-         * Lee un valor de 32 bits desde memoria virtual.
+         * @brief Lee cuatro bytes (little-endian) desde la direccion virtual indicada.
          *
-         * Esta función es un atajo sobre `read_bytes()` para obtener un entero
-         * de 32 bits desde la dirección virtual indicada. Gestiona automáticamente
-         * la traducción mediante TLB y los posibles saltos de página.
+         * Atajo sobre read_bytes() para acceso de 32 bits.  Gestiona
+         * automaticamente la traduccion TLB y los cruces de pagina.
          *
-         * @param vaddr Dirección virtual desde la que se desea leer el valor.
-         * @return Valor de 32 bits leído desde memoria virtual.
+         * @param vaddr Direccion virtual fuente.
+         * @return      Valor de 32 bits leido.
          */
         uint32_t read_u32(uint64_t vaddr);
 
         /**
-         * Lee un valor de 64 bits desde memoria virtual.
+         * @brief Lee ocho bytes (little-endian) desde la direccion virtual indicada.
          *
-         * Esta función es un atajo sobre `read_bytes()` para obtener un entero
-         * de 64 bits desde la dirección virtual indicada. Gestiona automáticamente
-         * la traducción mediante TLB y los posibles saltos de página.
+         * Atajo sobre read_bytes() para acceso de 64 bits.  Gestiona
+         * automaticamente la traduccion TLB y los cruces de pagina.
          *
-         * @param vaddr Dirección virtual desde la que se desea leer el valor.
-         * @return Valor de 64 bits leído desde memoria virtual.
+         * @param vaddr Direccion virtual fuente.
+         * @return      Valor de 64 bits leido.
          */
         uint64_t read_u64(uint64_t vaddr);
 
-
+        /**
+         * @brief Desmapea la region de memoria virtual indicada.
+         *
+         * Libera las arenas asociadas a las paginas del rango e invalida
+         * las entradas correspondientes en el TLB.
+         *
+         * @param vaddr Direccion virtual de inicio del rango.
+         * @param size  Tamanyo en bytes del rango a desmapear.
+         */
         void unmap(uint64_t vaddr, size_t size);
 
+        /**
+         * @brief Acceso por referencia a un byte de la memoria virtual.
+         *
+         * Traduce @p vaddr a un puntero de host y devuelve una referencia
+         * al byte en el offset de pagina correspondiente.  Si la entrada
+         * TLB no existe o no es de tipo HOST, fuerza una lectura de un byte
+         * para crear la pagina antes de devolver la referencia.
+         *
+         * @param vaddr Direccion virtual del byte a acceder.
+         * @return      Referencia mutable al byte en memoria del host.
+         *
+         * @warning El resultado es invalido tras cualquier llamada que
+         *          desaloje la pagina del TLB (unmap, clear_tlb_entry).
+         */
         uint8_t &operator[](uint64_t vaddr) {
-            tlb::TLBEntryData *entry = tlb.get_entry(vaddr);
+            tlb::TLBEntryData *entry = tlb.get_entry(vaddr); // buscar entrada en TLB
 
+            // si no existe o no es host, forzar la asignacion perezosa
             if (!entry || entry->type_address != MAPPED_PTR_HOST) {
                 uint8_t dummy;
-                read_bytes(vaddr, &dummy, 1);
-                entry = tlb.get_entry(vaddr);
+                read_bytes(vaddr, &dummy, 1); // genera la pagina si no existe
+                entry = tlb.get_entry(vaddr); // releer la entrada tras asignacion
             }
 
-            uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host);
-            return base[vaddr & 0xFFF];
+            uint8_t *base = static_cast<uint8_t *>(entry->address.ptr_host); // base de la pagina
+            return base[vaddr & 0xFFF]; // offset dentro de la pagina (12 bits)
         }
 
+        /**
+         * @brief Lee un valor del tipo T desde la direccion virtual indicada.
+         *
+         * Despacha en tiempo de compilacion a read_u8/u16/u32/u64 segun sizeof(T).
+         * Solo soporta uint8_t, uint16_t, uint32_t y uint64_t.
+         *
+         * @tparam T Tipo entero sin signo a leer (8, 16, 32 o 64 bits).
+         * @param  addr Direccion virtual fuente.
+         * @return Valor leido de tipo T.
+         */
         template<typename T>
         inline T read_any(uint64_t addr) {
-            if constexpr (std::is_same_v<T, uint8_t>)
-                return read_u8(addr);
-            else if constexpr (std::is_same_v<T, uint16_t>)
-                return read_u16(addr);
-            else if constexpr (std::is_same_v<T, uint32_t>)
-                return read_u32(addr);
-            else if constexpr (std::is_same_v<T, uint64_t>)
-                return read_u64(addr);
-            else
-                static_assert(sizeof(T) == 0, "Unsupported type in read_any");
+            if constexpr (std::is_same_v<T, uint8_t>)  return read_u8(addr);   // lectura de 8 bits
+            else if constexpr (std::is_same_v<T, uint16_t>) return read_u16(addr); // lectura de 16 bits
+            else if constexpr (std::is_same_v<T, uint32_t>) return read_u32(addr); // lectura de 32 bits
+            else if constexpr (std::is_same_v<T, uint64_t>) return read_u64(addr); // lectura de 64 bits
+            else static_assert(sizeof(T) == 0, "read_any: tipo no soportado"); // error en compilacion
         }
 
+        /**
+         * @brief Escribe un valor del tipo T en la direccion virtual indicada.
+         *
+         * Despacha en tiempo de compilacion a write_u8/u16/u32/u64 segun sizeof(T).
+         * Solo soporta uint8_t, uint16_t, uint32_t y uint64_t.
+         *
+         * @tparam T     Tipo entero sin signo a escribir (8, 16, 32 o 64 bits).
+         * @param  addr  Direccion virtual destino.
+         * @param  value Valor a escribir.
+         */
         template<typename T>
         inline void write_any(uint64_t addr, T value) {
-            if constexpr (std::is_same_v<T, uint8_t>)
-                write_u8(addr, value);
-            else if constexpr (std::is_same_v<T, uint16_t>)
-                write_u16(addr, value);
-            else if constexpr (std::is_same_v<T, uint32_t>)
-                write_u32(addr, value);
-            else if constexpr (std::is_same_v<T, uint64_t>)
-                write_u64(addr, value);
-            else
-                static_assert(sizeof(T) == 0, "Unsupported type in write_any");
+            if constexpr (std::is_same_v<T, uint8_t>)       write_u8(addr, value);   // escritura de 8 bits
+            else if constexpr (std::is_same_v<T, uint16_t>) write_u16(addr, value);  // escritura de 16 bits
+            else if constexpr (std::is_same_v<T, uint32_t>) write_u32(addr, value);  // escritura de 32 bits
+            else if constexpr (std::is_same_v<T, uint64_t>) write_u64(addr, value);  // escritura de 64 bits
+            else static_assert(sizeof(T) == 0, "write_any: tipo no soportado"); // error en compilacion
         }
     };
-}
 
-#endif //VIRTUALMEMORY_H
+} // namespace vm
+
+#endif // VIRTUALMEMORY_H

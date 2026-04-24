@@ -1,15 +1,23 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+* VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
  */
 
+/**
+ * @file cli.cpp
+ * @brief Implementacion del interprete interactivo (REPL) de VestaVM.
+ *
+ * Implementa @c cli::VestaViewManager y @c cli::VestaInterprete:
+ * lectura de linea con historial, despacho de comandos, callbacks y
+ * parseo de parametros de comando con soporte de comillas.
+ */
 #include "cli/cli.h"
 
 #include <cstdio>
@@ -61,7 +69,7 @@ namespace cli {
      * @param cmd ruta del archivo a ejecutar
      */
     static void command_run(const std::string &cmd) {
-        // parsear parámetros: nombre y ruta
+        // parsear parametros: nombre y ruta
         CmdParams p = parse_cmd_params(cmd);
         if (!p.valid) {
             vesta::scout() << "Uso: <name> <ruta_al_bytecode> [opciones]\n";
@@ -95,11 +103,11 @@ namespace cli {
 
         // p.name identificador y maybe_abs2->string() ruta absoluta
 
-        // Construcción del manager
+        // Construccion del manager
         runtime::ManageVM *vm = mgr.add_manager(p.name, nullptr);
         vm->name_manager      = p.name;
 
-        // Construir la representación textual fuera del mutex,
+        // Construir la representacion textual fuera del mutex,
         // espero que esto no de problemas en el futuro
         std::string info = vm->to_string_vm_manager_info();
 
@@ -112,7 +120,7 @@ namespace cli {
     }
 
 
-    // Señal global para Ctrl+C. Se usa para notificar la instancia activa.
+    // Senal global para Ctrl+C. Se usa para notificar la instancia activa.
     static std::atomic<bool> *global_interrupt_ptr = nullptr;
 
     static void global_sigint_handler(int) {
@@ -193,7 +201,7 @@ namespace cli {
             if (cb) {
                 cb(cmd);
             } else {
-                // fallback: simulación por ahora
+                // fallback: simulacion por ahora
                 std::this_thread::sleep_for(std::chrono::milliseconds(80));
                 std::cout << "[VM] ejecutado: " << cmd << std::endl;
             }
@@ -201,7 +209,7 @@ namespace cli {
     }
 
     // REPL helpers
-    // Reemplaza la función print_help_impl existente por esta versión ampliada.
+    // Reemplaza la funcion print_help_impl existente por esta version ampliada.
     static void print_help_impl(const Impl &I) {
         std::cout << "Comandos especiales:\n"
                 << "  exit                 - salir\n"
@@ -212,7 +220,7 @@ namespace cli {
                 << "  complete PREF        - listar completions para PREF\n"
                 << "\n"
                 << "Comandos del sistema:\n"
-                << "  cmd <comando>        - ejecutar <comando> en el shell (asíncrono)\n"
+                << "  cmd <comando>        - ejecutar <comando> en el shell (asincrono)\n"
                 << "    Ejemplo: cmd ls -la\n"
                 << "\n"
                 << "Ejecutar bytecode / crear manager:\n"
@@ -227,7 +235,7 @@ namespace cli {
                 << "\n"
                 << "    Reglas de parseo:\n"
                 << "      - El primer token es el nombre; puede ir entre comillas \"...\" o '...'.\n"
-                << "      - El segundo token es la ruta; también admite comillas y escapes.\n"
+                << "      - El segundo token es la ruta; tambien admite comillas y escapes.\n"
                 << "      - Ejemplos:\n"
                 << "         run myvm ./build/code.velb\n"
                 << "         run \"My VM\" \"/home/user/code with spaces.velb\" --debug\n"
@@ -248,8 +256,8 @@ namespace cli {
                 << "\n"
                 << "Consejos:\n"
                 << "  - Si la ruta no se encuentra, verifica comillas y escapes.\n"
-                << "  - Para rutas con ~ o variables de entorno, expándelas antes de usar.\n"
-                << "  - Usa nombres únicos para managers para facilitar su identificación.\n";
+                << "  - Para rutas con ~ o variables de entorno, expandelas antes de usar.\n"
+                << "  - Usa nombres unicos para managers para facilitar su identificacion.\n";
     }
 
 
@@ -302,14 +310,14 @@ namespace cli {
 
     /**
      * @brief Permite sugerir completions para un prefijo dado. Esto 
-     * consultaría la tabla de símbolos
+     * consultaria la tabla de simbolos
      * 
-     * @param I instancia del REPL para acceder a configuración o estado si es 
+     * @param I instancia del REPL para acceder a configuracion o estado si es 
      * necesario
      * @param pref prefijo para el que se quieren sugerencias 
      */
     static void handle_complete_impl(const Impl &I, const std::string &pref) {
-        // Reemplazar por consulta a tabla de símbolos de la VM.
+        // Reemplazar por consulta a tabla de simbolos de la VM.
         std::vector<std::string> candidates = {
             "run", "step", "break", "continue",
             "stack", "mem", "help", "exit"
@@ -340,7 +348,7 @@ namespace cli {
         impl_->vm_execute_cb = std::move(cb);
     }
 
-    // Comprueba si la línea inicia un bloque por palabra clave simple o contiene '{'
+    // Comprueba si la linea inicia un bloque por palabra clave simple o contiene '{'
     static bool likely_start_block(const std::string &line) {
         // ejemplo: si empieza por "func " o contiene '{' al final o en cualquier parte
         std::string s = line;
@@ -367,7 +375,7 @@ namespace cli {
         full_cmd   = "cmd.exe /C \"" + cmd + "\" 2>&1";
         FILE *pipe = _popen(full_cmd.c_str(), "r");
 #else
-        // POSIX: usar /bin/sh -c o directamente popen con redirección
+        // POSIX: usar /bin/sh -c o directamente popen con redireccion
         full_cmd = cmd + " 2>&1";
         FILE *pipe = popen(full_cmd.c_str(), "r");
 #endif
@@ -384,13 +392,13 @@ namespace cli {
 #else
         int rc = pclose(pipe);
 #endif
-        // añadir código de retorno al final
+        // anadir codigo de retorno al final
         result += "\n[exit code: " + std::to_string(rc) + "]";
         return result;
     }
 
 
-    // Cuenta balance de llaves en una línea (incrementa por '{', decrementa por '}')
+    // Cuenta balance de llaves en una linea (incrementa por '{', decrementa por '}')
     static int brace_delta(const std::string &line) {
         int d = 0;
         for (char c: line) {
@@ -422,13 +430,13 @@ namespace cli {
     }
 
     /**
-     * @brief Limpia la pantalla de la consola de forma portátil.
+     * @brief Limpia la pantalla de la consola de forma portatil.
      *
-     * En POSIX se envía la secuencia ANSI ESC[2J ESC[H para limpiar y mover el cursor.
+     * En POSIX se envia la secuencia ANSI ESC[2J ESC[H para limpiar y mover el cursor.
      * En Windows intenta habilitar el modo de secuencias ANSI (VT) y, si no es posible,
-     * cae en system("cls") como último recurso.
+     * cae en system("cls") como ultimo recurso.
      *
-     * Esta función no lanza excepciones; en caso de error simplemente no limpia.
+     * Esta funcion no lanza excepciones; en caso de error simplemente no limpia.
      */
     static void clear_screen() {
 #if defined(_WIN32)
@@ -465,7 +473,7 @@ namespace cli {
         if (impl_->running) return;
         impl_->running = true;
 
-        // registrar señal global
+        // registrar senal global
         global_interrupt_ptr = &impl_->interrupted_flag;
         std::signal(SIGINT, global_sigint_handler);
 
@@ -495,19 +503,19 @@ namespace cli {
             std::string        full = line;
             const std::string &term = impl_->cfg.multiline_end;
 
-            // Si la línea termina con el terminador, quitarlo y usarla directamente
+            // Si la linea termina con el terminador, quitarlo y usarla directamente
             if (full.size() >= term.size() &&
                 full.substr(full.size() - term.size()) == term) {
                 full = full.substr(0, full.size() - term.size());
             } else {
-                // Si la línea parece iniciar un bloque (ej. "func ..." o contiene '{'),
+                // Si la linea parece iniciar un bloque (ej. "func ..." o contiene '{'),
                 // entrar en modo bloque y acumular hasta que el balance de llaves sea 0
                 bool start_block = likely_start_block(full);
                 if (start_block) {
                     int balance = brace_delta(full);
-                    // Si el inicio ya cerró el bloque en la misma línea y balance<=0, no leer más
+                    // Si el inicio ya cerro el bloque en la misma linea y balance<=0, no leer mas
                     if (balance > 0) {
-                        // leer líneas hasta que balance vuelva a 0 o aparezca el terminador
+                        // leer lineas hasta que balance vuelva a 0 o aparezca el terminador
                         while (true) {
                             std::cout << "... " << std::flush;
                             std::string more;
@@ -521,7 +529,7 @@ namespace cli {
                                 break;
                             }
 
-                            // si la línea termina con terminador, quitarlo y añadir la parte previa
+                            // si la linea termina con terminador, quitarlo y anadir la parte previa
                             if (more.size() >= term.size() &&
                                 more.substr(more.size() - term.size()) == term) {
                                 std::string part = more.substr(0, more.size() - term.size());
@@ -535,10 +543,10 @@ namespace cli {
                             }
                         }
                     }
-                    // si balance <= 0 ya está completo en la misma línea
+                    // si balance <= 0 ya esta completo en la misma linea
                 } else {
-                    // No es inicio de bloque ni terminador: tratar como línea simple (no acumular)
-                    // full ya es la línea completa
+                    // No es inicio de bloque ni terminador: tratar como linea simple (no acumular)
+                    // full ya es la linea completa
                 }
             }
 
@@ -581,10 +589,10 @@ namespace cli {
 
             // detectar comandos de limpieza de pantalla
             if (cmd == "cls" || cmd == "clear") {
-                // proteger la salida si otros hilos también escriben
+                // proteger la salida si otros hilos tambien escriben
                 std::lock_guard<std::mutex> lk(vesta::cout_mutex);
                 clear_screen();
-                // añadir al historial
+                // anadir al historial
                 add_history_entry_impl(*impl_, cmd);
                 continue;
             }
@@ -593,7 +601,7 @@ namespace cli {
             if (cmd.rfind("cmd ", 0) == 0) {
                 std::string shell = cmd.substr(4); // quitar "cmd "
                 std::thread([shell]() {
-                    // Integración asíncrona (no bloquear REPL)
+                    // Integracion asincrona (no bloquear REPL)
                     try {
                         std::string                 out = execute_shell_command(shell);
                         std::lock_guard<std::mutex> lk(vesta::cout_mutex);
@@ -603,7 +611,7 @@ namespace cli {
                         std::cerr << "Error ejecutando shell: " << e.what() << std::endl;
                     }
                 }).detach();
-                add_history_entry_impl(*impl_, cmd); // no encolar ni añadir al history?
+                add_history_entry_impl(*impl_, cmd); // no encolar ni anadir al history?
                 continue;
             }
 
@@ -696,7 +704,7 @@ namespace cli {
                 }
             }
 
-            // normal: encolar para ejecución
+            // normal: encolar para ejecucion
             add_history_entry_impl(*impl_, cmd);
             cmd_queue_push_impl(*impl_, cmd);
         }
@@ -710,7 +718,7 @@ namespace cli {
         cmd_queue_close_impl(*impl_);
         if (impl_->worker_thread.joinable()) impl_->worker_thread.join();
         save_history_impl(*impl_);
-        // desregistrar señal
+        // desregistrar senal
         global_interrupt_ptr = nullptr;
         std::signal(SIGINT, SIG_DFL);
     }

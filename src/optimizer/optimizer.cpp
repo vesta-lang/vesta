@@ -1,21 +1,40 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
  *
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
  *
  * Descargo: Autor no responsable por modificaciones.
+ */
+
+/**
+ * @file optimizer.cpp
+ * @brief Implementacion del optimizador de bytecode de VestaVM.
+ *
+ * Actualmente contiene el esqueleto del metodo @c BytecodeOptimizer::optimize().
+ * Las transformaciones de peephole y eliminacion de codigo muerto estan pendientes
+ * de implementacion (marcadas con TODO).
  */
 
 #include "optimizer/optimizer.h"
 
 namespace Assembly::Bytecode::Optimizer {
 
-    void optimize(std::vector<uint8_t> &code) {
-        // TODO
+    /**
+     * @brief Aplica optimizaciones al buffer de bytecode indicado.
+     *
+     * En esta version el metodo esta vacio (TODO pendiente).
+     * Cuando se implemente realizara eliminacion de NOPs, fusion de instrucciones
+     * y compactacion de saltos de forma in-place sobre @p code.
+     *
+     * @param code Buffer de bytecode a optimizar (modificado in-place).
+     */
+    void BytecodeOptimizer::optimize(std::vector<uint8_t> &code) {
+        // TODO: implementar optimizaciones de peephole y dead code elimination
+        (void)code;
     }
 
-}
+} // namespace Assembly::Bytecode::Optimizer

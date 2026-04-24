@@ -1,157 +1,232 @@
 /*
- * VestaVM - Máquina Virtual Distribuida
- * 
- * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
+ * VestaVM - Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
- * USO LIBRE NO COMERCIAL con atribución obligatoria.
+ *
+ * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
-#include "runtime/runtime.h"
+
+/**
+ * @file runtime.cpp
+ * @brief Implementacion de la maquina virtual principal de VestaVM.
+ *
+ * Implementa @c VM: creacion del pool de hilos, gestion de schedulers,
+ * arranque y parada del runtime, carga de ejecutables .velb y creacion
+ * de procesos virtuales con @c make_process() / @c make_ready().
+ */#include "runtime/runtime.h"
 
 #include "cli/sync_io.h"
 #include "runtime/manager_runtime.h"
 
-
 namespace runtime {
+
+    /**
+     * @brief Construye la instancia VM e inicializa todos sus schedulers.
+     *
+     * Conecta la VM al gestor de instancias @p mgr_vm_, asigna el ID indicado
+     * y crea @p num_schedulers schedulers listos para lanzarse con start().
+     *
+     * @param mgr_vm_        Gestor de instancias que posee esta VM.
+     * @param id_vm          Identificador unico de esta instancia dentro del gestor.
+     * @param num_schedulers Numero de schedulers (hilos nativos) a crear.
+     */
     VM::VM(
         ManageVM &mgr_vm_,
         uint64_t  id_vm,
         size_t    num_schedulers
-    ) : manager_mem_public(mgr_vm_.manager_mem),
-        loader_priv(std::make_unique<loader::Loader>(mgr_vm_)),
-        loader_public(mgr_vm_.loader),
-        mgr_vm(mgr_vm_), num_schedulers(num_schedulers) {
-        id = id_vm;
+    ) : manager_mem_public(mgr_vm_.manager_mem),               // referencia al ArenaManager publico del gestor
+        loader_priv(std::make_unique<loader::Loader>(mgr_vm_)), // cargador privado de esta instancia
+        loader_public(mgr_vm_.loader),                          // referencia al cargador publico del gestor
+        mgr_vm(mgr_vm_),
+        num_schedulers(num_schedulers) {
+        id = id_vm; // asignar el ID de la instancia
 
-        schedulers.reserve(num_schedulers);
+        schedulers.reserve(num_schedulers); // reservar capacidad para evitar realocaciones
 
+        // crear cada scheduler y transferir su propiedad al vector
         for (uint32_t i = 0; i < num_schedulers; i++) {
-            auto sched = std::make_unique<Scheduler>(i, *this);
-            schedulers.push_back(std::move(sched));
+            auto sched = std::make_unique<Scheduler>(i, *this); // scheduler con ID i
+            schedulers.push_back(std::move(sched));             // mover al vector
         }
     }
 
+    /**
+     * @brief Genera una representacion textual de la instancia VM.
+     * @return Cadena con el ID de la VM en hexadecimal.
+     */
     std::string VM::to_string() const {
-        return this->vm_summary();
-        return "";
+        return this->vm_summary(); // delegar en vm_summary para no duplicar logica
     }
 
+    /**
+     * @brief Imprime el estado de la VM en stdout usando la salida sincronizada.
+     */
     void VM::print() {
-        // Reutiliza to_string() para evitar duplicar lógica
-        vesta::scout() << to_string();
+        vesta::scout() << to_string(); // usar salida thread-safe
     }
 
+    /**
+     * @brief Lanza todos los schedulers en el ThreadPool y comienza la ejecucion.
+     *
+     * Para cada scheduler se somete una tarea al pool que ejecuta run_loop().
+     * Los futures resultantes se almacenan en scheduler_futures para poder
+     * esperar a su finalizacion en wait().
+     *
+     * @note Este metodo no bloquea; llamar a wait() para esperar la finalizacion.
+     */
     void VM::start() {
-        vm_running = true;
+        vm_running = true; // marcar la VM como activa
+
         for (uint32_t i = 0; i < num_schedulers; i++) {
-            //vesta::scout() << "Creando future para scheduler " << i << "\n";
-
-            // submit() devuelve un future
+            // someter la tarea del scheduler al pool y guardar el future
             std::future<void> fut = pool.submit([this, i] {
-                schedulers[i]->run_loop();
+                schedulers[i]->run_loop(); // ejecutar el bucle principal del scheduler
             });
-            //vesta::scout() << "Future creado\n";
 
-            scheduler_futures.push_back(fut.share());
-            //vesta::scout() << "Future movido al vector\n";
+            scheduler_futures.push_back(fut.share()); // almacenar como shared_future
         }
     }
 
+    /**
+     * @brief Solicita la parada cooperativa de todos los schedulers y espera a que terminen.
+     *
+     * Pone vm_running=false y should_kill=true en cada scheduler, luego despierta
+     * a los que esten bloqueados en el semaforo.  Finalmente bloquea hasta que todos
+     * los futures hayan completado y limpia el vector de futures.
+     */
     void VM::stop() {
-        // Indicar que la VM debe morir
-        vm_running = false;
+        vm_running = false; // indicar a todos los schedulers que la VM debe detenerse
 
-        // Marcar todos los schedulers para matar
+        // marcar cada scheduler para que salga de su run_loop
         for (auto &sched: schedulers) {
-            sched->should_kill = true;
+            sched->should_kill = true; // bandera de parada cooperativa
         }
 
-        // Despertar a todos los schedulers que estén en sem.acquire()
+        // despertar a los schedulers bloqueados en sem.acquire()
         for (auto &sched: schedulers) {
-            sched->sem.release();
+            sched->sem.release(); // desbloquear el semaforo de espera
         }
 
-        // si los hilos no terminaron debemos esperar, en caso contrario
-        // no debemos hacer nada simplemente.
-        //bool status = all_schedulers_dead();
-        //if (!status) {
-        // Esperar a que todos los hilos terminen
+        // esperar a que todos los hilos de los schedulers terminen
         for (auto &f: scheduler_futures) {
-            f.get();
+            f.get(); // bloquear hasta que el scheduler finalice
         }
-        //}
 
-        scheduler_futures.clear();
+        scheduler_futures.clear(); // limpiar futures consumidos
     }
 
+    /**
+     * @brief Devuelve un puntero al proceso con el PID global indicado.
+     *
+     * Usa pid.scheduler_id para localizar el scheduler correcto y luego
+     * realiza la busqueda O(1) en su pid_index.
+     *
+     * @param pid PID global del proceso a buscar.
+     * @return    Puntero al proceso, o nullptr si el PID no existe.
+     */
     ProcessVM *VM::get_process(GlobalPID pid) {
-        return schedulers[pid.scheduler_id]->pid_index[pid];
+        return schedulers[pid.scheduler_id]->pid_index[pid]; // busqueda directa en el indice
     }
 
+    /**
+     * @brief Bloquea el hilo llamante hasta que todos los schedulers finalicen.
+     *
+     * Llama a wait() sobre cada shared_future para sincronizar con el fin de
+     * todos los run_loop() de los schedulers.
+     */
     void VM::wait() {
-        //vesta::scout() << "Entrando en wait()\n";
         for (auto &f: scheduler_futures) {
-            //::scout() << "Haciendo get() del future " << "\n";
-            f.wait(); // bloquea hasta que cada scheduler termine
+            f.wait(); // bloquear hasta que cada scheduler termine su run_loop
         }
-        //vesta::scout() << "Todos los futures consumidos\n";
     }
 
+    /**
+     * @brief Indica si el ThreadPool de la VM esta inactivo (todos los schedulers han terminado).
+     * @return true si el pool no tiene tareas activas ni pendientes.
+     */
     bool VM::all_schedulers_dead() {
-        bool is_dead = pool.idle();
+        bool is_dead = pool.idle(); // consultar el estado del pool
         return is_dead;
     }
 
+    /**
+     * @brief Indica si existe al menos un proceso vivo en algun scheduler.
+     *
+     * Itera los schedulers comprobando su alive_count atomico en O(N_schedulers),
+     * evitando iterar todos los procesos de cada scheduler.
+     *
+     * @return true si alguno de los schedulers tiene alive_count > 0.
+     */
     bool VM::has_alive_processes() {
-        // O(N_schedulers): cada scheduler mantiene alive_count atómico,
-        // evitando iterar todos los procesos (era O(N_procesos total)).
         for (auto &sched: schedulers) {
             if (sched->alive_count > 0)
-                return true;
+                return true; // al menos un proceso vivo en este scheduler
         }
-        return false;
+        return false; // ningun scheduler tiene procesos vivos
     }
 
+    /**
+     * @brief Marca un proceso como READY para que su scheduler pueda ejecutarlo.
+     *
+     * Delega en make_ready() del scheduler propietario y llama a sem.release()
+     * para despertar al scheduler si esta esperando.
+     *
+     * @note Tambien resetea should_kill del scheduler para que pueda aceptar
+     *       nuevos procesos tras haber finalizado un ciclo completo.
+     *
+     * @param pid PID global del proceso que debe pasar a estado READY.
+     */
     void VM::make_ready(GlobalPID pid) {
-        schedulers[pid.scheduler_id]->make_ready(pid);
-        schedulers[pid.scheduler_id]->sem.release();
+        schedulers[pid.scheduler_id]->make_ready(pid);  // insertar en la cola del scheduler
+        schedulers[pid.scheduler_id]->sem.release();    // despertar al scheduler si duerme
 
-        // muy importante si se añade procesos sin un reset, el gestor de procesos una
-        // vez finalice todos sus procesos, la instancia, activa esta bandera que indica
-        // al propio gestor que a terminado y no debe volver a iniciar o continuar con
-        // ningun otro proceso. Si se quiere añadir nuevos procesos en un estado como
-        // este, es necesario reactivarla o nunca sera ejecutado el proceso.
+        // reactivar el scheduler en caso de que haya terminado todos sus procesos
+        // y should_kill se haya puesto a true; necesario para reutilizar el scheduler
         schedulers[pid.scheduler_id]->should_kill = false;
     }
 
+    /**
+     * @brief Crea un nuevo proceso virtual en el scheduler con menos carga (round-robin).
+     *
+     * Lanza una excepcion si no hay schedulers disponibles (start() no fue llamado).
+     *
+     * @return PID global del proceso recien creado.
+     * @throws std::runtime_error si la VM no tiene schedulers activos.
+     */
     GlobalPID VM::spawn_process() {
         if (schedulers.empty())
             throw std::runtime_error("VM::spawn_process: no hay gestores de procesos, posiblemente no llamo a start()");
 
-        size_t index = next_sched;
-        next_sched   = (next_sched + 1) % schedulers.size();
+        size_t index = next_sched;                            // indice del scheduler elegido
+        next_sched   = (next_sched + 1) % schedulers.size(); // avanzar el contador round-robin
 
-        return schedulers[index]->spawn();
+        return schedulers[index]->spawn(); // crear el proceso en el scheduler elegido
     }
 
+    /**
+     * @brief Reinicia completamente la VM conservando la estructura de schedulers.
+     *
+     * Detiene la VM con stop(), reinicia el estado interno de cada scheduler,
+     * restaura los contadores y vuelve a lanzar los schedulers con start().
+     */
     void VM::reset() {
-        // Asegurar que todos los schedulers han terminado
-        stop(); // vm_running = false, should_kill = true, cv.notify_all(), f.get(), clear()
+        stop(); // detener la VM: vm_running=false, should_kill=true, esperar futures, limpiar futures
 
-        // Resetear el estado interno de cada scheduler
+        // reiniciar el estado interno de cada scheduler
         for (auto &sched: schedulers) {
-            sched->reset(); // limpia procesos, colas, pid_index, FSM, contadores, flags...
+            sched->reset(); // limpia procesos, colas, pid_index, FSM, contadores y flags
         }
 
-        // Resetear estado interno de la VM
-        next_sched = 0;
-        vm_running = true; // lista para volver a arrancar
+        // restaurar el estado de la instancia VM
+        next_sched = 0;    // reiniciar el selector round-robin
+        vm_running = true; // marcar como activa para que start() funcione
 
-        // Volver a lanzar los schedulers en el ThreadPool
-        scheduler_futures.clear(); // por si acaso
-        start();
+        scheduler_futures.clear(); // limpiar por si quedaron entradas residuales
+        start(); // volver a lanzar los schedulers en el pool
     }
-} // RUNTIME
+
+} // namespace runtime
