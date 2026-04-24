@@ -1,0 +1,63 @@
+/*
+ * usar_plugin.vel
+ *
+ * Demuestra el uso de un plugin nativo (mi_plugin.dll / mi_plugin.so).
+ * El plugin exporta "vesta_init" y funciones normales como "suma".
+ *
+ * Compilar:
+ *   vesta --build usar_plugin.vel -o usar_plugin
+ * Ejecutar (con el .dll / .so en el mismo directorio o en PATH):
+ *   vesta --run usar_plugin.velb
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+// Importar funciones del plugin nativo.
+// vesta_init se llama automaticamente; no es necesario importarla aqui.
+@Import {
+    @Method {
+        @Lib("mi_plugin.dll")
+        @Name("suma")
+    }
+    @Method {
+        @Lib("mi_plugin.dll")
+        @Name("mi_saludo")
+    }
+}
+
+// Importar puts de la CRT para imprimir el resultado.
+@Import {
+    @Method {
+        @Lib("msvcrt.dll")
+        @Name("puts")
+    }
+}
+
+code:
+    // --- llamar mi_saludo() -> imprime "Hola desde mi_plugin!" ---
+    mov    r15, 0
+    calln  @Method("vesta_io:vesta_init")
+
+    // --- llamar suma(10, 32) -> 42 ---
+    mov    r15, 2
+    mov    r1, 10
+    mov    r2, 32
+    calln  @Method("vesta_io:vesta_init")
+    // r0 = 42
+
+    // --- imprimir el resultado via puts (necesita un string host) ---
+    // Para este ejemplo usamos hlt directamente; el resultado esta en r0.
+    hlt
+end_code:

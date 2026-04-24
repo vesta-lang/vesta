@@ -267,6 +267,12 @@ namespace loader {
          */
         runtime::ManageVM &instance_manager;
 
+        /**
+         * Tabla de callbacks de la API expuesta a los plugins nativos.
+         * Debe vivir al menos tanto como los modulos cargados que guarden g_api.
+         */
+        VestaPluginAPI plugin_api;
+
         explicit Loader(
             runtime::ManageVM &instance_manager);
 

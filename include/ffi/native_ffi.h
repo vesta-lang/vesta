@@ -42,6 +42,9 @@
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+
+#include "ffi/vesta_plugin.h"
 
 /**
  * @brief Tipo de puntero de funcion generica para llamadas FFI con hasta 12 argumentos.
@@ -277,6 +280,14 @@ namespace ffi {
         std::unordered_map<std::string, void *> native_modules;
 
         /**
+         * @brief Conjunto de modulos en los que ya se llamo a @c vesta_init.
+         *
+         * Evita inicializar dos veces el mismo plugin si se carga en multiples
+         * ejecutables dentro de la misma sesion del manager.
+         */
+        std::unordered_set<std::string> initialized_plugins;
+
+        /**
          * @brief Interna un nombre de modulo y devuelve su indice en @c modules.
          *
          * Si el modulo ya existe en @c module_map devuelve el indice existente.
@@ -346,6 +357,21 @@ namespace ffi {
          * @throws FFIError si un modulo no puede cargarse o una funcion no se encuentra.
          */
         void resolve_all(uint8_t *file_base, uint64_t offset_real_bytecode);
+
+        /**
+         * @brief Llama a @c vesta_init en todos los modulos que lo exportan.
+         *
+         * Recorre @c native_modules; si un modulo exporta el simbolo @c "vesta_init"
+         * y aun no fue inicializado (no esta en @c initialized_plugins), lo llama
+         * pasando @p api.  Registra el modulo en @c initialized_plugins para evitar
+         * llamadas duplicadas en cargas sucesivas.
+         *
+         * Debe invocarse despues de @c resolve_all, cuando todos los modulos
+         * nativos del ejecutable ya estan cargados.
+         *
+         * @param api Puntero a la estructura @c VestaPluginAPI con los callbacks del manager.
+         */
+        void call_plugin_inits(const VestaPluginAPI *api);
     };
 
 } // namespace ffi

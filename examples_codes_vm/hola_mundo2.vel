@@ -1,0 +1,57 @@
+/*
+ * hola_mundo2.vel
+ *
+ * Hello World usando vio_println de la libreria estandar nativa vesta_io.
+ * Lee el string directamente de la memoria virtual de la VM sin vmcopy.
+ *
+ * Compilar y ejecutar:
+ *   vesta --build hola_mundo2.vel -o hola_mundo2
+ *   vesta --run   hola_mundo2.velb
+ *
+ * Requiere vesta_io.dll en el mismo directorio que el ejecutable vesta
+ * o en el PATH del sistema.
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+@Import {
+    @Method {
+        @Lib("stdlib/native/io/vesta_io")
+        @Name("vio_println")
+    }
+}
+
+code:
+    // 1. Obtener el puntero al proceso actual como uint64_t.
+    //    getproc no modifica calln; el puntero se pasa como argumento normal.
+    getproc r1
+
+    // 2. Direccion virtual del string en la seccion de datos.
+    mov     r2, @Absolute("all.hello")
+
+    // 3. Longitud del string (sin el null terminator; vio_println lo anade).
+    mov     r3, 12
+
+    // 4. vio_println(proc_ptr, vm_addr, len) -> lee de VM memory e imprime.
+    mov     r15, 3
+    calln   @Method("stdlib/native/io/vesta_io:vio_println")
+
+    hlt
+end_code:
+
+align 16
+data:
+    hello db "Hola, Mundo!", 0x00, 0x00, 0x00, 0x00
+end_data:

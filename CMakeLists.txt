@@ -246,6 +246,42 @@ target_compile_options(vm PRIVATE
 
 
 add_library(vmcore STATIC ${VM_SOURCES})
+target_include_directories(vmcore PRIVATE ${VM_INCLUDES})
+target_link_libraries(vmcore
+        PRIVATE sqlite3
+        PRIVATE capstone
+        PRIVATE keystone
+)
 
-# Añadir subdirectorio de tests
+if (WIN32)
+    target_include_directories(vmcore PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_directories(vmcore PRIVATE ${OPENSSL_LIB_DIR})
+    target_link_libraries(vmcore PRIVATE libssl libcrypto ws2_32 synchronization applink)
+else ()
+    target_link_libraries(vmcore PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif ()
+
+# Anadir subdirectorio de tests
 add_subdirectory(tests)
+
+# ---------------------------------------------------------------------------
+# Configuracion global del SDK de plugins nativos
+# Debe quedar fuera de los bloques opcionales para que VESTA_SDK_DIR y
+# CMAKE_MODULE_PATH esten disponibles en stdlib, examples y cualquier
+# subdirectorio futuro que use add_vesta_plugin().
+# ---------------------------------------------------------------------------
+set(VESTA_SDK_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH
+    "Raiz del SDK VestaVM (directorio con include/ffi/vesta_plugin.h)")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+# Libreria estandar nativa (vesta_io, vesta_math, ...)
+option(VESTA_BUILD_STDLIB   "Compilar la libreria estandar nativa de Vesta" ON)
+if(VESTA_BUILD_STDLIB)
+    add_subdirectory(stdlib/native)
+endif()
+
+# Ejemplos y plugins de demostracion
+option(VESTA_BUILD_EXAMPLES "Compilar los ejemplos y plugins de ejemplo"    ON)
+if(VESTA_BUILD_EXAMPLES)
+    add_subdirectory(examples_codes_vm/plugin_ejemplo)
+endif()

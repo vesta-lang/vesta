@@ -180,10 +180,17 @@ namespace Assembly::Bytecode {
         {"free",    {{0x00, 0xB1, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"realloc", {{0x00, 0xB2, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
 
-        /* --- Cursores: acceso a memoria real (opcode extendido 0x00 0xC0..0xC2) --- */
-        {"readcur",  {{0x00, 0xC0, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
-        {"writecur", {{0x00, 0xC1, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_cursor_rw}}},
-        {"gcderef",  {{0x00, 0xC2, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_gcderef}}},
+        /* --- Cursores: acceso a memoria real (opcode extendido 0x00 0xC0..0xC5) --- */
+        {"readcur",  {{0x00, 0xC0, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_cursor_rw}}},
+        {"writecur", {{0x00, 0xC1, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_cursor_rw}}},
+        {"gcderef",  {{0x00, 0xC2, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_gcderef}}},
+        {"addcur",   {{0x00, 0xC3, InstrSizeMode::FIXED_6, AddressingMode::INMED, emit_addcur}}},
+        {"vmcopy",   {{0x00, 0xC4, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_vmcopy}}},
+        {"vcopyh",   {{0x00, 0xC5, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_vcopyh}}},
+        /* --- Consulta de entorno de ejecucion (opcode extendido 0x00 0xC6..0xC8) --- */
+        {"getproc",  {{0x00, 0xC6, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"getvm",    {{0x00, 0xC7, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
+        {"getmgr",   {{0x00, 0xC8, InstrSizeMode::FIXED_4, AddressingMode::REG,   emit_instr_one_reg}}},
 
         /* --- OOP: sistema de objetos (opcode extendido 0x00 0xD0..0xDC) --- */
         {"newobjraw",  {{0x00, 0xD0, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
