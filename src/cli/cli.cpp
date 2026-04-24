@@ -314,17 +314,75 @@ namespace cli {
     }
 
     /**
-     * @brief Lista el contenido de un directorio con colores e informacion de cada entrada.
+     * @brief Compara un nombre de archivo contra un patron glob (solo nombre, sin separadores).
+     *
+     * Soporta:
+     *   '*' — cualquier secuencia de caracteres (incluyendo vacia)
+     *   '?' — exactamente un caracter cualquiera
+     *
+     * @param pattern Patron glob (e.g. "*.vel", "test_??.velb", "build*").
+     * @param name    Nombre de archivo a comparar.
+     * @return true si @p name coincide con @p pattern.
+     */
+    static bool glob_match(const std::string &pattern, const std::string &name) {
+        size_t p = 0, n = 0;
+        // posicion del ultimo '*' visto y la posicion en name en ese momento
+        size_t star_p = std::string::npos, star_n = 0;
+        while (n < name.size()) {
+            if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == name[n])) {
+                ++p; ++n;  // caracter literal o '?' coinciden: avanzar ambos
+            } else if (p < pattern.size() && pattern[p] == '*') {
+                star_p = p++;  // guardar posicion del '*' y avanzar patron
+                star_n = n;    // '*' consume cero caracteres inicialmente
+            } else if (star_p != std::string::npos) {
+                p = star_p + 1;  // retroceder al patron tras el ultimo '*'
+                n = ++star_n;    // el '*' consume un caracter mas de name
+            } else {
+                return false;    // sin '*' disponible para retroceder: no coincide
+            }
+        }
+        // consumir '*' finales del patron (e.g. "*.vel*")
+        while (p < pattern.size() && pattern[p] == '*') ++p;
+        return p == pattern.size();
+    }
+
+    /**
+     * @brief Lista el contenido de un directorio con soporte de patrones glob.
      *
      * Directorios en azul brillante, archivos en verde brillante.
      * Columnas: tipo (D/F), tamano, fecha de modificacion, nombre.
      * Orden: directorios primero, luego archivos, ambos alfabeticos.
      *
-     * @param args Ruta del directorio; si esta vacio usa el directorio actual.
+     * Formatos soportados:
+     *   ls                  lista el directorio actual
+     *   ls <dir>            lista <dir>
+     *   ls *.vel            archivos que coincidan con el patron en el dir actual
+     *   ls src/*.velb       archivos que coincidan con el patron en src/
+     *   ls test_??.vel      patron con '?' (un caracter cualquiera)
+     *
+     * @param args Ruta, patron glob, o ruta + patron glob.
      */
     static void command_ls(const std::string &args) {
         namespace fsp = std::filesystem;
-        fsp::path target = args.empty() ? fsp::current_path() : expand_path(args);
+
+        // detectar si el argumento contiene un caracter glob
+        bool has_glob = args.find('*') != std::string::npos ||
+                        args.find('?') != std::string::npos;
+
+        fsp::path   target;
+        std::string pattern;  // vacio = sin filtro
+
+        if (has_glob) {
+            // separar la parte de directorio de la parte de patron
+            // e.g. "src/*.vel" -> parent="src", filename="*.vel"
+            // e.g. "*.vel"     -> parent="",    filename="*.vel"
+            fsp::path raw(args);
+            fsp::path parent = raw.parent_path();
+            pattern = raw.filename().string();
+            target  = parent.empty() ? fsp::current_path() : expand_path(parent.string());
+        } else {
+            target = args.empty() ? fsp::current_path() : expand_path(args);
+        }
 
         if (!fsp::exists(target) || !fsp::is_directory(target)) {
             std::cout << "ls: no es un directorio: " << target.string() << "\n";
@@ -339,10 +397,16 @@ namespace cli {
         };
 
         std::vector<Entry> entries;
-        for (const auto &e : fsp::directory_iterator(target)) {
+        std::error_code    ec;
+        for (const auto &e : fsp::directory_iterator(target, ec)) {
+            std::string fname = e.path().filename().string();
+
+            // aplicar filtro glob si se especifico patron
+            if (!pattern.empty() && !glob_match(pattern, fname)) continue;
+
             Entry ent;
             ent.is_dir     = fsp::is_directory(e);
-            ent.name       = e.path().filename().string();
+            ent.name       = fname;
             ent.size_bytes = 0;
             if (!ent.is_dir) {
                 try { ent.size_bytes = fsp::file_size(e); } catch (...) {}
@@ -368,16 +432,29 @@ namespace cli {
             return a.name < b.name;
         });
 
+        // cabecera: mostrar patron activo si se uso glob
+        if (!pattern.empty()) {
+            std::cout << ansi::c(ansi::DIM)
+                      << "Patron: " << ansi::c(ansi::RESET)
+                      << ansi::c(ansi::BOLD) << pattern << ansi::c(ansi::RESET)
+                      << ansi::c(ansi::DIM) << "  en: " << target.string()
+                      << ansi::c(ansi::RESET) << "\n";
+        }
+
+        if (entries.empty()) {
+            std::cout << ansi::c(ansi::DIM) << "(sin resultados)\n" << ansi::c(ansi::RESET);
+            return;
+        }
+
         // formatea tamano en unidades legibles
         auto fmt_size = [](uintmax_t sz) -> std::string {
-            if (sz < 1024)            return std::to_string(sz) + " B";
-            if (sz < 1024 * 1024)     return std::to_string(sz / 1024) + " KB";
-            return std::to_string(sz / (1024 * 1024)) + " MB";
+            if (sz < 1024)        return std::to_string(sz) + " B";
+            if (sz < 1024*1024)   return std::to_string(sz / 1024) + " KB";
+            return std::to_string(sz / (1024*1024)) + " MB";
         };
 
-        // cabecera
         std::cout << ansi::c(ansi::BOLD)
-                  << std::left << std::setw(4) << "T"
+                  << std::left << std::setw(4)  << "T"
                   << std::setw(12) << "Tamano"
                   << std::setw(20) << "Modificado"
                   << "Nombre" << ansi::c(ansi::RESET) << "\n"
@@ -393,6 +470,14 @@ namespace cli {
                       << std::setw(12) << size_s
                       << std::setw(20) << e.mtime_str
                       << name_s << ansi::c(ansi::RESET) << "\n";
+        }
+
+        // pie con conteo cuando se usa patron
+        if (!pattern.empty()) {
+            std::cout << ansi::c(ansi::DIM)
+                      << std::string(60, '-') << "\n"
+                      << entries.size() << " resultado(s)\n"
+                      << ansi::c(ansi::RESET);
         }
     }
 
@@ -1176,7 +1261,7 @@ namespace cli {
      */
     static const CmdEntry cmd_table[] = {
         // nombre      uso                                         descripcion breve                                handler
-        { "ls",     "ls [ruta]",                                 "Listar contenido de directorio",                command_ls     },
+        { "ls",     "ls [ruta|patron]  (e.g. *.vel, src/*.velb)", "Listar directorio con soporte de patrones glob", command_ls     },
         { "vms",    "vms",                                       "Listar managers activos con ID y estado",       command_vms    },
         { "kill",   "kill <id>",                                 "Detener y eliminar manager por ID",             command_kill   },
         { "build",  "build <archivo.vel> [-o <salida>]",                       "Compilar .vel a .velb",                                     command_build  },
