@@ -3510,124 +3510,123 @@ namespace runtime {
             exec_instr_fieldattrval, decode_instr_oop_reg_imm8
         },
 
-        /* 0xEC */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xEC  yield: cede el quantum al scheduler */
+        {
+            "yield", Assembly::Bytecode::AddressingMode::NONE,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_yield, decode_instr_simple
         },
 
-        /* 0xED */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xED  resume reg: reactiva el proceso cuyo PID esta en reg */
+        {
+            "resume", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_resume, decode_instr_two_op_reg
         },
 
-        /* 0xEE */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xEE  spawn reg: crea nuevo proceso en la direccion del registro */
+        {
+            "spawn", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_spawn, decode_instr_two_op_reg
         },
 
-        /* 0xEF */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xEF  swapctx reg_dst, reg_src: intercambio de contexto entre fibras */
+        {
+            "swapctx", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_swapctx, decode_instr_two_op_reg
         },
 
-        /* 0xF0 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF0  fmov dst, src: copia registro ZMM con zeroing de aliasing */
+        {
+            "fmov", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fmov, decode_instr_simple_mov
         },
 
-
-        /* 0xF1 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF1  fadd dst, src: suma flotante escalar o packed */
+        {
+            "fadd", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fadd, decode_instr_simple_mov
         },
 
-        /* 0xF2 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF2  fsub dst, src: resta flotante */
+        {
+            "fsub", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fsub, decode_instr_simple_mov
         },
 
-        /* 0xF3 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF3  fmul dst, src: multiplicacion flotante */
+        {
+            "fmul", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fmul, decode_instr_simple_mov
         },
 
-        /* 0xF4 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF4  fdiv dst, src: division flotante */
+        {
+            "fdiv", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fdiv, decode_instr_simple_mov
         },
 
-        /* 0xF5 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF5  fcmp a, b: comparacion flotante; establece ZF/SF/CF */
+        {
+            "fcmp", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fcmp, decode_instr_simple_mov
         },
 
-        /* 0xF6 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF6  fsqrt dst, src: raiz cuadrada flotante */
+        {
+            "fsqrt", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fsqrt, decode_instr_simple_mov
         },
 
-        /* 0xF7 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF7  fabs dst, src: valor absoluto flotante */
+        {
+            "fabs", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fabs, decode_instr_simple_mov
         },
 
-        /* 0xF8 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF8  fneg dst, src: negacion flotante */
+        {
+            "fneg", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fneg, decode_instr_simple_mov
         },
 
-        /* 0xF9 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xF9  fcvt gp, zmm: conversion int<->float entre bancos */
+        {
+            "fcvt", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fcvt, decode_instr_simple_mov
         },
 
-        /* 0xFA */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xFA  fmowi zmm_idx, imm64: carga inmediato IEEE 754 en registro ZMM */
+        {
+            "fmowi", Assembly::Bytecode::AddressingMode::INMED,
+            Assembly::Bytecode::InstrSizeMode::FIXED_11,
+            exec_instr_fmovi, decode_instr_fmowi
         },
 
-        /* 0xFB */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xFB  fload zmm_dst, gp_addr: carga flotante desde memoria VM */
+        {
+            "fload", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fload, decode_instr_two_op_reg
         },
 
-        /* 0xFC */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xFC  fstore gp_addr, zmm_src: almacena flotante en memoria VM */
+        {
+            "fstore", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fstore, decode_instr_two_op_reg
         },
 
         /* 0xFD */{

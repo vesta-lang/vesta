@@ -39,15 +39,15 @@ void print_memory_stats() {
 int main() {
     runtime::ManageVM manager = runtime::ManageVM(nullptr, 0);
 
-    uint64_t vm1_id = manager.create_vm(); // ID=1
-    uint64_t vm2_id = manager.create_vm(); // ID=2
+    uint64_t vm1_id = manager.create_vm(1); // ID=1
+    uint64_t vm2_id = manager.create_vm(1); // ID=2
 
     printf("VM Manager %llu tiene %zu maquinas\n", vm1_id, manager.vm_count());
 
     for (int i = 0; i < manager.vm_count(); i++) {
         if (auto vm = manager.get_vm(i)) {
             std::cout << vm->to_string();
-            printf("VMs: %zu | Arenas VM1: %zu\n", manager.vms.size(), vm->manager_mem_priv.arenas.size());
+            printf("VMs: %zu | Arenas VM1: %zu\n", manager.vms.size(), vm->manager_mem_public.arenas.size());
 
         } else {
             printf("VM no encontrada\n");
