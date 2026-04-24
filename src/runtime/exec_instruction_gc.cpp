@@ -20,6 +20,7 @@
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
+#include "util/simd_copy.h"
 
 namespace runtime {
 
@@ -86,6 +87,132 @@ namespace runtime {
      * @param vm    Proceso virtual que ejecuta GCDEREF.
      * @param instr Instruccion descodificada con reg_data.reg2 (cursor) y reg_data.reg1 (handle).
      */
+    /**
+     * @brief Ejecuta ADDCUR: suma un inmediato con signo al registro cursor curN.
+     *
+     * Lee el inmediato de 16 bits almacenado en los bytes 2-3 de raw_data.raw1
+     * (colocado alli por decode_instr_addcur) y lo suma con extension de signo
+     * al valor de 64 bits del cursor.  Permite avanzar (imm > 0) y retroceder
+     * (imm < 0) sin el patron xchg/adds/xchg de tres instrucciones.
+     *
+     * @param vm    Proceso virtual que ejecuta ADDCUR.
+     * @param instr Instruccion descodificada: reg2=cur_idx, raw1[2..3]=imm16.
+     */
+    void exec_instr_addcur(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t cur_idx = instr.data_instruction.reg_data.reg2 & 0x3; // cursor 0-3
+
+        // recuperar imm16 de los bytes 2-3 de raw_data.raw1 (ver decode_instr_addcur)
+        const auto *raw = reinterpret_cast<const uint8_t *>(&instr.data_instruction.raw_data.raw1);
+        const int16_t imm16 = static_cast<int16_t>(
+            static_cast<uint16_t>(raw[2]) | (static_cast<uint16_t>(raw[3]) << 8)
+        );
+
+        // sumar con extension de signo a 64 bits para que el retroceso funcione
+        const uint64_t old_val = vm->registers.cur[cur_idx].qword();
+        vm->registers.cur[cur_idx].qword(
+            static_cast<uint64_t>(static_cast<int64_t>(old_val) + imm16)
+        );
+    }
+
+    /**
+     * @brief Ejecuta VMCOPY: copia bytes desde VM memory a host memory (cursor).
+     *
+     * Lee rLen bytes desde VM memory a partir de la direccion virtual almacenada
+     * en el registro rSrc y los escribe en la memoria host apuntada por curN.
+     * Usa la funcion simd_copy::fast_copy para elegir en tiempo de ejecucion la
+     * ruta SIMD mas rapida (AVX-512, AVX2, SSE2 o memcpy escalar).
+     *
+     * Tras la copia avanza automaticamente:
+     *   - curN  += rLen  (cursor host apunta al byte siguiente al ultimo copiado)
+     *   - rSrc  += rLen  (puntero VM avanza para copias secuenciales)
+     *
+     * @param vm    Proceso virtual que ejecuta VMCOPY.
+     * @param instr Instruccion descodificada: mem_data.reg_final=cur_idx,
+     *              mem_data.reg_base=rSrc, mem_data.reg_index=rLen.
+     */
+    void exec_instr_vmcopy(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  cur_idx  = instr.data_instruction.mem_data.reg_final & 0x3; // cursor 0-3
+        const uint8_t  r_src    = instr.data_instruction.mem_data.reg_base;          // reg VM src
+        const uint8_t  r_len    = instr.data_instruction.mem_data.reg_index;         // reg longitud
+
+        const uint64_t vm_addr  = vm->registers.regs[r_src].qword();                // dir. virtual
+        const uint64_t len      = vm->registers.regs[r_len].qword();                // bytes a copiar
+        uint8_t *const dst      = reinterpret_cast<uint8_t *>(vm->registers.cur[cur_idx].qword());
+
+        if (len == 0) return; // copia vacia: no modificar nada
+
+        // leer bytes desde VM memory al buffer host apuntado por el cursor;
+        // read_bytes maneja cruces de pagina y lazy allocation internamente
+        // se usa un buffer temporal solo si dst no es valido, pero aqui dst es host ptr
+        vm->vm_mem.read_bytes(vm_addr, dst, static_cast<size_t>(len));
+
+        // avanzar cursor host y puntero VM para facilitar copias secuenciales
+        vm->registers.cur[cur_idx].qword(vm->registers.cur[cur_idx].qword() + len);
+        vm->registers.regs[r_src].qword(vm_addr + len);
+    }
+
+    /**
+     * @brief Ejecuta VCOPYH: copia bytes desde host memory (cursor) a VM memory.
+     *
+     * Inverso de VMCOPY: lee rLen bytes del buffer host apuntado por curN y los
+     * escribe en VM memory a partir de la direccion virtual almacenada en rDst.
+     * Avanza curN y rDst en rLen bytes tras la copia.
+     *
+     * @param vm    Proceso virtual que ejecuta VCOPYH.
+     * @param instr Instruccion descodificada: mem_data.reg_final=cur_idx,
+     *              mem_data.reg_base=rDst, mem_data.reg_index=rLen.
+     */
+    void exec_instr_vcopyh(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  cur_idx  = instr.data_instruction.mem_data.reg_final & 0x3; // cursor 0-3
+        const uint8_t  r_dst    = instr.data_instruction.mem_data.reg_base;          // reg VM dst
+        const uint8_t  r_len    = instr.data_instruction.mem_data.reg_index;         // reg longitud
+
+        const uint64_t vm_addr  = vm->registers.regs[r_dst].qword();                // dir. virtual
+        const uint64_t len      = vm->registers.regs[r_len].qword();                // bytes a copiar
+        const uint8_t *src      = reinterpret_cast<const uint8_t *>(vm->registers.cur[cur_idx].qword());
+
+        if (len == 0) return;
+
+        // escribir desde host memory al espacio virtual de la VM
+        vm->vm_mem.write_bytes(vm_addr, src, static_cast<size_t>(len));
+
+        // avanzar cursor host y puntero VM
+        vm->registers.cur[cur_idx].qword(vm->registers.cur[cur_idx].qword() + len);
+        vm->registers.regs[r_dst].qword(vm_addr + len);
+    }
+
+    // -------------------------------------------------------------------------
+    // Consulta de entorno de ejecucion - opcodes 0x00 0xC6..0xC8
+    // Exponen punteros del entorno como uint64_t para pasarlos a funciones
+    // nativas via calln sin modificar la convencion de llamada existente.
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Ejecuta GETPROC: carga el puntero al ProcessVM actual en el registro destino.
+     */
+    void exec_instr_getproc(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t rdst = instr.data_instruction.reg_data.reg1; // registro destino
+        vm->registers.regs[rdst].qword(reinterpret_cast<uint64_t>(vm));
+    }
+
+    /**
+     * @brief Ejecuta GETVM: carga el puntero a la instancia VM propietaria en el registro destino.
+     */
+    void exec_instr_getvm(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t rdst = instr.data_instruction.reg_data.reg1;
+        // sigue la cadena: proceso -> scheduler -> vm_reference (VM&)
+        vm->registers.regs[rdst].qword(reinterpret_cast<uint64_t>(&vm->scheduler.vm_reference));
+    }
+
+    /**
+     * @brief Ejecuta GETMGR: carga el puntero al ManageVM del gestor en el registro destino.
+     */
+    void exec_instr_getmgr(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t rdst = instr.data_instruction.reg_data.reg1;
+        // sigue la cadena: proceso -> scheduler -> vm_reference -> mgr_vm (ManageVM&)
+        vm->registers.regs[rdst].qword(reinterpret_cast<uint64_t>(&vm->scheduler.vm_reference.mgr_vm));
+    }
+
     void exec_instr_gcderef(ProcessVM *vm, const DecodedInstr &instr) {
         const uint8_t  cur_idx    = instr.data_instruction.reg_data.reg2;          // cursor destino (0-3)
         const uint8_t  handle_reg = instr.data_instruction.reg_data.reg1;          // registro con el handle GC

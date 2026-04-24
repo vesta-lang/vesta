@@ -581,6 +581,74 @@ namespace runtime {
     }
 
     /**
+     * @brief Descodifica ADDCUR: avance/retroceso del cursor por inmediato con signo.
+     *
+     * Formato (FIXED_6): [0x00][0xC3][ctrl][pad][imm_lo][imm_hi]
+     *   ctrl bits 5-4: cur_idx (0-3).
+     *   imm16: desplazamiento con signo (little-endian, bytes 4-5).
+     *
+     * El inmediato se almacena en los bytes 2-3 del campo raw_data.raw1 para
+     * que sea accesible desde exec_instr_addcur sin un campo adicional en el
+     * union DecodedInstr.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
+    void decode_instr_addcur(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // 6 bytes
+
+        // leer los 4 bytes de datos (bytes 2-5 de la instruccion)
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint32_t data32 = vm->vm_mem.read_u32(offset);
+
+        uint8_t ctrl  = static_cast<uint8_t>(data32 & 0xFF);               // byte 2: ctrl
+        // byte 3 (bits 8-15): padding, se ignora
+        int16_t imm16 = static_cast<int16_t>((data32 >> 16) & 0xFFFF);     // bytes 4-5: inmediato con signo
+
+        // cur_idx en reg2 (patron identico a decode_instr_cursor_rw)
+        instr.data_instruction.reg_data.reg2 = (ctrl >> 4) & 0x3;
+
+        // almacenar imm16 en los bytes 2-3 de raw_data.raw1 (superpuestos con el union)
+        auto *raw = reinterpret_cast<uint8_t *>(&instr.data_instruction.raw_data.raw1);
+        raw[2] = static_cast<uint8_t>(imm16 & 0xFF);
+        raw[3] = static_cast<uint8_t>((imm16 >> 8) & 0xFF);
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    /**
+     * @brief Descodifica VMCOPY / VCOPYH: copia entre VM memory y host memory (cursor).
+     *
+     * Formato compartido (FIXED_4): [0x00][0xC4 o 0xC5][byte_A][byte_B]
+     *   byte_A bits 5-4: cur_idx (0-3).
+     *   byte_A bits 3-0: rSrc o rDst (registro VM).
+     *   byte_B bits 7-4: rLen (registro de longitud).
+     *
+     * Los tres operandos se almacenan en mem_data para mantener coherencia
+     * con las instrucciones SIB que ya usan ese campo para base/index/final.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
+    void decode_instr_vmcopy(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // 4 bytes
+
+        uint64_t offset = vm->registers.rip.raw() + 2;
+        uint16_t data16 = vm->vm_mem.read_u16(offset);
+
+        uint8_t byte_A = static_cast<uint8_t>(data16 & 0xFF);        // primer byte de datos
+        uint8_t byte_B = static_cast<uint8_t>((data16 >> 8) & 0xFF); // segundo byte de datos
+
+        instr.data_instruction.mem_data.reg_final = (byte_A >> 4) & 0x3; // cur_idx (2 bits)
+        instr.data_instruction.mem_data.reg_base  = byte_A & 0xF;         // rSrc/rDst (4 bits)
+        instr.data_instruction.mem_data.reg_index = (byte_B >> 4) & 0xF;  // rLen (4 bits)
+
+        DBG_DECODE(instr.pc, "Instruccion decode: ", instr.metadata->name, "");
+        DBG_DECODE_DUMP(vm, instr, instr.flags_info.size_instr);
+    }
+
+    /**
      * @brief Descodifica una instruccion de salto absoluto (10 bytes fijos).
      *
      * Formato: [opcode][cond_o_reservado][8 bytes addr] = 10 bytes (FIXED_10).

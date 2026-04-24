@@ -1,0 +1,66 @@
+/*
+ * hola_mundo.vel
+ *
+ * Hello World en VestaVM usando db en la seccion de datos.
+ * Demuestra las nuevas instrucciones: vmcopy y addcur.
+ *
+ * Compilar y ejecutar:
+ *   vesta --build hola_mundo.vel -o hola_mundo
+ *   vesta --run   hola_mundo.velb
+ */
+
+@Format("raw")
+
+@SpaceAddress {
+    @Name("anonymous"),
+    @IniAddress(0x0000000000000000),
+    @EndAddress(0xFFFFFFFFFFFFFFFF)
+}
+
+@Section {
+    @Name("all"),
+    @SpaceAddress("anonymous")
+    @Align(0x1000)
+}
+
+// puts(const char*) de la CRT de Windows
+@Import {
+    @Method {
+        @Lib("msvcrt.dll")
+        @Name("puts")
+    }
+}
+
+code:
+    // 1. VM address del string definido en la seccion de datos.
+    //    @Absolute("all.hello") se resuelve en tiempo de enlace.
+    mov    r1, @Absolute("all.hello")     // r1 = VM address de "Hola, Mundo!"
+
+    // 2. Reservar 16 bytes de memoria HOST para la copia del string.
+    mov    r2, 16
+    alloc  r2                             // r0 = host ptr (memoria nativa del proceso)
+    mov    r10, r0                        // guardar host ptr en r10
+
+    // 3. Apuntar cur0 al buffer host.
+    xchg   cur0, r0                       // cur0 = host ptr | r0 = 0 (cur0 estaba en 0)
+
+    // 4. Copiar 13 bytes de VM memory[r1] -> host memory[cur0].
+    //    vmcopy avanza cur0 y r1 automaticamente en 13 bytes.
+    mov    r2, 13                         // longitud: "Hola, Mundo!\0" = 13 bytes
+    vmcopy cur0, r1, r2                   // VM -> host en una sola instruccion
+
+    // 5. Llamar puts(host_ptr).
+    mov    r15, 1
+    mov    r1, r10                        // r1 = host ptr guardado
+    calln  @Method("msvcrt.dll:puts")    // imprime "Hola, Mundo!" + newline automatico
+
+    // 6. Liberar buffer host y terminar.
+    free   r10
+    hlt
+end_code:
+
+align 16
+data:
+    // "Hola, Mundo!" + null + 3 bytes de padding (total 16 bytes alineados a qword)
+    hello db "Hola, Mundo!", 0x00, 0x00, 0x00, 0x00
+end_data:

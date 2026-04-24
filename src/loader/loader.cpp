@@ -13,6 +13,8 @@
 #include "emmit/bytereader.h"
 #include "emmit/struct_context.h"
 #include "runtime/manager_runtime.h"
+#include "ffi/vesta_plugin.h"
+#include "cli/sync_io.h"
 
 /*
  *  Loader
@@ -326,6 +328,65 @@ namespace loader {
         // resolver todas las instrucciones que usan la tabla de importacion
         // nativa.
         this->ffi_loader.resolve_all(exe.bytecode.data(), exe.offset_real_bytecode);
+
+        // construir la tabla de callbacks de la API del plugin y notificar
+        // a los modulos que exporten "vesta_init".
+        this->plugin_api = {};
+        this->plugin_api.api_version = VESTA_PLUGIN_API_VERSION;
+        this->plugin_api.manager     = static_cast<VestaManager *>(&instance_manager);
+
+        this->plugin_api.create_vm  = [](VestaManager *mgr, uint32_t n) -> uint64_t {
+            return static_cast<runtime::ManageVM *>(mgr)->create_vm(static_cast<size_t>(n));
+        };
+        this->plugin_api.destroy_vm = [](VestaManager *mgr, uint64_t vm_id) -> int {
+            return static_cast<runtime::ManageVM *>(mgr)->destroy_vm(vm_id) ? 1 : 0;
+        };
+        this->plugin_api.get_vm     = [](VestaManager *mgr, uint64_t vm_id) -> VestaVM_t * {
+            return static_cast<VestaVM_t *>(
+                static_cast<runtime::ManageVM *>(mgr)->get_vm(vm_id));
+        };
+        this->plugin_api.has_vm     = [](VestaManager *mgr, uint64_t vm_id) -> int {
+            return static_cast<runtime::ManageVM *>(mgr)->has_vm(vm_id) ? 1 : 0;
+        };
+        this->plugin_api.vm_count   = [](VestaManager *mgr) -> uint64_t {
+            return static_cast<uint64_t>(
+                static_cast<runtime::ManageVM *>(mgr)->vm_count());
+        };
+        this->plugin_api.start_vm   = [](VestaVM_t *vm) {
+            static_cast<runtime::VM *>(vm)->start();
+        };
+        this->plugin_api.stop_vm    = [](VestaVM_t *vm) {
+            static_cast<runtime::VM *>(vm)->stop();
+        };
+        this->plugin_api.wait_vm    = [](VestaVM_t *vm) {
+            static_cast<runtime::VM *>(vm)->wait();
+        };
+        this->plugin_api.spawn_process = [](VestaVM_t *vm, uint32_t *out_sched, uint64_t *out_pid) {
+            GlobalPID gid = static_cast<runtime::VM *>(vm)->spawn_process();
+            if (out_sched) *out_sched = gid.scheduler_id;
+            if (out_pid)   *out_pid   = gid.local_pid;
+        };
+        this->plugin_api.make_ready = [](VestaVM_t *vm, uint32_t sched_id, uint64_t local_pid) {
+            GlobalPID pid{sched_id, local_pid};
+            static_cast<runtime::VM *>(vm)->make_ready(pid);
+        };
+        this->plugin_api.vm_read_bytes = [](uint64_t proc_ptr, uint64_t vm_addr,
+                                      void *dst, uint64_t len) -> uint64_t {
+            auto *proc = reinterpret_cast<runtime::ProcessVM *>(proc_ptr);
+            proc->vm_mem.read_bytes(vm_addr, dst, static_cast<size_t>(len));
+            return len;
+        };
+        this->plugin_api.vm_write_bytes = [](uint64_t proc_ptr, uint64_t vm_addr,
+                                       const void *src, uint64_t len) -> uint64_t {
+            auto *proc = reinterpret_cast<runtime::ProcessVM *>(proc_ptr);
+            proc->vm_mem.write_bytes(vm_addr, src, static_cast<size_t>(len));
+            return len;
+        };
+        this->plugin_api.log = [](const char *msg) {
+            vesta::print_threadsafe(std::string(msg));
+        };
+
+        this->ffi_loader.call_plugin_inits(&this->plugin_api);
     }
 
     std::unique_ptr<Executable> Loader::parse_velb(std::vector<uint8_t> bytecode) {
