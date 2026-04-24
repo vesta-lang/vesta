@@ -1,4 +1,4 @@
-*
+/*
  * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
@@ -24,7 +24,8 @@
  *  - @c exec_instr_call / @c exec_instr_ret                                : llamada/retorno
  *  - @c exec_instr_callvm / @c exec_instr_calln / @c exec_instr_enter      : llamadas VM/nativas
  *  - @c exec_instr_syscall / @c exec_instr_int                             : llamadas al sistema
- */#include "runtime/exec_instruction.h"
+ */
+#include "runtime/exec_instruction.h"
 
 namespace runtime {
 
