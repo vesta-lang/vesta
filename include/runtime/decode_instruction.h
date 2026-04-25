@@ -385,6 +385,19 @@ namespace runtime {
      */
     void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr);
 
+    /**
+     * @brief Descodifica una instruccion de tres registros (msgsend).
+     *
+     * Formato FIXED_4: [0x00][opcode2][b2][b3]
+     *   b2 = (r_pid<<4) | r_addr
+     *   b3 = (r_len<<4)
+     * Almacena en mem_data: reg_base=r_pid, reg_index=r_addr, reg_final=r_len.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr);
+
     // =========================================================================
     //  Funciones principales del pipeline
     // =========================================================================

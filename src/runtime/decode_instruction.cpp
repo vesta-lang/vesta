@@ -755,6 +755,16 @@ namespace runtime {
         instr.data_instruction.mem_data.scale     = b3;                 // count
     }
 
+    void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 4; // FIXED_4: opcode1 + opcode2 + b2 + b3
+        uint64_t base = vm->registers.rip.raw() + 2; // saltar opcode1 + opcode2
+        uint8_t  b2   = vm->vm_mem[base];     // (r_pid<<4) | r_addr
+        uint8_t  b3   = vm->vm_mem[base + 1]; // (r_len<<4) | 0
+        instr.data_instruction.mem_data.reg_base  = (b2 >> 4) & 0x0F; // r_pid
+        instr.data_instruction.mem_data.reg_index = b2 & 0x0F;         // r_addr
+        instr.data_instruction.mem_data.reg_final = (b3 >> 4) & 0x0F; // r_len
+    }
+
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
         instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2); // direccion de la funcion nativa
 

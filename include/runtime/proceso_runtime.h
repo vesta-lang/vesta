@@ -29,6 +29,10 @@
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
 
+namespace distrib {
+    class Mailbox; ///< Declaracion adelantada del buzon de mensajes distribuido
+}
+
 /**
  * @brief Numero de reducciones por defecto que se le asignan a cada proceso al entrar en ejecucion.
  *
@@ -306,6 +310,12 @@ namespace runtime {
         uint64_t current_exception = 0; ///< Handle de la excepcion activa durante el unwinding (0 = sin excepcion)
 
         Scheduler &scheduler; ///< Referencia al scheduler propietario de este proceso
+
+        distrib::Mailbox *mailbox = nullptr; ///< Buzon de mensajes distribuido (creado bajo demanda por DistRuntime)
+
+        // --- Campos para procesos creados remotamente via rspawn ---
+        uint64_t rspawn_future_id    = 0;            ///< future_id en el nodo origen que debe resolverse con r0 al terminar (0 = no es rspawn)
+        uint32_t rspawn_origin_node  = 0xFFFFFFFFu;  ///< node_idx del nodo que envio el rspawn (0xFFFFFFFF = no es rspawn)
 
         /**
          * @brief Construye un proceso virtual y lo asocia al scheduler indicado.

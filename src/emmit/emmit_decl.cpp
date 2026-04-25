@@ -1113,6 +1113,41 @@ void emit_instr_one_reg(
 }
 
 // =========================================================================
+// Emision de instrucciones con tres registros (msgsend r_pid, r_addr, r_len)
+// =========================================================================
+
+/**
+ * @brief Emite dos bytes de operandos para instrucciones de tres registros.
+ *
+ * Byte 1 (b2): (r1<<4) | r2
+ * Byte 2 (b3): (r3<<4)
+ *
+ * @param instruction_parser Instruccion parseada con tres operandos registro.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_three_reg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto r1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto r2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+    auto r3 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[2].get());
+    if (r1 == nullptr || r2 == nullptr || r3 == nullptr)
+        throw std::runtime_error(instruction_parser->opcode + ": requires three register operands");
+
+    uint8_t idx1 = encode_reg_general(r1->name.c_str()); // primer registro (nibble alto)
+    uint8_t idx2 = encode_reg_general(r2->name.c_str()); // segundo registro (nibble bajo)
+    uint8_t idx3 = encode_reg_general(r3->name.c_str()); // tercer registro (nibble alto del byte 3)
+
+    code_final.emit8(static_cast<uint8_t>((idx1 << 4) | (idx2 & 0x0F))); // b2
+    code_final.emit8(static_cast<uint8_t>((idx3 << 4)));                  // b3
+}
+
+// =========================================================================
 // Cursor read/write (readcur / writecur) emission
 // =========================================================================
 

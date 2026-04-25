@@ -576,6 +576,27 @@ namespace Assembly::Bytecode {
     );
 
     /**
+     * @brief Emite instrucciones con tres registros (ej. msgsend r_pid, r_addr, r_len).
+     *
+     * Codificacion FIXED_4 de la forma [op1][op2][b2][b3]:
+     * @code
+     *   b2 = (r1 << 4) | r2
+     *   b3 = (r3 << 4)
+     * @endcode
+     *
+     * @param instruction_parser Instruccion del AST con tres operandos registro.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_three_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
      * @brief Emite instrucciones de lectura/escritura a memoria real via cursor.
      *
      * Cubre: readcur dest_reg, curN  y  writecur curN, src_reg.

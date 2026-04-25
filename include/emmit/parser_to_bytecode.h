@@ -310,6 +310,17 @@ namespace Assembly::Bytecode {
          */
         {"specialize", {{0x00, 0x3A, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_jumptable}}},
 
+        /* --- Instrucciones distribuidas VDP (0x3B-0x3E) ---
+         *  rspawn  r_fn, r_node  -> R0 = GcHandle del FutureObject
+         *  msgsend r_pid, r_addr, r_len
+         *  msgrecv r_buf, r_max  -> R0 = bytes recibidos
+         *  memsync r_params
+         */
+        {"rspawn",  {{0x00, 0x3B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"msgsend", {{0x00, 0x3C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}}},
+        {"msgrecv", {{0x00, 0x3D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"memsync", {{0x00, 0x3E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
         /* --- Punto flotante escalar y vectorial (0xF0-0xFC) --- */
         {"fmov",     {{0x00, 0xF0, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},
         {"fadd",     {{0x00, 0xF1, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},

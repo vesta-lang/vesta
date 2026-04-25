@@ -1102,6 +1102,38 @@ namespace runtime {
      */
     void exec_instr_fstore(ProcessVM *vm, const DecodedInstr &instr);
 
+    // -------------------------------------------------------------------------
+    // Instrucciones distribuidas  (opcodes extendidos 0x3B-0x3E)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief RSPAWN: crea un proceso en un nodo remoto.
+     * @param vm    Proceso virtual que ejecuta RSPAWN.
+     * @param instr reg1 = r_fn (dir bytecode), reg2 = r_node (indice NodeRegistry).
+     */
+    void exec_instr_rspawn(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MSGSEND: envia un mensaje a otro proceso (local o remoto).
+     * @param vm    Proceso virtual emisor.
+     * @param instr mem_data: reg_base=r_pid, reg_index=r_addr, reg_final=r_len.
+     */
+    void exec_instr_msgsend(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MSGRECV: extrae el primer mensaje del buzon; bloquea si vacio.
+     * @param vm    Proceso virtual receptor.
+     * @param instr reg1 = r_buf (dir VM destino), reg2 = r_max (tamano maximo).
+     */
+    void exec_instr_msgrecv(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MEMSYNC: sincroniza una region de memoria con un nodo remoto.
+     * @param vm    Proceso virtual que ejecuta MEMSYNC.
+     * @param instr reg1 = r_params (dir de MemsyncParams en VM memory).
+     */
+    void exec_instr_memsync(ProcessVM *vm, const DecodedInstr &instr);
+
     /**
      * @brief Descodifica FMOVI: ctrl_byte con ZMM index empaquetado + imm64.
      *

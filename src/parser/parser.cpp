@@ -262,6 +262,12 @@ namespace vm {
         /* --- Genericos en tiempo de ejecucion --- */
         {"specialize",{"specialize",OpArity::THREE}},
 
+        /* --- Instrucciones distribuidas VDP --- */
+        {"rspawn",  {"rspawn",  OpArity::TWO}},
+        {"msgsend", {"msgsend", OpArity::THREE}},
+        {"msgrecv", {"msgrecv", OpArity::TWO}},
+        {"memsync", {"memsync", OpArity::ONE}},
+
     };
 
     bool Parser::match(TokenType type) {
