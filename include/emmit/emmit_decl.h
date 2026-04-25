@@ -749,6 +749,45 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite una instruccion de pila con inmediato (subsp / addsp).
+     *
+     * Operandos: [rsp|rbp], inmediato64.
+     * Byte ctrl: bits 7-6 = modo (siempre 3 = 64 bits), bits 1-0 = sp_bp (0=RSP,1=RBP).
+     * Formato: [0x00][opcode2][ctrl][imm64] = 11 bytes.
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_spimm(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite una instruccion de tabla de saltos (jumptable / typeswitch).
+     *
+     * Operandos: r_val, r_table, count.
+     * Formato: [0x00][opcode2][byte2][byte3] = FIXED_4.
+     *   byte2: bits 7-4 = r_val, bits 3-0 = r_table.
+     *   byte3: count (numero de entradas, uint8).
+     *
+     * @param instruction_parser Instruccion del AST.
+     * @param code_final         Escritor de bytecode destino.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_instr_jumptable(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
     // -------------------------------------------------------------------------
     // Helpers para registros ZMM (f/xmm/ymm/zmm)
     // -------------------------------------------------------------------------

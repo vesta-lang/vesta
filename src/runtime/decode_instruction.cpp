@@ -734,6 +734,27 @@ namespace runtime {
      * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
      * @param instr Estructura de instruccion descodificada que se rellena.
      */
+    /**
+     * @brief Descodifica JUMPTABLE / TYPESWITCH (3 operandos en 2 bytes, FIXED_4).
+     *
+     * Formato: [0x00][opcode2][byte2][byte3]
+     *   byte2 bits 7-4 = r_val/r_obj, bits 3-0 = r_table.
+     *   byte3          = count (numero de entradas).
+     * Almacena en mem_data: reg_base=r_val, reg_index=r_table, scale=count.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
+    void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 4; // FIXED_4
+        uint64_t base = vm->registers.rip.raw() + 2; // saltar opcode1 + opcode2
+        uint8_t  b2   = vm->vm_mem[base];     // byte empaquetado: r_val|r_table
+        uint8_t  b3   = vm->vm_mem[base + 1]; // count
+        instr.data_instruction.mem_data.reg_base  = (b2 >> 4) & 0x0F; // r_val/r_obj
+        instr.data_instruction.mem_data.reg_index = b2 & 0x0F;         // r_table
+        instr.data_instruction.mem_data.scale     = b3;                 // count
+    }
+
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
         instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2); // direccion de la funcion nativa
 

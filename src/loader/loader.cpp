@@ -10,6 +10,7 @@
  */
 #include "loader/loader.h"
 
+#include <cstring>
 #include "emmit/bytereader.h"
 #include "emmit/struct_context.h"
 #include "runtime/manager_runtime.h"
@@ -495,4 +496,82 @@ namespace loader {
 
         return vm;
     }
+
+    /**
+     * @brief Instancia una clase generica con tipos concretos (monomorphization en runtime).
+     *
+     * Construye la clave de cache como "ClassName<T1,T2,...>" concatenando los nombres
+     * de los tipos concretos.  Si ya existe en generic_cache_ devuelve el puntero
+     * cacheado.  Si no, clona el ClassInfo de @p generic, asigna el nombre especializado,
+     * vincula los type_params a los tipos concretos y lo almacena en generic_store_.
+     *
+     * Esta funcion es thread-safe: usa loader_mutex internamente.
+     *
+     * @param generic    ClassInfo de la clase generica origen (debe tener CLASS_FLAG_GENERIC).
+     * @param type_args  Array de ClassInfo* con los tipos concretos.
+     * @param count      Numero de elementos en type_args.
+     * @return Puntero al ClassInfo especializado (valido de por vida del Loader).
+     */
+    ClassInfo *Loader::specialize_class(ClassInfo *generic,
+                                        ClassInfo **type_args,
+                                        size_t count) {
+        if (generic == nullptr || type_args == nullptr || count == 0) return generic;
+
+        // construir la clave de cache: "ClassName<T1,T2,...>"
+        std::string key(reinterpret_cast<const char *>(generic->name.data),
+                        generic->name.size);
+        key += '<';
+        for (size_t i = 0; i < count; i++) {
+            if (i > 0) key += ',';
+            if (type_args[i] != nullptr) {
+                key.append(reinterpret_cast<const char *>(type_args[i]->name.data),
+                           type_args[i]->name.size);
+            } else {
+                key += "?"; // tipo desconocido: clave degenerada
+            }
+        }
+        key += '>';
+
+        std::lock_guard lock(loader_mutex);
+
+        // buscar en cache antes de clonar
+        auto it = generic_cache_.find(key);
+        if (it != generic_cache_.end()) return it->second;
+
+        // clonar el ClassInfo base y adaptar los campos necesarios
+        auto clone = std::make_unique<ClassInfo>(*generic);
+
+        // almacenar el nombre especializado como cadena estatica en el mismo bloque
+        // NOTA: el nombre se guarda en generic_store_names_ para que viva junto al ClassInfo
+        auto *name_buf = new char[key.size() + 1];
+        std::memcpy(name_buf, key.c_str(), key.size() + 1);
+        clone->name.data = reinterpret_cast<uint8_t *>(name_buf);
+        clone->name.size = static_cast<uint32_t>(key.size());
+
+        // vincular el origen (para distinguir especializaciones del original)
+        clone->generic_parent = generic;
+
+        // eliminar la marca GENERIC en la especializacion concreta
+        clone->flags &= ~CLASS_FLAG_GENERIC;
+
+        // sustituir los type_params por los tipos concretos proporcionados
+        // NOTA: la resolucion de campos/metodos internos que usan T queda a cargo
+        // del compilador de alto nivel o de una pasada de reflexion posterior.
+        // Aqui solo vinculamos el descriptor para permitir instanceof/specialize.
+        if (count <= generic->type_param_count && generic->type_params != nullptr) {
+            auto *new_params = new GenericParam[generic->type_param_count];
+            std::memcpy(new_params, generic->type_params,
+                        generic->type_param_count * sizeof(GenericParam));
+            for (size_t i = 0; i < count; i++) {
+                new_params[i].constraint = type_args[i]; // vincular tipo concreto
+            }
+            clone->type_params = new_params;
+        }
+
+        ClassInfo *raw = clone.get();
+        generic_store_.push_back(std::move(clone)); // tomar propiedad
+        generic_cache_.emplace(std::move(key), raw);
+        return raw;
+    }
+
 }

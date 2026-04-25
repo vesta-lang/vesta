@@ -1524,6 +1524,132 @@ void emit_instr_reg_imm8(
 }
 
 // =========================================================================
+// SUBSP / ADDSP -- aritmetica de puntero de pila con inmediato
+// =========================================================================
+
+/**
+ * @brief Emite un byte ctrl + inmediato de 64 bits para subsp/addsp.
+ *
+ * El primer operando debe ser "rsp" o "rbp"; el segundo es el inmediato.
+ * Formato: [0x00][opcode2][ctrl][imm64] donde ctrl = (3<<6)|sp_bp.
+ * Se usa siempre modo=3 (64 bits) porque RSP/RBP son registros de 64 bits.
+ *
+ * @param instruction_parser Instruccion parseada.
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_spimm(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (instruction_parser->operands.size() < 2)
+        throw std::runtime_error(
+            "emit_instr_spimm: '" + instruction_parser->opcode +
+            "' requires (rsp|rbp, imm)");
+
+    auto *reg_op = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    if (reg_op == nullptr)
+        throw std::runtime_error(
+            "emit_instr_spimm: '" + instruction_parser->opcode +
+            "': first operand must be rsp or rbp");
+
+    const std::string &rname = reg_op->name;
+    uint8_t sp_bp = 0; // 0 = RSP, 1 = RBP
+    if (rname == "rbp") sp_bp = 1;
+    else if (rname != "rsp")
+        throw std::runtime_error(
+            "emit_instr_spimm: '" + instruction_parser->opcode +
+            "': first operand must be rsp or rbp, got " + rname);
+
+    auto *num_op = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[1].get());
+    if (num_op == nullptr)
+        throw std::runtime_error(
+            "emit_instr_spimm: '" + instruction_parser->opcode +
+            "': second operand must be an immediate");
+
+    auto val_opt = vm::parse_number_safe(num_op->value);
+    if (!val_opt)
+        throw std::runtime_error(
+            "emit_instr_spimm: invalid number: " + num_op->value);
+
+    uint8_t  ctrl      = (3u << 6) | sp_bp; // modo=3 (64-bit), sp_bp en bits 1:0
+    uint64_t val_immed = val_opt.value();
+
+    code_final.emit8(ctrl);          // byte de control
+    code_final.emit64(val_immed);    // inmediato de 64 bits (little-endian)
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x ctrl=0x%02x imm=0x%llx\n",
+                instruction_parser->opcode.c_str(), now_instr->opcode2,
+                ctrl, (unsigned long long)val_immed);
+}
+
+// =========================================================================
+// JUMPTABLE / TYPESWITCH -- despacho por valor o por tipo
+// =========================================================================
+
+/**
+ * @brief Emite los dos bytes de operandos para jumptable/typeswitch.
+ *
+ * Formato de la instruccion completa (FIXED_4):
+ *   [0x00][opcode2][byte2][byte3]
+ * donde:
+ *   byte2 bits 7-4 = r_val/r_obj (registro del valor o del objeto)
+ *   byte2 bits 3-0 = r_table     (registro con la direccion de la tabla)
+ *   byte3          = count        (numero de entradas, uint8)
+ *
+ * @param instruction_parser Instruccion parseada (3 operandos: reg, reg, imm).
+ * @param code_final         Escritor de bytes de salida.
+ * @param now_instr          Metadatos de instruccion.
+ * @param assembly_ctx       Contexto del ensamblador.
+ */
+void emit_instr_jumptable(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (instruction_parser->operands.size() < 3)
+        throw std::runtime_error(
+            "emit_instr_jumptable: '" + instruction_parser->opcode +
+            "' requires (r_val, r_table, count)");
+
+    auto *op0 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto *op1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[1].get());
+    auto *op2 = dynamic_cast<vm::NumberOperand *>(
+        instruction_parser->operands[2].get());
+
+    if (!op0 || !op1 || !op2)
+        throw std::runtime_error(
+            "emit_instr_jumptable: '" + instruction_parser->opcode +
+            "': operands must be (reg, reg, imm8)");
+
+    uint8_t r_val   = encode_reg_general(op0->name.c_str()) & 0x0F; // 4 bits
+    uint8_t r_table = encode_reg_general(op1->name.c_str()) & 0x0F; // 4 bits
+
+    auto cnt_opt = vm::parse_number_safe(op2->value);
+    if (!cnt_opt)
+        throw std::runtime_error(
+            "emit_instr_jumptable: invalid count: " + op2->value);
+
+    uint8_t count = static_cast<uint8_t>(cnt_opt.value() & 0xFF); // truncar a 8 bits
+
+    uint8_t byte2 = (r_val << 4) | r_table; // empaqueta ambos registros en un byte
+    code_final.emit8(byte2);  // byte empaquetado de registros
+    code_final.emit8(count);  // numero de entradas de la tabla
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x r_val=%d r_table=%d count=%d\n",
+                instruction_parser->opcode.c_str(), now_instr->opcode2,
+                r_val, r_table, count);
+}
+
+// =========================================================================
 // MOVC / MOVCH -- conditional move based on a flag
 // =========================================================================
 

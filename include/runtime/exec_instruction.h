@@ -739,6 +739,294 @@ namespace runtime {
     void exec_instr_swapctx(ProcessVM *vm, const DecodedInstr &instr);
 
     // -------------------------------------------------------------------------
+    // Closures GC y raw  (opcodes extendidos 0x20-0x23)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief MKCLOSURE: crea un ClosureObject gestionado por el GC.
+     * @param vm    Proceso virtual que ejecuta MKCLOSURE.
+     * @param instr reg1 = MethodInfo*, reg2 = env addr en memoria VM.
+     */
+    void exec_instr_mkclosure(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief CALLCLOSURE: invoca un ClosureObject GC a traves de su MethodInfo.
+     * @param vm    Proceso virtual que ejecuta CALLCLOSURE.
+     * @param instr reg1 = GcHandle del ClosureObject.
+     */
+    void exec_instr_callclosure(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MKRAWCLOSURE: crea un RawClosureObject sin GC (para FFI nativo).
+     * @param vm    Proceso virtual que ejecuta MKRAWCLOSURE.
+     * @param instr reg1 = fn_addr, reg2 = env_addr en memoria VM.
+     */
+    void exec_instr_mkrawclosure(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief CALLRAWCLOSURE: invoca la funcion nativa de un RawClosureObject.
+     * @param vm    Proceso virtual que ejecuta CALLRAWCLOSURE.
+     * @param instr reg1 = puntero raw al RawClosureObject.
+     */
+    void exec_instr_callrawclosure(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // TCO  (opcode extendido 0x24)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief TAILCALL: llamada en posicion de cola; reutiliza el frame actual.
+     *
+     * Restaura SP al frame_base del FrameHeader activo y salta a la funcion
+     * destino sin empujar una nueva direccion de retorno.
+     *
+     * @param vm    Proceso virtual que ejecuta TAILCALL.
+     * @param instr reg1 = direccion de la funcion destino.
+     */
+    void exec_instr_tailcall(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Nullable  (opcodes extendidos 0x25-0x26)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief ISNULL: r_dst = (r_src == 0) ? 1 : 0. Sin excepcion.
+     * @param vm    Proceso virtual que ejecuta ISNULL.
+     * @param instr reg1 = destino, reg2 = valor a comprobar.
+     */
+    void exec_instr_isnull(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief UNWRAP: r_dst = r_src si != 0; lanza NullPointerException si == 0.
+     * @param vm    Proceso virtual que ejecuta UNWRAP.
+     * @param instr reg1 = destino, reg2 = valor nullable.
+     */
+    void exec_instr_unwrap(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Tabla de saltos y cambio de tipo  (opcodes extendidos 0x27-0x28)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief JUMPTABLE: salto O(1) por valor entero sobre una tabla de direcciones.
+     *
+     * Lee la direccion de la posicion r_val de la tabla apuntada por r_table y
+     * salta a ella.  Si r_val >= count no salta (cae al siguiente opcode).
+     *
+     * @param vm    Proceso virtual que ejecuta JUMPTABLE.
+     * @param instr mem_data.reg_base=r_val, mem_data.reg_index=r_table, mem_data.scale=count.
+     */
+    void exec_instr_jumptable(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief TYPESWITCH: despacho por tipo de objeto (O(n) sobre n entradas de la tabla).
+     *
+     * Obtiene ClassInfo del ObjectHeader del objeto en r_obj.  Recorre la tabla de
+     * pares [ClassInfo*, target_addr] buscando la clase exacta.  Si encuentra
+     * coincidencia salta a target_addr; si no, cae al siguiente opcode.
+     *
+     * @param vm    Proceso virtual que ejecuta TYPESWITCH.
+     * @param instr mem_data.reg_base=r_obj, mem_data.reg_index=r_table, mem_data.scale=count.
+     */
+    void exec_instr_typeswitch(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Async/await nativo  (opcodes extendidos 0x29-0x2C)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief FUTURE: crea un FutureObject gestionado por el GC en estado PENDING.
+     *
+     * Aloca mediante gc_heap.alloc y devuelve el GcHandle en R0.
+     * El handle debe pasarse a FULFILL o REJECT para resolverlo, y a AWAIT para esperar.
+     *
+     * @param vm    Proceso virtual que ejecuta FUTURE.
+     * @param instr Sin operandos (FIXED_2).
+     */
+    void exec_instr_future(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief AWAIT: suspende el proceso hasta que el FutureObject sea resuelto.
+     *
+     * Si el future ya esta RESOLVED o REJECTED: escribe result en R0 y continua.
+     * Si sigue PENDING: registra el PID del proceso en waiter_pid y bloquea
+     * (blocking=true) sin avanzar el PC.  Al ser despertado por FULFILL/REJECT
+     * re-ejecuta AWAIT, que ahora encuentra el estado resuelto y retorna el valor.
+     *
+     * @param vm    Proceso virtual que ejecuta AWAIT.
+     * @param instr reg1 = GcHandle del FutureObject.
+     */
+    void exec_instr_await(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FULFILL: resuelve un FutureObject con un valor (RESOLVED).
+     *
+     * Escribe result=r_val y state=RESOLVED en el FutureObject.
+     * Si waiter_pid != 0 llama a make_ready(waiter_pid) para despertar al proceso.
+     *
+     * @param vm    Proceso virtual que ejecuta FULFILL.
+     * @param instr reg1 = GcHandle del FutureObject, reg2 = valor de resolucion.
+     */
+    void exec_instr_fulfill(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief REJECT: rechaza un FutureObject con un codigo de error (REJECTED).
+     *
+     * Escribe result=r_err y state=REJECTED en el FutureObject.
+     * Si waiter_pid != 0 llama a make_ready(waiter_pid) para despertar al proceso.
+     *
+     * @param vm    Proceso virtual que ejecuta REJECT.
+     * @param instr reg1 = GcHandle del FutureObject, reg2 = codigo de error.
+     */
+    void exec_instr_reject(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Aritmetica de puntero de pila  (opcodes extendidos 0x2E-0x2F)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief SUBSP: resta un inmediato al puntero de pila RSP o RBP.
+     *
+     * Tipicamente usado para reservar espacio de variables locales al inicio
+     * de una funcion sin usar la instruccion generica SUB.
+     *
+     * @param vm    Proceso virtual que ejecuta SUBSP.
+     * @param instr inmmed_data.reg=0 (RSP) o 1 (RBP); inmmed_data.inmmed = delta.
+     */
+    void exec_instr_subsp(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief ADDSP: suma un inmediato al puntero de pila RSP o RBP.
+     *
+     * Tipicamente usado para liberar el espacio de variables locales al final
+     * de una funcion.
+     *
+     * @param vm    Proceso virtual que ejecuta ADDSP.
+     * @param instr inmmed_data.reg=0 (RSP) o 1 (RBP); inmmed_data.inmmed = delta.
+     */
+    void exec_instr_addsp(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Referencias debiles  (opcodes extendidos 0x30, 0x32, 0x34)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief WEAKREF: crea una referencia debil opaca a un objeto GC.
+     *
+     * Registra el GcHandle en la tabla de referencias debiles del GcHeap.
+     * El GC anula automaticamente la referencia si el objeto es recolectado.
+     * Devuelve el indice opaco (uint32_t) en R0.
+     *
+     * @param vm    Proceso virtual que ejecuta WEAKREF.
+     * @param instr reg1 = GcHandle del objeto.
+     */
+    void exec_instr_weakref(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief DEREF_WEAK: desreferencia un indice de weak ref.
+     *
+     * Si el objeto sigue vivo: r_dst = GcHandle original.
+     * Si el objeto fue recolectado: r_dst = GC_NULL_HANDLE (0xFFFFFFFF).
+     *
+     * @param vm    Proceso virtual que ejecuta DEREF_WEAK.
+     * @param instr reg1 = registro destino, reg2 = indice opaco de la weak ref.
+     */
+    void exec_instr_deref_weak(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief FREE_WEAK: libera una entrada de la tabla de weak refs.
+     *
+     * Debe llamarse cuando ya no se necesita la referencia debil para no
+     * acumular entradas muertas en la tabla.
+     *
+     * @param vm    Proceso virtual que ejecuta FREE_WEAK.
+     * @param instr reg1 = indice opaco de la weak ref a liberar.
+     */
+    void exec_instr_free_weak(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Monitor / sincronizacion  (opcodes extendidos 0x35-0x39)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief MONENTER: adquiere el monitor reentrante del objeto GC.
+     *
+     * Si el monitor esta libre o ya lo posee el proceso actual, lo adquiere e
+     * incrementa lock_depth en ObjectHeader.  Si esta ocupado por otro proceso,
+     * el proceso actual entra en la cola de espera (blocking=true) y re-ejecuta
+     * MONENTER al ser despertado por MONEXIT.
+     *
+     * @param vm    Proceso virtual que ejecuta MONENTER.
+     * @param instr reg1 = GcHandle del objeto cuyo monitor se quiere adquirir.
+     */
+    void exec_instr_monenter(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MONEXIT: libera el monitor del objeto GC.
+     *
+     * Decrementa lock_depth.  Cuando llega a 0, el monitor queda libre; si hay
+     * procesos en la cola de espera del GcHeap, despierta al primero (make_ready).
+     *
+     * @param vm    Proceso virtual que ejecuta MONEXIT.
+     * @param instr reg1 = GcHandle del objeto cuyo monitor se libera.
+     */
+    void exec_instr_monexit(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MONWAIT: libera completamente el monitor y suspende el proceso.
+     *
+     * Libera el monitor (lock_depth -> 0) y registra el PID en la cola de espera
+     * del monitor.  El proceso queda bloqueado hasta que MONNOTI o MONNOTA lo
+     * despierte.  Tras despertar debe llamar MONENTER para readquirir el lock.
+     *
+     * @param vm    Proceso virtual que ejecuta MONWAIT.
+     * @param instr reg1 = GcHandle del objeto.
+     */
+    void exec_instr_monwait(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MONNOTI: despierta un proceso de la cola de espera del monitor.
+     *
+     * Extrae el primer PID de monitor_waiters_ y llama make_ready.  No transfiere
+     * la propiedad del monitor; el proceso despertado debe llamar MONENTER de nuevo.
+     *
+     * @param vm    Proceso virtual que ejecuta MONNOTI.
+     * @param instr reg1 = GcHandle del objeto.
+     */
+    void exec_instr_monnoti(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief MONNOTA: despierta todos los procesos de la cola de espera del monitor.
+     *
+     * Extrae todos los PIDs de monitor_waiters_ y llama make_ready en cada uno.
+     *
+     * @param vm    Proceso virtual que ejecuta MONNOTA.
+     * @param instr reg1 = GcHandle del objeto.
+     */
+    void exec_instr_monnota(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
+    // Genericos en tiempo de ejecucion  (opcode extendido 0x3A)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief SPECIALIZE: instancia en tiempo de ejecucion una clase generica.
+     *
+     * Codificacion FIXED_4: byte2 = (r_dst<<4)|r_class, byte3 = (r_types<<4)|r_count.
+     *   r_class = registro con puntero a ClassInfo generica (CLASS_FLAG_GENERIC).
+     *   r_types = registro con puntero a array de ClassInfo* (tipos concretos).
+     *   r_count = nibble bajo de byte3; numero de parametros de tipo (1-15).
+     *   r_dst   = nibble alto de byte2; registro destino para el ClassInfo* result.
+     *
+     * Si la especializacion ya existe en la cache del Loader la retorna directamente.
+     * Si no, clona el ClassInfo original sustituyendo los type_params por los concretos.
+     *
+     * @param vm    Proceso virtual que ejecuta SPECIALIZE.
+     * @param instr byte2=(r_dst<<4)|r_class, byte3=(r_types<<4)|r_count.
+     */
+    void exec_instr_specialize(ProcessVM *vm, const DecodedInstr &instr);
+
+    // -------------------------------------------------------------------------
     // Punto flotante escalar y vectorial  (opcodes extendidos 0xF0-0xFC)
     //
     // Codificacion del campo mode (2 bits en ctrl byte bits[7:6]):

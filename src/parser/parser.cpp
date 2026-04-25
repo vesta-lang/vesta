@@ -116,6 +116,19 @@ namespace vm {
         {"spawn",   {"spawn",   OpArity::ONE}},
         {"swapctx", {"swapctx", OpArity::TWO}},
 
+        // --- Closures GC y raw ---
+        {"mkclosure",      {"mkclosure",      OpArity::TWO}},
+        {"callclosure",    {"callclosure",    OpArity::ONE}},
+        {"mkrawclosure",   {"mkrawclosure",   OpArity::TWO}},
+        {"callrawclosure", {"callrawclosure", OpArity::ONE}},
+
+        // --- TCO (tail call optimization) ---
+        {"tailcall", {"tailcall", OpArity::ONE}},
+
+        // --- Nullable ---
+        {"isnull", {"isnull", OpArity::TWO}},
+        {"unwrap",  {"unwrap",  OpArity::TWO}},
+
         // --- Punto flotante escalar y vectorial ---
         {"fmov",     {"fmov",     OpArity::TWO}},
         {"fadd",     {"fadd",     OpArity::TWO}},
@@ -168,13 +181,45 @@ namespace vm {
         {"import", {"import", OpArity::ONE}},
 
 
-        {"jmp", {"jmp", OpArity::ONE}},
-        {"jmp.je", {"jmp.je", OpArity::ONE}},
+        {"jmp",     {"jmp",     OpArity::ONE}},
+        {"jmp.je",  {"jmp.je",  OpArity::ONE}},
+        {"jmp.jz",  {"jmp.jz",  OpArity::ONE}},
         {"jmp.jne", {"jmp.jne", OpArity::ONE}},
+        {"jmp.jnz", {"jmp.jnz", OpArity::ONE}},
+        {"jmp.jcs", {"jmp.jcs", OpArity::ONE}},
+        {"jmp.jae", {"jmp.jae", OpArity::ONE}},
+        {"jmp.jcc", {"jmp.jcc", OpArity::ONE}},
+        {"jmp.jb",  {"jmp.jb",  OpArity::ONE}},
+        {"jmp.jmi", {"jmp.jmi", OpArity::ONE}},
+        {"jmp.jpl", {"jmp.jpl", OpArity::ONE}},
+        {"jmp.jvs", {"jmp.jvs", OpArity::ONE}},
+        {"jmp.jvc", {"jmp.jvc", OpArity::ONE}},
+        {"jmp.jhi", {"jmp.jhi", OpArity::ONE}},
+        {"jmp.jls", {"jmp.jls", OpArity::ONE}},
+        {"jmp.jge", {"jmp.jge", OpArity::ONE}},
+        {"jmp.jlt", {"jmp.jlt", OpArity::ONE}},
+        {"jmp.jgt", {"jmp.jgt", OpArity::ONE}},
+        {"jmp.jle", {"jmp.jle", OpArity::ONE}},
 
-        {"jrel", {"jrel", OpArity::ONE}},
-        {"jrel.je", {"jrel.je", OpArity::ONE}},
+        {"jrel",     {"jrel",     OpArity::ONE}},
+        {"jrel.je",  {"jrel.je",  OpArity::ONE}},
+        {"jrel.jz",  {"jrel.jz",  OpArity::ONE}},
         {"jrel.jne", {"jrel.jne", OpArity::ONE}},
+        {"jrel.jnz", {"jrel.jnz", OpArity::ONE}},
+        {"jrel.jcs", {"jrel.jcs", OpArity::ONE}},
+        {"jrel.jae", {"jrel.jae", OpArity::ONE}},
+        {"jrel.jcc", {"jrel.jcc", OpArity::ONE}},
+        {"jrel.jb",  {"jrel.jb",  OpArity::ONE}},
+        {"jrel.jmi", {"jrel.jmi", OpArity::ONE}},
+        {"jrel.jpl", {"jrel.jpl", OpArity::ONE}},
+        {"jrel.jvs", {"jrel.jvs", OpArity::ONE}},
+        {"jrel.jvc", {"jrel.jvc", OpArity::ONE}},
+        {"jrel.jhi", {"jrel.jhi", OpArity::ONE}},
+        {"jrel.jls", {"jrel.jls", OpArity::ONE}},
+        {"jrel.jge", {"jrel.jge", OpArity::ONE}},
+        {"jrel.jlt", {"jrel.jlt", OpArity::ONE}},
+        {"jrel.jgt", {"jrel.jgt", OpArity::ONE}},
+        {"jrel.jle", {"jrel.jle", OpArity::ONE}},
 
         {"calln", {"calln", OpArity::ONE}},
         {"callvm", {"callvm", OpArity::ONE}},
@@ -188,6 +233,34 @@ namespace vm {
         {"vminfo", {"vminfo", OpArity::ONE}},
         {"vminfomanager", {"vminfomanager", OpArity::ONE}},
 
+        /* --- Pattern matching nativo --- */
+        {"jumptable",  {"jumptable",  OpArity::THREE}},
+        {"typeswitch", {"typeswitch", OpArity::THREE}},
+
+        /* --- Async/await --- */
+        {"future",  {"future",  OpArity::ZERO}},
+        {"await",   {"await",   OpArity::ONE}},
+        {"fulfill", {"fulfill", OpArity::TWO}},
+        {"reject",  {"reject",  OpArity::TWO}},
+
+        /* --- Aritmetica sobre registros especiales (rsp/rbp) con inmediato --- */
+        {"subsp", {"subsp", OpArity::TWO}},
+        {"addsp", {"addsp", OpArity::TWO}},
+
+        /* --- Referencias debiles --- */
+        {"weakref",   {"weakref",   OpArity::ONE}},
+        {"deref_weak",{"deref_weak",OpArity::ONE}},
+        {"free_weak", {"free_weak", OpArity::ONE}},
+
+        /* --- Monitor / sincronizacion --- */
+        {"monenter",  {"monenter",  OpArity::ONE}},
+        {"monexit",   {"monexit",   OpArity::ONE}},
+        {"monwait",   {"monwait",   OpArity::ONE}},
+        {"monnoti",   {"monnoti",   OpArity::ONE}},
+        {"monnota",   {"monnota",   OpArity::ONE}},
+
+        /* --- Genericos en tiempo de ejecucion --- */
+        {"specialize",{"specialize",OpArity::THREE}},
 
     };
 

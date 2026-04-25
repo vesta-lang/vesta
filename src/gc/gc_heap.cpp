@@ -18,6 +18,7 @@
  * tri-color mark-and-sweep (blanco/gris/negro).
  */
 #include "gc/gc_heap.h"
+#include "loader/oop_types.h"
 
 #include <cstring>
 #include <cassert>
@@ -318,6 +319,25 @@ namespace gc {
                 cursor += total;
             }
         }
+
+        // WEAK SWEEP: anular referencias debiles a objetos recolectados
+        // Si el handle apuntado por una WeakEntry esta muerto, poner target = GC_NULL_HANDLE
+        for (auto &entry : weak_table_) {
+            if (!entry.live) continue; // entrada ya liberada
+            if (entry.target == GC_NULL_HANDLE) continue; // ya anulada
+
+            // verificar si el objeto sigue vivo (color != DEAD) en la tabla de handles
+            bool alive = false;
+            if (entry.target < handles_.size()) {
+                const auto &he = handles_[entry.target];
+                if (he.addr != nullptr && he.live) {
+                    // he.addr apunta al GcHeader del objeto; leer su color
+                    const auto *ghdr = reinterpret_cast<const GcHeader *>(he.addr);
+                    alive = (ghdr->color != GcColor::DEAD);
+                }
+            }
+            if (!alive) entry.target = GC_NULL_HANDLE; // objeto muerto: anular referencia
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -361,6 +381,173 @@ namespace gc {
         old_blocks_.push_back({ static_cast<uint8_t *>(a->ptr), block_size, aid });
         old_used_ += total_bytes;
         return static_cast<uint8_t *>(a->ptr);
+    }
+
+    // =========================================================================
+    //  Tabla de referencias debiles
+    // =========================================================================
+
+    /**
+     * @brief Registra un GcHandle en la tabla de referencias debiles.
+     *
+     * Busca primero un slot libre (live==false) para reutilizarlo.  Si no hay
+     * ninguno disponible, inserta una nueva entrada al final.
+     *
+     * @param target GcHandle del objeto a observar debilmente.
+     * @return Indice opaco uint32_t de la entrada en la tabla.
+     */
+    uint32_t GcHeap::alloc_weak(GcHandle target) {
+        // reutilizar slots liberados antes de crecer la tabla
+        for (uint32_t i = 0; i < static_cast<uint32_t>(weak_table_.size()); ++i) {
+            if (!weak_table_[i].live) {
+                weak_table_[i].target = target;
+                weak_table_[i].live   = true;
+                return i;
+            }
+        }
+        // ningun slot libre: anadir al final de la tabla
+        uint32_t idx = static_cast<uint32_t>(weak_table_.size());
+        weak_table_.push_back({ target, true });
+        return idx;
+    }
+
+    /**
+     * @brief Resuelve un indice de weak ref al GcHandle subyacente.
+     *
+     * Si el objeto fue recolectado durante el ultimo major GC el campo target
+     * habra sido puesto a GC_NULL_HANDLE por el barrido de weak refs.
+     *
+     * @param idx Indice opaco devuelto por alloc_weak().
+     * @return GcHandle del objeto si sigue vivo; GC_NULL_HANDLE si fue recolectado
+     *         o si el indice esta fuera de rango.
+     */
+    GcHandle GcHeap::deref_weak(uint32_t idx) const {
+        if (idx >= static_cast<uint32_t>(weak_table_.size())) return GC_NULL_HANDLE;
+        const auto &entry = weak_table_[idx];
+        if (!entry.live) return GC_NULL_HANDLE; // slot liberado: referencia invalida
+        return entry.target; // GC_NULL_HANDLE si el objeto fue recolectado, handle valido si no
+    }
+
+    /**
+     * @brief Libera una entrada de la tabla de referencias debiles.
+     *
+     * Marca el slot como libre (live=false) para que pueda ser reutilizado.
+     * Si idx esta fuera de rango o el slot ya estaba libre, no hace nada.
+     *
+     * @param idx Indice opaco devuelto por alloc_weak().
+     */
+    void GcHeap::free_weak(uint32_t idx) {
+        if (idx >= static_cast<uint32_t>(weak_table_.size())) return;
+        weak_table_[idx].live   = false;         // marcar como slot libre
+        weak_table_[idx].target = GC_NULL_HANDLE; // limpiar el handle por seguridad
+    }
+
+    // -------------------------------------------------------------------------
+    // Monitor / sincronizacion
+    // -------------------------------------------------------------------------
+
+    /**
+     * @brief Intenta adquirir el monitor del objeto referenciado por @p h.
+     *
+     * Si owner_pid == 0 (libre): asigna el monitor a @p local_pid,
+     * establece lock_depth = 1 y devuelve true.
+     * Si owner_pid == local_pid (lock reentrante): incrementa lock_depth y
+     * devuelve true.
+     * Si lo posee otro proceso: devuelve false (el llamante debe bloquear).
+     *
+     * @param h         Handle del objeto cuyo monitor se quiere adquirir.
+     * @param local_pid PID local del proceso solicitante.
+     * @return true si el monitor fue adquirido o incrementado.
+     */
+    bool GcHeap::monitor_try_acquire(GcHandle h, uint32_t local_pid) {
+        uint8_t *ptr = deref(h);
+        if (ptr == nullptr) return false; // handle invalido: no se puede adquirir
+
+        auto *hdr = reinterpret_cast<loader::ObjectHeader *>(ptr);
+
+        if (hdr->owner_pid == 0) {
+            hdr->owner_pid  = local_pid; // adquirir el monitor
+            hdr->lock_depth = 1;
+            return true;
+        }
+        if (hdr->owner_pid == local_pid) {
+            hdr->lock_depth++; // lock reentrante: incrementar profundidad
+            return true;
+        }
+        return false; // monitor ocupado por otro proceso
+    }
+
+    /**
+     * @brief Libera el monitor del objeto referenciado por @p h.
+     *
+     * Decrementa lock_depth.  Cuando llega a 0 el monitor queda libre
+     * (owner_pid = 0).  Extrae el primer proceso de la cola de espera
+     * para despertarlo.
+     *
+     * @param h         Handle del objeto cuyo monitor se libera.
+     * @param local_pid PID local del propietario actual (para validar).
+     * @return PID codificado del siguiente proceso en cola (0 si vacia).
+     */
+    uint64_t GcHeap::monitor_release(GcHandle h, uint32_t local_pid) {
+        uint8_t *ptr = deref(h);
+        if (ptr == nullptr) return 0;
+
+        auto *hdr = reinterpret_cast<loader::ObjectHeader *>(ptr);
+        if (hdr->owner_pid != local_pid) return 0; // no es el propietario
+
+        if (hdr->lock_depth > 1) {
+            hdr->lock_depth--; // reducir nivel de reentrada sin liberar el monitor
+            return 0;
+        }
+
+        // lock_depth llega a 0: liberar el monitor
+        hdr->owner_pid  = 0;
+        hdr->lock_depth = 0;
+
+        return monitor_pop_waiter(h); // devolver el siguiente proceso a despertar
+    }
+
+    /**
+     * @brief Anade un PID codificado a la cola de espera del monitor de @p h.
+     *
+     * @param h           Handle del objeto cuyo monitor tiene la cola.
+     * @param encoded_pid PID codificado: (scheduler_id << 32) | local_pid.
+     */
+    void GcHeap::monitor_add_waiter(GcHandle h, uint64_t encoded_pid) {
+        monitor_waiters_[h].push_back(encoded_pid); // insertar al final de la cola FIFO
+    }
+
+    /**
+     * @brief Extrae y devuelve el primer PID de la cola de espera del monitor de @p h.
+     *
+     * @param h Handle del objeto cuya cola de espera se consulta.
+     * @return PID codificado del primer proceso en cola, o 0 si la cola esta vacia.
+     */
+    uint64_t GcHeap::monitor_pop_waiter(GcHandle h) {
+        auto it = monitor_waiters_.find(h);
+        if (it == monitor_waiters_.end() || it->second.empty()) return 0;
+
+        uint64_t pid = it->second.front(); // extraer el primero de la cola FIFO
+        it->second.erase(it->second.begin());
+        if (it->second.empty()) monitor_waiters_.erase(it); // limpiar entrada vacia
+        return pid;
+    }
+
+    /**
+     * @brief Extrae y devuelve todos los PID de la cola de espera del monitor de @p h.
+     *
+     * La cola queda vacia tras la llamada.
+     *
+     * @param h Handle del objeto cuya cola de espera se vacia.
+     * @return Vector con todos los PID codificados.
+     */
+    std::vector<uint64_t> GcHeap::monitor_pop_all_waiters(GcHandle h) {
+        auto it = monitor_waiters_.find(h);
+        if (it == monitor_waiters_.end()) return {}; // cola inexistente: devolver vacio
+
+        std::vector<uint64_t> result = std::move(it->second); // mover para evitar copia
+        monitor_waiters_.erase(it); // limpiar la entrada
+        return result;
     }
 
 } // namespace gc
