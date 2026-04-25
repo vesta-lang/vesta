@@ -147,6 +147,7 @@ file(GLOB_RECURSE ALL_PROJECT_SOURCES
         ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
         ${CMAKE_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
+list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/runtime/exec_instruction_closure.cpp)
 
 # Buscar todos los archivos .cpp dentro de tests/ y subcarpetas
 file(GLOB_RECURSE TEST_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)

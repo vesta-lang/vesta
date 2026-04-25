@@ -209,6 +209,7 @@ namespace runtime {
         THREAD_STACK_UNDERFLOW,
 
         THREAD_INVALID_SYSCALL, ///< Llamada al sistema invalida o no soportada
+        THREAD_NULL_POINTER,    ///< UNWRAP encontro un valor nulo (NullPointerException)
     } state_err_thread;
 
     /**

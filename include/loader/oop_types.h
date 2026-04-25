@@ -55,6 +55,14 @@ namespace loader {
     static constexpr uint64_t CLASS_FLAG_STATIC    = (1ULL << 6);
     static constexpr uint64_t CLASS_FLAG_EXCEPTION = (1ULL << 7);
     static constexpr uint64_t CLASS_FLAG_NATIVE    = (1ULL << 8);
+    static constexpr uint64_t CLASS_FLAG_CLOSURE   = (1ULL << 9);  ///< clase es un closure GC
+    static constexpr uint64_t CLASS_FLAG_GENERIC   = (1ULL << 10); ///< clase tiene parametros de tipo
+
+    // -------------------------------------------------------------------------
+    //  Flags de visibilidad de modulo (ClassInfo::visibility)
+    // -------------------------------------------------------------------------
+    static constexpr uint64_t MODULE_VIS_INTERNAL  = 0x0ULL; ///< solo accesible dentro del modulo
+    static constexpr uint64_t MODULE_VIS_EXPORT    = 0x1ULL; ///< accesible desde otros modulos
 
     // -------------------------------------------------------------------------
     //  Flags de metodo (MethodInfo::flags)
@@ -112,6 +120,7 @@ namespace loader {
     struct ClassInfo;
     struct MethodInfo;
     struct FieldInfo;
+    struct GenericParam;
 
     // -------------------------------------------------------------------------
     //  AttrEntry - par clave/valor para anotaciones arbitrarias
@@ -210,27 +219,58 @@ namespace loader {
         // --- todos los metodos (para reflexion) ---
         MethodInfo *methods;
         size_t      method_count;
-        // --- reflexion/documentacion (offsets 136-167) ---
+        // --- reflexion/documentacion ---
         stringx     doc;        ///< docstring de la clase
         AttrEntry  *attrs;      ///< tabla de anotaciones clave/valor
         size_t      attr_count;
+
+        // --- genericos (monomorphization) ---
+        GenericParam *type_params;      ///< parametros de tipo (nombre + restriccion)
+        size_t        type_param_count; ///< numero de parametros de tipo
+        ClassInfo    *generic_parent;   ///< clase generica original (para especializaciones)
+
+        // --- modulos ---
+        stringx      module_name;  ///< nombre calificado del modulo propietario ("com.vesta.col")
+        uint64_t     visibility;   ///< MODULE_VIS_EXPORT o MODULE_VIS_INTERNAL
     } ClassInfo;
+
+    // -------------------------------------------------------------------------
+    //  GenericParam - descriptor de un parametro de tipo en una clase generica
+    //
+    //  Cada parametro tiene un nombre simbolico ("T", "K", "V") y una restriccion
+    //  opcional de tipo.  Si constraint == nullptr el parametro acepta cualquier
+    //  tipo; si constraint != nullptr el tipo concreto debe ser una subclase o
+    //  implementar la interfaz indicada.
+    // -------------------------------------------------------------------------
+    struct GenericParam {
+        const char *name;       ///< nombre del parametro ("T", "K", "V", ...)
+        ClassInfo  *constraint; ///< restriccion de tipo (nullptr = sin restriccion)
+    };
 
     // -------------------------------------------------------------------------
     //  ObjectHeader - cabecera que precede al payload de todo objeto
     //
     //  Layout en memoria:
     //    [GcHeader (8B)]      <- solo en objetos GC (antes del payload)
-    //    [ObjectHeader (16B)] <- inicio del payload; aqui apunta GcHeap::deref()
+    //    [ObjectHeader (24B)] <- inicio del payload; aqui apunta GcHeap::deref()
     //    [campos del objeto]
+    //
+    //  Cambio de ABI respecto a v1:
+    //    Se anaden owner_pid (4B), lock_depth (2B) y _mon_pad (2B) para
+    //    soportar monitores (instrucciones monenter/monexit/monwait/monnoti/monnota).
+    //    owner_pid almacena el local_pid del proceso propietario del monitor
+    //    (0 = monitor libre).  lock_depth permite locks reentrantes.
     // -------------------------------------------------------------------------
     struct alignas(8) ObjectHeader {
         ClassInfo *class_ptr;  ///< 8 bytes - puntero a los metadatos de la clase
         uint32_t   flags;      ///< 4 bytes - OBJ_FLAG_*
         uint32_t   hash_code;  ///< 4 bytes - identidad del objeto (lazy)
+        uint32_t   owner_pid;  ///< 4 bytes - local_pid del propietario del monitor (0=libre)
+        uint16_t   lock_depth; ///< 2 bytes - contador de locks reentrantes
+        uint16_t   _mon_pad;   ///< 2 bytes - relleno de alineacion
     };
-    static_assert(sizeof(ObjectHeader) == 16,
-                  "ObjectHeader debe medir exactamente 16 bytes");
+    static_assert(sizeof(ObjectHeader) == 24,
+                  "ObjectHeader debe medir exactamente 24 bytes");
 
     // -------------------------------------------------------------------------
     //  FrameHeader - frame en la cadena de llamadas (para throw/catch)
@@ -241,6 +281,69 @@ namespace loader {
         uint64_t     return_pc;   ///< PC virtual al que volver al hacer ret
         uint64_t     frame_base;  ///< SP en el momento de la llamada
     } FrameHeader;
+
+    // -------------------------------------------------------------------------
+    //  ClosureObject - closure gestionado por el GC
+    //
+    //  Layout en memoria (tras GcHeader de 8B):
+    //    [ObjectHeader (16B)] <- header.class_ptr apunta a la ClassInfo de closure
+    //    [method    (8B)]     <- puntero al MethodInfo del lambda/funcion capturada
+    //    [captures  (8B)]     <- puntero a array de GcHandle de las capturas
+    //    [cap_count (8B)]     <- numero de variables capturadas
+    //
+    //  Se crea con la instruccion mkclosure y se invoca con callclosure.
+    //  El GC escanea el array captures como raices durante la fase de marcado.
+    // -------------------------------------------------------------------------
+    struct alignas(8) ClosureObject {
+        ObjectHeader header;     ///< cabecera OOP; class_ptr -> ClassInfo con CLASS_FLAG_CLOSURE
+        MethodInfo  *method;     ///< metodo o lambda capturado
+        uint32_t    *captures;   ///< array de GcHandle (uint32_t) de las variables capturadas
+        size_t       cap_count;  ///< numero de entradas en captures
+    };
+
+    // -------------------------------------------------------------------------
+    //  RawClosureObject - closure no gestionado por GC (para FFI nativo)
+    //
+    //  Almacenado via RawAllocator. La funcion apuntada por fn_addr usa la
+    //  convencion de llamada calln: r1-r12 argumentos, r0 retorno, r15 argc.
+    //  El bloque de entorno en env_addr es opaco para la VM.
+    // -------------------------------------------------------------------------
+    struct alignas(8) RawClosureObject {
+        uint64_t fn_addr;   ///< direccion de la funcion nativa o bytecode
+        uint64_t env_addr;  ///< direccion del bloque de entorno en memoria VM
+        size_t   env_size;  ///< tamano del bloque de entorno en bytes
+    };
+
+    // -------------------------------------------------------------------------
+    //  FutureState - estado del ciclo de vida de un FutureObject
+    // -------------------------------------------------------------------------
+    enum class FutureState : uint8_t {
+        PENDING  = 0, ///< la promesa aun no se ha cumplido ni rechazado
+        RESOLVED = 1, ///< cumplida con un valor por FULFILL
+        REJECTED = 2, ///< rechazada con un codigo de error por REJECT
+    };
+
+    // -------------------------------------------------------------------------
+    //  FutureObject - promesa asincrona gestionada por el GC
+    //
+    //  Creado por FUTURE (0x29). El proceso que ejecuta AWAIT (0x2A) queda
+    //  suspendido con blocking=true hasta que FULFILL (0x2B) o REJECT (0x2C)
+    //  resuelvan la promesa y llamen a make_ready() del proceso esperador.
+    //
+    //  Layout en memoria (tras GcHeader de 8B):
+    //    [ObjectHeader (16B)] <- header OOP
+    //    [state      (1B)]    <- FutureState
+    //    [_pad       (7B)]    <- alineacion
+    //    [result     (8B)]    <- valor (RESOLVED) o codigo de error (REJECTED)
+    //    [waiter_pid (8B)]    <- PID codificado del proceso esperador (0 si nadie)
+    // -------------------------------------------------------------------------
+    struct alignas(8) FutureObject {
+        ObjectHeader header;      ///< cabecera OOP; flags = OBJ_FLAG_GC_OWNED
+        FutureState  state;       ///< estado actual del future
+        uint8_t      _pad[7];     ///< relleno de alineacion
+        uint64_t     result;      ///< valor resuelto o codigo de error
+        uint64_t     waiter_pid;  ///< PID codificado del proceso esperador (0 si ninguno)
+    };
 
 } // namespace loader
 

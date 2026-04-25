@@ -192,6 +192,20 @@ namespace gc {
     };
 
     /**
+     * @brief Entrada en la tabla de referencias debiles del GcHeap.
+     *
+     * Una referencia debil apunta a un objeto sin impedir su recoleccion.
+     * Durante la fase de barrido del major GC, si el objeto apuntado ha muerto,
+     * target se pone a GC_NULL_HANDLE automaticamente.
+     *
+     * Se accede mediante un indice uint32_t (WeakHandle).
+     */
+    struct WeakEntry {
+        GcHandle target; ///< handle del objeto referenciado (GC_NULL_HANDLE si recolectado)
+        bool     live;   ///< true si esta entrada esta en uso
+    };
+
+    /**
      * @brief Estadisticas acumuladas del GcHeap.
      *
      * Todos los campos son plain uint64_t sin sincronizacion. El heap es
@@ -356,6 +370,111 @@ namespace gc {
         }
 
         /**
+         * @brief Crea una referencia debil al objeto indicado por @p target.
+         *
+         * La referencia debil no impide la recoleccion del objeto.
+         * Durante el barrido del major GC, si el objeto es recolectado,
+         * la entrada se pone automaticamente a GC_NULL_HANDLE.
+         *
+         * @param target Handle del objeto a referenciar debilmente.
+         * @return Indice uint32_t de la entrada en weak_table_.
+         */
+        uint32_t alloc_weak(GcHandle target);
+
+        /**
+         * @brief Lee el handle apuntado por la referencia debil @p idx.
+         *
+         * @param idx Indice en weak_table_ obtenido de alloc_weak().
+         * @return Handle del objeto si aun esta vivo; GC_NULL_HANDLE si fue recolectado.
+         */
+        GcHandle deref_weak(uint32_t idx) const;
+
+        /**
+         * @brief Libera la entrada de referencia debil @p idx.
+         *
+         * Marca la entrada como libre para su reutilizacion.
+         *
+         * @param idx Indice en weak_table_ a liberar.
+         */
+        void free_weak(uint32_t idx);
+
+        // =====================================================================
+        //  Primitivas de monitor (sincronizacion por objeto)
+        //
+        //  Un monitor es un lock reentrante asociado a un objeto GC.  El estado
+        //  del lock (propietario y profundidad) se almacena en ObjectHeader de
+        //  cada objeto.  La cola de procesos en espera se almacena en esta clase.
+        //
+        //  Invariante:
+        //    - ObjectHeader::owner_pid == 0  <=>  monitor libre
+        //    - ObjectHeader::owner_pid != 0  <=>  monitor adquirido por ese pid
+        //    - ObjectHeader::lock_depth >= 1 cuando owner_pid != 0
+        //
+        //  Los PID codificados en las colas usan el formato:
+        //    encoded_pid = (scheduler_id << 32) | local_pid
+        // =====================================================================
+
+        /**
+         * @brief Intenta adquirir el monitor del objeto referenciado por @p h.
+         *
+         * Si el monitor esta libre, lo asigna a @p local_pid y devuelve true.
+         * Si ya lo posee @p local_pid (lock reentrante), incrementa lock_depth y
+         * devuelve true.
+         * Si lo posee otro proceso, devuelve false (el llamante debe bloquear).
+         *
+         * @param h         Handle del objeto cuyo monitor se quiere adquirir.
+         * @param local_pid PID local del proceso solicitante.
+         * @return true si el monitor fue adquirido o incrementado; false si bloqueado.
+         */
+        bool monitor_try_acquire(GcHandle h, uint32_t local_pid);
+
+        /**
+         * @brief Libera el monitor del objeto referenciado por @p h.
+         *
+         * Decrementa lock_depth.  Si llega a 0, marca el monitor como libre y
+         * extrae un proceso de la cola de espera para despertarlo.
+         *
+         * @param h         Handle del objeto cuyo monitor se libera.
+         * @param local_pid PID local del proceso propietario actual.
+         * @return PID codificado del siguiente proceso de la cola de espera
+         *         (0 si la cola estaba vacia o el monitor sigue bloqueado).
+         */
+        uint64_t monitor_release(GcHandle h, uint32_t local_pid);
+
+        /**
+         * @brief Anade un PID codificado a la cola de espera del monitor de @p h.
+         *
+         * Se llama desde exec_instr_monenter cuando el monitor esta ocupado, o
+         * desde exec_instr_monwait cuando el proceso libera el monitor para esperar.
+         *
+         * @param h           Handle del objeto cuyo monitor espera el proceso.
+         * @param encoded_pid PID codificado: (scheduler_id << 32) | local_pid.
+         */
+        void monitor_add_waiter(GcHandle h, uint64_t encoded_pid);
+
+        /**
+         * @brief Extrae y devuelve un PID codificado de la cola de espera de @p h.
+         *
+         * Devuelve 0 si la cola esta vacia.  Se usa en MONNOTI para despertar
+         * exactamente un proceso.
+         *
+         * @param h Handle del objeto cuya cola de espera se consulta.
+         * @return PID codificado del proceso despertado, o 0 si la cola estaba vacia.
+         */
+        uint64_t monitor_pop_waiter(GcHandle h);
+
+        /**
+         * @brief Extrae y devuelve todos los PID codificados de la cola de @p h.
+         *
+         * La cola queda vacia tras la llamada.  Se usa en MONNOTA para despertar
+         * a todos los procesos que esperan sobre el mismo objeto.
+         *
+         * @param h Handle del objeto cuya cola de espera se vacia.
+         * @return Vector con todos los PID codificados (puede estar vacio).
+         */
+        std::vector<uint64_t> monitor_pop_all_waiters(GcHandle h);
+
+        /**
          * @brief Minor GC: evacua la Nursery copiando supervivientes a OldGen.
          *
          * Algoritmo (Cheney-style simplificado):
@@ -474,6 +593,14 @@ namespace gc {
         // --- HandleTable ---
         std::vector<HandleEntry> handles_;
         std::vector<GcHandle>    free_handles_; ///< Freelist LIFO de slots reciclables.
+
+        // --- Tabla de referencias debiles ---
+        std::vector<WeakEntry> weak_table_; ///< Referencias debiles indexadas por uint32_t.
+
+        // --- Colas de espera de monitores ---
+        // Clave: GcHandle del objeto con el monitor ocupado.
+        // Valor: lista FIFO de PID codificados ((scheduler_id<<32)|local_pid) esperando.
+        std::unordered_map<GcHandle, std::vector<uint64_t>> monitor_waiters_;
 
         // --- RememberedSet ---
         std::unordered_set<GcHandle> remembered_set_; ///< Handles OLD con referencias a YOUNG.

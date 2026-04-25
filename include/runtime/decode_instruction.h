@@ -372,6 +372,19 @@ namespace runtime {
      */
     void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr);
 
+    /**
+     * @brief Descodifica JUMPTABLE / TYPESWITCH (3 operandos empaquetados, FIXED_4).
+     *
+     * Formato: [0x00][0x27|0x28][byte2][byte3]
+     *   byte2 bits 7-4 = r_val/r_obj, bits 3-0 = r_table.
+     *   byte3 = count (numero de entradas, uint8).
+     * Resultado en mem_data: reg_base=r_val, reg_index=r_table, scale=count.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr);
+
     // =========================================================================
     //  Funciones principales del pipeline
     // =========================================================================

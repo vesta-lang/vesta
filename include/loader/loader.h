@@ -44,6 +44,10 @@
 #include <cstdint>   // uint8_t, uint32_t
 #include <cstddef>   // size_t
 #include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <memory>
 
 #include "arena/arena_manager.h"
 #include "emmit/bytereader.h"
@@ -383,12 +387,46 @@ namespace loader {
          */
         runtime::VM *create_vm_instance(size_t num_schedulers);
 
+        /**
+         * @brief Instancia una clase generica con tipos concretos (monomorphization runtime).
+         *
+         * Busca en generic_cache_ la clave "ClassName<T1,T2,...>".  Si ya existe,
+         * devuelve el ClassInfo* cacheado.  Si no, clona el ClassInfo de @p generic y
+         * sustituye los type_params por los tipos concretos proporcionados.
+         *
+         * @param generic    ClassInfo de la clase generica (CLASS_FLAG_GENERIC).
+         * @param type_args  Array de ClassInfo* de tipos concretos.
+         * @param count      Numero de tipos (debe coincidir con type_param_count).
+         * @return Puntero a la especializacion (cacheada o recien creada).
+         */
+        loader::ClassInfo *specialize_class(loader::ClassInfo *generic,
+                                            loader::ClassInfo **type_args,
+                                            size_t count);
+
     private:
         /**
          * Un mutex en el loader para evitar problemas en el
          * caso de usar multihilo
          */
         std::mutex loader_mutex;
+
+        /**
+         * @brief Cache de especializaciones de clases genericas.
+         *
+         * Clave: nombre calificado de la especializacion, e.g. "List<int>".
+         * Valor: puntero al ClassInfo clonado para esa especializacion concreta.
+         *
+         * Protegido por loader_mutex en specialize_class().
+         */
+        std::unordered_map<std::string, loader::ClassInfo *> generic_cache_;
+
+        /**
+         * @brief Almacen de ClassInfo clonados para especializaciones genericas.
+         *
+         * Los punteros en generic_cache_ apuntan a ClassInfo almacenados aqui.
+         * Se usa unique_ptr para la gestion automatica del ciclo de vida.
+         */
+        std::vector<std::unique_ptr<loader::ClassInfo>> generic_store_;
     };
 }
 
