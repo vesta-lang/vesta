@@ -21,6 +21,7 @@
 
 #include "cli/sync_io.h"
 #include "runtime/manager_runtime.h"
+#include "distrib/dist_runtime.h"
 
 namespace runtime {
 
@@ -52,6 +53,19 @@ namespace runtime {
             auto sched = std::make_unique<Scheduler>(i, *this); // scheduler con ID i
             schedulers.push_back(std::move(sched));             // mover al vector
         }
+
+        // inicializar el runtime distribuido con configuracion minima:
+        // permite IPC local (msgsend/msgrecv entre procesos de la misma VM)
+        // sin abrir ningun puerto TCP ni hilo de descubrimiento UDP.
+        // Para activar la red llamar a dist_runtime->start() explicitamente.
+        distrib::DistRuntimeConfig dr_cfg{};
+        dr_cfg.local_node_id    = 0;      // auto-generar ID unico en el primer start()
+        dr_cfg.vdp_listen_port  = 0;      // sin servidor TCP por defecto
+        dr_cfg.discover_port    = 0;      // sin descubrimiento UDP
+        dr_cfg.enable_discovery = false;
+        std::snprintf(dr_cfg.local_node_name, sizeof(dr_cfg.local_node_name),
+                      "vm-%llu", static_cast<unsigned long long>(id_vm));
+        dist_runtime = std::make_unique<distrib::DistRuntime>(*this, dr_cfg);
     }
 
     /**

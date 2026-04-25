@@ -20,6 +20,9 @@
  */#include "runtime/scheduler.h"
 
 #include "runtime/decode_instruction.h"
+#include "distrib/dist_runtime.h"
+#include "distrib/dist_debug.h"
+#include "runtime/runtime.h"
 
 namespace runtime {
 
@@ -262,11 +265,14 @@ namespace runtime {
             if (!instance) {
                 // no hay procesos listos; verificar si quedan procesos vivos en toda la VM
                 if (!vm_reference.has_alive_processes()) {
-                    vm_reference.vm_running = false; // ninguna VM tiene procesos vivos: detener
-                    break;                           // terminar este scheduler
+                    if (!vm_reference.vm_persistent) {
+                        vm_reference.vm_running = false; // ninguna VM tiene procesos vivos: detener
+                        break;                           // terminar este scheduler
+                    }
+                    // modo persistente (servidor distribuido): esperar a que llegue un proceso
                 }
 
-                // hay procesos vivos en otros schedulers; dormir hasta que haya trabajo
+                // hay procesos vivos en otros schedulers (o modo persistente); dormir hasta que haya trabajo
                 is_waiting = true;
                 sem.acquire(); // bloquear hasta que make_ready() o stop() libere el semaforo
                 is_waiting = false;
@@ -286,6 +292,18 @@ namespace runtime {
                 if (instance->state == READY || instance->state == RUNNING)
                     instance->state = DECODE;
 
+                // traza de primera ejecucion del proceso para depuracion distribuida
+                if (instance->tsc == 0) {
+                    DIST_DBG("SCHED %u: primera ejecucion PID=(sched=%u local=%llu) "
+                             "PC=0x%llX rspawn_fid=%llu estado=%d",
+                             id_scheduler,
+                             instance->pid.scheduler_id,
+                             (unsigned long long)instance->pid.local_pid,
+                             (unsigned long long)instance->registers.rip.raw(),
+                             (unsigned long long)instance->rspawn_future_id,
+                             (int)instance->state);
+                }
+
                 while (instance->reductions_remaining > 0) {
                     decode_instruction(instance); // descodificar la instruccion en PC
 
@@ -304,11 +322,35 @@ namespace runtime {
                     // la instruccion cambio el estado de forma autonoma (ej. HLT via on_event)
                     if (instance->state == HALT || instance->state == DEAD) {
                         alive_count--; // decrementar el contador de procesos vivos
+                        DIST_DBG("SCHED %u: proceso PID=(sched=%u local=%llu) -> %s  "
+                                 "r0=%llu err=%d tsc=%llu PC=0x%llX",
+                                 id_scheduler,
+                                 instance->pid.scheduler_id,
+                                 (unsigned long long)instance->pid.local_pid,
+                                 instance->state == HALT ? "HALT" : "DEAD",
+                                 (unsigned long long)instance->registers.regs[0].qword(),
+                                 (int)instance->err_thread,
+                                 (unsigned long long)instance->tsc,
+                                 (unsigned long long)instance->registers.rip.raw());
+                        // si el proceso fue creado por rspawn remoto, notificar al nodo origen con r0
+                        if (instance->rspawn_future_id != 0 &&
+                            instance->rspawn_origin_node != 0xFFFFFFFFu &&
+                            vm_reference.dist_runtime) {
+                            vm_reference.dist_runtime->notify_rspawn_halt(instance);
+                        }
                         instance = nullptr;
                         break;
                     }
 
                     // E/S genuina: poner en WAIT_IO y dejar de procesar este proceso
+                    DIST_DBG("SCHED %u: proceso PID=(sched=%u local=%llu) -> WAIT_IO "
+                             "tsc=%llu PC=0x%llX err=%d",
+                             id_scheduler,
+                             instance->pid.scheduler_id,
+                             (unsigned long long)instance->pid.local_pid,
+                             (unsigned long long)instance->tsc,
+                             (unsigned long long)instance->registers.rip.raw(),
+                             (int)instance->err_thread);
                     instance->state = WAIT_IO;
                     instance = nullptr;
                     break;
@@ -322,6 +364,22 @@ namespace runtime {
                     // comprobar si el proceso alcanzo un estado terminal o bloqueante
                     if (instance->state == DEAD || instance->state == HALT) {
                         alive_count--; // decrementar el contador de procesos vivos
+                        DIST_DBG("SCHED %u (slow): proceso PID=(sched=%u local=%llu) -> %s  "
+                                 "r0=%llu err=%d tsc=%llu PC=0x%llX",
+                                 id_scheduler,
+                                 instance->pid.scheduler_id,
+                                 (unsigned long long)instance->pid.local_pid,
+                                 instance->state == HALT ? "HALT" : "DEAD",
+                                 (unsigned long long)instance->registers.regs[0].qword(),
+                                 (int)instance->err_thread,
+                                 (unsigned long long)instance->tsc,
+                                 (unsigned long long)instance->registers.rip.raw());
+                        // notificar al nodo origen si el proceso vino de un rspawn remoto
+                        if (instance->rspawn_future_id != 0 &&
+                            instance->rspawn_origin_node != 0xFFFFFFFFu &&
+                            vm_reference.dist_runtime) {
+                            vm_reference.dist_runtime->notify_rspawn_halt(instance);
+                        }
                         instance = nullptr;
                         break;
                     }

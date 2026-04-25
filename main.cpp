@@ -19,11 +19,14 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include <atomic>
+#include <csignal>
 #include <openssl/sha.h>
 
 #include "cxxopts.hpp"
 
 #include "cli/cli.h"
+#include "cli/vsh.h"
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "util/sqlite_singleton.h"
@@ -31,9 +34,126 @@
 #include "runtime/manager_runtime.h"
 #include "loader/loader.h"
 #include "profiler/timer.h"
+#include "distrib/dist_runtime.h"
+#include "distrib/dist_debug.h"
+#include "distrib/node_registry.h"
 #ifdef VESTA_HAS_PREPROCESSOR
     #include "preprocessor/preprocessor.h"
 #endif
+
+// flag global para el modo --dist-server; SIGINT lo pone a false
+static std::atomic<bool> g_server_running{true};
+static void on_dist_sigint(int) { g_server_running.store(false); }
+
+/**
+ * @brief Construye la NodeAuthConfig a partir de los flags de autenticacion.
+ *
+ * Calcula SHA-256 del token en texto plano si se proporciono --dist-token.
+ * Copia las rutas TLS si se activo --dist-tls.
+ *
+ * @param token    Token en texto plano (puede estar vacio).
+ * @param use_tls  true si se activo --dist-tls.
+ * @param cert     Ruta al certificado PEM del cliente.
+ * @param key      Ruta a la clave privada PEM del cliente.
+ * @param ca       Ruta al CA bundle PEM para verificar pares.
+ * @return NodeAuthConfig relleno.
+ */
+static distrib::NodeAuthConfig build_node_auth(
+    const std::string &token,
+    bool               use_tls,
+    const std::string &cert,
+    const std::string &key,
+    const std::string &ca)
+{
+    distrib::NodeAuthConfig auth{};
+    if (!token.empty()) {
+        auth.use_token = true;
+        SHA256(reinterpret_cast<const unsigned char *>(token.c_str()),
+               token.size(), auth.token_hash);
+    }
+    if (use_tls) {
+        auth.use_tls = true;
+        std::snprintf(auth.cert_path, sizeof(auth.cert_path), "%s", cert.c_str());
+        std::snprintf(auth.key_path,  sizeof(auth.key_path),  "%s", key.c_str());
+        std::snprintf(auth.ca_path,   sizeof(auth.ca_path),   "%s", ca.c_str());
+    }
+    return auth;
+}
+
+/**
+ * @brief Aplica la configuracion distribuida a una instancia VM.
+ *
+ * Reemplaza el dist_runtime minimo creado en VM::VM() por uno completamente
+ * configurado segun los flags --dist-* de la linea de comandos.
+ * Si --dist-port > 0 o --dist-discover esta activo, llama a start() para
+ * abrir el servidor VDP y/o el hilo de descubrimiento UDP.
+ * Registra cualquier nodo estatico indicado con --dist-add-node (formato IP:PUERTO).
+ *
+ * @param vm     Instancia VM sobre la que se aplica la configuracion.
+ * @param result Resultado del parseo de cxxopts con todos los flags.
+ */
+static void apply_dist_config(runtime::VM *vm, const cxxopts::ParseResult &result)
+{
+    const std::string token   = result["dist-token"].as<std::string>();
+    const bool        use_tls = result.count("dist-tls") > 0;
+    const std::string cert    = result["dist-cert"].as<std::string>();
+    const std::string key     = result["dist-key"].as<std::string>();
+    const std::string ca      = result["dist-ca"].as<std::string>();
+
+    // construir configuracion del DistRuntime
+    distrib::DistRuntimeConfig cfg{};
+    cfg.local_node_id    = result["dist-node-id"].as<uint64_t>();
+    cfg.vdp_listen_port  = result["dist-port"].as<uint16_t>();
+    cfg.discover_port    = result["dist-discover-port"].as<uint16_t>();
+    cfg.enable_discovery = result.count("dist-discover") > 0;
+
+    std::string name = result["dist-name"].as<std::string>();
+    if (!name.empty())
+        std::snprintf(cfg.local_node_name, sizeof(cfg.local_node_name), "%s", name.c_str());
+    else
+        std::snprintf(cfg.local_node_name, sizeof(cfg.local_node_name), "vm-%llu",
+                      static_cast<unsigned long long>(vm->id));
+
+    cfg.server_auth = build_node_auth(token, use_tls, cert, key, ca);
+
+    // reemplazar el dist_runtime minimal por uno completamente configurado
+    vm->dist_runtime = std::make_unique<distrib::DistRuntime>(*vm, cfg);
+
+    // arrancar el servidor VDP y/o el descubrimiento si alguno esta habilitado
+    if (cfg.vdp_listen_port > 0 || cfg.enable_discovery) {
+        if (vm->dist_runtime->start()) {
+            std::string msg = "[dist] Servidor VDP iniciado";
+            if (cfg.vdp_listen_port)
+                msg += " en puerto " + std::to_string(cfg.vdp_listen_port);
+            if (cfg.enable_discovery)
+                msg += " con descubrimiento UDP (puerto " + std::to_string(cfg.discover_port) + ")";
+            vesta::scout() << msg << "\n";
+        } else {
+            std::cerr << "[dist] Error al iniciar el servidor VDP\n";
+        }
+    }
+
+    // registrar nodos estaticos proporcionados con --dist-add-node IP:PUERTO
+    if (result.count("dist-add-node")) {
+        distrib::NodeAuthConfig node_auth = build_node_auth(token, use_tls, cert, key, ca);
+        for (auto &spec : result["dist-add-node"].as<std::vector<std::string>>()) {
+            auto colon = spec.rfind(':');
+            if (colon == std::string::npos) {
+                std::cerr << "[dist] Formato invalido (esperado IP:PUERTO): " << spec << "\n";
+                continue;
+            }
+            std::string node_ip   = spec.substr(0, colon);
+            uint16_t    node_port = 0;
+            try { node_port = static_cast<uint16_t>(std::stoul(spec.substr(colon + 1))); }
+            catch (...) { std::cerr << "[dist] Puerto invalido en: " << spec << "\n"; continue; }
+
+            uint32_t idx = vm->dist_runtime->add_node(
+                node_ip.c_str(), node_port, node_auth, node_ip.c_str());
+            vesta::scout() << "[dist] Nodo registrado: " << node_ip << ":"
+                           << node_port << " (idx=" << idx << ")\n";
+        }
+    }
+}
 
 
 int main(int argc, char *argv[]) {
@@ -62,12 +182,41 @@ int main(int argc, char *argv[]) {
             ("build", "Compilar un archivo .vel a .velb", cxxopts::value<std::string>())
             ("schedulers", "Número de schedulers para el comando run", cxxopts::value<size_t>()->default_value("1"))
             ("stats", "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)")
+            // ---- opciones de runtime distribuido ----
+            ("dist-port",         "Puerto VDP del servidor distribuido (0 = sin servidor TCP)",
+                cxxopts::value<uint16_t>()->default_value("0"))
+            ("dist-discover",     "Activar descubrimiento UDP de nodos en la LAN")
+            ("dist-discover-port","Puerto UDP para descubrimiento de nodos",
+                cxxopts::value<uint16_t>()->default_value("7790"))
+            ("dist-name",         "Nombre del nodo local (cadena identificativa)",
+                cxxopts::value<std::string>()->default_value(""))
+            ("dist-node-id",      "ID de 64 bits del nodo (0 = generar automaticamente)",
+                cxxopts::value<uint64_t>()->default_value("0"))
+            ("dist-add-node",     "Nodo estatico a registrar y conectar (formato IP:PUERTO, repetible)",
+                cxxopts::value<std::vector<std::string>>())
+            ("dist-token",        "Token de autenticacion en texto plano (se almacena como SHA-256)",
+                cxxopts::value<std::string>()->default_value(""))
+            ("dist-tls",          "Usar TLS en las conexiones VDP salientes y entrantes")
+            ("dist-cert",         "Ruta al certificado TLS del nodo local (PEM)",
+                cxxopts::value<std::string>()->default_value(""))
+            ("dist-key",          "Ruta a la clave privada TLS del nodo local (PEM)",
+                cxxopts::value<std::string>()->default_value(""))
+            ("dist-ca",           "Ruta al CA bundle TLS para verificar pares (PEM)",
+                cxxopts::value<std::string>()->default_value(""))
+            ("dist-server",       "Modo servidor distribuido puro: espera conexiones VDP sin ejecutar bytecode")
+            ("dist-debug",        "Activar trazas de depuracion del subsistema distribuido (RSPAWN, HALT, FUTURE_FULFILL)")
+            ("script",            "Ejecutar un fichero VestaShell (.vsh) y salir", cxxopts::value<std::string>())
+            ("interprete",        "Abrir el interprete interactivo VestaShell (REPL .vsh)")
 #ifdef VESTA_HAS_PREPROCESSOR
             ("preprocess-only", "Solo preprocesar un .vel y mostrar/guardar el resultado (debug)", cxxopts::value<std::string>())
 #endif
             ;
 
     auto result = options.parse(argc, argv);
+
+    // activar trazas de depuracion del subsistema distribuido si se paso --dist-debug
+    if (result.count("dist-debug"))
+        distrib::set_dist_debug(true);
 
     if (result.count("help")) {
         vesta::scout() << options.help() << std::endl;
@@ -167,6 +316,46 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    // -----------------------------------------------------------------------
+    // Modo servidor distribuido puro (sin ejecutar bytecode)
+    // vm.exe --dist-server --dist-port 7789 [--dist-discover] [--dist-name nodo1]
+    //        [--dist-add-node 192.168.1.100:7789] [--dist-token secreto]
+    //        [--dist-tls --dist-cert cert.pem --dist-key key.pem --dist-ca ca.pem]
+    // -----------------------------------------------------------------------
+    if (result.count("dist-server")) {
+        try {
+            runtime::ManageVM dist_mgr(nullptr, 0);
+            runtime::VM *vm = dist_mgr.loader.create_vm_instance(1);
+            if (!vm) {
+                std::cerr << "[dist-server] Error: no se pudo crear la instancia VM\n";
+                return EXIT_FAILURE;
+            }
+
+            apply_dist_config(vm, result);
+
+            // activar modo persistente para que el scheduler no termine al no haber procesos;
+            // los procesos remotos llegan via rspawn despues del arranque
+            vm->vm_persistent = true;
+            vm->start();
+
+            vesta::scout() << "[dist-server] Nodo distribuido activo. "
+                              "Pulse Ctrl+C para detener.\n";
+
+            // esperar hasta Ctrl+C
+            std::signal(SIGINT, on_dist_sigint);
+            while (g_server_running.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            vm->dist_runtime->stop();
+            vm->stop();
+            vesta::scout() << "[dist-server] Nodo detenido.\n";
+        } catch (const std::exception &e) {
+            std::cerr << "[dist-server] Error: " << e.what() << "\n";
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+    }
+
     // Compilar un archivo como worker
     // vm.exe --worker src/main.vel -o main.velb
     if (result.count("worker")) {
@@ -229,6 +418,33 @@ int main(int argc, char *argv[]) {
         );
     }
 
+    // Abrir el REPL interactivo VestaShell (--interprete)
+    if (result.count("interprete")) {
+        vsh::VshInterpreter interp;
+        interp.run_interactive();
+        return EXIT_SUCCESS;
+    }
+
+    // Ejecutar un fichero VestaShell directamente sin abrir el REPL
+    // vm.exe --script mi_script.vsh
+    if (result.count("script")) {
+        const std::string &vsh_path = result["script"].as<std::string>();
+        try {
+            vsh::VshInterpreter interp; // sin callback REPL
+            interp.exec_file(vsh_path);
+        } catch (const vsh::VshRuntimeError &e) {
+            std::cerr << "[script] Error en " << vsh_path << ": " << e.what() << "\n";
+            return EXIT_FAILURE;
+        } catch (const vsh::VshParseError &e) {
+            std::cerr << "[script] Error de sintaxis en " << vsh_path << ": " << e.what() << "\n";
+            return EXIT_FAILURE;
+        } catch (const std::exception &e) {
+            std::cerr << "[script] " << e.what() << "\n";
+            return EXIT_FAILURE;
+        }
+        return EXIT_SUCCESS;
+    }
+
     // Ejecutar un archivo .velb en la VM
     // vm.exe --run program.velb
     if (result.count("run")) {
@@ -242,6 +458,16 @@ int main(int argc, char *argv[]) {
                 std::cerr << "Error: no se pudo crear la instancia de VM\n";
                 return EXIT_FAILURE;
             }
+            // aplicar configuracion distribuida si el usuario paso algun flag --dist-*
+            bool has_dist = result.count("dist-port")        > 0 ||
+                            result.count("dist-discover")    > 0 ||
+                            result.count("dist-add-node")    > 0 ||
+                            result.count("dist-tls")         > 0 ||
+                            result.count("dist-name")        > 0 ||
+                            result.count("dist-token")       > 0 ||
+                            result.count("dist-node-id")     > 0;
+            if (has_dist) apply_dist_config(vm, result);
+
             runtime::ProcessVM *proc = mgr.loader.load_executable(*vm, velb_path);
             if (!proc) {
                 std::cerr << "Error: no se pudo cargar el ejecutable\n";

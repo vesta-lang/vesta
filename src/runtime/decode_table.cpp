@@ -2275,32 +2275,32 @@ namespace runtime {
             exec_instr_specialize, decode_instr_jumptable
         },
 
-        /* 0x3B */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3B  rspawn r_fn, r_node -> R0 = GcHandle del FutureObject */
+        {
+            "rspawn", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_rspawn, decode_instr_two_op_reg
         },
 
-        /* 0x3C */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3C  msgsend r_pid, r_addr, r_len */
+        {
+            "msgsend", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_msgsend, decode_instr_three_reg
         },
 
-        /* 0x3D */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3D  msgrecv r_buf, r_max -> R0 = bytes recibidos */
+        {
+            "msgrecv", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_msgrecv, decode_instr_two_op_reg
         },
 
-        /* 0x3E */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3E  memsync r_params */
+        {
+            "memsync", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_memsync, decode_instr_two_op_reg
         },
 
         /* 0x3F */{
