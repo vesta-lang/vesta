@@ -86,7 +86,32 @@ namespace runtime {
         // guardar la excepcion activa para que RETHROW pueda relanzarla
         vm->current_exception = exception_ptr;
 
-        loader::FrameHeader *frame = vm->frame_stack; // comenzar desde el frame actual
+        // --- comprobar primero la pila de frames TRYENTER (frames ligeros de alto nivel) ---
+        ProcessVM::ExceptionFrame *ef = vm->exc_frame_stack;
+        while (ef != nullptr) {
+            bool matches = (ef->type == nullptr) || is_instance_of(exc_class, ef->type);
+            if (matches) {
+                uint64_t handler_addr = ef->handler_pc; // guardar antes de liberar
+
+                // desapilar todos los frames TRYENTER hasta el handler encontrado
+                while (vm->exc_frame_stack != nullptr && vm->exc_frame_stack != ef) {
+                    ProcessVM::ExceptionFrame *tmp = vm->exc_frame_stack;
+                    vm->exc_frame_stack = tmp->prev;
+                    delete tmp; // liberar frame apilado por TRYENTER
+                }
+                vm->exc_frame_stack = ef->prev; // el handler se consume al saltar
+                delete ef;
+
+                // convencion: R00 contiene el puntero al objeto excepcion
+                vm->registers.regs[R00].qword(exception_ptr);
+                vm->registers.rip.qword(handler_addr); // saltar al handler
+                vm->decoded_ptr->flags_info.did_jump = true;
+                return;
+            }
+            ef = ef->prev;
+        }
+
+        loader::FrameHeader *frame = vm->frame_stack; // continuar con la cadena de FrameHeaders
 
         while (frame != nullptr) {
             loader::MethodInfo *method = frame->method;

@@ -427,6 +427,39 @@ namespace loader {
          * Se usa unique_ptr para la gestion automatica del ciclo de vida.
          */
         std::vector<std::unique_ptr<loader::ClassInfo>> generic_store_;
+
+        /**
+         * @brief Almacen de nombres calificados de especializaciones.
+         *
+         * Cada entrada es el buffer de caracteres del nombre "List<int>" u
+         * otro nombre especializado.  Se gestiona con unique_ptr<char[]> para
+         * liberar automaticamente al destruir el Loader.
+         */
+        std::vector<std::unique_ptr<char[]>> generic_store_names_;
+
+        /**
+         * @brief Almacen de arrays GenericParam[] clonados para especializaciones.
+         *
+         * Cada especializacion clona el array de parametros de tipo para poder
+         * sustituir concrete sin modificar la plantilla original.
+         */
+        std::vector<std::unique_ptr<loader::GenericParam[]>> generic_store_params_;
+
+        /**
+         * @brief Almacen de arrays FieldInfo[] clonados para especializaciones.
+         *
+         * Incluye campos de instancia y arrays de argumentos de metodos clonados
+         * durante la resolucion de tipos concretos en specialize_class().
+         */
+        std::vector<std::unique_ptr<loader::FieldInfo[]>> generic_store_fields_;
+
+        /**
+         * @brief Almacen de arrays MethodInfo[] clonados para especializaciones.
+         *
+         * Copia superficial de la tabla de metodos del ClassInfo generico con
+         * los tipos de argumentos y retorno ya resueltos a concretos.
+         */
+        std::vector<std::unique_ptr<loader::MethodInfo[]>> generic_store_methods_;
     };
 }
 

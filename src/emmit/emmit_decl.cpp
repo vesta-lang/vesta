@@ -2039,5 +2039,91 @@ void emit_instr_fcvt(
     code_final.emit8(regs); // emitir byte de registros
 }
 
+// =========================================================================
+// emit_str_two_reg: Convention B, 2 registros - para instrucciones de string
+// =========================================================================
+
+/**
+ * @brief Emite b2=(r_dst<<4)|r_src, b3=0 para instrucciones de string de dos registros.
+ *
+ * Convention B: byte2 lleva los dos indices de registro, byte3 es cero.
+ * Usado por strlen, strflat, strhash, strintern, strgetenc, strgetbytes,
+ * strgetkind, strreserve, strfinalize, strraw.
+ */
+void emit_str_two_reg(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto r1 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto r2 = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+    if (!r1 || !r2)
+        throw std::runtime_error(instruction_parser->opcode + ": requiere dos operandos registro");
+
+    uint8_t idx1 = encode_reg_general(r1->name.c_str()); // r_dst: nibble alto de b2
+    uint8_t idx2 = encode_reg_general(r2->name.c_str()); // r_src: nibble bajo de b2
+
+    code_final.emit8(static_cast<uint8_t>((idx1 << 4) | (idx2 & 0x0F))); // b2
+    code_final.emit8(0x00);                                                 // b3 siempre cero
+}
+
+// =========================================================================
+// emit_strconv: Convention B, 2 registros + encoding literal
+// =========================================================================
+
+/**
+ * @brief Emite b2=(r_dst<<4)|r_src, b3=(enc<<4) para STRCONV.
+ *
+ * El tercer operando es un literal numerico (StringEncoding 0-4)
+ * que se codifica en el nibble alto de b3.
+ */
+void emit_strconv(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto r1  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto r2  = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[1].get());
+    auto enc = dynamic_cast<vm::NumberOperand *>(instruction_parser->operands[2].get());
+    if (!r1 || !r2 || !enc)
+        throw std::runtime_error(instruction_parser->opcode + ": requiere r_dst, r_src, enc_literal");
+
+    uint8_t idx1    = encode_reg_general(r1->name.c_str());
+    uint8_t idx2    = encode_reg_general(r2->name.c_str());
+    uint8_t enc_val = static_cast<uint8_t>(std::stoull(enc->value) & 0x0F);
+
+    code_final.emit8(static_cast<uint8_t>((idx1 << 4) | (idx2 & 0x0F))); // b2
+    code_final.emit8(static_cast<uint8_t>(enc_val << 4));                 // b3: enc en nibble alto
+}
+
+// =========================================================================
+// emit_setcc: Convention B, 1 registro + codigo de condicion literal
+// =========================================================================
+
+/**
+ * @brief Emite b2=(cond<<4)|r_dst, b3=0 para SETCC.
+ *
+ * El segundo operando es un literal numerico (codigo de condicion 0-15).
+ */
+void emit_setcc(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    auto r1   = dynamic_cast<vm::RegisterOperand *>(instruction_parser->operands[0].get());
+    auto cond = dynamic_cast<vm::NumberOperand *>(instruction_parser->operands[1].get());
+    if (!r1 || !cond)
+        throw std::runtime_error(instruction_parser->opcode + ": requiere r_dst, cond_literal");
+
+    uint8_t idx1     = encode_reg_general(r1->name.c_str());
+    uint8_t cond_val = static_cast<uint8_t>(std::stoull(cond->value) & 0x0F);
+
+    code_final.emit8(static_cast<uint8_t>((cond_val << 4) | (idx1 & 0x0F))); // b2
+    code_final.emit8(0x00);                                                     // b3
+}
+
 } // namespace Assembly::Bytecode
 

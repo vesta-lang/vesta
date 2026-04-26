@@ -175,6 +175,18 @@ namespace runtime {
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * @brief Descodifica instrucciones con codificacion de bytes crudos.
+     *
+     * Almacena byte2 en reg1 y byte3 en reg2 sin extraccion de nibbles.
+     * Usado por instrucciones de strings (0x43-0x54) cuya convencion de encoding
+     * es (r_dst<<4)|r_src en byte2, datos adicionales en byte3.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * @brief Descodifica una instruccion de un solo registro con modo (INC/DEC).
      *
      * Formato: [opcode1][byte]

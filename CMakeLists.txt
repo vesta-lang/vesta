@@ -150,6 +150,8 @@ list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_sync.cpp)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_generic.cpp)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_distrib.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_exc.cpp)
+list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_string.cpp)
 
 # Modulo de programacion distribuida (VDP protocol)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/distrib/mailbox.cpp)
@@ -217,7 +219,7 @@ if (WIN32)
     target_link_libraries(vm PRIVATE applink)
 else ()
     find_package(OpenSSL REQUIRED)
-    target_link_libraries(vm PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(vm PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
 # Opciones globales para todos los builds

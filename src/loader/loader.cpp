@@ -160,6 +160,14 @@ namespace loader {
         // obtener cuantas labels tiene la tabla de labels
         exe.header.size_label_table = reader.read32();
 
+        // campos de depuracion (deben leerse para mantener sincronizacion con el writer)
+        exe.header.offset_debug_section = reader.read64();
+        exe.header.size_debug_section   = reader.read32();
+        exe.header.debug_level          = reader.read8();
+        (void) reader.read8(); // _debug_pad[0]
+        (void) reader.read8(); // _debug_pad[1]
+        (void) reader.read8(); // _debug_pad[2]
+
         // el header siempre debe estar alineado a 16 bytes
         while (reader.offset % 16 != 0) {
             (void) reader.read8();
@@ -498,16 +506,45 @@ namespace loader {
     }
 
     /**
+     * @brief Resuelve los campos de un FieldInfo[] clonado sustituyendo parametros de tipo.
+     *
+     * Para cada FieldInfo con is_type_param == true, busca el tipo concreto en
+     * params[type_param_idx].concrete y lo asigna a type_class, marcando el campo
+     * como resuelto (is_type_param = false).
+     *
+     * @param fields  Array de FieldInfo clonado; modificado en sitio.
+     * @param count   Numero de entradas en fields.
+     * @param params  Array de GenericParam con los tipos concretos ya asignados.
+     * @param np      Numero de parametros de tipo.
+     */
+    static void resolve_generic_fields(FieldInfo *fields, size_t count,
+                                       const GenericParam *params, size_t np) {
+        for (size_t i = 0; i < count; i++) {
+            if (!fields[i].is_type_param) continue; // tipo ya concreto, no tocar
+            uint16_t idx = fields[i].type_param_idx;
+            if (static_cast<size_t>(idx) < np && params[idx].concrete != nullptr) {
+                fields[i].type_class    = params[idx].concrete; // sustituir tipo
+                fields[i].is_type_param = false;                // marcar resuelto
+            }
+        }
+    }
+
+    /**
      * @brief Instancia una clase generica con tipos concretos (monomorphization en runtime).
      *
-     * Construye la clave de cache como "ClassName<T1,T2,...>" concatenando los nombres
-     * de los tipos concretos.  Si ya existe en generic_cache_ devuelve el puntero
-     * cacheado.  Si no, clona el ClassInfo de @p generic, asigna el nombre especializado,
-     * vincula los type_params a los tipos concretos y lo almacena en generic_store_.
+     * Construye la clave "ClassName<T1,T2,...>" y busca en generic_cache_.  Si no
+     * existe, clona el ClassInfo original y realiza resolucion completa de tipos:
      *
-     * Esta funcion es thread-safe: usa loader_mutex internamente.
+     *   1. GenericParam[].concrete = tipo concreto (constraint se preserva para bounds).
+     *   2. FieldInfo[] de campos de instancia: type_class resuelto via type_param_idx.
+     *   3. MethodInfo[].args y .return_type: misma resolucion para cada metodo.
      *
-     * @param generic    ClassInfo de la clase generica origen (debe tener CLASS_FLAG_GENERIC).
+     * Toda la memoria auxiliar se almacena en generic_store_* para duracion de vida
+     * automatica: se libera al destruir el Loader.
+     *
+     * Thread-safe: protegido por loader_mutex.
+     *
+     * @param generic    ClassInfo de la clase generica (CLASS_FLAG_GENERIC).
      * @param type_args  Array de ClassInfo* con los tipos concretos.
      * @param count      Numero de elementos en type_args.
      * @return Puntero al ClassInfo especializado (valido de por vida del Loader).
@@ -517,7 +554,7 @@ namespace loader {
                                         size_t count) {
         if (generic == nullptr || type_args == nullptr || count == 0) return generic;
 
-        // construir la clave de cache: "ClassName<T1,T2,...>"
+        // --- construir clave de cache: "ClassName<T1,T2,...>" ---
         std::string key(reinterpret_cast<const char *>(generic->name.data),
                         generic->name.size);
         key += '<';
@@ -527,49 +564,94 @@ namespace loader {
                 key.append(reinterpret_cast<const char *>(type_args[i]->name.data),
                            type_args[i]->name.size);
             } else {
-                key += "?"; // tipo desconocido: clave degenerada
+                key += '?'; // tipo desconocido: clave degenerada
             }
         }
         key += '>';
 
-        std::lock_guard lock(loader_mutex);
+        std::lock_guard<std::mutex> lock(loader_mutex);
 
-        // buscar en cache antes de clonar
+        // camino rapido: especializacion ya cacheada
         auto it = generic_cache_.find(key);
         if (it != generic_cache_.end()) return it->second;
 
-        // clonar el ClassInfo base y adaptar los campos necesarios
+        // --- clonar ClassInfo base ---
         auto clone = std::make_unique<ClassInfo>(*generic);
 
-        // almacenar el nombre especializado como cadena estatica en el mismo bloque
-        // NOTA: el nombre se guarda en generic_store_names_ para que viva junto al ClassInfo
-        auto *name_buf = new char[key.size() + 1];
-        std::memcpy(name_buf, key.c_str(), key.size() + 1);
-        clone->name.data = reinterpret_cast<uint8_t *>(name_buf);
+        // guardar nombre especializado con gestion de vida automatica
+        auto name_buf = std::make_unique<char[]>(key.size() + 1);
+        std::memcpy(name_buf.get(), key.c_str(), key.size() + 1);
+        clone->name.data = reinterpret_cast<uint8_t *>(name_buf.get());
         clone->name.size = static_cast<uint32_t>(key.size());
+        generic_store_names_.push_back(std::move(name_buf));
 
-        // vincular el origen (para distinguir especializaciones del original)
+        // vincular plantilla original (para instanceof, reflexion y diagnosticos)
         clone->generic_parent = generic;
 
-        // eliminar la marca GENERIC en la especializacion concreta
+        // limpiar CLASS_FLAG_GENERIC: la especializacion es clase concreta
         clone->flags &= ~CLASS_FLAG_GENERIC;
 
-        // sustituir los type_params por los tipos concretos proporcionados
-        // NOTA: la resolucion de campos/metodos internos que usan T queda a cargo
-        // del compilador de alto nivel o de una pasada de reflexion posterior.
-        // Aqui solo vinculamos el descriptor para permitir instanceof/specialize.
-        if (count <= generic->type_param_count && generic->type_params != nullptr) {
-            auto *new_params = new GenericParam[generic->type_param_count];
-            std::memcpy(new_params, generic->type_params,
-                        generic->type_param_count * sizeof(GenericParam));
-            for (size_t i = 0; i < count; i++) {
-                new_params[i].constraint = type_args[i]; // vincular tipo concreto
+        // --- clonar y rellenar GenericParam[].concrete ---
+        // constraint se preserva intacto para validar bounds en tiempo de carga
+        GenericParam *new_params = nullptr;
+        size_t np = generic->type_param_count;
+        if (np > 0 && generic->type_params != nullptr) {
+            auto pbuf = std::make_unique<GenericParam[]>(np);
+            std::memcpy(pbuf.get(), generic->type_params, np * sizeof(GenericParam));
+            for (size_t i = 0; i < count && i < np; i++) {
+                pbuf[i].concrete = type_args[i]; // asignar concreto; constraint intacto
             }
+            new_params = pbuf.get();
             clone->type_params = new_params;
+            generic_store_params_.push_back(std::move(pbuf));
+        }
+
+        // --- resolver FieldInfo[] de campos de instancia ---
+        if (generic->fields != nullptr && generic->field_count > 0) {
+            size_t fc = generic->field_count;
+            auto fbuf = std::make_unique<FieldInfo[]>(fc);
+            std::memcpy(fbuf.get(), generic->fields, fc * sizeof(FieldInfo));
+            if (new_params != nullptr) {
+                resolve_generic_fields(fbuf.get(), fc, new_params, np);
+            }
+            clone->fields = fbuf.get();
+            generic_store_fields_.push_back(std::move(fbuf));
+        }
+
+        // --- resolver MethodInfo[]: argumentos y tipo de retorno ---
+        if (generic->methods != nullptr && generic->method_count > 0) {
+            size_t mc = generic->method_count;
+            auto mbuf = std::make_unique<MethodInfo[]>(mc);
+            std::memcpy(mbuf.get(), generic->methods, mc * sizeof(MethodInfo));
+
+            for (size_t mi = 0; mi < mc; mi++) {
+                // resolver argumentos del metodo
+                if (new_params != nullptr &&
+                    mbuf[mi].args != nullptr && mbuf[mi].arg_count > 0) {
+                    size_t ac = mbuf[mi].arg_count;
+                    auto abuf = std::make_unique<FieldInfo[]>(ac);
+                    std::memcpy(abuf.get(), mbuf[mi].args, ac * sizeof(FieldInfo));
+                    resolve_generic_fields(abuf.get(), ac, new_params, np);
+                    mbuf[mi].args = abuf.get();
+                    generic_store_fields_.push_back(std::move(abuf));
+                }
+                // resolver tipo de retorno si es un parametro de tipo
+                if (new_params != nullptr &&
+                    mbuf[mi].return_type != nullptr &&
+                    mbuf[mi].return_type->is_type_param) {
+                    auto rbuf = std::make_unique<FieldInfo[]>(1);
+                    std::memcpy(rbuf.get(), mbuf[mi].return_type, sizeof(FieldInfo));
+                    resolve_generic_fields(rbuf.get(), 1, new_params, np);
+                    mbuf[mi].return_type = rbuf.get();
+                    generic_store_fields_.push_back(std::move(rbuf));
+                }
+            }
+            clone->methods = mbuf.get();
+            generic_store_methods_.push_back(std::move(mbuf));
         }
 
         ClassInfo *raw = clone.get();
-        generic_store_.push_back(std::move(clone)); // tomar propiedad
+        generic_store_.push_back(std::move(clone)); // transferir propiedad
         generic_cache_.emplace(std::move(key), raw);
         return raw;
     }

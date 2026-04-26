@@ -44,9 +44,11 @@ parentesis en el REPL lo invoca automaticamente (comportamiento estilo Python).
 11. [Importacion de modulos](#importacion-de-modulos)
 12. [Funciones integradas](#funciones-integradas)
 13. [Sockets y red](#sockets-y-red)
-14. [REPL interactivo VestaShell](#repl-interactivo-vestaShell)
-15. [Integracion con el REPL](#integracion-con-el-repl)
-16. [Comentarios y continuacion de linea](#comentarios-y-continuacion-de-linea)
+14. [FFI: llamadas a librerias nativas](#ffi-llamadas-a-librerias-nativas)
+15. [ANSI: colores y secuencias de escape](#ansi-colores-y-secuencias-de-escape)
+16. [REPL interactivo VestaShell](#repl-interactivo-vestaShell)
+17. [Integracion con el REPL](#integracion-con-el-repl)
+18. [Comentarios y continuacion de linea](#comentarios-y-continuacion-de-linea)
 
 ---
 
@@ -131,9 +133,9 @@ cuidar(Perro("Rex"))    // ok: Perro es subclase de Animal
 | `+`      | Suma / concatenacion| `3 + 4`, `"a"+"b"` |
 | `-`      | Resta / negacion    | `10 - 3`, `-x`   |
 | `*`      | Multiplicacion      | `3 * 4`          |
-| `/`      | Division            | `10 / 3` → `3`   |
-| `%`      | Modulo              | `10 % 3` → `1`   |
-| `**`     | Potencia (der)      | `2 ** 10` → `1024`|
+| `/`      | Division            | `10 / 3` -> `3`   |
+| `%`      | Modulo              | `10 % 3` -> `1`   |
+| `**`     | Potencia (der)      | `2 ** 10` -> `1024`|
 
 ### Comparacion
 
@@ -602,31 +604,72 @@ import "ruta/al/modulo.vsh"
 
 ### Strings
 
-| Funcion                       | Descripcion                                |
-|-------------------------------|--------------------------------------------|
-| `len(s)`                      | Longitud en bytes                          |
-| `upper(s)`                    | Todo en mayusculas                         |
-| `lower(s)`                    | Todo en minusculas                         |
-| `trim(s)`                     | Eliminar espacios al inicio y al final     |
-| `split(s, sep)`               | Dividir por separador → lista              |
-| `join(lista, sep)`            | Unir lista de strings con separador        |
-| `starts_with(s, pref)`        | True si s empieza con pref                 |
-| `ends_with(s, suf)`           | True si s termina con suf                  |
-| `replace(s, old, new)`        | Sustituir todas las ocurrencias de old     |
-| `substr(s, inicio, longitud)` | Subcadena desde inicio con longitud bytes  |
-| `contains(s, sub)`            | True si sub esta en s                      |
+| Funcion                        | Descripcion                                               |
+|--------------------------------|-----------------------------------------------------------|
+| `len(s)`                       | Longitud en bytes                                         |
+| `upper(s)`                     | Todo en mayusculas                                        |
+| `lower(s)`                     | Todo en minusculas                                        |
+| `trim(s)`                      | Eliminar espacios al inicio y al final                    |
+| `lstrip(s)`                    | Eliminar espacios solo al inicio                          |
+| `rstrip(s)`                    | Eliminar espacios solo al final                           |
+| `split(s, sep)`                | Dividir por separador -> lista                            |
+| `join(lista, sep)`             | Unir lista de strings con separador                       |
+| `starts_with(s, pref)`         | True si s empieza con pref                                |
+| `ends_with(s, suf)`            | True si s termina con suf                                 |
+| `replace(s, old, new)`         | Sustituir todas las ocurrencias de old                    |
+| `substr(s, inicio [, len])`    | Subcadena (indices negativos cuentan desde el final)      |
+| `find_str(s, sub [, inicio])`  | Indice de sub en s (-1 si no existe)                      |
+| `count_str(s, sub)`            | Numero de ocurrencias de sub en s                         |
+| `repeat(s, n)`                 | Repetir s n veces                                         |
+| `pad_left(s, n [, char])`      | Rellenar por la izquierda hasta longitud n                |
+| `pad_right(s, n [, char])`     | Rellenar por la derecha hasta longitud n                  |
+| `contains(s, sub)`             | True si sub esta en s                                     |
+| `char_code(s)`                 | Codigo ASCII/byte del primer caracter                     |
+| `from_char(n)`                 | Caracter con codigo n                                     |
+| `is_numeric(s)`                | True si s se puede parsear como numero                    |
+| `hex(n)`                       | Representacion hex del entero (`"0x1f"`)                  |
+| `bin_str(n)`                   | Representacion binaria del entero (`"0b1010"`)            |
 
 ### Listas
 
-| Funcion              | Descripcion                                     |
-|----------------------|-------------------------------------------------|
-| `len(lista)`         | Numero de elementos                             |
-| `append(lista, v)`   | Anadir v al final (in-place)                    |
-| `pop(lista)`         | Eliminar y devolver el ultimo elemento          |
-| `contains(lista, v)` | True si v esta en la lista (por valor)          |
-| `range(n)`           | Lista `[0, 1, ..., n-1]`                        |
-| `range(s, e)`        | Lista `[s, s+1, ..., e-1]`                      |
-| `range(s, e, step)`  | Lista con incremento step (puede ser negativo)  |
+| Funcion                   | Descripcion                                              |
+|---------------------------|----------------------------------------------------------|
+| `len(lista)`              | Numero de elementos                                      |
+| `append(lista, v)`        | Anadir v al final (in-place via shared ref)              |
+| `pop(lista)`              | Eliminar y devolver el ultimo elemento                   |
+| `contains(lista, v)`      | True si v esta en la lista (por valor)                   |
+| `index_of(lista, v)`      | Indice de v en la lista (-1 si no existe)                |
+| `range(n)`                | Lista `[0, 1, ..., n-1]`                                 |
+| `range(s, e [, step])`    | Lista desde s hasta e-1 con paso step                    |
+| `sort(lista)`             | Copia de la lista ordenada                               |
+| `reverse(lista)`          | Copia de la lista al reves                               |
+| `slice(lista, s [, e])`   | Sublista [s, e) con indices negativos soportados         |
+| `flat(lista)`             | Aplanar un nivel (lista de listas)                       |
+| `zip(a, b)`               | Lista de pares `[[a0,b0], [a1,b1], ...]`                 |
+| `enumerate(lista)`        | Lista de pares `[[0,v0], [1,v1], ...]`                   |
+| `sum(lista)`              | Suma de todos los elementos numericos                    |
+| `any_of(lista)`           | True si algun elemento es truthy                         |
+| `all_of(lista)`           | True si todos los elementos son truthy                   |
+| `unique(lista)`           | Copia sin duplicados (preserva orden)                    |
+
+```vsh
+// Ordenar y transformar
+let nums = [3, 1, 4, 1, 5, 9, 2, 6]
+println(sort(nums))                          // [1, 1, 2, 3, 4, 5, 6, 9]
+println(unique(sort(nums)))                  // [1, 2, 3, 4, 5, 6, 9]
+println(reverse(slice(nums, 0, 4)))          // [4, 1, 3]
+println(sum(nums))                           // 31
+
+// Herramientas utiles
+for pair in enumerate(["a", "b", "c"]) {
+    println(pair[0] + ": " + pair[1])        // 0: a, 1: b, 2: c
+}
+let coords = zip([1,2,3], [4,5,6])           // [[1,4],[2,5],[3,6]]
+println(flat([[1,2],[3],[4,5]]))              // [1, 2, 3, 4, 5]
+println(any_of([false, false, true]))         // true
+println(all_of([1, 2, 3]))                   // true
+println(index_of([10,20,30], 20))            // 1
+```
 
 ### Mapas
 
@@ -658,43 +701,213 @@ is_class(v)     is_instance(v)
 
 ### Matematicas
 
-| Funcion             | Descripcion                                  |
-|---------------------|----------------------------------------------|
-| `abs(x)`            | Valor absoluto                               |
-| `min(a, b)`         | Minimo de dos valores                        |
-| `max(a, b)`         | Maximo de dos valores                        |
-| `floor(x)`          | Redondear hacia abajo                        |
-| `ceil(x)`           | Redondear hacia arriba                       |
-| `round(x)`          | Redondear al entero mas cercano              |
-| `sqrt(x)`           | Raiz cuadrada                                |
-| `pow(base, exp)`    | Potencia (equivalente a `base ** exp`)       |
-| `log(x)`            | Logaritmo natural (base e)                   |
+| Funcion                | Descripcion                                       |
+|------------------------|---------------------------------------------------|
+| `abs(x)`               | Valor absoluto                                    |
+| `min(a, b)`            | Minimo de dos valores                             |
+| `max(a, b)`            | Maximo de dos valores                             |
+| `clamp(x, lo, hi)`     | Limitar x al rango [lo, hi]                       |
+| `sign(x)`              | -1, 0 o 1 segun el signo de x                    |
+| `floor(x)`             | Redondear hacia abajo                             |
+| `ceil(x)`              | Redondear hacia arriba                            |
+| `round(x)`             | Redondear al entero mas cercano                   |
+| `sqrt(x)`              | Raiz cuadrada                                     |
+| `pow(base, exp)`       | Potencia                                          |
+| `log(x)`               | Logaritmo natural (base e)                        |
+| `log2(x)`              | Logaritmo en base 2                               |
+| `log10(x)`             | Logaritmo en base 10                              |
+| `sin(x)` / `cos(x)` / `tan(x)` | Trigonometria (radianes)                 |
+| `gcd(a, b)`            | Maximo comun divisor                              |
+| `lcm(a, b)`            | Minimo comun multiplo                             |
+| `pi()`                 | Constante pi (3.14159...)                         |
+| `inf()`                | Infinito positivo (float)                         |
+| `is_nan(x)`            | True si x es NaN                                  |
+| `is_inf(x)`            | True si x es infinito                             |
 
-### Sistema de ficheros
+### Numeros aleatorios
 
-| Funcion                    | Descripcion                                   |
-|----------------------------|-----------------------------------------------|
-| `exists(ruta)`             | True si la ruta existe                        |
-| `is_file(ruta)`            | True si es un fichero regular                 |
-| `is_dir(ruta)`             | True si es un directorio                      |
-| `basename(ruta)`           | Nombre del fichero con extension              |
-| `dirname(ruta)`            | Directorio padre                              |
-| `stem(ruta)`               | Nombre sin extension                          |
-| `extension(ruta)`          | Extension (incluye el punto)                  |
-| `glob(patron)`             | Lista de rutas que coinciden con el patron    |
-| `read_file(ruta)`          | Leer fichero a string; lanza si no existe     |
-| `write_file(ruta, texto)`  | Escribir string en fichero (sobreescribe)     |
+| Funcion                      | Descripcion                                              |
+|------------------------------|----------------------------------------------------------|
+| `rand()`                     | Float aleatorio en [0.0, 1.0)                            |
+| `rand_int(min, max)`         | Entero aleatorio en [min, max] (extremos incluidos)      |
+| `rand_float(min, max)`       | Float aleatorio en [min, max)                            |
+| `rand_choice(lista)`         | Elemento aleatorio de la lista                           |
+| `rand_shuffle(lista)`        | Copia de la lista barajada aleatoriamente                |
+| `rand_seed(n)`               | Inicializar el generador con semilla n (reproducible)    |
+
+```vsh
+println(rand())                      // 0.73812...
+println(rand_int(1, 6))              // dado: 1..6
+println(rand_float(0.0, 100.0))      // 42.71...
+println(rand_choice([10, 20, 30]))   // 20
+let deck = rand_shuffle(range(52))
+rand_seed(42)                        // resultados reproducibles
+```
+
+### Sistema de ficheros — consulta
+
+| Funcion                    | Descripcion                                        |
+|----------------------------|----------------------------------------------------|
+| `exists(ruta)`             | True si la ruta existe                             |
+| `is_file(ruta)`            | True si es un fichero regular                      |
+| `is_dir(ruta)`             | True si es un directorio                           |
+| `basename(ruta)`           | Nombre del fichero con extension                   |
+| `dirname(ruta)`            | Directorio padre                                   |
+| `stem(ruta)`               | Nombre sin extension                               |
+| `extension(ruta)`          | Extension (incluye el punto)                       |
+| `abspath(ruta)`            | Ruta absoluta normalizada                          |
+| `normpath(ruta)`           | Normaliza `.` y `..` sin resolver symlinks         |
+| `join_path(a, b, ...)`     | Une componentes de ruta con el separador del SO    |
+| `file_size(ruta)`          | Tamano del fichero en bytes (int)                  |
+| `glob(patron)`             | Lista de rutas que coinciden con el patron         |
+| `read_file(ruta)`          | Leer fichero a string; lanza si no existe          |
+| `write_file(ruta, texto)`  | Escribir string en fichero (sobreescribe)          |
+
+### Sistema de ficheros — navegacion y mutacion
+
+| Funcion                        | Descripcion                                              |
+|--------------------------------|----------------------------------------------------------|
+| `getcwd()`                     | Devuelve el directorio de trabajo actual como string     |
+| `chdir(ruta)`                  | Cambia el directorio de trabajo actual                   |
+| `listdir([ruta])`              | Lista los nombres de entradas en `ruta` (defecto `.`)   |
+| `listdir_full([ruta])`         | Como `listdir` pero devuelve rutas completas             |
+| `mkdir(ruta)`                  | Crea un directorio (un solo nivel)                       |
+| `makedirs(ruta)`               | Crea el arbol de directorios completo (como `mkdir -p`) |
+| `rmdir(ruta)`                  | Elimina un directorio vacio o un fichero                 |
+| `remove_file(ruta)`            | Elimina un fichero                                       |
+| `remove_all(ruta)`             | Elimina un arbol de directorios completo (recursivo)     |
+| `rename_path(origen, destino)` | Renombra o mueve un fichero o directorio                 |
+| `copy_file(origen, destino)`   | Copia un fichero (sobreescribe destino si existe)        |
+
+**Ejemplos:**
+
+```vsh
+// Directorio actual y navegacion
+let cwd = getcwd()
+println("Estoy en: " + cwd)
+chdir("..")
+println("Ahora en: " + getcwd())
+
+// Listar directorio
+let entradas = listdir(".")          // ["build", "main.cpp", ...]
+let rutas    = listdir_full("src")   // ["src/foo.cpp", "src/bar.h", ...]
+
+// Filtrar solo ficheros
+let ficheros: list = []
+for nombre in listdir(".") {
+    if (is_file(nombre)) {
+        append(ficheros, nombre)
+    }
+}
+println(ficheros)
+
+// Rutas
+let ruta = join_path("build", "out", "programa.velb")  // build/out/programa.velb
+println(abspath("../config"))                           // ruta absoluta
+println(normpath("a/b/../c"))                           // a/c
+
+// Crear y eliminar directorios
+makedirs("build/out/ir")
+copy_file("src/main.vel", "build/main.vel")
+rename_path("build/viejo.vel", "build/nuevo.vel")
+remove_all("build/tmp")
+
+// Tamano de fichero
+println(file_size("programa.velb") + " bytes")
+```
+
+> **Nota sobre `append` y variables de bucle:**
+> El `for var in lista` define `var` en un scope hijo. Si tienes una lista
+> acumuladora con el mismo nombre, sera ocultada dentro del bucle.
+> Usa nombres distintos para el acumulador y la variable de iteracion:
+>
+> ```vsh
+> // INCORRECTO: 'dir' es string dentro del for, no la lista
+> let dir: list = []
+> for dir in entradas { append(dir, ...) }  // error: dir es string
+>
+> // CORRECTO: nombres distintos
+> let resultado: list = []
+> for entrada in entradas {
+>     if (is_file(entrada)) { append(resultado, entrada) }
+> }
+> ```
+
+### Shell y proceso
+
+| Funcion                    | Descripcion                                                       |
+|----------------------------|-------------------------------------------------------------------|
+| `shell(cmd)`               | Ejecutar comando; devuelve stdout+stderr como string              |
+| `shell_ex(cmd)`            | Ejecutar comando; devuelve `{"output": str, "code": int}`         |
+| `sleep(ms)`                | Pausar N milisegundos                                             |
+| `exit([codigo])`           | Salir del proceso con codigo de salida                            |
+| `pid()`                    | PID del proceso actual                                            |
+| `cpu_count()`              | Numero de CPUs logicas disponibles                                |
+| `platform()`               | `"windows"`, `"linux"` o `"macos"`                               |
+| `getenv(nombre)`           | Valor de la variable de entorno (null si no existe)               |
+| `setenv(nombre, valor)`    | Asignar variable de entorno                                       |
+
+```vsh
+// Obtener codigo de salida de un comando
+let res = shell_ex("vestad -h")
+println(res["output"])
+println("Codigo: " + res["code"])   // 0 = exito
+
+// Plataforma y entorno
+println(platform())                  // "windows"
+println(getenv("PATH"))
+setenv("MY_VAR", "hola")
+
+// Informacion del proceso
+println("PID: " + pid())
+println("CPUs: " + cpu_count())
+```
+
+### Tiempo
+
+| Funcion              | Descripcion                                                     |
+|----------------------|-----------------------------------------------------------------|
+| `time_ms()`          | Timestamp Unix en milisegundos (int)                            |
+| `time_s()`           | Timestamp Unix en segundos (float)                              |
+| `time_now([fmt])`    | Fecha/hora actual formateada (defecto: `"%Y-%m-%d %H:%M:%S"`)  |
+
+```vsh
+let t0 = time_ms()
+// ... operacion ...
+println("Tardo: " + (time_ms() - t0) + " ms")
+
+println(time_now())                        // "2026-04-26 14:30:00"
+println(time_now("%d/%m/%Y"))              // "26/04/2026"
+println(time_now("%H:%M"))                 // "14:30"
+```
+
+### Formato y serializacion
+
+| Funcion              | Descripcion                                                   |
+|----------------------|---------------------------------------------------------------|
+| `format(tmpl, ...)` | Plantilla con `{}` o `{0}`, `{1}`... sustituidos por args    |
+| `json_str(v)`        | Serializar valor a JSON (null/bool/int/float/str/list/map)    |
+
+```vsh
+println(format("Hola {} en {}", "mundo", 2026))   // "Hola mundo en 2026"
+println(format("{0} + {0} = {1}", 3, 6))           // "3 + 3 = 6"
+
+let datos = {"nombre": "Vesta", "version": 2, "activo": true}
+println(json_str(datos))
+// {"nombre":"Vesta","version":2,"activo":true}
+
+let lista = [1, 2, [3, 4], null, false]
+println(json_str(lista))
+// [1,2,[3,4],null,false]
+```
 
 ### Utilidades
 
-| Funcion              | Descripcion                                   |
-|----------------------|-----------------------------------------------|
-| `shell(cmd)`         | Ejecutar comando de shell; devuelve la salida |
-| `sleep(ms)`          | Pausar N milisegundos                         |
-| `exit([codigo])`     | Salir del proceso                             |
-| `assert(cond, [msg])`| Lanzar error si cond es falso                 |
-| `error(msg)`              | Lanzar un VshRuntimeError con msg                      |
-| `doc(fn_o_clase)`         | Devuelve el docstring de `fn` o clase (o `""`)         |
+| Funcion                   | Descripcion                                              |
+|---------------------------|----------------------------------------------------------|
+| `assert(cond [, msg])`    | Lanzar error si cond es falso                            |
+| `error(msg)`              | Lanzar VshRuntimeError con msg                           |
+| `doc(fn_o_clase)`         | Docstring de funcion o clase (o `""`)                    |
 | `help(fn_o_clase)`        | Imprime firma + docstring; devuelve el texto como string |
 
 ---
@@ -737,7 +950,7 @@ socket_close(srv)
 | Funcion | Descripcion |
 |---------|-------------|
 | `tcp_connect(host, port)` | Conectar TCP; devuelve handle |
-| `tcp_listen(port [, backlog])` | Crear socket servidor; `port=0` → SO asigna puerto libre |
+| `tcp_listen(port [, backlog])` | Crear socket servidor; `port=0` -> SO asigna puerto libre |
 | `tcp_accept(handle)` | Aceptar conexion entrante (bloqueante); devuelve handle cliente |
 | `socket_send(h, datos)` | Enviar string; devuelve bytes enviados |
 | `socket_recv(h [, maxlen])` | Recibir hasta `maxlen` bytes (defecto 4096); `""` = EOF |
@@ -867,6 +1080,186 @@ socket_close(srv)
 
 ---
 
+## FFI: llamadas a librerias nativas
+
+VestaShell puede cargar y llamar funciones de cualquier libreria dinamica del
+sistema (`.dll` en Windows, `.so` en Linux) sin necesidad de compilar un plugin.
+Es la forma de acceder a la Win32 API, librerias C de sistema o cualquier ABI
+nativo desde un script `.vsh`.
+
+### Funciones FFI
+
+| Funcion                            | Descripcion                                                       |
+|------------------------------------|-------------------------------------------------------------------|
+| `ffi_open(ruta)`                   | Carga la libreria y devuelve un handle (int)                      |
+| `ffi_sym(handle, nombre)`          | Busca el simbolo en la libreria; devuelve su direccion como int   |
+| `ffi_call(sym [, args...])`        | Llama a la funcion; retorna int64. Args: int/str/float/bool/null  |
+| `ffi_call_f(sym [, args...])`      | Igual que ffi_call pero retorna double                            |
+| `ffi_close(handle)`                | Descarga la libreria                                              |
+| `ffi_call_sym(ruta, nom [, args])` | Atajo: open+sym+call+close en una sola expresion                  |
+| `ffi_str(ptr_int)`                 | Lee un C-string desde un puntero retornado por ffi_call           |
+
+### Tipos de argumentos
+
+| Tipo VSH  | Como se pasa a la funcion nativa                                  |
+|-----------|-------------------------------------------------------------------|
+| `int`     | Directamente como `int64_t`                                       |
+| `bool`    | `1` o `0` como `int64_t`                                         |
+| `float`   | Bits IEEE-754 empaquetados en `int64_t` (convenio de registros)   |
+| `string`  | Puntero `char*` al buffer interno (vivo durante la llamada)       |
+| `null`    | `0` (puntero nulo)                                                |
+
+> **Limite**: maximo 8 argumentos por llamada. Para funciones con mas parametros
+> escribe un wrapper C fino y cargalo como FFI.
+
+### Ejemplo: Win32 MessageBoxA
+
+```vsh
+// Mostrar un dialogo en Windows
+let user32 = ffi_open("user32.dll")
+let msgbox  = ffi_sym(user32, "MessageBoxA")
+// HWND=0, texto, titulo, MB_OK=0
+ffi_call(msgbox, 0, "Hola desde VestaShell!", "FFI Demo", 0)
+ffi_close(user32)
+```
+
+### Ejemplo: GetTickCount (tiempo en ms desde el arranque)
+
+```vsh
+let r = ffi_call_sym("kernel32.dll", "GetTickCount")
+echo("Uptime ms: " + str(r))
+```
+
+### Ejemplo: libc en Linux
+
+```vsh
+let libc = ffi_open("libc.so.6")
+let strlen = ffi_sym(libc, "strlen")
+let n = ffi_call(strlen, "hola mundo")  // str -> char*, retorna int
+echo("longitud: " + str(n))
+ffi_close(libc)
+```
+
+### Ejemplo: leer una string de retorno
+
+```vsh
+// GetCommandLineA devuelve un LPSTR (char*)
+let ptr = ffi_call_sym("kernel32.dll", "GetCommandLineA")
+echo("Linea de comandos: " + ffi_str(ptr))
+```
+
+---
+
+## ANSI: colores y secuencias de escape
+
+VestaShell activa automaticamente el soporte VT100 en Windows
+(`ENABLE_VIRTUAL_TERMINAL_PROCESSING`) al iniciarse, por lo que los codigos
+ANSI funcionan en `cmd.exe` y `PowerShell` sin configuracion adicional.
+
+### Mapa de constantes ANSI
+
+Disponible como variable global `ANSI`. Uso: `ANSI["RED"]`, `ANSI["RESET"]`, etc.
+
+| Clave          | Secuencia         | Efecto                        |
+|----------------|-------------------|-------------------------------|
+| `RESET`        | `\033[0m`         | Restaura todo a defecto       |
+| `BOLD`         | `\033[1m`         | Negrita                       |
+| `DIM`          | `\033[2m`         | Tenue                         |
+| `ITALIC`       | `\033[3m`         | Cursiva                       |
+| `UNDERLINE`    | `\033[4m`         | Subrayado                     |
+| `BLINK`        | `\033[5m`         | Parpadeo                      |
+| `REVERSE`      | `\033[7m`         | Video inverso                 |
+| `STRIKE`       | `\033[9m`         | Tachado                       |
+| `BLACK`..`WHITE` | `\033[30m`..`37m` | Colores fg normales         |
+| `BR_BLACK`..`BR_WHITE` | `\033[90m`..`97m` | Colores fg brillantes |
+| `BG_BLACK`..`BG_WHITE` | `\033[40m`..`47m` | Colores de fondo      |
+| `BG_BR_*`      | `\033[100m`..`107m` | Fondos brillantes           |
+| `CLEAR`        | `\033[2J\033[H`   | Limpiar pantalla y mover cursor al inicio |
+| `CLEAR_LINE`   | `\033[2K\r`       | Borrar la linea actual        |
+
+### Funciones rapidas de color y estilo
+
+Estas funciones aceptan un argumento opcional. Con argumento envuelven el texto
+y añaden reset al final; sin argumento devuelven solo el codigo de escape.
+
+```vsh
+echo(red("Error critico"))          // texto en rojo con reset automatico
+echo(green("OK"))                   // texto en verde
+echo(bold("Titulo"))                // negrita
+echo(yellow() + "Atencion" + ANSI["RESET"])  // solo el codigo de apertura
+```
+
+| Funcion     | Color/estilo     |
+|-------------|-----------------|
+| `red(s?)`   | Rojo fg         |
+| `green(s?)` | Verde fg        |
+| `yellow(s?)`| Amarillo fg     |
+| `blue(s?)`  | Azul fg         |
+| `magenta(s?)`| Magenta fg     |
+| `cyan(s?)`  | Cian fg         |
+| `white(s?)` | Blanco fg       |
+| `bold(s?)`  | Negrita         |
+| `dim(s?)`   | Tenue           |
+| `italic(s?)`| Cursiva         |
+| `underline(s?)`| Subrayado    |
+| `strike(s?)`| Tachado         |
+
+### Funciones de color avanzadas
+
+| Funcion                              | Descripcion                                                  |
+|--------------------------------------|--------------------------------------------------------------|
+| `colorize(texto, fg [, bg [, bold]])` | Envuelve el texto con fg, bg opcional y negrita opcional    |
+| `ansi_rgb(r, g, b)`                  | Codigo fg en True Color (24 bits)                           |
+| `ansi_rgb_bg(r, g, b)`               | Codigo bg en True Color (24 bits)                           |
+| `ansi_code(n)`                       | Codigo arbitrario `\033[{n}m`                               |
+| `ansi_enable()`                      | Activa VT100 en Windows; no-op en Linux                     |
+| `strip_ansi(texto)`                  | Elimina todas las secuencias ANSI de un string              |
+
+### Control de cursor
+
+| Funcion                    | Descripcion                              |
+|----------------------------|------------------------------------------|
+| `ansi_cursor_up(n?)`       | Mueve el cursor N lineas arriba          |
+| `ansi_cursor_down(n?)`     | Mueve el cursor N lineas abajo           |
+| `ansi_cursor_left(n?)`     | Mueve el cursor N columnas a la izquierda |
+| `ansi_cursor_right(n?)`    | Mueve el cursor N columnas a la derecha  |
+| `ansi_cursor_pos(fila,col)`| Posiciona el cursor en (fila, col)       |
+| `ansi_clear()`             | Limpia la pantalla                       |
+| `ansi_clear_line()`        | Borra la linea actual                    |
+
+### Ejemplos
+
+```vsh
+// Barra de progreso simple
+fn progreso(pct: int) {
+    let lleno  = pct / 5
+    let vacio  = 20 - lleno
+    let barra  = green(repeat("#", lleno)) + dim(repeat("-", vacio))
+    echo("\r[" + barra + "] " + str(pct) + "%")
+}
+
+// Tabla coloreada
+echo(bold("Nombre")     + "  " + bold("Estado"))
+echo(cyan("servidor-01") + "  " + green("OK"))
+echo(cyan("servidor-02") + "  " + red("FALLO"))
+
+// True Color
+echo(ansi_rgb(255, 128, 0) + "Naranja" + ANSI["RESET"])
+
+// colorize con fondo
+echo(colorize("AVISO", "black", "yellow", true))
+
+// Limpiar consola y escribir en posicion fija
+echo(ansi_clear())
+echo(ansi_cursor_pos(5, 10) + "Texto en fila 5 col 10")
+
+// Eliminar escapes para guardar en fichero de log limpio
+let log_line = red("[ERROR]") + " mensaje de error"
+write_file("app.log", strip_ansi(log_line) + "\n")
+```
+
+---
+
 ## REPL interactivo VestaShell
 
 ```bash
@@ -974,6 +1367,8 @@ completos que cubren toda la sintaxis y los casos de uso tipicos:
 | `11_errores_tipados.vsh`             | Errores personalizados, throw, catch tipado, jerarquia |
 | `12_tipado.vsh`                      | Anotaciones de tipo en let y parametros de funcion     |
 | `13_sockets.vsh`                     | TCP, UDP, TLS, HTTP/HTTPS GET/POST/PUT/DELETE          |
+| `14_ffi.vsh`                         | Llamadas a librerias nativas, Win32 API, ffi_call      |
+| `15_ansi.vsh`                        | Colores, estilos, cursor, True Color, progreso         |
 
 Ejecutar la suite completa (desde el directorio raiz del proyecto):
 

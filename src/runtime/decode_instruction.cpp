@@ -190,6 +190,35 @@ namespace runtime {
     }
 
     /**
+     * @brief Descodifica instrucciones con codificacion de bytes crudos (string ops, setcc, tryenter).
+     *
+     * A diferencia de decode_instr_two_op_reg, esta funcion almacena los bytes2 y byte3 en bruto
+     * en reg1 y reg2, de modo que las instrucciones de strings pueden extraer nibbles directamente:
+     *   reg1 = byte2  (ctrl)  = (r_dst<<4) | r_src
+     *   reg2 = byte3  (extra) = (r3<<4) | ...
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion descodificada que se rellena.
+     */
+    void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = Assembly::Bytecode::instr_size(instr.metadata->size); // tamano fijo
+
+        uint64_t offset = vm->registers.rip.raw() + ((instr.flags_info.is_not_extended != 0) ? 1 : 2);
+
+        uint16_t data = vm->vm_mem.read_u16(offset);
+
+        // almacenar byte2 y byte3 en bruto para que exec pueda extraer nibbles
+        instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(data & 0x00FF);       // byte2 crudo
+        instr.data_instruction.reg_data.reg2 = static_cast<uint8_t>((data & 0xFF00) >> 8); // byte3 crudo
+
+        DBG_DECODE(instr.pc, "Instruccion decode_raw_bytes: ", instr.metadata->name,
+                   " b2=" << std::hex << (int)instr.data_instruction.reg_data.reg1
+                   << " b3=" << (int)instr.data_instruction.reg_data.reg2 << std::dec
+        );
+        DBG_DECODE_DUMP(vm, instr, Assembly::Bytecode::instr_size(instr.metadata->size));
+    }
+
+    /**
      * @brief Descodifica una instruccion MOV registro-registro con byte de control.
      *
      * Similar a decode_instr_two_op_reg pero extrae ademas los campos

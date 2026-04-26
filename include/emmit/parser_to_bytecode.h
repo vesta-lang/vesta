@@ -465,6 +465,118 @@ namespace Assembly::Bytecode {
             },
         },
 
+        /* --- MODS / MODU (modulo con/sin signo) --- */
+        {
+            "modu", {
+                {0x00, 0x40, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
+                {0x00, 0x41, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
+                {0x00, 0x42, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
+            }
+        },
+        {
+            "mods", {
+                {0x00, 0x40, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
+                {0x00, 0x41, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
+                {0x00, 0x42, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
+            }
+        },
+
+        /* --- SETCC r_dst, cond_literal: escribir condicion de flags como 0 o 1 --- */
+        {
+            "setcc", {
+                {0x00, 0x43, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_setcc}
+            }
+        },
+
+        /* --- TRYENTER / TRYLEAVE: frames de excepcion dinamicos --- */
+        {
+            "tryenter", {
+                {0x00, 0x44, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "tryleave", {
+                {0x00, 0x45, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}
+            }
+        },
+
+        /* --- STRMAKE / STRLEN / STRCAT / STRCMP / STRCONV / STRRAW: instrucciones de string --- */
+        {
+            "strmake", {
+                {0x00, 0x46, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strlen", {
+                {0x00, 0x47, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strcat", {
+                {0x00, 0x48, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strcmp", {
+                {0x00, 0x49, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strconv", {
+                {0x00, 0x4A, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_strconv}
+            }
+        },
+        {
+            "strraw", {
+                {0x00, 0x4B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strslice", {
+                {0x00, 0x4C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strflat", {
+                {0x00, 0x4D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strhash", {
+                {0x00, 0x4E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strintern", {
+                {0x00, 0x4F, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strgetenc", {
+                {0x00, 0x50, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strgetbytes", {
+                {0x00, 0x51, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strgetkind", {
+                {0x00, 0x52, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strreserve", {
+                {0x00, 0x53, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strfinalize", {
+                {0x00, 0x54, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+
         /* --- MOV: transferencia de datos --- */
         {
             "mov", {

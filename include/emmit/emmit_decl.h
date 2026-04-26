@@ -331,7 +331,7 @@ namespace Assembly::Bytecode {
      * lo que determina como se interpreta el inmediato (int64_t vs uint64_t).
      */
     static const std::unordered_set<std::string> signed_ops = {
-        "adds", "subs", "muls", "divs", "cmps"
+        "adds", "subs", "muls", "divs", "cmps", "mods"
     };
 
     /**
@@ -963,6 +963,64 @@ namespace Assembly::Bytecode {
      * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_fcvt(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite instrucciones de string con dos registros (Convention B).
+     *
+     * Formato FIXED_4: [0x00][opcode2][b2][b3=0]
+     *   b2 = (r_dst << 4) | r_src
+     *
+     * Usos: strlen, strflat, strhash, strintern, strgetenc, strgetbytes,
+     *       strgetkind, strreserve, strfinalize, strraw.
+     *
+     * @param instruction_parser Instruccion con dos operandos registro.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_str_two_reg(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite STRCONV r_dst, r_src, enc_literal (Convention B + inmediato 4 bits).
+     *
+     * Formato FIXED_4: [0x00][0x4A][b2][b3]
+     *   b2 = (r_dst << 4) | r_src
+     *   b3 = (enc_literal << 4)  (nibble alto)
+     *
+     * @param instruction_parser Instruccion con dos registros y un literal numerico.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_strconv(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite SETCC r_dst, cond_literal (Convention B + inmediato 4 bits).
+     *
+     * Formato FIXED_4: [0x00][0x43][b2][b3=0]
+     *   b2 = (cond_literal << 4) | r_dst
+     *
+     * @param instruction_parser Instruccion con un registro y un literal de condicion.
+     * @param code_final         Escritor de bytecode.
+     * @param now_instr          Descriptor de la instruccion.
+     * @param assembly_ctx       Contexto del ensamblador.
+     */
+    void emit_setcc(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,

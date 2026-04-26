@@ -137,18 +137,34 @@ namespace loader {
 
     // -------------------------------------------------------------------------
     //  FieldInfo - descripcion de un campo de instancia o estatico
+    //
+    //  Para campos genericos (tipo = parametro T, K, V...):
+    //    is_type_param  = true
+    //    type_param_idx = indice en ClassInfo::type_params
+    //    type_class     = nullptr (se resuelve al especializar con SPECIALIZE)
+    //
+    //  Tras especializacion (specialize_class en loader.cpp):
+    //    is_type_param  = false
+    //    type_class     = ClassInfo* del tipo concreto instanciado
+    //
+    //  Todos los campos del VM tienen size = 8 (slot de 64 bits) independientemente
+    //  del tipo: los objetos se representan por GcHandle (32 bits en los 4 bajos)
+    //  y los primitivos se almacenan como uint64 con extension de signo / zero.
     // -------------------------------------------------------------------------
     typedef struct FieldInfo {
         stringx     name;
         FieldAccess access;
         FieldKind   kind;
-        ClassInfo  *type_class; ///< si kind == FIELD_CLASS o FIELD_STRUCT
-        uint32_t    size;       ///< bytes que ocupa el campo
-        uint32_t    offset;     ///< offset dentro del payload del objeto
+        ClassInfo  *type_class;    ///< tipo concreto (nullptr si is_type_param == true)
+        uint32_t    size;          ///< bytes del campo (8 para slots VM estandar)
+        uint32_t    offset;        ///< offset dentro del payload del objeto
         bool        is_static;
-        // --- reflexion/documentacion (offsets 48-79) ---
-        stringx     doc;        ///< docstring del campo
-        AttrEntry  *attrs;      ///< tabla de anotaciones clave/valor
+        bool        is_type_param; ///< true si el tipo es un parametro de tipo (T, K, V...)
+        uint16_t    type_param_idx;///< indice en ClassInfo::type_params (valido si is_type_param)
+        uint8_t     _field_pad[4]; ///< relleno de alineacion (reservado, debe ser 0)
+        // --- reflexion/documentacion ---
+        stringx     doc;           ///< docstring del campo
+        AttrEntry  *attrs;         ///< tabla de anotaciones clave/valor
         size_t      attr_count;
     } FieldInfo;
 
@@ -237,14 +253,18 @@ namespace loader {
     // -------------------------------------------------------------------------
     //  GenericParam - descriptor de un parametro de tipo en una clase generica
     //
-    //  Cada parametro tiene un nombre simbolico ("T", "K", "V") y una restriccion
-    //  opcional de tipo.  Si constraint == nullptr el parametro acepta cualquier
-    //  tipo; si constraint != nullptr el tipo concreto debe ser una subclase o
-    //  implementar la interfaz indicada.
+    //  Cada parametro tiene un nombre simbolico ("T", "K", "V"), una restriccion
+    //  opcional de tipo (bound) y, en especializaciones concretas, el tipo real
+    //  instanciado.
+    //
+    //  En la plantilla generica original:  constraint = bound o nullptr; concrete = nullptr.
+    //  En una especializacion (p.ej. List<int>): concrete = ClassInfo de int.
+    //  constraint se preserva para poder validar que concrete cumple el bound.
     // -------------------------------------------------------------------------
     struct GenericParam {
         const char *name;       ///< nombre del parametro ("T", "K", "V", ...)
-        ClassInfo  *constraint; ///< restriccion de tipo (nullptr = sin restriccion)
+        ClassInfo  *constraint; ///< restriccion de tipo / bound (nullptr = sin restriccion)
+        ClassInfo  *concrete;   ///< tipo concreto instanciado (nullptr en la plantilla generica)
     };
 
     // -------------------------------------------------------------------------

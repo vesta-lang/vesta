@@ -27,6 +27,7 @@
 
 #include "cli/cli.h"
 #include "cli/vsh.h"
+#include "ir/ir_emitter.h"
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "util/sqlite_singleton.h"
@@ -207,6 +208,11 @@ int main(int argc, char *argv[]) {
             ("dist-debug",        "Activar trazas de depuracion del subsistema distribuido (RSPAWN, HALT, FUTURE_FULFILL)")
             ("script",            "Ejecutar un fichero VestaShell (.vsh) y salir", cxxopts::value<std::string>())
             ("interprete",        "Abrir el interprete interactivo VestaShell (REPL .vsh)")
+            ("ir-file",           "Compilar archivo .ir (SSA IR) a .vel y opcionalmente a .velb",
+                cxxopts::value<std::string>())
+            ("ir-opt",            "Nivel de optimizacion IR: 0=O0, 1=O1, 2=O2, 3=O3 (defecto: 1)",
+                cxxopts::value<int>()->default_value("1"))
+            ("ir-emit-only",      "Solo emitir el texto .vel; no compilar a .velb")
 #ifdef VESTA_HAS_PREPROCESSOR
             ("preprocess-only", "Solo preprocesar un .vel y mostrar/guardar el resultado (debug)", cxxopts::value<std::string>())
 #endif
@@ -409,6 +415,52 @@ int main(int argc, char *argv[]) {
                    : EXIT_FAILURE;
     }
 
+    // Compilar un archivo .ir (SSA IR) a .vel y opcionalmente a .velb
+    // vm.exe --ir-file program.ir --ir-opt 2 -o program.velb
+    if (result.count("ir-file")) {
+        const std::string &ir_path = result["ir-file"].as<std::string>();
+        int opt_n = result["ir-opt"].as<int>();
+        bool emit_only = result.count("ir-emit-only") > 0;
+
+        // Leer el archivo .ir
+        std::ifstream ifs(ir_path);
+        if (!ifs.is_open()) {
+            std::cerr << "[ir] No se puede abrir: " << ir_path << "\n";
+            return EXIT_FAILURE;
+        }
+        std::string ir_text((std::istreambuf_iterator<char>(ifs)),
+                             std::istreambuf_iterator<char>());
+
+        // Emitir .vel
+        ir::EmitOptions eopts;
+        eopts.opt_level     = ir::opt_level_from_int(opt_n);
+        eopts.emit_comments = true;
+        eopts.export_all    = true;
+
+        ir::EmitResult er = ir::ir_emit_text(ir_text, eopts);
+        if (!er.ok) {
+            std::cerr << "[ir] Error de emision: " << er.error << "\n";
+            return EXIT_FAILURE;
+        }
+
+        // Determinar nombre del archivo .vel de salida
+        std::string vel_path = out_prefix.empty() ? "out.vel" : out_prefix + ".vel";
+        {
+            std::ofstream ofs(vel_path);
+            if (!ofs.is_open()) {
+                std::cerr << "[ir] No se puede escribir: " << vel_path << "\n";
+                return EXIT_FAILURE;
+            }
+            ofs << er.vel_text;
+        }
+        vesta::scout() << "[ir] .vel generado: " << vel_path << "\n";
+
+        if (emit_only) return EXIT_SUCCESS;
+
+        // Compilar el .vel generado a .velb usando el pipeline existente
+        return asm_multi_process::run_worker(vel_path, out_prefix);
+    }
+
     // Compilar un archivo .vel a .velb
     // vm.exe --build src/main.vel -o main.velb
     if (result.count("build")) {
@@ -433,10 +485,14 @@ int main(int argc, char *argv[]) {
             vsh::VshInterpreter interp; // sin callback REPL
             interp.exec_file(vsh_path);
         } catch (const vsh::VshRuntimeError &e) {
-            std::cerr << "[script] Error en " << vsh_path << ": " << e.what() << "\n";
+            std::cerr << "[script] Error en " << vsh_path;
+            if (e.line > 0) std::cerr << ":" << e.line;
+            std::cerr << ": " << e.what() << "\n";
             return EXIT_FAILURE;
         } catch (const vsh::VshParseError &e) {
-            std::cerr << "[script] Error de sintaxis en " << vsh_path << ": " << e.what() << "\n";
+            std::cerr << "[script] Error de sintaxis en " << vsh_path;
+            if (e.line > 0) std::cerr << ":" << e.line;
+            std::cerr << ": " << e.what() << "\n";
             return EXIT_FAILURE;
         } catch (const std::exception &e) {
             std::cerr << "[script] " << e.what() << "\n";

@@ -42,6 +42,17 @@
 #include <openssl/err.h>
 #include <mutex>
 #include <atomic>
+#include <random>
+#include <numeric>
+#include <ctime>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <sys/types.h>
+#if !defined(_WIN32)
+#  include <sys/wait.h>
+#  include <dlfcn.h>
+#endif
 
 // ============================================================
 // Estado global de sockets para los builtins de red VSH
@@ -224,6 +235,159 @@ namespace {
         }
         return {hostport, use_tls ? uint16_t(443) : uint16_t(80)};
     }
+
+// RNG global compartido por todos los builtins de aleatoriedad
+static std::mt19937_64 g_vsh_rng(std::random_device{}());
+
+// ============================================================
+// FFI: tabla de handles de librerias dinamicas cargadas en tiempo de ejecucion
+// ============================================================
+
+struct VshFfiLib {
+#if defined(_WIN32)
+    HMODULE handle = nullptr;
+#else
+    void *handle = nullptr;
+#endif
+};
+
+static std::mutex                              g_ffi_mutex;
+static std::unordered_map<int64_t, VshFfiLib> g_ffi_libs;
+static int64_t                                 g_ffi_next_id = 1;
+
+// Abre una libreria dinamica y devuelve un identificador opaco.
+static int64_t vsh_ffi_open(const std::string &path) {
+    std::lock_guard<std::mutex> lk(g_ffi_mutex);
+#if defined(_WIN32)
+    HMODULE h = LoadLibraryA(path.c_str());
+    if (!h) throw vsh::VshRuntimeError("ffi_open: no se pudo cargar: " + path);
+#else
+    void *h = dlopen(path.c_str(), RTLD_LAZY | RTLD_LOCAL);
+    if (!h) throw vsh::VshRuntimeError(std::string("ffi_open: ") + dlerror());
+#endif
+    int64_t id = g_ffi_next_id++;
+    g_ffi_libs[id] = {h};
+    return id;
+}
+
+// Libera una libreria cargada con vsh_ffi_open.
+static void vsh_ffi_close(int64_t id) {
+    std::lock_guard<std::mutex> lk(g_ffi_mutex);
+    auto it = g_ffi_libs.find(id);
+    if (it == g_ffi_libs.end()) return;
+#if defined(_WIN32)
+    FreeLibrary(it->second.handle);
+#else
+    dlclose(it->second.handle);
+#endif
+    g_ffi_libs.erase(it);
+}
+
+// Busca un simbolo en la libreria y devuelve su direccion como int64_t.
+static int64_t vsh_ffi_sym(int64_t lib_id, const std::string &name) {
+    std::lock_guard<std::mutex> lk(g_ffi_mutex);
+    auto it = g_ffi_libs.find(lib_id);
+    if (it == g_ffi_libs.end()) throw vsh::VshRuntimeError("ffi_sym: handle invalido");
+#if defined(_WIN32)
+    FARPROC p = GetProcAddress(it->second.handle, name.c_str());
+    if (!p) throw vsh::VshRuntimeError("ffi_sym: simbolo no encontrado: " + name);
+    int64_t result = 0;
+    memcpy(&result, &p, sizeof(p));
+    return result;
+#else
+    void *p = dlsym(it->second.handle, name.c_str());
+    if (!p) throw vsh::VshRuntimeError(std::string("ffi_sym: ") + dlerror());
+    int64_t result = 0;
+    memcpy(&result, &p, sizeof(p));
+    return result;
+#endif
+}
+
+// Llama a una funcion nativa con hasta 8 argumentos.
+// int/bool/null pasan directamente; strings se convierten a char* temporal;
+// floats pasan sus bits IEEE-754 empaquetados en int64_t.
+static int64_t vsh_ffi_call(int64_t sym_addr, const std::vector<vsh::Value> &args) {
+    std::vector<std::string> str_storage;
+    str_storage.reserve(args.size());
+    std::vector<int64_t> iargs;
+    iargs.reserve(args.size());
+    for (const auto &a : args) {
+        if (a.is_string()) {
+            str_storage.push_back(a.as_string());
+            int64_t p = 0;
+            const void *cp = str_storage.back().c_str();
+            memcpy(&p, &cp, sizeof(p));
+            iargs.push_back(p);
+        } else if (a.is_int()) {
+            iargs.push_back(a.as_int());
+        } else if (a.is_bool()) {
+            iargs.push_back(a.as_bool() ? 1 : 0);
+        } else if (a.is_float()) {
+            double d = a.as_float();
+            int64_t bits = 0;
+            memcpy(&bits, &d, 8);
+            iargs.push_back(bits);
+        } else if (a.is_null()) {
+            iargs.push_back(0);
+        } else {
+            throw vsh::VshRuntimeError("ffi_call: tipo de argumento no soportado para FFI");
+        }
+    }
+    // Typedef de punteros a funcion tipados para evitar casting de void*
+    typedef int64_t (*fn0)();
+    typedef int64_t (*fn1)(int64_t);
+    typedef int64_t (*fn2)(int64_t,int64_t);
+    typedef int64_t (*fn3)(int64_t,int64_t,int64_t);
+    typedef int64_t (*fn4)(int64_t,int64_t,int64_t,int64_t);
+    typedef int64_t (*fn5)(int64_t,int64_t,int64_t,int64_t,int64_t);
+    typedef int64_t (*fn6)(int64_t,int64_t,int64_t,int64_t,int64_t,int64_t);
+    typedef int64_t (*fn7)(int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,int64_t);
+    typedef int64_t (*fn8)(int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,int64_t,int64_t);
+    // Recuperar el puntero de funcion desde el int64_t via memcpy (sin UB)
+    fn0 raw = nullptr;
+    memcpy(&raw, &sym_addr, sizeof(raw));
+    size_t n = iargs.size();
+    while (iargs.size() < 8) iargs.push_back(0);
+    switch (n) {
+        case 0: return raw();
+        case 1: return reinterpret_cast<fn1>(raw)(iargs[0]);
+        case 2: return reinterpret_cast<fn2>(raw)(iargs[0],iargs[1]);
+        case 3: return reinterpret_cast<fn3>(raw)(iargs[0],iargs[1],iargs[2]);
+        case 4: return reinterpret_cast<fn4>(raw)(iargs[0],iargs[1],iargs[2],iargs[3]);
+        case 5: return reinterpret_cast<fn5>(raw)(iargs[0],iargs[1],iargs[2],iargs[3],iargs[4]);
+        case 6: return reinterpret_cast<fn6>(raw)(iargs[0],iargs[1],iargs[2],iargs[3],iargs[4],iargs[5]);
+        case 7: return reinterpret_cast<fn7>(raw)(iargs[0],iargs[1],iargs[2],iargs[3],iargs[4],iargs[5],iargs[6]);
+        case 8: return reinterpret_cast<fn8>(raw)(iargs[0],iargs[1],iargs[2],iargs[3],iargs[4],iargs[5],iargs[6],iargs[7]);
+        default: throw vsh::VshRuntimeError("ffi_call: maximo 8 argumentos soportados");
+    }
+}
+
+// Igual que vsh_ffi_call pero el entero retornado se reinterpreta como double.
+static double vsh_ffi_call_f(int64_t sym_addr, const std::vector<vsh::Value> &args) {
+    int64_t bits = vsh_ffi_call(sym_addr, args);
+    double d = 0.0;
+    memcpy(&d, &bits, 8);
+    return d;
+}
+
+// ============================================================
+// ANSI: activacion de secuencias de escape en la consola de Windows
+// ============================================================
+
+// Habilita ENABLE_VIRTUAL_TERMINAL_PROCESSING en Windows para que los
+// codigos de escape ANSI se interpreten correctamente en cmd.exe / conhost.
+// En Linux es una no-op: el terminal ya los soporta de forma nativa.
+static void vsh_ansi_ensure() {
+#if defined(_WIN32)
+    static bool done = false;
+    if (done) return;
+    done = true;
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    if (GetConsoleMode(hOut, &mode))
+        SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#endif
+}
 
 } // anonymous namespace
 
@@ -568,6 +732,46 @@ void VshLexer::push_interp_tokens(const std::string &raw, int base_line, int bas
 Token VshLexer::read_string_or_interp() {
     int sline = line_, scol = col_;
     char quote = advance(); // consume '"' o '\''
+
+    // Triple-comilla """...""": string multilínea sin interpolacion (docstring)
+    if (quote == '"' && pos_ < src_.size() && cur() == '"') {
+        if (pos_ + 1 < src_.size() && src_[pos_ + 1] == '"') {
+            // Consumir las dos comillas restantes de apertura
+            advance(); advance();
+            std::string out;
+            while (pos_ < src_.size()) {
+                // Detectar cierre """
+                if (cur() == '"' && pos_ + 1 < src_.size() && src_[pos_ + 1] == '"' &&
+                    pos_ + 2 < src_.size() && src_[pos_ + 2] == '"') {
+                    advance(); advance(); advance();
+                    break;
+                }
+                if (cur() == '\\') {
+                    advance();
+                    if (pos_ < src_.size()) {
+                        char e = advance();
+                        switch (e) {
+                            case 'n':  out += '\n'; break;
+                            case 't':  out += '\t'; break;
+                            case 'r':  out += '\r'; break;
+                            case '"':  out += '"';  break;
+                            case '\\': out += '\\'; break;
+                            default:   out += '\\'; out += e; break;
+                        }
+                    }
+                } else {
+                    out += advance();
+                }
+            }
+            Token t; t.kind = TK::STRING_LIT; t.lexeme = out; t.line = sline; t.col = scol;
+            return t;
+        }
+        // Cadena vacia "": la segunda '"' cierra directamente
+        advance();
+        Token t; t.kind = TK::STRING_LIT; t.lexeme = ""; t.line = sline; t.col = scol;
+        return t;
+    }
+
     std::string raw;
     bool has_interp = false;
     while (pos_ < src_.size() && cur() != quote) {
@@ -1277,7 +1481,36 @@ void VshInterpreter::exec_file(const std::string &path) {
     if (!f) throw VshRuntimeError("no se puede abrir el fichero: " + path);
     std::string src((std::istreambuf_iterator<char>(f)),
                      std::istreambuf_iterator<char>());
-    exec_string(src, path);
+
+    // Guardar contexto anterior para restaurarlo si esto es una importacion
+    bool is_import = !import_stack_.empty();
+    Value prev_name = global_->get("__name__");
+    Value prev_file = global_->get("__file__");
+
+    // __name__ segun si es script principal o modulo importado
+    if (is_import) {
+        std::string mod = std::filesystem::path(path).stem().string();
+        global_->define("__name__", Value(mod));
+    } else {
+        global_->define("__name__", Value(std::string("__main__")));
+    }
+    global_->define("__file__", Value(path));
+
+    try {
+        exec_string(src, path);
+    } catch (...) {
+        // Restaurar contexto del importador antes de propagar la excepcion
+        if (is_import) {
+            global_->define("__name__", prev_name);
+            global_->define("__file__", prev_file);
+        }
+        throw;
+    }
+    // Restaurar contexto del importador al terminar la importacion
+    if (is_import) {
+        global_->define("__name__", prev_name);
+        global_->define("__file__", prev_file);
+    }
 }
 
 void VshInterpreter::exec_string(const std::string &src, const std::string &name) {
@@ -2286,6 +2519,121 @@ void VshInterpreter::register_builtins() {
         return {};
     };
 
+    // ---- sistema de ficheros (operaciones mutables y navegacion) ----
+    builtins_["getcwd"] = [](std::vector<Value> /*args*/) -> Value {
+        std::error_code ec;
+        auto p = std::filesystem::current_path(ec);
+        if (ec) throw VshRuntimeError("getcwd(): " + ec.message());
+        return Value(p.string());
+    };
+    builtins_["listdir"] = [](std::vector<Value> args) -> Value {
+        namespace fs = std::filesystem;
+        std::string dir = args.empty() ? "." : args[0].as_string();
+        auto lst = std::make_shared<std::vector<Value>>();
+        std::error_code ec;
+        for (auto &e : fs::directory_iterator(dir, ec))
+            lst->push_back(Value(e.path().filename().string()));
+        if (ec) throw VshRuntimeError("listdir(): " + ec.message());
+        std::sort(lst->begin(), lst->end(), [](const Value &a, const Value &b){
+            return a.as_string() < b.as_string();
+        });
+        return Value(lst);
+    };
+    builtins_["listdir_full"] = [](std::vector<Value> args) -> Value {
+        namespace fs = std::filesystem;
+        std::string dir = args.empty() ? "." : args[0].as_string();
+        auto lst = std::make_shared<std::vector<Value>>();
+        std::error_code ec;
+        for (auto &e : fs::directory_iterator(dir, ec))
+            lst->push_back(Value(e.path().string()));
+        if (ec) throw VshRuntimeError("listdir_full(): " + ec.message());
+        std::sort(lst->begin(), lst->end(), [](const Value &a, const Value &b){
+            return a.as_string() < b.as_string();
+        });
+        return Value(lst);
+    };
+    builtins_["mkdir"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: mkdir(ruta)");
+        std::error_code ec;
+        std::filesystem::create_directory(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("mkdir(): " + ec.message());
+        return {};
+    };
+    builtins_["makedirs"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: makedirs(ruta)");
+        std::error_code ec;
+        std::filesystem::create_directories(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("makedirs(): " + ec.message());
+        return {};
+    };
+    builtins_["rmdir"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: rmdir(ruta)");
+        std::error_code ec;
+        std::filesystem::remove(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("rmdir(): " + ec.message());
+        return {};
+    };
+    builtins_["remove_file"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: remove_file(ruta)");
+        std::error_code ec;
+        std::filesystem::remove(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("remove_file(): " + ec.message());
+        return {};
+    };
+    builtins_["remove_all"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: remove_all(ruta)");
+        std::error_code ec;
+        std::filesystem::remove_all(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("remove_all(): " + ec.message());
+        return {};
+    };
+    builtins_["rename_path"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: rename_path(origen, destino)");
+        std::error_code ec;
+        std::filesystem::rename(args[0].as_string(), args[1].as_string(), ec);
+        if (ec) throw VshRuntimeError("rename_path(): " + ec.message());
+        return {};
+    };
+    builtins_["copy_file"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: copy_file(origen, destino)");
+        std::error_code ec;
+        std::filesystem::copy_file(args[0].as_string(), args[1].as_string(),
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) throw VshRuntimeError("copy_file(): " + ec.message());
+        return {};
+    };
+    builtins_["abspath"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: abspath(ruta)");
+        std::error_code ec;
+        auto p = std::filesystem::absolute(args[0].as_string());
+        return Value(p.lexically_normal().string());
+    };
+    builtins_["normpath"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: normpath(ruta)");
+        return Value(std::filesystem::path(args[0].as_string()).lexically_normal().string());
+    };
+    builtins_["join_path"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) return Value(std::string{});
+        std::filesystem::path p(args[0].as_string());
+        for (size_t i = 1; i < args.size(); ++i)
+            p /= args[i].as_string();
+        return Value(p.string());
+    };
+    builtins_["file_size"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: file_size(ruta)");
+        std::error_code ec;
+        auto sz = std::filesystem::file_size(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("file_size(): " + ec.message());
+        return Value(int64_t(sz));
+    };
+    builtins_["chdir"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: chdir(ruta)");
+        std::error_code ec;
+        std::filesystem::current_path(args[0].as_string(), ec);
+        if (ec) throw VshRuntimeError("chdir(): " + ec.message());
+        return {};
+    };
+
     // ---- shell y misc ----
     builtins_["shell"] = [](std::vector<Value> args) -> Value {
         if (args.empty()) return Value(std::string{});
@@ -2306,6 +2654,31 @@ void VshInterpreter::register_builtins() {
 #endif
         if (!out.empty() && out.back()=='\n') out.pop_back();
         return Value(out);
+    };
+    builtins_["shell_ex"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: shell_ex(cmd)");
+        std::string cmd = args[0].as_string();
+        std::string out;
+        int code = 0;
+#if defined(_WIN32)
+        FILE *f = _popen(("cmd.exe /C \"" + cmd + "\" 2>&1").c_str(), "r");
+#else
+        FILE *f = popen((cmd + " 2>&1").c_str(), "r");
+#endif
+        if (!f) throw VshRuntimeError("shell_ex(): no se pudo ejecutar: " + cmd);
+        char buf[256];
+        while (fgets(buf, sizeof(buf), f)) out += buf;
+        if (!out.empty() && out.back()=='\n') out.pop_back();
+#if defined(_WIN32)
+        code = _pclose(f);
+#else
+        int status = pclose(f);
+        code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+        auto m = std::make_shared<std::unordered_map<std::string,Value>>();
+        (*m)["output"] = Value(out);
+        (*m)["code"]   = Value(int64_t(code));
+        return Value(m);
     };
     builtins_["sleep"] = [](std::vector<Value> args) -> Value {
         int64_t ms = 0;
@@ -2459,6 +2832,637 @@ void VshInterpreter::register_builtins() {
             return Value(out);
         }
         throw VshRuntimeError("help() requiere funcion o clase");
+    };
+
+    // ---- numeros aleatorios ----
+    builtins_["rand_seed"] = [](std::vector<Value> args) -> Value {
+        uint64_t seed = args.empty() ? (uint64_t)std::random_device{}()
+                                     : (uint64_t)(args[0].is_int()?args[0].as_int():(int64_t)args[0].as_number());
+        g_vsh_rng.seed(seed);
+        return {};
+    };
+    builtins_["rand"] = [](std::vector<Value> /*args*/) -> Value {
+        return Value(std::uniform_real_distribution<double>(0.0, 1.0)(g_vsh_rng));
+    };
+    builtins_["rand_int"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: rand_int(min, max)");
+        int64_t lo = args[0].is_int()?args[0].as_int():(int64_t)args[0].as_number();
+        int64_t hi = args[1].is_int()?args[1].as_int():(int64_t)args[1].as_number();
+        if (lo > hi) throw VshRuntimeError("rand_int(): min > max");
+        return Value(std::uniform_int_distribution<int64_t>(lo, hi)(g_vsh_rng));
+    };
+    builtins_["rand_float"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: rand_float(min, max)");
+        double lo = args[0].as_number(), hi = args[1].as_number();
+        return Value(std::uniform_real_distribution<double>(lo, hi)(g_vsh_rng));
+    };
+    builtins_["rand_choice"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: rand_choice(lista)");
+        auto &lst = *args[0].as_list();
+        if (lst.empty()) throw VshRuntimeError("rand_choice(): lista vacia");
+        size_t idx = std::uniform_int_distribution<size_t>(0, lst.size()-1)(g_vsh_rng);
+        return lst[idx];
+    };
+    builtins_["rand_shuffle"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: rand_shuffle(lista)");
+        auto copy = std::make_shared<std::vector<Value>>(*args[0].as_list());
+        std::shuffle(copy->begin(), copy->end(), g_vsh_rng);
+        return Value(copy);
+    };
+
+    // ---- colecciones de orden superior ----
+    builtins_["sort"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: sort(lista)");
+        auto copy = std::make_shared<std::vector<Value>>(*args[0].as_list());
+        std::sort(copy->begin(), copy->end());
+        return Value(copy);
+    };
+    builtins_["reverse"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: reverse(lista)");
+        auto copy = std::make_shared<std::vector<Value>>(*args[0].as_list());
+        std::reverse(copy->begin(), copy->end());
+        return Value(copy);
+    };
+    builtins_["slice"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: slice(lista, inicio [, fin])");
+        auto &src = *args[0].as_list();
+        int64_t n = (int64_t)src.size();
+        int64_t lo = args.size()>=2 ? args[1].as_int() : 0;
+        int64_t hi = args.size()>=3 ? args[2].as_int() : n;
+        if (lo < 0) lo += n; if (hi < 0) hi += n;
+        lo = std::max<int64_t>(0,lo); hi = std::min<int64_t>(n,hi);
+        auto out = std::make_shared<std::vector<Value>>();
+        for (int64_t i=lo; i<hi; ++i) out->push_back(src[(size_t)i]);
+        return Value(out);
+    };
+    builtins_["flat"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: flat(lista)");
+        auto out = std::make_shared<std::vector<Value>>();
+        for (auto &v : *args[0].as_list()) {
+            if (v.is_list()) for (auto &e : *v.as_list()) out->push_back(e);
+            else out->push_back(v);
+        }
+        return Value(out);
+    };
+    builtins_["zip"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_list()||!args[1].is_list())
+            throw VshRuntimeError("Uso: zip(lista_a, lista_b)");
+        auto &a = *args[0].as_list(); auto &b = *args[1].as_list();
+        size_t n = std::min(a.size(), b.size());
+        auto out = std::make_shared<std::vector<Value>>();
+        for (size_t i=0; i<n; ++i) {
+            auto pair = std::make_shared<std::vector<Value>>();
+            pair->push_back(a[i]); pair->push_back(b[i]);
+            out->push_back(Value(pair));
+        }
+        return Value(out);
+    };
+    builtins_["enumerate"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: enumerate(lista)");
+        auto out = std::make_shared<std::vector<Value>>();
+        int64_t i=0;
+        for (auto &v : *args[0].as_list()) {
+            auto pair = std::make_shared<std::vector<Value>>();
+            pair->push_back(Value(i++)); pair->push_back(v);
+            out->push_back(Value(pair));
+        }
+        return Value(out);
+    };
+    builtins_["sum"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: sum(lista)");
+        bool has_float = false;
+        double acc = 0.0;
+        for (auto &v : *args[0].as_list()) {
+            if (v.is_float()) { has_float=true; acc+=v.as_float(); }
+            else if (v.is_int()) acc+=double(v.as_int());
+            else throw VshRuntimeError("sum(): elemento no numerico: " + v.to_string());
+        }
+        return has_float ? Value(acc) : Value(int64_t(acc));
+    };
+    builtins_["any_of"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: any_of(lista)");
+        for (auto &v : *args[0].as_list()) if (v.truthy()) return Value(true);
+        return Value(false);
+    };
+    builtins_["all_of"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: all_of(lista)");
+        for (auto &v : *args[0].as_list()) if (!v.truthy()) return Value(false);
+        return Value(true);
+    };
+    builtins_["unique"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_list()) throw VshRuntimeError("Uso: unique(lista)");
+        auto out = std::make_shared<std::vector<Value>>();
+        for (auto &v : *args[0].as_list()) {
+            bool found=false;
+            for (auto &u : *out) if (u==v){found=true;break;}
+            if (!found) out->push_back(v);
+        }
+        return Value(out);
+    };
+    builtins_["index_of"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_list()) throw VshRuntimeError("Uso: index_of(lista, valor)");
+        auto &lst = *args[0].as_list();
+        for (size_t i=0; i<lst.size(); ++i) if (lst[i]==args[1]) return Value(int64_t(i));
+        return Value(int64_t(-1));
+    };
+
+    // ---- utilidades de string adicionales ----
+    builtins_["lstrip"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_string()) throw VshRuntimeError("Uso: lstrip(s)");
+        std::string s=args[0].as_string();
+        auto i=s.find_first_not_of(" \t\r\n");
+        return Value(i==std::string::npos ? std::string{} : s.substr(i));
+    };
+    builtins_["rstrip"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_string()) throw VshRuntimeError("Uso: rstrip(s)");
+        std::string s=args[0].as_string();
+        auto i=s.find_last_not_of(" \t\r\n");
+        return Value(i==std::string::npos ? std::string{} : s.substr(0,i+1));
+    };
+    builtins_["find_str"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_string()) throw VshRuntimeError("Uso: find_str(s, sub [, inicio])");
+        const auto &s=args[0].as_string(), &sub=args[1].as_string();
+        size_t start=args.size()>=3 ? (size_t)args[2].as_int() : 0;
+        auto pos=s.find(sub,start);
+        return Value(pos==std::string::npos ? int64_t(-1) : int64_t(pos));
+    };
+    builtins_["count_str"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_string()) throw VshRuntimeError("Uso: count_str(s, sub)");
+        const auto &s=args[0].as_string(), &sub=args[1].as_string();
+        if (sub.empty()) return Value(int64_t(0));
+        int64_t n=0; size_t pos=0;
+        while ((pos=s.find(sub,pos))!=std::string::npos){++n; pos+=sub.size();}
+        return Value(n);
+    };
+    builtins_["repeat"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_string()) throw VshRuntimeError("Uso: repeat(s, n)");
+        std::string s=args[0].as_string(); int64_t n=args[1].as_int();
+        if (n<=0) return Value(std::string{});
+        std::string r; r.reserve(s.size()*(size_t)n);
+        for (int64_t i=0;i<n;++i) r+=s;
+        return Value(r);
+    };
+    builtins_["pad_left"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_string()) throw VshRuntimeError("Uso: pad_left(s, n [, char])");
+        std::string s=args[0].as_string();
+        int64_t n=args[1].as_int();
+        char ch = args.size()>=3 && args[2].is_string() && !args[2].as_string().empty() ? args[2].as_string()[0] : ' ';
+        while ((int64_t)s.size()<n) s.insert(s.begin(),ch);
+        return Value(s);
+    };
+    builtins_["pad_right"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2||!args[0].is_string()) throw VshRuntimeError("Uso: pad_right(s, n [, char])");
+        std::string s=args[0].as_string();
+        int64_t n=args[1].as_int();
+        char ch = args.size()>=3 && args[2].is_string() && !args[2].as_string().empty() ? args[2].as_string()[0] : ' ';
+        while ((int64_t)s.size()<n) s.push_back(ch);
+        return Value(s);
+    };
+    builtins_["char_code"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_string()||args[0].as_string().empty())
+            throw VshRuntimeError("Uso: char_code(s)");
+        return Value(int64_t((unsigned char)args[0].as_string()[0]));
+    };
+    builtins_["from_char"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: from_char(n)");
+        char c=(char)(args[0].as_int()&0xFF);
+        return Value(std::string(1,c));
+    };
+    builtins_["is_numeric"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()||!args[0].is_string()) return Value(false);
+        const auto &s=args[0].as_string(); if (s.empty()) return Value(false);
+        try { std::stod(s); return Value(true); } catch(...){ return Value(false); }
+    };
+    builtins_["hex"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: hex(n)");
+        int64_t n=args[0].is_int()?args[0].as_int():(int64_t)args[0].as_number();
+        char buf[32]; snprintf(buf,sizeof(buf),"0x%llx",(unsigned long long)(uint64_t)n);
+        return Value(std::string(buf));
+    };
+    builtins_["bin_str"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: bin_str(n)");
+        uint64_t n=(uint64_t)(args[0].is_int()?args[0].as_int():(int64_t)args[0].as_number());
+        if (n==0) return Value(std::string("0b0"));
+        std::string r; while(n){r=(char)('0'+(n&1))+r; n>>=1;} return Value("0b"+r);
+    };
+
+    // ---- matematicas adicionales ----
+    builtins_["clamp"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<3) throw VshRuntimeError("Uso: clamp(x, min, max)");
+        if (args[0].is_int()&&args[1].is_int()&&args[2].is_int()) {
+            int64_t x=args[0].as_int(),lo=args[1].as_int(),hi=args[2].as_int();
+            return Value(x<lo?lo:(x>hi?hi:x));
+        }
+        double x=args[0].as_number(),lo=args[1].as_number(),hi=args[2].as_number();
+        return Value(x<lo?lo:(x>hi?hi:x));
+    };
+    builtins_["sign"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: sign(x)");
+        if (args[0].is_int()) { int64_t x=args[0].as_int(); return Value(x>0?int64_t(1):(x<0?int64_t(-1):int64_t(0))); }
+        double x=args[0].as_number(); return Value(x>0.0?1.0:(x<0.0?-1.0:0.0));
+    };
+    builtins_["gcd"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2) throw VshRuntimeError("Uso: gcd(a, b)");
+        int64_t a=std::abs(args[0].as_int()), b=std::abs(args[1].as_int());
+        while(b){int64_t t=b; b=a%b; a=t;} return Value(a);
+    };
+    builtins_["lcm"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2) throw VshRuntimeError("Uso: lcm(a, b)");
+        int64_t a=std::abs(args[0].as_int()), b=std::abs(args[1].as_int());
+        if (!a||!b) return Value(int64_t(0));
+        int64_t g=a; int64_t tb=b; while(tb){int64_t t=tb;tb=g%tb;g=t;}
+        return Value(a/g*b);
+    };
+    builtins_["log2"]  = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: log2(x)");
+        return Value(std::log2(args[0].as_number()));
+    };
+    builtins_["log10"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: log10(x)");
+        return Value(std::log10(args[0].as_number()));
+    };
+    builtins_["sin"]   = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: sin(x)");
+        return Value(std::sin(args[0].as_number()));
+    };
+    builtins_["cos"]   = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: cos(x)");
+        return Value(std::cos(args[0].as_number()));
+    };
+    builtins_["tan"]   = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: tan(x)");
+        return Value(std::tan(args[0].as_number()));
+    };
+    builtins_["pi"] = [](std::vector<Value> /*args*/) -> Value {
+        return Value(3.141592653589793);
+    };
+    builtins_["inf"] = [](std::vector<Value> /*args*/) -> Value {
+        return Value(std::numeric_limits<double>::infinity());
+    };
+    builtins_["is_nan"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) return Value(false);
+        return Value(args[0].is_float() && std::isnan(args[0].as_float()));
+    };
+    builtins_["is_inf"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) return Value(false);
+        return Value(args[0].is_float() && std::isinf(args[0].as_float()));
+    };
+
+    // ---- tiempo ----
+    builtins_["time_ms"] = [](std::vector<Value> /*args*/) -> Value {
+        using namespace std::chrono;
+        return Value(int64_t(duration_cast<milliseconds>(
+            system_clock::now().time_since_epoch()).count()));
+    };
+    builtins_["time_s"] = [](std::vector<Value> /*args*/) -> Value {
+        using namespace std::chrono;
+        return Value(double(duration_cast<microseconds>(
+            system_clock::now().time_since_epoch()).count()) / 1e6);
+    };
+    builtins_["time_now"] = [](std::vector<Value> args) -> Value {
+        std::time_t t = std::time(nullptr);
+        const char *fmt = args.empty() ? "%Y-%m-%d %H:%M:%S" : args[0].as_string().c_str();
+        char buf[128];
+        std::strftime(buf, sizeof(buf), fmt, std::localtime(&t));
+        return Value(std::string(buf));
+    };
+
+    // ---- entorno y proceso ----
+    builtins_["getenv"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: getenv(nombre)");
+        const char *v = std::getenv(args[0].as_string().c_str());
+        return v ? Value(std::string(v)) : Value{};
+    };
+    builtins_["setenv"] = [](std::vector<Value> args) -> Value {
+        if (args.size()<2) throw VshRuntimeError("Uso: setenv(nombre, valor)");
+#if defined(_WIN32)
+        _putenv_s(args[0].as_string().c_str(), args[1].as_string().c_str());
+#else
+        setenv(args[0].as_string().c_str(), args[1].as_string().c_str(), 1);
+#endif
+        return {};
+    };
+    builtins_["platform"] = [](std::vector<Value> /*args*/) -> Value {
+#if defined(_WIN32)
+        return Value(std::string("windows"));
+#elif defined(__APPLE__)
+        return Value(std::string("macos"));
+#else
+        return Value(std::string("linux"));
+#endif
+    };
+    builtins_["pid"] = [](std::vector<Value> /*args*/) -> Value {
+#if defined(_WIN32)
+        return Value(int64_t(GetCurrentProcessId()));
+#else
+        return Value(int64_t(getpid()));
+#endif
+    };
+    builtins_["cpu_count"] = [](std::vector<Value> /*args*/) -> Value {
+        return Value(int64_t(std::thread::hardware_concurrency()));
+    };
+
+    // ---- formato de texto ----
+    builtins_["format"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) return Value(std::string{});
+        std::string tmpl = args[0].as_string();
+        std::string out; size_t arg_idx=1;
+        for (size_t i=0; i<tmpl.size(); ++i) {
+            if (tmpl[i]=='{' && i+1<tmpl.size()) {
+                size_t j=i+1;
+                while (j<tmpl.size()&&tmpl[j]!='}') ++j;
+                if (j<tmpl.size()) {
+                    std::string key=tmpl.substr(i+1,j-i-1);
+                    size_t idx = key.empty() ? arg_idx++ : (size_t)std::stoul(key)+1;
+                    out += (idx<args.size()) ? args[idx].to_string() : "";
+                    i=j; continue;
+                }
+            }
+            out+=tmpl[i];
+        }
+        return Value(out);
+    };
+
+    // ---- json simple ----
+    // Implementacion recursiva sin dependencias externas.
+    // Soporta null, bool, int, float, string, list, map.
+    builtins_["json_str"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) return Value(std::string("null"));
+        std::function<std::string(const Value&)> to_json = [&](const Value &v) -> std::string {
+            if (v.is_null())   return "null";
+            if (v.is_bool())   return v.as_bool() ? "true" : "false";
+            if (v.is_int())    return std::to_string(v.as_int());
+            if (v.is_float()) {
+                std::ostringstream os; os << v.as_float(); return os.str();
+            }
+            if (v.is_string()) {
+                std::string s=v.as_string(), r="\"";
+                for (char c:s) {
+                    if (c=='"') r+="\\\"";
+                    else if (c=='\\') r+="\\\\";
+                    else if (c=='\n') r+="\\n";
+                    else if (c=='\r') r+="\\r";
+                    else if (c=='\t') r+="\\t";
+                    else r+=c;
+                }
+                return r+"\"";
+            }
+            if (v.is_list()) {
+                std::string r="[";
+                auto &lst=*v.as_list();
+                for (size_t i=0;i<lst.size();++i){if(i)r+=","; r+=to_json(lst[i]);}
+                return r+"]";
+            }
+            if (v.is_map()) {
+                std::string r="{";
+                bool first=true;
+                for (auto &[k,val]:*v.as_map()){
+                    if(!first)r+=","; first=false;
+                    r+="\""+k+"\":"+to_json(val);
+                }
+                return r+"}";
+            }
+            return "null";
+        };
+        return Value(to_json(args[0]));
+    };
+
+    // ---- ffi: llamadas a librerias nativas (Win API, .so, .dll) ----
+    // ffi_open(ruta) -> handle: carga la libreria dinamica y devuelve su id opaco.
+    builtins_["ffi_open"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: ffi_open(ruta_lib)");
+        return Value(vsh_ffi_open(args[0].as_string()));
+    };
+
+    // ffi_sym(handle, nombre) -> dir: busca el simbolo y devuelve su direccion como int.
+    builtins_["ffi_sym"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: ffi_sym(handle, nombre)");
+        return Value(vsh_ffi_sym(args[0].as_int(), args[1].as_string()));
+    };
+
+    // ffi_call(sym [, arg1, ...]) -> int: llama con args int/str/float/bool/null.
+    builtins_["ffi_call"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: ffi_call(sym_handle [, arg1, ...])");
+        int64_t sym = args[0].as_int();
+        std::vector<Value> rest(args.begin() + 1, args.end());
+        return Value(vsh_ffi_call(sym, rest));
+    };
+
+    // ffi_call_f(sym [, arg1, ...]) -> float: igual que ffi_call pero retorno double.
+    builtins_["ffi_call_f"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: ffi_call_f(sym_handle [, arg1, ...])");
+        int64_t sym = args[0].as_int();
+        std::vector<Value> rest(args.begin() + 1, args.end());
+        return Value(vsh_ffi_call_f(sym, rest));
+    };
+
+    // ffi_close(handle): descarga la libreria.
+    builtins_["ffi_close"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: ffi_close(handle)");
+        vsh_ffi_close(args[0].as_int());
+        return Value();
+    };
+
+    // ffi_call_sym(ruta, nombre [, arg1, ...]): atajo open+sym+call+close en una llamada.
+    builtins_["ffi_call_sym"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: ffi_call_sym(ruta, nombre [, arg1, ...])");
+        int64_t lib = vsh_ffi_open(args[0].as_string());
+        int64_t sym = vsh_ffi_sym(lib, args[1].as_string());
+        std::vector<Value> rest(args.begin() + 2, args.end());
+        int64_t ret = vsh_ffi_call(sym, rest);
+        vsh_ffi_close(lib);
+        return Value(ret);
+    };
+
+    // ffi_str(ptr_int) -> string: interpreta el entero como char* y copia el contenido.
+    // Util para leer strings de retorno de funciones Win32/POSIX.
+    builtins_["ffi_str"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: ffi_str(ptr_int64)");
+        int64_t addr = args[0].as_int();
+        if (!addr) return Value(); // puntero nulo -> null
+        const char *p = nullptr;
+        memcpy(&p, &addr, sizeof(p));
+        return Value(std::string(p));
+    };
+
+    // ---- ansi: secuencias de escape y colores ANSI/VT100 ----
+    // Activa VT100 en Windows automaticamente al cargar los builtins.
+    vsh_ansi_ensure();
+
+    // Mapa ANSI con todas las constantes de color y estilo.
+    // Uso: echo(ANSI["RED"] + "texto" + ANSI["RESET"])
+    {
+        auto ansi_map = std::make_shared<std::unordered_map<std::string, Value>>();
+        (*ansi_map)["RESET"]         = Value(std::string("\033[0m"));
+        (*ansi_map)["BOLD"]          = Value(std::string("\033[1m"));
+        (*ansi_map)["DIM"]           = Value(std::string("\033[2m"));
+        (*ansi_map)["ITALIC"]        = Value(std::string("\033[3m"));
+        (*ansi_map)["UNDERLINE"]     = Value(std::string("\033[4m"));
+        (*ansi_map)["BLINK"]         = Value(std::string("\033[5m"));
+        (*ansi_map)["REVERSE"]       = Value(std::string("\033[7m"));
+        (*ansi_map)["STRIKE"]        = Value(std::string("\033[9m"));
+        (*ansi_map)["BLACK"]         = Value(std::string("\033[30m"));
+        (*ansi_map)["RED"]           = Value(std::string("\033[31m"));
+        (*ansi_map)["GREEN"]         = Value(std::string("\033[32m"));
+        (*ansi_map)["YELLOW"]        = Value(std::string("\033[33m"));
+        (*ansi_map)["BLUE"]          = Value(std::string("\033[34m"));
+        (*ansi_map)["MAGENTA"]       = Value(std::string("\033[35m"));
+        (*ansi_map)["CYAN"]          = Value(std::string("\033[36m"));
+        (*ansi_map)["WHITE"]         = Value(std::string("\033[37m"));
+        (*ansi_map)["BR_BLACK"]      = Value(std::string("\033[90m"));
+        (*ansi_map)["BR_RED"]        = Value(std::string("\033[91m"));
+        (*ansi_map)["BR_GREEN"]      = Value(std::string("\033[92m"));
+        (*ansi_map)["BR_YELLOW"]     = Value(std::string("\033[93m"));
+        (*ansi_map)["BR_BLUE"]       = Value(std::string("\033[94m"));
+        (*ansi_map)["BR_MAGENTA"]    = Value(std::string("\033[95m"));
+        (*ansi_map)["BR_CYAN"]       = Value(std::string("\033[96m"));
+        (*ansi_map)["BR_WHITE"]      = Value(std::string("\033[97m"));
+        (*ansi_map)["BG_BLACK"]      = Value(std::string("\033[40m"));
+        (*ansi_map)["BG_RED"]        = Value(std::string("\033[41m"));
+        (*ansi_map)["BG_GREEN"]      = Value(std::string("\033[42m"));
+        (*ansi_map)["BG_YELLOW"]     = Value(std::string("\033[43m"));
+        (*ansi_map)["BG_BLUE"]       = Value(std::string("\033[44m"));
+        (*ansi_map)["BG_MAGENTA"]    = Value(std::string("\033[45m"));
+        (*ansi_map)["BG_CYAN"]       = Value(std::string("\033[46m"));
+        (*ansi_map)["BG_WHITE"]      = Value(std::string("\033[47m"));
+        (*ansi_map)["BG_BR_BLACK"]   = Value(std::string("\033[100m"));
+        (*ansi_map)["BG_BR_RED"]     = Value(std::string("\033[101m"));
+        (*ansi_map)["BG_BR_GREEN"]   = Value(std::string("\033[102m"));
+        (*ansi_map)["BG_BR_YELLOW"]  = Value(std::string("\033[103m"));
+        (*ansi_map)["BG_BR_BLUE"]    = Value(std::string("\033[104m"));
+        (*ansi_map)["BG_BR_MAGENTA"] = Value(std::string("\033[105m"));
+        (*ansi_map)["BG_BR_CYAN"]    = Value(std::string("\033[106m"));
+        (*ansi_map)["BG_BR_WHITE"]   = Value(std::string("\033[107m"));
+        (*ansi_map)["CLEAR"]         = Value(std::string("\033[2J\033[H"));
+        (*ansi_map)["CLEAR_LINE"]    = Value(std::string("\033[2K\r"));
+        global_->define("ANSI", Value(ansi_map));
+    }
+
+    // ansi_enable(): activa VT100 en Windows; siempre retorna true.
+    builtins_["ansi_enable"] = [](std::vector<Value> /*args*/) -> Value {
+        vsh_ansi_ensure();
+        return Value(true);
+    };
+
+    // ansi_code(n): devuelve "\033[{n}m" para cualquier codigo ANSI arbitrario.
+    builtins_["ansi_code"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: ansi_code(n)");
+        return Value("\033[" + args[0].to_string() + "m");
+    };
+
+    // ansi_rgb(r,g,b): color de primer plano en True Color (24 bits).
+    builtins_["ansi_rgb"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 3) throw VshRuntimeError("Uso: ansi_rgb(r, g, b)");
+        return Value("\033[38;2;" + std::to_string(args[0].as_int()) + ";" +
+                     std::to_string(args[1].as_int()) + ";" +
+                     std::to_string(args[2].as_int()) + "m");
+    };
+
+    // ansi_rgb_bg(r,g,b): color de fondo en True Color (24 bits).
+    builtins_["ansi_rgb_bg"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 3) throw VshRuntimeError("Uso: ansi_rgb_bg(r, g, b)");
+        return Value("\033[48;2;" + std::to_string(args[0].as_int()) + ";" +
+                     std::to_string(args[1].as_int()) + ";" +
+                     std::to_string(args[2].as_int()) + "m");
+    };
+
+    // colorize(texto, fg [, bg [, negrita]]): envuelve el texto con escapes de color.
+    // fg/bg son nombres de color en minusculas: "red", "green", "br_blue", etc.
+    builtins_["colorize"] = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: colorize(texto, fg [, bg [, bold]])");
+        static const std::unordered_map<std::string, int> fg_map = {
+            {"black",30},{"red",31},{"green",32},{"yellow",33},{"blue",34},
+            {"magenta",35},{"cyan",36},{"white",37},
+            {"br_black",90},{"br_red",91},{"br_green",92},{"br_yellow",93},
+            {"br_blue",94},{"br_magenta",95},{"br_cyan",96},{"br_white",97}};
+        static const std::unordered_map<std::string, int> bg_map = {
+            {"black",40},{"red",41},{"green",42},{"yellow",43},{"blue",44},
+            {"magenta",45},{"cyan",46},{"white",47},
+            {"br_black",100},{"br_red",101},{"br_green",102},{"br_yellow",103},
+            {"br_blue",104},{"br_magenta",105},{"br_cyan",106},{"br_white",107}};
+        std::string text = args[0].to_string();
+        std::string out;
+        std::string fg_name = args[1].to_string();
+        for (auto &c : fg_name) c = (char)tolower((unsigned char)c);
+        auto it = fg_map.find(fg_name);
+        if (it != fg_map.end()) out += "\033[" + std::to_string(it->second) + "m";
+        if (args.size() >= 3) {
+            std::string bg_name = args[2].to_string();
+            for (auto &c : bg_name) c = (char)tolower((unsigned char)c);
+            auto jt = bg_map.find(bg_name);
+            if (jt != bg_map.end()) out += "\033[" + std::to_string(jt->second) + "m";
+        }
+        if (args.size() >= 4 && args[3].truthy()) out += "\033[1m";
+        out += text + "\033[0m";
+        return Value(out);
+    };
+
+    // Funciones rapidas de color y estilo:
+    //   red("hola")    -> "\033[31mhola\033[0m"
+    //   red()          -> "\033[31m"  (solo el codigo, sin reset)
+    {
+        static const std::pair<const char *, const char *> color_list[] = {
+            {"red",         "\033[31m"}, {"green",     "\033[32m"},
+            {"yellow",      "\033[33m"}, {"blue",      "\033[34m"},
+            {"magenta",     "\033[35m"}, {"cyan",      "\033[36m"},
+            {"white",       "\033[37m"}, {"bold",      "\033[1m" },
+            {"dim",         "\033[2m" }, {"italic",    "\033[3m" },
+            {"underline",   "\033[4m" }, {"strike",    "\033[9m" },
+        };
+        for (const auto &entry : color_list) {
+            std::string seq(entry.second);
+            builtins_[entry.first] = [seq](std::vector<Value> args) -> Value {
+                return args.empty() ? Value(seq) : Value(seq + args[0].to_string() + "\033[0m");
+            };
+        }
+    }
+
+    // Movimiento de cursor ANSI.
+    builtins_["ansi_cursor_up"]    = [](std::vector<Value> args) -> Value {
+        int64_t n = args.empty() ? 1 : args[0].as_int();
+        return Value("\033[" + std::to_string(n) + "A");
+    };
+    builtins_["ansi_cursor_down"]  = [](std::vector<Value> args) -> Value {
+        int64_t n = args.empty() ? 1 : args[0].as_int();
+        return Value("\033[" + std::to_string(n) + "B");
+    };
+    builtins_["ansi_cursor_right"] = [](std::vector<Value> args) -> Value {
+        int64_t n = args.empty() ? 1 : args[0].as_int();
+        return Value("\033[" + std::to_string(n) + "C");
+    };
+    builtins_["ansi_cursor_left"]  = [](std::vector<Value> args) -> Value {
+        int64_t n = args.empty() ? 1 : args[0].as_int();
+        return Value("\033[" + std::to_string(n) + "D");
+    };
+    builtins_["ansi_cursor_pos"]   = [](std::vector<Value> args) -> Value {
+        if (args.size() < 2) throw VshRuntimeError("Uso: ansi_cursor_pos(fila, col)");
+        return Value("\033[" + std::to_string(args[0].as_int()) + ";" +
+                     std::to_string(args[1].as_int()) + "H");
+    };
+    builtins_["ansi_clear"]        = [](std::vector<Value> /*args*/) -> Value {
+        return Value(std::string("\033[2J\033[H"));
+    };
+    builtins_["ansi_clear_line"]   = [](std::vector<Value> /*args*/) -> Value {
+        return Value(std::string("\033[2K\r"));
+    };
+
+    // strip_ansi(texto): elimina todas las secuencias de escape ANSI de un string.
+    builtins_["strip_ansi"] = [](std::vector<Value> args) -> Value {
+        if (args.empty()) throw VshRuntimeError("Uso: strip_ansi(texto)");
+        std::string s = args[0].to_string();
+        std::string out;
+        for (size_t i = 0; i < s.size(); ) {
+            if (s[i] == '\033' && i + 1 < s.size() && s[i + 1] == '[') {
+                i += 2;
+                while (i < s.size() && s[i] != 'm' && s[i] != 'A' &&
+                       s[i] != 'B'  && s[i] != 'C' && s[i] != 'D' &&
+                       s[i] != 'H'  && s[i] != 'J' && s[i] != 'K') ++i;
+                if (i < s.size()) ++i;
+            } else {
+                out += s[i++];
+            }
+        }
+        return Value(out);
     };
 
     // ---- sockets de red ----
@@ -2707,6 +3711,14 @@ void VshInterpreter::register_builtins() {
         (*m)["body"]    = Value(r.body);
         return Value(m);
     };
+
+    // ---- variables de contexto de ejecucion (estilo Python __name__) ----
+    // __name__ == "__main__"   -> script ejecutado directamente (--script o REPL script)
+    // __name__ == "<modulo>"   -> script cargado via import
+    // __name__ == "__repl__"   -> sesion interactiva (--interprete o CLI vsh)
+    // __file__                 -> ruta del fichero en ejecucion ("" en REPL)
+    global_->define("__name__", Value(std::string("__repl__")));
+    global_->define("__file__", Value(std::string("")));
 
     // ---- exponer todos los builtins en el scope global como stubs (estilo Python) ----
     // Esto permite usar 'help' sin parentesis igual que en Python
