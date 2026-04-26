@@ -355,6 +355,149 @@ namespace runtime {
     /** @brief Ejecuta CMP reg, imm: compara registro con inmediato; solo flags. */
     void exec_instr_cmp_imm(ProcessVM *vm, const DecodedInstr &instr);
 
+    /** @brief Ejecuta MOD reg, reg: resto de la division entera y actualiza flags. */
+    void exec_instr_mod_reg(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief Ejecuta MOD con acceso a memoria SIB. */
+    void exec_instr_mod_sib(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief Ejecuta MOD reg, imm: resto de la division con inmediato. */
+    void exec_instr_mod_imm(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta SETCC r_dst, cond: almacena 0 o 1 en el registro segun la condicion de flags.
+     *
+     * Encoding FIXED_4: [0x00][0x43][byte2][0x00]
+     *   byte2 = (cond<<4) | dst_reg
+     * El codigo de condicion es el mismo que usa JCC (0x00=JO, 0x0F=siempre).
+     */
+    void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta TRYENTER: apila un nuevo frame de excepcion en exc_frame_stack.
+     *
+     * Encoding FIXED_4 REG: [0x00][0x44][ctrl][byte3]
+     *   reg1 = registro con la PC handler (direccion absoluta en VM)
+     *   reg2 = registro con ClassInfo* del tipo capturado (0 = catch-all)
+     */
+    void exec_instr_tryenter(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta TRYLEAVE: desapila el frame de excepcion del tope de exc_frame_stack.
+     *
+     * Encoding FIXED_2: [0x00][0x45]
+     */
+    void exec_instr_tryleave(ProcessVM *vm, const DecodedInstr &instr);
+
+    // =========================================================================
+    //  Ejecutores: instrucciones de cadenas (StringObject)
+    // =========================================================================
+
+    /**
+     * @brief Ejecuta STRMAKE r_dst, r_src: crea un StringObject a partir de un buffer en VM.
+     *
+     * Encoding FIXED_4: [0x00][0x46][ctrl][byte3]
+     *   ctrl = (r_dst<<4)|r_src   - r_src apunta al buffer UTF-8 en memoria VM
+     *   byte3 = (encoding<<4)|r_len - r_len contiene la longitud en bytes
+     * r_dst recibe el GcHandle del nuevo StringObject.
+     */
+    void exec_instr_strmake(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRLEN r_dst, r_src: almacena el numero de code points en r_dst.
+     *
+     * Encoding FIXED_4: [0x00][0x47][ctrl][0x00]  ctrl = (r_dst<<4)|r_src
+     */
+    void exec_instr_strlen(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRCAT r_dst, r_a, r_b: concatena dos StringObjects en uno nuevo.
+     *
+     * Encoding FIXED_4: [0x00][0x48][ctrl][byte3]  ctrl=(r_dst<<4)|r_a, byte3=r_b
+     */
+    void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRCMP r_dst, r_a, r_b: compara dos StringObjects.
+     *
+     * r_dst recibe -1, 0 o 1. ZF/SF se actualizan segun el resultado.
+     * Encoding FIXED_4: [0x00][0x49][ctrl][byte3]  ctrl=(r_dst<<4)|r_a, byte3=r_b
+     */
+    void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRCONV r_dst, r_src, enc: convierte la codificacion de un StringObject.
+     *
+     * Encoding FIXED_4: [0x00][0x4A][ctrl][byte3]  ctrl=(r_dst<<4)|r_src, byte3=encoding
+     * Crea un nuevo StringObject con la codificacion indicada.
+     */
+    void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRRAW r_dst, r_src: devuelve un puntero host al buffer interno del string.
+     *
+     * Util para pasar strings a la Win32 API (MessageBoxA, CreateFileA, etc.).
+     * Encoding FIXED_4: [0x00][0x4B][ctrl][0x00]  ctrl=(r_dst<<4)|r_src
+     * r_dst recibe la direccion host (uint64) del buffer de datos del StringObject.
+     */
+    void exec_instr_strraw(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRSLICE r_dst, r_src, r_range: vista sin copia sobre un substring.
+     *
+     * r_range debe contener (cp_start << 32) | cp_len (ambos en code points).
+     * Materializa ROPE antes de crear el slice.
+     * Encoding FIXED_4: [0x00][0x4C][ctrl][byte3]  ctrl=(r_dst<<4)|r_src, byte3=r_range (nibble)
+     */
+    void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRFLAT r_dst, r_src: materializa ROPE/SLICE a FLAT.
+     *
+     * Si el origen ya es FLAT, r_dst recibe el mismo GcHandle sin copiar.
+     * Encoding FIXED_4: [0x00][0x4D][ctrl][0x00]  ctrl=(r_dst<<4)|r_src
+     */
+    void exec_instr_strflat(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRHASH r_dst, r_src: calcula y cachea el hash FNV-1a.
+     *
+     * Materializa ROPE/SLICE si es necesario. r_dst recibe el hash de 32 bits.
+     * Encoding FIXED_4: [0x00][0x4E][ctrl][0x00]  ctrl=(r_dst<<4)|r_src
+     */
+    void exec_instr_strhash(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRINTERN r_dst, r_src: interna el string en el pool del proceso.
+     *
+     * Devuelve el GcHandle canonico (puede diferir de r_src si ya existia un identico).
+     * Encoding FIXED_4: [0x00][0x4F][ctrl][0x00]  ctrl=(r_dst<<4)|r_src
+     */
+    void exec_instr_strintern(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief Ejecuta STRGETENC r_dst, r_src: almacena el byte de codificacion en r_dst. */
+    void exec_instr_strgetenc(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief Ejecuta STRGETBYTES r_dst, r_src: almacena el byte_len en r_dst. */
+    void exec_instr_strgetbytes(ProcessVM *vm, const DecodedInstr &instr);
+
+    /** @brief Ejecuta STRGETKIND r_dst, r_src: almacena el kind (0=FLAT 1=ROPE 2=SLICE) en r_dst. */
+    void exec_instr_strgetkind(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRRESERVE r_dst, r_cap: aloca FLAT vacio con capacidad reservada.
+     *
+     * Permite patron string-builder: STRRESERVE -> STRRAW (write) -> STRFINALIZE.
+     * Encoding FIXED_4: [0x00][0x53][ctrl][0x00]  ctrl=(r_dst<<4)|r_cap
+     */
+    void exec_instr_strreserve(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta STRFINALIZE r_dst, r_newlen: actualiza byte_len/length/hash de un FLAT mutable.
+     *
+     * Debe usarse tras STRRESERVE + escritura directa en el buffer.
+     * Encoding FIXED_4: [0x00][0x54][ctrl][0x00]  ctrl=(r_dst<<4)|r_newlen
+     */
+    void exec_instr_strfinalize(ProcessVM *vm, const DecodedInstr &instr);
+
     // =========================================================================
     //  Ejecutores: control de flujo y pila
     // =========================================================================

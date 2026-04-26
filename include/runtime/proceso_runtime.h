@@ -33,6 +33,10 @@ namespace distrib {
     class Mailbox; ///< Declaracion adelantada del buzon de mensajes distribuido
 }
 
+namespace runtime {
+    class StringInternPool; ///< Pool de interning de strings (definicion en string_intern.h)
+}
+
 /**
  * @brief Numero de reducciones por defecto que se le asignan a cada proceso al entrar en ejecucion.
  *
@@ -308,6 +312,23 @@ namespace runtime {
         loader::FrameHeader *frame_stack = nullptr; ///< Cabeza de la cadena de FrameHeaders activos (push en CALLVIRT, pop en RET/THROW)
 
         uint64_t current_exception = 0; ///< Handle de la excepcion activa durante el unwinding (0 = sin excepcion)
+
+        /**
+         * @brief Frame de excepcion ligero apilado por TRYENTER / desapilado por TRYLEAVE.
+         *
+         * Permite que compiladores de alto nivel instalen handlers de excepcion en
+         * tiempo de ejecucion sin necesidad de anotaciones en el bytecode.
+         * do_throw comprueba esta pila antes de recorrer MethodInfo.handlers.
+         */
+        struct ExceptionFrame {
+            uint64_t              handler_pc; ///< Direccion absoluta VM del bloque catch
+            loader::ClassInfo    *type;        ///< Tipo capturado (nullptr = catch-all)
+            struct ExceptionFrame *prev;       ///< Frame anterior en la pila
+        };
+
+        ExceptionFrame *exc_frame_stack = nullptr; ///< Pila de frames TRYENTER activos
+
+        StringInternPool *str_intern_pool = nullptr; ///< Pool de strings internados (creado bajo demanda)
 
         Scheduler &scheduler; ///< Referencia al scheduler propietario de este proceso
 
