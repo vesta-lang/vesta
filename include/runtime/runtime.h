@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <queue>
 #include <thread>
 #include <vector>
@@ -44,6 +45,10 @@
 
 namespace loader {
     class Loader; ///< Cargador de archivos .velb (declaracion adelantada)
+}
+
+namespace distrib {
+    class DistRuntime; ///< Coordinador del sistema distribuido (declaracion adelantada)
 }
 
 namespace runtime {
@@ -212,9 +217,12 @@ namespace runtime {
             return ss.str();
         }
 
-        std::atomic<bool> vm_running{true}; ///< true mientras haya schedulers en ejecucion
+        std::atomic<bool> vm_running{true};      ///< true mientras haya schedulers en ejecucion
+        std::atomic<bool> vm_persistent{false};  ///< si true, el scheduler espera nuevos procesos en lugar de terminar al quedarse sin trabajo
 
         size_t num_schedulers; ///< Numero de schedulers creados al inicializar la VM
+
+        std::unique_ptr<distrib::DistRuntime> dist_runtime; ///< Coordinador del sistema de programacion distribuida (puede ser nullptr si no se arranco)
 
     private:
         std::mutex state_lock; ///< Mutex para serializar cambios de estado de la instancia

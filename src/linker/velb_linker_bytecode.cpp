@@ -903,6 +903,15 @@ namespace Assembly::Bytecode::Linker {
         // indicar el tamano de la tabla de etiquetas.
         result->emit32(final_header.size_label_table);
 
+        // campos de depuracion (añadidos al struct pero antes no se emitian, lo que desplazaba
+        // compute_sections_base_offset() 16 bytes respecto a la posicion real del blob de strings)
+        result->emit64(final_header.offset_debug_section);
+        result->emit32(final_header.size_debug_section);
+        result->emit8(final_header.debug_level);
+        result->emit8(final_header._debug_pad[0]);
+        result->emit8(final_header._debug_pad[1]);
+        result->emit8(final_header._debug_pad[2]);
+
         // el header siempre debe estar alineado a 16 bytes
         while (result->offset % 16 != 0) {
             result->emit8(0x00);

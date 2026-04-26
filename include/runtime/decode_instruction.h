@@ -175,6 +175,18 @@ namespace runtime {
     void decode_instr_two_op_reg(ProcessVM *vm, DecodedInstr &instr);
 
     /**
+     * @brief Descodifica instrucciones con codificacion de bytes crudos.
+     *
+     * Almacena byte2 en reg1 y byte3 en reg2 sin extraccion de nibbles.
+     * Usado por instrucciones de strings (0x43-0x54) cuya convencion de encoding
+     * es (r_dst<<4)|r_src en byte2, datos adicionales en byte3.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_raw_bytes(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
      * @brief Descodifica una instruccion de un solo registro con modo (INC/DEC).
      *
      * Formato: [opcode1][byte]
@@ -371,6 +383,32 @@ namespace runtime {
      * @param instr Estructura de instruccion que se rellena.
      */
     void decode_instr_sib(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
+     * @brief Descodifica JUMPTABLE / TYPESWITCH (3 operandos empaquetados, FIXED_4).
+     *
+     * Formato: [0x00][0x27|0x28][byte2][byte3]
+     *   byte2 bits 7-4 = r_val/r_obj, bits 3-0 = r_table.
+     *   byte3 = count (numero de entradas, uint8).
+     * Resultado en mem_data: reg_base=r_val, reg_index=r_table, scale=count.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_jumptable(ProcessVM *vm, DecodedInstr &instr);
+
+    /**
+     * @brief Descodifica una instruccion de tres registros (msgsend).
+     *
+     * Formato FIXED_4: [0x00][opcode2][b2][b3]
+     *   b2 = (r_pid<<4) | r_addr
+     *   b3 = (r_len<<4)
+     * Almacena en mem_data: reg_base=r_pid, reg_index=r_addr, reg_final=r_len.
+     *
+     * @param vm    Proceso virtual cuyo RIP apunta al inicio de la instruccion.
+     * @param instr Estructura de instruccion que se rellena.
+     */
+    void decode_instr_three_reg(ProcessVM *vm, DecodedInstr &instr);
 
     // =========================================================================
     //  Funciones principales del pipeline

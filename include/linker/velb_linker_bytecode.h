@@ -22,25 +22,31 @@
  *  - Clase @c Linker que combina multiples modulos objeto en un ejecutable final.
  *  - Estructuras de reporte (@c LinkerReport, @c LinkerError, @c LinkerWarning).
  *
- * Formato VELB (layout del header, 88 bytes):
+ * Formato VELB (layout del header, 120 bytes):
  * @verbatim
  *   Offset  Size  Campo
  *   ------  ----  -----
- *      0      4   magic          ("VELB" en LE / "BLEV" en BE)
- *      4      4   format_v       (version del formato)
- *      8      4   max_v          (version maxima de VM compatible)
- *     12      4   min_v          (version minima de VM compatible)
- *     16      8   checksum       (checksum del ejecutable)
- *     24      8   flags          (meta-informacion del ejecutable)
- *     32      8   timestamp      (marca de tiempo de compilacion)
- *     40      4   arch           (arquitectura objetivo)
- *     44      4   count          (numero de secciones)
- *     48      8   table_offset   (offset a la tabla de secciones)
- *     56      8   n_spaces       (numero de espacios de direcciones)
+ *      0      4   magic              ("VELB" en LE / "BLEV" en BE)
+ *      4      4   format_v           (version del formato)
+ *      8      4   max_v              (version maxima de VM compatible)
+ *     12      4   min_v              (version minima de VM compatible)
+ *     16      8   checksum           (checksum del ejecutable)
+ *     24      8   flags              (meta-informacion del ejecutable)
+ *     32      8   timestamp          (marca de tiempo de compilacion)
+ *     40      4   arch               (arquitectura objetivo)
+ *     44      4   count              (numero de secciones)
+ *     48      8   table_offset       (offset a la tabla de secciones)
+ *     56      8   n_spaces           (numero de espacios de direcciones)
  *     64      8   offset_section_strings
- *     72      8   start_pc       (PC inicial del programa)
+ *     72      8   start_pc           (PC inicial del programa)
  *     80      8   offset_import_table
  *     88      8   offset_label_table
+ *     96      4   size_import_table
+ *    100      4   size_label_table
+ *    104      8   offset_debug_section (0 = sin info de depuracion)
+ *    112      4   size_debug_section
+ *    116      1   debug_level        (0=ninguno 1=lineas 2=+vars 3=+scopes)
+ *    117      3   _debug_pad         (reservado, debe ser 0)
  * @endverbatim
  *
  * @note Todas las estructuras usan @c __attribute__((packed)) / @c pragma pack(push,1)
@@ -215,6 +221,30 @@ typedef struct PACKED HeaderVELB {
      * cantidad de entradas en la tabla de etiquetas.
      */
     uint32_t size_label_table = 0;
+
+    /**
+     * Offset desde el inicio del archivo a la seccion de informacion de depuracion.
+     * El valor 0 indica que el ejecutable no contiene informacion de depuracion.
+     * La seccion comienza con el magic 0x47425644 ("DVBG") para validacion.
+     */
+    uint64_t offset_debug_section = 0; // 8, offset 104
+
+    /**
+     * Tamano en bytes de la seccion de depuracion completa.
+     * Incluye el encabezado DebugSectionHeader, todas las entradas y el blob de cadenas.
+     */
+    uint32_t size_debug_section = 0; // 4, offset 112
+
+    /**
+     * Nivel de granularidad de la informacion de depuracion generada.
+     *   0 = sin informacion (offset_debug_section debe ser 0)
+     *   1 = solo mapeo bytecode -> (archivo, linea)
+     *   2 = nivel 1 + tabla de variables locales con nombre y offset en pila
+     *   3 = nivel 2 + columna, scopes con nombre y rango, soporte completo
+     */
+    uint8_t debug_level = 0; // 1, offset 116
+
+    uint8_t _debug_pad[3] = {}; // 3, offset 117 (reservado, debe ser 0)
 
     table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
 } HeaderVELB;

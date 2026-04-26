@@ -2085,221 +2085,222 @@ namespace runtime {
             exec_instr_movc_reg, decode_instr_movc
         },
 
-        /* 0x20 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
-        },
-
-        /* 0x21 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
-        },
-
-        /* 0x22 */{
-            // CALLVM/JMP   <addr56bits>
-            "call / jmp", Assembly::Bytecode::AddressingMode::REG,
+        /* 0x20  mkclosure r_method, r_env: crea ClosureObject GC y retorna handle en R0 */
+        {
+            "mkclosure", Assembly::Bytecode::AddressingMode::REG,
             Assembly::Bytecode::InstrSizeMode::FIXED_4,
-            nullptr, nullptr
+            exec_instr_mkclosure, decode_instr_two_op_reg
         },
 
-        /* 0x23 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x21  callclosure r_closure: invoca el MethodInfo del ClosureObject GC */
+        {
+            "callclosure", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_callclosure, decode_instr_two_op_reg
         },
 
-        /* 0x24 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x22  mkrawclosure r_fn, r_env: crea RawClosureObject sin GC y retorna puntero en R0 */
+        {
+            "mkrawclosure", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_mkrawclosure, decode_instr_two_op_reg
         },
 
-        /* 0x25 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x23  callrawclosure r_closure: invoca la funcion nativa del RawClosureObject */
+        {
+            "callrawclosure", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_callrawclosure, decode_instr_two_op_reg
         },
 
-        /* 0x26 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x24  tailcall r_fn: salto en posicion de cola; reutiliza el frame actual */
+        {
+            "tailcall", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_tailcall, decode_instr_two_op_reg
         },
 
-        /* 0x27 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x25  isnull r_dst, r_src: r_dst = (r_src == 0) ? 1 : 0 */
+        {
+            "isnull", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_isnull, decode_instr_two_op_reg
         },
 
-        /* 0x28 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x26  unwrap r_dst, r_src: r_dst = r_src o throw NullPointerException si nulo */
+        {
+            "unwrap", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_unwrap, decode_instr_two_op_reg
         },
 
-        /* 0x29 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x27  jumptable r_val, r_table, count: salto O(1) por valor entero */
+        {
+            "jumptable", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_jumptable, decode_instr_jumptable
         },
 
-        /* 0x2A */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x28  typeswitch r_obj, r_table, count: despacho por clase (O(n)) */
+        {
+            "typeswitch", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_typeswitch, decode_instr_jumptable
         },
 
-        /* 0x2B */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x29  future: crea FutureObject GC en estado PENDING; R0 = GcHandle */
+        {
+            "future", Assembly::Bytecode::AddressingMode::NONE,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_future, decode_instr_no_operands
         },
 
-        /* 0x2C */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x2A  await r_fut: bloquea el proceso hasta que el future se resuelva */
+        {
+            "await", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_await, decode_instr_two_op_reg
         },
 
-        /* 0x2D */{
-            // jrel cond, disp32: salto relativo condicional con desplazamiento 32-bit
-            // [0x00][0x2D][cond][pad][disp32] = 8 bytes
+        /* 0x2B  fulfill r_fut, r_val: resuelve el future con un valor */
+        {
+            "fulfill", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fulfill, decode_instr_two_op_reg
+        },
+
+        /* 0x2C  reject r_fut, r_err: rechaza el future con un codigo de error */
+        {
+            "reject", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_reject, decode_instr_two_op_reg
+        },
+
+        /* 0x2D  jrel cond, disp32: salto relativo condicional con desplazamiento 32-bit
+         * [0x00][0x2D][cond][pad][disp32] = 8 bytes */
+        {
             "jrel", Assembly::Bytecode::AddressingMode::INMED,
             Assembly::Bytecode::InstrSizeMode::FIXED_8,
             exec_instr_jrel, decode_instr_jrel
         },
-        /* 0x2E */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+
+        /* 0x2E  subsp rsp|rbp, imm: RSP/RBP -= imm (reserva frame de variables locales) */
+        {
+            "subsp", Assembly::Bytecode::AddressingMode::MEM,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
+            exec_instr_subsp, decode_instr_inmed_reg
         },
 
-        /* 0x2F */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x2F  addsp rsp|rbp, imm: RSP/RBP += imm (libera frame de variables locales) */
+        {
+            "addsp", Assembly::Bytecode::AddressingMode::MEM,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
+            exec_instr_addsp, decode_instr_inmed_reg
         },
 
-        /* 0x30 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x30  weakref r_handle: registra GcHandle en la tabla de weak refs; R0 = indice opaco */
+        {
+            "weakref", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_weakref, decode_instr_two_op_reg
         },
 
-        /* 0x31 */{
-            // loop
+        /* 0x31  loop: salto condicional de bucle con contador en registro */
+        {
             "loop", Assembly::Bytecode::AddressingMode::INMED,
             Assembly::Bytecode::InstrSizeMode::FIXED_8,
             nullptr, nullptr
         },
 
-        /* 0x32 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x32  deref_weak r_dst, r_idx: r_dst = GcHandle si vivo, GC_NULL_HANDLE si muerto */
+        {
+            "deref_weak", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_deref_weak, decode_instr_two_op_reg
         },
 
-        /* 0x33 */{
-            // nop2
+        /* 0x33  nop2: no operacion de 2 bytes */
+        {
             "nop2", Assembly::Bytecode::AddressingMode::NONE,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
             nullptr, nullptr
         },
 
-        /* 0x34 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x34  free_weak r_idx: libera una entrada de la tabla de weak refs */
+        {
+            "free_weak", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_free_weak, decode_instr_two_op_reg
         },
 
-        /* 0x35 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x35  monenter reg_handle: adquiere el monitor reentrante del objeto GC */
+        {
+            "monenter", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_monenter, decode_instr_two_op_reg
         },
 
-        /* 0x36 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x36  monexit reg_handle: libera el monitor del objeto GC */
+        {
+            "monexit", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_monexit, decode_instr_two_op_reg
         },
 
-        /* 0x37 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x37  monwait reg_handle: libera el monitor y suspende el proceso */
+        {
+            "monwait", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_monwait, decode_instr_two_op_reg
         },
 
-        /* 0x38 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x38  monnoti reg_handle: despierta un proceso de la cola de espera */
+        {
+            "monnoti", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_monnoti, decode_instr_two_op_reg
         },
 
-        /* 0x39 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x39  monnota reg_handle: despierta todos los procesos de la cola de espera */
+        {
+            "monnota", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_monnota, decode_instr_two_op_reg
         },
 
-        /* 0x3A */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3A  specialize r_dst, r_class, r_types, count: instancia clase generica */
+        {
+            "specialize", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_specialize, decode_instr_jumptable
         },
 
-        /* 0x3B */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3B  rspawn r_fn, r_node -> R0 = GcHandle del FutureObject */
+        {
+            "rspawn", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_rspawn, decode_instr_two_op_reg
         },
 
-        /* 0x3C */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3C  msgsend r_pid, r_addr, r_len */
+        {
+            "msgsend", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_msgsend, decode_instr_three_reg
         },
 
-        /* 0x3D */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3D  msgrecv r_buf, r_max -> R0 = bytes recibidos */
+        {
+            "msgrecv", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_msgrecv, decode_instr_two_op_reg
         },
 
-        /* 0x3E */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x3E  memsync r_params */
+        {
+            "memsync", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_memsync, decode_instr_two_op_reg
         },
 
         /* 0x3F */{
@@ -2309,153 +2310,130 @@ namespace runtime {
             nullptr, nullptr
         },
 
-        /* 0x40 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x40 mods/modu reg, reg */{
+            "mod", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_mod_reg, decode_instr_two_op_reg
         },
 
-
-        /* 0x41 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x41 mods/modu reg, imm */{
+            "mod", Assembly::Bytecode::AddressingMode::MEM,
+            Assembly::Bytecode::InstrSizeMode::MIXED_SIZE,
+            exec_instr_mod_imm, decode_instr_inmed_reg
         },
 
-        /* 0x42 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x42 mods/modu SIB */{
+            "mod", Assembly::Bytecode::AddressingMode::SIB,
+            Assembly::Bytecode::InstrSizeMode::FIXED_6,
+            exec_instr_mod_sib, decode_instr_sib
         },
 
-        /* 0x43 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x43 setcc r_dst, cond */{
+            "setcc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_setcc, decode_instr_raw_bytes
         },
 
-        /* 0x44 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x44 tryenter r_handler, r_type */{
+            "tryenter", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_tryenter, decode_instr_raw_bytes
         },
 
-        /* 0x45 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x45 tryleave */{
+            "tryleave", Assembly::Bytecode::AddressingMode::NONE,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_tryleave, nullptr
         },
 
-        /* 0x46 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x46 strmake r_dst, r_src, r_len */{
+            "strmake", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strmake, decode_instr_raw_bytes
         },
 
-        /* 0x47 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x47 strlen r_dst, r_src */{
+            "strlen", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strlen, decode_instr_raw_bytes
         },
 
-        /* 0x48 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x48 strcat r_dst, r_a, r_b */{
+            "strcat", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strcat, decode_instr_raw_bytes
         },
 
-        /* 0x49 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x49 strcmp r_dst, r_a, r_b */{
+            "strcmp", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strcmp, decode_instr_raw_bytes
         },
 
-        /* 0x4A */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x4A strconv r_dst, r_src, enc */{
+            "strconv", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strconv, decode_instr_raw_bytes
         },
 
-        /* 0x4B */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x4B strraw r_dst, r_src */{
+            "strraw", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strraw, decode_instr_raw_bytes
         },
 
-        /* 0x4C */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x4C  strslice r_dst, r_src, r_range */{
+            "strslice", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strslice, decode_instr_raw_bytes
         },
 
-        /* 0x4D */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x4D  strflat r_dst, r_src */{
+            "strflat", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strflat, decode_instr_raw_bytes
         },
 
-        /* 0x4E */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x4E  strhash r_dst, r_src */{
+            "strhash", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strhash, decode_instr_raw_bytes
         },
 
-        /* 0x4F */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x4F  strintern r_dst, r_src */{
+            "strintern", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strintern, decode_instr_raw_bytes
         },
 
-        /* 0x50 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x50  strgetenc r_dst, r_src */{
+            "strgetenc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strgetenc, decode_instr_raw_bytes
         },
 
-
-        /* 0x51 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x51  strgetbytes r_dst, r_src */{
+            "strgetbytes", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strgetbytes, decode_instr_raw_bytes
         },
 
-        /* 0x52 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x52  strgetkind r_dst, r_src */{
+            "strgetkind", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strgetkind, decode_instr_raw_bytes
         },
 
-        /* 0x53 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x53  strreserve r_dst, r_cap */{
+            "strreserve", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strreserve, decode_instr_raw_bytes
         },
 
-        /* 0x54 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x54  strfinalize r_dst, r_newlen */{
+            "strfinalize", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_strfinalize, decode_instr_raw_bytes
         },
 
         /* 0x55 */{

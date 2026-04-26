@@ -29,6 +29,14 @@
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
 
+namespace distrib {
+    class Mailbox; ///< Declaracion adelantada del buzon de mensajes distribuido
+}
+
+namespace runtime {
+    class StringInternPool; ///< Pool de interning de strings (definicion en string_intern.h)
+}
+
 /**
  * @brief Numero de reducciones por defecto que se le asignan a cada proceso al entrar en ejecucion.
  *
@@ -209,6 +217,7 @@ namespace runtime {
         THREAD_STACK_UNDERFLOW,
 
         THREAD_INVALID_SYSCALL, ///< Llamada al sistema invalida o no soportada
+        THREAD_NULL_POINTER,    ///< UNWRAP encontro un valor nulo (NullPointerException)
     } state_err_thread;
 
     /**
@@ -304,7 +313,30 @@ namespace runtime {
 
         uint64_t current_exception = 0; ///< Handle de la excepcion activa durante el unwinding (0 = sin excepcion)
 
+        /**
+         * @brief Frame de excepcion ligero apilado por TRYENTER / desapilado por TRYLEAVE.
+         *
+         * Permite que compiladores de alto nivel instalen handlers de excepcion en
+         * tiempo de ejecucion sin necesidad de anotaciones en el bytecode.
+         * do_throw comprueba esta pila antes de recorrer MethodInfo.handlers.
+         */
+        struct ExceptionFrame {
+            uint64_t              handler_pc; ///< Direccion absoluta VM del bloque catch
+            loader::ClassInfo    *type;        ///< Tipo capturado (nullptr = catch-all)
+            struct ExceptionFrame *prev;       ///< Frame anterior en la pila
+        };
+
+        ExceptionFrame *exc_frame_stack = nullptr; ///< Pila de frames TRYENTER activos
+
+        StringInternPool *str_intern_pool = nullptr; ///< Pool de strings internados (creado bajo demanda)
+
         Scheduler &scheduler; ///< Referencia al scheduler propietario de este proceso
+
+        distrib::Mailbox *mailbox = nullptr; ///< Buzon de mensajes distribuido (creado bajo demanda por DistRuntime)
+
+        // --- Campos para procesos creados remotamente via rspawn ---
+        uint64_t rspawn_future_id    = 0;            ///< future_id en el nodo origen que debe resolverse con r0 al terminar (0 = no es rspawn)
+        uint32_t rspawn_origin_node  = 0xFFFFFFFFu;  ///< node_idx del nodo que envio el rspawn (0xFFFFFFFF = no es rspawn)
 
         /**
          * @brief Construye un proceso virtual y lo asocia al scheduler indicado.

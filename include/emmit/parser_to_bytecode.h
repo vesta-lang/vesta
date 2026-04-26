@@ -230,6 +230,97 @@ namespace Assembly::Bytecode {
         {"spawn",   {{0x00, 0xEE, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"swapctx", {{0x00, 0xEF, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
 
+        /* --- Closures GC (0x20-0x21): mkclosure / callclosure ---
+         *  mkclosure    r_method, r_env  -> aloca ClosureObject GC y retorna handle en R0
+         *  callclosure  r_closure        -> invoca el closure a traves del MethodInfo capturado
+         */
+        {"mkclosure",   {{0x00, 0x20, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"callclosure", {{0x00, 0x21, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
+        /* --- Closures raw / FFI (0x22-0x23): mkrawclosure / callrawclosure ---
+         *  mkrawclosure    r_fn, r_env  -> aloca RawClosureObject sin GC y retorna puntero en R0
+         *  callrawclosure  r_closure    -> invoca la funcion nativa del RawClosureObject
+         */
+        {"mkrawclosure",    {{0x00, 0x22, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"callrawclosure",  {{0x00, 0x23, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
+        /* --- TCO: tailcall (0x24) ---
+         *  tailcall r_fn  -> salto en posicion de cola; reutiliza el frame actual sin crecer la pila
+         */
+        {"tailcall", {{0x00, 0x24, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
+        /* --- Nullable: isnull / unwrap (0x25-0x26) ---
+         *  isnull r_dst, r_src  -> r_dst = (r_src == 0) ? 1 : 0
+         *  unwrap r_dst, r_src  -> r_dst = r_src si no nulo; throw NullPointerException si nulo
+         */
+        {"isnull", {{0x00, 0x25, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"unwrap",  {{0x00, 0x26, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+
+        /* --- Tabla de saltos O(1) (0x27) y cambio de tipo O(n) (0x28) ---
+         *  jumptable  r_val, r_table, count  -> salta a table[r_val] si r_val < count
+         *  typeswitch r_obj, r_table, count  -> salta al handler de la clase de r_obj
+         */
+        {"jumptable",  {{0x00, 0x27, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_jumptable}}},
+        {"typeswitch", {{0x00, 0x28, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_jumptable}}},
+
+        /* --- Async/await nativo (0x29-0x2C) ---
+         *  future           -> R0 = GcHandle del FutureObject creado (PENDING)
+         *  await   r_fut    -> bloquea el proceso hasta que r_fut sea RESOLVED o REJECTED
+         *  fulfill r_fut, r_val  -> resuelve r_fut con r_val (RESOLVED)
+         *  reject  r_fut, r_err  -> rechaza r_fut con r_err (REJECTED)
+         */
+        {"future",  {{0x00, 0x29, InstrSizeMode::FIXED_2,  AddressingMode::NONE, nullptr}}},
+        {"await",   {{0x00, 0x2A, InstrSizeMode::FIXED_4,  AddressingMode::REG,  emit_instr_one_reg}}},
+        {"fulfill", {{0x00, 0x2B, InstrSizeMode::FIXED_4,  AddressingMode::REG,  emit_instr_reg}}},
+        {"reject",  {{0x00, 0x2C, InstrSizeMode::FIXED_4,  AddressingMode::REG,  emit_instr_reg}}},
+
+        /* --- Aritmetica de puntero de pila (0x2E-0x2F) ---
+         *  subsp rsp|rbp, imm  -> RSP/RBP -= imm (reserva frame)
+         *  addsp rsp|rbp, imm  -> RSP/RBP += imm (libera frame)
+         */
+        {"subsp", {{0x00, 0x2E, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_spimm}}},
+        {"addsp", {{0x00, 0x2F, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_spimm}}},
+
+        /* --- Referencias debiles (0x30, 0x32, 0x34) ---
+         *  weakref   r_handle  -> R0 = indice opaco en la tabla de weak refs
+         *  deref_weak r_dst, r_idx -> r_dst = GcHandle si el objeto sigue vivo, 0 si fue recolectado
+         *  free_weak r_idx     -> libera la entrada weak en la tabla
+         */
+        {"weakref",    {{0x00, 0x30, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+        {"deref_weak", {{0x00, 0x32, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"free_weak",  {{0x00, 0x34, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
+        /* --- Monitor / sincronizacion (0x35-0x39) ---
+         *  monenter r_handle  -> adquiere el monitor del objeto GC
+         *  monexit  r_handle  -> libera el monitor del objeto GC
+         *  monwait  r_handle  -> libera el monitor y suspende el proceso
+         *  monnoti  r_handle  -> despierta un proceso de la cola de espera
+         *  monnota  r_handle  -> despierta todos los procesos de la cola
+         */
+        {"monenter",   {{0x00, 0x35, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+        {"monexit",    {{0x00, 0x36, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+        {"monwait",    {{0x00, 0x37, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+        {"monnoti",    {{0x00, 0x38, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+        {"monnota",    {{0x00, 0x39, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
+        /* --- Genericos en tiempo de ejecucion (0x3A) ---
+         *  specialize r_dst, r_class, r_types
+         *  byte2 = (r_dst<<4)|r_class,  byte3 = (r_types<<4)|count
+         *  count se pasa como tercer operando inmediato (0-15)
+         */
+        {"specialize", {{0x00, 0x3A, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_jumptable}}},
+
+        /* --- Instrucciones distribuidas VDP (0x3B-0x3E) ---
+         *  rspawn  r_fn, r_node  -> R0 = GcHandle del FutureObject
+         *  msgsend r_pid, r_addr, r_len
+         *  msgrecv r_buf, r_max  -> R0 = bytes recibidos
+         *  memsync r_params
+         */
+        {"rspawn",  {{0x00, 0x3B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"msgsend", {{0x00, 0x3C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}}},
+        {"msgrecv", {{0x00, 0x3D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"memsync", {{0x00, 0x3E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
         /* --- Punto flotante escalar y vectorial (0xF0-0xFC) --- */
         {"fmov",     {{0x00, 0xF0, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},
         {"fadd",     {{0x00, 0xF1, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},
@@ -372,6 +463,118 @@ namespace Assembly::Bytecode {
                 {0x00, 0x12, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
                 {0x00, 0x13, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib},
             },
+        },
+
+        /* --- MODS / MODU (modulo con/sin signo) --- */
+        {
+            "modu", {
+                {0x00, 0x40, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
+                {0x00, 0x41, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
+                {0x00, 0x42, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
+            }
+        },
+        {
+            "mods", {
+                {0x00, 0x40, InstrSizeMode::FIXED_4,   AddressingMode::REG,   emit_instr_reg},
+                {0x00, 0x41, InstrSizeMode::MIXED_SIZE, AddressingMode::INMED, emit_instr_inmed},
+                {0x00, 0x42, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_sib}
+            }
+        },
+
+        /* --- SETCC r_dst, cond_literal: escribir condicion de flags como 0 o 1 --- */
+        {
+            "setcc", {
+                {0x00, 0x43, InstrSizeMode::FIXED_4, AddressingMode::INMED, emit_setcc}
+            }
+        },
+
+        /* --- TRYENTER / TRYLEAVE: frames de excepcion dinamicos --- */
+        {
+            "tryenter", {
+                {0x00, 0x44, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "tryleave", {
+                {0x00, 0x45, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}
+            }
+        },
+
+        /* --- STRMAKE / STRLEN / STRCAT / STRCMP / STRCONV / STRRAW: instrucciones de string --- */
+        {
+            "strmake", {
+                {0x00, 0x46, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strlen", {
+                {0x00, 0x47, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strcat", {
+                {0x00, 0x48, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strcmp", {
+                {0x00, 0x49, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strconv", {
+                {0x00, 0x4A, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_strconv}
+            }
+        },
+        {
+            "strraw", {
+                {0x00, 0x4B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strslice", {
+                {0x00, 0x4C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_three_reg}
+            }
+        },
+        {
+            "strflat", {
+                {0x00, 0x4D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strhash", {
+                {0x00, 0x4E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strintern", {
+                {0x00, 0x4F, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strgetenc", {
+                {0x00, 0x50, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strgetbytes", {
+                {0x00, 0x51, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strgetkind", {
+                {0x00, 0x52, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strreserve", {
+                {0x00, 0x53, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
+        },
+        {
+            "strfinalize", {
+                {0x00, 0x54, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_str_two_reg}
+            }
         },
 
         /* --- MOV: transferencia de datos --- */
