@@ -42,6 +42,7 @@
 #include "disasm/disasm.h"
 #include "util/ansi.h"
 #include "util/fs_utils.h"
+#include "install/install.h"
 #include <cstring>
 #include <iomanip>
 #include <unordered_set>
@@ -1514,6 +1515,23 @@ namespace cli {
             << "Nota: <id> es el mgr_id que muestra 'vms'. "
                "--dist-server en linea de comandos lanza un nodo servidor puro.\n"
             << ansi::c(ansi::RESET);
+    }
+
+    static void command_install(const std::string& args) {
+        install::run_install_repl(args);
+    }
+
+    static void command_uninstall(const std::string& args) {
+        install::run_uninstall_repl(args);
+    }
+
+    static void command_repair(const std::string& args) {
+        std::filesystem::path mf;
+        auto words = split_words(args);
+        for (auto& w : words) {
+            if (w.rfind("--manifest=", 0) == 0) mf = w.substr(11);
+        }
+        install::repair(mf, false);
     }
 
     /**
@@ -3152,20 +3170,34 @@ namespace cli {
     static void command_script(const std::string &args) {
         auto words = split_words(args);
         if (words.empty()) {
-            std::cout << "Uso: script <archivo.vsh>\n";
+            std::cout << "Uso: script <archivo.vsh> [args...]\n";
             return;
         }
         const std::string &path = words[0];
+
+        // Construir ARGV: [path, words[1..]]
+        std::vector<std::string> script_args;
+        script_args.push_back(path);
+        for (size_t i = 1; i < words.size(); ++i) {
+            script_args.push_back(words[i]);
+        }
+
         try {
-            get_vsh_interp().exec_file(path);
+            auto& interp = get_vsh_interp();
+            interp.set_argv(script_args);
+            interp.exec_file(path);
         } catch (const vsh::VshRuntimeError &e) {
-            std::cout << ansi::c(ansi::BR_RED) << "[script] Error: " << e.what() << ansi::c(ansi::RESET) << "\n";
+            std::cout << ansi::c(ansi::BR_RED) << "[script] Error: " << e.what()
+                      << ansi::c(ansi::RESET) << "\n";
         } catch (const vsh::VshParseError &e) {
-            std::cout << ansi::c(ansi::BR_RED) << "[script] Error de sintaxis: " << e.what() << ansi::c(ansi::RESET) << "\n";
+            std::cout << ansi::c(ansi::BR_RED) << "[script] Error de sintaxis: " << e.what()
+                      << ansi::c(ansi::RESET) << "\n";
         } catch (const std::exception &e) {
-            std::cout << ansi::c(ansi::BR_RED) << "[script] " << e.what() << ansi::c(ansi::RESET) << "\n";
+            std::cout << ansi::c(ansi::BR_RED) << "[script] " << e.what()
+                      << ansi::c(ansi::RESET) << "\n";
         }
     }
+
 
     /**
      * @brief Abre el REPL interactivo de VestaShell.
@@ -3247,6 +3279,12 @@ namespace cli {
           "Ejecutar un fichero VestaShell (.vsh) con el interprete integrado",                    command_script },
         { "vsh",    "vsh",
           "Abrir el interprete interactivo VestaShell (REPL .vsh)",                               command_vsh    },
+        { "install",   "install [--silent] [--per-user] [--system-wide] [--prefix=<dir>] [--no-path] [--assoc=...]",
+        "Instalar Vesta VM en el sistema (asociaciones, PATH, accesos directos)",                   command_install },
+        { "uninstall", "uninstall [--manifest=<path>]",
+        "Desinstalar Vesta VM usando el manifest registrado",                                       command_uninstall },
+        { "repair",    "repair [--manifest=<path>]",
+        "Reparar asociaciones y PATH de una instalacion existente",                                     command_repair },
     };
 
     // numero de entradas en la tabla
