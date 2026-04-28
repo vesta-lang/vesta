@@ -38,6 +38,8 @@
 #include "distrib/dist_runtime.h"
 #include "distrib/dist_debug.h"
 #include "distrib/node_registry.h"
+#include "install/install.h"
+
 #ifdef VESTA_HAS_PREPROCESSOR
     #include "preprocessor/preprocessor.h"
 #endif
@@ -182,6 +184,14 @@ int main(int argc, char *argv[]) {
             ("run", "Ejecutar un archivo .velb en la VM", cxxopts::value<std::string>())
             ("build", "Compilar un archivo .vel a .velb", cxxopts::value<std::string>())
             ("schedulers", "Número de schedulers para el comando run", cxxopts::value<size_t>()->default_value("1"))
+            ("install",   "Ejecutar el instalador interactivo (o con flags adicionales)")
+            ("uninstall", "Desinstalar Vesta usando el manifest")
+            ("repair",    "Reparar la instalacion existente")
+            ("silent",    "Modo silencioso para install/uninstall")
+            ("per-user",  "Forzar instalacion per-user")
+            ("system-wide","Forzar instalacion system-wide")
+            ("prefix",    "Directorio destino", cxxopts::value<std::string>())
+            ("manifest",  "Ruta a install_manifest.json", cxxopts::value<std::string>())
             ("stats", "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)")
             // ---- opciones de runtime distribuido ----
             ("dist-port",         "Puerto VDP del servidor distribuido (0 = sin servidor TCP)",
@@ -218,7 +228,18 @@ int main(int argc, char *argv[]) {
 #endif
             ;
 
+
     auto result = options.parse(argc, argv);
+
+    // Args posicionales: cualquier cosa sin "--" que aparezca tras los
+    // flags conocidos se acumula en "positional" para que --script pueda
+    // consumirla como ARGV del script.
+    options.add_options()("positional", "Argumentos posicionales",
+        cxxopts::value<std::vector<std::string>>());
+    options.parse_positional({"positional"});
+    options.positional_help("[args...]");
+    options.allow_unrecognised_options();   // para flags sin que aun hay que parsear
+
 
     // activar trazas de depuracion del subsistema distribuido si se paso --dist-debug
     if (result.count("dist-debug"))
@@ -362,6 +383,28 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
+    if (result.count("install") ||
+        result.count("uninstall") ||
+        result.count("repair"))
+    {
+        // Reconstruir argv "limpio" para el parser interno del instalador
+        std::vector<std::string> args;
+        if (result.count("uninstall")) args.push_back("uninstall");
+        else if (result.count("repair")) args.push_back("repair");
+        else args.push_back("install");
+
+        if (result.count("silent"))      args.push_back("--silent");
+        if (result.count("per-user"))    args.push_back("--per-user");
+        if (result.count("system-wide")) args.push_back("--system-wide");
+        if (result.count("prefix"))      args.push_back("--prefix=" + result["prefix"].as<std::string>());
+        if (result.count("manifest"))    args.push_back("--manifest=" + result["manifest"].as<std::string>());
+
+        std::vector<char*> argv2;
+        argv2.push_back(argv[0]);
+        for (auto& s : args) argv2.push_back(s.data());
+        return install::run_install_cli((int)argv2.size(), argv2.data());
+    }
+
     // Compilar un archivo como worker
     // vm.exe --worker src/main.vel -o main.velb
     if (result.count("worker")) {
@@ -473,16 +516,31 @@ int main(int argc, char *argv[]) {
     // Abrir el REPL interactivo VestaShell (--interprete)
     if (result.count("interprete")) {
         vsh::VshInterpreter interp;
+        // ARGV vacio o con [""]
+        std::vector<std::string> empty_argv = { "" };
+        interp.set_argv(empty_argv);
         interp.run_interactive();
         return EXIT_SUCCESS;
     }
 
+
     // Ejecutar un fichero VestaShell directamente sin abrir el REPL
-    // vm.exe --script mi_script.vsh
+    // vm.exe --script mi_script.vsh [args extra para el script...]
     if (result.count("script")) {
         const std::string &vsh_path = result["script"].as<std::string>();
+
+        // Construir ARGV: [vsh_path, args_posicionales_extra...]
+        std::vector<std::string> script_args;
+        script_args.push_back(vsh_path);
+        if (result.count("positional")) {
+            for (const auto& a : result["positional"].as<std::vector<std::string>>()) {
+                script_args.push_back(a);
+            }
+        }
+
         try {
-            vsh::VshInterpreter interp; // sin callback REPL
+            vsh::VshInterpreter interp;     // sin callback REPL
+            interp.set_argv(script_args);   // <--- AQUI lo importante
             interp.exec_file(vsh_path);
         } catch (const vsh::VshRuntimeError &e) {
             std::cerr << "[script] Error en " << vsh_path;
@@ -500,6 +558,7 @@ int main(int argc, char *argv[]) {
         }
         return EXIT_SUCCESS;
     }
+
 
     // Ejecutar un archivo .velb en la VM
     // vm.exe --run program.velb

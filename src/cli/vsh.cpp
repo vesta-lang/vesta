@@ -1099,6 +1099,8 @@ AstNodePtr VshParser::import_stmt() {
     return n;
 }
 
+
+
 AstNodePtr VshParser::class_decl() {
     auto n = make_node(AstKind::ClassDecl, cur_.line, cur_.col);
     advance(); // 'class'
@@ -1612,6 +1614,12 @@ Value VshInterpreter::eval_interp_str(const AstNode &n, std::shared_ptr<VshEnv> 
         result += eval(part, env).to_string();
     }
     return Value(result);
+}
+
+void VshInterpreter::set_argv(const std::vector<std::string>& argv) {
+    auto lst = std::make_shared<std::vector<Value>>();
+    for (auto& a : argv) lst->push_back(Value(a));
+    global_->define("ARGV", Value(lst));
 }
 
 Value VshInterpreter::eval_ident(const AstNode &n, std::shared_ptr<VshEnv> env) {
@@ -3335,6 +3343,11 @@ void VshInterpreter::register_builtins() {
         (*ansi_map)["BG_BR_WHITE"]   = Value(std::string("\033[107m"));
         (*ansi_map)["CLEAR"]         = Value(std::string("\033[2J\033[H"));
         (*ansi_map)["CLEAR_LINE"]    = Value(std::string("\033[2K\r"));
+        (*ansi_map)["HOME"]         = Value(std::string("\033[H"));
+        (*ansi_map)["CURSOR_HIDE"]  = Value(std::string("\033[?25l"));
+        (*ansi_map)["CURSOR_SHOW"]  = Value(std::string("\033[?25h"));
+        (*ansi_map)["SAVE_POS"]     = Value(std::string("\033[s"));
+        (*ansi_map)["RESTORE_POS"]  = Value(std::string("\033[u"));
         global_->define("ANSI", Value(ansi_map));
     }
 
@@ -3719,6 +3732,11 @@ void VshInterpreter::register_builtins() {
     // __file__                 -> ruta del fichero en ejecucion ("" en REPL)
     global_->define("__name__", Value(std::string("__repl__")));
     global_->define("__file__", Value(std::string("")));
+
+    // ---- argumentos del script (estilo Python sys.argv) ----
+    // ARGV[0] = ruta del script, ARGV[1..] = argumentos pasados
+    auto argv_list = std::make_shared<std::vector<Value>>();
+    global_->define("ARGV", Value(argv_list));
 
     // ---- exponer todos los builtins en el scope global como stubs (estilo Python) ----
     // Esto permite usar 'help' sin parentesis igual que en Python
