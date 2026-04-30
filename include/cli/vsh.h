@@ -543,7 +543,7 @@ public:
     using ReadlineFn    = std::function<std::string(const std::string &)>;
 
     explicit VshInterpreter(ReplDispatch dispatch = nullptr);
-    ~VshInterpreter() = default;
+    ~VshInterpreter();
 
     /** @brief Ejecuta un fichero .vsh. */
     void exec_file(const std::string &path);

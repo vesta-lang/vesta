@@ -80,6 +80,7 @@ let KEY_CTRL_G    = 7
 let KEY_BACKSPACE = 8
 let KEY_TAB       = 9
 let KEY_ENTER     = 13
+let KEY_CTRL_J    = 10
 let KEY_CTRL_K    = 11
 let KEY_CTRL_L    = 12
 let KEY_CTRL_N    = 14
@@ -113,7 +114,12 @@ let KEY_DEL         = -1008
 let KEY_F1          = -1010
 let KEY_F2          = -1011
 let KEY_F3          = -1012
+let KEY_F4          = -1013
+let KEY_F5          = -1014
 let KEY_F6          = -1015
+let KEY_F7          = -1016
+let KEY_F8          = -1017
+let KEY_F9          = -1018
 let KEY_F10         = -1019
 
 let KEY_SHIFT_UP    = -2000
@@ -168,6 +174,11 @@ class InputBackend {
     }
 
     fn read_key_blocking(self) {
+        // Garantizar que cualquier output pendiente en el buffer del
+        // interprete se vea ANTES de bloquearnos esperando tecla. Sin
+        // esto, el contenido recien pintado se queda invisible hasta
+        // el siguiente flush por umbral.
+        flush_output()
         while true {
             let k = self.poll_key()
             if k != -1 { return k }
@@ -225,7 +236,12 @@ class InputBackend {
         if c2 == 59 { return KEY_F1    }
         if c2 == 60 { return KEY_F2    }
         if c2 == 61 { return KEY_F3    }
+        if c2 == 62 { return KEY_F4    }
+        if c2 == 63 { return KEY_F5    }
         if c2 == 64 { return KEY_F6    }
+        if c2 == 65 { return KEY_F7    }
+        if c2 == 66 { return KEY_F8    }
+        if c2 == 67 { return KEY_F9    }
         if c2 == 68 { return KEY_F10   }
         // Ctrl+flechas en Windows
         if c2 == 116 { return KEY_CTRL_RIGHT }
@@ -653,6 +669,15 @@ class Highlighter {
         self.col_ruler      = ansi_rgb(68, 71, 90)
         self.col_cursor_sec = ansi_rgb_bg(98, 114, 164) + ansi_rgb(248, 248, 242)
         self.col_reset      = ANSI["RESET"]
+
+        // OPTIMIZACION: precomputar maps para lookup O(1) en vez de O(n)
+        // Asi tokenize() consulta keyword/type/builtin en tiempo constante.
+        self.kw_map = {}
+        for w in VSH_KEYWORDS { self.kw_map[w] = true }
+        self.type_map = {}
+        for w in VSH_TYPES { self.type_map[w] = true }
+        self.builtin_map = {}
+        for w in VSH_BUILTINS { self.builtin_map[w] = true }
     }
 
     fn _is_alpha(self, c) {
@@ -818,11 +843,11 @@ class Highlighter {
                 }
                 let word = substr(line, start, i-start)
                 let kind = "id"
-                if self._in_list(word, VSH_KEYWORDS) {
+                if contains(self.kw_map, word) {
                     kind = "kw"
-                } elif self._in_list(word, VSH_TYPES) {
+                } elif contains(self.type_map, word) {
                     kind = "type"
-                } elif self._in_list(word, VSH_BUILTINS) {
+                } elif contains(self.builtin_map, word) {
                     kind = "builtin"
                 }
                 if kind == "id" {
@@ -1348,6 +1373,9 @@ class EditorBuffer {
         self.row_off = 0
         self.col_off = 0
         self.last_search = ""
+        // Ultima palabra-bajo-cursor que se renderizo, para minimizar
+        // las lineas que hay que redibujar cuando cur_word cambia
+        self.last_cur_word = ""
         // Cargar fichero si existe
         if filename != "" and exists(filename) {
             try {
@@ -1369,6 +1397,18 @@ class EditorBuffer {
     fn display_name(self) {
         if self.filename == "" { return "[Sin nombre]" }
         return basename_or(self.filename, self.filename)
+    }
+
+    // Crear una "vista" nueva: comparte el mismo TextBuffer pero tiene
+    // cursores y scroll independientes. Util para split donde dos paneles
+    // editan el mismo fichero pero ven el cursor en sitios distintos.
+    fn clone_view(self) {
+        // Construye con "" (no lee fichero), luego sustituye campos
+        let v = EditorBuffer("")
+        v.filename = self.filename
+        v.buf = self.buf            // referencia compartida al MISMO TextBuffer
+        // cursors, row_off, col_off, last_search ya inicializados por __init__
+        return v
     }
 }
 
@@ -1945,25 +1985,398 @@ class HelpOverlay {
     }
 }
 // =============================================================================
-// SECCION 12: Editor (workspace con pestanas y sidebar)
+// =============================================================================
+// SECCION 11.5: Panel y LayoutManager
+// =============================================================================
+// Un Panel es un area de edicion. Tiene su propia lista de pestanas
+// (EditorBuffer) y su propio buffer activo. Varios paneles componen el
+// workspace del Editor segun el layout activo.
+//
+// LayoutManager gestiona los 6 layouts predefinidos:
+//   single, split_v, split_h, three_left, three_right, grid
+
+class Panel {
+    "Panel de edicion: contiene una lista de buffers y uno activo."
+
+    fn __init__(self, buffer) {
+        // Si recibe un EditorBuffer, lo usa como inicial; si null, queda vacio
+        self.buffers = []
+        if buffer != null {
+            append(self.buffers, buffer)
+        }
+        self.active_idx = 0
+        // Cuando es true, el panel se redibuja entero la proxima vez
+        self.full_redraw_local = true
+    }
+
+    fn ab(self) {
+        // Active EditorBuffer; null si no hay buffers
+        if len(self.buffers) == 0 { return null }
+        if self.active_idx < 0 or self.active_idx >= len(self.buffers) {
+            self.active_idx = 0
+        }
+        return self.buffers[self.active_idx]
+    }
+
+    fn tab_count(self) { return len(self.buffers) }
+
+    fn has_tabbar(self) { return len(self.buffers) > 1 }
+
+    // Conmutar a la pestana N (idx); si esta fuera de rango, no hace nada
+    fn switch_to(self, idx) {
+        if idx >= 0 and idx < len(self.buffers) {
+            self.active_idx = idx
+            self.full_redraw_local = true
+        }
+    }
+
+    // Anadir una pestana y conmutar a ella
+    fn add_buffer(self, buffer) {
+        append(self.buffers, buffer)
+        self.active_idx = len(self.buffers) - 1
+        self.full_redraw_local = true
+    }
+
+    // Cerrar la pestana en idx; devuelve true si quedan pestanas, false si no
+    fn close_tab(self, idx) {
+        if idx < 0 or idx >= len(self.buffers) { return true }
+        let new_buffers = []
+        let i = 0
+        while i < len(self.buffers) {
+            if i != idx { append(new_buffers, self.buffers[i]) }
+            i = i + 1
+        }
+        self.buffers = new_buffers
+        if self.active_idx >= len(self.buffers) {
+            self.active_idx = len(self.buffers) - 1
+        }
+        if self.active_idx < 0 { self.active_idx = 0 }
+        self.full_redraw_local = true
+        return len(self.buffers) > 0
+    }
+
+    // Buscar si ya hay una pestana con ese filename; retorna idx o -1
+    fn find_buffer(self, filename) {
+        let i = 0
+        while i < len(self.buffers) {
+            if self.buffers[i].filename == filename { return i }
+            i = i + 1
+        }
+        return -1
+    }
+
+    fn is_modified(self) {
+        for b in self.buffers {
+            if b.buf.modified { return true }
+        }
+        return false
+    }
+}
+
+
+class LayoutManager {
+    "Gestor del layout de paneles. Calcula rectangulos y transiciones."
+
+    fn __init__(self) {
+        self.layout = "single"
+    }
+
+    fn n_panels_required(self) {
+        if self.layout == "single" { return 1 }
+        if self.layout == "split_v" or self.layout == "split_h" { return 2 }
+        if self.layout == "three_left" or self.layout == "three_right" { return 3 }
+        if self.layout == "grid" { return 4 }
+        return 1
+    }
+
+    // Devuelve [{x,y,w,h}, ...] para los paneles dentro del area dada
+    fn rects(self, area_x, area_y, area_w, area_h) {
+        let rects = []
+        let l = self.layout
+
+        if l == "single" {
+            append(rects, { "x": area_x, "y": area_y, "w": area_w, "h": area_h })
+            return rects
+        }
+        if l == "split_v" {
+            let half = (area_w - 1) / 2
+            let other = area_w - 1 - half
+            append(rects, { "x": area_x, "y": area_y, "w": half, "h": area_h })
+            append(rects, { "x": area_x + half + 1, "y": area_y, "w": other, "h": area_h })
+            return rects
+        }
+        if l == "split_h" {
+            let half = (area_h - 1) / 2
+            let other = area_h - 1 - half
+            append(rects, { "x": area_x, "y": area_y, "w": area_w, "h": half })
+            append(rects, { "x": area_x, "y": area_y + half + 1, "w": area_w, "h": other })
+            return rects
+        }
+        if l == "three_left" {
+            let half_w = (area_w - 1) / 2
+            let other_w = area_w - 1 - half_w
+            let half_h = (area_h - 1) / 2
+            let other_h = area_h - 1 - half_h
+            append(rects, { "x": area_x, "y": area_y, "w": half_w, "h": area_h })
+            append(rects, { "x": area_x + half_w + 1, "y": area_y, "w": other_w, "h": half_h })
+            append(rects, { "x": area_x + half_w + 1, "y": area_y + half_h + 1, "w": other_w, "h": other_h })
+            return rects
+        }
+        if l == "three_right" {
+            let half_w = (area_w - 1) / 2
+            let other_w = area_w - 1 - half_w
+            let half_h = (area_h - 1) / 2
+            let other_h = area_h - 1 - half_h
+            append(rects, { "x": area_x, "y": area_y, "w": half_w, "h": half_h })
+            append(rects, { "x": area_x, "y": area_y + half_h + 1, "w": half_w, "h": other_h })
+            append(rects, { "x": area_x + half_w + 1, "y": area_y, "w": other_w, "h": area_h })
+            return rects
+        }
+        if l == "grid" {
+            let half_w = (area_w - 1) / 2
+            let other_w = area_w - 1 - half_w
+            let half_h = (area_h - 1) / 2
+            let other_h = area_h - 1 - half_h
+            append(rects, { "x": area_x,                  "y": area_y,                  "w": half_w,  "h": half_h })
+            append(rects, { "x": area_x + half_w + 1,     "y": area_y,                  "w": other_w, "h": half_h })
+            append(rects, { "x": area_x,                  "y": area_y + half_h + 1,     "w": half_w,  "h": other_h })
+            append(rects, { "x": area_x + half_w + 1,     "y": area_y + half_h + 1,     "w": other_w, "h": other_h })
+            return rects
+        }
+        append(rects, { "x": area_x, "y": area_y, "w": area_w, "h": area_h })
+        return rects
+    }
+
+    // Transicion al hacer split. direction = "v" o "h".
+    // Devuelve true si se pudo, false si ya no caben mas paneles.
+    fn split(self, direction) {
+        let l = self.layout
+        if l == "single" {
+            if direction == "v" { self.layout = "split_v" }
+            if direction == "h" { self.layout = "split_h" }
+            return true
+        }
+        if l == "split_v" {
+            self.layout = "three_right"
+            return true
+        }
+        if l == "split_h" {
+            self.layout = "three_left"
+            return true
+        }
+        if l == "three_left" or l == "three_right" {
+            self.layout = "grid"
+            return true
+        }
+        return false
+    }
+
+    // Reducir layout cuando se cierra un panel
+    fn shrink(self) {
+        let l = self.layout
+        if l == "grid" {
+            self.layout = "three_right"
+        } elif l == "three_left" or l == "three_right" {
+            self.layout = "split_v"
+        } elif l == "split_v" or l == "split_h" {
+            self.layout = "single"
+        }
+    }
+
+    fn cycle(self) {
+        if self.layout == "split_v" { self.layout = "split_h"; return }
+        if self.layout == "split_h" { self.layout = "split_v"; return }
+        if self.layout == "three_left" { self.layout = "three_right"; return }
+        if self.layout == "three_right" { self.layout = "three_left"; return }
+    }
+}
+
+
+// =============================================================================
+// SECCION 11.6: AutocompletePopup (estilo VS Code)
+// =============================================================================
+// Popup flotante con bordes Unicode/ASCII y candidatos resaltados por
+// prefijo. Auto-trigger tras 2 caracteres alfanumericos.
+
+class AutocompletePopup {
+    "Popup de autocompletado. Muestra candidatos con icono y resaltado."
+
+    fn __init__(self, candidates, x, y, prefix, use_unicode) {
+        self.candidates = candidates    // list of {text, kind}
+        self.sel = 0
+        self.x = x                       // 1-based ANSI
+        self.y = y                       // 1-based ANSI
+        self.prefix = prefix
+        self.use_unicode = use_unicode
+        self.max_show = 8
+        self.scroll = 0
+        self.width = self._compute_width()
+    }
+
+    fn _compute_width(self) {
+        let mw = 0
+        for c in self.candidates {
+            // " [K] text  kind " = 2 + 4 + len(text) + 2 + len(kind) + 1
+            let w = 2 + 4 + len(c["text"]) + 2 + len(c["kind"]) + 1
+            if w > mw { mw = w }
+        }
+        if mw < 18 { mw = 18 }
+        if mw > 50 { mw = 50 }
+        return mw
+    }
+
+    fn n_visible(self) {
+        let n = len(self.candidates)
+        if n > self.max_show { return self.max_show }
+        return n
+    }
+
+    fn move_up(self) {
+        if len(self.candidates) == 0 { return }
+        if self.sel > 0 {
+            self.sel = self.sel - 1
+        } else {
+            self.sel = len(self.candidates) - 1
+        }
+        self._adjust_scroll()
+    }
+
+    fn move_down(self) {
+        if len(self.candidates) == 0 { return }
+        self.sel = self.sel + 1
+        if self.sel >= len(self.candidates) { self.sel = 0 }
+        self._adjust_scroll()
+    }
+
+    fn _adjust_scroll(self) {
+        if self.sel < self.scroll { self.scroll = self.sel }
+        if self.sel >= self.scroll + self.max_show {
+            self.scroll = self.sel - self.max_show + 1
+        }
+    }
+
+    fn sel_text(self) {
+        if self.sel < 0 or self.sel >= len(self.candidates) { return null }
+        return self.candidates[self.sel]["text"]
+    }
+
+    // Pintar el popup. Devuelve string ANSI para que el editor lo añada
+    // a su buffer de salida en lugar de printear directamente.
+    fn render(self) {
+        let out = ""
+        let n = self.n_visible()
+        if n == 0 { return out }
+
+        let u = self.use_unicode
+        // Caracteres de borde
+        let TL = "+"; let TR = "+"; let BL = "+"; let BR = "+"
+        let H = "-";  let V = "|"
+        if u {
+            TL = from_char(226) + from_char(149) + from_char(173)  // ╭
+            TR = from_char(226) + from_char(149) + from_char(174)  // ╮
+            BL = from_char(226) + from_char(149) + from_char(176)  // ╰
+            BR = from_char(226) + from_char(149) + from_char(175)  // ╯
+            H  = from_char(226) + from_char(148) + from_char(128)  // ─
+            V  = from_char(226) + from_char(148) + from_char(130)  // │
+        }
+
+        let bg = ansi_rgb_bg(40, 42, 54)
+        let bg_sel = ansi_rgb_bg(98, 114, 164)
+        let fg = ansi_rgb(248, 248, 242)
+        let dim = ansi_rgb(98, 114, 164)
+        let prefix_color = ansi_rgb(255, 121, 198) + ANSI["BOLD"]
+        let R = ANSI["RESET"]
+
+        let inner_w = self.width
+
+        // Top border
+        out = out + ansi_cursor_pos(self.y, self.x)
+        out = out + dim + TL + repeat(H, inner_w) + TR + R
+
+        // Filas
+        let i = 0
+        while i < n {
+            let idx = self.scroll + i
+            out = out + ansi_cursor_pos(self.y + 1 + i, self.x)
+            out = out + dim + V + R
+
+            if idx < len(self.candidates) {
+                let cand = self.candidates[idx]
+                let kind = cand["kind"]
+                let text = cand["text"]
+
+                let icon_letter = "?"
+                let icon_color = fg
+                if kind == "kw"      { icon_letter = "K"; icon_color = ansi_rgb(255, 121, 198) }
+                if kind == "type"    { icon_letter = "T"; icon_color = ansi_rgb(139, 233, 253) }
+                if kind == "builtin" { icon_letter = "B"; icon_color = ansi_rgb(80, 250, 123) }
+                if kind == "func"    { icon_letter = "F"; icon_color = ansi_rgb(80, 250, 123) }
+                if kind == "id"      { icon_letter = "V"; icon_color = ansi_rgb(248, 248, 242) }
+
+                let row_bg = bg
+                if idx == self.sel { row_bg = bg_sel }
+
+                let plen = len(self.prefix)
+                let prefix_part = ""
+                let rest_part = text
+                if plen <= len(text) and lower(substr(text, 0, plen)) == lower(self.prefix) {
+                    prefix_part = substr(text, 0, plen)
+                    rest_part = substr(text, plen, len(text) - plen)
+                }
+
+                let consumed = 2 + 3 + 1 + len(text) + 2 + len(kind) + 1
+                let pad = inner_w - consumed
+                if pad < 0 { pad = 0 }
+
+                out = out + row_bg + " "
+                out = out + "[" + icon_color + icon_letter + R + row_bg + "]"
+                out = out + " "
+                if prefix_part != "" {
+                    out = out + prefix_color + row_bg + prefix_part + R + row_bg
+                }
+                out = out + fg + row_bg + rest_part + R + row_bg
+                out = out + repeat(" ", pad)
+                out = out + dim + row_bg + " " + kind + " " + R
+            }
+            out = out + dim + V + R
+            i = i + 1
+        }
+
+        // Bottom border
+        out = out + ansi_cursor_pos(self.y + 1 + n, self.x)
+        out = out + dim + BL + repeat(H, inner_w) + BR + R
+
+        return out
+    }
+
+    // Devuelve el rectangulo {x, y, w, h} ocupado por el popup en pantalla,
+    // 1-based (para que el editor pueda re-pintar esas zonas al cerrar).
+    fn rect(self) {
+        let n = self.n_visible()
+        return { "x": self.x, "y": self.y, "w": self.width + 2, "h": n + 2 }
+    }
+}
+// =============================================================================
+// SECCION 12: Editor (workspace con paneles, sidebar y autocompletado)
 // =============================================================================
 
 class Editor {
-    "Editor de texto multicursor con sidebar y pestanas."
+    "Editor multicursor con paneles, sidebar, pestanas y autocompletado."
 
     fn __init__(self, config) {
         self.config = config
         self.hl = Highlighter()
 
-        // Lista de buffers (pestanas) y activo
-        self.buffers = []           // list of EditorBuffer
-        self.active_idx = 0
+        // Panels
+        self.panels = []                 // list[Panel]
+        self.active_panel_idx = 0
+        self.layout_mgr = LayoutManager()
 
         // Sidebar
         self.sidebar_visible = false
-        self.sidebar_root = ""      // path del proyecto
-        self.tree = null            // FileTree (null si no hay proyecto)
-        self.sidebar_sel = 0        // indice seleccionado en list_visible
+        self.sidebar_root = ""
+        self.tree = null
+        self.sidebar_sel = 0
         self.sidebar_scroll = 0
 
         // Foco: "editor" o "sidebar"
@@ -1972,7 +2385,7 @@ class Editor {
         // Clipboard global
         self.kill_buffer = ""
 
-        // Backend de input (asignado en run)
+        // Backend de input
         self.input_backend = null
 
         // Tamano del terminal
@@ -1985,87 +2398,213 @@ class Editor {
         self.status_msg = ""
         self.status_until = 0
         self.show_lineno = true
+
+        // Autocomplete popup
+        self.popup = null            // null si no hay popup activo
+
+        // Output buffer para render bufferizado: acumulamos toda la salida
+        // del frame y hacemos un solo print al final. Reduce drasticamente
+        // los syscalls a WriteConsole en Windows.
+        self._out = ""
+    }
+
+    // Helper: escribe en el buffer de salida del frame
+    fn _w(self, s) {
+        self._out = self._out + s
+    }
+
+    // Vuelca el buffer a stdout y lo resetea.
+    // CRITICO: tras el cambio del interprete a print bufferizado interno,
+    // necesitamos llamar flush_output() para forzar el volcado al terminal.
+    // Si no, el output se queda en el buffer C++ del interprete y nada
+    // aparece en pantalla hasta que se acumulan 64KB o cierras vnano.
+    fn _flush(self) {
+        if self._out != "" {
+            print(self._out)
+            self._out = ""
+        }
+        flush_output()
     }
 
     // -------------------------------------------------------------------------
-    // ACCESO AL BUFFER ACTIVO
+    // ACCESO AL PANEL/BUFFER ACTIVO
     // -------------------------------------------------------------------------
 
-    fn _ab(self) { return self.buffers[self.active_idx] }
+    fn _ap(self) {
+        // Active panel; null si no hay paneles
+        if len(self.panels) == 0 { return null }
+        if self.active_panel_idx < 0 or self.active_panel_idx >= len(self.panels) {
+            self.active_panel_idx = 0
+        }
+        return self.panels[self.active_panel_idx]
+    }
 
-    fn _has_active(self) { return len(self.buffers) > 0 }
+    fn _ab(self) {
+        // Active EditorBuffer of active panel; null si no hay
+        let p = self._ap()
+        if p == null { return null }
+        return p.ab()
+    }
+
+    fn _has_active(self) {
+        let b = self._ab()
+        return b != null
+    }
 
     // -------------------------------------------------------------------------
-    // GESTION DE PESTANAS
+    // GESTION DE PESTANAS (en el panel activo)
     // -------------------------------------------------------------------------
 
     fn open_file(self, path) {
-        // Si ya esta abierto, conmutar a esa pestana
-        let i = 0
-        while i < len(self.buffers) {
-            if self.buffers[i].filename == path {
-                self.active_idx = i
-                self.full_redraw = true
-                self.set_status("Cambiado a pestana: " + basename_or(path, "?"))
-                return
-            }
-            i = i + 1
+        // Si ya hay una pestana con ese fichero EN EL PANEL ACTIVO,
+        // conmutar; si no, anadir nueva pestana al panel activo.
+        let p = self._ap()
+        if p == null {
+            // No hay paneles: crear el primero
+            self._ensure_initial_panel()
+            p = self._ap()
         }
-        // Nueva pestana
+        let idx = p.find_buffer(path)
+        if idx != -1 {
+            p.switch_to(idx)
+            self.full_redraw = true
+            self.set_status("Cambiado a pestana: " + basename_or(path, "?"))
+            return
+        }
         let buf = EditorBuffer(path)
-        append(self.buffers, buf)
-        self.active_idx = len(self.buffers) - 1
+        p.add_buffer(buf)
         self.full_redraw = true
         self._recompute_state(0)
         self.set_status("Abierto: " + basename_or(path, "?"))
     }
 
     fn new_tab(self) {
+        let p = self._ap()
+        if p == null {
+            self._ensure_initial_panel()
+            p = self._ap()
+        }
         let buf = EditorBuffer("")
-        append(self.buffers, buf)
-        self.active_idx = len(self.buffers) - 1
+        p.add_buffer(buf)
         self.full_redraw = true
         self.set_status("Nueva pestana")
     }
 
+    fn _ensure_initial_panel(self) {
+        if len(self.panels) == 0 {
+            append(self.panels, Panel(null))
+            self.active_panel_idx = 0
+        }
+    }
+
     fn close_tab(self, inp) {
-        if not self._has_active() { return false }
-        let ab = self._ab()
+        let p = self._ap()
+        if p == null { return false }
+        if p.tab_count() == 0 { return false }
+        let ab = p.ab()
         if ab.buf.modified {
             let ans = self._prompt(inp, "Cambios sin guardar en '" + ab.display_name() + "'. Cerrar? (y/N): ", "")
             if ans == null { return false }
             if lower(ans) != "y" { return false }
         }
-        // Quitar la pestana
-        let new_buffers = []
-        let i = 0
-        while i < len(self.buffers) {
-            if i != self.active_idx { append(new_buffers, self.buffers[i]) }
-            i = i + 1
-        }
-        self.buffers = new_buffers
-        if self.active_idx >= len(self.buffers) { self.active_idx = len(self.buffers) - 1 }
-        if self.active_idx < 0 { self.active_idx = 0 }
+        let still_has = p.close_tab(p.active_idx)
         self.full_redraw = true
-        if len(self.buffers) == 0 {
-            // Si cerramos la ultima, abrir una vacia para no quedar sin nada
-            self.new_tab()
+        if not still_has {
+            // Panel vacio: si hay mas paneles, cerrar este. Si es el unico, abrir
+            // pestana vacia.
+            if len(self.panels) > 1 {
+                self._close_active_panel()
+            } else {
+                self.new_tab()
+            }
         }
         return true
     }
 
+    fn _close_active_panel(self) {
+        let new_panels = []
+        let i = 0
+        while i < len(self.panels) {
+            if i != self.active_panel_idx { append(new_panels, self.panels[i]) }
+            i = i + 1
+        }
+        self.panels = new_panels
+        self.layout_mgr.shrink()
+        if self.active_panel_idx >= len(self.panels) {
+            self.active_panel_idx = len(self.panels) - 1
+        }
+        if self.active_panel_idx < 0 { self.active_panel_idx = 0 }
+        self.full_redraw = true
+        self.set_status("Panel cerrado. Layout: " + self.layout_mgr.layout)
+    }
+
     fn next_tab(self) {
-        if len(self.buffers) <= 1 { return }
-        self.active_idx = self.active_idx + 1
-        if self.active_idx >= len(self.buffers) { self.active_idx = 0 }
+        let p = self._ap()
+        if p == null or p.tab_count() <= 1 { return }
+        p.active_idx = p.active_idx + 1
+        if p.active_idx >= p.tab_count() { p.active_idx = 0 }
+        p.full_redraw_local = true
         self.full_redraw = true
     }
 
     fn prev_tab(self) {
-        if len(self.buffers) <= 1 { return }
-        self.active_idx = self.active_idx - 1
-        if self.active_idx < 0 { self.active_idx = len(self.buffers) - 1 }
+        let p = self._ap()
+        if p == null or p.tab_count() <= 1 { return }
+        p.active_idx = p.active_idx - 1
+        if p.active_idx < 0 { p.active_idx = p.tab_count() - 1 }
+        p.full_redraw_local = true
         self.full_redraw = true
+    }
+
+    // -------------------------------------------------------------------------
+    // GESTION DE PANELES
+    // -------------------------------------------------------------------------
+
+    fn split_active_panel(self, direction) {
+        let p = self._ap()
+        if p == null { return }
+        let n_before = self.layout_mgr.n_panels_required()
+        let ok = self.layout_mgr.split(direction)
+        if not ok {
+            self.set_status("Maximo de paneles alcanzado")
+            return
+        }
+        let n_after = self.layout_mgr.n_panels_required()
+        // Crear paneles nuevos hasta llegar a n_after, copiando el buffer activo
+        // del panel actual como vista clonada
+        while len(self.panels) < n_after {
+            let active = p.ab()
+            let new_buf = null
+            if active != null {
+                new_buf = active.clone_view()
+            }
+            append(self.panels, Panel(new_buf))
+        }
+        // Foco al panel nuevo
+        self.active_panel_idx = len(self.panels) - 1
+        self.full_redraw = true
+        self.set_status("Split " + direction + ". Layout: " + self.layout_mgr.layout)
+    }
+
+    fn rotate_panel_focus(self) {
+        if len(self.panels) <= 1 {
+            self.set_status("Solo hay un panel")
+            return
+        }
+        self.active_panel_idx = self.active_panel_idx + 1
+        if self.active_panel_idx >= len(self.panels) { self.active_panel_idx = 0 }
+        self.full_redraw = true
+        self.set_status("Foco -> Panel " + str(self.active_panel_idx + 1))
+    }
+
+    fn cycle_layout(self) {
+        if self.layout_mgr.n_panels_required() == 1 {
+            self.set_status("Layout sin alternativa para 1 panel")
+            return
+        }
+        self.layout_mgr.cycle()
+        self.full_redraw = true
+        self.set_status("Layout: " + self.layout_mgr.layout)
     }
 
     // -------------------------------------------------------------------------
@@ -2081,7 +2620,6 @@ class Editor {
 
     fn toggle_sidebar(self) {
         if self.tree == null {
-            // Si no hay proyecto, abrir el cwd como proyecto
             self.set_project(getcwd())
             self.set_status("Sidebar abierto en cwd")
             return
@@ -2113,18 +2651,29 @@ class Editor {
     }
 
     // -------------------------------------------------------------------------
-    // HELPERS DE CURSOR (operan sobre el buffer activo)
+    // HELPERS DE CURSOR
     // -------------------------------------------------------------------------
 
     fn _make_cursor(self, row, col, primary) {
         return { "row": row, "col": col, "anchor_row": row, "anchor_col": col, "primary": primary }
     }
 
-    fn _primary(self) { return self._ab().cursors[0] }
-    fn _has_multi(self) { return len(self._ab().cursors) > 1 }
+    fn _primary(self) {
+        let ab = self._ab()
+        if ab == null { return null }
+        return ab.cursors[0]
+    }
+
+    fn _has_multi(self) {
+        let ab = self._ab()
+        if ab == null { return false }
+        return len(ab.cursors) > 1
+    }
 
     fn _any_selection(self) {
-        for cur in self._ab().cursors {
+        let ab = self._ab()
+        if ab == null { return false }
+        for cur in ab.cursors {
             if cur["row"] != cur["anchor_row"] or cur["col"] != cur["anchor_col"] {
                 return true
             }
@@ -2146,8 +2695,9 @@ class Editor {
     }
 
     fn _cursors_desc(self) {
+        let ab = self._ab()
         let lst = []
-        for c in self._ab().cursors { append(lst, c) }
+        for c in ab.cursors { append(lst, c) }
         let n = len(lst)
         let i = 0
         while i < n {
@@ -2160,9 +2710,7 @@ class Editor {
                 } elif a["row"] == b["row"] and a["col"] < b["col"] {
                     cmp = true
                 }
-                if cmp {
-                    lst[j] = b; lst[j+1] = a
-                }
+                if cmp { lst[j] = b; lst[j+1] = a }
                 j = j + 1
             }
             i = i + 1
@@ -2197,6 +2745,7 @@ class Editor {
 
     fn _clamp_all_cursors(self) {
         let ab = self._ab()
+        if ab == null { return }
         let n = ab.buf.nlines()
         if n == 0 { return }
         for cur in ab.cursors {
@@ -2215,6 +2764,7 @@ class Editor {
 
     fn _recompute_state(self, from_row) {
         let ab = self._ab()
+        if ab == null { return }
         let n = ab.buf.nlines()
         if from_row < 0 { from_row = 0 }
         if from_row >= n { return }
@@ -2241,72 +2791,16 @@ class Editor {
         self.status_until = time_ms() + 4000
     }
 
-    // -------------------------------------------------------------------------
-    // GEOMETRIA DE LA UI
-    // -------------------------------------------------------------------------
-
-    fn _has_tabbar(self) { return len(self.buffers) > 1 }
-
-    // Filas: header(1) + tabbar(0|1) + texto + statusbar(1)
-    fn _editor_top_row(self) {
-        let r = 2  // tras header
-        if self._has_tabbar() { r = r + 1 }
-        return r
-    }
-
-    fn _editor_height(self) {
-        let used = 2  // header + statusbar
-        if self._has_tabbar() { used = used + 1 }
-        return self.term_h - used
-    }
-
-    fn _sidebar_w(self) {
-        if not self.sidebar_visible or self.tree == null { return 0 }
-        return self.config.sidebar_width
-    }
-
-    // Ancho del area de texto (sin sidebar ni gutter)
-    fn _text_area_left(self) { return self._sidebar_w() }   // columna 0-based desde donde empieza el editor
-    fn _text_area_width(self) { return self.term_w - self._sidebar_w() }
-
-    fn _gutter_width(self) {
-        if not self.show_lineno { return 0 }
-        if not self._has_active() { return 0 }
-        let n = self._ab().buf.nlines()
-        let w = 1
-        let m = n
-        while m >= 10 { w = w + 1; m = m / 10 }
-        return w + 1
-    }
-
-    fn _text_width(self) { return self._text_area_width() - self._gutter_width() }
-
-    // -------------------------------------------------------------------------
-    // SCROLL
-    // -------------------------------------------------------------------------
-
-    fn _scroll(self) {
-        self._clamp_all_cursors()
-        let h = self._editor_height()
-        let w = self._text_width()
-        let ab = self._ab()
-        let p = self._primary()
-        if p["row"] < ab.row_off {
-            ab.row_off = p["row"]; self.full_redraw = true
+    fn _any_modified(self) {
+        for p in self.panels {
+            if p.is_modified() { return true }
         }
-        if p["row"] >= ab.row_off + h {
-            ab.row_off = p["row"] - h + 1; self.full_redraw = true
-        }
-        if p["col"] < ab.col_off {
-            ab.col_off = p["col"]; self.full_redraw = true
-        }
-        if p["col"] >= ab.col_off + w {
-            ab.col_off = p["col"] - w + 1; self.full_redraw = true
-        }
+        return false
     }
 
     fn _word_at_cursor(self) {
         let ab = self._ab()
+        if ab == null { return "" }
         let p = self._primary()
         let ln = ab.buf.line(p["row"])
         if p["col"] > len(ln) { return "" }
@@ -2324,172 +2818,372 @@ class Editor {
         return substr(ln, start, end - start)
     }
     // -------------------------------------------------------------------------
+    // GEOMETRIA
+    // -------------------------------------------------------------------------
+
+    fn _sidebar_w(self) {
+        if not self.sidebar_visible or self.tree == null { return 0 }
+        return self.config.sidebar_width
+    }
+
+    // El area total que ocupan TODOS los paneles juntos:
+    // x = sidebar_w (1-based: +1 al pintar)
+    // y = 2 (debajo del header)
+    // w = term_w - sidebar_w
+    // h = term_h - 2 (header + statusbar)
+    fn _panels_area(self) {
+        let x = self._sidebar_w()
+        let y = 1                        // 0-based: fila 1 (debajo de header en fila 0)
+        let w = self.term_w - self._sidebar_w()
+        let h = self.term_h - 2
+        return { "x": x, "y": y, "w": w, "h": h }
+    }
+
+    // Devuelve el rect del panel idx (0-based en pantalla) ya en
+    // coordenadas absolutas dentro del workspace
+    fn _panel_rects(self) {
+        let area = self._panels_area()
+        return self.layout_mgr.rects(area["x"], area["y"], area["w"], area["h"])
+    }
+
+    // Geometria interna de un panel: cabecera (1), tabbar (0|1), contenido
+    fn _panel_header_h(self) { return 1 }
+
+    fn _panel_content_h(self, panel, rect) {
+        let used = self._panel_header_h()
+        if panel.has_tabbar() { used = used + 1 }
+        return rect["h"] - used
+    }
+
+    fn _panel_content_y(self, panel, rect) {
+        let y = rect["y"] + self._panel_header_h()
+        if panel.has_tabbar() { y = y + 1 }
+        return y
+    }
+
+    fn _gutter_width_for(self, panel) {
+        if not self.show_lineno { return 0 }
+        let ab = panel.ab()
+        if ab == null { return 0 }
+        let n = ab.buf.nlines()
+        let w = 1
+        let m = n
+        while m >= 10 { w = w + 1; m = m / 10 }
+        return w + 1
+    }
+
+    fn _panel_text_width(self, panel, rect) {
+        return rect["w"] - self._gutter_width_for(panel)
+    }
+
+    // -------------------------------------------------------------------------
+    // SCROLL (para el panel/buffer activo)
+    // -------------------------------------------------------------------------
+
+    fn _scroll(self) {
+        self._clamp_all_cursors()
+        let p = self._ap()
+        if p == null { return }
+        let ab = p.ab()
+        if ab == null { return }
+        let rects = self._panel_rects()
+        if self.active_panel_idx >= len(rects) { return }
+        let rect = rects[self.active_panel_idx]
+        let h = self._panel_content_h(p, rect)
+        let w = self._panel_text_width(p, rect)
+        let cur = ab.cursors[0]
+        if cur["row"] < ab.row_off {
+            ab.row_off = cur["row"]; self.full_redraw = true
+        }
+        if cur["row"] >= ab.row_off + h {
+            ab.row_off = cur["row"] - h + 1; self.full_redraw = true
+        }
+        if cur["col"] < ab.col_off {
+            ab.col_off = cur["col"]; self.full_redraw = true
+        }
+        if cur["col"] >= ab.col_off + w {
+            ab.col_off = cur["col"] - w + 1; self.full_redraw = true
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // RENDER PRINCIPAL
     // -------------------------------------------------------------------------
 
     fn render(self) {
         if not self._has_active() { return }
 
-        if self.full_redraw { print(ANSI["CLEAR"]) }
+        if self.full_redraw { self._w(ANSI["CLEAR"]) }
 
-        self._draw_header()
-        if self._has_tabbar() { self._draw_tabbar() }
-        if self.sidebar_visible and self.tree != null { self._draw_sidebar() }
-        self._draw_text_area()
+        // Chrome (header, sidebar, divisores) solo se redibuja cuando hay
+        // un cambio estructural (full_redraw=true). En el resto de casos,
+        // solo redibujamos el contenido del panel activo (que respeta line_dirty)
+        // y la status bar (que muestra Lin/Col actuales).
+        if self.full_redraw {
+            self._draw_header()
+            if self.sidebar_visible and self.tree != null { self._draw_sidebar() }
+            self._draw_dividers()
+        }
+
+        self._draw_panels()
         self._draw_status_bar()
 
+        // Popup encima de todo
+        if self.popup != null {
+            self._w(self.popup.render())
+        }
+
         // Posicionar cursor del terminal
-        if self.focus == "editor" {
-            let p = self._primary()
-            let ab = self._ab()
-            let screen_row = p["row"] - ab.row_off + self._editor_top_row()
-            let screen_col = p["col"] - ab.col_off + self._sidebar_w() + self._gutter_width() + 1
-            print(ansi_cursor_pos(screen_row, screen_col))
-            print(ESC_CUR_SHOW)
+        if self.focus == "editor" and self.popup == null {
+            self._position_cursor_in_active_panel()
+            self._w(ESC_CUR_SHOW)
         } else {
-            // Foco en sidebar: ocultamos el cursor (la barra azul ya marca posicion)
-            print(ESC_CUR_HIDE)
+            self._w(ESC_CUR_HIDE)
         }
 
         self.full_redraw = false
+        self._flush()
+    }
+
+    fn _position_cursor_in_active_panel(self) {
+        let p = self._ap()
+        if p == null { return }
+        let ab = p.ab()
+        if ab == null { return }
+        let rects = self._panel_rects()
+        if self.active_panel_idx >= len(rects) { return }
+        let rect = rects[self.active_panel_idx]
+        let cy = self._panel_content_y(p, rect)
+        let gw = self._gutter_width_for(p)
+        let cur = ab.cursors[0]
+        let screen_row = cur["row"] - ab.row_off + cy + 1            // +1 para 1-based ANSI
+        let screen_col = cur["col"] - ab.col_off + rect["x"] + gw + 1
+        self._w(ansi_cursor_pos(screen_row, screen_col))
     }
 
     fn _draw_header(self) {
-        print(ansi_cursor_pos(1, 1))
-        print(ANSI["REVERSE"] + ANSI["BOLD"])
-        let title = " vnano 0.4 "
+        self._w(ansi_cursor_pos(1, 1))
+        self._w(ANSI["REVERSE"] + ANSI["BOLD"])
+        let title = " vnano 0.5 "
         let ab = self._ab()
-        let fname = ab.display_name()
+        let fname = "[Sin buffer]"
         let mod_marker = ""
-        if ab.buf.modified { mod_marker = " * " }
         let multi = ""
-        if self._has_multi() { multi = "  [" + str(len(ab.cursors)) + " cursores]" }
+        if ab != null {
+            fname = ab.display_name()
+            if ab.buf.modified { mod_marker = " * " }
+            if self._has_multi() { multi = "  [" + str(len(ab.cursors)) + " cursores]" }
+        }
         let foco = ""
-        if self.focus == "sidebar" { foco = "  [foco: sidebar]" }
+        if self.focus == "sidebar" { foco = "  [sidebar]" }
         let project = ""
-        if self.tree != null { project = "  Proyecto: " + basename_or(self.sidebar_root, "?") }
-        let middle = "  Archivo: " + fname + mod_marker + multi + foco + project
+        if self.tree != null { project = "  Proy: " + basename_or(self.sidebar_root, "?") }
+        let panels_info = ""
+        if len(self.panels) > 1 {
+            panels_info = "  [" + str(self.active_panel_idx + 1) + "/" + str(len(self.panels)) + " " + self.layout_mgr.layout + "]"
+        }
+        let middle = "  " + fname + mod_marker + multi + foco + panels_info + project
         let total = pad_visual(title + middle, self.term_w)
-        print(total)
-        print(ANSI["RESET"])
-    }
-
-    fn _draw_tabbar(self) {
-        print(ansi_cursor_pos(2, 1))
-        print(ESC_CLR_EOL)
-        let bg = ansi_rgb_bg(40, 42, 54)
-        let fg = ansi_rgb(248, 248, 242)
-        let active_bg = ansi_rgb_bg(68, 71, 90)
-        let active_fg = ansi_rgb(255, 121, 198) + ANSI["BOLD"]
-        let dim = ansi_rgb(98, 114, 164)
-
-        let s = ""
-        let i = 0
-        while i < len(self.buffers) {
-            let b = self.buffers[i]
-            let label = " " + b.display_name()
-            if b.buf.modified { label = label + " *" }
-            label = label + " "
-            if i == self.active_idx {
-                s = s + active_bg + active_fg + label + ANSI["RESET"]
-            } else {
-                s = s + bg + fg + label + ANSI["RESET"]
-            }
-            s = s + dim + VBAR + ANSI["RESET"]
-            i = i + 1
-        }
-        // Padding hasta el ancho total
-        let visual = visual_len(strip_ansi(s))
-        if visual < self.term_w {
-            s = s + bg + repeat(" ", self.term_w - visual) + ANSI["RESET"]
-        }
-        print(s)
+        self._w(total)
+        self._w(ANSI["RESET"])
     }
 
     fn _draw_sidebar(self) {
         let w = self._sidebar_w()
-        let top = self._editor_top_row()
-        let h = self._editor_height()
+        let h = self.term_h - 2          // header + statusbar
         let visible = self.tree.list_visible()
 
-        // Ajustar scroll del sidebar
         if self.sidebar_sel < self.sidebar_scroll { self.sidebar_scroll = self.sidebar_sel }
         if self.sidebar_sel >= self.sidebar_scroll + h - 1 {
             self.sidebar_scroll = self.sidebar_sel - h + 2
         }
         if self.sidebar_scroll < 0 { self.sidebar_scroll = 0 }
 
-        // Cabecera del sidebar
-        print(ansi_cursor_pos(top, 1))
+        self._w(ansi_cursor_pos(2, 1))
         let dim = ansi_rgb(98, 114, 164)
         let header_txt = pad_visual(" EXPLORADOR", w - 1) + VBAR
-        print(dim + ANSI["BOLD"] + header_txt + ANSI["RESET"])
+        self._w(dim + ANSI["BOLD"] + header_txt + ANSI["RESET"])
 
-        // Lineas
         let active_path = ""
-        if self._has_active() { active_path = self._ab().filename }
+        let ab = self._ab()
+        if ab != null { active_path = ab.filename }
 
         let i = 1
         while i < h {
-            print(ansi_cursor_pos(top + i, 1))
+            self._w(ansi_cursor_pos(2 + i, 1))
             let idx = self.sidebar_scroll + i - 1
             if idx < len(visible) {
                 let node = visible[idx]
                 let line = self.tree.render_line(node, w - 1, idx == self.sidebar_sel, self.focus == "sidebar", node["path"] == active_path)
-                print(line)
-                print(dim + VBAR + ANSI["RESET"])
+                self._w(line)
+                self._w(dim + VBAR + ANSI["RESET"])
             } else {
-                print(pad_visual("", w - 1))
-                print(dim + VBAR + ANSI["RESET"])
+                self._w(pad_visual("", w - 1))
+                self._w(dim + VBAR + ANSI["RESET"])
             }
             i = i + 1
         }
     }
 
-    fn _draw_text_area(self) {
-        let h = self._editor_height()
-        let top = self._editor_top_row()
-        let cur_word = self._word_at_cursor()
+    fn _draw_panels(self) {
+        let rects = self._panel_rects()
+        let i = 0
+        while i < len(self.panels) and i < len(rects) {
+            let p = self.panels[i]
+            let rect = rects[i]
+            self._draw_panel(p, rect, i == self.active_panel_idx)
+            i = i + 1
+        }
+    }
+
+    fn _draw_panel(self, panel, rect, focused) {
+        let ab = panel.ab()
+
+        // El header (1 linea) y la tabbar (0-1 lineas) son baratos: los
+        // repintamos siempre. Solo el contenido del panel (muchas lineas)
+        // se optimiza con line_dirty.
+
+        // Header del panel: nombre del fichero activo, marcador de foco
+        let head_text = " "
+        if ab != null {
+            head_text = head_text + ab.display_name()
+            if ab.buf.modified { head_text = head_text + " *" }
+        }
+        if focused { head_text = head_text + "  [FOCO]" }
+        head_text = pad_visual(head_text, rect["w"])
+
+        let bg = ansi_rgb_bg(40, 42, 54)
+        let active_bg = ansi_rgb_bg(98, 114, 164)
+        let fg = ansi_rgb(248, 248, 242)
+        let pink = ansi_rgb(255, 121, 198)
+        let R = ANSI["RESET"]
+
+        self._w(ansi_cursor_pos(rect["y"] + 1, rect["x"] + 1))
+        if focused {
+            self._w(active_bg + ANSI["BOLD"] + fg + head_text + R)
+        } else {
+            self._w(bg + fg + head_text + R)
+        }
+
+        // Tabbar del panel (si tiene >1 buffer)
+        if panel.has_tabbar() {
+            self._w(ansi_cursor_pos(rect["y"] + 2, rect["x"] + 1))
+            let s = ""
+            let i = 0
+            while i < panel.tab_count() {
+                let b = panel.buffers[i]
+                let label = " " + b.display_name()
+                if b.buf.modified { label = label + "*" }
+                label = label + " "
+                if i == panel.active_idx {
+                    s = s + active_bg + pink + ANSI["BOLD"] + label + R
+                } else {
+                    s = s + bg + fg + label + R
+                }
+                s = s + ansi_rgb(68, 71, 90) + VBAR + R
+                i = i + 1
+            }
+            let visual = visual_len(strip_ansi(s))
+            if visual < rect["w"] {
+                s = s + bg + repeat(" ", rect["w"] - visual) + R
+            }
+            self._w(s)
+        }
+
+        // header_used: 1 solo header, 2 header+tabbar
+        let header_used = 1
+        if panel.has_tabbar() { header_used = 2 }
+
+        // Contenido del buffer activo (siempre se evalua, respeta line_dirty)
+        if ab != null {
+            self._draw_panel_content(panel, ab, rect, header_used, focused)
+        }
+    }
+
+    // Marca como dirty las lineas visibles del buffer ab que contienen la
+    // palabra completa word. Usado para invalidar solo las lineas afectadas
+    // cuando cambia cur_word.
+    fn _mark_lines_with_word_dirty(self, ab, word, content_h) {
+        let i = 0
+        while i < content_h {
+            let row_idx = ab.row_off + i
+            if row_idx >= ab.buf.nlines() {
+                i = i + 1
+                continue
+            }
+            let line = ab.buf.lines[row_idx]
+            // Optimizacion: si la palabra no esta como subcadena, ni siquiera
+            // tokenizamos. find_str es mucho mas barato que tokenize.
+            if find_str(line, word, 0) != -1 {
+                ab.buf.line_dirty[row_idx] = true
+            }
+            i = i + 1
+        }
+    }
+
+    fn _draw_panel_content(self, panel, ab, rect, header_used, focused) {
+        let content_y = rect["y"] + header_used   // 0-based; 1-based = +1 al pintar
+        let content_h = rect["h"] - header_used
+        let content_x = rect["x"]
+        let cw = rect["w"]
+        let gw = self._gutter_width_for(panel)
+        let tw = cw - gw
+
+        let cur_word = ""
+        if focused {
+            let p = self._primary()
+            if p != null {
+                cur_word = self._word_at_cursor()
+            }
+        }
+
+        // Optimizacion clave: si cur_word cambio respecto al render anterior,
+        // solo marcamos como dirty las lineas que CONTIENEN la palabra vieja
+        // o la palabra nueva. Asi al mover el cursor solo redibujamos las
+        // lineas con la palabra resaltada, no todo el panel.
+        if cur_word != ab.last_cur_word {
+            // Marcar dirty lineas con la palabra vieja (para borrar highlight)
+            if ab.last_cur_word != "" and len(ab.last_cur_word) >= 2 {
+                self._mark_lines_with_word_dirty(ab, ab.last_cur_word, content_h)
+            }
+            // Marcar dirty lineas con la palabra nueva (para pintar highlight)
+            if cur_word != "" and len(cur_word) >= 2 {
+                self._mark_lines_with_word_dirty(ab, cur_word, content_h)
+            }
+            ab.last_cur_word = cur_word
+        }
+
+        let force_all = self.full_redraw or panel.full_redraw_local
 
         let i = 0
-        let ab = self._ab()
-        while i < h {
+        while i < content_h {
             let row_idx = ab.row_off + i
-            let must_draw = self.full_redraw
+            let must_draw = force_all
             if not must_draw and row_idx < ab.buf.nlines() {
                 must_draw = ab.buf.line_dirty[row_idx]
             }
             if must_draw {
-                self._draw_line(row_idx, i, cur_word)
-                if row_idx < ab.buf.nlines() {
+                let screen_y = content_y + i + 1   // 1-based ANSI
+                self._w(ansi_cursor_pos(screen_y, content_x + 1))
+                self._w(ESC_CLR_EOL)
+
+                if row_idx >= ab.buf.nlines() {
+                    self._w(self.hl.col_ruler + "~" + ANSI["RESET"])
+                } else {
+                    self._paint_line_in_panel(panel, ab, row_idx, content_x, gw, tw, cur_word, focused)
                     ab.buf.line_dirty[row_idx] = false
                 }
             }
             i = i + 1
         }
+        panel.full_redraw_local = false
     }
 
-    fn _draw_line(self, row_idx, screen_y, cur_word) {
-        let ab = self._ab()
-        let top = self._editor_top_row()
-        let left = self._sidebar_w() + 1   // 1-based ANSI
-        let area_w = self._text_area_width()
-
-        print(ansi_cursor_pos(top + screen_y, left))
-        print(ESC_CLR_EOL)
-
-        if row_idx >= ab.buf.nlines() {
-            print(self.hl.col_ruler + "~" + ANSI["RESET"])
-            return
-        }
-
-        // Gutter (numeros de linea)
-        let gw = 0
+    fn _paint_line_in_panel(self, panel, ab, row_idx, content_x, gw, tw, cur_word, focused) {
+        // Pintar gutter
         if self.show_lineno {
-            gw = self._gutter_width() - 1
-            let lnum = pad_left(str(row_idx + 1), gw)
-            print(self.hl.col_ruler + lnum + ANSI["RESET"] + " ")
-            gw = gw + 1
+            let lnum = pad_left(str(row_idx + 1), gw - 1)
+            self._w(self.hl.col_ruler + lnum + ANSI["RESET"] + " ")
         }
 
         let line = ab.buf.line(row_idx)
@@ -2497,7 +3191,7 @@ class Editor {
         let result = self.hl.tokenize(line, in_state)
         let tokens = result["tokens"]
 
-        // Construir overlays
+        // Overlays (selecciones, multicursor, busqueda, word match, overflow)
         let overlays = []
         for cur in ab.cursors {
             if self._cursor_has_sel(cur) {
@@ -2522,7 +3216,7 @@ class Editor {
             let m = self.hl.find_search_matches(line, ab.last_search)
             for x in m { append(overlays, x) }
         }
-        if cur_word != "" and len(cur_word) >= 2 {
+        if focused and cur_word != "" and len(cur_word) >= 2 {
             let m = self.hl.find_word_matches(tokens, cur_word)
             let p = self._primary()
             for x in m {
@@ -2534,7 +3228,7 @@ class Editor {
             append(overlays, { "start": 80, "end": len(line), "color": self.hl.col_overflow })
         }
 
-        // Render con scroll horizontal
+        // Render con scroll horizontal y truncado al ancho del panel (tw)
         let painted = ""
         if ab.col_off > 0 and ab.col_off < len(line) {
             let visible = substr(line, ab.col_off, len(line) - ab.col_off)
@@ -2552,17 +3246,11 @@ class Editor {
         } else {
             painted = self.hl.render(tokens, overlays)
         }
-        print(painted)
 
-        // Ruler vertical en columna 80 del area de texto
-        if len(line) < 80 {
-            let ruler_offset = gw + 80 - ab.col_off
-            if ruler_offset > gw and ruler_offset <= area_w {
-                print(ansi_cursor_pos(top + screen_y, left + ruler_offset))
-                print(self.hl.col_ruler + "|" + ANSI["RESET"])
-            }
-        }
-        print(ESC_CLR_EOL)
+        // Truncar pintado a tw columnas visibles aproximadas
+        // (quick&dirty: confiamos en que no hay caracteres ANSI excesivos)
+        self._w(painted)
+        self._w(ESC_CLR_EOL)
     }
 
     fn _cursor_sel_range_in_line(self, cur, row_idx) {
@@ -2576,27 +3264,118 @@ class Editor {
         return { "start": s, "end": e }
     }
 
+    // Pinta los divisores entre paneles
+    fn _draw_dividers(self) {
+        if self.layout_mgr.n_panels_required() == 1 { return }
+        let area = self._panels_area()
+        let rects = self._panel_rects()
+        let dim = ansi_rgb(68, 71, 90)
+        let yy = 0
+        while yy < area["h"] {
+            let xx = 0
+            while xx < area["w"] {
+                let gx = area["x"] + xx
+                let gy = area["y"] + yy
+                if not self._is_inside_any_rect(rects, gx, gy) {
+                    let is_h = self._is_horizontal_divider(rects, gy)
+                    let is_v = self._is_vertical_divider(rects, gx)
+                    let ch = " "
+                    if is_h and is_v {
+                        ch = from_char(226) + from_char(148) + from_char(188)   // ┼
+                    } elif is_h {
+                        ch = from_char(226) + from_char(148) + from_char(128)   // ─
+                    } elif is_v {
+                        ch = VBAR                                               // │
+                    }
+                    self._w(ansi_cursor_pos(gy + 1, gx + 1))
+                    self._w(dim + ch + ANSI["RESET"])
+                }
+                xx = xx + 1
+            }
+            yy = yy + 1
+        }
+    }
+
+    fn _is_inside_any_rect(self, rects, gx, gy) {
+        for r in rects {
+            if gx >= r["x"] and gx < r["x"] + r["w"] and gy >= r["y"] and gy < r["y"] + r["h"] {
+                return true
+            }
+        }
+        return false
+    }
+
+    fn _is_horizontal_divider(self, rects, gy) {
+        let i = 0
+        while i < len(rects) {
+            let r = rects[i]
+            if r["y"] + r["h"] == gy {
+                let j = 0
+                while j < len(rects) {
+                    let r2 = rects[j]
+                    if r2["y"] == gy + 1 {
+                        let lo = r["x"]
+                        if r2["x"] > lo { lo = r2["x"] }
+                        let hi = r["x"] + r["w"]
+                        let hi2 = r2["x"] + r2["w"]
+                        if hi2 < hi { hi = hi2 }
+                        if hi > lo { return true }
+                    }
+                    j = j + 1
+                }
+            }
+            i = i + 1
+        }
+        return false
+    }
+
+    fn _is_vertical_divider(self, rects, gx) {
+        let i = 0
+        while i < len(rects) {
+            let r = rects[i]
+            if r["x"] + r["w"] == gx {
+                let j = 0
+                while j < len(rects) {
+                    let r2 = rects[j]
+                    if r2["x"] == gx + 1 {
+                        let lo = r["y"]
+                        if r2["y"] > lo { lo = r2["y"] }
+                        let hi = r["y"] + r["h"]
+                        let hi2 = r2["y"] + r2["h"]
+                        if hi2 < hi { hi = hi2 }
+                        if hi > lo { return true }
+                    }
+                    j = j + 1
+                }
+            }
+            i = i + 1
+        }
+        return false
+    }
+
     fn _draw_status_bar(self) {
         let y = self.term_h
-        print(ansi_cursor_pos(y, 1))
-        print(ANSI["REVERSE"])
+        self._w(ansi_cursor_pos(y, 1))
+        self._w(ANSI["REVERSE"])
+        let pos = ""
         let p = self._primary()
         let ab = self._ab()
-        let pos = "Lin " + str(p["row"]+1) + ", Col " + str(p["col"]+1) + " / " + str(ab.buf.nlines())
+        if p != null and ab != null {
+            pos = "Lin " + str(p["row"]+1) + ", Col " + str(p["col"]+1) + " / " + str(ab.buf.nlines())
+        }
         let middle = ""
         let now = time_ms()
         if self.status_msg != "" and now < self.status_until {
             middle = "  " + self.status_msg + "  "
         } else {
-            middle = "  F1 Ayuda  ^S Save  ^E Run  ^F Find  ^B Sidebar  ^N Tab  ^W Cerrar  ^Q Salir  "
+            middle = "  F1 Ayuda  ^O Save  ^J Auto  ^F Find  F4/F8 Split  F7 Foco  F9 Layout  ^B Sidebar  ^N Tab  ^W Cerrar  ^Q Salir  "
         }
         let left = " " + pos + " "
         let total = pad_visual(left + middle, self.term_w)
-        print(total)
-        print(ANSI["RESET"] + ESC_CLR_EOL)
+        self._w(total)
+        self._w(ANSI["RESET"] + ESC_CLR_EOL)
     }
-    // -------------------------------------------------------------------------
-    // COMANDOS DE EDICION (multicursor-aware)
+// COMANDOS DE EDICION (multicursor-aware)
     // -------------------------------------------------------------------------
 
     fn cmd_insert_char(self, ch) {
@@ -2841,8 +3620,14 @@ class Editor {
         self._scroll()
     }
 
-    fn cmd_pgup(self) { self.cmd_move(-self._editor_height(), 0, false) }
-    fn cmd_pgdn(self) { self.cmd_move(self._editor_height(), 0, false) }
+    fn cmd_pgup(self) {
+        let h = self._active_panel_content_h()
+        self.cmd_move(-h, 0, false)
+    }
+    fn cmd_pgdn(self) {
+        let h = self._active_panel_content_h()
+        self.cmd_move(h, 0, false)
+    }
 
     fn cmd_word_left(self) {
         let ab = self._ab()
@@ -3214,12 +3999,15 @@ class Editor {
         return ans
     }
     // -------------------------------------------------------------------------
-    // AUTOCOMPLETADO
+    // AUTOCOMPLETADO (estilo VS Code, popup flotante)
     // -------------------------------------------------------------------------
 
     fn _word_prefix_at_cursor(self) {
         let p = self._primary()
         let ab = self._ab()
+        if p == null or ab == null {
+            return { "prefix": "", "start": 0, "end": 0 }
+        }
         let ln = ab.buf.line(p["row"])
         let end = p["col"]
         let start = end
@@ -3235,8 +4023,9 @@ class Editor {
     fn _build_word_corpus(self, prefix) {
         let words = []
         let seen = {}
+        let plower = lower(prefix)
         for w in VSH_KEYWORDS {
-            if starts_with(w, prefix) and len(w) > len(prefix) {
+            if starts_with(lower(w), plower) and len(w) > len(prefix) {
                 if not contains(seen, w) {
                     append(words, { "text": w, "kind": "kw" })
                     seen[w] = true
@@ -3244,7 +4033,7 @@ class Editor {
             }
         }
         for w in VSH_TYPES {
-            if starts_with(w, prefix) and len(w) > len(prefix) {
+            if starts_with(lower(w), plower) and len(w) > len(prefix) {
                 if not contains(seen, w) {
                     append(words, { "text": w, "kind": "type" })
                     seen[w] = true
@@ -3252,7 +4041,7 @@ class Editor {
             }
         }
         for w in VSH_BUILTINS {
-            if starts_with(w, prefix) and len(w) > len(prefix) {
+            if starts_with(lower(w), plower) and len(w) > len(prefix) {
                 if not contains(seen, w) {
                     append(words, { "text": w, "kind": "builtin" })
                     seen[w] = true
@@ -3260,101 +4049,92 @@ class Editor {
             }
         }
         let ab = self._ab()
-        let r = 0
-        while r < ab.buf.nlines() {
-            let res = self.hl.tokenize(ab.buf.lines[r], ab.buf.in_state_at[r])
-            for tok in res["tokens"] {
-                let k = tok["kind"]
-                if k == "id" or k == "func" {
-                    let w = tok["text"]
-                    if starts_with(w, prefix) and len(w) > len(prefix) {
-                        if not contains(seen, w) {
-                            append(words, { "text": w, "kind": k })
-                            seen[w] = true
+        if ab != null {
+            let r = 0
+            while r < ab.buf.nlines() {
+                let res = self.hl.tokenize(ab.buf.lines[r], ab.buf.in_state_at[r])
+                for tok in res["tokens"] {
+                    let k = tok["kind"]
+                    if k == "id" or k == "func" {
+                        let w = tok["text"]
+                        if starts_with(lower(w), plower) and len(w) > len(prefix) {
+                            if not contains(seen, w) {
+                                append(words, { "text": w, "kind": k })
+                                seen[w] = true
+                            }
                         }
                     }
                 }
+                r = r + 1
             }
-            r = r + 1
         }
         return words
     }
 
-    fn cmd_autocomplete(self, inp) {
+    // Calcula posicion 1-based del popup, justo debajo del prefijo
+    fn _popup_position(self, prefix_start_col) {
+        let p = self._primary()
+        let ab = self._ab()
+        let rects = self._panel_rects()
+        if self.active_panel_idx >= len(rects) {
+            return { "x": 1, "y": 1 }
+        }
+        let rect = rects[self.active_panel_idx]
+        let ap = self._ap()
+        let cy = self._panel_content_y(ap, rect)
+        let gw = self._gutter_width_for(ap)
+        let x = prefix_start_col - ab.col_off + rect["x"] + gw + 1
+        let y = p["row"] - ab.row_off + cy + 2   // +2: 1 por 1-based, 1 para ir debajo
+        return { "x": x, "y": y }
+    }
+
+    // Abre o actualiza el popup. Si el prefijo es vacio, lo cierra.
+    fn _popup_refresh(self) {
         let info = self._word_prefix_at_cursor()
         let prefix = info["prefix"]
-        if len(prefix) < 1 {
-            self.set_status("Escribe al menos 1 caracter antes de Ctrl+Space")
+        if len(prefix) == 0 {
+            self.popup = null
             return
         }
         let candidates = self._build_word_corpus(prefix)
         if len(candidates) == 0 {
-            self.set_status("Sin sugerencias para '" + prefix + "'")
+            self.popup = null
             return
         }
-        if len(candidates) == 1 {
-            self._apply_completion(candidates[0]["text"], info)
-            self.set_status("Completado")
-            return
-        }
+        let pos = self._popup_position(info["start"])
+        self.popup = AutocompletePopup(candidates, pos["x"], pos["y"], prefix, self.config.use_unicode)
+    }
 
-        let sel = 0
-        let max_show = 8
-        if max_show > len(candidates) { max_show = len(candidates) }
-
-        let p = self._primary()
-        let ab = self._ab()
-        let dropdown_row = p["row"] - ab.row_off + self._editor_top_row() + 1
-        let dropdown_col = p["col"] - ab.col_off + self._sidebar_w() + self._gutter_width() + 1
-        if dropdown_row + max_show > self.term_h {
-            dropdown_row = p["row"] - ab.row_off + self._editor_top_row() - max_show
-            if dropdown_row < self._editor_top_row() { dropdown_row = self._editor_top_row() }
-        }
-
-        let max_w = 0
-        let i = 0
-        while i < len(candidates) {
-            let l = len(candidates[i]["text"]) + 2 + 8
-            if l > max_w { max_w = l }
-            i = i + 1
-        }
-        if max_w > 40 { max_w = 40 }
-
-        let cancelled = false
-        while true {
-            let i2 = 0
-            while i2 < max_show {
-                print(ansi_cursor_pos(dropdown_row + i2, dropdown_col))
-                let cand = candidates[i2]
-                let txt = cand["text"]
-                let kind_label = "  " + cand["kind"]
-                let line = " " + txt + repeat(" ", max_w - len(txt) - len(kind_label) - 1) + kind_label + " "
-                if i2 == sel {
-                    print(ANSI["BG_BLUE"] + ANSI["WHITE"] + line + ANSI["RESET"])
-                } else {
-                    print(self.hl.col_cursor_sec + line + ANSI["RESET"])
-                }
-                i2 = i2 + 1
-            }
-            let k = inp.read_key_blocking()
-            if k == KEY_ESC { cancelled = true; break }
-            if k == KEY_ENTER or k == KEY_TAB { break }
-            if k == KEY_UP {
-                sel = sel - 1
-                if sel < 0 { sel = max_show - 1 }
-            } elif k == KEY_DOWN {
-                sel = sel + 1
-                if sel >= max_show { sel = 0 }
-            }
-            if k != KEY_UP and k != KEY_DOWN { cancelled = true; break }
-        }
-        self.full_redraw = true
-        if not cancelled {
-            self._apply_completion(candidates[sel]["text"], info)
+    // Trigger automatico tras escribir un caracter alfanumerico
+    fn _maybe_trigger_autocomplete(self) {
+        let info = self._word_prefix_at_cursor()
+        let prefix = info["prefix"]
+        if len(prefix) >= 2 {
+            self._popup_refresh()
+        } else {
+            self.popup = null
         }
     }
 
-    fn _apply_completion(self, full_word, info) {
+    // Apertura manual con Ctrl+J
+    fn cmd_autocomplete_manual(self, inp) {
+        let info = self._word_prefix_at_cursor()
+        if len(info["prefix"]) == 0 {
+            self.set_status("Escribe al menos 1 caracter antes de Ctrl+J")
+            return
+        }
+        self._popup_refresh()
+        if self.popup == null {
+            self.set_status("Sin sugerencias para '" + info["prefix"] + "'")
+        }
+    }
+
+    // Aplicar el candidato seleccionado del popup
+    fn _popup_accept(self) {
+        if self.popup == null { return }
+        let txt = self.popup.sel_text()
+        if txt == null { return }
+        let info = self._word_prefix_at_cursor()
         let p = self._primary()
         let ab = self._ab()
         let n_to_del = info["end"] - info["start"]
@@ -3365,14 +4145,30 @@ class Editor {
         }
         p["col"] = info["start"]
         let j = 0
-        while j < len(full_word) {
-            ab.buf.insert_char(p["row"], p["col"], substr(full_word, j, 1))
+        while j < len(txt) {
+            ab.buf.insert_char(p["row"], p["col"], substr(txt, j, 1))
             p["col"] = p["col"] + 1
             j = j + 1
         }
         p["anchor_row"] = p["row"]; p["anchor_col"] = p["col"]
         self._recompute_state(p["row"])
         self._scroll()
+        self.popup = null
+        self.full_redraw = true
+    }
+
+    fn _popup_cancel(self) {
+        self.popup = null
+        self.full_redraw = true
+    }
+
+    // Helper para que cmd_pgup/pgdn sepan el alto del panel
+    fn _active_panel_content_h(self) {
+        let rects = self._panel_rects()
+        if self.active_panel_idx >= len(rects) { return self.term_h - 4 }
+        let rect = rects[self.active_panel_idx]
+        let p = self._ap()
+        return self._panel_content_h(p, rect)
     }
 
     // -------------------------------------------------------------------------
@@ -3478,7 +4274,47 @@ class Editor {
         while true {
             let k = inp.read_key_blocking()
 
-            // -- Globales que se procesan SIEMPRE (independiente del foco) --
+            // ---- Si hay POPUP abierto, primero el popup ----
+            if self.popup != null {
+                if k == KEY_ESC {
+                    self._popup_cancel()
+                    self.render(); continue
+                }
+                if k == KEY_ENTER or k == KEY_TAB {
+                    self._popup_accept()
+                    self.render(); continue
+                }
+                if k == KEY_UP { self.popup.move_up(); self.render(); continue }
+                if k == KEY_DOWN { self.popup.move_down(); self.render(); continue }
+                if k == KEY_BACKSPACE or k == KEY_DELETE {
+                    self.cmd_backspace()
+                    // Recompute popup
+                    self._maybe_trigger_autocomplete()
+                    self._scroll()
+                    self.render()
+                    continue
+                }
+                if k >= 32 and k < 127 {
+                    let ch = from_char(k)
+                    if self.hl._is_alnum(ch) {
+                        self.cmd_insert_char(ch)
+                        self._popup_refresh()
+                        self._scroll()
+                        self.render()
+                        continue
+                    } else {
+                        // Caracter no alfanumerico: cerrar popup y procesar la tecla
+                        self._popup_cancel()
+                    }
+                } else {
+                    // Tecla especial no manejada por popup: cerrar y dejar caer
+                    self._popup_cancel()
+                }
+                // Si llegamos aqui, popup se cerro y queremos procesar la tecla
+                // como entrada normal. Continua el flujo normal abajo.
+            }
+
+            // ---- Globales ----
 
             if k == KEY_CTRL_Q {
                 if self._any_modified() {
@@ -3507,12 +4343,26 @@ class Editor {
                 self.render(); continue
             }
 
-            // Ctrl+0/Ctrl+1: Windows envia codigos especiales por _getch.
-            // En la mayoria de terminales Ctrl+0 = NUL extendido. Mejor
-            // damos F2/F3 como atajos alternativos:
             if k == KEY_F2 {
-                // Foco al sidebar
                 self.focus_sidebar()
+                self.render(); continue
+            }
+
+            // Splits y paneles
+            if k == KEY_F4 {
+                self.split_active_panel("v")
+                self.render(); continue
+            }
+            if k == KEY_F8 {
+                self.split_active_panel("h")
+                self.render(); continue
+            }
+            if k == KEY_F7 {
+                self.rotate_panel_focus()
+                self.render(); continue
+            }
+            if k == KEY_F9 {
+                self.cycle_layout()
                 self.render(); continue
             }
 
@@ -3530,13 +4380,12 @@ class Editor {
                 self.render(); continue
             }
 
-            // Ctrl+W cierra pestana (siempre)
             if k == KEY_CTRL_W {
                 self.close_tab(inp)
                 self.render(); continue
             }
 
-            // -- Si el foco esta en el sidebar, dejarle manejar primero --
+            // ---- Foco en sidebar ----
             if self.focus == "sidebar" {
                 if k == KEY_ESC {
                     self.focus_editor()
@@ -3546,11 +4395,10 @@ class Editor {
                 if handled {
                     self.render(); continue
                 }
-                // Tecla no manejada por sidebar: ignorar
                 continue
             }
 
-            // -- A partir de aqui, foco en EDITOR --
+            // ---- Foco en EDITOR ----
 
             if k == KEY_ESC {
                 if self._has_multi() {
@@ -3566,9 +4414,11 @@ class Editor {
                 self.render(); continue
             }
 
+            // Ctrl+S y Ctrl+O: ambos guardan
             if k == KEY_CTRL_S { self.cmd_save()
+            } elif k == KEY_CTRL_O { self.cmd_save()
             } elif k == KEY_CTRL_T { self.cmd_shell(inp)
-            } elif k == KEY_CTRL_SPACE { self.cmd_autocomplete(inp)
+            } elif k == KEY_CTRL_J { self.cmd_autocomplete_manual(inp)
             } elif k == KEY_CTRL_E { self.cmd_run_script(inp)
             } elif k == KEY_CTRL_F { self.cmd_find(inp)
             } elif k == KEY_F3 { self.cmd_find_next()
@@ -3618,7 +4468,14 @@ class Editor {
             } elif k == KEY_TAB { self.cmd_tab()
             } elif k == KEY_BACKSPACE or k == KEY_DELETE { self.cmd_backspace()
             } elif k == KEY_DEL { self.cmd_delete_forward()
-            } elif k >= 32 and k < 127 { self.cmd_insert_char(from_char(k)) }
+            } elif k >= 32 and k < 127 {
+                let ch = from_char(k)
+                self.cmd_insert_char(ch)
+                // Auto-trigger autocompletado si tras este char tenemos prefijo >= 2
+                if self.hl._is_alnum(ch) {
+                    self._maybe_trigger_autocomplete()
+                }
+            }
 
             self._scroll()
             self.render()
@@ -3627,14 +4484,7 @@ class Editor {
         print(ANSI["CLEAR"] + ESC_CUR_SHOW + ANSI["RESET"])
     }
 
-    fn _any_modified(self) {
-        for b in self.buffers {
-            if b.buf.modified { return true }
-        }
-        return false
-    }
 }
-
 
 // =============================================================================
 // SECCION 13: main()
@@ -3645,7 +4495,6 @@ fn main() {
     let cfg = Config()
 
     try {
-        // Lanzar el selector
         let launcher = Launcher(getcwd(), cfg)
         let result = launcher.run(inp)
 
@@ -3663,10 +4512,9 @@ fn main() {
         } elif result["mode"] == "file" {
             editor.open_file(result["path"])
         } elif result["mode"] == "new" {
-            // Crear pestana con nombre, sin escribir aun
+            editor._ensure_initial_panel()
             let buf = EditorBuffer(result["path"])
-            append(editor.buffers, buf)
-            editor.active_idx = 0
+            editor._ap().add_buffer(buf)
             editor.full_redraw = true
         }
 
