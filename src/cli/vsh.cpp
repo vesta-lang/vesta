@@ -29,6 +29,8 @@
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
 #  include <windows.h>
+#  include <io.h>
+#  include <fcntl.h>
 #else
 #  include <glob.h>
 #  include <sys/socket.h>
@@ -60,6 +62,10 @@
 
 namespace {
 
+    // Estado interno del buffer de salida.
+    static std::string g_out_buffer;
+    static const size_t OUT_FLUSH_THRESHOLD = 64 * 1024;   // 64 KB
+
 #if defined(_WIN32)
     typedef SOCKET vsh_sock_t;
     static constexpr vsh_sock_t VSH_BAD_SOCK = INVALID_SOCKET;
@@ -69,6 +75,30 @@ namespace {
         static bool done = false;
         if (!done) { WSADATA wd; WSAStartup(MAKEWORD(2,2), &wd); done = true; }
     }
+
+    // Cache del handle del console: se obtiene una sola vez
+    static HANDLE g_console_handle = INVALID_HANDLE_VALUE;
+    static bool   g_is_console = false;
+    static bool   g_console_handle_initialized = false;
+
+    static void init_console_handle() {
+        if (g_console_handle_initialized) return;
+        g_console_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode;
+        g_is_console = (g_console_handle != INVALID_HANDLE_VALUE) &&
+                       GetConsoleMode(g_console_handle, &mode);
+        g_console_handle_initialized = true;
+    }
+
+    // Conversion rapida UTF-8 -> UTF-16 con MultiByteToWideChar
+    static int utf8_to_utf16(const char* src, int src_len, std::wstring& out) {
+        if (src_len <= 0) { out.clear(); return 0; }
+        int needed = MultiByteToWideChar(CP_UTF8, 0, src, src_len, nullptr, 0);
+        if (needed <= 0) return 0;
+        out.resize(needed);
+        return MultiByteToWideChar(CP_UTF8, 0, src, src_len, &out[0], needed);
+    }
+
 #else
     typedef int vsh_sock_t;
     static constexpr vsh_sock_t VSH_BAD_SOCK = -1;
@@ -76,6 +106,65 @@ namespace {
     static bool vsh_sock_valid(vsh_sock_t s) { return s >= 0; }
     static void ensure_wsa() {}
 #endif
+
+    // Escribe el contenido de g_out_buffer a stdout y limpia el buffer.
+    // Usado por todos los builtins de salida.
+    static void flush_out_buffer() {
+        if (g_out_buffer.empty()) return;
+#ifdef _WIN32
+        init_console_handle();
+        if (g_is_console) {
+            // Console: usar WriteConsoleW directamente, evita la doble conversion
+            // de std::cout en codepage 65001.
+            std::wstring wide;
+            int n = utf8_to_utf16(g_out_buffer.data(),
+                                  static_cast<int>(g_out_buffer.size()),
+                                  wide);
+            if (n > 0) {
+                DWORD written = 0;
+                // Escribir en chunks porque WriteConsoleW tiene un limite de
+                // ~32K wchars por llamada en algunas versiones de Windows
+                const DWORD CHUNK = 16 * 1024;
+                DWORD remaining = static_cast<DWORD>(n);
+                const wchar_t* p = wide.data();
+                while (remaining > 0) {
+                    DWORD to_write = remaining > CHUNK ? CHUNK : remaining;
+                    if (!WriteConsoleW(g_console_handle, p, to_write, &written, nullptr)) {
+                        // Fallback: si falla, usar fwrite normal
+                        fwrite(g_out_buffer.data(), 1, g_out_buffer.size(), stdout);
+                        break;
+                    }
+                    p += written;
+                    remaining -= written;
+                }
+            }
+        } else {
+            // Pipe o redireccion: fwrite directo (no conviene WriteConsole con pipes)
+            fwrite(g_out_buffer.data(), 1, g_out_buffer.size(), stdout);
+        }
+#else
+        // Linux/macOS: fwrite es ya muy rapido
+        fwrite(g_out_buffer.data(), 1, g_out_buffer.size(), stdout);
+#endif
+
+        g_out_buffer.clear();
+    }
+
+    // Anade un string al buffer; flush automatico si supera el umbral
+    static void buffered_write(const std::string& s) {
+        g_out_buffer.append(s);
+        if (g_out_buffer.size() >= OUT_FLUSH_THRESHOLD) {
+            flush_out_buffer();
+        }
+    }
+
+    static void buffered_write_char(char c) {
+        g_out_buffer.push_back(c);
+        if (g_out_buffer.size() >= OUT_FLUSH_THRESHOLD) {
+            flush_out_buffer();
+        }
+    }
+
 
     struct VshSockState {
         vsh_sock_t fd  = VSH_BAD_SOCK;
@@ -1469,9 +1558,17 @@ AstNodePtr VshParser::primary() {
 // Seccion 5: VshInterpreter
 // ============================================================
 
+VshInterpreter::~VshInterpreter() {
+    flush_out_buffer();
+    fflush(stdout);
+}
+
 VshInterpreter::VshInterpreter(ReplDispatch dispatch)
     : global_(std::make_shared<VshEnv>()), repl_dispatch_(std::move(dispatch)) {
     register_builtins();
+    std::ios::sync_with_stdio(false);
+    std::cout.tie(nullptr);
+    std::cin.tie(nullptr);
 }
 
 void VshInterpreter::register_builtin(const std::string &name, NativeFn fn) {
@@ -2254,7 +2351,7 @@ void VshInterpreter::run_interactive(ReadlineFn readline_fn) {
 
 void VshInterpreter::register_builtins() {
     // ---- salida ----
-    builtins_["echo"] = [](std::vector<Value> args) -> Value {
+    /*builtins_["echo"] = [](std::vector<Value> args) -> Value {
         for (size_t i = 0; i < args.size(); ++i) {
             if (i) std::cout << ' ';
             std::cout << args[i].to_string();
@@ -2271,6 +2368,47 @@ void VshInterpreter::register_builtins() {
             std::cout << args[i].to_string();
         }
         std::cout << '\n'; return {};
+    };*/
+
+    builtins_["echo"] = [](std::vector<Value> args) -> Value {
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i) buffered_write_char(' ');
+            buffered_write(args[i].to_string());
+        }
+        buffered_write_char('\n');
+        // No flush automatico aqui; lo hace el threshold o el shutdown.
+        // Si se usa echo para debug interactivo, puede convenir flushear:
+        flush_out_buffer();
+        return {};
+    };
+
+    // print: sin separador, sin newline (el caso comun de vnano)
+    builtins_["print"] = [](std::vector<Value> args) -> Value {
+        for (auto &a : args) {
+            buffered_write(a.to_string());
+        }
+        // OJO: NO hacemos flush aqui. El codigo VSH (vnano.render) llama print
+        // muchas veces seguidas y un flush por llamada arruina la optimizacion.
+        // El flush ocurre por threshold (64KB) o explicitamente con flush_output().
+        return {};
+    };
+
+    // println: con espacios entre args y \n al final, con flush
+    builtins_["println"] = [](std::vector<Value> args) -> Value {
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i) buffered_write_char(' ');
+            buffered_write(args[i].to_string());
+        }
+        buffered_write_char('\n');
+        flush_out_buffer();   // println es para output del usuario, flush es razonable
+        return {};
+    };
+
+    // flush_output: builtin nuevo para forzar el flush desde codigo VSH
+    builtins_["flush_output"] = [](std::vector<Value> args) -> Value {
+        flush_out_buffer();
+        fflush(stdout);
+        return {};
     };
 
     // ---- conversiones de tipo ----

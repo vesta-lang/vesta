@@ -64,6 +64,10 @@
 #endif
 
 namespace cli {
+    #ifndef _WIN32
+    // POSIX: recorrer el array 'environ' terminado en NULL
+    using ::environ;   
+    #endif
     static ManagerOfManagersAndServer mgr = ManagerOfManagersAndServer();
 
     // ---- almacen persistente de aliases ----
@@ -161,7 +165,6 @@ namespace cli {
             FreeEnvironmentStringsA(block);
         }
 #else
-        extern char **environ;
         for (char **ep = environ; ep && *ep; ++ep) {
             std::string e(*ep);
             if (e.find('=') == std::string::npos) continue;
@@ -2362,8 +2365,6 @@ namespace cli {
             }
             FreeEnvironmentStringsA(block);
 #else
-            // POSIX: recorrer el array 'environ' terminado en NULL
-            extern char **environ;
             for (char **ep = environ; ep && *ep; ++ep) {
                 std::string entry(*ep);
                 auto eq = entry.find('=');
