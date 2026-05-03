@@ -258,6 +258,24 @@ target_link_options(vm PRIVATE
         >
 )
 
+add_library(vesta_install STATIC
+        src/install/install.cpp
+        src/install/install_options.cpp
+        src/install/manifest.cpp
+)
+
+if(WIN32)
+    target_sources(vesta_install PRIVATE src/install/platform_win.cpp)
+    target_link_libraries(vesta_install PRIVATE Shell32 Advapi32 Ole32 User32 Shlwapi)
+else()
+    target_sources(vesta_install PRIVATE src/install/platform_linux.cpp)
+endif()
+
+target_include_directories(vesta_install PUBLIC include)
+
+# Linkar al binario principal:
+target_link_libraries(vm PRIVATE vesta_install)
+
 # Enlace estático solo en Windows + Release
 target_link_options(vm PRIVATE
         $<$<AND:$<CONFIG:Release>,$<BOOL:${WIN32}>>:

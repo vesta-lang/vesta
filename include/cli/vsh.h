@@ -543,7 +543,7 @@ public:
     using ReadlineFn    = std::function<std::string(const std::string &)>;
 
     explicit VshInterpreter(ReplDispatch dispatch = nullptr);
-    ~VshInterpreter() = default;
+    ~VshInterpreter();
 
     /** @brief Ejecuta un fichero .vsh. */
     void exec_file(const std::string &path);
@@ -569,6 +569,19 @@ public:
     /** @brief Registra una funcion nativa adicional. */
     void register_builtin(const std::string &name, NativeFn fn);
 
+    /**
+     * @brief Establece la lista ARGV accesible desde el script.
+     *
+     * Se debe llamar ANTES de exec_file() para que el script vea los
+     * argumentos. Convencion estilo Python:
+     *   ARGV[0] = ruta del script
+     *   ARGV[1..] = argumentos posicionales tras --script <fichero>
+     *
+     * Si no se llama, ARGV queda como lista vacia.
+     */
+    void set_argv(const std::vector<std::string> &argv);
+
+
 private:
     std::shared_ptr<VshEnv>                  global_;
     ReplDispatch                             repl_dispatch_;
@@ -583,6 +596,7 @@ private:
 
     Value eval_literal    (const AstNode &n);
     Value eval_interp_str (const AstNode &n, std::shared_ptr<VshEnv> env);
+
     Value eval_ident      (const AstNode &n, std::shared_ptr<VshEnv> env);
     Value eval_binop      (const AstNode &n, std::shared_ptr<VshEnv> env);
     Value eval_unary      (const AstNode &n, std::shared_ptr<VshEnv> env);
