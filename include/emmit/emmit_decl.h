@@ -335,6 +335,26 @@ namespace Assembly::Bytecode {
     };
 
     /**
+     * @brief Mnemonicos cuya variante SIB requiere acceder a memoria HOST en
+     *        lugar de memoria VM.  Reutiliza el bit @c _signed_instruct del
+     *        ctrl byte (bit 5): para MOV SIB, s=1 selecciona MOVH (memoria
+     *        del proceso host) y s=0 selecciona MOVC (memoria VM).
+     *        El emisor SIB consulta is_signed() OR is_host_sib() para
+     *        decidir el bit; al ser conjuntos disjuntos por construccion,
+     *        no hay colision de semanticas.
+     */
+    static const std::unordered_set<std::string> host_sib_ops = {
+        "movh"
+    };
+
+    /**
+     * @brief Indica si el mnemonico corresponde a un MOV SIB sobre memoria host.
+     */
+    static bool is_host_sib(const std::string &opcode) {
+        return host_sib_ops.count(opcode) > 0;
+    }
+
+    /**
      * @brief Indica si el mnemonico corresponde a una instruccion con signo.
      *
      * @param opcode Nombre del mnemonico a comprobar.
@@ -803,6 +823,91 @@ namespace Assembly::Bytecode {
      * @param assembly_ctx       Contexto del ensamblador.
      */
     void emit_instr_jumptable(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c addadvice (FIXED_4, convencion B).
+     *
+     * Toma 3 operandos textuales: r_target, r_advice, kind (imm).  Empaqueta
+     * registros en byte2 = (r_advice<<4)|r_target y kind en byte3.  El opcode
+     * prefix (0x00, 0xCE) lo emite el helper estandar antes de invocar este.
+     */
+    void emit_instr_addadvice(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c getstatic / @c setstatic (FIXED_8).
+     *
+     * 3 operandos textuales: dos registros y un offset (uint32).  Empaqueta
+     * los registros en byte2 = (r0<<4)|r1 y emite el offset uint32 en los
+     * 4 bytes finales.  El opcode prefix (0x00, 0x60 o 0x61) lo emite el
+     * helper estandar antes de invocar este emisor.
+     *
+     * Formato fisico:
+     *   [0x00][0x60|0x61][regs_byte][_pad8=0][offset_u32_LE]
+     *
+     * Convencion de operandos:
+     *   getstatic: op0=r_dst,   op1=r_class, op2=offset
+     *   setstatic: op0=r_class, op1=r_value, op2=offset
+     */
+    void emit_instr_static(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c dlopen (FIXED_4, 3 regs).
+     *
+     * Operandos textuales: r_dst, r_path_addr, r_path_len.
+     * Encoding fisico:
+     *   [0x00][0x62][b2][b3]
+     *     b2 = (r_dst<<4) | r_path_addr
+     *     b3 = (r_path_len<<4) | 0
+     */
+    void emit_instr_dlopen(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c dlsym (FIXED_4, 4 regs).
+     *
+     * Operandos textuales: r_dst, r_handle, r_name_addr, r_name_len.
+     * Encoding fisico:
+     *   [0x00][0x63][b2][b3]
+     *     b2 = (r_dst<<4) | r_handle
+     *     b3 = (r_name_addr<<4) | r_name_len
+     */
+    void emit_instr_dlsym(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c callni (FIXED_4, 1 reg).
+     *
+     * Operando textual: r_fn (puntero a funcion nativa ya resuelto via dlsym).
+     * Encoding fisico:
+     *   [0x00][0x64][b2][b3]   b2 = (r_fn<<4) | 0,  b3 = 0
+     *
+     * Calling convention: argc en R15, args en R01..R12, retorno en R00
+     * (mismo que CALLN estatico).
+     */
+    void emit_instr_callni(
         const vm::Instruction *instruction_parser,
         ByteWriter &           code_final,
         const InstrInfo *      now_instr,

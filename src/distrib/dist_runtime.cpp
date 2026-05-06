@@ -144,11 +144,14 @@ DistRuntime::DistRuntime(runtime::VM &vm, const DistRuntimeConfig &config)
     , config_(config)
     , registry_(config.local_node_id, config.vdp_listen_port)
 {
-    // si el node_id es 0, generar uno automaticamente
-    if (config_.local_node_id == 0) {
-        config_.local_node_id = generate_node_id_();
-    }
-
+    // NO generar node_id en el constructor.  El
+    // RAND_bytes de OpenSSL inicializa su RNG la primera vez (~3ms en
+    // Windows) y para programas sin networking (vdp_listen_port=0,
+    // enable_discovery=false, sin add-node) ese coste es 100% wasted.
+    // Si el usuario llama start() y aun no hay node_id, lo generamos
+    // alli.  Para uso solo-local (msgsend/msgrecv intra-VM) ni siquiera
+    // se necesita node_id.
+    //
     // registrar callback para nuevos nodos descubiertos dinamicamente
     registry_.on_new_node([this](const NodeInfo &n) { on_new_node_(n); });
 }
@@ -162,6 +165,14 @@ DistRuntime::~DistRuntime() {
 // ---------------------------------------------------------------------------
 
 bool DistRuntime::start() {
+    // generar node_id aqui (no en el constructor) para
+    // que los programas sin networking no paguen el coste de inicializar
+    // OpenSSL RNG.  Si llegamos a start(), el usuario quiere networking y
+    // necesita un node_id valido.
+    if (config_.local_node_id == 0) {
+        config_.local_node_id = generate_node_id_();
+    }
+
 #ifdef _WIN32
     // WSAStartup debe llamarse antes de cualquier funcion de sockets de Winsock;
     // si el TCPServer no arranca (puerto 0), nadie mas lo inicializa
@@ -591,22 +602,42 @@ bool DistRuntime::msgsend(runtime::ProcessVM *proc,
 
         return true;
     } else {
-        // PID local: depositar directamente en el mailbox del proceso destino
-        uint64_t  local_pid = target_pid & 0xFFFFFFFFFFFFFFFFull;
+        // PID local: depositar directamente en el mailbox del proceso destino.
+        // El PID encoded contiene scheduler_id en bits 63-32 y local_pid
+        // en bits 31-0 (formato emitido por exec_instr_spawn y exec_instr_getpid).
+        // Extraemos ambos para localizar el proceso en el scheduler correcto.
+        const uint32_t sched_id  = static_cast<uint32_t>((target_pid >> 32) & 0xFFFFFFFFu);
+        const uint64_t local_pid = target_pid & 0xFFFFFFFFu;
         GlobalPID dest_gpid{};
-        dest_gpid.scheduler_id = 0; // no sabemos el scheduler, buscar en todos
+        dest_gpid.scheduler_id = sched_id;
         dest_gpid.local_pid    = local_pid;
 
         runtime::ProcessVM *dest = vm_.get_process(dest_gpid);
+        // Fallback: si scheduler_id apunta a un scheduler inexistente o el
+        // proceso no esta ahi, escanear todos los schedulers buscando por
+        // local_pid (caso de PIDs construidos a mano sin scheduler_id).
+        if (!dest) {
+            for (size_t s = 0; s < vm_.schedulers.size(); ++s) {
+                GlobalPID try_gpid{static_cast<uint32_t>(s), local_pid};
+                runtime::ProcessVM *p = vm_.get_process(try_gpid);
+                if (p) { dest = p; dest_gpid = try_gpid; break; }
+            }
+        }
         if (!dest) return false;
 
         Mailbox *mb = get_or_create_mailbox(dest);
         if (!mb->push(proc->pid.local_pid, data.data(), data.size())) return false;
 
-        // si el proceso estaba bloqueado en msgrecv esperando un mensaje, despertarlo
-        if (dest->state == runtime::WAIT_IO) {
-            vm_.make_ready(dest_gpid);
-        }
+        // A.7.2.5-rev2: SIEMPRE invocar make_ready tras push, sin
+        // condicional sobre dest->state.  El propio make_ready usa CAS y
+        // wake_pending para resolver correctamente:
+        //   - dest activo (EXECUTE/RUNNING/etc): no toca state pero deja
+        //     wake_pending=true; el scheduler lo respeta al transicionar
+        //     a WAIT_IO via double-check.
+        //   - dest durmiente (WAIT_IO/BLOCKED/NEW/HALT/DEAD): CAS a READY
+        //     y reencola.
+        // Esto cierra la ventana race "lost wakeup" en multi-thread real.
+        vm_.make_ready(dest_gpid);
 
         return true;
     }
@@ -973,7 +1004,10 @@ void DistRuntime::handle_msgsend_(uint32_t node_idx,
         Mailbox *mb = get_or_create_mailbox(proc);
         delivered = mb->push(node_idx, data, data_size); // node_idx como "PID remoto" del emisor
 
-        if (delivered && proc->state == runtime::WAIT_IO) {
+        // SIEMPRE make_ready tras push exitoso para cerrar
+        // race "lost wakeup" en multi-thread real.  Ver dist_runtime::msgsend
+        // local para detalles.
+        if (delivered) {
             vm_.make_ready(dest);
         }
     }

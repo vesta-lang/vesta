@@ -794,6 +794,55 @@ namespace runtime {
         instr.data_instruction.mem_data.reg_final = (b3 >> 4) & 0x0F; // r_len
     }
 
+    /**
+     * @brief Descodificador de @c getstatic / @c setstatic (FIXED_8).
+     *
+     * Layout fisico desde @c rip+2 (post-prefijo extendido):
+     *   byte 0 (rip+2): regs_byte = (r0 << 4) | r1
+     *   byte 1 (rip+3): _pad8 (reservado, debe ser 0)
+     *   bytes 2-5     : offset uint32 little-endian
+     *
+     * Para getstatic: r0=r_dst, r1=r_class.
+     * Para setstatic: r0=r_class, r1=r_value.
+     */
+    void decode_instr_static_offset(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 8; // FIXED_8: prefix(2) + regs(1) + pad(1) + offset(4)
+        uint64_t base = vm->registers.rip.raw() + 2; // saltar opcode1 + opcode2
+        uint8_t  regs_byte = vm->vm_mem[base];           // (r0<<4) | r1
+        uint32_t offset    = vm->vm_mem.read_u32(base + 2); // bytes 4-7 absolutos
+        instr.data_instruction.static_data.r0     = (regs_byte >> 4) & 0x0F;
+        instr.data_instruction.static_data.r1     = regs_byte & 0x0F;
+        instr.data_instruction.static_data.offset = offset;
+    }
+
+    /**
+     * @brief Decoder compartido para @c dlopen (3 regs) y @c dlsym (4 regs).
+     *
+     * Lee 2 bytes desde @c rip+2 y los desempaqueta en 4 nibbles que se
+     * almacenan en @c mem_data (reg_base, reg_index, reg_final, scale).
+     */
+    void decode_instr_dlopen_dlsym(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 4; // FIXED_4: prefix(2) + b2 + b3
+        uint64_t base = vm->registers.rip.raw() + 2;
+        uint8_t  b2   = vm->vm_mem[base];
+        uint8_t  b3   = vm->vm_mem[base + 1];
+        instr.data_instruction.mem_data.reg_base  = (b2 >> 4) & 0x0F; // r_dst
+        instr.data_instruction.mem_data.reg_index = b2 & 0x0F;         // rB (path_addr / handle)
+        instr.data_instruction.mem_data.reg_final = (b3 >> 4) & 0x0F; // rC (path_len / name_addr)
+        instr.data_instruction.mem_data.scale     = b3 & 0x0F;         // rD (solo dlsym: name_len)
+    }
+
+    /**
+     * @brief Decoder de @c callni (FIXED_4, 1 registro en byte2 hi-nibble).
+     */
+    void decode_instr_callni(ProcessVM *vm, DecodedInstr &instr) {
+        instr.flags_info.size_instr = 4; // FIXED_4: prefix(2) + b2 + b3
+        uint64_t base = vm->registers.rip.raw() + 2;
+        uint8_t  b2   = vm->vm_mem[base];
+        instr.data_instruction.reg_data.reg1 = (b2 >> 4) & 0x0F; // r_fn
+        instr.data_instruction.reg_data.reg2 = 0;                 // sin uso
+    }
+
     void decode_instr_calln(ProcessVM *vm, DecodedInstr &instr) {
         instr.data_instruction.inmmed_data.inmmed = vm->vm_mem.read_u64(vm->registers.rip.raw() + 2); // direccion de la funcion nativa
 
@@ -882,6 +931,7 @@ namespace runtime {
         if (metadata.exec == nullptr || metadata.decode == nullptr ||
             metadata.mode >= Assembly::Bytecode::AddressingMode::COUNT) {
             decode_tmp.metadata = &metadata;   // enlazar metadata (exec/decode pueden ser null)
+            decode_tmp.exec_cached = nullptr;  // sentinel: el run_loop detecta nullptr y emite HALT
             process->icache[idx]  = decode_tmp; // cachear para que decoded_ptr sea valido
             process->decoded_ptr  = &process->icache[idx];
             if (measuring) process->scheduler.time_decode += now_ns() - t1;
@@ -905,7 +955,8 @@ namespace runtime {
             vm_hook(process, DebugStage::DecodeEnd);
         );
 
-        decode_tmp.metadata = &metadata; // enlazar metadatos al temporal de descodificacion
+        decode_tmp.metadata    = &metadata;       // enlazar metadatos al temporal de descodificacion
+        decode_tmp.exec_cached = metadata.exec;   // A.7.2.5-rev3 perf: cachear exec ptr para hot path
 
         // llamar al metodo especializado de descodificacion de la instruccion
         metadata.decode(process, decode_tmp);

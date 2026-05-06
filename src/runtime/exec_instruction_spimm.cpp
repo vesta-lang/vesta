@@ -56,7 +56,16 @@ namespace runtime {
 
         if (sp_bp == 0) {
             // restar delta al puntero de pila RSP
-            write_rsp(vm, read_rsp(vm) - delta);
+            const uint64_t new_rsp = read_rsp(vm) - delta;
+            write_rsp(vm, new_rsp);
+            // fix8 - tracking de low-water-mark del stack para el GC
+            // scan.  Solo cuando rsp baja (subsp); addsp NO lo actualiza
+            // porque liberar slots no significa que ya no contengan refs
+            // a objetos GC potencialmente alcanzables (defensivo).  Reset
+            // tras GC para limitar el scan al rango realmente activo.
+            if (new_rsp < vm->stack_low_water) {
+                vm->stack_low_water = new_rsp;
+            }
         } else {
             // restar delta al puntero base de pila RBP
             write_rbp(vm, read_rbp(vm) - delta);

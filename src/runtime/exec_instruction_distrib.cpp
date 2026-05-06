@@ -35,6 +35,9 @@
 #include "runtime/runtime.h"
 #include "distrib/dist_runtime.h"
 #include "distrib/mailbox.h"
+#include "loader/loader.h"   // Loader::load_module_dynamic
+#include <fstream>           // leer archivo .velb del filesystem
+#include <iterator>          // istreambuf_iterator
 
 namespace runtime {
 
@@ -69,6 +72,98 @@ void exec_instr_rspawn(ProcessVM *vm, const DecodedInstr &instr) {
 
     uint32_t handle = dr->rspawn(vm, fn_addr, node_idx);
     vm->registers.regs[0].qword(static_cast<uint64_t>(handle)); // R0 = GcHandle del future
+}
+
+// =========================================================================
+//  0x59  LOADMOD  r_path_addr, r_path_len   (carga dinamica de .velb)
+// =========================================================================
+
+/**
+ * @brief Ejecuta la instruccion LOADMOD: carga dinamica de un .velb.
+ *
+ * Lee `path_len` bytes desde `vm_mem[path_addr]` (string utf-8 con la ruta
+ * al archivo .velb), abre el archivo, llama a `Loader::load_module_dynamic`
+ * y deja en R0:
+ *   - 0 si el archivo no existe, esta vacio o el parse falla.
+ *   - init_pc del modulo cargado (>0) en exito.
+ *
+ * NO ejecuta automaticamente el modulo: el caller (la builtin Vex
+ * `loadmodule`) usa `callvmr r0` para invocar el main del nuevo modulo,
+ * cuyo prologo ejecuta `__module_init` y registra las clases en el
+ * ClassRegistry global de la VM.
+ *
+ * @param vm    Proceso virtual que invoca la carga.
+ * @param instr reg1 = registro con direccion VM del buffer del path,
+ *              reg2 = registro con longitud en bytes del path.
+ */
+void exec_instr_loadmod(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t  r_path_addr = instr.data_instruction.reg_data.reg1;
+    const uint8_t  r_path_len  = instr.data_instruction.reg_data.reg2;
+    const uint64_t path_addr   = vm->registers.regs[r_path_addr].qword();
+    const uint64_t path_len    = vm->registers.regs[r_path_len].qword();
+
+    // Validacion basica del path.  Limitamos a un tamano razonable para
+    // evitar lecturas de buffer arbitrariamente grandes (PATH_MAX en
+    // Windows es ~260, en POSIX 4096; ponemos 8192 con margen).
+    if (path_len == 0 || path_len > 8192) {
+        vm->registers.regs[0].qword(0);
+        return;
+    }
+
+    std::vector<uint8_t> path_bytes(path_len);
+    vm->vm_mem.read_bytes(path_addr, path_bytes.data(),
+                          static_cast<size_t>(path_len));
+    std::string path(reinterpret_cast<const char *>(path_bytes.data()),
+                     static_cast<size_t>(path_len));
+
+    // Leer el archivo .velb completo desde el filesystem del host.
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        vm->registers.regs[0].qword(0); // file not found
+        return;
+    }
+    std::vector<uint8_t> file_bytes(
+        (std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>()
+    );
+    if (file_bytes.empty()) {
+        vm->registers.regs[0].qword(0);
+        return;
+    }
+
+    runtime::VM &vm_ref = vm->scheduler.vm_reference;
+    const uint64_t init_pc = vm_ref.loader_public.load_module_dynamic(
+        vm_ref, std::move(file_bytes));
+
+    // NOTE: el init_pc puede legitimamente ser 0 (start del code section).
+    // No usamos 0 como sentinela de error: el sentinela es file-not-found
+    // (manejado arriba) o parse-failure (load_module_dynamic devolveria 0
+    // pero tampoco anadiria al pool, asi que distinguimos por el comportamiento
+    // del callvm posterior).  Para A.9 MVP: si load_module_dynamic devuelve 0
+    // asumimos failure ya que el caso "init_pc legitimo == 0" se solapa con
+    // el code section del caller (limitacion documentada de VA fija).
+    if (init_pc == 0) {
+        vm->registers.regs[0].qword(0); // failure
+        return;
+    }
+
+    // Convencion CALLVM: empujar la direccion de retorno (PC tras esta
+    // instruccion) en la pila y saltar al init_pc del modulo cargado.  El
+    // main del nuevo modulo termina con RET, lo que pop'eara la direccion
+    // y el flujo continuara despues del loadmod.  Su prologo invoca
+    // __module_init (que registra clases via defclass/deffield/defmethod),
+    // por lo que tras el RET las clases del modulo estaran disponibles via
+    // findclass.  Dejamos R0 = init_pc como indicador de exito antes del
+    // salto; el main cargado puede sobrescribirlo si quiere devolver algo
+    // al caller.
+    const uint64_t ret_addr = vm->registers.rip.raw()
+                            + vm->decoded_ptr->flags_info.size_instr;
+    const uint64_t new_sp = vm->registers.stack_pointer.qword() - 8;
+    vm->registers.stack_pointer.qword(new_sp);
+    vm->vm_mem.write_bytes(new_sp, &ret_addr, 8);
+    vm->registers.rip.qword(init_pc);
+    vm->decoded_ptr->flags_info.did_jump = true;
+    vm->registers.regs[0].qword(init_pc); // success indicator (puede ser sobrescrito)
 }
 
 // =========================================================================
@@ -156,6 +251,15 @@ void exec_instr_msgrecv(ProcessVM *vm, const DecodedInstr &instr) {
 
     uint64_t bytes = dr->msgrecv(vm, buf_addr, max_len);
     vm->registers.regs[0].qword(bytes); // R0 = bytes copiados al buffer
+    // CRITICO: si la primera llamada a msgrecv (icache miss) seteo blocking=true
+    // por mailbox vacio, ese flag queda CACHEADO en la entrada del icache.
+    // En la re-ejecucion (post-wake) decode_instruction devuelve cache HIT con
+    // el blocking=true viejo; tras leer el mensaje DEBEMOS limpiar el flag
+    // para que execute_instruction devuelva EVT_EXEC_DONE y el scheduler
+    // continue al siguiente opcode (avanzando el PC).  Sin esto el proceso
+    // queda en bucle: msgrecv -> blocking=true sticky -> WAIT_IO de nuevo
+    // -> nadie lo despierta -> deadlock.
+    vm->decoded_ptr->flags_info.blocking = false;
 }
 
 // =========================================================================

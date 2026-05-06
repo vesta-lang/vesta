@@ -13,6 +13,7 @@
 #include "ir/liveness.h"
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace ir {
 
@@ -65,12 +66,21 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     }
 
     // Marca un valor como "usado" en la posicion pos.
-    // Actualiza def si aun no tenia definicion (caso raro: uso antes de def en IR invalida).
+    //
+    // IMPORTANTE: NO tocar def aqui.  En presencia de phi_args con back-edge
+    // (loops), el "uso" como argumento phi se procesa cuando se recorre el
+    // bloque sucesor (header), pero la definicion del valor esta en el
+    // bloque predecesor (body), que aparece DESPUES en el orden lineal.
+    // Si seteasemos def=use_pos cuando todavia es UNDEF, machacariamos el
+    // def correcto que vendra cuando el liveness procese el body, dejando
+    // intervalos colapsados [end,end] que confunden al linear scan y
+    // provocan que reuse el mismo registro para valores realmente vivos
+    // a la vez (el bug observado del while: sum_next y i_phi compartian r4).
+    //
     auto mark_use = [&](IrValueId vid, uint32_t use_pos) {
         if (vid == IR_NO_VALUE) return;
         auto it = imap.find(vid);
         if (it == imap.end()) return;
-        if (it->second.def == UNDEF) it->second.def = use_pos; // no deberia ocurrir en IR valida
         if (use_pos > it->second.end) it->second.end = use_pos;
     };
 
@@ -98,8 +108,12 @@ LivenessResult compute_liveness(const IrFunction &fn) {
                 mark_use(op, instr_pos);
             }
 
-            // Uso del puntero de funcion en CALLIND
-            if (ins.op == IrOp::CALLIND) {
+            // Uso del puntero de funcion en CALLIND y CALLCLOSURE.  Sin
+            // tratar este uso explicitamente, el liveness no extiende el
+            // live range del SSA value que produjo fn_addr y el regalloc
+            // puede reasignar su registro antes del call -> callvmr a
+            // direccion basura.
+            if (ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE) {
                 mark_use(ins.func_ptr, instr_pos);
             }
 
@@ -115,6 +129,110 @@ LivenessResult compute_liveness(const IrFunction &fn) {
             }
         }
     }
+
+    // --- live-in / live-out por bloque (dataflow iterativo) ---
+    //
+    // Sin este pase, los valores definidos antes de un loop y usados dentro
+    // del header se consideran "muertos" tras el ultimo uso lineal en el
+    // body, por lo que el regalloc reusa su registro y rompe la siguiente
+    // iteracion (bug observado con `i32* p = &x` dentro de un while).
+    //
+    // Algoritmo clasico de dataflow:
+    //   use[B] = valores que el bloque B usa antes de definirlos
+    //   def[B] = valores que B define
+    //   live_out[B] = U_{S in succs(B)}  live_in[S]  U  {phi.value que llegan a S desde B}
+    //   live_in[B]  = use[B] U (live_out[B] - def[B])
+    // Iteramos en orden inverso hasta fixed point (rapido en CFGs reducibles).
+    std::vector<std::unordered_set<IrValueId>> block_use(nblocks);
+    std::vector<std::unordered_set<IrValueId>> block_def(nblocks);
+    for (size_t b = 0; b < nblocks; ++b) {
+        const IrBlock &bb = fn.blocks[b];
+        for (const IrInstr &ins : bb.instrs) {
+            // Cada operando es un uso si todavia no fue definido en B.
+            for (IrValueId op : ins.operands) {
+                if (op == IR_NO_VALUE) continue;
+                if (!block_def[b].count(op)) block_use[b].insert(op);
+            }
+            // Mismo razonamiento que arriba para CALLCLOSURE en el
+            // dataflow de live-in/live-out por bloque: tratamos el
+            // func_ptr como uso si no fue definido en el bloque.
+            if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE)
+             && ins.func_ptr != IR_NO_VALUE) {
+                if (!block_def[b].count(ins.func_ptr))
+                    block_use[b].insert(ins.func_ptr);
+            }
+            // El destino se considera definido a partir de aqui.
+            if (ins.dst != IR_NO_VALUE) {
+                block_def[b].insert(ins.dst);
+            }
+            // phi_args se procesan como uses en el predecesor (mas abajo).
+        }
+    }
+
+    std::vector<std::unordered_set<IrValueId>> live_in(nblocks);
+    std::vector<std::unordered_set<IrValueId>> live_out(nblocks);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        // Recorrido en orden inverso ayuda a converger rapido en bucles.
+        for (int b = static_cast<int>(nblocks) - 1; b >= 0; --b) {
+            std::unordered_set<IrValueId> new_out;
+            // live_in de cada sucesor.
+            for (IrBlockId s : fn.blocks[b].succs) {
+                if (s >= static_cast<IrBlockId>(nblocks)) continue;
+                for (IrValueId v : live_in[s]) new_out.insert(v);
+                // PHI args en el sucesor que vengan de este bloque b: el
+                // valor entregado se debe poder leer al salir de b, asi
+                // que esta vivo en live_out[b].
+                for (const IrInstr &ins_s : fn.blocks[s].instrs) {
+                    if (ins_s.op != IrOp::PHI) continue;
+                    for (const auto &pa : ins_s.phi_args) {
+                        if (pa.block == static_cast<IrBlockId>(b)
+                         && pa.value != IR_NO_VALUE) {
+                            new_out.insert(pa.value);
+                        }
+                    }
+                }
+            }
+            // live_in[b] = use[b] U (new_out - def[b])
+            std::unordered_set<IrValueId> new_in = block_use[b];
+            for (IrValueId v : new_out) {
+                if (!block_def[b].count(v)) new_in.insert(v);
+            }
+            if (new_out != live_out[b]) {
+                live_out[b] = std::move(new_out);
+                changed = true;
+            }
+            if (new_in != live_in[b]) {
+                live_in[b] = std::move(new_in);
+                changed = true;
+            }
+        }
+    }
+
+    // Extender intervalos: cada valor vivo a la salida de un bloque debe
+    // mantener su registro al menos hasta el final de ese bloque (incluyendo
+    // back-edges hacia loop headers).
+    for (size_t b = 0; b < nblocks; ++b) {
+        const uint32_t end_pos = result.block_end[b];
+        for (IrValueId v : live_out[b]) {
+            auto it = imap.find(v);
+            if (it == imap.end()) continue;
+            if (end_pos > it->second.end) it->second.end = end_pos;
+        }
+    }
+
+    // Loop carry fix: si un value @c v se USA en una posicion ANTERIOR
+    // a su definicion lineal (caso clasico de back-edge: %v def en
+    // bloque B6, usado como PHI arg desde bloque B3 que viene antes
+    // linealmente), extender el end al final de la funcion para que el
+    // linear scan no reuse el reg de @c v en cualquier bloque entre
+    // B3 y B6 (que en orden de ejecucion del CFG ESTA en el body del
+    // loop, accesible via back-edge).
+    //
+    // Sin esto, el regalloc reusa el reg de @c v dentro de step/body y
+    // los PHI moves al final del back-edge leen basura -> resultados
+    // incorrectos en for/while con vars carry-loop.
 
     // --- Paso 4: asegurar coherencia en los parametros ---
     // Si un parametro nunca se uso, su end quedaria a 0 < def=0.

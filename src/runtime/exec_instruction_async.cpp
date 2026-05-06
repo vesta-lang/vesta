@@ -57,29 +57,25 @@ namespace runtime {
     void exec_instr_future(ProcessVM *vm, const DecodedInstr &instr) {
         (void)instr; // sin operandos
 
-        // alocar el FutureObject en el heap GC
-        gc::GcHandle h = vm->gc_heap.alloc(sizeof(loader::FutureObject));
-        if (h == gc::GC_NULL_HANDLE) {
-            vm->registers.regs[0].qword(static_cast<uint64_t>(gc::GC_NULL_HANDLE));
-            return; // sin memoria: el llamante debe comprobar el handle
+        runtime::VM &vm_ref = vm->scheduler.vm_reference;
+        uint64_t idx;
+        {
+            std::lock_guard<std::mutex> lk(vm_ref.shared_futures_mtx);
+            idx = vm_ref.shared_futures.size();
+            vm_ref.shared_futures.emplace_back();
+            auto &fut = vm_ref.shared_futures.back();
+            fut.header.flags     = 0;
+            fut.header.hash_code = static_cast<uint32_t>(idx);
+            fut.header.class_ptr = nullptr;
+            fut.state            = loader::FutureState::PENDING;
+            fut.result           = 0;
+            // CRITICO: el sentinel "no waiter" debe ser UINT64_MAX, NO 0,
+            // porque el primer proceso (main) tiene PID encoded = 0 y
+            // 0==0 lo confundiria con "no waiter".  Con UINT64_MAX como
+            // sentinel, cualquier PID valido (incluido 0) se distingue.
+            fut.waiter_pid       = UINT64_MAX;
         }
-
-        uint8_t *payload = vm->gc_heap.deref(h);
-        if (payload == nullptr) {
-            vm->registers.regs[0].qword(static_cast<uint64_t>(gc::GC_NULL_HANDLE));
-            return;
-        }
-
-        // inicializar el FutureObject en estado PENDING
-        auto *fut             = reinterpret_cast<loader::FutureObject *>(payload);
-        fut->header.flags     = loader::OBJ_FLAG_GC_OWNED; // gestionado por GC
-        fut->header.hash_code = static_cast<uint32_t>(h);  // identidad = handle
-        fut->header.class_ptr = nullptr;                    // sin ClassInfo asignado
-        fut->state            = loader::FutureState::PENDING;
-        fut->result           = 0;
-        fut->waiter_pid       = 0; // ningún proceso esperando aun
-
-        vm->registers.regs[0].qword(static_cast<uint64_t>(h)); // R0 = GcHandle
+        vm->registers.regs[0].qword(idx);
     }
 
     // =========================================================================
@@ -101,31 +97,49 @@ namespace runtime {
      */
     void exec_instr_await(ProcessVM *vm, const DecodedInstr &instr) {
         const uint8_t  r_fut = instr.data_instruction.reg_data.reg1;
-        const uint32_t h     = static_cast<uint32_t>(vm->registers.regs[r_fut].qword());
+        const uint64_t h     = vm->registers.regs[r_fut].qword();
 
-        uint8_t *payload = vm->gc_heap.deref(h);
-        if (payload == nullptr) {
-            vm->registers.regs[0].qword(0); // handle invalido: retornar 0
-            return;
+        runtime::VM &vm_ref = vm->scheduler.vm_reference;
+        bool          is_pending = false;
+        uint64_t      result_val = 0;
+        {
+            std::lock_guard<std::mutex> lk(vm_ref.shared_futures_mtx);
+            if (h >= vm_ref.shared_futures.size()) {
+                vm->registers.regs[0].qword(0); // handle invalido
+                return;
+            }
+            loader::FutureObject &fut = vm_ref.shared_futures[h];
+            if (fut.state == loader::FutureState::PENDING) {
+                // registrar al waiter DENTRO del lock para evitar race con
+                // fulfill (que lee waiter_pid bajo el mismo mutex).
+                const uint64_t my_pid =
+                    (static_cast<uint64_t>(vm->pid.scheduler_id) << 32)
+                  | static_cast<uint64_t>(vm->pid.local_pid);
+                fut.waiter_pid = my_pid;
+                is_pending = true;
+            } else {
+                result_val = fut.result;
+            }
         }
 
-        auto *fut = reinterpret_cast<loader::FutureObject *>(payload);
-
-        if (fut->state == loader::FutureState::PENDING) {
-            // future aun no resuelto: suspender el proceso
-            // codificar el PID del proceso actual: scheduler_id<<32 | local_pid
-            uint64_t my_pid = (static_cast<uint64_t>(vm->pid.scheduler_id) << 32)
-                            | static_cast<uint64_t>(vm->pid.local_pid);
-            fut->waiter_pid = my_pid; // registrar quien espera
-
+        if (is_pending) {
             // bloquear el proceso sin avanzar el PC (AWAIT sera re-ejecutado)
             vm->decoded_ptr->flags_info.blocking = true;
             vm->scheduler.on_event(EVT_IO_WAIT); // transicion a WAIT_IO
             return;
         }
 
-        // future ya resuelto: escribir resultado en R0 y continuar
-        vm->registers.regs[0].qword(fut->result);
+        // future ya resuelto: escribir resultado en R0 y continuar.
+        // CRITICO: si la primera llamada a await (icache miss) seteo
+        // blocking=true por estado PENDING, ese flag queda CACHEADO en
+        // la entrada de icache.  En la re-ejecucion (post-wake)
+        // decode_instruction devuelve cache HIT con el blocking=true
+        // viejo; tras leer el resultado DEBEMOS limpiar el flag para
+        // que execute_instruction devuelva EVT_EXEC_DONE y el scheduler
+        // continue al siguiente opcode.  Mismo patron que el fix de
+        // msgrecv.
+        vm->decoded_ptr->flags_info.blocking = false;
+        vm->registers.regs[0].qword(result_val);
     }
 
     // =========================================================================
@@ -146,21 +160,25 @@ namespace runtime {
         const uint8_t  r_fut = instr.data_instruction.reg_data.reg1; // handle del future
         const uint8_t  r_val = instr.data_instruction.reg_data.reg2; // valor de resolucion
 
-        const uint32_t h = static_cast<uint32_t>(vm->registers.regs[r_fut].qword());
-        uint8_t *payload = vm->gc_heap.deref(h);
-        if (payload == nullptr) return; // handle invalido: ignorar
-
-        auto *fut    = reinterpret_cast<loader::FutureObject *>(payload);
-        fut->state   = loader::FutureState::RESOLVED;
-        fut->result  = vm->registers.regs[r_val].qword(); // almacenar el valor
-
-        if (fut->waiter_pid != 0) {
-            // despertar al proceso que esta esperando en AWAIT
+        const uint64_t h = vm->registers.regs[r_fut].qword();
+        runtime::VM &vm_ref = vm->scheduler.vm_reference;
+        loader::FutureObject *fut = nullptr;
+        uint64_t waiter = UINT64_MAX;
+        const uint64_t val = vm->registers.regs[r_val].qword();
+        {
+            std::lock_guard<std::mutex> lk(vm_ref.shared_futures_mtx);
+            if (h >= vm_ref.shared_futures.size()) return;
+            fut = &vm_ref.shared_futures[h];
+            fut->state  = loader::FutureState::RESOLVED;
+            fut->result = val;
+            waiter      = fut->waiter_pid;
+            fut->waiter_pid = UINT64_MAX; // limpiar para evitar wake repetido
+        }
+        if (waiter != UINT64_MAX) {
             GlobalPID target;
-            target.scheduler_id = static_cast<uint32_t>(fut->waiter_pid >> 32);
-            target.local_pid    = static_cast<uint64_t>(fut->waiter_pid & 0xFFFFFFFF);
-            vm->scheduler.vm_reference.make_ready(target);
-            fut->waiter_pid = 0; // limpiar para evitar despertar varias veces
+            target.scheduler_id = static_cast<uint32_t>(waiter >> 32);
+            target.local_pid    = static_cast<uint64_t>(waiter & 0xFFFFFFFF);
+            vm_ref.make_ready(target);
         }
     }
 
@@ -182,21 +200,25 @@ namespace runtime {
         const uint8_t  r_fut = instr.data_instruction.reg_data.reg1; // handle del future
         const uint8_t  r_err = instr.data_instruction.reg_data.reg2; // codigo de error
 
-        const uint32_t h = static_cast<uint32_t>(vm->registers.regs[r_fut].qword());
-        uint8_t *payload = vm->gc_heap.deref(h);
-        if (payload == nullptr) return; // handle invalido: ignorar
-
-        auto *fut    = reinterpret_cast<loader::FutureObject *>(payload);
-        fut->state   = loader::FutureState::REJECTED;
-        fut->result  = vm->registers.regs[r_err].qword(); // almacenar el codigo de error
-
-        if (fut->waiter_pid != 0) {
-            // despertar al proceso que esta esperando en AWAIT
+        const uint64_t h = vm->registers.regs[r_fut].qword();
+        runtime::VM &vm_ref = vm->scheduler.vm_reference;
+        loader::FutureObject *fut = nullptr;
+        uint64_t waiter = UINT64_MAX;
+        const uint64_t err = vm->registers.regs[r_err].qword();
+        {
+            std::lock_guard<std::mutex> lk(vm_ref.shared_futures_mtx);
+            if (h >= vm_ref.shared_futures.size()) return;
+            fut = &vm_ref.shared_futures[h];
+            fut->state  = loader::FutureState::REJECTED;
+            fut->result = err;
+            waiter      = fut->waiter_pid;
+            fut->waiter_pid = UINT64_MAX;
+        }
+        if (waiter != UINT64_MAX) {
             GlobalPID target;
-            target.scheduler_id = static_cast<uint32_t>(fut->waiter_pid >> 32);
-            target.local_pid    = static_cast<uint64_t>(fut->waiter_pid & 0xFFFFFFFF);
-            vm->scheduler.vm_reference.make_ready(target);
-            fut->waiter_pid = 0; // limpiar para evitar despertar varias veces
+            target.scheduler_id = static_cast<uint32_t>(waiter >> 32);
+            target.local_pid    = static_cast<uint64_t>(waiter & 0xFFFFFFFF);
+            vm_ref.make_ready(target);
         }
     }
 

@@ -133,12 +133,21 @@ if(VESTA_BUILD_PREPROCESSOR)
     list(APPEND VM_INCLUDES ${CMAKE_SOURCE_DIR}/preprocessor/include)
 endif()
 
-# Sources del ejecutable principal
+# Frontend del lenguaje Vex como libreria estatica aislada (vex_lib).
+# Decision arquitectonica: el frontend del HLL se compila
+# fuera del GLOB principal y se enlaza al ejecutable como dependencia
+# explicita, prefigurando la futura libvesta_rt.
+add_subdirectory(src/vex)
+
+# Sources del ejecutable principal.  Se EXCLUYEN los .cpp de src/vex/
+# porque ya se compilan dentro de vex_lib (incluirlos en ambos lados
+# causaria definicion multiple de simbolos en el linker).
 file(GLOB_RECURSE VM_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein_c.c
         ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/DistanciaLevenshtein/Levenshtein.cpp
 )
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vex/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
@@ -180,6 +189,7 @@ target_link_libraries(vm
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone
+        PRIVATE vex_lib
 )
 if(VESTA_BUILD_PREPROCESSOR)
     target_link_libraries(vm PRIVATE vpp_lib)

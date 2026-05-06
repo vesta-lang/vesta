@@ -786,8 +786,13 @@ void exec_instr_mov_reg(ProcessVM *vm, const DecodedInstr &instr) {
         return;
     }
 
-    // s=1: variante reg_ext -- codificar registro especial como (modo<<4)|reg2
-    uint8_t special = (uint8_t)((mode << 4) | (reg2 & 0xF)); // reconstruir el codigo del registro especial
+    // s=1: variante reg_ext -- todos los codigos de registros especiales caben en 4 bits
+    // (cur0..cur3 = 0..3, rip/rbp/rsp/rflags = 8..11), por lo que el selector se halla
+    // unicamente en el nibble alto de byte2 (campo reg2 tras decodificar).  El campo
+    // mode del ctrl byte indica el ancho real del operando general y se respeta para
+    // mov_table[mode], evitando truncamientos accidentales (antes mode siempre era 0
+    // por venir de bits[5:4] del codigo especial, lo que truncaba a 8 bits).
+    uint8_t special = (uint8_t)(reg2 & 0xF); // codigo de registro especial (4 bits)
     if (d == 0) {
         // MOV reg_ext, reg -- escribir valor de registro general en registro especial
         write_special(vm, special, vm->registers.regs[reg1].raw());

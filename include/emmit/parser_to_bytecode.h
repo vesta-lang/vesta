@@ -228,6 +228,23 @@ namespace Assembly::Bytecode {
         {"yield",   {{0x00, 0xEC, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
         {"resume",  {{0x00, 0xED, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
         {"spawn",   {{0x00, 0xEE, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_one_reg}}},
+        // spawnon r_fn, r_hint
+        // - r_hint = -1 (interpretado como int64): Here (mismo scheduler).
+        // - r_hint = 0..num_schedulers-1: Pinned al scheduler indicado.
+        // Encoding REG (FIXED_4) con 2 registros en byte2 = (reg2<<4)|reg1.
+        {"spawnon", {{0x00, 0x58, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        // loadmod r_path_addr, r_path_len -- carga dinamica de .velb.
+        // Lee path_len bytes desde vm_mem[path_addr] (string utf-8), abre
+        // el archivo, lo carga via Loader::load_module_dynamic, y deja en r0:
+        //   - 0 si failure (file no existe o vacio o parse error)
+        //   - init_pc (>0) del modulo cargado en exito.
+        // El caller debe invocar `callvmr r0` para que el prologo de main
+        // del nuevo modulo llame __module_init y registre las clases.
+        {"loadmod", {{0x00, 0x59, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        // A.17.x: panic r_msg_addr, r_msg_len -- lanza FatalError USER_ABORT.
+        {"panic",   {{0x00, 0x5A, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
+        // A.17.y: setmethdbg r_method, r_params -- debug info para method.
+        {"setmethdbg", {{0x00, 0x5B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
         {"swapctx", {{0x00, 0xEF, InstrSizeMode::FIXED_4, AddressingMode::REG,  emit_instr_reg}}},
 
         /* --- Closures GC (0x20-0x21): mkclosure / callclosure ---
@@ -290,6 +307,18 @@ namespace Assembly::Bytecode {
         {"deref_weak", {{0x00, 0x32, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
         {"free_weak",  {{0x00, 0x34, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
 
+        /* --- Lookup inverso ptr -> handle (opcode 0x56) ---
+         *  gchandle r_dst, r_src  -> r_dst = GcHandle(host_ptr) o GC_NULL_HANDLE
+         *  Es el inverso de gcderef.  O(1) via hash map en GcHeap.  Usado por
+         *  Vex synchronized(obj) para obtener el handle desde el host_ptr.
+         */
+        {"gchandle",   {{0x00, 0x56, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+
+        /* --- PID del proceso actual (opcode 0x57) ---
+         *  getpid r_dst -> r_dst = (scheduler_id<<32) | (local_pid & 0xFFFFFFFF)
+         */
+        {"getpid",     {{0x00, 0x57, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
         /* --- Monitor / sincronizacion (0x35-0x39) ---
          *  monenter r_handle  -> adquiere el monitor del objeto GC
          *  monexit  r_handle  -> libera el monitor del objeto GC
@@ -349,6 +378,8 @@ namespace Assembly::Bytecode {
         {"fneg.ps",  {{0x00, 0xF8, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},
         {"fcvt",     {{0x00, 0xF9, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_fcvt}}},
         {"fcvt.ps",  {{0x00, 0xF9, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_fcvt}}},
+        {"fextend",  {{0x00, 0x5C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},
+        {"fnarrow",  {{0x00, 0x5D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_freg}}},
         {"fmowi",    {{0x00, 0xFA, InstrSizeMode::FIXED_11, AddressingMode::INMED, emit_instr_fmowi}}},
         {"fload",    {{0x00, 0xFB, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_fmem}}},
         {"fstore",   {{0x00, 0xFC, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_fmem}}},
@@ -586,6 +617,21 @@ namespace Assembly::Bytecode {
             },
         },
 
+        /* --- MOVH: variante SIB que accede a memoria HOST.
+         *
+         * Usa el mismo opcode que MOV SIB (0x00 0x16); el bit s del ctrl
+         * byte (encolado por is_host_sib() en emit_instr_sib) selecciona
+         * el modo MOVH en el ejecutor.  Solo se admite en modo SIB
+         * (con [reg]); registro-registro o inmediato directos siguen
+         * usando 'mov'.  Lo emite el frontend Vex para LOAD/STORE de
+         * punteros marcados is_host_ptr (e.g. resultado de malloc).
+         */
+        {
+            "movh", {
+                {0x00, 0x16, InstrSizeMode::FIXED_6,   AddressingMode::SIB,   emit_instr_mov_sib},
+            },
+        },
+
         /* --- MOVC / MOVCH: movimiento con bandera de modo (VM mem / host mem) --- */
         {
             "movc", {
@@ -624,6 +670,39 @@ namespace Assembly::Bytecode {
                 {0x00, 0x55, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_calln_inmmed},
             },
         },
+
+        /* --- Meta-programacion OOP (clases en runtime) ---
+         *
+         * Cada instruccion toma (r_arg, r_params): el primero es el destino
+         * del resultado o la clase a modificar, el segundo apunta a una
+         * struct DefXxxParams en memoria VM.  El ejecutor lee la struct y
+         * delega al ClassRegistry del Loader.  Encoding FIXED_4 / REG mode
+         * compartido con el resto de instrucciones two-reg.
+         */
+        {"defclass",  {{0x00, 0xC9, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"deffield",  {{0x00, 0xCA, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"defmethod", {{0x00, 0xCB, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"findclass", {{0x00, 0xCC, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"findmethod",{{0x00, 0xCD, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"findfield", {{0x00, 0xCF, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"callm",     {{0x00, 0xFD, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
+        {"proceed",   {{0x00, 0xFE, InstrSizeMode::FIXED_2, AddressingMode::NONE, nullptr}}},
+        // addadvice: 3 operandos (r_target, r_advice, kind imm).  Usa
+        // emit_instr_addadvice (mismo patron que jumptable: byte2 con dos
+        // registros + byte3 con un valor inmediato pequeno).
+        {"addadvice", {{0x00, 0xCE, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_addadvice}}},
+        // getstatic / setstatic: 3 operandos (2 regs + offset_u32).  FIXED_8.
+        // Encoding fisico [0x00][opcode2][regs_byte][_pad8][offset_u32_LE]
+        // donde regs_byte = (r0<<4) | r1.  Ver exec_instr_getstatic /
+        // exec_instr_setstatic en src/runtime/exec_instruction_meta.cpp.
+        {"getstatic", {{0x00, 0x60, InstrSizeMode::FIXED_8, AddressingMode::REG, emit_instr_static}}},
+        {"setstatic", {{0x00, 0x61, InstrSizeMode::FIXED_8, AddressingMode::REG, emit_instr_static}}},
+        // FFI runtime dinamico: dlopen / dlsym / callni (FIXED_4).
+        // Encoding [0x00][opcode2][b2][b3] con regs empaquetados por nibble.
+        // Ver emit_instr_dlopen / emit_instr_dlsym / emit_instr_callni.
+        {"dlopen", {{0x00, 0x62, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_dlopen}}},
+        {"dlsym",  {{0x00, 0x63, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_dlsym}}},
+        {"callni", {{0x00, 0x64, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_callni}}},
     };
 
     /**
