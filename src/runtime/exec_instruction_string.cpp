@@ -143,7 +143,11 @@ static gc::GcHandle alloc_flat(ProcessVM *vm,
     uint32_t buf_size = (capacity > byte_len) ? capacity : byte_len; // usar el mayor
     size_t total = sizeof(loader::StringObject) + buf_size + 1;      // +1 para nulo Win32
 
-    gc::GcHandle h = vm->gc_heap.alloc(total);
+    // alloc_pinned: aloca directo en OldGen (non-moving).  Necesario porque
+    // STRRAW exporta el host_ptr al buffer y este se preserva via push/pop a
+    // traves de calls que pueden disparar GC.  Si el StringObject estuviera
+    // en young y se evacuara, el host_ptr quedaria dangling.
+    gc::GcHandle h = vm->gc_heap.alloc_pinned(total);
     if (h == gc::GC_NULL_HANDLE) return gc::GC_NULL_HANDLE;
 
     uint8_t *payload = vm->gc_heap.deref(h);
@@ -198,7 +202,9 @@ static gc::GcHandle alloc_rope(ProcessVM *vm,
                                 uint32_t depth)
 {
     size_t total = sizeof(loader::StringObject) + sizeof(loader::RopeData);
-    gc::GcHandle h = vm->gc_heap.alloc(total);
+    // Vease nota en alloc_flat: alloc_pinned -> OldGen non-moving para que el
+    // host_ptr exportado via STRRAW no quede dangling tras un GC menor.
+    gc::GcHandle h = vm->gc_heap.alloc_pinned(total);
     if (h == gc::GC_NULL_HANDLE) return gc::GC_NULL_HANDLE;
 
     uint8_t *payload = vm->gc_heap.deref(h);
@@ -250,7 +256,8 @@ static gc::GcHandle alloc_slice(ProcessVM *vm,
                                  loader::StringEncoding enc)
 {
     size_t total = sizeof(loader::StringObject) + sizeof(loader::SliceData);
-    gc::GcHandle h = vm->gc_heap.alloc(total);
+    // Vease nota en alloc_flat: alloc_pinned -> OldGen non-moving.
+    gc::GcHandle h = vm->gc_heap.alloc_pinned(total);
     if (h == gc::GC_NULL_HANDLE) return gc::GC_NULL_HANDLE;
 
     uint8_t *payload = vm->gc_heap.deref(h);

@@ -141,9 +141,13 @@ namespace ir {
      */
     enum class IrOp : uint16_t {
         // ---- constantes y movimiento (0x00-0x0F) ----
-        CONST    = 0x00, ///< %dst = const.T  imm64
-        MOV      = 0x01, ///< %dst = mov.T   %src   (copia; eliminada en lowering)
-        NOP      = 0x02, ///< nop
+        CONST        = 0x00, ///< %dst = const.T  imm64
+        MOV          = 0x01, ///< %dst = mov.T   %src   (copia; eliminada en lowering)
+        NOP          = 0x02, ///< nop
+        STR_LIT_ADDR = 0x03, ///< %dst = str_lit_addr.ptr  imm=indice en IrModule::static_data
+                              ///<   El emisor genera "mov rDst, @Absolute(\"code.s_<imm>\")"
+                              ///<   resolviendo a la direccion VM del literal en la seccion data
+                              ///<   adjuntada al final de la seccion "code".  Tipo destino: PTR.
 
         // ---- aritmetica entera (0x10-0x1F) ----
         ADD      = 0x10, ///< %dst = add.T    %a, %b
@@ -163,9 +167,8 @@ namespace ir {
         FSQRT    = 0x26, ///< %dst = fsqrt.fN %a        (raiz cuadrada)
         FMIN     = 0x27, ///< %dst = fmin.fN  %a, %b
         FMAX     = 0x28, ///< %dst = fmax.fN  %a, %b
-        FFLOOR   = 0x29, ///< %dst = ffloor.fN %a
-        FCEIL    = 0x2A, ///< %dst = fceil.fN  %a
-        FROUND   = 0x2B, ///< %dst = fround.fN %a
+        // 0x29..0x2B reservados (antes FFLOOR/FCEIL/FROUND, eliminados; el
+        // frontend Vex baja a CALLN(stdlib/native/math/vesta_math:vmath_*)).
 
         // ---- logica y desplazamientos (0x30-0x3F) ----
         AND      = 0x30, ///< %dst = and.T    %a, %b
@@ -224,12 +227,23 @@ namespace ir {
         TAILCALL = 0x82, ///< tailcall @fn(%a, %b, ...)                (tail-call intra)
         CALLVIRT = 0x83, ///< %dst = callvirt.T %obj, vtbl_idx(%a, ...) (virtual via vtable)
         CALLN    = 0x84, ///< %dst = calln.T   @lib:func(%a, ...)      (nativa FFI calln)
+        CALLM    = 0x85, ///< %dst = callm.T   %obj, %method(%a, ...)  (dispatch via MethodInfo*; A.5.2.b interfaces, reflexion)
+        CALLCLOSURE = 0x86, ///< %dst = callclosure.T %fn_ptr, %env(%a, ...)  (Phase A.10:
+                            ///< llamada a closure inline.  Identico a CALLIND pero ademas
+                            ///< coloca @c env en R14 antes del @c callvm fn_ptr.  Si la
+                            ///< lambda no captura nada, env = 0 (sentinela).  El campo
+                            ///< @c func_ptr lleva el SSA del fn_addr; el primer operando
+                            ///< es el env_ptr; los restantes son los args declarados.
+                            ///< Lowering en exec: @c lower_lambda_expr emite el helper
+                            ///< sintetico __lambda_<N> y el call site usa este opcode.)
 
         // ---- memoria (0x90-0x9F) ----
         ALLOCA   = 0x90, ///< %dst = alloca.T count       (reservar en pila local)
-        LOAD     = 0x91, ///< %dst = load.T  %ptr         (leer de memoria VM)
-        STORE    = 0x92, ///< store.T  %val, %ptr         (escribir en memoria VM)
+        LOAD     = 0x91, ///< %dst = load.T  %ptr         (leer; movh si is_host_ptr, mov si no)
+        STORE    = 0x92, ///< store.T  %val, %ptr         (escribir; idem LOAD)
         MEMCPY   = 0x93, ///< memcpy %dst_ptr, %src_ptr, %len
+        RAW_ALLOC = 0x94, ///< %dst = raw_alloc.ptr %size  (rawalloc; dst es puntero host)
+        RAW_FREE  = 0x95, ///< raw_free %ptr               (rawfree)
 
         // ---- OOP / GC (0xA0-0xAF) ----
         NEWOBJ      = 0xA0, ///< %dst = newobj  %class_ptr          (allojar objeto GC)
@@ -344,6 +358,45 @@ namespace ir {
         std::string name;                    ///< nombre legible ("%0", "%result", "%a", ...)
         bool        is_param  = false;       ///< true si es un parametro de funcion
         bool        is_const  = false;       ///< true si es una constante literal
+        /// true si el valor (debe ser PTR) apunta a memoria HOST (e.g. retorno
+        /// de @c rawalloc).  Los LOAD/STORE consultan este bit para decidir
+        /// entre @c mov [rp] (s=0, memoria VM) y @c movh [rp] (s=1, memoria
+        /// host).  La aritmetica de punteros y subscript propagan el bit
+        /// desde el operando base.
+        bool        is_host_ptr = false;
+        /// Limitacion A (cerrada): true si el valor es un PTR a memoria VM
+        /// (tipicamente la direccion de un slot ALLOCA en el stack del
+        /// proceso) cuyo CONTENIDO es a su vez un host_ptr.  Lo setea el
+        /// lowering en (a) @c write_local cuando se escribe un valor con
+        /// @c is_host_ptr=true a un local address-taken, y (b) en @c &x
+        /// cuando @c x es local host-bearing (caso indirecto via address-of).
+        /// El emisor IR (case LOAD en @c ir_emitter.cpp) lo consulta para
+        /// propagar @c is_host_ptr=true al SSA value resultante del LOAD,
+        /// manteniendo la cadena de host_ptr a traves del round-trip
+        /// @c i32** pp = &p; **pp = v.  Solo cubre 1 nivel de indireccion;
+        /// patrones con mas niveles (e.g. @c &pp) caen al modelo legacy.
+        bool        pointee_is_host_ptr = false;
+        /// A.32.fix - true si el valor es un host_ptr a un objeto GESTIONADO
+        /// por el GC (instancia de clase Vex tipicamente).  El emisor IR
+        /// usa este flag para que cualquier @c push/@c pop alrededor de un
+        /// CALL que pueda disparar GC se haga sobre el GcHandle (estable),
+        /// no sobre el host_ptr (movido por evacuacion en GC generacional).
+        ///
+        /// Patron emitido al spillar:
+        /// @code
+        ///   gchandle reg, reg     // host_ptr -> GcHandle
+        ///   push reg
+        ///   ... call ...
+        ///   pop reg
+        ///   gcderef cur0, reg     // GcHandle -> host_ptr (refrescado tras GC)
+        ///   xchg cur0, reg
+        /// @endcode
+        ///
+        /// Coste: 4 instrucciones extra por spill, solo cuando aplica.
+        /// Sin esto, ctors que invocan otra alocacion intermedia (e.g.
+        /// @c this.field = new Inner(x)) ven @c this como host_ptr stale
+        /// tras un minor GC -> escritura en memoria liberada -> segfault.
+        bool        is_gc_object = false;
         uint64_t    const_val = 0;           ///< valor si is_const == true
     };
 
@@ -367,7 +420,7 @@ namespace ir {
      *
      *   CONST:         dst, type, imm
      *   ADD..SAR:      dst, type, operands[0], operands[1]
-     *   NEG/NOT/FNEG/FABS/FSQRT/FFLOOR/FCEIL/FROUND: dst, type, operands[0]
+     *   NEG/NOT/FNEG/FABS/FSQRT: dst, type, operands[0]
      *   CMP_*:         dst, type=BOOL, operands[0], operands[1]
      *   FCMP_*:        dst, type=BOOL, operands[0], operands[1]
      *   CAST/ZEXT/SEXT/TRUNC/ITOF/UITOF/FTOI/FTOUI/F32TOF64/F64TOF32/BITCAST:
@@ -445,6 +498,13 @@ namespace ir {
         std::vector<IrPhiArg> phi_args;  ///< para PHI
 
         uint32_t source_line;  ///< numero de linea del fuente original (0 = desconocido)
+
+        /// Si true, esta instruccion NO debe ser eliminada por copy_prop
+        /// ni DCE.  Util para barreras de codegen como los MOVs que el
+        /// lower_for/lower_while inserta antes del back-edge para
+        /// proteger los SSA values de loop-carry contra el "live hole"
+        /// del linear scan (ver lower_for / lower_while).
+        bool     preserve = false;
 
         IrInstr() : op(IrOp::NOP), type(IrType::VOID), dst(IR_NO_VALUE),
                     imm(0), func_ptr(IR_NO_VALUE),
@@ -548,12 +608,50 @@ namespace ir {
         uint64_t    align;      ///< alineacion en bytes (p.ej. 0x1000)
     };
 
+    /**
+     * @brief Importacion de una funcion nativa desde una libreria dinamica.
+     *
+     * Corresponde a un bloque @c "@Method { @Lib(\"...\") @Name(\"...\") }" dentro
+     * del bloque @c @Import del .vel.  El frontend (Vex u otro) registra una
+     * IrNativeImport por cada funcion nativa que sus llamadas (CALLN) van a
+     * usar.  El emisor agrupa todas en un unico bloque @Import.
+     */
+    struct IrNativeImport {
+        std::string lib;   ///< Ruta logica de la libreria (p.ej. "stdlib/native/io/vesta_io")
+        std::string name;  ///< Nombre de la funcion nativa (p.ej. "vio_println")
+    };
+
     struct IrModule {
         std::string                              name;       ///< nombre del modulo (@module)
         std::vector<IrFunction>                  functions;  ///< funciones definidas
         std::vector<std::string>                 imports;    ///< nombres de funciones importadas (@import)
         std::unordered_map<std::string, IrValueId> globals;  ///< variables globales
         std::vector<std::string>                 native_libs; ///< libs nativas (@native_lib)
+
+        /**
+         * @brief Datos estaticos del modulo: cada entrada es la imagen de bytes
+         *        de un literal de cadena u otro blob inmutable.
+         *
+         * El emisor IR genera al final del .vel una etiqueta @c s_<i> por cada
+         * entrada con la directiva @c db ... bytes.  El opcode @c STR_LIT_ADDR
+         * con @c imm=i carga la direccion VM de @c s_i en un registro.
+         *
+         * Layout: @c std::vector<std::vector<uint8_t>> garantiza memoria
+         * contigua por entrada (cache-friendly al iterar) y permite que
+         * cualquier byte (incluido @c '\0') aparezca en el contenido.
+         */
+        std::vector<std::vector<uint8_t>> static_data;
+
+        /**
+         * @brief Funciones nativas que el modulo declara importar.
+         *
+         * Cada una corresponde a un @c @Method dentro del bloque @c @Import
+         * del .vel emitido.  El emisor las agrupa en un unico bloque para
+         * evitar declaraciones redundantes; el frontend solo debe garantizar
+         * que cada par (lib, name) usado por un CALLN aparece aqui al menos
+         * una vez (los duplicados los filtra el emisor).
+         */
+        std::vector<IrNativeImport> native_imports;
 
         // Metadatos de compilacion (opcionales; el emisor genera valores por defecto si estan vacios)
         std::string                format;    ///< formato de salida: "velb" (defecto) u otro
@@ -566,6 +664,26 @@ namespace ir {
          * @return Indice de la funcion en el modulo.
          */
         size_t add_function(IrFunction fn);
+
+        /**
+         * @brief Registra un literal de cadena en static_data.
+         *
+         * Si el contenido ya existe lo deduplica devolviendo el indice
+         * existente, evitando datos duplicados en el binario final.
+         *
+         * @param bytes Contenido literal (puede contener nuls intermedios).
+         * @return Indice estable que el lowering puede pasar a STR_LIT_ADDR.
+         */
+        uint64_t intern_static_data(std::vector<uint8_t> bytes);
+
+        /**
+         * @brief Registra una importacion nativa, deduplicando.
+         *
+         * Si la pareja (lib, name) ya esta en native_imports no se anyade
+         * de nuevo; el lowering puede llamarlo libremente desde cualquier
+         * punto sin preocuparse de duplicados.
+         */
+        void register_native_import(std::string lib, std::string name);
     };
 
     // =========================================================================

@@ -121,6 +121,58 @@ namespace loader {
     struct MethodInfo;
     struct FieldInfo;
     struct GenericParam;
+    struct AdviceEntry;
+    struct LookupSlot;
+
+    // -------------------------------------------------------------------------
+    //  Programacion de aspectos (AOP)
+    //
+    //  Cada MethodInfo lleva opcionalmente un puntero a una cadena de
+    //  AdviceEntry.  Si el puntero es NULL, CALLVIRT toma el fast path
+    //  (1 cmp + jmp) y llama directamente al code_vaddr del metodo.  Si
+    //  no es NULL, recorre la lista en orden y llama a cada advice antes
+    //  o despues del target segun su tipo.
+    //
+    //  Tipos de advice:
+    //   BEFORE  - se invoca antes del target.  Si retorna distinto de 0
+    //             (codigo de short-circuit), el target NO se invoca.
+    //   AFTER   - se invoca despues del target con el resultado del target
+    //             como argumento (puede transformarlo).
+    //   AROUND  - reemplaza al target.  El advice recibe un puntero al
+    //             target y decide si invocarlo o no via "proceed()".
+    //
+    //  Los advices comparten el mismo descriptor que el target para
+    //  garantizar que la firma encaja sin reflexion adicional.
+    // -------------------------------------------------------------------------
+    static constexpr uint8_t ADVICE_BEFORE = 0;
+    static constexpr uint8_t ADVICE_AFTER  = 1;
+    static constexpr uint8_t ADVICE_AROUND = 2;
+
+    typedef struct AdviceEntry {
+        uint8_t      kind;          ///< ADVICE_BEFORE / ADVICE_AFTER / ADVICE_AROUND
+        uint8_t      _pad[7];       ///< alineacion
+        MethodInfo  *advice_method; ///< metodo que implementa el advice
+        AdviceEntry *next;          ///< siguiente advice en la cadena (NULL = fin)
+    } AdviceEntry;
+
+    // -------------------------------------------------------------------------
+    //  Lookup acelerado de fields/methods por nombre
+    //
+    //  Cada ClassInfo lleva una tabla hash open-addressing (tamano potencia
+    //  de 2, factor de carga 0.5) que mapea hash(name) -> indice en fields[]
+    //  o vtable[].  Permite getfield/getmethod por nombre en O(1) amortizado
+    //  sin recorrer el array linealmente.  La tabla se construye al definir
+    //  los miembros (una sola vez) y se consulta en cada lookup dinamico.
+    //
+    //  El campo `name_hash` es FNV-1a de los bytes de stringx::data; se
+    //  cachea en el slot para evitar recalcular durante la sonda lineal.
+    // -------------------------------------------------------------------------
+    typedef struct LookupSlot {
+        uint64_t name_hash;   ///< FNV-1a del nombre (0 = slot vacio)
+        uint32_t index;       ///< indice en fields[] o vtable[]
+        uint32_t name_len;    ///< longitud del nombre (para confirmar match)
+        const char *name_ptr; ///< puntero al nombre (no propietario)
+    } LookupSlot;
 
     // -------------------------------------------------------------------------
     //  AttrEntry - par clave/valor para anotaciones arbitrarias
@@ -202,6 +254,14 @@ namespace loader {
         stringx           doc;          ///< docstring del metodo
         AttrEntry        *attrs;        ///< tabla de anotaciones clave/valor
         size_t            attr_count;
+        // --- programacion de aspectos (AOP) ---
+        /// Cadena de advices o NULL si el metodo no tiene aspectos asociados.
+        /// CALLVIRT comprueba este campo antes de invocar; NULL es el fast
+        /// path (zero overhead).  Los advices se anaden con add_advice() del
+        /// ClassRegistry.  El orden de la cadena define el orden de
+        /// ejecucion: BEFORE en orden de insercion, AFTER en orden inverso,
+        /// AROUND envolviendo el target.
+        AdviceEntry      *advice_chain;
     } MethodInfo;
 
     // -------------------------------------------------------------------------
@@ -248,6 +308,21 @@ namespace loader {
         // --- modulos ---
         stringx      module_name;  ///< nombre calificado del modulo propietario ("com.vesta.col")
         uint64_t     visibility;   ///< MODULE_VIS_EXPORT o MODULE_VIS_INTERNAL
+
+        // --- caches de lookup acelerado (open addressing, potencia de 2) ---
+        /// Tabla hash de fields por nombre (incluye instance + static).
+        /// Tamano = field_lookup_mask + 1 (siempre potencia de 2).  Slot
+        /// vacio: name_hash == 0.  Si el cache no esta inicializado
+        /// field_lookup_table es NULL y el caller debe recorrer fields[]
+        /// linealmente.  Construido por ClassRegistry::finalize().
+        LookupSlot  *field_lookup_table;
+        uint32_t     field_lookup_mask;
+        uint32_t     _flpad;       ///< alineacion (reservado, debe ser 0)
+
+        /// Tabla hash de metodos por nombre (mapea a indice del vtable).
+        LookupSlot  *method_lookup_table;
+        uint32_t     method_lookup_mask;
+        uint32_t     _mlpad;       ///< alineacion (reservado, debe ser 0)
     } ClassInfo;
 
     // -------------------------------------------------------------------------
@@ -296,10 +371,16 @@ namespace loader {
     //  FrameHeader - frame en la cadena de llamadas (para throw/catch)
     // -------------------------------------------------------------------------
     typedef struct FrameHeader {
-        FrameHeader *prev;        ///< frame del llamante (linked list)
-        MethodInfo  *method;      ///< metodo en ejecucion
-        uint64_t     return_pc;   ///< PC virtual al que volver al hacer ret
-        uint64_t     frame_base;  ///< SP en el momento de la llamada
+        FrameHeader *prev;            ///< frame del llamante (linked list)
+        MethodInfo  *method;          ///< metodo en ejecucion
+        uint64_t     return_pc;       ///< PC virtual al que volver al hacer ret
+        uint64_t     frame_base;      ///< SP en el momento de la llamada
+        /// Para AOP @Around: si este frame es un advice AROUND, apunta al
+        /// MethodInfo* del target original (lo que el bytecode `proceed`
+        /// invoca).  Es nullptr para frames normales (no-around).  Permite
+        /// que `proceed()` funcione como una llamada implicita al wrapped
+        /// method, con la misma calling convention que el receptor original.
+        MethodInfo  *proceed_target;
     } FrameHeader;
 
     // -------------------------------------------------------------------------

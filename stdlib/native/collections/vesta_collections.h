@@ -155,7 +155,7 @@ VESTA_PLUGIN_EXPORT uint64_t vcol_list_get(uint64_t handle, uint64_t index);
  * @return Valor anterior, o VCOL_NOT_FOUND si index >= size.
  */
 VESTA_PLUGIN_EXPORT uint64_t vcol_list_set(uint64_t handle, uint64_t index,
-                                            uint64_t element);
+                                           uint64_t element);
 
 /** @brief Devuelve el numero de elementos en la lista. */
 VESTA_PLUGIN_EXPORT uint64_t vcol_list_size(uint64_t handle);
@@ -182,7 +182,7 @@ VESTA_PLUGIN_EXPORT uint64_t vcol_list_remove_at(uint64_t handle, uint64_t index
  * @return Nuevo tamano, o VCOL_NOT_FOUND si falla la reasignacion.
  */
 VESTA_PLUGIN_EXPORT uint64_t vcol_list_insert(uint64_t handle, uint64_t index,
-                                               uint64_t element);
+                                              uint64_t element);
 
 /**
  * @brief Busca la primera ocurrencia de un elemento.
@@ -223,7 +223,7 @@ VESTA_PLUGIN_EXPORT uint64_t vcol_alist_get(uint64_t handle, uint64_t index);
 
 /** @brief Escribe un elemento en la posicion indicada. */
 VESTA_PLUGIN_EXPORT uint64_t vcol_alist_set(uint64_t handle, uint64_t index,
-                                             uint64_t value);
+                                            uint64_t value);
 
 /** @brief Devuelve el numero de elementos. */
 VESTA_PLUGIN_EXPORT uint64_t vcol_alist_size(uint64_t handle);
@@ -239,7 +239,7 @@ VESTA_PLUGIN_EXPORT uint64_t vcol_alist_remove_at(uint64_t handle, uint64_t inde
 
 /** @brief Inserta un elemento en la posicion indicada. */
 VESTA_PLUGIN_EXPORT uint64_t vcol_alist_insert(uint64_t handle, uint64_t index,
-                                                uint64_t value);
+                                               uint64_t value);
 
 /** @brief Busca la primera ocurrencia de un valor (comparacion exacta de 64 bits). */
 VESTA_PLUGIN_EXPORT uint64_t vcol_alist_indexof(uint64_t handle, uint64_t value);
@@ -300,7 +300,7 @@ VESTA_PLUGIN_EXPORT uint64_t vcol_map_get(uint64_t handle, uint64_t key);
  * @return Valor almacenado, o default_val si la clave no existe.
  */
 VESTA_PLUGIN_EXPORT uint64_t vcol_map_get_or(uint64_t handle, uint64_t key,
-                                              uint64_t default_val);
+                                             uint64_t default_val);
 
 /**
  * @brief Comprueba si la clave existe en el mapa.
@@ -397,6 +397,278 @@ VESTA_PLUGIN_EXPORT uint64_t vcol_set_union(uint64_t set_a, uint64_t set_b);
  * @return Handle del nuevo set, o VCOL_NULL si falla malloc.
  */
 VESTA_PLUGIN_EXPORT uint64_t vcol_set_intersect(uint64_t set_a, uint64_t set_b);
+
+/* =========================================================================
+ * VestaQueue / VestaDeque -- ring buffer FIFO / LIFO+FIFO de uint64_t
+ *
+ * Ring buffer de capacidad potencia de 2 con head y tail.  push/pop son
+ * O(1) amortizado; resize x2 cuando se llena.  Usa mascara bit para wrap-
+ * around (sin modulo).  Cero realloc de elementos en operaciones normales.
+ *
+ * Queue:  FIFO puro -- vcol_queue_push (tail) + vcol_queue_pop (head).
+ * Deque:  ambos extremos -- push_front, push_back, pop_front, pop_back.
+ * ========================================================================= */
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_new(uint64_t initial_capacity);
+
+VESTA_PLUGIN_EXPORT void vcol_queue_free(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_push(uint64_t handle, uint64_t value); /* push tail */
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_pop(uint64_t handle);                  /* pop head */
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_peek(uint64_t handle);                 /* peek head sin pop */
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_size(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_queue_clear(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_new(uint64_t initial_capacity);
+
+VESTA_PLUGIN_EXPORT void vcol_deque_free(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_push_back(uint64_t handle, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_push_front(uint64_t handle, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_pop_back(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_pop_front(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_peek_front(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_peek_back(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_size(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_deque_clear(uint64_t handle);
+
+/* =========================================================================
+ * VestaTreeMap / VestaTreeSet -- arbol Red-Black ordenado uint64_t
+ *
+ * Map ordenado por clave: provee acceso O(log n) por clave + iteracion en
+ * orden + operaciones de rango (first / last / floor / ceiling).
+ * Implementacion: arbol Red-Black con sentinela NIL compartido para
+ * simplicidad de balanceo.  Comparacion de claves: uint64_t numerico
+ * (caller debe usar comparable representation, e.g. punteros / hashes).
+ *
+ * Set: wrapper sobre Map con valor sentinel.
+ * ========================================================================= */
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_new(void);
+
+VESTA_PLUGIN_EXPORT void vcol_tmap_free(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_tmap_put(uint64_t handle, uint64_t key, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_get(uint64_t handle, uint64_t key);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_contains(uint64_t handle, uint64_t key);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_remove(uint64_t handle, uint64_t key);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_size(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_tmap_clear(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_first_key(uint64_t handle); /* min key, o VCOL_NOT_FOUND */
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_last_key(uint64_t handle); /* max key */
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_floor_key(uint64_t handle, uint64_t key); /* mayor key <= key */
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_ceiling_key(uint64_t handle, uint64_t key); /* menor key >= key */
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_keys(uint64_t handle); /* alist con keys ordenadas */
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_values(uint64_t handle); /* alist con values en orden de keys */
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_new(void);
+
+VESTA_PLUGIN_EXPORT void vcol_tset_free(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_add(uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_contains(uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_remove(uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_size(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_tset_clear(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_first(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_last(uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_to_list(uint64_t handle); /* alist en orden */
+
+/* =========================================================================
+ * Variantes GC-aware -- write-barrier para colecciones que retienen
+ * GcHandles (e.g. ArrayList<string>).  Cada operacion que adquiere o libera
+ * un slot llama a vesta_init->gc_addref/gc_release del proceso activo via
+ * la API extendida v2.
+ *
+ * Convencion: las variantes gc-aware reciben @c proc_ptr como PRIMER
+ * argumento adicional (handle al ProcessVM activo) para que el plugin
+ * pueda invocar las callbacks gc_addref/gc_release del API.  El frontend
+ * Vex emite @c getproc para obtener el proc_ptr antes del CALLN.
+ *
+ * Cero overhead vs variante no-gc cuando los elementos son i64 puros: el
+ * frontend solo dispatcha a las gc_* cuando el tipo de elemento es GC
+ * (string, class, future, closure).
+ * ========================================================================= */
+
+/* ArrayList */
+VESTA_PLUGIN_EXPORT uint64_t vcol_alist_push_gc(uint64_t proc, uint64_t handle, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_alist_pop_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_alist_set_gc(uint64_t proc, uint64_t handle, uint64_t index, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_alist_remove_at_gc(uint64_t proc, uint64_t handle, uint64_t index);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_alist_insert_gc(uint64_t proc, uint64_t handle, uint64_t index, uint64_t value);
+
+VESTA_PLUGIN_EXPORT void vcol_alist_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_alist_free_gc(uint64_t proc, uint64_t handle);
+
+/* HashMap (values son GC; las keys son uint64 puros por convencion) */
+VESTA_PLUGIN_EXPORT void vcol_map_put_gc(uint64_t proc, uint64_t handle, uint64_t key, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_map_remove_gc(uint64_t proc, uint64_t handle, uint64_t key);
+
+VESTA_PLUGIN_EXPORT void vcol_map_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_map_free_gc(uint64_t proc, uint64_t handle);
+
+/* HashSet (elementos son GC) */
+VESTA_PLUGIN_EXPORT uint64_t vcol_set_add_gc(uint64_t proc, uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_set_remove_gc(uint64_t proc, uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT void vcol_set_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_set_free_gc(uint64_t proc, uint64_t handle);
+
+/* Queue / Deque */
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_push_gc(uint64_t proc, uint64_t handle, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_queue_pop_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_queue_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_queue_free_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_push_back_gc(uint64_t proc, uint64_t handle, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_push_front_gc(uint64_t proc, uint64_t handle, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_pop_back_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_deque_pop_front_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_deque_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_deque_free_gc(uint64_t proc, uint64_t handle);
+
+/* TreeMap / TreeSet */
+VESTA_PLUGIN_EXPORT void vcol_tmap_put_gc(uint64_t proc, uint64_t handle, uint64_t key, uint64_t value);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tmap_remove_gc(uint64_t proc, uint64_t handle, uint64_t key);
+
+VESTA_PLUGIN_EXPORT void vcol_tmap_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_tmap_free_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_add_gc(uint64_t proc, uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT uint64_t vcol_tset_remove_gc(uint64_t proc, uint64_t handle, uint64_t element);
+
+VESTA_PLUGIN_EXPORT void vcol_tset_clear_gc(uint64_t proc, uint64_t handle);
+
+VESTA_PLUGIN_EXPORT void vcol_tset_free_gc(uint64_t proc, uint64_t handle);
+
+/* =========================================================================
+ * String ops nativas
+ *
+ * Operan sobre buffers crudos (host_ptr + byte_len) que el frontend Vex
+ * obtiene via STRRAW / STRGETBYTES de un StringObject.  No alocan
+ * StringObjects nuevos -- devuelven escalares (indices, longitudes, bools)
+ * o modifican in-place; el frontend Vex se encarga de envolver / dividir
+ * con STRMAKE segun necesite.
+ *
+ * Internamente usan memmem / memchr / memcmp (en glibc / msvcrt usan SIMD
+ * cuando esta disponible; cero overhead de re-implementacion en assembly).
+ * ========================================================================= */
+
+/** Indice de la primera ocurrencia de needle en haystack, o UINT64_MAX si no. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_indexof(uint64_t haystack_ptr, uint64_t haystack_len,
+                                          uint64_t needle_ptr, uint64_t   needle_len);
+
+/** Indice de la primera ocurrencia desde @p start, o UINT64_MAX. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_indexof_from(uint64_t haystack_ptr, uint64_t haystack_len,
+                                               uint64_t needle_ptr, uint64_t   needle_len,
+                                               uint64_t start);
+
+/** 1 si needle aparece en haystack, 0 si no. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_contains(uint64_t haystack_ptr, uint64_t haystack_len,
+                                           uint64_t needle_ptr, uint64_t   needle_len);
+
+/** 1 si haystack empieza por needle, 0 si no. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_starts_with(uint64_t haystack_ptr, uint64_t haystack_len,
+                                              uint64_t needle_ptr, uint64_t   needle_len);
+
+/** 1 si haystack termina con needle, 0 si no. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_ends_with(uint64_t haystack_ptr, uint64_t haystack_len,
+                                            uint64_t needle_ptr, uint64_t   needle_len);
+
+/** Convierte ASCII A-Z a a-z in-place.  No-op para bytes >= 0x80. */
+VESTA_PLUGIN_EXPORT void vstr_lower_inplace(uint64_t ptr, uint64_t len);
+
+/** Convierte ASCII a-z a A-Z in-place.  No-op para bytes >= 0x80. */
+VESTA_PLUGIN_EXPORT void vstr_upper_inplace(uint64_t ptr, uint64_t len);
+
+/** Devuelve cuantos bytes whitespace (' ', '\t', '\n', '\r') hay al inicio. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_trim_start_offset(uint64_t ptr, uint64_t len);
+
+/** Devuelve longitud final tras quitar whitespace al final.  trim_total = len - start - end_strip. */
+VESTA_PLUGIN_EXPORT uint64_t vstr_trim_end_strip(uint64_t ptr, uint64_t len);
+
+/**
+ * @brief Split de haystack por delim.  Devuelve un VestaArrayList handle
+ *        con N elementos uint64_t empaquetados como (offset << 32) | len,
+ *        donde offset es la posicion en haystack donde empieza la
+ *        substring y len es su longitud en bytes (sin contar el delim).
+ *
+ * El caller en Vex itera el alist, descodifica cada elemento y hace
+ * STRMAKE de la substring usando (haystack_ptr + offset, len) como
+ * (raw_ptr, byte_len).  No incluye substrings vacios entre delims
+ * consecutivos (skip).
+ *
+ * Coste: O(haystack_len) usando vstr_memmem (Boyer-Moore-Horspool para
+ * delims largos, memchr para delim de 1 byte como '\n').
+ *
+ * @return Handle al alist resultado (caller debe vcol_alist_free al
+ *         terminar), o VCOL_NULL si malloc falla.
+ */
+VESTA_PLUGIN_EXPORT uint64_t vstr_split_offsets(uint64_t haystack_ptr, uint64_t haystack_len,
+                                                uint64_t delim_ptr, uint64_t    delim_len);
+
+/* =========================================================================
+ * Array ops nativas
+ *
+ * Operan sobre arrays crudos (host_ptr) de uint64_t.  El frontend Vex pasa
+ * el host_ptr de un array nativo (T*) o de un alist (data ptr).
+ * ========================================================================= */
+
+/** Sort in-place de N uint64_t ascendente (qsort + comparador trivial). */
+VESTA_PLUGIN_EXPORT void varr_sort_u64(uint64_t ptr, uint64_t n);
+
+/** Sort in-place de N uint64_t descendente. */
+VESTA_PLUGIN_EXPORT void varr_sort_u64_desc(uint64_t ptr, uint64_t n);
+
+/** Busqueda binaria en array uint64_t ordenado asc.  Indice o UINT64_MAX. */
+VESTA_PLUGIN_EXPORT uint64_t varr_bsearch_u64(uint64_t ptr, uint64_t n, uint64_t key);
+
+/** Busqueda lineal en array uint64_t.  Indice o UINT64_MAX.  memchr-like sobre 64-bit. */
+VESTA_PLUGIN_EXPORT uint64_t varr_indexof_u64(uint64_t ptr, uint64_t n, uint64_t key);
+
+/** Reverse in-place de N uint64_t. */
+VESTA_PLUGIN_EXPORT void varr_reverse_u64(uint64_t ptr, uint64_t n);
 
 #ifdef __cplusplus
 } /* extern "C" */

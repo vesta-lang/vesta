@@ -33,6 +33,7 @@
 
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
+#include "runtime/exception_runtime.h"
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
@@ -112,16 +113,17 @@ namespace runtime {
         const uint64_t raw_h  = vm->registers.regs[r_clos].qword(); // valor del GcHandle
 
         if (raw_h == static_cast<uint64_t>(gc::GC_NULL_HANDLE)) {
-            vm->err_thread = THREAD_SEGMENTATION_FAULT; // closure nulo
-            vm->scheduler.on_event(EVT_ERROR);
-            vm->decoded_ptr->flags_info.blocking = true; // impedir avance de PC tras error
+            runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
+                "CALLCLOSURE: GcHandle nulo");
+            vm->decoded_ptr->flags_info.blocking = true;
             return;
         }
 
         uint8_t *payload = vm->gc_heap.deref(static_cast<gc::GcHandle>(raw_h));
         if (payload == nullptr) {
-            vm->err_thread = THREAD_SEGMENTATION_FAULT; // handle invalido
-            vm->scheduler.on_event(EVT_ERROR);
+            runtime::throw_fatalf(vm, runtime::FATAL_NULL_POINTER,
+                "CALLCLOSURE: GcHandle invalido (raw=0x%llX)",
+                (unsigned long long)raw_h);
             vm->decoded_ptr->flags_info.blocking = true;
             return;
         }
@@ -130,8 +132,8 @@ namespace runtime {
         loader::MethodInfo *method = clos->method;
 
         if (method == nullptr || method->code_vaddr == 0) {
-            vm->err_thread = THREAD_ILLEGAL_INSTRUCTION; // closure sin cuerpo
-            vm->scheduler.on_event(EVT_ERROR);
+            runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+                "CALLCLOSURE: closure sin cuerpo (method=null o code_vaddr=0)");
             vm->decoded_ptr->flags_info.blocking = true;
             return;
         }
@@ -140,15 +142,16 @@ namespace runtime {
                             + static_cast<uint64_t>(instr.flags_info.size_instr); // PC post-instruccion
 
         // empujar FrameHeader para soporte de excepciones
-        auto *frame       = new loader::FrameHeader{};
+        auto *frame       = vm->frame_pool.acquire(); // A.34.fix13
         frame->prev       = vm->frame_stack;
         frame->method     = method;
         frame->return_pc  = ret_addr;
         frame->frame_base = vm->registers.stack_pointer.qword();
+        frame->proceed_target = nullptr;
         vm->frame_stack   = frame;
 
-        // empujar la direccion de retorno en la pila convencional para RET
         vm->registers.stack_pointer.qword(vm->registers.stack_pointer.qword() - 8);
+        // Mantener write para callvm anidado.
         vm->vm_mem.write_bytes(vm->registers.stack_pointer.raw(), &ret_addr, 8);
 
         vm->registers.rip.qword(method->code_vaddr); // saltar al lambda
@@ -214,8 +217,8 @@ namespace runtime {
         const uint64_t ptr    = vm->registers.regs[r_clos].qword(); // puntero raw
 
         if (ptr == 0) {
-            vm->err_thread = THREAD_SEGMENTATION_FAULT; // closure nulo
-            vm->scheduler.on_event(EVT_ERROR);
+            runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
+                "CALLRAWCLOSURE: puntero nulo");
             vm->decoded_ptr->flags_info.blocking = true;
             return;
         }
@@ -223,8 +226,8 @@ namespace runtime {
         auto *rc = reinterpret_cast<loader::RawClosureObject *>(ptr);
 
         if (rc->fn_addr == 0) {
-            vm->err_thread = THREAD_ILLEGAL_INSTRUCTION; // funcion nula
-            vm->scheduler.on_event(EVT_ERROR);
+            runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+                "CALLRAWCLOSURE: fn_addr nulo");
             vm->decoded_ptr->flags_info.blocking = true;
             return;
         }
@@ -269,7 +272,7 @@ namespace runtime {
             // restaurar SP al punto de entrada del frame actual para liberar su espacio
             vm->registers.stack_pointer.qword(frame->frame_base);
             vm->frame_stack = frame->prev; // desapilar el frame
-            delete frame;                  // liberar la memoria del FrameHeader
+            vm->frame_pool.release(frame); // fix13
         }
 
         // no se empuja nueva direccion de retorno: la del llamante ya esta en la pila
@@ -319,20 +322,23 @@ namespace runtime {
         const uint64_t val   = vm->registers.regs[r_src].qword();
 
         if (val == 0) {
-            // valor nulo: lanzar NullPointerException
-            // alocar un ObjectHeader minimo para representar la excepcion
+            // Valor nulo: lanzar NullPointerException via el mismo
+            // mecanismo que la instruccion `throw`, para que sea
+            // capturable por try/catch.  Si no hay handler en
+            // exc_frame_stack, el throw escala a error fatal del thread
+            // (THREAD_NULL_POINTER).  Esto unifica el modelo: unwrap
+            // failure y throw user-level se procesan por el mismo
+            // unwinder.
             uint64_t ex_ptr = vm->raw_alloc.alloc(sizeof(loader::ObjectHeader));
             if (ex_ptr != 0) {
                 auto *hdr      = reinterpret_cast<loader::ObjectHeader *>(ex_ptr);
-                hdr->class_ptr = nullptr;                    // sin ClassInfo: excepcion anonima
+                hdr->class_ptr = nullptr;                    // excepcion sin ClassInfo (catch-all)
                 hdr->flags     = loader::OBJ_FLAG_RAW_OWNED;
                 hdr->hash_code = 0;
             }
-            // iniciar el desenrollado de pila con la excepcion creada
-            vm->current_exception = ex_ptr;
-            vm->err_thread        = THREAD_NULL_POINTER;    // marcar el tipo de error
-            vm->scheduler.on_event(EVT_ERROR);              // senalizar error al scheduler
-            vm->decoded_ptr->flags_info.blocking = true;    // impedir avance de PC tras error fatal
+            // Forward declaration: do_throw vive en exec_instruction_oop.cpp.
+            extern void do_throw(ProcessVM *vm, uint64_t exception_ptr);
+            do_throw(vm, ex_ptr);
             return;
         }
 

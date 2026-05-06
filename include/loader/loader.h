@@ -53,6 +53,7 @@
 #include "emmit/bytereader.h"
 #include "ffi/native_ffi.h"
 #include "linker/velb_linker_bytecode.h"
+#include "loader/class_registry.h"
 #include "runtime/runtime.h"
 
 namespace runtime {
@@ -216,6 +217,17 @@ namespace loader {
         std::vector<Assembly::Bytecode::Relocation> relocations{};
 
         /**
+         * @brief tabla de relocations leida del .velb tras el link.
+         *
+         * Cada entry contiene el offset DENTRO del bytecode (no del archivo)
+         * y el target_value original.  Permite al loader hacer rebase
+         * preciso cuando carga el modulo en una VA distinta de la original
+         * (`load_module_dynamic`).  Vacia si el .velb no tiene tabla de
+         * relocations (formato viejo o sin relocations resolubles).
+         */
+        std::vector<entry_relocation_table> velb_relocations{};
+
+        /**
          * @brief Metadatos arbitrarios en formato JSON.
          *
          * Puede incluir:
@@ -265,6 +277,21 @@ namespace loader {
          */
         std::vector<std::unique_ptr<Executable> > executables;
 
+        /**
+         * @brief Proximo VA libre para asignar a modulos cargados
+         * dinamicamente via @c load_module_dynamic.  Empieza en 0x80000000
+         * (2 GiB).  Por debajo de eso se reservan las stacks de proceso
+         * (esquema en exec_instr_spawn: stack_base = 0x10000000 +
+         * (local_pid % 0x1000) * 0x100000 -> hasta 0x10FFF00000 con 4096
+         * procesos a 1 MiB cada uno).  Fijar la base de plugins a 2 GiB
+         * elimina cualquier solapamiento entre stacks de proceso, code
+         * section del caller (en VA 0x0..N) y los plugins cargados
+         * dinamicamente.  La carga dinamica solo usa este contador si
+         * detecta solapamiento entre la VA original del modulo y otros
+         * executables ya cargados.
+         */
+        uint64_t next_dyn_base = 0x80000000ULL;
+
 
         /**
          * referencia al manager de instancias de VM
@@ -279,6 +306,23 @@ namespace loader {
 
         explicit Loader(
             runtime::ManageVM &instance_manager);
+
+        /**
+         * @brief Copia el bytecode de TODOS los executables cargados al
+         *        @c vm_mem del proceso destino.
+         *
+         * Replica la copia que hace @c load_executable, pero sobre un proceso
+         * que ya existe (caso: hijos creados con @c spawn que comparten codigo
+         * pero tienen vm_mem privado vacio).  Para cada Executable iterado en
+         * @c executables, recorre sus secciones y emite un
+         * @c vm_to_host_memcpy con el rango (address_init, exe->bytecode.size()).
+         *
+         * Coste O(numero_executables * secciones * tamano_bytecode).  En
+         * spawn se llama una sola vez por hijo.
+         *
+         * @param dest Proceso destino que recibira la copia del codigo.
+         */
+        void copy_executables_to(runtime::ProcessVM &dest);
 
         /**
          * Permite obtener una cadena de la seccion strings, en base a su offset
@@ -353,6 +397,30 @@ namespace loader {
          */
         runtime::ProcessVM *load_executable(runtime::VM &vm, std::vector<uint8_t> raw_bytecode_file);
 
+        /**
+         * @brief carga DINAMICA de un .velb adicional en una VM ya corriendo.
+         *
+         * Diferencias clave con @c load_executable:
+         *   - NO crea un proceso nuevo: el modulo se anade al pool de
+         *     `executables` y su bytecode se copia al `vm_mem` de TODOS los
+         *     procesos vivos para que cualquiera pueda saltar a su codigo.
+         *   - Devuelve el `init_pc` del modulo cargado (entry point del main
+         *     del nuevo modulo) para que el caller pueda ejecutarlo via
+         *     `callvmr` y que el prologo de su `main` invoque `__module_init`
+         *     (registrando clases en el ClassRegistry global).
+         *
+         * El caller tipico es la instruccion bytecode @c loadmod, que reusa
+         * la convencion CALLVM (push de return addr + jump al init_pc) para
+         * ejecutar el modulo cargado de forma sincrona.
+         *
+         * @param vm Instancia VM activa donde cargar el modulo.
+         * @param raw_bytecode_file Bytes del archivo .velb a cargar.
+         * @return @c init_pc (entry point) del modulo cargado, o 0 si el
+         *         parse falla o el archivo esta vacio.
+         */
+        uint64_t load_module_dynamic(runtime::VM &vm,
+                                      std::vector<uint8_t> raw_bytecode_file);
+
         void resolve_labels(Assembly::Bytecode::Section &section);
 
         void load_sections(Assembly::Bytecode::Label &label);
@@ -403,7 +471,28 @@ namespace loader {
                                             loader::ClassInfo **type_args,
                                             size_t count);
 
+        /**
+         * @brief Acceso al registro global de clases definidas en runtime.
+         *
+         * El @c ClassRegistry mantiene la tabla nombre -> ClassInfo* y la
+         * propiedad de toda la memoria asociada (FieldInfo[], MethodInfo[],
+         * tablas hash de lookup, advices, strings).  Consultar
+         * @c class_registry.h para la API de definicion y busqueda.
+         */
+        ClassRegistry &class_registry() noexcept { return class_registry_; }
+        const ClassRegistry &class_registry() const noexcept { return class_registry_; }
+
     private:
+        /**
+         * @brief Registro de clases dinamicas.
+         *
+         * Vive como miembro del Loader para que su vida coincida con la
+         * de la VM.  Las instrucciones VM @c defclass / @c defmethod /
+         * @c deffield invocan este registry indirectamente via el VM
+         * que conoce su Loader.
+         */
+        ClassRegistry class_registry_;
+
         /**
          * Un mutex en el loader para evitar problemas en el
          * caso de usar multihilo

@@ -39,6 +39,9 @@
 #include "util/ThreadPool.h"
 
 #include "runtime/pid.h"
+#include "loader/oop_types.h"  // FutureObject + FutureState para shared_futures
+#include <mutex>                // mutex para shared_futures concurrent access
+#include <condition_variable>   // condition_variable para done_cv (rev3)
 
 /** @brief Version actual del formato de bytecode .velb soportado por esta VM. */
 #define VERSION_VM 0
@@ -75,7 +78,7 @@ namespace runtime {
      */
     class VM {
     public:
-        ThreadPool pool; ///< Pool de hilos que ejecuta los schedulers
+        ThreadPool pool; ///< Pool de hilos que ejecuta los schedulers (dimensionado a num_schedulers, no hardware_concurrency, para no crear threads ociosos)
 
         /**
          * @brief Indice del proximo scheduler al que se asignara un proceso nuevo.
@@ -104,6 +107,35 @@ namespace runtime {
         uint64_t id; ///< Identificador unico de esta instancia VM dentro del ManageVM
 
         ManageVM &mgr_vm; ///< Referencia al gestor de instancias que posee esta VM
+
+        // ---------------------------------------------------------------------
+        // tabla compartida de FutureObjects para IPC entre procesos.
+        // ---------------------------------------------------------------------
+        // Los FutureObject viven aqui en lugar de en el gc_heap per-process,
+        // porque el patron @c spawn { fulfill(...) } + parent.await(...) requiere
+        // que ambos procesos accedan al mismo Future objeto.  Usar la tabla
+        // compartida garantiza que el handle devuelto por @c future sea valido
+        // desde cualquier proceso de la misma VM.
+        //
+        // Indices son monotonicos (no se reciclan) para evitar A-B-A; en la
+        // practica un Future se libera mucho despues del fulfill y la tabla
+        // crece pero no de forma critica (futures son pocos comparados con
+        // objetos GC normales).  Mejora futura: free list + reciclaje.
+        std::vector<loader::FutureObject> shared_futures;
+        std::mutex                        shared_futures_mtx;
+
+        // ---------------------------------------------------------------------
+        // condition variable para que el hilo principal
+        // se bloquee sin polling hasta que la VM termine.
+        // ---------------------------------------------------------------------
+        // Antes el bucle en main era `while (vm.has_alive_processes())
+        // sleep_for(1ms)` -> en Windows el granularity de Sleep es ~15.6ms,
+        // anadiendo 15-50 ms de latencia por programa incluso para tareas
+        // triviales.  Ahora el ultimo scheduler que detecte
+        // `vm_running == false` notifica @c done_cv y main hace
+        // `done_cv.wait` con predicado.  Cero polling, latencia ~us.
+        std::mutex              done_mtx;
+        std::condition_variable done_cv;
 
         /**
          * @brief Construye la instancia VM e inicializa los schedulers.

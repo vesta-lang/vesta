@@ -618,6 +618,22 @@ private:
     void exec_try       (const AstNode &n, std::shared_ptr<VshEnv> env);
     void exec_import    (const AstNode &n, std::shared_ptr<VshEnv> env);
 
+    /**
+     * @brief Resuelve el path de un @c import "ruta" probando varias
+     *        ubicaciones canonicas: literal, relativo al script
+     *        importador, relativo al directorio del interprete (vm.exe),
+     *        relativo a @c <interprete>/stdlib/, y la variable de entorno
+     *        @c VESTAVM_VSH_PATH.  Devuelve el path absoluto del primer
+     *        candidato existente, o lanza @c VshRuntimeError listando
+     *        todos los paths probados.
+     *
+     * @param path           Argumento literal del import (e.g. "stdlib/vsh/build_lib.vsh").
+     * @param importer_file  Path del fichero .vsh que contiene el import,
+     *                       o cadena vacia si es el script raiz.
+     */
+    std::string resolve_import_path(const std::string &path,
+                                     const std::string &importer_file) const;
+
     Value call_fn(const Value &callee, std::vector<Value> args, int line);
 
     /**

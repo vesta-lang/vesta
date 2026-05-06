@@ -39,6 +39,9 @@
 #  include <netdb.h>
 #  include <unistd.h>
 #  include <fcntl.h>
+#  if defined(__APPLE__)
+#    include <mach-o/dyld.h>
+#  endif
 #endif
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -2099,14 +2102,168 @@ void VshInterpreter::exec_try(const AstNode &n, std::shared_ptr<VshEnv> env) {
     // ReturnSignal / BreakSignal / ContinueSignal se propagan sin capturar
 }
 
+// =============================================================================
+// Resolucion de imports VSH
+// =============================================================================
+//
+// `import "ruta"` busca el fichero en el siguiente orden, devolviendo el
+// PRIMER candidato que exista en disco.  Si ninguno existe, error con la
+// lista completa de rutas probadas para facilitar el diagnostico:
+//
+//   1. La ruta literal tal cual (relativa al cwd o absoluta).
+//   2. Resuelta relativa al directorio del SCRIPT QUE HACE EL IMPORT
+//      (i.e. dirname(__file__)).  Permite que un script main.vsh haga
+//      `import "lib/util.vsh"` sin importar desde donde se llamo.
+//   3. Resuelta relativa al directorio del INTERPRETE (vm[.exe]).
+//      Permite que vm.exe + stdlib/ se distribuyan juntos en /Program
+//      Files/Vesta/ y que `import "stdlib/vsh/build_lib.vsh"` funcione
+//      desde cualquier cwd.
+//   4. Resuelta relativa a `<dir interprete>/stdlib/`.  Atajo para los
+//      modulos canonicos del runtime: `import "vsh/build_lib.vsh"`.
+//   5. Cada entrada de la variable de entorno VESTAVM_VSH_PATH
+//      (separada por ; en Windows, : en POSIX) anteponiendola al path.
+//
+// Devuelve el path resuelto o cadena vacia si no se encuentra.
+
+namespace {
+    // Devuelve el path absoluto del binario en ejecucion (vm[.exe]).
+    // Usa GetModuleFileNameW en Windows, /proc/self/exe en Linux y
+    // _NSGetExecutablePath en macOS.  Devuelve cadena vacia ante fallo.
+    std::string get_executable_path() {
+#if defined(_WIN32)
+        wchar_t buf[MAX_PATH * 2];
+        DWORD n = GetModuleFileNameW(nullptr, buf, sizeof(buf) / sizeof(buf[0]));
+        if (n == 0) return {};
+        // Convertir UTF-16 -> UTF-8 sin depender de WideCharToMultiByte
+        // (basta con narrowing ASCII para paths del sistema).
+        std::string out;
+        out.reserve(n);
+        for (DWORD i = 0; i < n; ++i) {
+            wchar_t c = buf[i];
+            out.push_back(c < 128 ? static_cast<char>(c) : '?');
+        }
+        return out;
+#elif defined(__APPLE__)
+        char buf[4096];
+        uint32_t sz = sizeof(buf);
+        if (_NSGetExecutablePath(buf, &sz) != 0) return {};
+        return std::string(buf);
+#else
+        char buf[4096];
+        ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n <= 0) return {};
+        buf[n] = '\0';
+        return std::string(buf);
+#endif
+    }
+
+    // Path separator de la variable de entorno PATH-like.
+    constexpr char path_list_sep() {
+#if defined(_WIN32)
+        return ';';
+#else
+        return ':';
+#endif
+    }
+
+    // Split de una cadena por separador (sin std::ranges para C++17).
+    std::vector<std::string> split_paths(const std::string &s, char sep) {
+        std::vector<std::string> out;
+        std::string cur;
+        for (char c : s) {
+            if (c == sep) {
+                if (!cur.empty()) out.push_back(cur);
+                cur.clear();
+            } else {
+                cur.push_back(c);
+            }
+        }
+        if (!cur.empty()) out.push_back(cur);
+        return out;
+    }
+} // namespace
+
+std::string VshInterpreter::resolve_import_path(const std::string &path,
+                                                  const std::string &importer_file) const
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> tried;
+
+    auto try_candidate = [&](const fs::path &p) -> std::string {
+        std::error_code ec;
+        if (fs::exists(p, ec) && fs::is_regular_file(p, ec)) {
+            return p.string();
+        }
+        tried.push_back(p.string());
+        return {};
+    };
+
+    // 1. Path literal tal cual.
+    if (auto r = try_candidate(fs::path(path)); !r.empty()) return r;
+
+    // 2. Relativo al script importador.
+    if (!importer_file.empty()) {
+        fs::path importer_dir = fs::path(importer_file).parent_path();
+        if (!importer_dir.empty()) {
+            if (auto r = try_candidate(importer_dir / path); !r.empty()) return r;
+        }
+    }
+
+    // 3. Relativo al directorio del intérprete (vm[.exe]).
+    std::string exe = get_executable_path();
+    fs::path exe_dir;
+    if (!exe.empty()) exe_dir = fs::path(exe).parent_path();
+    if (!exe_dir.empty()) {
+        if (auto r = try_candidate(exe_dir / path); !r.empty()) return r;
+        // 4. Relativo a <dir interprete>/stdlib/.
+        if (auto r = try_candidate(exe_dir / "stdlib" / path); !r.empty()) return r;
+        // 5. Layout build-tree:  parent_del_exe + path  (e.g. para imports
+        //    `stdlib/vsh/X` cuando vm.exe vive en cmake-build-XXX/ y la
+        //    stdlib esta en la raiz del repo en stdlib/).
+        fs::path parent = exe_dir.parent_path();
+        if (!parent.empty()) {
+            if (auto r = try_candidate(parent / path); !r.empty()) return r;
+            // 6. Layout estilo Unix prefix:  bin/vm + stdlib/...  o
+            //    bin/vm + share/vm/stdlib/...  (para imports `vsh/X`
+            //    sin el prefijo stdlib).
+            if (auto r = try_candidate(parent / "stdlib" / path); !r.empty()) return r;
+            if (auto r = try_candidate(parent / "share" / "vm" / "stdlib" / path); !r.empty()) return r;
+        }
+    }
+
+    // 5. VESTAVM_VSH_PATH.
+    if (const char *envp = std::getenv("VESTAVM_VSH_PATH")) {
+        for (const auto &dir : split_paths(envp, path_list_sep())) {
+            fs::path d(dir);
+            if (auto r = try_candidate(d / path); !r.empty()) return r;
+        }
+    }
+
+    // No encontrado: lanzar error con la lista de rutas probadas.
+    std::string msg = "import: no se encuentra '" + path + "'.  Probado:";
+    for (const auto &t : tried) msg += "\n  - " + t;
+    throw VshRuntimeError(msg);
+}
+
 void VshInterpreter::exec_import(const AstNode &n, std::shared_ptr<VshEnv> /*env*/) {
-    std::string path = n.name;
+    std::string requested = n.name;
+    // Path del importador: leemos __file__ del scope global ANTES de
+    // que exec_file lo sobreescriba con el path del modulo importado.
+    std::string importer_file;
+    if (global_->has("__file__")) {
+        Value fv = global_->get("__file__");
+        if (fv.type() == VshType::String) importer_file = fv.as_string();
+    }
+    std::string resolved = resolve_import_path(requested, importer_file);
+
+    // Detección de ciclo usando el path RESUELTO (evita que dos imports
+    // del mismo fichero por rutas distintas pasen el chequeo).
     for (auto &p : import_stack_)
-        if (p == path)
-            throw VshRuntimeError("importacion circular detectada: " + path, n.line);
-    import_stack_.push_back(path);
+        if (p == resolved)
+            throw VshRuntimeError("importacion circular detectada: " + resolved, n.line);
+    import_stack_.push_back(resolved);
     try {
-        exec_file(path); // ejecuta en el scope global (efecto: define funciones globales)
+        exec_file(resolved); // ejecuta en el scope global (efecto: define funciones globales)
     } catch (...) {
         import_stack_.pop_back();
         throw;
@@ -3296,6 +3453,21 @@ void VshInterpreter::register_builtins() {
 #else
         return Value(std::string("linux"));
 #endif
+    };
+    // Devuelve el path absoluto del directorio que contiene el binario
+    // del interprete (vm[.exe]).  Util para builders portables que
+    // necesitan localizar la stdlib o el propio vm desde un script
+    // ejecutado con cwd arbitrario.
+    builtins_["interpreter_dir"] = [](std::vector<Value> /*args*/) -> Value {
+        std::string exe = get_executable_path();
+        if (exe.empty()) return Value(std::string{});
+        return Value(std::filesystem::path(exe).parent_path().string());
+    };
+    // Devuelve el path absoluto del binario del interprete (incluyendo
+    // el nombre del .exe en Windows).  Cadena vacia si no se puede
+    // resolver.
+    builtins_["interpreter_path"] = [](std::vector<Value> /*args*/) -> Value {
+        return Value(get_executable_path());
     };
     builtins_["pid"] = [](std::vector<Value> /*args*/) -> Value {
 #if defined(_WIN32)
