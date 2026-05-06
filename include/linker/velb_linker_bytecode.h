@@ -79,7 +79,10 @@ extern "C" {
 
 
 #define MAGIC_NUMBER_VELB 0x424C4556
-#define VERSION_VELB 0x1
+// bumped to 0x2 cuando se anyadio la tabla de relocations al header.
+// Loaders viejos (v1) no entenderan los campos nuevos; no es backward
+// compatible.  Las .velb existentes deben recompilarse.
+#define VERSION_VELB 0x2
 #define VERSION_VELA 0x1
 
 /**
@@ -246,7 +249,30 @@ typedef struct PACKED HeaderVELB {
 
     uint8_t _debug_pad[3] = {}; // 3, offset 117 (reservado, debe ser 0)
 
-    table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones
+    /**
+     * @brief A.9: offset al inicio de la tabla de relocations dentro del .velb.
+     *
+     * Cada entry registra un slot de bytecode que contiene una direccion
+     * absoluta (e.g. resultado de @c @Absolute("code.foo")).  Permite al
+     * loader (`load_module_dynamic`) reescribir esos slots cuando un modulo
+     * se carga en una VA distinta de la original (rebase transparente sin
+     * heuristics ni flags de compilacion).  El valor 0 indica que el .velb
+     * no contiene tabla de relocations (build viejo o sin relocations
+     * resolubles).
+     */
+    uint64_t offset_reloc_table = 0; // 8, offset 120
+
+    /**
+     * @brief A.9: numero de entries en la tabla de relocations.
+     */
+    uint32_t size_reloc_table = 0;   // 4, offset 128
+
+    /**
+     * @brief Relleno hasta alineacion de 16 bytes (offset 132 -> 144).
+     */
+    uint8_t _reloc_pad[12] = {};     // 12, offsets 132-143
+
+    table_spaces_address *address_spaces = nullptr; // tabla de espacios de direcciones (NO se serializa)
 } HeaderVELB;
 
 /**
@@ -273,6 +299,49 @@ typedef struct PACKED entry_label_table {
      */
     uint32_t size_label;
 } entry_label_table;
+
+/**
+ * @brief entrada en la tabla de relocations.
+ *
+ * Cada entrada describe un slot DENTRO del bytecode (offset desde el inicio
+ * de los bytes ejecutables, NO desde el inicio del archivo) que contiene
+ * una direccion absoluta resuelta por el linker.  El loader puede usar
+ * estos datos para reescribir los slots cuando un modulo se carga en una
+ * VA distinta de la original (`load_module_dynamic` rebase transparente).
+ *
+ * Layout (24 bytes packed):
+ *
+ *   +0  bytecode_offset  (u64)  Offset desde el inicio de los bytes ejecutables.
+ *                                Sumar @c offset_real_bytecode + section.file_offset
+ *                                para obtener offset dentro del .velb completo.
+ *   +8  target_value     (u64)  Valor original escrito en el slot (la direccion
+ *                                absoluta resuelta por el linker).  El loader
+ *                                puede comparar contra el rango VA del modulo
+ *                                para decidir si patchear o no.
+ *  +16  type             (u8)   Tipo de relocation: 1=Absolute64, 2=Relative32,
+ *                                3=Relative64.  Para A.9 MVP solo se usa
+ *                                Absolute64 (lo que produce @c @Absolute(...)).
+ *  +17  _pad             (u8x7) Relleno hasta 24 bytes.
+ */
+typedef struct PACKED entry_relocation_table {
+    uint64_t bytecode_offset;
+    uint64_t target_value;
+    uint8_t  type;
+    uint8_t  _pad[7];
+} entry_relocation_table;
+
+/**
+ * @brief codigos compactos de tipo de relocation usados en
+ * @c entry_relocation_table::type.  Mapeo desde el enum @c Type del
+ * linker (que tiene mas variantes pero las relevantes para .velb son
+ * absolute64 -- el resto se descarta o se transforma).
+ */
+enum class RelocTypeVELB : uint8_t {
+    NONE       = 0,
+    ABSOLUTE64 = 1,
+    RELATIVE32 = 2,
+    RELATIVE64 = 3,
+};
 
 /**
  * Entrada en la tabla de importaciones de funciones
@@ -1024,6 +1093,16 @@ namespace Assembly::Bytecode::Linker {
          * bytecode final que plasmar, esto esta generado por una unidad de ensamblado
          */
         std::vector<uint8_t> final_bytecode;
+
+        /**
+         * @brief tabla de relocations Absolute64 capturadas durante
+         * @c apply_relocations.  Cada entry guarda el offset (relativo al
+         * inicio del @c final_bytecode) y el target_value escrito en ese
+         * slot.  Se serializa al .velb tras el bytecode y se actualiza
+         * @c final_header.offset_reloc_table / size_reloc_table.  El loader
+         * la usa en @c load_module_dynamic para rebase transparente.
+         */
+        std::vector<entry_relocation_table> applied_relocations_;
 
         /**
          * Header que escribir en el archivo final

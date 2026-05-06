@@ -203,6 +203,47 @@ namespace install {
         return std::filesystem::path(std::string(buf, n - 1));
     }
 
+    /// @brief @c true si la entrada es basura de build (cmake intermedios)
+    /// que no debe instalarse.  Usado por @c copy_dir_recursive para
+    /// filtrar @c stdlib/ y otras carpetas que el build de cmake llena
+    /// con CMakeFiles/, libfoo.dll.a, *.cmake, etc.  Lo que SI se copia:
+    /// .dll/.so/.dylib (plugins), .vex/.vsh/.vel/.velb (codigo runtime),
+    /// .md/.txt si es @c doc/.  Lo que NO: directorios @c CMakeFiles,
+    /// @c .git, @c __pycache__, archivos @c .a/.o/.obj/.lib/.exp/.cmake/.txt
+    /// terminados en cmake artifacts.
+    static bool is_build_garbage(const std::filesystem::path& p) {
+        // Filtrar por nombre de directorio.
+        for (const auto& part : p) {
+            const std::string s = part.string();
+            if (s == "CMakeFiles"
+             || s == ".git"
+             || s == ".vs"
+             || s == "__pycache__") {
+                return true;
+            }
+        }
+        // Filtrar por extension/nombre del archivo.
+        const std::string fn   = p.filename().string();
+        const std::string ext  = p.extension().string();
+        if (fn == "Makefile"
+         || fn == "cmake_install.cmake"
+         || fn == "CMakeCache.txt"
+         || fn == "CTestTestfile.cmake") return true;
+        // Import libraries de MinGW: lib<plugin>.dll.a son interfaz de
+        // link, NO necesarias en runtime.
+        if (fn.size() > 6 && fn.substr(fn.size() - 6) == ".dll.a") return true;
+        // Otros artefactos de build sin valor en runtime.
+        if (ext == ".obj" || ext == ".o"   || ext == ".lib"
+         || ext == ".exp" || ext == ".pdb" || ext == ".ilk"
+         || ext == ".d"   || ext == ".rsp" || ext == ".cmake") return true;
+        // Intermediarios del frontend Vex (debug-only).  El usuario final
+        // no necesita: .ir (SSA dump), .velb-map (debug map del linker).
+        // Conservamos .vex (source), .vel (assembly), .velb (ejecutable).
+        if (ext == ".ir") return true;
+        if (fn.size() > 9 && fn.substr(fn.size() - 9) == ".velb-map") return true;
+        return false;
+    }
+
     static bool copy_dir_recursive(const std::filesystem::path& src,
                                     const std::filesystem::path& dst,
                                     Manifest& mf, bool overwrite)
@@ -211,6 +252,11 @@ namespace install {
         std::filesystem::create_directories(dst, ec);
         for (auto& entry : std::filesystem::recursive_directory_iterator(src, ec)) {
             if (ec) return false;
+            // Saltar basura de build (CMakeFiles/, *.dll.a, etc.).
+            // Aplica tanto a directorios (skip_recursion via continue + skip
+            // de subarbol manual no necesario porque is_build_garbage
+            // tambien matchea cualquier fichero dentro).
+            if (is_build_garbage(entry.path())) continue;
             auto rel = std::filesystem::relative(entry.path(), src, ec);
             auto target = dst / rel;
             if (entry.is_directory()) {
@@ -287,20 +333,97 @@ namespace install {
             }
 
             // 2) assets relativos al binario actual: docs/, examples_codes_vsh/, icons/
+            //
+            // BUG fix: el binario puede estar en un build dir paralelo
+            // (ej. cmake-vex-build/vm.exe) donde los assets de source no
+            // existen.  Probamos varias raices y usamos la primera que
+            // contenga la carpeta.  Orden: <exe_dir>, <exe_dir>/.., <exe_dir>/../..
             auto src_root = module_path().parent_path();
 
             auto try_copy_dir = [&](const char* name, bool enabled) {
                 if (!enabled) return;
-                auto s = src_root / name;
-                if (!std::filesystem::exists(s)) return;
-                copy_dir_recursive(s, opts.prefix / name, mf, opts.force);
+                const std::filesystem::path roots[] = {
+                    src_root,
+                    src_root.parent_path(),
+                    src_root.parent_path().parent_path(),
+                };
+                for (const auto &r : roots) {
+                    auto s = r / name;
+                    if (std::filesystem::exists(s)) {
+                        copy_dir_recursive(s, opts.prefix / name, mf, opts.force);
+                        return;
+                    }
+                }
             };
 
             try_copy_dir("doc",                  opts.copy_docs);
             try_copy_dir("examples_codes_vsh",   opts.copy_examples);
             try_copy_dir("examples_codes_vm",    opts.copy_examples);
+            try_copy_dir("examples_codes_vex",   opts.copy_examples);
             try_copy_dir("stdlib",               opts.copy_stdlib);
             try_copy_dir("icons",                opts.copy_icons);
+
+            // ----------------------------------------------------------------
+            // Fallback critico para plugins nativos (fix instalador):
+            //
+            // try_copy_dir("stdlib") ya copia recursivo lo que encuentre en
+            // <src_root>/stdlib/.  Pero esa carpeta puede ser SOLO sources
+            // (sin .dll) si el binario corre desde un build dir paralelo.
+            // Garantizamos los plugins runtime esenciales (vesta_io.dll y
+            // vesta_math.dll) buscandolos en lugares conocidos y copiandolos
+            // a la ruta relativa esperada por el loader (LoadLibraryA usa
+            // <exe_dir>/stdlib/native/<lib>/<name>.dll).
+            //
+            // Ubicaciones probadas en orden:
+            //   1. <src_root>/stdlib/native/<lib>/<name>.dll  (build local)
+            //   2. <src_root>/<name>.dll                       (junto a vm.exe)
+            //   3. <src_root>/../stdlib/native/<lib>/<name>.dll (cmake parent)
+            //   4. <src_root>/../../stdlib/native/<lib>/<name>.dll
+            //
+            // Solo se copia si el destino aun no existe (idempotencia).
+            // ----------------------------------------------------------------
+            if (opts.copy_stdlib) {
+                struct PluginSpec { const char *lib; const char *file; };
+                static const PluginSpec plugins[] = {
+                    { "io",   "vesta_io.dll"   },
+                    { "math", "vesta_math.dll" },
+                };
+                for (const auto &ps : plugins) {
+                    const std::string rel_path =
+                        std::string("stdlib/native/") + ps.lib + "/" + ps.file;
+                    auto dst = opts.prefix / rel_path;
+                    if (std::filesystem::exists(dst)) continue;  // ya copiado
+
+                    // Probar varias ubicaciones.
+                    const std::filesystem::path candidates[] = {
+                        src_root / "stdlib" / "native" / ps.lib / ps.file,
+                        src_root / ps.file,
+                        src_root.parent_path() / "stdlib" / "native" / ps.lib / ps.file,
+                        src_root.parent_path().parent_path() / "stdlib" / "native" / ps.lib / ps.file,
+                    };
+                    bool copied = false;
+                    for (const auto &cand : candidates) {
+                        if (!std::filesystem::exists(cand)) continue;
+                        std::filesystem::create_directories(dst.parent_path(), ec);
+                        std::filesystem::copy_file(cand, dst,
+                            std::filesystem::copy_options::overwrite_existing, ec);
+                        if (!ec) {
+                            ManifestFile e; e.path = dst;
+                            e.size = std::filesystem::file_size(dst, ec);
+                            mf.files.push_back(e);
+                            std::cout << "  [plugin] " << ps.file
+                                      << " <- " << cand.string() << "\n";
+                            copied = true;
+                        }
+                        break;
+                    }
+                    if (!copied) {
+                        std::cerr << "  [plugin] AVISO: " << ps.file
+                                  << " no encontrado en ninguna ubicacion conocida; "
+                                  << "los programas que lo requieran fallaran al cargar.\n";
+                    }
+                }
+            }
 
             // 3) icono individual si existe en el directorio fuente
             if (opts.copy_icons) {

@@ -2341,9 +2341,15 @@ namespace runtime {
         },
 
         /* 0x45 tryleave */{
+            // Sin operandos; usa decode_instr_simple porque la salida del
+            // decoder (al margen del exec) DEBE rellenar size_instr.  Si
+            // decode == nullptr, el decoder corto-circuita la instruccion
+            // en line 882 de decode_instruction.cpp como invalida y el
+            // proceso queda "halt"-ed pero sin avance de PC, causando
+            // bucle silencioso o cuelgue del scheduler.
             "tryleave", Assembly::Bytecode::AddressingMode::NONE,
             Assembly::Bytecode::InstrSizeMode::FIXED_2,
-            exec_instr_tryleave, nullptr
+            exec_instr_tryleave, decode_instr_simple
         },
 
         /* 0x46 strmake r_dst, r_src, r_len */{
@@ -2445,59 +2451,80 @@ namespace runtime {
 
 
         /* 0x56 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // gchandle r_dst, r_src  - lookup inverso payload_ptr -> GcHandle
+            // (O(1) via mapa hash en GcHeap).  Devuelve GC_NULL_HANDLE si el
+            // puntero no corresponde a ningun objeto vivo.  Usado por Vex
+            // synchronized(obj) para obtener el handle desde el host_ptr.
+            "gchandle", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_gchandle, decode_instr_two_op_reg
         },
 
         /* 0x57 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+            // getpid r_dst  - deposita encoded PID del proceso actual en r_dst.
+            // Formato: (scheduler_id<<32) | (local_pid & 0xFFFFFFFF).
+            "getpid", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_getpid, decode_instr_two_op_reg
         },
 
-        /* 0x58 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x58  spawnon r_fn, r_hint - spawn con scheduler hint:
+                  hint = -1 (signed) -> Here (mismo scheduler que el padre)
+                  hint >= 0          -> Pinned al scheduler hint%num_schedulers
+                  Sirve a Vex `spawn here { }` y `spawn on(N) { }`. */
+        {
+            "spawnon", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_spawn_on, decode_instr_two_op_reg
         },
 
-        /* 0x59 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x59  loadmod r_path_addr, r_path_len - carga dinamica de un .velb
+                  desde el filesystem; r0 = init_pc (entry del modulo) o 0 si
+                  failure.  El caller invoca el modulo via callvmr r0 para
+                  que su prologo de main corra __module_init y registre las
+                  clases nuevas en el ClassRegistry global. */
+        {
+            "loadmod", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_loadmod, decode_instr_two_op_reg
         },
 
-        /* 0x5A */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x5A  panic r_msg_addr, r_msg_len - A.17.x: lanza FatalError con
+                  kind = FATAL_USER_ABORT y message = bytes[vm_addr,len]. */
+        {
+            "panic", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_panic, decode_instr_two_op_reg
         },
 
-        /* 0x5B */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x5B  setmethdbg r_method, r_params - : registra debug
+                  info para un MethodInfo (file + start_line) en la tabla
+                  global g_method_debug.  Lo emite el frontend Vex tras
+                  cada defmethod en __module_init.  El stack trace lo
+                  consulta para mostrar "(file.vex:42)" en vez de
+                  "(pc=0xADDR)" en cada frame. */
+        {
+            "setmethdbg", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_setmethdbg, decode_instr_two_op_reg
         },
 
-        /* 0x5C */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x5C  fextend zmm_dst, zmm_src - convierte f32 -> f64 dentro del
+                  banco ZMM.  Lo emite IrOp::F32TOF64 (frontend Vex hace
+                  `f64 d = f32_var;`).  Mismo encoding que fadd/fmov. */
+        {
+            "fextend", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fextend, decode_instr_simple_mov
         },
 
-        /* 0x5D */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x5D  fnarrow zmm_dst, zmm_src - convierte f64 -> f32 dentro del
+                  banco ZMM.  Lo emite IrOp::F64TOF32 (frontend Vex hace
+                  `f32 f = f64_var;`).  Mismo encoding que fadd/fmov. */
+        {
+            "fnarrow", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fnarrow, decode_instr_simple_mov
         },
 
         /* 0x5E */{
@@ -2514,40 +2541,53 @@ namespace runtime {
             nullptr, nullptr
         },
 
-        /* 0x60 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x60  getstatic r_dst, r_class, offset_u32 (FIXED_8)
+                 Lee 8 bytes desde cls->static_data + offset (HOST mem).
+                 El frontend Vex hace truncate post-load para tipos < 8 bytes.
+                 Ver exec_instr_getstatic en exec_instruction_meta.cpp. */
+        {
+            "getstatic", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_8,
+            exec_instr_getstatic, decode_instr_static_offset
         },
 
 
-        /* 0x61 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x61  setstatic r_class, r_value, offset_u32 (FIXED_8)
+                 Escribe 8 bytes a cls->static_data + offset (HOST mem).
+                 El frontend Vex hace truncate / sign-ext pre-store si
+                 necesario.  Ver exec_instr_setstatic. */
+        {
+            "setstatic", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_8,
+            exec_instr_setstatic, decode_instr_static_offset
         },
 
-        /* 0x62 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x62  dlopen r_dst, r_path_addr, r_path_len (FIXED_4, FFI runtime)
+                 Carga libreria nativa por path leido desde vm_mem; devuelve
+                 handle host en r_dst.  Ver exec_instr_dlopen. */
+        {
+            "dlopen", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_dlopen, decode_instr_dlopen_dlsym
         },
 
-        /* 0x63 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x63  dlsym r_dst, r_handle, r_name_addr, r_name_len (FIXED_4)
+                 Resuelve simbolo nativo en una libreria cargada; devuelve
+                 fn_addr en r_dst.  Ver exec_instr_dlsym. */
+        {
+            "dlsym", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_dlsym, decode_instr_dlopen_dlsym
         },
 
-        /* 0x64 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x64  callni r_fn (FIXED_4, FFI runtime)
+                 Invoca funcion nativa por puntero (r_fn).  argc en R15,
+                 args en R01..R12, retorno en R00.  Misma calling convention
+                 que CALLN estatico (mismo invoke_native_unchecked). */
+        {
+            "callni", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_callni, decode_instr_callni
         },
 
         /* 0x65 */{
@@ -3258,53 +3298,53 @@ namespace runtime {
             exec_instr_getmgr, decode_instr_two_op_reg
         },
 
-        /* 0xC9 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xC9  defclass r_dst, r_params: crear clase nueva */
+        {
+            "defclass", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_defclass, decode_instr_two_op_reg
         },
 
-        /* 0xCA */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xCA  deffield r_class, r_params: anadir field a clase */
+        {
+            "deffield", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_deffield, decode_instr_two_op_reg
         },
 
-        /* 0xCB */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xCB  defmethod r_class, r_params: anadir method a clase */
+        {
+            "defmethod", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_defmethod, decode_instr_two_op_reg
         },
 
-        /* 0xCC */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xCC  findclass r_dst, r_params: buscar clase por nombre */
+        {
+            "findclass", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_findclass, decode_instr_two_op_reg
         },
 
-        /* 0xCD */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xCD  findmethod r_dst, r_params: buscar metodo por nombre dentro de clase */
+        {
+            "findmethod", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_findmethod, decode_instr_two_op_reg
         },
 
-        /* 0xCE */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xCE  addadvice r_target, r_advice (kind en byte3): registrar advice AOP */
+        {
+            "addadvice", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_addadvice, decode_instr_raw_bytes
         },
 
-        /* 0xCF */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xCF  findfield r_dst, r_params: buscar field por nombre dentro de clase */
+        {
+            "findfield", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_findfield, decode_instr_two_op_reg
         },
 
         /* 0xD0 */{
@@ -3607,18 +3647,18 @@ namespace runtime {
             exec_instr_fstore, decode_instr_two_op_reg
         },
 
-        /* 0xFD */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xFD  callm r_obj, r_method: dispatch dinamico via MethodInfo* */
+        {
+            "callm", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_callm, decode_instr_two_op_reg
         },
 
-        /* 0xFE */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0xFE  proceed: invoca target original de un AROUND (sin operandos) */
+        {
+            "proceed", Assembly::Bytecode::AddressingMode::NONE,
+            Assembly::Bytecode::InstrSizeMode::FIXED_2,
+            exec_instr_proceed, decode_instr_simple
         },
 
         /* 0xFF */{

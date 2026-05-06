@@ -154,6 +154,21 @@ typedef struct ByteWriter {
         output[pos + 7] = (uint8_t) ((value >> 56) & 0xFF);
     }
 
+    /**
+     * @brief Patch in-place de un uint32 little-endian en una posicion conocida.
+     * Usado para emitir el size de la tabla de relocations en el header
+     * tras conocer cuantas entries hay (write_executable patron pre-calculado).
+     */
+    void write32_at(uint32_t value, uint64_t pos) {
+        if (pos + 4 > output.size()) {
+            throw std::runtime_error("write32_at fuera de rango");
+        }
+        output[pos + 0] = (uint8_t) (value & 0xFF);
+        output[pos + 1] = (uint8_t) ((value >> 8)  & 0xFF);
+        output[pos + 2] = (uint8_t) ((value >> 16) & 0xFF);
+        output[pos + 3] = (uint8_t) ((value >> 24) & 0xFF);
+    }
+
 } ByteWriter;
 
 #endif // BYTEWRITER_H

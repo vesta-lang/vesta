@@ -30,7 +30,8 @@ static bool is_side_effecting(IrOp op) {
     switch (op) {
         // llamadas (pueden lanzar excepciones o modificar estado)
         case IrOp::CALL:    case IrOp::CALLIND: case IrOp::CALLVIRT:
-        case IrOp::CALLN:   case IrOp::TAILCALL:
+        case IrOp::CALLN:   case IrOp::TAILCALL: case IrOp::CALLM:
+        case IrOp::CALLCLOSURE:
         // control de flujo
         case IrOp::BR:      case IrOp::BR_COND: case IrOp::RET:
         case IrOp::UNREACHABLE:
@@ -92,8 +93,17 @@ bool ir_pass_dce(IrFunction &fn) {
             for (IrValueId op : ins.operands) {
                 if (op != IR_NO_VALUE) used.insert(op);
             }
-            if (ins.op == IrOp::CALLIND && ins.func_ptr != IR_NO_VALUE)
+            // CALLIND y CALLCLOSURE referencian el callee via func_ptr (no
+            // via operands), asi que DCE debe contarlo como uso para que el
+            // SSA value que produjo el puntero (e.g. RAW_ASM `mov rN, @Abs(...)`
+            // o LOAD del slot del function value) NO sea eliminado.  Sin
+            // esto, A.10 closures rompen porque el optimizer purga la
+            // instruccion que materializa fn_addr y el regalloc deja r14
+            // (asignado a fn_addr_v) sin inicializar -> callvmr salta a 0.
+            if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE)
+             && ins.func_ptr != IR_NO_VALUE) {
                 used.insert(ins.func_ptr);
+            }
             for (const auto &pa : ins.phi_args) {
                 if (pa.value != IR_NO_VALUE) used.insert(pa.value);
             }
@@ -107,10 +117,12 @@ bool ir_pass_dce(IrFunction &fn) {
         for (size_t i = 0; i < instrs.size(); ++i) {
             const IrInstr &ins = instrs[i];
             bool keep = true;
-            // Una instruccion con resultado no usado y sin efectos laterales se elimina
+            // Una instruccion con resultado no usado y sin efectos laterales se elimina,
+            // EXCEPTO si lleva el flag @c preserve (barreras del codegen).
             if (ins.dst != IR_NO_VALUE
                 && !used.count(ins.dst)
-                && !is_side_effecting(ins.op)) {
+                && !is_side_effecting(ins.op)
+                && !ins.preserve) {
                 keep  = false;
                 changed = true;
             }
@@ -134,6 +146,7 @@ bool ir_pass_copy_prop(IrFunction &fn) {
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             if (ins.op == IrOp::MOV
+                && !ins.preserve
                 && ins.dst != IR_NO_VALUE
                 && ins.operands.size() == 1
                 && ins.operands[0] != IR_NO_VALUE) {
@@ -447,11 +460,100 @@ bool ir_pass_cse(IrFunction &fn) {
 //  Pase TCO (Tail Call Optimization)
 // =========================================================================
 
+// =========================================================================
+//  Helper: detectar si un IrValueId deriva (transitivamente) de una ALLOCA
+//
+//  Usado por TCO para descartar la transformacion CALL->TAILCALL cuando
+//  algun argumento referencia memoria asignada en el frame del caller.
+//  Razon: TAILCALL emite `leave` antes del salto al callee, lo que
+//  restaura RSP=RBP y libera el bloque ALLOCA.  Si el callee dereferencia
+//  un puntero que apuntaba a esa region, lee basura (o memoria del
+//  callee).  Demo regresion: 17_ecs_basico.vex pasaba arrays
+//  i32[8] (ALLOCA) por valor a system_sum_positions y obtenia R0=0
+//  en vez de 100 con TCO activo.
+//
+//  La deteccion es conservadora: marcamos un valor como "alloca-derived"
+//  si su def es ALLOCA, MEMBER (que devuelve direccion en frame), o
+//  cualquier ADD/SUB/MOV/STORE/STR_LIT_ADDR cuyo operando ya este marcado.
+//  No intenta tracking flow-sensitive: una sobreestimacion implica
+//  perder TCO en ese caller, no incorrectness.
+// =========================================================================
+static bool collect_alloca_derived(const IrFunction &fn,
+                                    std::unordered_set<IrValueId> &out) {
+    out.clear();
+    // Pase 1: identificar las definiciones ALLOCA directas.
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE) {
+                out.insert(ins.dst);
+            }
+        }
+    }
+    if (out.empty()) return false;
+
+    // Pase 2: propagar la marca por aritmetica de punteros y MOV/PHI.
+    // Iteramos hasta punto fijo (cota: numero de blocks * instrs por block).
+    bool changed = true;
+    int  guard   = 1024;
+    while (changed && guard-- > 0) {
+        changed = false;
+        for (const auto &bb : fn.blocks) {
+            for (const auto &ins : bb.instrs) {
+                if (ins.dst == IR_NO_VALUE) continue;
+                if (out.count(ins.dst)) continue;
+                bool any_op_tainted = false;
+                for (auto op : ins.operands) {
+                    if (op != IR_NO_VALUE && out.count(op)) {
+                        any_op_tainted = true;
+                        break;
+                    }
+                }
+                if (!any_op_tainted) {
+                    for (const auto &pa : ins.phi_args) {
+                        if (out.count(pa.value)) {
+                            any_op_tainted = true;
+                            break;
+                        }
+                    }
+                }
+                if (any_op_tainted) {
+                    // Solo propagamos por ops que SI pueden producir una
+                    // direccion derivada: aritmetica (ADD/SUB), copias
+                    // (MOV, PHI), o casts/cargas/loads que conserven el
+                    // puntero.  Para ALU "verdadera" sobre escalares no
+                    // hay riesgo, asi que la lista blanca es restrictiva
+                    // pero suficiente para el patron observado.
+                    switch (ins.op) {
+                        case IrOp::ADD: case IrOp::SUB:
+                        case IrOp::MOV: case IrOp::PHI:
+                            out.insert(ins.dst);
+                            changed = true;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 bool ir_pass_tailcall(IrFunction &fn) {
     // Detecta el patron: CALL @f(args) seguido inmediatamente de RET %resultado
     // y convierte el CALL en TAILCALL (elimina la RET subsiguiente).
     // Tambien maneja RET void inmediatamente despues de CALL void.
+    //
+    // SAFETY: NO se promueve a TAILCALL si algun argumento es derivado
+    // de una ALLOCA del caller.  TAILCALL emite `leave` (que restaura
+    // RSP=RBP y libera el frame), invalidando los punteros que apuntan
+    // al area de allocas.  El callee leeria basura.  La deteccion se
+    // hace una vez por funcion y la cache se reutiliza para todos los
+    // CALLs candidatos.
     bool changed = false;
+
+    std::unordered_set<IrValueId> alloca_derived;
+    const bool fn_has_alloca = collect_alloca_derived(fn, alloca_derived);
 
     for (auto &bb : fn.blocks) {
         auto &instrs = bb.instrs;
@@ -469,6 +571,20 @@ bool ir_pass_tailcall(IrFunction &fn) {
             bool ret_is_void   = ret.operands.empty();
 
             if (!ret_uses_call && !ret_is_void) { ++i; continue; }
+
+            // Bloqueo de seguridad: si CUALQUIER arg es derivado de
+            // ALLOCA del caller, NO promover a TAILCALL.  El leave
+            // posterior liberaria la memoria todavia referenciada.
+            if (fn_has_alloca) {
+                bool unsafe = false;
+                for (auto op : call.operands) {
+                    if (op != IR_NO_VALUE && alloca_derived.count(op)) {
+                        unsafe = true;
+                        break;
+                    }
+                }
+                if (unsafe) { ++i; continue; }
+            }
 
             // Convertir: CALL -> TAILCALL, eliminar RET
             call.op  = IrOp::TAILCALL;
@@ -500,16 +616,16 @@ void ir_optimize(IrModule &mod, OptLevel level) {
             any |= ir_pass_dce(fn);
 
             if (level >= OptLevel::O2) {
-                // O2: plegado de constantes + bloques inalcanzables + TCO
+                // O2: plegado de constantes + bloques inalcanzables + TCO.
                 any |= ir_pass_const_fold(fn);
                 any |= ir_pass_unreachable(fn);
                 any |= ir_pass_tailcall(fn);
-                // Segunda ronda de DCE tras plegado y TCO
+                // Segunda ronda de DCE tras plegado y TCO.
                 any |= ir_pass_dce(fn);
             }
 
             if (level >= OptLevel::O3) {
-                // O3: eliminacion de subexpresiones comunes
+                // O3: eliminacion de subexpresiones comunes.
                 any |= ir_pass_cse(fn);
             }
         }

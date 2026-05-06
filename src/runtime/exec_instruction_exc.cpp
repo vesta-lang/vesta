@@ -54,6 +54,15 @@ namespace runtime {
         auto *ef       = new ProcessVM::ExceptionFrame();               // alocar nuevo frame
         ef->handler_pc = handler_pc;                                    // guardar PC del handler
         ef->type       = class_ptr;                                     // guardar tipo capturado
+        // snapshot RSP/RBP/frame_stack al momento del tryenter.
+        // do_throw los restaura para descartar pushes del regalloc y
+        // frames de calls anidados que no retornaron normalmente por el
+        // throw.  Sin esto, los registros vivos guardados en stack quedan
+        // corruptos despues del catch (caso visto: callvirt en obj null
+        // dentro del try, push r1 sin pop -> r1 corrupto en el merge).
+        ef->saved_rsp         = vm->registers.stack_pointer.qword();
+        ef->saved_rbp         = vm->registers.base_pointer.qword();
+        ef->saved_frame_stack = (uint64_t)(uintptr_t)vm->frame_stack;
         ef->prev       = vm->exc_frame_stack;                           // encadenar con el frame anterior
         vm->exc_frame_stack = ef;                                       // empujar al tope de la pila
     }

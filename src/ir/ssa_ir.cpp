@@ -94,9 +94,10 @@ namespace ir {
 
     static const OpEntry OP_TABLE[] = {
         // constantes y movimiento
-        {"const",      IrOp::CONST},
-        {"mov",        IrOp::MOV},
-        {"nop",        IrOp::NOP},
+        {"const",        IrOp::CONST},
+        {"mov",          IrOp::MOV},
+        {"nop",          IrOp::NOP},
+        {"str_lit_addr", IrOp::STR_LIT_ADDR},
         // aritmetica entera
         {"add",        IrOp::ADD},
         {"sub",        IrOp::SUB},
@@ -114,9 +115,6 @@ namespace ir {
         {"fsqrt",      IrOp::FSQRT},
         {"fmin",       IrOp::FMIN},
         {"fmax",       IrOp::FMAX},
-        {"ffloor",     IrOp::FFLOOR},
-        {"fceil",      IrOp::FCEIL},
-        {"fround",     IrOp::FROUND},
         // logica y desplazamientos
         {"and",        IrOp::AND},
         {"or",         IrOp::OR},
@@ -167,12 +165,16 @@ namespace ir {
         {"callind",    IrOp::CALLIND},
         {"tailcall",   IrOp::TAILCALL},
         {"callvirt",   IrOp::CALLVIRT},
+        {"callm",      IrOp::CALLM},
+        {"callclosure",IrOp::CALLCLOSURE},
         {"calln",      IrOp::CALLN},
         // memoria
         {"alloca",     IrOp::ALLOCA},
         {"load",       IrOp::LOAD},
         {"store",      IrOp::STORE},
         {"memcpy",     IrOp::MEMCPY},
+        {"raw_alloc",  IrOp::RAW_ALLOC},
+        {"raw_free",   IrOp::RAW_FREE},
         // OOP / GC
         {"newobj",       IrOp::NEWOBJ},
         {"getfield",     IrOp::GETFIELD},
@@ -275,11 +277,20 @@ namespace ir {
 
     /**
      * @brief Crea un nuevo bloque basico.
+     *
+     * Garantiza nombres unicos dentro de la funcion (necesario porque el
+     * emisor IR los traduce a etiquetas .vel y los .vel exigen unicidad
+     * por seccion).  Si el frontend pasa el mismo nombre logico para dos
+     * bloques (caso tipico: dos while anidados que ambos se llaman
+     * "while_header"), se anexa "_<id>" para distinguirlos.  Si pasa
+     * vacio, se genera "bbN".
      */
     IrBlockId IrFunction::new_block(const std::string &nm) {
         IrBlock b;
         b.id   = static_cast<IrBlockId>(blocks.size());
-        b.name = nm.empty() ? ("bb" + std::to_string(b.id)) : nm;
+        b.name = nm.empty()
+                   ? ("bb" + std::to_string(b.id))
+                   : (nm + "_" + std::to_string(b.id));
         blocks.push_back(std::move(b));
         return blocks.back().id;
     }
@@ -300,6 +311,39 @@ namespace ir {
         size_t idx = functions.size();
         functions.push_back(std::move(fn));
         return idx;
+    }
+
+    /**
+     * @brief Registra (con deduplicacion) un blob de bytes en static_data.
+     *
+     * La deduplicacion compara contenido completo; en programas con muchos
+     * literales repetidos esto reduce el tamano del .vel emitido.
+     * Coste O(N*M) en el peor caso (N entradas, M bytes); aceptable para
+     * tamanos tipicos de modulo.  Si el coste se vuelve relevante en
+     * el futuro, sustituir por una std::unordered_map<hash, idx>.
+     */
+    uint64_t IrModule::intern_static_data(std::vector<uint8_t> bytes) {
+        for (size_t i = 0; i < static_data.size(); ++i) {
+            if (static_data[i] == bytes) return static_cast<uint64_t>(i);
+        }
+        static_data.push_back(std::move(bytes));
+        return static_cast<uint64_t>(static_data.size() - 1);
+    }
+
+    /**
+     * @brief Registra (con deduplicacion) un par (lib, name) en native_imports.
+     *
+     * Comparacion lineal sobre native_imports.  El frontend Vex puede
+     * llamar a esta funcion desde cada CALLN sin preocuparse por
+     * duplicados; el numero tipico de imports nativos por modulo es
+     * pequeno (decenas como mucho), por lo que la busqueda lineal es
+     * trivialmente mas barata que mantener una tabla hash auxiliar.
+     */
+    void IrModule::register_native_import(std::string lib, std::string name) {
+        for (const auto &ni : native_imports) {
+            if (ni.lib == lib && ni.name == name) return;
+        }
+        native_imports.push_back({std::move(lib), std::move(name)});
     }
 
     /* =====================================================================
@@ -427,6 +471,22 @@ namespace ir {
                 o << "(";
                 for (size_t i = 0; i < ins.operands.size(); i++) {
                     if (i) o << ", ";
+                    print_val(o, fn, ins.operands[i]);
+                }
+                o << ")";
+                break;
+
+            case IrOp::CALLCLOSURE:
+                // A.10 closures: callclosure.T %fn_ptr, %env(args...)
+                // %fn_ptr en func_ptr, %env en operands[0], args declarados
+                // en operands[1..].  Notacion textual elegida para que sea
+                // visualmente similar a CALLIND pero exhiba el env.
+                o << " "; print_val(o, fn, ins.func_ptr);
+                o << ", ";
+                if (!ins.operands.empty()) print_val(o, fn, ins.operands[0]);
+                o << "(";
+                for (size_t i = 1; i < ins.operands.size(); i++) {
+                    if (i > 1) o << ", ";
                     print_val(o, fn, ins.operands[i]);
                 }
                 o << ")";
@@ -592,7 +652,7 @@ namespace ir {
 
             default:
                 // instrucciones con 0..N operandos simples:
-                // NEG, NOT, FNEG, FABS, FSQRT, FFLOOR, FCEIL, FROUND (1 op)
+                // NEG, NOT, FNEG, FABS, FSQRT (1 op)
                 // ADD, SUB, MUL, DIV, MOD, CMP_*, FCMP_*, AND, OR, XOR, etc. (2 ops)
                 // THROW, MONENTER, MONEXIT, MONWAIT, MONNOTI, MONNOTA (1 op)
                 // AWAIT (1 op), SPAWN (1 op), RESUME (1 op)
@@ -1279,11 +1339,11 @@ namespace ir {
                             ok = false;
                         }
                     }
-                    // verificar func_ptr para CALLIND
-                    if (ins.op == IrOp::CALLIND &&
+                    // verificar func_ptr para CALLIND y CALLCLOSURE.
+                    if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE) &&
                         ins.func_ptr != IR_NO_VALUE &&
                         ins.func_ptr >= static_cast<IrValueId>(fn.values.size())) {
-                        errors.push_back("fn '" + fn.name + "': callind func_ptr " +
+                        errors.push_back("fn '" + fn.name + "': callind/closure func_ptr " +
                             std::to_string(ins.func_ptr) + " fuera del rango");
                         ok = false;
                     }
