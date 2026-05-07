@@ -242,6 +242,18 @@ namespace vex {
         // signature.
         out_mod_ = &out_module;
 
+        // Inferir el fichero fuente del primer AST node con loc.file no
+        // vacio.  Esto se usa en warnings emitidos por @c cast_if_needed
+        // que solo recibe @c source_line.  Sin esta inferencia, los
+        // warnings se imprimirian sin nombre de fichero.
+        for (auto &d : mod_.decls) {
+            if (!d) continue;
+            if (!d->loc.file.empty()) {
+                current_file_ = d->loc.file;
+                break;
+            }
+        }
+
         // Pase 1: registrar el tipo de retorno de cada funcion para validar
         // las llamadas.  Esto en un programa real ya esta en el type checker,
         // pero lo replicamos aqui para no acoplar la API.
@@ -914,8 +926,19 @@ namespace vex {
             for (size_t i = 0; i < il->elements.size(); ++i) {
                 ir::IrValueId v_val = lower_expr(il->elements[i].get());
                 if (v_val == ir::IR_NO_VALUE) continue;
+                // Suprimir warning de narrowing si el elemento es literal
+                // (`{10, 20, ...}` con i64-defaulted literals encajando en
+                // el tipo de elemento).  Mismo razonamiento que en
+                // var-decl con init literal.
+                const bool elem_is_literal =
+                        il->elements[i]->kind == ast::NodeKind::IntLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::FloatLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::BoolLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::CharLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::NullLitExpr;
                 v_val = cast_if_needed(v_val,
-                                       fn_->values[v_val].type, ir_elem, vd->loc.line);
+                                       fn_->values[v_val].type, ir_elem, vd->loc.line,
+                                       /*is_explicit=*/elem_is_literal);
                 ir::IrValueId v_addr_i = addr;
                 if (i > 0) {
                     ir::IrValueId v_off = emit_const(ir::IrType::I64,
@@ -1019,8 +1042,15 @@ namespace vex {
                 ir::IrValueId v_val = lower_expr(il->elements[i].get());
                 if (v_val == ir::IR_NO_VALUE) continue;
                 const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-                v_val                  = cast_if_needed(v_val,
-                                                        fn_->values[v_val].type, ir_ft, vd->loc.line);
+                const bool elem_is_literal =
+                        il->elements[i]->kind == ast::NodeKind::IntLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::FloatLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::BoolLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::CharLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::NullLitExpr;
+                v_val = cast_if_needed(v_val,
+                                       fn_->values[v_val].type, ir_ft, vd->loc.line,
+                                       /*is_explicit=*/elem_is_literal);
                 ir::IrValueId v_addr = addr;
                 if (fi->offset > 0) {
                     ir::IrValueId v_off = emit_const(ir::IrType::I64,
@@ -1228,8 +1258,19 @@ namespace vex {
             for (size_t i = 0; i < il->elements.size(); ++i) {
                 ir::IrValueId v_val = lower_expr(il->elements[i].get());
                 if (v_val == ir::IR_NO_VALUE) continue;
+                // Suprimir warning de narrowing si el elemento es literal
+                // (`{10, 20, ...}` con i64-defaulted literals encajando en
+                // el tipo de elemento).  Mismo razonamiento que en
+                // var-decl con init literal.
+                const bool elem_is_literal =
+                        il->elements[i]->kind == ast::NodeKind::IntLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::FloatLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::BoolLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::CharLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::NullLitExpr;
                 v_val = cast_if_needed(v_val,
-                                       fn_->values[v_val].type, ir_elem, vd->loc.line);
+                                       fn_->values[v_val].type, ir_elem, vd->loc.line,
+                                       /*is_explicit=*/elem_is_literal);
                 ir::IrValueId v_addr_i = addr;
                 if (i > 0) {
                     ir::IrValueId v_off = emit_const(ir::IrType::I64,
@@ -1305,8 +1346,15 @@ namespace vex {
                 ir::IrValueId v_val = lower_expr(il->elements[i].get());
                 if (v_val == ir::IR_NO_VALUE) continue;
                 const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-                v_val                  = cast_if_needed(v_val,
-                                                        fn_->values[v_val].type, ir_ft, vd->loc.line);
+                const bool elem_is_literal =
+                        il->elements[i]->kind == ast::NodeKind::IntLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::FloatLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::BoolLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::CharLitExpr
+                     || il->elements[i]->kind == ast::NodeKind::NullLitExpr;
+                v_val = cast_if_needed(v_val,
+                                       fn_->values[v_val].type, ir_ft, vd->loc.line,
+                                       /*is_explicit=*/elem_is_literal);
                 ir::IrValueId v_addr = addr;
                 if (fi->offset > 0) {
                     ir::IrValueId v_off = emit_const(ir::IrType::I64,
@@ -1406,7 +1454,19 @@ namespace vex {
                 v0 = lower_expr(vd->init.get());
                 if (v0 != ir::IR_NO_VALUE) {
                     const ir::IrType vfrom = fn_->values[v0].type;
-                    v0                     = cast_if_needed(v0, vfrom, vt, vd->loc.line);
+                    // Suprimir el warning de cast implicito cuando el
+                    // init es un literal: `u8 init = 0` no merece
+                    // alarma porque el valor es estatico y conocido en
+                    // compile-time; es un patron habitual y el type
+                    // checker ya valida el rango.
+                    const bool init_is_literal =
+                            vd->init->kind == ast::NodeKind::IntLitExpr
+                         || vd->init->kind == ast::NodeKind::FloatLitExpr
+                         || vd->init->kind == ast::NodeKind::BoolLitExpr
+                         || vd->init->kind == ast::NodeKind::CharLitExpr
+                         || vd->init->kind == ast::NodeKind::NullLitExpr;
+                    v0 = cast_if_needed(v0, vfrom, vt, vd->loc.line,
+                                        /*is_explicit=*/init_is_literal);
                 }
             }
             if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, vd->loc.line);
@@ -1440,7 +1500,17 @@ namespace vex {
             v = lower_expr(vd->init.get());
             if (v != ir::IR_NO_VALUE) {
                 const ir::IrType vfrom = fn_->values[v].type;
-                v                      = cast_if_needed(v, vfrom, vt, vd->loc.line);
+                // Misma supresion de warning que en la rama
+                // address-taken: literales no merecen alarma de
+                // narrowing porque el valor es compile-time conocido.
+                const bool init_is_literal =
+                        vd->init->kind == ast::NodeKind::IntLitExpr
+                     || vd->init->kind == ast::NodeKind::FloatLitExpr
+                     || vd->init->kind == ast::NodeKind::BoolLitExpr
+                     || vd->init->kind == ast::NodeKind::CharLitExpr
+                     || vd->init->kind == ast::NodeKind::NullLitExpr;
+                v = cast_if_needed(v, vfrom, vt, vd->loc.line,
+                                   /*is_explicit=*/init_is_literal);
             }
         } else {
             // Sin init: defecto 0.  Las variables sin init son raras
@@ -4843,10 +4913,105 @@ namespace vex {
                 return lower_lambda_expr(static_cast<ast::LambdaExpr *>(e));
             case ast::NodeKind::MatchExpr:
                 return lower_match_expr(static_cast<ast::MatchExpr *>(e));
+            case ast::NodeKind::CastExpr:
+                return lower_cast_expr(static_cast<ast::CastExpr *>(e));
             default:
                 unsupported(e->loc, "expresion no soportada en A.1");
                 return ir::IR_NO_VALUE;
         }
+    }
+
+    ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
+        if (!e || !e->operand) return ir::IR_NO_VALUE;
+        const ir::IrValueId v_op = lower_expr(e->operand.get());
+        if (v_op == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+        const Type &dst_type = e->result_type;          // tipo destino del cast
+        const Type &src_type = e->operand->result_type; // tipo del operando
+
+        // Categorias.  PTR/ARRAY se tratan como pointer-like.
+        auto is_ptr_like = [](const Type &t) {
+            return t.kind == PrimitiveKind::PTR
+                || t.kind == PrimitiveKind::ARRAY;
+        };
+        const bool dst_ptr = is_ptr_like(dst_type);
+        const bool src_ptr = is_ptr_like(src_type);
+
+        // ptr <-> ptr: el bit-pattern es identico, solo cambia la
+        // interpretacion (host vs virtual, pointee).  No emitimos
+        // ninguna instruccion IR; reusamos el SSA value tras propagar
+        // los flags is_host_ptr/pointee_is_host_ptr al destino.
+        if (dst_ptr && src_ptr) {
+            // El SSA value sigue siendo el mismo bit-pattern.  Para
+            // que LOAD/STORE posteriores emitan mov vs movh segun el
+            // tipo DESTINO, marcamos el bit en el value resultante.
+            // Convencion: VirtualPtr<T> -> is_host_ptr=false (memoria VM).
+            //             T* (sin is_virtual) -> is_host_ptr=true (host).
+            // Si el bit-pattern original era host_ptr=true y el destino
+            // es VirtualPtr (is_virtual=true), el cast cambia la
+            // interpretacion: el lowering ahora emitira mov en lugar
+            // de movh.  El usuario asume las consecuencias.
+            //
+            // No clonamos el SSA value (eso obligaria a un MOV inutil);
+            // creamos un nuevo SSA value vacio que comparte el reg con
+            // el original via copy-prop natural del IR optimizer.  Para
+            // ello emitimos un BITCAST de PTR a PTR (no-op a nivel
+            // bytecode: se baja a `mov rd, rs` y la siguiente fase de
+            // copy-prop suele eliminarlo).
+            const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ins{};
+            ins.op          = ir::IrOp::BITCAST;
+            ins.type        = ir::IrType::PTR;
+            ins.dst         = dst;
+            ins.operands    = {v_op};
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            // Propagar flags segun el tipo destino.
+            fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
+            // pointee_is_host_ptr: si el destino apunta a otro puntero
+            // host (e.g. T**), el slot apuntado lleva un host_ptr.  Sin
+            // tipo pointee accesible aqui, replicamos el flag del
+            // operando original como aproximacion conservadora.
+            fn_->values[dst].pointee_is_host_ptr =
+                fn_->values[v_op].pointee_is_host_ptr;
+            return dst;
+        }
+
+        // ptr <-> int: BITCAST.  El IR_OP::BITCAST esta diseñado para
+        // exactamente este caso (preserva bits sin conversion numerica).
+        if (dst_ptr || src_ptr) {
+            const ir::IrType ir_dst = ir_type_from_primitive(dst_type.kind);
+            const ir::IrType ir_use = (ir_dst == ir::IrType::VOID)
+                                         ? (dst_ptr ? ir::IrType::PTR : ir::IrType::I64)
+                                         : ir_dst;
+            const ir::IrValueId dst = fn_->new_value(ir_use);
+            ir::IrInstr ins{};
+            ins.op          = ir::IrOp::BITCAST;
+            ins.type        = ir_use;
+            ins.dst         = dst;
+            ins.operands    = {v_op};
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            if (dst_ptr) {
+                fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
+            }
+            return dst;
+        }
+
+        // num <-> num: delegar al helper existente.  Maneja int<->int
+        // (TRUNC/ZEXT/SEXT/CAST), int<->float (ITOF/UITOF/FTOI/FTOUI) y
+        // float<->float (F32TOF64/F64TOF32).  Pasamos @c is_explicit=true
+        // para silenciar el warning de cast implicito (el usuario opto
+        // por el cast explicitamente).
+        const ir::IrType ir_from = ir_type_from_primitive(src_type.kind);
+        const ir::IrType ir_to   = ir_type_from_primitive(dst_type.kind);
+        if (ir_from == ir::IrType::VOID || ir_to == ir::IrType::VOID) {
+            // Sin tipos validos en alguno de los lados, devolvemos el
+            // operando sin convertir.  El type checker ya emitio el
+            // error correspondiente.
+            return v_op;
+        }
+        return cast_if_needed(v_op, ir_from, ir_to, e->loc.line, /*is_explicit=*/true);
     }
 
     // ---------------------------------------------------------------------
@@ -5821,6 +5986,18 @@ namespace vex {
         if (e->op == ast::UnOp::Deref) {
             const ir::IrValueId p = lower_expr(e->operand.get());
             if (p == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            // Fix defensivo VirtualPtr: un VirtualPtr<T> es por definicion una
+            // direccion en el espacio de memoria virtual de la VM.  Si por
+            // propagacion de is_host_ptr (emit_field_addr, copy-prop del IR
+            // optimizer, etc.) el flag quedo marcado en el SSA value del
+            // puntero, limpiarlo aqui antes de emitir el LOAD.  Sin esto,
+            // el emitter IR elige 'movh' (acceso a memoria host) en lugar
+            // de 'mov' (acceso VM) y causa SIGSEGV al intentar desreferenciar
+            // una direccion virtual de la VM como si fuera puntero del host.
+            if (e->operand && e->operand->result_type.is_virtual) {
+                fn_->values[p].is_host_ptr        = false;
+                fn_->values[p].pointee_is_host_ptr = false;
+            }
             const ir::IrType    ft  = ir_type_from_primitive(e->result_type.kind);
             const ir::IrValueId dst = fn_->new_value(ft);
             ir::IrInstr         ins{};
@@ -5839,6 +6016,30 @@ namespace vex {
             // @c write_local en el SSA value del slot.
             if (fn_->values[p].pointee_is_host_ptr) {
                 fn_->values[dst].is_host_ptr = true;
+            }
+            // Multi-nivel de punteros host (i64****, etc.): cada deref
+            // devuelve un valor que ES OTRO puntero host (apunta a una
+            // celda en memoria del host malloc'eado).  Sin propagar el
+            // bit, el siguiente deref emitiria mov (memoria VM) en
+            // lugar de movh (memoria host) y leeria garbage.
+            //
+            // Heuristica: si el operando es un puntero host (is_host_ptr)
+            // Y el tipo de resultado del deref es OTRO puntero (PTR no
+            // virtual), entonces el valor cargado tambien es host_ptr.
+            // Lo mismo simetricamente para VirtualPtr<VirtualPtr<...>>:
+            // si el operando es VirtualPtr y el resultado es OTRO
+            // VirtualPtr, el valor cargado es una direccion VM (NO
+            // host_ptr).
+            if (e->result_type.kind == PrimitiveKind::PTR
+             || e->result_type.kind == PrimitiveKind::ARRAY) {
+                if (e->result_type.is_virtual) {
+                    fn_->values[dst].is_host_ptr = false;
+                } else if (fn_->values[p].is_host_ptr) {
+                    // El resultado del deref de un host_ptr es OTRO
+                    // host_ptr.  Asi p4=host_ptr -> *p4 = i64*** que
+                    // apunta a celda host -> tambien host_ptr.
+                    fn_->values[dst].is_host_ptr = true;
+                }
             }
             return dst;
         }
@@ -6815,7 +7016,14 @@ namespace vex {
         const bool is_print_bool  = (name == "print_bool");
         const bool is_print_char  = (name == "print_char");
         const bool is_print_color = (name == "print_color");
-        const bool is_print_cstr  = (name == "print_cstr"); 
+        const bool is_print_cstr  = (name == "print_cstr");
+        // formatos numericos alternativos (binario / octal) y impresion
+        // de punteros / handles de objetos GC + padding para alineacion.
+        const bool is_print_bin      = (name == "print_bin");
+        const bool is_print_oct      = (name == "print_oct");
+        const bool is_print_ptr      = (name == "print_ptr");
+        const bool is_print_gchandle = (name == "print_gchandle");
+        const bool is_print_pad      = (name == "print_pad");
         const bool is_fopen       = (name == "fopen");
         const bool is_fwrite      = (name == "fwrite");
         const bool is_fclose      = (name == "fclose");
@@ -6911,6 +7119,8 @@ namespace vex {
                 || is_print_float || is_print_bool
                 || is_print_char || is_print_color
                 || is_print_cstr
+                || is_print_bin || is_print_oct
+                || is_print_ptr || is_print_gchandle || is_print_pad
                 || is_fopen || is_fwrite || is_fclose
                 || is_malloc || is_free
                 || is_forName || is_getClass || is_getField
@@ -7051,9 +7261,96 @@ namespace vex {
                     {"CURSOR_HOME", "\x1b[H"},
                 };
 
-        auto emit_print_typed_value = [&](ast::Expr *ex) {
+        // Helper local: parsea una cadena de formato `${expr:fmt}` en
+        // secciones separadas por `:`.  Devuelve un struct con kind
+        // (hex/bin/oct/dec/ptr/gc/char/bool/auto), align (left/right/none),
+        // width y fill char.  La forma sin `:` (formato vacio) deja todo
+        // en defaults (auto + sin alineacion).
+        struct FmtSpec {
+            enum class Kind {
+                AUTO,   // dispatch por tipo (comportamiento default)
+                DEC,    // entero decimal con signo correcto
+                HEX,    // 0x + 16 hex fixed
+                BIN,    // 0b + bits compactos
+                OCT,    // 0o + dig compactos
+                PTR,    // 0x + hex compacto
+                GC,     // <gc:N>
+                CHAR,   // codepoint -> UTF-8
+                BOOL    // "true"/"false"
+            };
+            enum class Align { NONE, LEFT, RIGHT };
+            Kind     kind   = Kind::AUTO;
+            Align    align  = Align::NONE;
+            uint32_t width  = 0;
+            uint32_t fill_cp = 32; // espacio por defecto
+        };
+        auto parse_fmt_spec = [&](const std::string &s,
+                                   const SourceLoc &loc) -> FmtSpec {
+            FmtSpec out;
+            size_t i = 0;
+            while (i < s.size()) {
+                // Saltar espacios.
+                while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+                if (i >= s.size()) break;
+                // Detectar alineacion: primer caracter '<' / '>' = left/right,
+                // seguido de digitos para el width, y opcionalmente un char
+                // de fill.
+                if (s[i] == '<' || s[i] == '>') {
+                    out.align = (s[i] == '<') ? FmtSpec::Align::LEFT
+                                              : FmtSpec::Align::RIGHT;
+                    ++i;
+                    uint32_t w = 0;
+                    while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+                        w = w * 10 + (uint32_t)(s[i] - '0');
+                        ++i;
+                    }
+                    out.width = w;
+                    // Optional fill char (cualquier caracter no `:` ni final).
+                    if (i < s.size() && s[i] != ':') {
+                        // tomar UN char (asumimos ASCII; multibyte no
+                        // soportado en este parser simple).
+                        out.fill_cp = (uint32_t)(uint8_t)s[i];
+                        ++i;
+                    }
+                } else {
+                    // Detectar keyword.
+                    size_t start = i;
+                    while (i < s.size() && s[i] != ':' && s[i] != ' '
+                                          && s[i] != '\t') ++i;
+                    std::string kw = s.substr(start, i - start);
+                    if      (kw == "hex")  out.kind = FmtSpec::Kind::HEX;
+                    else if (kw == "bin")  out.kind = FmtSpec::Kind::BIN;
+                    else if (kw == "oct")  out.kind = FmtSpec::Kind::OCT;
+                    else if (kw == "dec")  out.kind = FmtSpec::Kind::DEC;
+                    else if (kw == "ptr")  out.kind = FmtSpec::Kind::PTR;
+                    else if (kw == "gc")   out.kind = FmtSpec::Kind::GC;
+                    else if (kw == "char") out.kind = FmtSpec::Kind::CHAR;
+                    else if (kw == "bool") out.kind = FmtSpec::Kind::BOOL;
+                    else {
+                        diags_.warning(loc,
+                            std::string("formato '") + kw +
+                            "' desconocido en ${...:fmt}; usando default");
+                    }
+                }
+                // Saltar separador `:`.
+                while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+                if (i < s.size() && s[i] == ':') ++i;
+            }
+            return out;
+        };
+
+        auto emit_print_typed_value = [&](ast::Expr *ex,
+                                            const std::string &fmt_str) {
             if (!ex) return;
             const Type t = ex->result_type;
+            // Parsear formato y, si hay alineacion right, calcular y emitir
+            // padding ANTES del valor (para left-align se emite DESPUES).
+            // Como no medimos el ancho exacto del valor a emitir (eso
+            // requeriria itoa+len al vuelo), aceptamos un sub-set: el
+            // usuario pasa un ancho que va a quedar como margen superior
+            // al ancho real.  Para alineacion exacta de columnas con
+            // valores variables, usar print_pad explicito.
+            FmtSpec fs = parse_fmt_spec(fmt_str, ex->loc);
             // Caso especial: identificador ANSI magico -> emit la cadena
             // directamente como string literal (sin pasar por print_int).
             if (ex->kind == ast::NodeKind::IdentExpr) {
@@ -7083,6 +7380,117 @@ namespace vex {
             ir::IrValueId v = lower_expr(ex);
             if (v == ir::IR_NO_VALUE) return;
             const ir::IrType vt = fn_->values[v].type;
+
+            // Format spec ${expr:fmt}: si el formato pide un kind concreto
+            // (hex/bin/oct/dec/ptr/gc/char/bool) o alineacion, usamos el
+            // helper unificado @c vio_print_fmt(value, kind, width,
+            // fill, align) que combina formateo + padding en un solo
+            // CALLN.  Sin formato (default), caemos al dispatch normal
+            // por tipo abajo.
+            const bool has_fmt = fs.kind != FmtSpec::Kind::AUTO
+                              || fs.align != FmtSpec::Align::NONE;
+            if (has_fmt && t.kind != PrimitiveKind::STRING) {
+                // Determinar el kind code para vio_print_fmt.  Si AUTO,
+                // derivar del tipo de la expresion.  La logica es la
+                // misma del switch de abajo.
+                int kind_code = -1;
+                if (fs.kind == FmtSpec::Kind::HEX)       kind_code = 2;
+                else if (fs.kind == FmtSpec::Kind::BIN)  kind_code = 3;
+                else if (fs.kind == FmtSpec::Kind::OCT)  kind_code = 4;
+                else if (fs.kind == FmtSpec::Kind::PTR)  kind_code = 5;
+                else if (fs.kind == FmtSpec::Kind::GC)   kind_code = 6;
+                else if (fs.kind == FmtSpec::Kind::BOOL) kind_code = 7;
+                else if (fs.kind == FmtSpec::Kind::CHAR) kind_code = 8;
+                else if (fs.kind == FmtSpec::Kind::DEC) {
+                    const bool unsigned_t = (t.kind == PrimitiveKind::CHAR
+                            || t.kind == PrimitiveKind::U8
+                            || t.kind == PrimitiveKind::U16
+                            || t.kind == PrimitiveKind::U32
+                            || t.kind == PrimitiveKind::U64);
+                    kind_code = unsigned_t ? 1 : 0;
+                } else {
+                    // AUTO: dispatch por tipo del operando.
+                    switch (t.kind) {
+                        case PrimitiveKind::BOOL: kind_code = 7; break;
+                        case PrimitiveKind::CHAR:
+                        case PrimitiveKind::U8: case PrimitiveKind::U16:
+                        case PrimitiveKind::U32: case PrimitiveKind::U64:
+                            kind_code = 1; break;
+                        case PrimitiveKind::I8: case PrimitiveKind::I16:
+                        case PrimitiveKind::I32: case PrimitiveKind::I64:
+                            kind_code = 0; break;
+                        case PrimitiveKind::F32:
+                        case PrimitiveKind::F64: kind_code = 9; break;
+                        case PrimitiveKind::PTR:
+                        case PrimitiveKind::ARRAY: kind_code = 5; break;
+                        case PrimitiveKind::CLASS: kind_code = 6; break;
+                        default: kind_code = 1; break;
+                    }
+                }
+                // Convertir el valor al uint64 que espera vio_print_fmt.
+                ir::IrValueId v_arg = v;
+                if (t.kind == PrimitiveKind::F32) {
+                    // F32 -> F64 (re-encoding) -> i64 bits.
+                    ir::IrValueId f64v = fn_->new_value(ir::IrType::F64);
+                    ir::IrInstr ext{};
+                    ext.op = ir::IrOp::F32TOF64; ext.type = ir::IrType::F64;
+                    ext.dst = f64v; ext.operands = {v_arg};
+                    ext.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(ext));
+                    ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr bc{};
+                    bc.op = ir::IrOp::BITCAST; bc.type = ir::IrType::I64;
+                    bc.dst = bits; bc.operands = {f64v};
+                    bc.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(bc));
+                    v_arg = bits;
+                } else if (t.kind == PrimitiveKind::F64 && vt != ir::IrType::I64) {
+                    ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr bc{};
+                    bc.op = ir::IrOp::BITCAST; bc.type = ir::IrType::I64;
+                    bc.dst = bits; bc.operands = {v_arg};
+                    bc.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(bc));
+                    v_arg = bits;
+                } else if (t.kind == PrimitiveKind::CLASS) {
+                    // CLASS -> GcHandle via instruccion `gchandle`.
+                    ir::IrValueId v_h = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr ra{};
+                    ra.op = ir::IrOp::RAW_ASM; ra.type = ir::IrType::I64;
+                    ra.dst = v_h; ra.operands = {v_arg};
+                    ra.func_name = std::string("gchandle {dst}, {src0}\n");
+                    ra.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(ra));
+                    v_arg = v_h;
+                } else {
+                    // Numeros enteros y punteros: cast (silencioso) a I64.
+                    v_arg = cast_if_needed(v_arg, vt, ir::IrType::I64,
+                                           ex->loc.line, /*is_explicit=*/true);
+                }
+                // Constantes para kind, width, fill, align.
+                ir::IrValueId v_kind  = emit_const(ir::IrType::I64,
+                        (uint64_t)(uint32_t)kind_code, ex->loc.line);
+                ir::IrValueId v_width = emit_const(ir::IrType::I64,
+                        (uint64_t)fs.width, ex->loc.line);
+                ir::IrValueId v_fill  = emit_const(ir::IrType::I64,
+                        (uint64_t)fs.fill_cp, ex->loc.line);
+                int align_code = (fs.align == FmtSpec::Align::LEFT) ? 1
+                                : (fs.align == FmtSpec::Align::RIGHT) ? 2
+                                : 0;
+                ir::IrValueId v_align = emit_const(ir::IrType::I64,
+                        (uint64_t)align_code, ex->loc.line);
+                out_mod_->register_native_import(lib, "vio_print_fmt");
+                ir::IrInstr ins{};
+                ins.op          = ir::IrOp::CALLN;
+                ins.type        = ir::IrType::VOID;
+                ins.dst         = ir::IR_NO_VALUE;
+                ins.func_name   = lib + ":vio_print_fmt";
+                ins.operands    = {v_arg, v_kind, v_width, v_fill, v_align};
+                ins.source_line = ex->loc.line;
+                fn_->append(current_block_, std::move(ins));
+                return;
+            }
+
             // Caso STRING: el valor es GcHandle a un StringObject.  Emitir
             // STRRAW para obtener host_ptr al buffer + STRGETBYTES para la
             // longitud en bytes, y usar vio_print_buf para emitir el bloque
@@ -7141,6 +7549,21 @@ namespace vex {
                 case PrimitiveKind::F64:
                     func = "vio_print_float";
                     break;
+                case PrimitiveKind::PTR:
+                case PrimitiveKind::ARRAY:
+                    // Imprime "0x<hex>" compacto sin ceros lider.  El
+                    // mismo formato funciona tanto para punteros host
+                    // como virtuales: el numero es la direccion bruta.
+                    func = "vio_print_ptr";
+                    break;
+                case PrimitiveKind::CLASS:
+                    // Para CLASS imprimimos el GcHandle como "<gc:N>".
+                    // Antes del CALLN debemos convertir el host_ptr al
+                    // handle via la instruccion @c gchandle.  Esto se
+                    // hace abajo en el bloque de F32/F64; aqui solo
+                    // marcamos el func.
+                    func = "vio_print_gchandle";
+                    break;
                 default:
                     // Fallback: trata como puntero a cstring (no len).
                     // Por ahora no soportado; reportar error claro.
@@ -7183,8 +7606,28 @@ namespace vex {
                     fn_->append(current_block_, std::move(bc));
                     v = bits;
                 }
+            } else if (t.kind == PrimitiveKind::CLASS) {
+                // El SSA value `v` es un host_ptr al objeto.  Convertir
+                // a GcHandle (uint32) via la instruccion @c gchandle
+                // antes de pasar al native.  vio_print_gchandle espera
+                // el handle como uint64 zero-extended.
+                ir::IrValueId v_h = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ra{};
+                ra.op          = ir::IrOp::RAW_ASM;
+                ra.type        = ir::IrType::I64;
+                ra.dst         = v_h;
+                ra.operands    = {v};
+                ra.func_name   = std::string("gchandle {dst}, {src0}\n");
+                ra.source_line = ex->loc.line;
+                fn_->append(current_block_, std::move(ra));
+                v = v_h;
+            } else if (t.kind == PrimitiveKind::PTR
+                    || t.kind == PrimitiveKind::ARRAY) {
+                // Punteros pasan tal cual; el ABI uint64 de
+                // vio_print_ptr ya espera la direccion bruta.  Sin
+                // cast_if_needed para no emitir un mov espureo.
             } else {
-                v = cast_if_needed(v, vt, promote, ex->loc.line);
+                v = cast_if_needed(v, vt, promote, ex->loc.line, /*is_explicit=*/true);
             }
             out_mod_->register_native_import(lib, func);
             ir::IrInstr ins{};
@@ -7203,15 +7646,22 @@ namespace vex {
                 auto *sl = static_cast<ast::StringLitExpr *>(ex);
                 if (sl->is_interpolated()) {
                     // Iteracion: parts[0] + exprs[0] + parts[1] + exprs[1]
-                    // + ... + parts[N].  Cada fragmento -> 1 CALLN.
+                    // + ... + parts[N].  Cada fragmento -> 1 CALLN.  Si
+                    // hay format spec por interpolacion (interp_formats[i]
+                    // no vacio), se pasa al typed_value para dispatch a
+                    // vio_print_fmt.
                     const size_t ne = sl->interp_exprs.size();
                     const size_t np = sl->interp_parts.size();
+                    const size_t nf = sl->interp_formats.size();
                     for (size_t i = 0; i < ne; ++i) {
                         if (i < np && !sl->interp_parts[i].empty()) {
                             emit_print_string_literal(sl->interp_parts[i],
                                                       ex->loc.line);
                         }
-                        emit_print_typed_value(sl->interp_exprs[i].get());
+                        const std::string &fmt = (i < nf)
+                                ? sl->interp_formats[i]
+                                : std::string();
+                        emit_print_typed_value(sl->interp_exprs[i].get(), fmt);
                     }
                     if (np > ne) {
                         const auto &last = sl->interp_parts.back();
@@ -7224,7 +7674,7 @@ namespace vex {
                 emit_print_string_literal(sl->value, ex->loc.line);
                 return;
             }
-            emit_print_typed_value(ex);
+            emit_print_typed_value(ex, std::string());
         };
 
         // ----- print(arg) / echo(arg) / println(arg) -----
@@ -7272,7 +7722,9 @@ namespace vex {
         // print_int sigue funcionando (rama mas abajo) por compat.
         if (is_print_uint || is_print_hex || is_print_float
             || is_print_bool || is_print_char || is_print_color
-            || is_print_cstr) {
+            || is_print_cstr
+            || is_print_bin || is_print_oct
+            || is_print_ptr || is_print_gchandle) {
             if (e->args.size() != 1) {
                 error_at(e->loc,
                          std::string("'") + name +
@@ -7285,8 +7737,24 @@ namespace vex {
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
+            // Caso especial: print_gchandle recibe un objeto CLASS y debe
+            // emitir la instruccion @c gchandle r_dst, r_src para
+            // convertir el host_ptr al GcHandle (uint32) antes de
+            // pasarlo al native como uint64 zero-extended.
+            if (is_print_gchandle && e->args[0]->result_type.kind == PrimitiveKind::CLASS) {
+                ir::IrValueId v_h = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ra{};
+                ra.op          = ir::IrOp::RAW_ASM;
+                ra.type        = ir::IrType::I64;
+                ra.dst         = v_h;
+                ra.operands    = {v};
+                ra.func_name   = std::string("gchandle {dst}, {src0}\n");
+                ra.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ra));
+                v = v_h;
+            }
             v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64,
-                               e->loc.line);
+                               e->loc.line, /*is_explicit=*/true);
             std::string func;
             if (is_print_uint) func = "vio_print_uint";
             else if (is_print_hex) func = "vio_print_hex";
@@ -7294,6 +7762,10 @@ namespace vex {
             else if (is_print_bool) func = "vio_print_bool";
             else if (is_print_char) func = "vio_print_char";
             else if (is_print_color) func = "vio_print_color";
+            else if (is_print_bin) func = "vio_print_bin";
+            else if (is_print_oct) func = "vio_print_oct";
+            else if (is_print_ptr) func = "vio_print_ptr";
+            else if (is_print_gchandle) func = "vio_print_gchandle";
             else func                     = "vio_print_cstr"; // host_ptr -> bytes hasta NUL
             out_mod_->register_native_import(lib, func);
             ir::IrInstr ins{};
@@ -7302,6 +7774,38 @@ namespace vex {
             ins.dst         = ir::IR_NO_VALUE;
             ins.func_name   = lib + ":" + func;
             ins.operands    = {v};
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // ----- print_pad(fill_cp, width) -----
+        // Emite @p width copias del codepoint @p fill_cp al buffer.  Util
+        // para construir alineacion manual de columnas (TUI / tablas).
+        if (is_print_pad) {
+            if (e->args.size() != 2) {
+                error_at(e->loc,
+                         "'print_pad' requiere (fill_cp, width)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            ir::IrValueId v_fill = lower_expr(e->args[0].get());
+            ir::IrValueId v_w    = lower_expr(e->args[1].get());
+            if (v_fill == ir::IR_NO_VALUE || v_w == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            v_fill = cast_if_needed(v_fill, fn_->values[v_fill].type,
+                                    ir::IrType::I64, e->loc.line, true);
+            v_w    = cast_if_needed(v_w, fn_->values[v_w].type,
+                                    ir::IrType::I64, e->loc.line, true);
+            out_mod_->register_native_import(lib, "vio_print_pad");
+            ir::IrInstr ins{};
+            ins.op          = ir::IrOp::CALLN;
+            ins.type        = ir::IrType::VOID;
+            ins.dst         = ir::IR_NO_VALUE;
+            ins.func_name   = lib + ":vio_print_pad";
+            ins.operands    = {v_fill, v_w};
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
             out_value = ir::IR_NO_VALUE;
@@ -10736,8 +11240,71 @@ namespace vex {
 
     ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v,
                                            ir::IrType    from, ir::IrType to,
-                                           uint32_t      source_line) {
+                                           uint32_t      source_line,
+                                           bool          is_explicit) {
         if (from == to || v == ir::IR_NO_VALUE) return v;
+        // Warning de seguridad para casts implicitos que pueden perder
+        // informacion: narrowing entero, float -> int, int -> float (los
+        // grandes pierden mantissa).  Solo se emite cuando el usuario NO
+        // escribio el cast explicitamente: `i32 x = i64_val` avisa, pero
+        // `i32 x = (i32) i64_val` no.  Misma politica que -Wconversion en
+        // GCC/Clang.
+        if (!is_explicit) {
+            auto bytes_for = [](ir::IrType t) -> int {
+                switch (t) {
+                    case ir::IrType::I8:  case ir::IrType::U8:
+                    case ir::IrType::BOOL:                       return 1;
+                    case ir::IrType::I16: case ir::IrType::U16:  return 2;
+                    case ir::IrType::I32: case ir::IrType::U32:
+                    case ir::IrType::F32:                        return 4;
+                    default:                                      return 8;
+                }
+            };
+            const bool from_is_float = (from == ir::IrType::F32 || from == ir::IrType::F64);
+            const bool to_is_float   = (to   == ir::IrType::F32 || to   == ir::IrType::F64);
+            const bool from_is_int = (from == ir::IrType::I8  || from == ir::IrType::I16
+                                   || from == ir::IrType::I32 || from == ir::IrType::I64
+                                   || from == ir::IrType::U8  || from == ir::IrType::U16
+                                   || from == ir::IrType::U32 || from == ir::IrType::U64
+                                   || from == ir::IrType::BOOL);
+            const bool to_is_int   = (to   == ir::IrType::I8  || to   == ir::IrType::I16
+                                   || to   == ir::IrType::I32 || to   == ir::IrType::I64
+                                   || to   == ir::IrType::U8  || to   == ir::IrType::U16
+                                   || to   == ir::IrType::U32 || to   == ir::IrType::U64
+                                   || to   == ir::IrType::BOOL);
+            const int from_bytes = bytes_for(from);
+            const int to_bytes   = bytes_for(to);
+            std::string warn_msg;
+            if (from_is_float && to_is_int) {
+                warn_msg = "conversion implicita float -> int trunca la parte fraccionaria; "
+                           "usa cast explicito si es intencional";
+            } else if (from_is_int && to_is_float) {
+                // Solo avisar para enteros grandes a f32 (perdida de mantissa).
+                // i64/u64 -> f32: ~24 bits de mantissa, perdida garantizada para magnitudes >2^24.
+                // i32/u32 -> f32: tambien puede perder.  i*->f64 es exacto hasta 2^53.
+                if (to == ir::IrType::F32 && from_bytes >= 4) {
+                    warn_msg = "conversion implicita int -> f32 puede perder precision; "
+                               "usa cast explicito si es intencional";
+                }
+            } else if (from_is_int && to_is_int) {
+                if (to_bytes < from_bytes) {
+                    warn_msg = "conversion implicita reduce el ancho del entero "
+                               "(narrowing); usa cast explicito si es intencional";
+                }
+            } else if (from_is_float && to_is_float) {
+                if (to == ir::IrType::F32 && from == ir::IrType::F64) {
+                    warn_msg = "conversion implicita f64 -> f32 reduce precision; "
+                               "usa cast explicito si es intencional";
+                }
+            }
+            if (!warn_msg.empty()) {
+                SourceLoc loc;
+                loc.file   = current_file_;
+                loc.line   = source_line;
+                loc.column = 1;
+                diags_.warning(loc, warn_msg);
+            }
+        }
 
         // Elegir el opcode de conversion correcto segun categoria.
         ir::IrOp   op         = ir::IrOp::CAST;
@@ -10759,9 +11326,37 @@ namespace vex {
                 || from == ir::IrType::I32 || from == ir::IrType::I64);
             op = from_signed ? ir::IrOp::ITOF : ir::IrOp::UITOF;
         } else {
-            // Entero -> entero: TRUNC si reduce ancho, ZEXT si amplia unsigned,
-            // SEXT si amplia signed.  CAST funciona como fallback generico.
-            op = ir::IrOp::CAST;
+            // Entero -> entero: elegir TRUNC, ZEXT o SEXT segun el cambio
+            // de ancho y la signedness de la fuente.  Sin esto, el
+            // emitter recibia siempre CAST y emitia un mov plano que NO
+            // truncaba ni extendia: `i32 x = i64_value` dejaba los 8
+            // bytes originales en el registro (bug de truncacion).
+            auto bytes_of = [](ir::IrType t) -> int {
+                switch (t) {
+                    case ir::IrType::I8:  case ir::IrType::U8:
+                    case ir::IrType::BOOL:                       return 1;
+                    case ir::IrType::I16: case ir::IrType::U16:  return 2;
+                    case ir::IrType::I32: case ir::IrType::U32:  return 4;
+                    default:                                      return 8;
+                }
+            };
+            const int from_b = bytes_of(from);
+            const int to_b   = bytes_of(to);
+            const bool from_signed = (from == ir::IrType::I8
+                                   || from == ir::IrType::I16
+                                   || from == ir::IrType::I32
+                                   || from == ir::IrType::I64);
+            if (to_b < from_b) {
+                op = ir::IrOp::TRUNC;
+            } else if (to_b > from_b) {
+                op = from_signed ? ir::IrOp::SEXT : ir::IrOp::ZEXT;
+            } else {
+                // Mismo ancho: nada que extender ni truncar; un BITCAST
+                // (mov plano) es lo correcto a nivel de bytecode.  Esto
+                // cubre cambios de signedness sin reinterpretacion (e.g.
+                // i32 -> u32) y casts entre PTR e i64.
+                op = ir::IrOp::BITCAST;
+            }
         }
 
         const ir::IrValueId dst = fn_->new_value(to);
@@ -10944,9 +11539,29 @@ namespace vex {
                     visit_stmt(f->body.get());
                     return;
                 }
+                case ast::NodeKind::TryStmt: {
+                    // Sin esta rama, las variables declaradas dentro de un
+                    // try/catch/finally no se promocionan a address-taken
+                    // aunque aparezca `&var` en el body (error: '&x' sobre
+                    // variable no promocionada).  Y el cascade de errores
+                    // "nombre no resuelto" surge porque el lowering del
+                    // var-decl falla al evaluar `&var` y deja el binding
+                    // sin registrar.
+                    auto *ts = static_cast<ast::TryStmt *>(st);
+                    visit_stmt(ts->body.get());
+                    for (auto &cc: ts->catches) visit_stmt(cc.body.get());
+                    if (ts->finally_body) visit_stmt(ts->finally_body.get());
+                    return;
+                }
                 case ast::NodeKind::ReturnStmt: {
                     auto *r = static_cast<ast::ReturnStmt *>(st);
                     visit_expr(r->value.get());
+                    return;
+                }
+                case ast::NodeKind::SynchronizedStmt: {
+                    auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+                    visit_expr(sy->target.get());
+                    visit_stmt(sy->body.get());
                     return;
                 }
                 default:
@@ -11094,6 +11709,21 @@ namespace vex {
                     visit_expr(f->cond.get());
                     visit_expr(f->step.get());
                     visit_stmt(f->body.get());
+                    return;
+                }
+                case ast::NodeKind::TryStmt: {
+                    // Recursar tambien en try para detectar escapes de
+                    // locales dentro de body, catches y finally.
+                    auto *ts = static_cast<ast::TryStmt *>(st);
+                    visit_stmt(ts->body.get());
+                    for (auto &cc: ts->catches) visit_stmt(cc.body.get());
+                    if (ts->finally_body) visit_stmt(ts->finally_body.get());
+                    return;
+                }
+                case ast::NodeKind::SynchronizedStmt: {
+                    auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+                    visit_expr(sy->target.get());
+                    visit_stmt(sy->body.get());
                     return;
                 }
                 case ast::NodeKind::ReturnStmt: {

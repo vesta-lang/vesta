@@ -118,10 +118,12 @@ namespace Assembly::Bytecode {
         {"jmp.jz",  {{0x11, 0x00, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jne", {{0x11, 0x01, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jnz", {{0x11, 0x01, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
+        /* jcs/jb (jump if below)        : CF==1 -> cond 0x02 */
         {"jmp.jcs", {{0x11, 0x02, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
-        {"jmp.jae", {{0x11, 0x02, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
+        {"jmp.jb",  {{0x11, 0x02, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
+        /* jcc/jae (jump if above-or-equal) : CF==0 -> cond 0x03 */
         {"jmp.jcc", {{0x11, 0x03, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
-        {"jmp.jb",  {{0x11, 0x03, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
+        {"jmp.jae", {{0x11, 0x03, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jmi", {{0x11, 0x04, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jpl", {{0x11, 0x05, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},
         {"jmp.jvs", {{0x11, 0x06, InstrSizeMode::FIXED_10, AddressingMode::INMED, emit_instr_abs64}}},

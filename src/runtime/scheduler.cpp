@@ -20,9 +20,13 @@
  */#include "runtime/scheduler.h"
 
 #include "runtime/decode_instruction.h"
+#include "runtime/exception_runtime.h"
 #include "distrib/dist_runtime.h"
 #include "distrib/dist_debug.h"
 #include "runtime/runtime.h"
+
+#include <csetjmp>
+#include <cstdio>
 
 namespace runtime {
 
@@ -260,6 +264,19 @@ namespace runtime {
     void Scheduler::run_loop() {
         // continuar mientras no se solicite parada y la VM siga activa
         while (!should_kill && vm_reference.vm_running) {
+            // Limpiar el TLS del proc en ejecucion al inicio de cada
+            // iteracion.  Si entre batches ocurre un AV (codigo del
+            // scheduler accediendo memoria invalida), el handler vera
+            // TLS=null y delegara al SEH normal en lugar de hacer
+            // longjmp a un jmp_buf stale.  Tambien reseteamos
+            // av_recovery_active del proc anterior para evitar que un
+            // AV entre el sigsetjmp y el set_current_executing_process
+            // del proximo batch se desvie a la jmp_buf vieja.
+            if (instance != nullptr) {
+                instance->av_recovery_active = false;
+            }
+            set_current_executing_process(nullptr);
+
             instance = schedule_next(); // obtener el proximo proceso listo
 
             if (!instance) {
@@ -321,6 +338,32 @@ namespace runtime {
                              (unsigned long long)instance->registers.rip.raw(),
                              (unsigned long long)instance->rspawn_future_id,
                              (int)instance->state);
+                }
+
+                // OPTIMIZACION (overhead): solo armar el recovery point
+                // cuando el proceso tiene una pila de try/catch activa.
+                // Programas sin try/catch (caso comun) no pagan el coste
+                // de @c setjmp (~10-15 ns por batch, ~1% del runtime).
+                //
+                // Cuando el proceso ENTRA a un try mid-batch via la
+                // instruccion @c tryenter, esa instruccion fuerza
+                // @c reductions_remaining = 1 para terminar el batch
+                // actual.  El proximo batch ya verá @c exc_frame_stack
+                // no-null y armará el recovery.  Asi cubrimos toda la
+                // ventana de vulnerabilidad sin overhead permanente.
+                set_current_executing_process(instance);
+                const bool armed_fast = (instance->exc_frame_stack != nullptr);
+                if (armed_fast) {
+                    instance->av_recovery_active = true;
+                    if (setjmp(instance->av_recovery_jmpbuf) != 0) {
+                        char msg[128];
+                        std::snprintf(msg, sizeof(msg),
+                            "host access violation at 0x%llx (deref de puntero invalido)",
+                            (unsigned long long)instance->pending_av_addr);
+                        runtime::throw_fatal(instance,
+                                             runtime::FATAL_SEGMENTATION_FAULT,
+                                             msg);
+                    }
                 }
 
                 while (instance->reductions_remaining > 0) {
@@ -554,6 +597,22 @@ namespace runtime {
                 }
             } else {
                 // === SLOW PATH: FSM completo con hooks de depuracion ===
+                // Misma optimizacion que en fast path: solo armar
+                // recovery cuando hay try/catch activo.
+                set_current_executing_process(instance);
+                const bool armed_slow = (instance->exc_frame_stack != nullptr);
+                if (armed_slow) {
+                    instance->av_recovery_active = true;
+                    if (setjmp(instance->av_recovery_jmpbuf) != 0) {
+                        char msg[128];
+                        std::snprintf(msg, sizeof(msg),
+                            "host access violation at 0x%llx (deref de puntero invalido)",
+                            (unsigned long long)instance->pending_av_addr);
+                        runtime::throw_fatal(instance,
+                                             runtime::FATAL_SEGMENTATION_FAULT,
+                                             msg);
+                    }
+                }
                 while (instance->reductions_remaining > 0) {
                     run_fsm_step(instance); // ejecutar un paso de la FSM
                     instance->reductions_remaining--;

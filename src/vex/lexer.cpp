@@ -56,6 +56,7 @@ namespace vex {
             case TokenKind::ISTR_BEGIN:      return "ISTR_BEGIN";
             case TokenKind::ISTR_TEXT:       return "ISTR_TEXT";
             case TokenKind::ISTR_EXPR_BEGIN: return "ISTR_EXPR_BEGIN";
+            case TokenKind::ISTR_EXPR_FMT:   return "ISTR_EXPR_FMT";
             case TokenKind::ISTR_EXPR_END:   return "ISTR_EXPR_END";
             case TokenKind::ISTR_END:        return "ISTR_END";
             case TokenKind::IDENTIFIER:      return "IDENTIFIER";
@@ -912,6 +913,50 @@ namespace vex {
                                 string_emit_queue_.push_back(std::move(tend));
                                 break;
                             }
+                        } else if (inner.kind == TokenKind::COLON && depth == 1) {
+                            // Format spec: tras `:` capturamos texto raw
+                            // hasta el `}` de cierre, sin tokenizar.  El
+                            // formato se almacena en @c str_val del
+                            // token ISTR_EXPR_FMT.  No permitimos `:`
+                            // como operador ternario dentro de la expr
+                            // (Vex no tiene ternario).  Si se necesita
+                            // un `:` dentro del formato (improbable),
+                            // habria que usar paren-balanced sub-spec.
+                            std::string fmt;
+                            const SourceLoc fmt_loc = inner.loc;
+                            // Saltar trivia inicial (espacios entre `:` y la
+                            // primera spec).
+                            while (pos_ < source_.size()) {
+                                const char fc = source_[pos_];
+                                if (fc == '}') {
+                                    Token tfmt = make_token(
+                                        TokenKind::ISTR_EXPR_FMT, "", fmt_loc);
+                                    tfmt.str_val = std::move(fmt);
+                                    string_emit_queue_.push_back(std::move(tfmt));
+                                    // Consumir `}` y emitir ISTR_EXPR_END.
+                                    SourceLoc rb_loc{filename_, line_, column_,
+                                                     (uint32_t)pos_, 1};
+                                    advance(); // consumir '}'
+                                    Token tend = make_token(
+                                        TokenKind::ISTR_EXPR_END, "", rb_loc);
+                                    string_emit_queue_.push_back(std::move(tend));
+                                    depth = 0;
+                                    break;
+                                }
+                                if (fc == '\n') {
+                                    error_at(fmt_loc,
+                                        "salto de linea dentro del formato ${...:fmt}");
+                                    break;
+                                }
+                                fmt.push_back(fc);
+                                advance();
+                            }
+                            if (depth != 0) {
+                                error_at(fmt_loc,
+                                    "interpolacion ${...:fmt} sin '}' de cierre");
+                                depth = 0;
+                            }
+                            break;
                         }
                         string_emit_queue_.push_back(std::move(inner));
                     }

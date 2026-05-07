@@ -174,8 +174,17 @@ namespace runtime {
         uint8_t n1 = static_cast<uint8_t>(data & 0x00FF); // byte de modo
         uint8_t n2 = static_cast<uint8_t>((data & 0xFF00) >> 8); // byte de registros
 
-        // extraer modo de los bits 7-6 del byte de control
-        instr.flags_info.mode = (n1 >> 6) & 0b11;
+        // ctrl byte: mode(2) | signed(1) | dir(1) | reg(4)
+        // Extraer mode, _signed_instruct y direction del byte de control.
+        // Sin extraer el bit signed, las variantes con/sin signo
+        // (cmpu/cmps, addu/adds, etc.) compartirian _signed_instruct con
+        // el valor residual de la icache, llevando a semantica indefinida
+        // en CF/OF.  Bug observado: cmpu r2(0), r3(3) tomaba la rama
+        // erronea porque _signed_instruct quedaba a 1 -> SubOp::flags
+        // entraba por la rama signed y dejaba CF=0 en lugar de CF=1.
+        instr.flags_info.mode             = (n1 >> 6) & 0b11;  // ancho del operando
+        instr.flags_info._signed_instruct = (n1 >> 5) & 0b1;   // variante con/sin signo
+        instr.flags_info.direction        = (n1 >> 4) & 0b1;   // direccion (reservado)
 
         // los dos registros se codifican en el mismo byte: nibble bajo = reg1, nibble alto = reg2
         instr.data_instruction.reg_data.reg1 = static_cast<uint8_t>(n2 & 0xF);
