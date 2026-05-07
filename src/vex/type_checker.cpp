@@ -245,6 +245,15 @@ namespace vex {
                 x->operand = clone_expr(s->operand.get());
                 return x;
             }
+            case ast::NodeKind::CastExpr: {
+                auto *s = static_cast<const ast::CastExpr *>(e);
+                auto x = std::make_unique<ast::CastExpr>();
+                x->loc         = s->loc;
+                x->target_type = clone_type_with_subst(s->target_type.get(),
+                                                        GenSubst{nullptr, nullptr});
+                x->operand     = clone_expr(s->operand.get());
+                return x;
+            }
             case ast::NodeKind::AssignExpr: {
                 auto *s = static_cast<const ast::AssignExpr *>(e);
                 auto x = std::make_unique<ast::AssignExpr>();
@@ -594,6 +603,14 @@ namespace vex {
             case ast::NodeKind::UnaryExpr: {
                 auto *u = static_cast<const ast::UnaryExpr *>(e);
                 pre_mono_collect_in_expr(tc, u->operand.get());
+                return;
+            }
+            case ast::NodeKind::CastExpr: {
+                auto *c = static_cast<const ast::CastExpr *>(e);
+                if (c->target_type) {
+                    pre_mono_collect_in_type(tc, c->target_type.get(), c->loc);
+                }
+                pre_mono_collect_in_expr(tc, c->operand.get());
                 return;
             }
             case ast::NodeKind::AssignExpr: {
@@ -1013,6 +1030,23 @@ namespace vex {
         // print_cstr(host_ptr) imprime una cstring desde memoria host
         // (FatalError.message o .stack_trace).  Acepta cualquier PTR.
         reg_builtin("print_cstr",  Type{PrimitiveKind::VOID}, {PrimitiveKind::PTR});
+        // Formatos numericos alternativos: binario y octal con prefijo
+        // "0b" / "0o".  Compactos (sin ceros lider).
+        reg_builtin("print_bin",   Type{PrimitiveKind::VOID}, {PrimitiveKind::U64});
+        reg_builtin("print_oct",   Type{PrimitiveKind::VOID}, {PrimitiveKind::U64});
+        // print_ptr(addr) imprime "0x<hex>" compacto sin ceros lider.
+        // Acepta cualquier PTR (host o virtual) o un i64 con la direccion.
+        // print_gchandle(handle) imprime "<gc:N>" donde N es el handle
+        // como entero decimal.  Para uso con CLASS objects el lowering
+        // emite la instruccion @c gchandle antes de llamar.
+        reg_builtin("print_ptr",      Type{PrimitiveKind::VOID}, {PrimitiveKind::PTR});
+        reg_builtin("print_gchandle", Type{PrimitiveKind::VOID}, {PrimitiveKind::I64});
+        // Padding/alineacion: emite @p width copias del codepoint
+        // @p fill_cp.  El usuario calcula la diferencia entre el ancho
+        // deseado y el ancho actual del texto y llama a este builtin.
+        // Para alineacion manual de columnas en TUIs.
+        reg_builtin("print_pad",   Type{PrimitiveKind::VOID},
+                    {PrimitiveKind::U32, PrimitiveKind::U64});
         // I/O de fichero.  fopen recibe path y modo como literales de
         // string; devuelve un FILE* (uint64_t).  fwrite recibe el FILE*
         // y un buffer literal; devuelve el numero de bytes escritos.
@@ -2618,6 +2652,31 @@ namespace vex {
                     pop_scope();
                 }
                 t = Type{PrimitiveKind::I64};
+                break;
+            }
+            case ast::NodeKind::CastExpr: {
+                // Cast C-style `(T) expr`.  Validacion permisiva: el
+                // tipo destino se evalua y se chequea el operando, pero
+                // no se rechaza ninguna conversion concreta (la decision
+                // sobre como bajar la conversion la toma el lowering
+                // segun los tipos actual y destino).  Convertir entre
+                // punteros (incl. virtual <-> host) es legal; convertir
+                // de int a ptr o viceversa tambien.  Quien escriba el
+                // cast asume las consecuencias.
+                auto *ce = static_cast<ast::CastExpr *>(e);
+                if (ce->target_type) {
+                    t = type_from_node(ce->target_type.get());
+                } else {
+                    t = Type{};
+                }
+                if (ce->operand) {
+                    Type to = check_expr(ce->operand.get());
+                    ce->operand->result_type = to;
+                    if (to.kind == PrimitiveKind::VOID) {
+                        diags_.error(ce->loc,
+                            "no se puede castear una expresion de tipo void");
+                    }
+                }
                 break;
             }
             default:
@@ -4459,8 +4518,13 @@ namespace vex {
 
         // print/println/echo aceptan cualquier tipo escalar como
         // arg[0] (despacha en lowering).  Bypass del strict type-check.
+        // print_ptr/print_gchandle tambien son polimorficos: aceptan
+        // CLASS, PTR, ARRAY, o entero arbitrario sin que el bypass del
+        // type checker se queje del tipo.  El lowering despacha al
+        // CALLN apropiado convirtiendo a uint64.
         const bool is_io_print_relaxed =
-            (id->name == "print" || id->name == "println" || id->name == "echo");
+            (id->name == "print" || id->name == "println" || id->name == "echo"
+          || id->name == "print_ptr" || id->name == "print_gchandle");
         if (is_io_print_relaxed) {
             if (e->args.size() != 1) {
                 diags_.error(e->loc,

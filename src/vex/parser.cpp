@@ -71,6 +71,37 @@ namespace vex {
         return bad;
     }
 
+    Token Parser::expect_close_angle(const char *msg) {
+        // Caso comun: el token actual es ya un `>` (GT).  Consumir y
+        // listo.
+        if (current_.kind == TokenKind::GT) return consume();
+        // Caso del lexer: `>>` se tokeniza como un solo SHR.  Cuando
+        // aparece cerrando un argumento de tipo anidado (e.g.
+        // `VirtualPtr<VirtualPtr<i64>>`), el parser quiere cerrar UN
+        // solo `>` y dejar el otro disponible para el caller exterior.
+        // Partimos el token: devolvemos un GT sintetico y mutamos
+        // current_ para que sea un GT con loc avanzada un caracter.
+        if (current_.kind == TokenKind::SHR) {
+            Token first;
+            first.kind   = TokenKind::GT;
+            first.lexeme = ">";
+            first.loc    = current_.loc;
+            // Avanzar la columna del token restante.  El campo de linea
+            // no cambia: `>>` siempre cabe en una linea.
+            current_.kind   = TokenKind::GT;
+            current_.lexeme = ">";
+            ++current_.loc.column;
+            ++current_.loc.offset;
+            current_.loc.length = 1;
+            return first;
+        }
+        error_here(msg);
+        Token bad;
+        bad.kind = TokenKind::UNKNOWN;
+        bad.loc  = current_.loc;
+        return bad;
+    }
+
     void Parser::error_here(const char *msg) {
         diags_.error(current_.loc, msg);
     }
@@ -439,6 +470,101 @@ namespace vex {
     // hitos posteriores (esto se quedara como caso por defecto del switch).
     // ---------------------------------------------------------------------
 
+    bool Parser::looks_like_cast() const noexcept {
+        // Precondition: current_ es LPAREN.  Comprobamos si la
+        // secuencia tras `(` forma un type-node valido seguido de `)`.
+        // Para evitar conflictos con expresiones agrupadas, exigimos
+        // que el PRIMER token sea un type-starter inequivoco:
+        // primitivo (i32, u8, ...), VirtualPtr, fn, nonnull.  Tipos
+        // nombrados via identifier (typedef sin marca clara) requieren
+        // que el usuario escriba `(VirtualPtr<...>)x` o `(T*)x` para
+        // desambiguar.
+        Lexer &mut_lex = const_cast<Lexer &>(lex_);
+
+        size_t off = 0;
+        // Prefijo opcional `nonnull`.
+        if (mut_lex.peek_at(off).kind == TokenKind::KW_NONNULL) ++off;
+
+        const Token &first = mut_lex.peek_at(off);
+        const TokenKind first_kind = first.kind;
+        const bool is_type_starter =
+                primitive_kind_from_token(first_kind) != PrimitiveKind::COUNT
+                || first_kind == TokenKind::KW_FN
+                || (first_kind == TokenKind::IDENTIFIER
+                    && first.lexeme == "VirtualPtr");
+        if (!is_type_starter) return false;
+        ++off;
+
+        // Saltar argumentos genericos `<...>` con balance, tratando
+        // `>>` (SHR) como dos GTs.
+        if (mut_lex.peek_at(off).kind == TokenKind::LT) {
+            int depth = 1;
+            ++off;
+            const size_t MAX_LOOKAHEAD = 64;
+            while (depth > 0 && off < MAX_LOOKAHEAD) {
+                TokenKind k = mut_lex.peek_at(off).kind;
+                if (k == TokenKind::END_OF_FILE) return false;
+                if (k == TokenKind::LT) ++depth;
+                else if (k == TokenKind::GT) --depth;
+                else if (k == TokenKind::SHR) depth -= 2;
+                ++off;
+            }
+            if (depth != 0) return false;
+        }
+        // Saltar `*`s (punteros).
+        while (mut_lex.peek_at(off).kind == TokenKind::STAR) ++off;
+        // Saltar `[N]` o `[]` (arrays nativos).  Cierre exacto con `]`.
+        while (mut_lex.peek_at(off).kind == TokenKind::LBRACKET) {
+            int depth = 1;
+            ++off;
+            const size_t MAX = 64;
+            while (depth > 0 && off < MAX) {
+                TokenKind k = mut_lex.peek_at(off).kind;
+                if (k == TokenKind::END_OF_FILE) return false;
+                if (k == TokenKind::LBRACKET) ++depth;
+                else if (k == TokenKind::RBRACKET) --depth;
+                ++off;
+            }
+            if (depth != 0) return false;
+        }
+        // Tras todo, debe haber `)`.
+        if (mut_lex.peek_at(off).kind != TokenKind::RPAREN) return false;
+        // El siguiente token debe poder iniciar una expresion (de lo
+        // contrario `(i32)` aislado seria ambiguo y la heuristica
+        // genera un cast espureo).  Excluye operadores binarios (que
+        // empezarian una expresion infix sin operando izquierdo).
+        ++off;
+        const TokenKind after = mut_lex.peek_at(off).kind;
+        switch (after) {
+            case TokenKind::IDENTIFIER:
+            case TokenKind::INT_LIT:
+            case TokenKind::FLOAT_LIT:
+            case TokenKind::CHAR_LIT:
+            case TokenKind::STRING_LIT:
+            case TokenKind::RAW_STRING_LIT:
+            case TokenKind::TRUE_KW:
+            case TokenKind::FALSE_KW:
+            case TokenKind::NULL_KW:
+            case TokenKind::KW_THIS:
+            case TokenKind::KW_NEW:
+            case TokenKind::KW_AWAIT:
+            case TokenKind::ISTR_BEGIN:
+            case TokenKind::LPAREN:
+            case TokenKind::AMP:
+            case TokenKind::STAR:
+            case TokenKind::PLUS:
+            case TokenKind::MINUS:
+            case TokenKind::BANG:
+            case TokenKind::BANG_BANG:
+            case TokenKind::TILDE:
+            case TokenKind::PLUS_PLUS:
+            case TokenKind::MINUS_MINUS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool Parser::starts_type() const noexcept {
         // Cualquier keyword que sea tipo primitivo, o un identificador
         // seguido de uno o mas '*' (cero permitidos) y luego otro
@@ -463,6 +589,10 @@ namespace vex {
         Lexer &mut_lex = const_cast<Lexer &>(lex_);
         size_t off = 0;
         // Optional: skip generic angle-brackets `<...>` con balance.
+        // El lexer tokeniza `>>` como un solo SHR (mismo problema que en
+        // C++ <17): aqui tratamos SHR como dos GTs cerrados a la vez.
+        // Sin esto, `Cls<Inner<T>>` no se reconoce como tipo y el parser
+        // bajaria a expr-stmt, fallando al ver el nombre de la variable.
         if (mut_lex.peek_at(off).kind == TokenKind::LT) {
             int depth = 1;
             ++off;
@@ -472,6 +602,7 @@ namespace vex {
                 if (k == TokenKind::END_OF_FILE) return false;
                 if (k == TokenKind::LT) ++depth;
                 else if (k == TokenKind::GT) --depth;
+                else if (k == TokenKind::SHR) depth -= 2;
                 ++off;
             }
             if (depth != 0) return false;
@@ -588,7 +719,7 @@ namespace vex {
                 error_here("se esperaba un tipo dentro de VirtualPtr<...>");
                 return nullptr;
             }
-            (void)expect(TokenKind::GT, "se esperaba '>' al cerrar VirtualPtr<...>");
+            (void)expect_close_angle("se esperaba '>' al cerrar VirtualPtr<...>");
             auto pn = std::make_unique<ast::PointerTypeNode>();
             pn->loc        = vloc;
             pn->pointee    = std::move(inner);
@@ -614,8 +745,8 @@ namespace vex {
                     nt->type_args.push_back(std::move(ta));
                     if (!match(TokenKind::COMMA)) break;
                 }
-                (void)expect(TokenKind::GT,
-                             "se esperaba '>' al cerrar argumentos de tipo");
+                (void)expect_close_angle(
+                    "se esperaba '>' al cerrar argumentos de tipo");
             }
             base = std::move(nt);
         } else {
@@ -1058,8 +1189,7 @@ namespace vex {
                 c->type_params.push_back(consume().lexeme);
                 if (!match(TokenKind::COMMA)) break;
             }
-            (void)expect(TokenKind::GT,
-                         "se esperaba '>' al cerrar parametros de tipo");
+            (void)expect_close_angle("se esperaba '>' al cerrar parametros de tipo");
         }
 
         // Superclase opcional via ':'.
@@ -1670,6 +1800,23 @@ namespace vex {
             return nullptr;
         }
         vd->name = consume().lexeme;
+        // Sintaxis C-style: `T name[N]` -> wrappear el tipo base en
+        // ArrayTypeNode(N).  Acepta tambien `T name[]` (sin tamano,
+        // tipico de parametros con decay-to-ptr).  Cadena permitida
+        // para matrices: `T name[N][M]`.
+        while (current_.kind == TokenKind::LBRACKET) {
+            const SourceLoc abr_loc = current_.loc;
+            (void)consume(); // '['
+            auto an = std::make_unique<ast::ArrayTypeNode>();
+            an->loc          = abr_loc;
+            an->element_type = std::move(vd->type);
+            if (current_.kind != TokenKind::RBRACKET) {
+                an->size_expr = parse_expr();
+            }
+            (void)expect(TokenKind::RBRACKET,
+                         "se esperaba ']' al cerrar el tamano del array");
+            vd->type = std::move(an);
+        }
         if (match(TokenKind::ASSIGN)) {
             vd->init = parse_expr();
             // Si la sintaxis fue `T !!name = init`, envolvemos el init
@@ -2083,6 +2230,21 @@ namespace vex {
     }
 
     std::unique_ptr<ast::Expr> Parser::parse_unary() {
+        // Cast C-style `(T) expr`.  Comprobamos antes de los demas
+        // unarios porque el cast tambien empieza con `(` y queremos
+        // reconocerlo antes de caer al patron `(expr)`.
+        if (current_.kind == TokenKind::LPAREN && looks_like_cast()) {
+            const SourceLoc loc = current_.loc;
+            (void)consume(); // '('
+            auto type_node = parse_type_node();
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' al cerrar el cast");
+            auto operand = parse_unary();
+            auto ce = std::make_unique<ast::CastExpr>();
+            ce->loc          = loc;
+            ce->target_type  = std::move(type_node);
+            ce->operand      = std::move(operand);
+            return ce;
+        }
         // Unarios prefijo: ! ~ - + ++ -- & * await
         // El '&' produce AddrOf (toma direccion) y el '*' produce Deref
         // (lectura via puntero).  'await' (KW_AWAIT) bloquea hasta que el
@@ -2352,6 +2514,18 @@ namespace vex {
                             e->interp_exprs.push_back(std::move(expr));
                         }
 
+                        // Formato opcional `${expr:fmt}` (lexer emite
+                        // ISTR_EXPR_FMT con la cadena de formato en
+                        // str_val).  Capturar y guardar; si no existe,
+                        // insertar string vacio para mantener
+                        // interp_formats[i] paralelo a interp_exprs[i].
+                        std::string fmt;
+                        if (current_.kind == TokenKind::ISTR_EXPR_FMT) {
+                            fmt = std::move(current_.str_val);
+                            (void)consume();
+                        }
+                        e->interp_formats.push_back(std::move(fmt));
+
                         // Consumir ISTR_EXPR_END (cierre del lexer).
                         if (current_.kind == TokenKind::ISTR_EXPR_END) {
                             (void)consume();
@@ -2411,8 +2585,8 @@ namespace vex {
                         e->type_args.push_back(std::move(ta));
                         if (!match(TokenKind::COMMA)) break;
                     }
-                    (void)expect(TokenKind::GT,
-                                 "se esperaba '>' al cerrar argumentos de tipo en new");
+                    (void)expect_close_angle(
+                        "se esperaba '>' al cerrar argumentos de tipo en new");
                 }
                 (void)expect(TokenKind::LPAREN, "se esperaba '(' tras el nombre de la clase");
                 while (current_.kind != TokenKind::RPAREN

@@ -118,6 +118,12 @@ namespace vex::ast {
                       ///< var-decl o como init de campo nested.  Lowering
                       ///< asigna cada elemento al slot correspondiente del
                       ///< destino (no construye un valor temporal).
+        CastExpr,     ///< (T)expr: cast C-style.  El parser solo reconoce
+                      ///< el patron `(<type>) <unary>` cuando el contenido
+                      ///< del parentesis es un type-node (no una expresion
+                      ///< que produce valor).  Cubre tanto conversiones
+                      ///< numericas como bitcasts de punteros entre
+                      ///< VirtualPtr<T> y T*, ptr<->int, etc.
 
         // ----- Types AST -----
         PrimitiveTypeNode,
@@ -224,10 +230,10 @@ namespace vex::ast {
      * @brief @c true si k representa una expresion.
      */
     constexpr bool is_expr_kind(NodeKind k) noexcept {
-        // Rango contiguo: cualquier NodeKind entre IntLitExpr y MatchExpr
+        // Rango contiguo: cualquier NodeKind entre IntLitExpr y CastExpr
         // (la ultima expresion definida) es una expresion.
         return (uint8_t)k >= (uint8_t)NodeKind::IntLitExpr
-            && (uint8_t)k <= (uint8_t)NodeKind::MatchExpr;
+            && (uint8_t)k <= (uint8_t)NodeKind::CastExpr;
     }
     /**
      * @brief @c true si k representa un statement.
@@ -429,6 +435,14 @@ namespace vex::ast {
         /// Los vectores quedan vacios para strings sin interpolacion.
         std::vector<std::string>           interp_parts;
         std::vector<std::unique_ptr<Expr>> interp_exprs;
+
+        /// Formato opcional por interpolacion: @c ${expr:fmt}.  Vector
+        /// paralelo a @c interp_exprs (tambien tamano N).  Cadena vacia
+        /// = sin formato (default).  El formato es una mini-DSL parseada
+        /// en lowering: kinds (`hex`, `bin`, `oct`, `dec`, `ptr`, `gc`,
+        /// `char`, `bool`) y alineacion (`>N` right, `<N` left, opcional
+        /// fill char tras el ancho).  Multiples specs se separan por `:`.
+        std::vector<std::string>           interp_formats;
 
         /// @c true si el string contiene al menos una expresion ${...}.
         bool is_interpolated() const noexcept {
@@ -733,6 +747,28 @@ namespace vex::ast {
         std::vector<std::string>           field_names;
         bool                               is_designated = false;
         InitListExpr() : Expr(NodeKind::InitListExpr) {}
+    };
+
+    /**
+     * @struct CastExpr
+     * @brief Cast C-style: `(T) expr`.
+     *
+     * El parser lo reconoce solo cuando el contenido del parentesis es
+     * un type-node valido (incluyendo @c VirtualPtr<T>, @c T*, primitivos
+     * y aliases declarados via typedef/using).  Si el parentesis contiene
+     * una expresion (e.g. `(a + b)`), el parser usa la rama de expresion
+     * agrupada y NO genera @c CastExpr.
+     *
+     * El type checker valida la conversion: cualquier ptr->ptr es bitcast
+     * (mismo bit-pattern), conversiones numericas usan el cast IR
+     * apropiado (ZEXT/SEXT/TRUNC/FTOI/...), y el flag @c is_virtual del
+     * tipo destino se propaga al SSA value resultante para que el LOAD/
+     * STORE posterior emita @c mov vs @c movh correctamente.
+     */
+    struct CastExpr : Expr {
+        std::unique_ptr<TypeNode> target_type;  ///< Tipo destino del cast.
+        std::unique_ptr<Expr>     operand;      ///< Expresion a convertir.
+        CastExpr() : Expr(NodeKind::CastExpr) {}
     };
 
     struct LambdaExpr : Expr {

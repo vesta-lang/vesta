@@ -79,6 +79,16 @@ namespace runtime {
         // intentaran lanzar @c FatalError caerian al camino antiguo
         // (mata el proceso sin posibilidad de captura).
         runtime::init_exception_classes(loader_public);
+
+        // Instalar el handler de access violations a nivel de OS
+        // (Vectored Exception Handler en Windows, sigaction(SIGSEGV) en
+        // POSIX).  Idempotente via std::once: solo la primera VM
+        // creada lo registra; las siguientes son no-op.  Permite que
+        // accesos a punteros host invalidos desde bytecode (caso comun:
+        // deref de host_ptr stale tras free) se conviertan en
+        // FatalError capturables via try/catch en lugar de crashear la
+        // VM entera.
+        runtime::install_host_av_handler();
     }
 
     /**

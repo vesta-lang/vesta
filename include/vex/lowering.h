@@ -120,9 +120,16 @@ namespace vex {
 
         /**
          * @brief Inserta una conversion de tipo si difiere; identidad si igual.
+         *
+         * @param is_explicit Si false (por defecto), emite un warning cuando
+         *        la conversion es potencialmente perdida (narrowing,
+         *        float<->int, etc.).  Las llamadas desde @c lower_cast_expr
+         *        pasan true para silenciar el warning porque el usuario
+         *        opto explicitamente por el cast.
          */
         ir::IrValueId cast_if_needed(ir::IrValueId v, ir::IrType from, ir::IrType to,
-                                     uint32_t source_line);
+                                     uint32_t source_line,
+                                     bool is_explicit = false);
 
         // -----------------------------------------------------------------
         // Lowering por categoria.
@@ -366,6 +373,23 @@ namespace vex {
          */
         ir::IrValueId  lower_match_expr(ast::MatchExpr *e);
 
+        /**
+         * @brief Lower @c CastExpr `(T) operand`.
+         *
+         * Casos cubiertos:
+         *  - num <-> num (primitivos): delega en @c cast_if_needed.
+         *  - PTR <-> PTR (incluyendo @c VirtualPtr<X> <-> @c X*): bitcast,
+         *    el valor SSA mantiene el bit-pattern, pero @c is_host_ptr y
+         *    @c pointee_is_host_ptr se ajustan al destino para que LOAD
+         *    y STORE posteriores emitan @c mov vs @c movh segun la
+         *    naturaleza del destino.
+         *  - PTR <-> int (i64/u64) y viceversa: BITCAST IR op (preserva
+         *    bits sin conversion numerica).
+         *  - ARRAY -> PTR: decay (mismo bit-pattern); ARRAY <-> ARRAY:
+         *    bitcast con propagacion de @c is_host_ptr.
+         */
+        ir::IrValueId  lower_cast_expr(ast::CastExpr *e);
+
         // -----------------------------------------------------------------
         // POO: clases, new, this, getfield/setfield/callvirt sobre CLASS.
         // -----------------------------------------------------------------
@@ -581,6 +605,14 @@ namespace vex {
         ast::ModuleNode    &mod_;
         const TypeChecker  &tc_;
         Diagnostics        &diags_;
+
+        // Nombre del fichero fuente actual (para warnings que solo
+        // tienen un source_line).  Se infiere del primer AST node con
+        // loc no vacio durante run() y se mantiene durante todo el
+        // lowering del modulo.  Si no se puede inferir, queda vacio
+        // y los warnings se imprimen sin prefijo de fichero (siguen
+        // siendo utiles porque contienen line:col).
+        std::string current_file_;
 
         // Estado por funcion en curso.
         ir::IrModule   *out_mod_       = nullptr;  ///< Modulo IR de salida (para static_data e imports).

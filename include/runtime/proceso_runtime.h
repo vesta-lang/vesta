@@ -30,6 +30,7 @@
 #include "loader/oop_types.h"
 
 #include <atomic>
+#include <csetjmp>
 #include <vector>
 
 namespace distrib {
@@ -484,6 +485,24 @@ namespace runtime {
         void   *fatal_slot      = nullptr;
         char   *fatal_msg_buf   = nullptr;   ///< buffer de mensajes (256 bytes)
         char   *fatal_trace_buf = nullptr;   ///< buffer de stack trace (4096 bytes)
+
+        /// Recovery point para errores fatales de OS-level (access
+        /// violation / SIGSEGV cuando el bytecode dereferencia un
+        /// puntero host invalido).  El scheduler hace setjmp aqui antes
+        /// de cada batch de instrucciones; el VEH (Windows) o el
+        /// handler de SIGSEGV (POSIX) hace longjmp si av_recovery_active
+        /// esta activo y el proceso tiene un try/catch envolvente
+        /// (exc_frame_stack != nullptr).  Tras el longjmp el scheduler
+        /// llama @c throw_fatal con FATAL_SEGMENTATION_FAULT y la
+        /// direccion del AV; el flujo normal de @c do_throw redirige al
+        /// handler `catch (FatalError e)`.
+        ///
+        /// Sin esta infra, accesos a punteros host invalidos (e.g.
+        /// `*(i32*)0`, deref de un host_ptr stale tras free) crashean
+        /// el proceso entero de la VM en lugar de ser capturados.
+        std::jmp_buf av_recovery_jmpbuf;
+        bool         av_recovery_active = false;
+        uint64_t     pending_av_addr    = 0; ///< direccion bruta del AV (informativa)
 
         StringInternPool *str_intern_pool = nullptr; ///< Pool de strings internados (creado bajo demanda)
 

@@ -919,9 +919,71 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         case IrOp::CAST: case IrOp::ZEXT: case IrOp::SEXT:
         case IrOp::TRUNC: {
             if (!ins.operands.empty()) {
-                std::string rs = ctx.load_src(ins.operands[0], 0);
-                std::string rd = ctx.dst_of(ins.dst);
+                const std::string rs = ctx.load_src(ins.operands[0], 0);
+                const std::string rd = ctx.dst_of(ins.dst);
+                const IrType src_t = ctx.fn.values[ins.operands[0]].type;
+                const IrType dst_t = ins.type;
+                const uint64_t src_bytes = ir_type_size(src_t);
+                const uint64_t dst_bytes = ir_type_size(dst_t);
+                const bool dst_signed = (dst_t == IrType::I8
+                                      || dst_t == IrType::I16
+                                      || dst_t == IrType::I32
+                                      || dst_t == IrType::I64);
+                const bool src_signed = (src_t == IrType::I8
+                                      || src_t == IrType::I16
+                                      || src_t == IrType::I32
+                                      || src_t == IrType::I64);
+                // Mover el valor primero al registro destino.
                 emit_mov_if_needed(ctx, rd, rs);
+
+                // Bug fix: el codigo previo solo emitia el mov, sin
+                // truncar ni extender.  Esto dejaba los 8 bytes
+                // originales del registro fuente en el destino, asi
+                // que `i32 x = i64_value` no truncaba (`${x}` imprimia
+                // el valor i64 completo).  Ahora emitimos:
+                //   - TRUNC: AND con mascara del ancho destino;
+                //     ademas si el destino es signed, sign-extend de
+                //     vuelta a 64 bits para que ${x} (que lee qword)
+                //     vea el valor correcto con bit de signo
+                //     replicado.
+                //   - ZEXT: AND con mascara del ancho FUENTE para
+                //     descartar cualquier garbage en los bits altos.
+                //   - SEXT: AND con mascara del ancho FUENTE +
+                //     shl/sar para replicar el bit de signo de la
+                //     fuente en los bits altos del destino.
+                //   - CAST/BITCAST mismo ancho: solo el mov.
+                if (dst_bytes < src_bytes) {
+                    // Truncate.
+                    const int dst_bits = static_cast<int>(dst_bytes) * 8;
+                    if (dst_bits < 64) {
+                        const uint64_t mask = (1ULL << dst_bits) - 1ULL;
+                        ctx.out << "    mov r14, " << mask << "\n";
+                        ctx.out << "    and " << rd << ", r14\n";
+                        if (dst_signed) {
+                            // Sign-extend from dst_bits to 64.
+                            const int shift = 64 - dst_bits;
+                            ctx.out << "    mov r14, " << shift << "\n";
+                            ctx.out << "    shl " << rd << ", r14\n";
+                            ctx.out << "    sar " << rd << ", r14\n";
+                        }
+                    }
+                } else if (dst_bytes > src_bytes) {
+                    // Widen.
+                    const int src_bits = static_cast<int>(src_bytes) * 8;
+                    if (src_bits < 64) {
+                        const uint64_t mask = (1ULL << src_bits) - 1ULL;
+                        ctx.out << "    mov r14, " << mask << "\n";
+                        ctx.out << "    and " << rd << ", r14\n";
+                        if (src_signed) {
+                            // Sign-extend from src_bits to 64.
+                            const int shift = 64 - src_bits;
+                            ctx.out << "    mov r14, " << shift << "\n";
+                            ctx.out << "    shl " << rd << ", r14\n";
+                            ctx.out << "    sar " << rd << ", r14\n";
+                        }
+                    }
+                }
+                // Mismo ancho: solo el mov inicial.
                 ctx.store_spilled(ins.dst);
             }
             break;

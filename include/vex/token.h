@@ -83,6 +83,9 @@ namespace vex {
         ISTR_BEGIN,         ///< Inicio de string interpolado.
         ISTR_TEXT,          ///< Fragmento literal entre interpolaciones.
         ISTR_EXPR_BEGIN,    ///< Apertura de la expresion ${.
+        ISTR_EXPR_FMT,      ///< Especificador de formato tras `:` dentro
+                            ///< de `${expr:fmt}`.  El texto del formato
+                            ///< va en @c str_val sin tokenizar (raw).
         ISTR_EXPR_END,      ///< Cierre de la expresion }.
         ISTR_END,           ///< Fin de string interpolado.
 
