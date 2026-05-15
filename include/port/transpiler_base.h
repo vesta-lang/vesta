@@ -373,6 +373,106 @@ namespace port {
             ctx.out << "/* CALLVIRT no soportado en este backend */\n";
         }
 
+        /**
+         * @brief Emite CALLM (dispatch via @c MethodInfo* dinamico).
+         *
+         * Usado por interfaces y reflexion: el receptor @c obj es de tipo
+         * abstracto y @c method_ptr fue resuelto via @c findmethod en
+         * runtime.  En port C, el backend lo lowers a sealed dispatch
+         * cuando el tipo concreto del receiver se conoce; sino emite stub
+         * (requeriria ClassRegistry runtime).
+         *
+         * Default: emit_unsupported.
+         */
+        virtual void emit_callm(EmitContext &ctx,
+                                 ir::IrValueId dst,
+                                 ir::IrValueId obj,
+                                 ir::IrValueId method_ptr,
+                                 const std::vector<ir::IrValueId> &args,
+                                 ir::IrType ret_type) {
+            (void)dst; (void)obj; (void)method_ptr; (void)args; (void)ret_type;
+            ctx.indent();
+            ctx.out << "/* CALLM no soportado en este backend */\n";
+        }
+
+        /**
+         * @brief Emite CALLCLOSURE (call a un closure via slot 16 bytes).
+         *
+         * @c slot_ptr apunta a un struct @c {fn_addr, env_addr} en stack.
+         * El backend lo casts a un function pointer del tipo apropiado y
+         * llama @c fn(env_addr, args...).  Si @c env_addr == 0, el callee
+         * es una funcion libre sin captura.
+         *
+         * Default: emit_unsupported.
+         */
+        virtual void emit_call_closure(EmitContext &ctx,
+                                        ir::IrValueId dst,
+                                        ir::IrValueId slot_ptr,
+                                        const std::vector<ir::IrValueId> &args,
+                                        ir::IrType ret_type,
+                                        const ir::IrInstr &ins) {
+            (void)dst; (void)slot_ptr; (void)args; (void)ret_type; (void)ins;
+            ctx.indent();
+            ctx.out << "/* CALLCLOSURE no soportado en este backend */\n";
+        }
+
+        /**
+         * @brief Emite el call al trampoline de un SPAWN_ARGS multi-arg.
+         *
+         * El transpiler ya alloco @c __sa con los args; el backend conoce
+         * el helper destino y emite el dispatch.  Backend C: registra el
+         * (helper_name, argc) y emite el trampoline al final del modulo.
+         *
+         * Default: emit_unsupported.
+         */
+        virtual void emit_spawn_trampoline_call(EmitContext &ctx,
+                                                  ir::IrValueId fn_ptr,
+                                                  size_t argc,
+                                                  const std::string &args_var) {
+            (void)fn_ptr; (void)argc; (void)args_var;
+            ctx.indent();
+            ctx.out << "/* SPAWN_ARGS multi-arg no soportado en este backend */\n";
+        }
+
+        /**
+         * @brief Emite STR_LIT_ADDR: carga la direccion de un literal estatico.
+         *
+         * @c imm es el indice en @c IrModule::static_data.  El backend C
+         * lo resuelve a la direccion de @c __str_<imm> emitido en el prelude.
+         *
+         * Default: emit_unsupported.
+         */
+        virtual void emit_str_lit_addr(EmitContext &ctx,
+                                        ir::IrValueId dst,
+                                        uint64_t imm,
+                                        ir::IrType t) {
+            (void)ctx; (void)dst; (void)imm; (void)t;
+            ctx.indent();
+            ctx.out << "/* STR_LIT_ADDR no soportado en este backend */\n";
+        }
+
+        /**
+         * @brief Emite RAW_ASM: bloque de codigo del lenguaje destino verbatim
+         *        o equivalente reconocido por pattern-match.
+         *
+         * @c asm_text es el texto del @c .vel raw_asm; @c operands son los
+         * SSA values referenciados por @c {src0}, @c {src1}, etc.  El backend
+         * C trata de match el texto con una tabla de patrones (strmake,
+         * strcat, monenter, gchandle, etc.) y emite el equivalente C
+         * correspondiente.  Si no matchea, emit_unsupported.
+         *
+         * Default: emit_unsupported.
+         */
+        virtual void emit_raw_asm(EmitContext &ctx,
+                                   ir::IrValueId dst,
+                                   const std::string &asm_text,
+                                   const std::vector<ir::IrValueId> &operands,
+                                   ir::IrType t) {
+            (void)dst; (void)asm_text; (void)operands; (void)t;
+            ctx.indent();
+            ctx.out << "/* RAW_ASM no soportado en este backend */\n";
+        }
+
         // -------- GENERICO PARA IR OPS NO IMPLEMENTADAS --------
 
         /**

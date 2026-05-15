@@ -97,6 +97,22 @@ namespace vex {
          */
         bool run(ir::IrModule &out_module, const std::string &module_name);
 
+        /**
+         * @brief Habilita instrumentacion para debugging.  Cuando esta
+         * activa, el lowering emite @c CALLN sinteticas a
+         * @c "vex_trace:enter" al inicio y a @c "vex_trace:exit" antes
+         * de cada @c RET de cada funcion del usuario.  La instrumentacion
+         * vive en el IR -> todos los backends (bytecode VM, JIT, port C,
+         * futuros ports) la heredan automaticamente.
+         *
+         * @param mode @c "none" (default, sin instrumentacion),
+         *             @c "trace" (enter/exit con nombre + depth),
+         *             @c "profile" (timing per-funcion).
+         */
+        void set_instrument_mode(const std::string &mode) {
+            instrument_mode_ = mode;
+        }
+
     private:
         // -----------------------------------------------------------------
         // Helpers de tipo y constante.
@@ -794,6 +810,38 @@ namespace vex {
         /// que el local apunta.  Las re-asignaciones desde fuentes no
         /// trackeable (e.g. `cls = otroFn()`) borran la entrada.
         std::unordered_map<std::string, std::string> class_origin_of_local_;
+
+        /// Mapa SSA value -> clase concreta cuando el valor proviene de un
+        /// @c new Class() (o cadena MOV/PHI desde ese origen).  Permite
+        /// devirtualizar en tiempo de compilacion las llamadas via
+        /// interface receiver cuando el tipo concreto es estaticamente
+        /// conocido: el dispatch baja a CALLVIRT directo con el vtable_idx
+        /// del metodo en la CLASE concreta, sin necesidad del trio
+        /// findclass+findmethod+callm runtime.
+        ///
+        /// Coste: cero runtime; ~50 LOC en el lowering para mantenerlo.
+        /// Beneficio: tanto port C como JIT obtienen output devirtualizado
+        /// para el caso comun de `Iface x = new Impl(); x.metodo()`.
+        ///
+        /// Llave: IrValueId.  Valor: nombre de clase concreta.  Vacio = no
+        /// se conoce el tipo concreto estatico.
+        std::unordered_map<ir::IrValueId, std::string> ssa_concrete_class_;
+
+        /// Modo de instrumentacion: "none", "trace", "profile".  Cuando
+        /// no es "none", el lowering envuelve cada funcion usuario con
+        /// CALLs a @c vex_trace:enter y @c vex_trace:exit (o equivalente).
+        std::string instrument_mode_ = "none";
+
+        /// Helper: emite CALLN sintetica a @c "vex_trace:enter" con
+        /// argumento puntero al string literal del nombre de la funcion.
+        /// Usa @c out_mod_->intern_static_data para internar el nombre.
+        void emit_instrument_enter(const std::string &fn_name, uint32_t line);
+
+        /// Helper: emite CALLN sintetica a @c "vex_trace:exit" con
+        /// argumentos (fn_name_ptr, return_value).  Si @c v_ret es
+        /// @c IR_NO_VALUE (funcion void), se pasa @c 0.
+        void emit_instrument_exit(const std::string &fn_name,
+                                    ir::IrValueId v_ret, uint32_t line);
 
         /// Spill slots activos durante el body y catches de un try.
         /// Para cada variable del scope outer que se asigna dentro del try,

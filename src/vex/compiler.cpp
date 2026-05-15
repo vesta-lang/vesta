@@ -95,6 +95,9 @@ namespace vex {
         // sin recalcularlos.
         ir::IrModule irmod;
         Lowering lo(*mod, tc, res.diagnostics);
+        if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
+            lo.set_instrument_mode(opts.instrument_mode);
+        }
         const std::string mod_name = opts.module_name.empty() ? std::string("main")
                                                               : opts.module_name;
         if (!lo.run(irmod, mod_name)) {

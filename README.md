@@ -1,10 +1,131 @@
 # VestaVM
 
+VestaVM es una máquina virtual distribuida basada en registros diseñada para ejecutar el lenguaje de programación Vesta.
+
+El sistema integra tres modelos de ejecución dentro de un único runtime:
+- Interpretación directa de bytecode (baseline)
+- Compilación JIT (C1 basada en plantillas)
+- Transpilación de IR a C para generación de binarios nativos
+
+La VM está construida alrededor de un scheduler cooperativo de procesos ligeros, un recolector de basura generacional y una capa de ejecución distribuida nativa (VDP) sobre TCP/TLS.
+
+VestaVM es una plataforma experimental de ejecución de lenguajes diseñada para el estudio y prototipado de runtimes modernos. Orientada al estudio de arquitecturas modernas de máquinas virtuales, compiladores y sistemas distribuidos.
+
+## Capacidades
+
+- Lenguaje de programación completo (Vesta)
+- Máquina virtual basada en registros
+- Múltiples modos de ejecución:
+  - Intérprete
+  - JIT (C1 basado en plantillas, hasta ~13× más rápido que el intérprete)
+  - Transpilación IR -> C para binarios nativos
+
+- Scheduler cooperativo multi-hilo con procesos ligeros
+- Modelo de concurrencia tipo actor con comunicación por mailbox
+- Ejecución distribuida entre nodos (VDP sobre TCP + TLS)
+- Recolector de basura generacional con stack maps precisos para JIT
+- Interoperabilidad nativa mediante FFI (dlopen / dlsym / callni)
+- Sistema de reflexión en tiempo de ejecución (clases y métodos dinámicos)
+- AOP (programación orientada a aspectos: BEFORE / AFTER / AROUND)
+- Async/await basado en Future + mensajería
+- Soporte de depuración a nivel de código fuente (breakpoints, stack trace)
+
+## Arquitectura
+
+VestaVM se compone de los siguientes subsistemas:
+
+- Compilador frontend (Vesta -> bytecode)
+- Pipeline de optimización basado en SSA
+- Motor de ejecución basado en registros
+- Scheduler de procesos cooperativo
+- Sistema de memoria con arenas + GC generacional
+- Capa de red distribuida (VDP)
+
+Cada instancia de la VM puede funcionar de forma independiente o como nodo dentro de un clúster distribuido.
+
+## Pipeline de compilación
+
+El código fuente de Vesta pasa por las siguientes etapas:
+
+Código fuente (.vel)
+1. Lexer
+2. Parser (AST)
+3. Type Checker
+4. IR en SSA
+5. Optimizador
+6. Generación de bytecode (.velb)
+7. Linker
+8. Loader
+9. Ejecución en la VM
+
+## Modelo de ejecución
+
+- Máquina virtual basada en registros (16 registros generales + registros SIMD por proceso)
+- Scheduler cooperativo con cuotas de instrucciones (reducción de tiempo por proceso)
+- Procesos ligeros con pila aislada
+- Comunicación estilo actor mediante mailboxes
+- Ejecución multi-hilo opcional mediante pool de schedulers
+
+Cada proceso ejecuta hasta agotar su presupuesto de instrucciones o hasta entrar en una operación bloqueante (I/O, await, recepción de mensajes).
+
+## Sistema distribuido (VDP)
+
+VestaVM implementa un protocolo nativo llamado VDP (Vesta Distribution Protocol).
+
+Permite:
+- Creación de procesos remotos (rspawn)
+- Mensajería entre nodos (msgsend / msgrecv)
+- Sincronización de memoria entre VMs (memsync)
+- Resolución de Future entre nodos de forma transparente
+
+La comunicación se realiza sobre TCP con soporte opcional de TLS.
+
+Cada VM puede actuar como nodo independiente dentro de un clúster distribuido.
+
+## Sistema de memoria
+
+- Asignación mediante arenas por VM
+- Stack independiente por proceso
+- Heap compartido generacional
+
+## Recolector de basura
+
+- GC generacional (Young / Old)
+- Escaneo conservativo para frames del intérprete
+- Stack maps precisos para frames JIT
+- Puntos seguros (safepoints) para recolección
+- Referencias débiles y tracking de handles externos
+
+## JIT y generación de código
+
+- Compilador JIT basado en plantillas (C1)
+- Hasta ~13× de mejora respecto al intérprete en rutas calientes
+- Optimización SSA (eliminación de código muerto, propagación de constantes, copy propagation)
+- Transpilación IR -> C para generación de binarios nativos
+- Codificación de instrucciones optimizada manualmente
+
+## Interoperabilidad
+
+- FFI nativo (Windows / Linux)
+- Resolución dinámica de símbolos (dlopen / dlsym)
+- Acceso directo a memoria del host (zero-copy)
+- Llamadas a funciones nativas mediante ``calln``
+
+----
+
+## Decisiones de diseño destacadas
+
+- Máquina virtual basada en registros (mejor densidad de instrucciones que stack-based)
+- Modelo actor nativo (mailboxes + procesos ligeros)
+- GC generacional con stack maps precisos para habilitar JIT seguro
+- IR único compartido entre JIT y transpilador C
+- Sistema distribuido nativo (no RPC externo, sino parte del bytecode)
+
+----
+
 <div style="display: flex; align-items: center; gap: 20px;">
   <img src="./Component 1.svg" width="250" height="250" />
-  <p>
-    Vesta es una VM de bajo nivel y distribuida que está siendo desarrollada para un lenguaje de programación.
-    Esta VM se basa en el concepto de registros y memoria. Puede encontrar más información y documentación en el repositorio:<br><br>
+  <p>Puede encontrar más información y documentación en el repositorio:<br><br>
     <a href="https://github.com/desmonHak/VMdoc">https://github.com/desmonHak/VMdoc</a>
   </p>
 </div>
@@ -146,7 +267,7 @@ valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./vm```
 El ejecutable `vm` (o `vm.exe` en Windows) acepta distintos modos de operacion mediante flags.
 Los modos son mutuamente excluyentes: solo uno es activo por invocacion.
 
-### Compilacion de fuentes Vesta (`.vel` → `.velb`)
+### Compilacion de fuentes Vesta (`.vel` -> `.velb`)
 
 ```bash
 # Compilar un unico archivo fuente
