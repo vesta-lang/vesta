@@ -92,6 +92,10 @@ namespace vex {
             case TokenKind::KW_TREEMAP:      return "TreeMap";
             case TokenKind::KW_TREESET:      return "TreeSet";
             case TokenKind::KW_STACK:        return "Stack";
+            case TokenKind::KW_UNIQUE:       return "unique";
+            case TokenKind::KW_SHARED:       return "shared";
+            case TokenKind::KW_BORROW:       return "borrow";
+            case TokenKind::KW_BORROW_MUT:   return "borrow_mut";
             case TokenKind::KW_CONST:        return "const";
             case TokenKind::KW_STATIC:       return "static";
             case TokenKind::KW_FINAL:        return "final";
@@ -249,8 +253,10 @@ namespace vex {
                 VEX_KW_EXACT("asm",   TokenKind::KW_ASM);
                 break;
             case 'b':
-                VEX_KW_EXACT("bool",  TokenKind::KW_BOOL);
-                VEX_KW_EXACT("break", TokenKind::KW_BREAK);
+                VEX_KW_EXACT("bool",       TokenKind::KW_BOOL);
+                VEX_KW_EXACT("break",      TokenKind::KW_BREAK);
+                VEX_KW_EXACT("borrow_mut", TokenKind::KW_BORROW_MUT);
+                VEX_KW_EXACT("borrow",     TokenKind::KW_BORROW);
                 break;
             case 'c':
                 VEX_KW_EXACT("char",     TokenKind::KW_CHAR);
@@ -327,6 +333,7 @@ namespace vex {
                 VEX_KW_EXACT("super",        TokenKind::KW_SUPER);
                 VEX_KW_EXACT("spawn",        TokenKind::KW_SPAWN);
                 VEX_KW_EXACT("synchronized", TokenKind::KW_SYNCHRONIZED);
+                VEX_KW_EXACT("shared",       TokenKind::KW_SHARED);
                 break;
             case 't':
                 VEX_KW_EXACT("this",    TokenKind::KW_THIS);
@@ -345,6 +352,7 @@ namespace vex {
                 VEX_KW_EXACT("uint32_t", TokenKind::KW_UINT32_T);
                 VEX_KW_EXACT("uint64_t", TokenKind::KW_UINT64_T);
                 VEX_KW_EXACT("using",    TokenKind::KW_USING);
+                VEX_KW_EXACT("unique",   TokenKind::KW_UNIQUE);
                 break;
             case 'v':
                 VEX_KW_EXACT("void", TokenKind::KW_VOID);

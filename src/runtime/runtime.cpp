@@ -118,6 +118,38 @@ namespace runtime {
     void VM::start() {
         vm_running = true; // marcar la VM como activa
 
+        // Optimizacion (single-scheduler bypass): cuando hay un solo
+        // scheduler y el modo NO es persistente (dist-server), ejecutamos
+        // el run_loop SINCRONAMENTE en el thread llamante (main).  Esto
+        // ahorra:
+        //   - Latencia de OS-thread sched (~30 ms en Windows) del worker
+        //     del ThreadPool.
+        //   - Sincronizacion via condition_variable (cv.wait posterior
+        //     en el caller despierta inmediatamente porque run_loop
+        //     setea vm_running=false antes de retornar).
+        //
+        // Para programas triviales y tooling esta latencia es muy notable
+        // (representa el 50%+ del wall time).  Para programas grandes el
+        // overhead del pool es despreciable, pero la mejora sigue siendo
+        // 0% perdida y la simplicidad de single-thread es atractiva.
+        //
+        // El modo persistente (vm_persistent=true, dist-server) NO se
+        // beneficia: el run_loop nunca termina por si solo (espera procesos
+        // remotos via rspawn), bloquearia main para siempre.  Mantenemos
+        // el ThreadPool para ese caso.
+        if (num_schedulers == 1 && !vm_persistent) {
+            schedulers[0]->run_loop(); // bloquea hasta que todos los procs mueran
+            // run_loop ya setea vm_running=false + notifica done_cv cuando
+            // has_alive_processes() retorna false.  Defensivo: asegurar
+            // notify por si el run_loop salio por otra ruta (e.g. should_kill).
+            {
+                std::lock_guard<std::mutex> lk(done_mtx);
+                vm_running = false;
+            }
+            done_cv.notify_all();
+            return;
+        }
+
         for (uint32_t i = 0; i < num_schedulers; i++) {
             // someter la tarea del scheduler al pool y guardar el future
             std::future<void> fut = pool.submit([this, i] {

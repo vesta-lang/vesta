@@ -385,6 +385,26 @@ namespace vex::ast {
     struct Expr : Node {
         Type result_type{}; ///< Inicialmente VOID; el type checker lo rellena.
 
+        /// Borrow checker (F4 - lifetime elision): si esta Expr produce
+        /// un borrow<T>/borrow_mut<T> derivado de algun owner trackeable
+        /// (var local, param, etc.), aqui se guarda el nombre de ese
+        /// owner.  Vacio si no aplica o si la fuente no es trackeable.
+        /// Usado para propagar la "lifetime source" a traves de:
+        ///   - lend(x) / lend_mut(x): borrow_owner_source = x
+        ///   - identity_borrow(p): si la firma tiene 1 input borrow, el
+        ///     resultado hereda el source del arg
+        ///   - reborrow lend(b): borrow_owner_source = b's source
+        std::string borrow_owner_source;
+
+        /// Borrow checker (F3 ext - suspend semantics): si esta Expr es
+        /// un lend()/lend_mut() cuya fuente es un borrow_mut, aqui se
+        /// guarda el nombre de la fuente para que @c check_var_decl
+        /// pueda llamar @c mark_as_reborrow tras registrar el binding.
+        std::string borrow_reborrow_source_name;
+        /// Flag asociado: true si la fuente era borrow_mut (necesita
+        /// restore al drop).  False si era borrow shared o owner directo.
+        bool        borrow_reborrow_source_is_mut = false;
+
         explicit Expr(NodeKind k) : Node(k) {}
     };
 

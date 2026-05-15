@@ -121,6 +121,14 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
                 ActiveEntry spilled = *it_max;
                 active.erase(it_max);
                 result.spill_map[spilled.id] = result.spill_count++;
+                // CRITICAL Bug C fix: borrar reg_map[spilled.id] porque
+                // el reg pasa a `li.id`.  Sin esto, el desalojado quedaria
+                // en ambos reg_map (apuntando a reg ya reusado) y
+                // spill_map.  load_src/dst_of priorizan reg_map (lookup
+                // primero) y retornarian un reg con valor de OTRO IrValueId
+                // tras la reasignacion -> linked list / PHI nodes con
+                // punteros stale tras un CALL.
+                result.reg_map.erase(spilled.id);
                 // reusar el registro del desalojado para li
                 result.reg_map[li.id] = spilled.reg;
                 active.insert({li.end, li.id, spilled.reg});

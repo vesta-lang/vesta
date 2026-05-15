@@ -63,6 +63,16 @@ namespace runtime {
         ef->saved_rsp         = vm->registers.stack_pointer.qword();
         ef->saved_rbp         = vm->registers.base_pointer.qword();
         ef->saved_frame_stack = (uint64_t)(uintptr_t)vm->frame_stack;
+        // Snapshot de R0..R15 para que do_throw los restaure antes de
+        // saltar al handler.  Resuelve el problema clasico de regs
+        // clobreados durante el try-body que dejaban variables vivas
+        // del catch con valores stale (incluido `this` y parametros).
+        // Coste: 16 store de qword en tryenter (raro) + 16 load qword
+        // en do_throw (raro tambien).  Despreciable comparado con un
+        // AV/throw real.
+        for (int i = 0; i < 16; ++i) {
+            ef->saved_regs[i] = vm->registers.regs[i].qword();
+        }
         ef->prev       = vm->exc_frame_stack;                           // encadenar con el frame anterior
         vm->exc_frame_stack = ef;                                       // empujar al tope de la pila
 

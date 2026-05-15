@@ -114,6 +114,17 @@ namespace vex {
         // Avanza hasta el siguiente punto de "respiracion": fin de
         // statement, cierre de bloque, o el inicio de una declaracion
         // de top-level.  Esto evita reportar 50 errores cuando solo hubo 1.
+        //
+        // GARANTIA DE PROGRESO: consume SIEMPRE al menos un token antes
+        // de chequear sync points.  Sin esto, si el parser fallo
+        // dejando current_ sobre un sync-point keyword (e.g. KW_FN),
+        // parse_program quedaria en bucle infinito: parse_top_level_decl
+        // falla -> synchronize ve KW_FN -> retorna sin consumir -> retry.
+        // Bug observado: `fn my_release(p: i64) { }` con sintaxis Rust-style
+        // a nivel top-level (Vex usa C-style `T name(T param)`) causaba
+        // 5+ GB de RAM al crecer indefinidamente el AST.
+        if (current_.kind == TokenKind::END_OF_FILE) return;
+        (void)consume();   // forzar progreso
         while (current_.kind != TokenKind::END_OF_FILE) {
             if (current_.kind == TokenKind::SEMICOLON) {
                 (void)consume();
@@ -400,7 +411,21 @@ namespace vex {
 
         // Lista de parametros vacia o coma-separada.
         if (current_.kind != TokenKind::RPAREN) {
+            // Cota dura para evitar loops infinitos por bugs en parse_param.
+            // En la practica nunca se declara >256 params; 1024 es defensivo.
+            constexpr size_t MAX_PARAMS = 1024;
+            size_t           param_count = 0;
             while (true) {
+                if (current_.kind == TokenKind::END_OF_FILE
+                 || current_.kind == TokenKind::LBRACE
+                 || current_.kind == TokenKind::RBRACE) {
+                    error_here("se esperaba ')' antes de fin de archivo o '{'");
+                    break;
+                }
+                if (++param_count > MAX_PARAMS) {
+                    error_here("demasiados parametros (>1024); error de sintaxis no recuperable");
+                    break;
+                }
                 auto p = parse_param();
                 if (p) fn->params.push_back(std::move(p));
                 if (!match(TokenKind::COMMA)) break;
@@ -679,7 +704,8 @@ namespace vex {
             // como `pointee` (1er arg) y `pointee2` (2do arg) -- mismo
             // mecanismo que Optional<T> y Result<V,E>.
             if (current_.kind == TokenKind::LT) {
-                // Solo aceptamos type args para tipos de coleccion.
+                // Solo aceptamos type args para tipos de coleccion o smart
+                // pointers (unique<T> / shared<T>).
                 const bool is_col = (k == PrimitiveKind::ARRAYLIST
                                   || k == PrimitiveKind::HASHMAP
                                   || k == PrimitiveKind::HASHSET
@@ -688,7 +714,11 @@ namespace vex {
                                   || k == PrimitiveKind::TREEMAP
                                   || k == PrimitiveKind::TREESET
                                   || k == PrimitiveKind::STACK);
-                if (is_col) {
+                const bool is_smart_ptr = (k == PrimitiveKind::UNIQUE_PTR
+                                        || k == PrimitiveKind::SHARED_PTR);
+                const bool is_borrow    = (k == PrimitiveKind::BORROW
+                                        || k == PrimitiveKind::BORROW_MUT);
+                if (is_col || is_smart_ptr || is_borrow) {
                     (void)consume(); // '<'
                     while (current_.kind != TokenKind::GT
                         && current_.kind != TokenKind::END_OF_FILE) {
@@ -697,7 +727,7 @@ namespace vex {
                         pt->type_args.push_back(std::move(ta));
                         if (!match(TokenKind::COMMA)) break;
                     }
-                    (void)expect(TokenKind::GT,
+                    (void)expect_close_angle(
                         "se esperaba '>' al cerrar argumentos de tipo");
                 }
                 // Si no es coleccion, dejamos el '<' para que el caller
@@ -751,6 +781,19 @@ namespace vex {
             base = std::move(nt);
         } else {
             error_here("se esperaba un tipo");
+            // Sincronizacion: consumir el token de error para que el caller
+            // no vuelva a procesarlo y entre en bucle infinito (caso clasico:
+            // `fn name(p: i64)` con sintaxis Rust-style en params).  Sin
+            // esto, parse_param/etc llaman a parse_type_node repetidamente
+            // sobre el mismo token y el vector de params crece sin limite
+            // -> RAM exhaustion.
+            if (current_.kind != TokenKind::END_OF_FILE
+             && current_.kind != TokenKind::RBRACE
+             && current_.kind != TokenKind::RPAREN
+             && current_.kind != TokenKind::SEMICOLON
+             && current_.kind != TokenKind::COMMA) {
+                (void)consume();
+            }
             return nullptr;
         }
         // Postfix: cada '*' apila un PointerTypeNode adicional.
