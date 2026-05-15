@@ -914,6 +914,112 @@ namespace Assembly::Bytecode {
         Assembler *            assembly_ctx
     );
 
+    /**
+     * @brief Emite los operandos de @c gcallocp (extended 0x65, FIXED_4, 2 regs).
+     *
+     * Encoding fisico: [0x00][0x65][b2][0x00] con b2 = (r_dst<<4) | r_size.
+     * Aloca en GcHeap y deja host_ptr al payload en r_dst (1 instr VM vs 3
+     * de la secuencia gcalloc + gcderef + xchg).
+     */
+    void emit_instr_gcallocp(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c spawnargs (extended 0x66, FIXED_4, 1 reg).
+     *
+     * Encoding fisico: [0x00][0x66][b2][0x00] con b2 = (r_pc<<4).  Copia
+     * R1..R[R15] del padre al child antes de make_ready.  Calling convention
+     * identica a CALLVM (argc en R15, args en R1..R12).
+     */
+    void emit_instr_spawnargs(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c fulfillhlt (extended 0x67, FIXED_4, 2 regs).
+     *
+     * Encoding fisico: [0x00][0x67][b2][0x00] con b2 = (r_fut<<4) | r_value.
+     * Combina fulfill + hlt en 1 instruccion para el path critico del helper
+     * @Async (cada `return X` del body emite un solo fulfillhlt).
+     */
+    void emit_instr_fulfillhlt(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c cmpjmp.cc (extended 0x68, FIXED_8, 2 regs + label).
+     *
+     * Encoding fisico: [0x00][0x68][b2][cond_byte][target_u32_LE].
+     *   b2 = (r_a<<4) | r_b
+     *   cond_byte = 0x00..0x0D (mismo set que jmp.j*).
+     *   target_u32 = direccion absoluta del label (4 bytes LE; falla si VA > 4GB).
+     *
+     * El handler extrae el sufijo del mnemonic (".je", ".jne", etc.) para
+     * determinar @c cond_byte.  Comparacion signed (cmps).
+     */
+    void emit_instr_cmpjmp_signed(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c cmpjmpu.cc (extended 0x69, FIXED_8, 2 regs + label).
+     *
+     * Identico a @c cmpjmp_signed pero comparacion unsigned (cmpu).
+     */
+    void emit_instr_cmpjmp_unsigned(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los operandos de @c decjnz (extended 0x6A, FIXED_8, 1 reg + label).
+     *
+     * Encoding fisico: [0x00][0x6A][b2][0x00][target_u32_LE].
+     *   b2 = (r_counter<<4) | 0
+     *   target_u32 = direccion absoluta del label (4 bytes LE).
+     *
+     * Decremento + branch-if-not-zero en 1 instr.  Ahorra 2 instr por iter
+     * en loops `for (i = N; i > 0; i--)`.
+     */
+    void emit_instr_decjnz(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite los 4 bytes de fastpush / fastpop con bitmask de registros.
+     *
+     * Formato fisico: el prefijo (0x00 + opcode2) ya fue emitido por el dispatcher
+     * de assemble_instruction.  Este emit produce los 2 bytes de mascara:
+     *   byte 0: mask & 0xFF       (bits r0..r7)
+     *   byte 1: (mask >> 8) & 0xFF (bits r8..r15)
+     *
+     * El operando debe ser un NumberOperand con valor 0..0xFFFF.
+     */
+    void emit_instr_fastmask(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
     // -------------------------------------------------------------------------
     // Helpers para registros ZMM (f/xmm/ymm/zmm)
     // -------------------------------------------------------------------------

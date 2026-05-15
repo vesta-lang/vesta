@@ -24,6 +24,8 @@
 #include "distrib/dist_runtime.h"
 #include "distrib/dist_debug.h"
 #include "runtime/runtime.h"
+#include "debug/debugger.h"
+#include "jit/interp_jit_bridge.h"  // D.3-E: dispatch a jit_entry_fn al iniciar main
 
 #include <csetjmp>
 #include <cstdio>
@@ -108,6 +110,15 @@ namespace runtime {
         goto *dispatch_table[instance->state];
 
     EXECUTE_LABEL:
+        // hook del debugger ANTES de cada instruccion del slow path.
+        // En el caso comun (sin breakpoints ni step) el fast path interno
+        // de on_before_exec se resuelve en 2 atomic loads + 1 branch
+        // (~1 ns).  Cuando hay breakpoint en el PC actual, esta llamada
+        // bloquea el hilo del scheduler hasta que el cliente envie
+        // CONTINUE/STEP/NEXT.
+        if (vm_reference.debugger != nullptr) {
+            vm_reference.debugger->on_before_exec(process);
+        }
         // ejecutar la instruccion; si es bloqueante retorna EVT_IO_WAIT, si no EVT_EXEC_DONE
         on_event(execute_instruction(process));
         return;
@@ -316,6 +327,27 @@ namespace runtime {
                 continue;
             }
 
+            // ---- JIT entry dispatch para el main del proceso ----
+            // Si el proceso tiene jit_entry_fn (Loader eager-compilo main),
+            // ejecutarlo UNA VEZ directamente en codigo nativo.  Al retornar,
+            // marcar como HALT y continuar.  Esto cierra el gap "main es
+            // free function y nunca dispara CALLVIRT".
+            if (instance->jit_entry_fn != nullptr && instance->tsc == 0) {
+                void *fn_ptr = instance->jit_entry_fn;
+                instance->jit_entry_fn = nullptr;  /* one-shot */
+                instance->state.store(EXECUTE, std::memory_order_relaxed);
+                /* Llamar al codigo nativo de main.  R0 al retornar contendra
+                 * el return value de main (escrito por el RET con VM_ABI).
+                 * El JIT-eated main puede invocar metodos via CALLVIRT
+                 * (que en el selector baja a vrt_callvirt -> enter_jit). */
+                jit::JitFn jf = reinterpret_cast<jit::JitFn>(fn_ptr);
+                (void)jit::enter_jit(jf, reinterpret_cast<vrt_proc *>(instance));
+                /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */
+                instance->state.store(HALT, std::memory_order_release);
+                instance->tsc = 1;  /* marcar que ya ejecuto algo */
+                continue;  /* volver al outer loop a buscar otro proceso */
+            }
+
             if (!has_hooks) {
                 // === FAST PATH: decode + execute directo sin FSM completa ni hooks ===
                 // perf: izar el state store fuera del bucle
@@ -398,12 +430,17 @@ namespace runtime {
                                 }
                                 break;
                             }
-                            case 0x15: { // mov reg-imm i64 (direction=0 = reg dst)
-                                if (fl_inl.direction == 0) {
+                            case 0x15: { // mov reg-imm i64 (direction=0, signed=0 = reg dst general)
+                                // El fast path solo cubre el caso "mov reg, imm"
+                                // (variant 2 del exec): direction=0 Y signed=0.  Si
+                                // signed=1 con direction=0 es "mov [reg], imm" (escritura
+                                // a memoria, variant 3); si direction=1 es write a registro
+                                // especial (variant 1).  Ambos casos van por slow path.
+                                if (fl_inl.direction == 0 && fl_inl._signed_instruct == 0) {
                                     const uint8_t r = d->data_instruction.inmmed_data.reg;
                                     regs[r].qword(d->data_instruction.inmmed_data.inmmed);
                                 } else {
-                                    hit = false; // direction=1 = mem dst, slow path
+                                    hit = false; // mem dst o special reg dst -> slow path
                                 }
                                 break;
                             }
@@ -444,6 +481,58 @@ namespace runtime {
                                 }
                                 break;
                             }
+                            // Optimizacion C (expanded fast-path): mas opcodes
+                            // muy comunes en hot loops aritmeticos y bitwise.
+                            // Cubren ~10-15% adicional vs el fast path previo.
+                            case 0x08: { // sub reg-reg i64
+                                const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                                const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                                const uint64_t a = regs[r1].qword();
+                                const uint64_t b = regs[r2].qword();
+                                const uint64_t res = a - b;
+                                regs[r1].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = (int64_t)res < 0;
+                                if (fl_inl._signed_instruct) {
+                                    fl.OF = (((int64_t)a ^ (int64_t)b) &
+                                             ((int64_t)a ^ (int64_t)res)) < 0;
+                                    fl.CF = 0;
+                                } else {
+                                    fl.CF = a < b;
+                                    fl.OF = 0;
+                                }
+                                break;
+                            }
+                            case 0x17: { // and reg-reg i64
+                                const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                                const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                                const uint64_t res = regs[r1].qword() & regs[r2].qword();
+                                regs[r1].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = (int64_t)res < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            }
+                            case 0x18: { // or reg-reg i64
+                                const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                                const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                                const uint64_t res = regs[r1].qword() | regs[r2].qword();
+                                regs[r1].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = (int64_t)res < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            }
+                            case 0x19: { // xor reg-reg i64
+                                const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                                const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                                const uint64_t res = regs[r1].qword() ^ regs[r2].qword();
+                                regs[r1].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = (int64_t)res < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            }
                             default:
                                 hit = false;
                         }
@@ -454,6 +543,62 @@ namespace runtime {
                             --instance->reductions_remaining;
                             continue;
                         }
+                    }
+                    // Optimizacion C (cmpjmp/cmpjmpu fast path): ambos opcodes
+                    // son extendidos (is_not_extended == 0x00) con opcode2
+                    // 0x68/0x69.  Tras la fusion CMP+BR_COND del IR emitter
+                    // estos son ahora EXTREMADAMENTE comunes en hot loops
+                    // (bound check de while/for).  Inline aqui evita el
+                    // indirect call a exec_cached + el switch del cond_byte
+                    // en exec_instruction_alu.cpp.
+                    if (__builtin_expect(
+                          fl_inl.is_not_extended == 0x00 &&
+                          (fl_inl.opcode_index == 0x68 || fl_inl.opcode_index == 0x69),
+                          0)) {
+                        const auto &sd = d->data_instruction.static_data;
+                        auto    &regs2 = instance->registers.regs;
+                        auto    &fl2   = instance->registers.flags.bits;
+                        const uint64_t a = regs2[sd.r0].qword();
+                        const uint64_t b = regs2[sd.r1].qword();
+                        const uint64_t res = a - b;
+                        fl2.ZF = (res == 0);
+                        fl2.SF = static_cast<int64_t>(res) < 0;
+                        if (fl_inl.opcode_index == 0x68) { // signed
+                            fl2.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
+                                      (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0;
+                            fl2.CF = 0;
+                        } else { // unsigned (0x69)
+                            fl2.CF = a < b;
+                            fl2.OF = 0;
+                        }
+                        const uint8_t cond = static_cast<uint8_t>(sd._pad);
+                        bool taken;
+                        switch (cond) {
+                            case 0x00: taken = (fl2.ZF == 1); break;
+                            case 0x01: taken = (fl2.ZF == 0); break;
+                            case 0x02: taken = (fl2.CF == 1); break;
+                            case 0x03: taken = (fl2.CF == 0); break;
+                            case 0x04: taken = (fl2.SF == 1); break;
+                            case 0x05: taken = (fl2.SF == 0); break;
+                            case 0x06: taken = (fl2.OF == 1); break;
+                            case 0x07: taken = (fl2.OF == 0); break;
+                            case 0x08: taken = (fl2.CF == 0 && fl2.ZF == 0); break;
+                            case 0x09: taken = (fl2.CF == 1 || fl2.ZF == 1); break;
+                            case 0x0A: taken = (fl2.SF == fl2.OF); break;
+                            case 0x0B: taken = (fl2.SF != fl2.OF); break;
+                            case 0x0C: taken = (fl2.ZF == 0 && fl2.SF == fl2.OF); break;
+                            case 0x0D: taken = (fl2.ZF == 1 || fl2.SF != fl2.OF); break;
+                            default:   taken = true; break;
+                        }
+                        if (taken) {
+                            instance->registers.rip.qword(static_cast<uint64_t>(sd.offset));
+                        } else {
+                            instance->registers.rip.qword(
+                                instance->registers.rip.raw() + fl_inl.size_instr);
+                        }
+                        ++profiler_instr_counter;
+                        --instance->reductions_remaining;
+                        continue;
                     }
                     // Fast path para jmp/jcc primary 0x11 (independiente del mode).
                     if (__builtin_expect(fl_inl.is_not_extended == 0x11, 0)) {
@@ -630,6 +775,14 @@ namespace runtime {
                                  (int)instance->err_thread,
                                  (unsigned long long)instance->tsc,
                                  (unsigned long long)instance->registers.rip.raw());
+                        // Notificar al debugger del fin del proceso.  Los
+                        // clientes conectados reciben evento "exit" con el
+                        // PID y el codigo en R0 + err_thread para que
+                        // distingan HALT normal de DEAD/abort.
+                        if (vm_reference.debugger != nullptr) {
+                            vm_reference.debugger->on_process_exit(
+                                instance->pid.local_pid);
+                        }
                         // notificar al nodo origen si el proceso vino de un rspawn remoto
                         if (instance->rspawn_future_id != 0 &&
                             instance->rspawn_origin_node != 0xFFFFFFFFu &&

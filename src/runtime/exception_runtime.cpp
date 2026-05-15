@@ -6,8 +6,10 @@
 #include "runtime/exception_runtime.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/scheduler.h"
+#include "runtime/runtime.h"
 #include "loader/loader.h"
 #include "loader/class_registry.h"
+#include "debug/debugger.h"
 
 #include <csetjmp>
 #include <cstdarg>
@@ -317,6 +319,18 @@ namespace runtime {
 
     void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
         if (!vm) return;
+
+        // Notificar al debugger de la excepcion ANTES de elegir ruta
+        // (capturable o fatal).  El cliente recibe evento "exception"
+        // con clase + pid; util para parar y ver el contexto incluso
+        // si el codigo del usuario captura la excepcion.  Si no hay
+        // debugger activo (caso comun), la rama es 1 carga + 1 branch
+        // bien predicho (~0 ns en hot path).
+        if (vm->scheduler.vm_reference.debugger != nullptr) {
+            vm->scheduler.vm_reference.debugger->on_exception(
+                vm->pid.local_pid,
+                message ? std::string(message) : std::string("FatalError"));
+        }
 
         // FAST PATH: si no hay handler activo, ruta antigua.  Esto es
         // el caso comun (programas sin try/catch envolvente).  Cero

@@ -499,6 +499,106 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print(uint64_t proc_ptr,
     return 0;
 }
 
+/* -----------------------------------------------------------------------
+ * Stringify helpers usados por la interpolacion `${expr}` en contexto
+ * STRING (e.g. `this.field = "msg ${count}"`).  Cada uno escribe la
+ * representacion ASCII del valor a un buffer en MEMORIA VM y devuelve
+ * la longitud en bytes.  El compilador combina cada llamada con un
+ * STRMAKE posterior para producir un StringObject GC-managed que se
+ * concatena via STRCAT con las partes literales.
+ *
+ * Convencion de buffers: 32 bytes son suficientes para i64/u64
+ * (max 20 caracteres + signo) y para hex de 64 bits ("0x" + 16
+ * digitos = 18 caracteres).
+ * ----------------------------------------------------------------------- */
+
+VESTA_PLUGIN_EXPORT uint64_t vio_int_to_vmbuf(uint64_t proc_ptr,
+                                               uint64_t vm_addr,
+                                               uint64_t value) {
+    char   tmp[32];
+    size_t k = vio_i64_to_str((int64_t) value, tmp);
+    g_api->vm_write_bytes((void *) proc_ptr, vm_addr, tmp, k);
+    return (uint64_t) k;
+}
+
+VESTA_PLUGIN_EXPORT uint64_t vio_uint_to_vmbuf(uint64_t proc_ptr,
+                                                uint64_t vm_addr,
+                                                uint64_t value) {
+    char   tmp[32];
+    size_t k = vio_u64_to_str(value, tmp);
+    g_api->vm_write_bytes((void *) proc_ptr, vm_addr, tmp, k);
+    return (uint64_t) k;
+}
+
+VESTA_PLUGIN_EXPORT uint64_t vio_hex_to_vmbuf(uint64_t proc_ptr,
+                                               uint64_t vm_addr,
+                                               uint64_t value) {
+    char   tmp[32];
+    size_t k = vio_u64_to_hex(value, tmp);
+    g_api->vm_write_bytes((void *) proc_ptr, vm_addr, tmp, k);
+    return (uint64_t) k;
+}
+
+VESTA_PLUGIN_EXPORT uint64_t vio_bool_to_vmbuf(uint64_t proc_ptr,
+                                                uint64_t vm_addr,
+                                                uint64_t value) {
+    /* "true" (4) o "false" (5). */
+    const char *s = value ? "true" : "false";
+    size_t      k = value ? 4u : 5u;
+    g_api->vm_write_bytes((void *) proc_ptr, vm_addr, s, k);
+    return (uint64_t) k;
+}
+
+VESTA_PLUGIN_EXPORT uint64_t vio_char_to_vmbuf(uint64_t proc_ptr,
+                                                uint64_t vm_addr,
+                                                uint64_t codepoint) {
+    /* Codifica el codepoint en UTF-8 (1-4 bytes). */
+    char   tmp[8];
+    size_t k = 0;
+    uint32_t cp = (uint32_t) codepoint;
+    if (cp < 0x80) {
+        tmp[k++] = (char) cp;
+    } else if (cp < 0x800) {
+        tmp[k++] = (char) (0xC0 | (cp >> 6));
+        tmp[k++] = (char) (0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        tmp[k++] = (char) (0xE0 | (cp >> 12));
+        tmp[k++] = (char) (0x80 | ((cp >> 6) & 0x3F));
+        tmp[k++] = (char) (0x80 | (cp & 0x3F));
+    } else {
+        tmp[k++] = (char) (0xF0 | (cp >> 18));
+        tmp[k++] = (char) (0x80 | ((cp >> 12) & 0x3F));
+        tmp[k++] = (char) (0x80 | ((cp >> 6) & 0x3F));
+        tmp[k++] = (char) (0x80 | (cp & 0x3F));
+    }
+    g_api->vm_write_bytes((void *) proc_ptr, vm_addr, tmp, k);
+    return (uint64_t) k;
+}
+
+VESTA_PLUGIN_EXPORT uint64_t vio_ptr_to_vmbuf(uint64_t proc_ptr,
+                                               uint64_t vm_addr,
+                                               uint64_t addr) {
+    /* Compacto: "0x" + minimos digitos hex (max 18 caracteres). */
+    char     tmp[32];
+    size_t   k    = 0;
+    tmp[k++]      = '0';
+    tmp[k++]      = 'x';
+    if (addr == 0) {
+        tmp[k++] = '0';
+    } else {
+        char   rev[16];
+        size_t r = 0;
+        while (addr > 0) {
+            uint64_t d = addr & 0xFu;
+            rev[r++]   = (char) (d < 10 ? '0' + d : 'a' + (d - 10));
+            addr >>= 4;
+        }
+        while (r > 0) tmp[k++] = rev[--r];
+    }
+    g_api->vm_write_bytes((void *) proc_ptr, vm_addr, tmp, k);
+    return (uint64_t) k;
+}
+
 /**
  * @brief Imprime una cadena de la memoria VM y agrega '\n'.
  */

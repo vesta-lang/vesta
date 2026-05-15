@@ -439,6 +439,20 @@ namespace vex {
         void           generate_module_init_function(ir::IrModule &out);
 
         /**
+         * @brief Exporta @c TypeChecker::class_layouts_ al @c IrModule::classes.
+         *
+         * Convierte el modelo interno del frontend Vex a la representacion
+         * portable del IR.  Cada @c ClassLayout produce un @c ir::IrClass
+         * con sus fields/methods/super/interfaces.  Esta info la consumen
+         * los transpilers (port-C, port-Java, ...) para emitir POO eficiente
+         * sin tener que reconstruir el modelo desde @c __module_init.
+         *
+         * Clases @c is_runtime_predefined (FatalError, etc.) se omiten:
+         * el runtime las define y los transpilers no deben re-emitirlas.
+         */
+        void           export_classes_to_ir(ir::IrModule &out);
+
+        /**
          * @brief Lower de @c this -> primer parametro del metodo en curso.
          */
         ir::IrValueId  lower_this_expr(ast::ThisExpr *e);
@@ -653,6 +667,16 @@ namespace vex {
         /// caller sin use-after-free.
         std::unordered_set<std::string> fn_returns_function_;
 
+        /// Funciones cuyo return type es @c unique<T> o @c shared<T>.
+        /// Igual que @c fn_returns_function_ pero con buffer SRET de 8
+        /// bytes (slot del smart pointer).  El @c return p en el body
+        /// copia los 8 bytes del slot local al retbuf del caller; el
+        /// caller bindea la variable receptora directamente al retbuf,
+        /// donde ya viven los datos correctos.  Cleanup del local NO
+        /// se emite (escape detection lo detecta via "return ident"),
+        /// pero el caller registra cleanup sobre el retbuf.
+        std::unordered_set<std::string> fn_returns_smartptr_;
+
         /// indicador activo durante el lowering del body de una
         /// funcion que retorna FUNCTION.  Disparado en @c lower_function
         /// y consultado por @c lower_lambda_expr para alocar el env
@@ -733,6 +757,12 @@ namespace vex {
         /// helper de futuras analizadores de escape mas precisas.
         void scan_escaping_locals(ast::Stmt *body);
 
+        /// Bug D fix: propagar @c is_gc_object a traves de todos los PHI
+        /// nodes de la funcion hasta punto fijo.  Llamado al final de cada
+        /// lowering de funcion (top-level, class methods, helpers
+        /// sintetizados) justo antes de @c IrModule::add_function.
+        void propagate_is_gc_object_through_phis(ir::IrFunction &fn);
+
         /// Limitacion A (cerrada): subset de @c address_taken_locals_ cuyo
         /// contenido es un puntero a memoria HOST (resultado de malloc o
         /// derivado).  Lo registra @c write_local cada vez que el valor
@@ -752,6 +782,18 @@ namespace vex {
         /// IrValue propagado a traves de @c &x.  Documentado como gap
         /// remanente; requiere acuerdo de diseno antes de implementarse.
         std::unordered_set<std::string> host_bearing_locals_;
+
+        /// Mapa de variables locales tipo `Class` cuyo origen es un
+        /// `Class.forName("X")` con literal X.  Permite que el lowering
+        /// de `cls.newInstance()` detecte la clase concreta en compile
+        /// time y emita `new X()` (que SI llama al constructor via
+        /// `__new_<X>` synthetic) en lugar del NEWOBJ raw que no llama
+        /// al ctor.  Coste: cero (el helper `__new_<X>` ya existia).
+        ///
+        /// Llave: nombre del local Class.  Valor: nombre de la clase X
+        /// que el local apunta.  Las re-asignaciones desde fuentes no
+        /// trackeable (e.g. `cls = otroFn()`) borran la entrada.
+        std::unordered_map<std::string, std::string> class_origin_of_local_;
 
         /// Spill slots activos durante el body y catches de un try.
         /// Para cada variable del scope outer que se asigna dentro del try,
@@ -798,7 +840,16 @@ namespace vex {
             ///               primer argumento (variantes @c *_free_gc de A.30).
             ///               El regalloc trata el CALLN como cualquier call,
             ///               preservando regs caller-saved automaticamente.
-            enum class Kind { RAW_ASM, CALL_DTOR, CALLN_FREE };
+            ///   SMARTPTR_FREE: libera un @c unique<T> al exit del scope.
+            ///                  Sigue el patron: cargar ptr del slot stack,
+            ///                  saltar si es 0 (moved), invocar deleter
+            ///                  literal (free, fclose, ~T()).  Para Tier 0
+            ///                  el deleter es CALLN a @c free.  Para Tier 1
+            ///                  con deleter custom usa el field +8 del slot.
+            ///   SHAREDPTR_REL: decremento del refcount de un @c shared<T> al
+            ///                  exit del scope.  Si llega a 0 invoca el
+            ///                  deleter sobre payload (ctrl_block + 16).
+            enum class Kind { RAW_ASM, CALL_DTOR, CALLN_FREE, SMARTPTR_FREE, SHAREDPTR_REL };
             Kind                         kind = Kind::RAW_ASM;
             // --- Comun ---
             std::vector<ir::IrValueId>   operands;     ///< valores SSA referenciados
@@ -810,11 +861,38 @@ namespace vex {
             std::string                  asm_text;     ///< plantilla con {src0..}
             // --- CALL_DTOR ---
             uint32_t                     dtor_vtable_index = 0;
-            // --- CALLN_FREE ---
+            // --- CALLN_FREE / SMARTPTR_FREE / SHAREDPTR_REL ---
             std::string                  func_name;    ///< "lib:symbol" para CALLN
             bool                         needs_proc = false; ///< prepend GETPROC
+            // --- SMARTPTR_FREE / SHAREDPTR_REL ---
+            /// SSA value del PTR al slot del smart pointer (donde vive el ptr).
+            /// Usado para LOAD del valor actual y CMP_EQ 0 (skip si moved).
+            ir::IrValueId                slot_addr = 0;
+            /// Nombre del deleter.  Tres formatos:
+            ///   "free"                  -> emite IrOp::RAW_FREE directo
+            ///                              (deleter por defecto de unique_box).
+            ///   "<vesta_fn_name>"       -> emite CALLVM @Method al simbolo
+            ///                              Vesta declarado por el usuario.
+            ///                              Cero overhead: 1 LOAD + 1 CALLVM.
+            ///   "@extern:<lib>:<fn>"    -> emite CALLN al simbolo nativo
+            ///                              de la libreria.  El prefijo "@extern:"
+            ///                              discrimina extern vs Vesta.
+            std::string                  literal_deleter;
+            /// Tamano del slot del smart pointer (8 para Tier 0).
+            uint32_t                     slot_size = 8;
         };
         std::vector<CleanupAction> cleanup_stack_;
+        /// Contador para etiquetas unicas en cleanups que emiten labels
+        /// (smart pointer cleanups con branches internos).  Cada invocacion
+        /// de emit_cleanups consume el siguiente valor; garantiza que dos
+        /// cleanups no colisionen en el mismo label dentro de la misma
+        /// funcion (caso comun: 2 vars unique<T> en el mismo scope).
+        uint32_t                   cleanup_label_seq_ = 0;
+        /// Canal compartido entre @c try_lower_builtin_call (unique_with /
+        /// shared_with) y @c lower_var_decl para pasar el nombre del deleter
+        /// custom al cleanup pendiente.  Vacio = usar el deleter por
+        /// defecto ("free").  Se limpia tras consumirse en lower_var_decl.
+        std::string                pending_smartptr_deleter_;
 
         /// Stack de targets de break/continue para los loops anidados.
         /// Cada vez que entramos a un while/for/do-while se hace push de
