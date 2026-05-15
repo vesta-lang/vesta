@@ -88,6 +88,19 @@ namespace vex {
         /// Opciones del transpiler (GC, EH, type style).  Solo se consulta
         /// si @c port_target != "".  Default segun PortOptions::PortOptions.
         port::PortOptions port_options;
+
+        /// Instrumentacion para debugging: cuando esta activa, el lowering
+        /// emite CALLs sinteticas a @c "vex_trace:enter" y @c "vex_trace:exit"
+        /// al inicio y antes de cada @c RET de cada funcion del usuario.
+        /// Como las trazas estan en el IR (no en un backend especifico),
+        /// el bytecode VM, el JIT y todos los ports (C, futuro Java, JS)
+        /// las heredan automaticamente.
+        ///   "none" (default) - sin instrumentacion (cero overhead).
+        ///   "trace"          - imprime "ENTER name" y "EXIT name = value"
+        ///                      con indentacion segun call depth.
+        ///   "profile"        - mide tiempo per-funcion (rdtsc); imprime
+        ///                      estadisticas al exit del programa.
+        std::string instrument_mode;
     };
 
     /**

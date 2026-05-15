@@ -67,6 +67,19 @@ namespace port {
         return false;
     }
 
+    bool parse_string_mode(const std::string &s, StringMode &out) {
+        if (s == "raw")     { out = StringMode::Raw;     return true; }
+        if (s == "managed") { out = StringMode::Managed; return true; }
+        return false;
+    }
+
+    bool parse_instrument_mode(const std::string &s, InstrumentMode &out) {
+        if (s == "none"    || s.empty()) { out = InstrumentMode::None;    return true; }
+        if (s == "trace")   { out = InstrumentMode::Trace;   return true; }
+        if (s == "profile") { out = InstrumentMode::Profile; return true; }
+        return false;
+    }
+
     // =========================================================================
     //  EmitContext helpers
     // =========================================================================
@@ -362,10 +375,34 @@ namespace port {
         for (const auto &v : fn.values) {
             if (v.id == ir::IR_NO_VALUE) continue;
             if (v.is_param) continue;
-            // Skip values no usados (DCE-able).  El frontend deberia haberlos
-            // eliminado en el ir_optimizer, pero por defensa los saltamos
-            // aqui tambien.  Esto silencia warnings @c -Wunused-variable.
-            if (ana_.use_count[v.id] == 0) continue;
+            // Skip values no usados (DCE-able), EXCEPTO si su def tiene
+            // side effects (ALLOCA, CALL, RAW_ALLOC, etc.).  Esos siempre
+            // emiten un assignment al dst y por tanto requieren la
+            // declaracion para que C no genere "undeclared variable".
+            // Esto silencia warnings @c -Wunused-variable.
+            if (ana_.use_count[v.id] == 0) {
+                const ir::IrInstr *def = (v.id < ana_.def_instr.size())
+                                            ? ana_.def_instr[v.id] : nullptr;
+                bool side_effecting = false;
+                if (def != nullptr) {
+                    using ir::IrOp;
+                    switch (def->op) {
+                        case IrOp::ALLOCA:
+                        case IrOp::RAW_ALLOC:
+                        case IrOp::CALL:
+                        case IrOp::CALLN:
+                        case IrOp::CALLIND:
+                        case IrOp::CALLVIRT:
+                        case IrOp::NEWOBJ:
+                        case IrOp::GC_ALLOC:
+                        case IrOp::RAW_ASM:
+                            side_effecting = true;
+                            break;
+                        default: break;
+                    }
+                }
+                if (!side_effecting) continue;
+            }
             // Skip inline candidates: su expresion se construye en el use site.
             if (ana_.is_inline_candidate[v.id]) continue;
             backend_.emit_local_decl(ctx, v.id, v);
@@ -386,8 +423,18 @@ namespace port {
         // Esto cubre el entry block (que se alcanza por fall-through) y
         // cualquier bloque inalcanzable accidentalmente (raro pero defensivo).
         // Resultado: menos warnings @c -Wunused-label de GCC.
+        //
+        // Excepcion: bloques try_handler_* / try_body_* / try_merge_* /
+        // *_handler son destinos de @c goto computado via labels-as-values
+        // emitido por raw_asm "tryenter".  Forzamos emission del label
+        // aunque no haya predecesor CFG normal.
         const bool has_preds = block_has_preds(bb.id);
-        if (has_preds) {
+        const bool is_handler_block = (!bb.name.empty())
+            && (bb.name.compare(0, 12, "try_handler_") == 0
+             || bb.name.compare(0, 9, "try_body_")    == 0
+             || bb.name.compare(0, 10, "try_merge_") == 0
+             || bb.name.find("_handler") != std::string::npos);
+        if (has_preds || is_handler_block) {
             backend_.emit_label_def(ctx, bb.id);
         }
 
@@ -626,8 +673,22 @@ namespace port {
                     if (ctx.fn && ins.operands[0] < ctx.fn->values.size()) {
                         src_t = ctx.fn->values[ins.operands[0]].type;
                     }
+                    // Preferir el tipo del SSA value destino al de la
+                    // instruccion (algunos frontends dejan @c ins.type
+                    // a VOID para conversiones cuyo tipo queda implicito).
+                    ir::IrType dst_t = ins.type;
+                    if (dst_t == ir::IrType::VOID
+                     && ctx.fn && ins.dst < ctx.fn->values.size()) {
+                        dst_t = ctx.fn->values[ins.dst].type;
+                    }
+                    // Final fallback: si BITCAST queda con destino VOID,
+                    // usar el tipo source (es una identidad).
+                    if (dst_t == ir::IrType::VOID
+                     && ins.op == ir::IrOp::BITCAST) {
+                        dst_t = src_t;
+                    }
                     backend_.emit_convert(ctx, ins.op, ins.dst,
-                                          ins.operands[0], ins.type, src_t);
+                                          ins.operands[0], dst_t, src_t);
                 }
                 return;
             }
@@ -674,10 +735,37 @@ namespace port {
                 return;
 
             // Llamadas
-            case IrOp::CALL: case IrOp::TAILCALL:
+            case IrOp::CALL: case IrOp::CALLN:
+                // CALL y CALLN comparten el mismo dispatch.  El backend
+                // distingue via @c func_name: si contiene ":" es nativa
+                // (lib:func) y el backend la trata con linkage real.
                 backend_.emit_call(ctx, ins.dst, ins.func_name,
                                    ins.operands, ins.type);
                 return;
+
+            case IrOp::TAILCALL: {
+                // TAILCALL: termina la funcion con el resultado de la
+                // llamada.  C no tiene keyword nativa; emitimos
+                // @c "return func(args...);" directo.  GCC -O3 hace
+                // tail-call optimization automaticamente cuando sea legal.
+                ctx.indent();
+                if (ins.type != ir::IrType::VOID) {
+                    ctx.out << "return ";
+                } else {
+                    // void tail call: emit como statement + return.
+                }
+                ctx.out << ins.func_name << "(";
+                for (size_t i = 0; i < ins.operands.size(); ++i) {
+                    if (i) ctx.out << ", ";
+                    ctx.out << backend_.format_value(ctx, ins.operands[i]);
+                }
+                ctx.out << ");\n";
+                if (ins.type == ir::IrType::VOID) {
+                    ctx.indent();
+                    ctx.out << "return;\n";
+                }
+                return;
+            }
 
             case IrOp::CALLIND:
                 if (ins.func_ptr != ir::IR_NO_VALUE) {
@@ -685,6 +773,17 @@ namespace port {
                                                 ins.operands, ins.type);
                 }
                 return;
+
+            case IrOp::CALLCLOSURE: {
+                // CALLCLOSURE: el func_ptr apunta al slot de 16 bytes que
+                // contiene {fn_addr, env_addr}.  En port C lo lowers a:
+                //   tipo (*fn)(void*, args...) = *(tipo(*)(void*,...))slot[0];
+                //   ret = fn(slot[8], args...);
+                if (ins.func_ptr == ir::IR_NO_VALUE) return;
+                backend_.emit_call_closure(ctx, ins.dst, ins.func_ptr,
+                                            ins.operands, ins.type, ins);
+                return;
+            }
 
             case IrOp::CALLVIRT: {
                 // CALLVIRT: operands[0]=obj, imm=vtable_idx, operands[1..]=args.
@@ -698,6 +797,21 @@ namespace port {
                 return;
             }
 
+            case IrOp::CALLM: {
+                // CALLM: operands[0]=obj, operands[1]=method_ptr, [2..]=args.
+                // Dispatch dinamico via @c MethodInfo*; en port C requiere
+                // que el backend deduzca el metodo a llamar (via concrete
+                // type del receiver + nombre del metodo).
+                if (ins.operands.size() < 2) return;
+                ir::IrValueId obj = ins.operands[0];
+                ir::IrValueId method_ptr = ins.operands[1];
+                std::vector<ir::IrValueId> args(ins.operands.begin() + 2,
+                                                ins.operands.end());
+                backend_.emit_callm(ctx, ins.dst, obj, method_ptr,
+                                     args, ins.type);
+                return;
+            }
+
             // Markers semanticos (Phase B): no-op para transpiler.
             case IrOp::MAKE_VARIANT:
             case IrOp::MATCH_VARIANT:
@@ -706,6 +820,72 @@ namespace port {
                     ctx.indent();
                     ctx.out << "/* marker: " << ir::ir_op_name(ins.op) << " */\n";
                 }
+                return;
+
+            case IrOp::STR_LIT_ADDR:
+                backend_.emit_str_lit_addr(ctx, ins.dst, ins.imm, ins.type);
+                return;
+
+            case IrOp::SPAWN_ARGS: {
+                // SPAWN_ARGS: operands[0]=fn_ptr, operands[1]=future,
+                // operands[2..]=args adicionales.
+                //
+                // Caso 1 arg (solo future): direct @c vex_spawn(fn, fut).
+                // Caso N>1: alocar array @c int64_t[N], rellenar y pasar
+                // un trampoline-by-pointer que el backend genera al emit
+                // del modulo (ver @c emit_spawn_trampolines).
+                if (ins.operands.size() < 2) return;
+                ctx.indent();
+                if (ins.operands.size() == 2) {
+                    /* Direct path: helper toma solo future. */
+                    ctx.out << "vex_spawn((void(*)(int64_t))(intptr_t)"
+                            << backend_.format_value(ctx, ins.operands[0])
+                            << ", "
+                            << backend_.format_value(ctx, ins.operands[1])
+                            << ");\n";
+                } else {
+                    /* Multi-arg: empaquetar (fn_ptr, future, args...) en
+                     * @c int64_t[N+1] heap-alloc.  Un trampoline generico
+                     * por aridad recibe el ptr, llama @c fn(future, args...).
+                     * Cero trampolines especificos por helper. */
+                    size_t n_extra = ins.operands.size() - 2;
+                    /* Total slots: fn_ptr + future + extras */
+                    size_t n_total = 2 + n_extra;
+                    ctx.out << "{\n";
+                    ctx.indent_level++;
+                    ctx.indent();
+                    ctx.out << "int64_t *__sa = (int64_t*)malloc(sizeof(int64_t) * "
+                            << n_total << ");\n";
+                    ctx.indent();
+                    ctx.out << "__sa[0] = (int64_t)(intptr_t)"
+                            << backend_.format_value(ctx, ins.operands[0])
+                            << ";\n";
+                    ctx.indent();
+                    ctx.out << "__sa[1] = "
+                            << backend_.format_value(ctx, ins.operands[1])
+                            << ";\n";
+                    for (size_t i = 0; i < n_extra; ++i) {
+                        ctx.indent();
+                        ctx.out << "__sa[" << (i + 2) << "] = "
+                                << backend_.format_value(ctx, ins.operands[2 + i])
+                                << ";\n";
+                    }
+                    /* Llamada al trampoline generico de aridad N=n_extra+1
+                     * (future + extras).  El backend C registra el N en
+                     * @c emit_spawn_trampoline_call para emitir el
+                     * @c __vex_trampoline_N una sola vez en el postamble. */
+                    backend_.emit_spawn_trampoline_call(ctx, ins.operands[0],
+                                                          n_extra + 1, "__sa");
+                    ctx.indent_level--;
+                    ctx.indent();
+                    ctx.out << "}\n";
+                }
+                return;
+            }
+
+            case IrOp::RAW_ASM:
+                backend_.emit_raw_asm(ctx, ins.dst, ins.func_name,
+                                       ins.operands, ins.type);
                 return;
 
             default:
@@ -966,9 +1146,15 @@ namespace port {
 
             // Emitir label si el bloque tiene mas de un predecesor Y NO es
             // un header estructurable (cuyo flujo de entrada es implicito).
+            // Tambien forzar emission para handlers de try/catch que son
+            // destino de @c goto computado via labels-as-values.
+            const bool is_try_block = (!bb.name.empty())
+                && (bb.name.compare(0, 12, "try_handler_") == 0
+                 || bb.name.compare(0, 9, "try_body_")    == 0
+                 || bb.name.compare(0, 10, "try_merge_") == 0);
             if (cur != start
              && !is_structured_header
-             && ana_.block_preds[cur].size() > 1) {
+             && (ana_.block_preds[cur].size() > 1 || is_try_block)) {
                 backend_.emit_label_def(ctx, cur);
             }
 
@@ -1073,9 +1259,26 @@ namespace port {
                     ctx.indent();
                     ctx.out << "}\n";
                 } else {
-                    ctx.out << "\n";
                     // Phi copies del edge bb -> merge (para if-then sin else).
-                    emit_phi_copies_for_edge(ctx, fn, bb.id, info.merge_block);
+                    // CRITICO: estas copias deben emitirse SOLO cuando la cond
+                    // es false (rama no tomada).  Si no hay PHIs, no emitimos
+                    // un else vacio; si hay, lo envolvemos en @c else {}.
+                    bool merge_has_phis = false;
+                    if (info.merge_block < fn.blocks.size()) {
+                        for (const auto &mi : fn.blocks[info.merge_block].instrs) {
+                            if (mi.op == ir::IrOp::PHI) { merge_has_phis = true; break; }
+                        }
+                    }
+                    if (merge_has_phis) {
+                        ctx.out << " else {\n";
+                        ctx.indent_level++;
+                        emit_phi_copies_for_edge(ctx, fn, bb.id, info.merge_block);
+                        ctx.indent_level--;
+                        ctx.indent();
+                        ctx.out << "}\n";
+                    } else {
+                        ctx.out << "\n";
+                    }
                 }
 
                 cur = info.merge_block;
@@ -1143,6 +1346,19 @@ namespace port {
                 case ir::IrOp::UNREACHABLE:
                     ctx.indent();
                     ctx.out << "/* unreachable */ ;\n";
+                    cur = ir::IR_NO_BLOCK;
+                    break;
+                case ir::IrOp::TAILCALL:
+                    // TAILCALL es terminator: emit como return func(args).
+                    emit_instr(ctx, term);
+                    cur = ir::IR_NO_BLOCK;
+                    break;
+                case ir::IrOp::RAW_ASM:
+                    // El frontend Vex usa raw_asm como ultimo instr para
+                    // emitir @c fulfillhlt (async helpers) y otros patrones
+                    // de exit-from-function.  Tratarlo como instruccion
+                    // normal + terminar region.
+                    emit_instr(ctx, term);
                     cur = ir::IR_NO_BLOCK;
                     break;
                 default:

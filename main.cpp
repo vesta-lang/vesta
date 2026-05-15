@@ -278,6 +278,16 @@ int main(int argc, char *argv[]) {
                 cxxopts::value<std::string>()->default_value("setjmp"))
             ("port-types",      "Estilo de tipos del codigo portado: stdint (default) usa int8_t/uint64_t/etc de stdint.h.  builtin usa char/int/long del C clasico (menos portable).",
                 cxxopts::value<std::string>()->default_value("stdint"))
+            ("port-strings",    "Modelo de strings: raw (const char* solo literales) | managed (default: VexString con tracking per-thread).",
+                cxxopts::value<std::string>()->default_value("managed"))
+            ("port-freestanding", "Generar C freestanding (sin includes automaticos de stdio/stdlib/math).  El usuario debe proveer vex_throw + vex_panic_with_str.  Para bootloaders, kernels, firmware.")
+            ("port-stdlib-dir", "Path al directorio stdlib/port/c con los snippets .v.c (autodetect si vacio).",
+                cxxopts::value<std::string>()->default_value(""))
+            ("port-arch", "Target CPU: '' (portable, default) | native | x86-64-v2 | x86-64-v3 | x86-64-v4.  Emite #pragma GCC target con flags agresivas (AVX2/FMA/BMI2 segun nivel).",
+                cxxopts::value<std::string>()->default_value(""))
+            ("port-no-aggressive", "Desactivar atributos agresivos (const/cold/restrict/always_inline + __builtin_expect/unreachable).  Default: activado.")
+            ("instrument", "Instrumentacion en el IR Vex (heredada por bytecode VM, JIT, port C, port futuros): none (default) | trace (calls a vex_trace:enter/exit por funcion) | profile (timing per-funcion).",
+                cxxopts::value<std::string>()->default_value("none"))
 #ifdef VESTA_HAS_PREPROCESSOR
             ("preprocess-only", "Solo preprocesar un .vel y mostrar/guardar el resultado (debug)", cxxopts::value<std::string>())
 #endif
@@ -731,6 +741,17 @@ int main(int argc, char *argv[]) {
         copts.module_name = mod_name;
         copts.opt_level   = 2;
         copts.dump_ir     = emit_ir;  // habilita CompileResult::ir_text
+        // Instrumentacion: aplica al IR independientemente del target
+        // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.
+        copts.instrument_mode = result["instrument"].as<std::string>();
+        if (copts.instrument_mode != "none"
+         && copts.instrument_mode != "trace"
+         && copts.instrument_mode != "profile") {
+            std::cerr << "[vex] --instrument invalido: "
+                      << copts.instrument_mode
+                      << " (valores: none|trace|profile)\n";
+            return 2;
+        }
         // --vex-debug: emite `// @line N` en el .vel y genera la
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
@@ -772,12 +793,25 @@ int main(int argc, char *argv[]) {
                           << " (valores: none|setjmp|returncode)\n";
                 return EXIT_FAILURE;
             }
+            const std::string &str_s = result["port-strings"].as<std::string>();
+            if (!port::parse_string_mode(str_s, copts.port_options.strings)) {
+                std::cerr << "[port] --port-strings invalido: " << str_s
+                          << " (valores: raw|managed)\n";
+                return 2;
+            }
             const std::string &ty_s = result["port-types"].as<std::string>();
             if (!port::parse_type_style(ty_s, copts.port_options.types)) {
                 std::cerr << "[port] --port-types invalido: " << ty_s
                           << " (valores: stdint|builtin)\n";
                 return EXIT_FAILURE;
             }
+            copts.port_options.freestanding = result.count("port-freestanding") > 0;
+            copts.port_options.stdlib_port_c_dir =
+                result["port-stdlib-dir"].as<std::string>();
+            copts.port_options.arch_target =
+                result["port-arch"].as<std::string>();
+            copts.port_options.aggressive_opt =
+                (result.count("port-no-aggressive") == 0);
             copts.port_options.module_name = mod_name;
             copts.port_options.source_path = vex_path;
         }

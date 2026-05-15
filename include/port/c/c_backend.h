@@ -187,6 +187,105 @@ namespace port {
                            const std::vector<ir::IrValueId> &args,
                            ir::IrType ret_type) override;
 
+        void emit_call_closure(EmitContext &ctx,
+                                ir::IrValueId dst,
+                                ir::IrValueId slot_ptr,
+                                const std::vector<ir::IrValueId> &args,
+                                ir::IrType ret_type,
+                                const ir::IrInstr &ins) override;
+
+        void emit_callm(EmitContext &ctx,
+                         ir::IrValueId dst,
+                         ir::IrValueId obj,
+                         ir::IrValueId method_ptr,
+                         const std::vector<ir::IrValueId> &args,
+                         ir::IrType ret_type) override;
+
+        void emit_spawn_trampoline_call(EmitContext &ctx,
+                                          ir::IrValueId fn_ptr,
+                                          size_t argc,
+                                          const std::string &args_var) override;
+
+        // -------- STRINGS Y RAW_ASM --------
+
+        /**
+         * @brief Carga la direccion de un literal estatico interned.
+         * Emite @c "v_dst = (void*)__str_<imm>;" usando los buffers
+         * emitidos por @c emit_static_data en el prelude.
+         */
+        void emit_str_lit_addr(EmitContext &ctx,
+                                ir::IrValueId dst,
+                                uint64_t imm,
+                                ir::IrType t) override;
+
+        /**
+         * @brief Pattern-match texto de raw_asm contra la tabla de patrones
+         * conocidos (strmake, strcat, gchandle, gcderef, monenter, etc).
+         * Cada patron mapea a una secuencia C equivalente. Si no matchea,
+         * emit_unsupported con el texto truncado.
+         */
+        void emit_raw_asm(EmitContext &ctx,
+                           ir::IrValueId dst,
+                           const std::string &asm_text,
+                           const std::vector<ir::IrValueId> &operands,
+                           ir::IrType t) override;
+
+        /**
+         * @brief Emite una llamada nativa (CALLN @c "lib:sym").
+         *
+         * Para builtins conocidos (vio_print_*, vio_print_buf, vmath_*),
+         * emit bridge a stdio/math C estandar (sin requerir libs Vesta).
+         * Para simbolos desconocidos, emit @c extern declaration + direct
+         * call al simbolo @c sym (usuario enlaza la lib correspondiente).
+         */
+        void emit_native_call(EmitContext &ctx,
+                               ir::IrValueId dst,
+                               const std::string &lib,
+                               const std::string &sym,
+                               const std::vector<ir::IrValueId> &args,
+                               ir::IrType ret_type);
+
+        /**
+         * @brief Emite el runtime VexString inline al inicio del .c.
+         *
+         * Solo se invoca si @c opts_.strings == Managed Y el modulo usa
+         * strings (detectado via STR_LIT_ADDR o raw_asm "str*").  Emite:
+         *   - typedef struct VexString { ... };
+         *   - vex_str_make_lit / vex_str_make / vex_str_concat / vex_str_eq
+         *   - vex_str_len / vex_str_byte_len / vex_str_raw / vex_str_free
+         *   - Linked list per-thread + warn on leak at exit.
+         */
+        void emit_string_runtime(EmitContext &ctx);
+
+        /**
+         * @brief Emite los literales de @c IrModule::static_data como
+         *        @c static @c const arrays con nombre @c __str_<i>.
+         *
+         * Solo se invoca si el modulo tiene @c static_data no vacio.  Lo
+         * llama @c emit_prelude justo antes de las clases.
+         */
+        void emit_static_data(EmitContext &ctx, const ir::IrModule &mod);
+
+        /**
+         * @brief Carga un snippet @c .v.c desde @c stdlib/port/c/ y lo
+         *        emite en @c ctx.out.  Si el snippet tiene @c freestanding-skip:yes
+         *        y estamos en modo freestanding, no emite nada.  Si no se
+         *        encuentra el archivo, emite stub inline + warning a stderr.
+         *
+         * @param name Nombre base del snippet (sin extension).  El loader
+         *             busca @c <stdlib_port_c_dir>/<name>.v.c.
+         * @return true si el snippet fue emitido (o omitido legitimamente
+         *         por freestanding-skip).  false si hubo error de IO.
+         */
+        bool emit_snippet(EmitContext &ctx, const std::string &name);
+
+        /**
+         * @brief Resuelve el path absoluto al directorio @c stdlib/port/c.
+         *        Usa @c PortOptions::stdlib_port_c_dir si esta seto, sino
+         *        busca relativo al ejecutable actual.
+         */
+        std::string resolve_stdlib_dir() const;
+
     private:
         const PortOptions &opts_;
 
@@ -231,6 +330,15 @@ namespace port {
          * @c emit_call emite stack alloc en lugar de heap.
          */
         std::unordered_set<ir::IrValueId> stack_alloc_candidates_;
+
+        /**
+         * @brief Set de aridades de SPAWN_ARGS encontradas en el modulo.
+         *
+         * Cada aridad N requiere un @c __vex_trampoline_<N> que desempaca
+         * @c (fn_ptr, args...) y llama al helper.  Se emite una sola vez
+         * por N en @c emit_postamble.
+         */
+        mutable std::unordered_set<size_t> spawn_trampoline_arities_;
 
         /**
          * @brief Stack-allocated objects en la funcion actual (RAII).
