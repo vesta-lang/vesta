@@ -32,6 +32,12 @@ static bool is_side_effecting(IrOp op) {
         case IrOp::CALL:    case IrOp::CALLIND: case IrOp::CALLVIRT:
         case IrOp::CALLN:   case IrOp::TAILCALL: case IrOp::CALLM:
         case IrOp::CALLCLOSURE:
+        // para C2 (escape analysis + case-splitting);
+        // NUNCA eliminar aunque dst sea IR_NO_VALUE.  Sin efecto en codegen
+        // (emitter los trata como no-op), pero deben sobrevivir DCE.
+        case IrOp::MAKE_CLOSURE:
+        case IrOp::MAKE_VARIANT:
+        case IrOp::MATCH_VARIANT:
         // control de flujo
         case IrOp::BR:      case IrOp::BR_COND: case IrOp::RET:
         case IrOp::UNREACHABLE:
@@ -49,6 +55,11 @@ static bool is_side_effecting(IrOp op) {
         // OOP con efectos
         case IrOp::NEWOBJ:  case IrOp::CHECKCAST: case IrOp::UNWRAP:
         case IrOp::SPECIALIZE:
+        // GC_ALLOC: consume memoria del heap GC + puede disparar minor/major
+        // GC + el payload puede ser referenciado posteriormente.  Tratarlo
+        // como CALL evita que el DCE elimine el alloc cuando el dst es
+        // temporariamente parecido a "no usado" en algun analisis local.
+        case IrOp::GC_ALLOC:
         // arrays con efectos
         case IrOp::ARRAY_ALLOC: case IrOp::ARRAY_STORE: case IrOp::GCWB_IR:
         case IrOp::GCDEREF_IR:
@@ -58,7 +69,7 @@ static bool is_side_effecting(IrOp op) {
         case IrOp::STRFINALIZE:
         // scheduler / proceso
         case IrOp::SPAWN:   case IrOp::RESUME:   case IrOp::YIELD:
-        case IrOp::SWAPCTX:
+        case IrOp::SWAPCTX: case IrOp::SPAWN_ARGS:
         // asignacion
         case IrOp::ALLOCA:
         // ensamblador incrustado (nunca eliminar; semantica opaca)
@@ -601,6 +612,141 @@ bool ir_pass_tailcall(IrFunction &fn) {
 //  Punto de entrada principal
 // =========================================================================
 
+/**
+ * @brief Inline de header trivial de loop para habilitar fusion decjnz.
+ *
+ * Detecta el patron:
+ *   B: ...; <SUB>; br H
+ *   H: %cmp = CMP_X(...); br.cond %cmp, T, F
+ * con H teniendo UN SOLO predecesor (B).  Mueve las 2 instrs de H al
+ * final de B (reemplazando el br) y vacia H.  Despues, B queda con
+ * SUB+CMP+BR_COND consecutivos -> el peephole de same-block del IR
+ * emitter aplica decjnz fusion.
+ *
+ * Generaliza a cualquier patron "header trivial con un predecesor", no
+ * solo a decjnz.  Otros peepholes (cmpjmp) tambien se benefician.
+ *
+ * Coste: O(N_blocks * N_predecessors).  El check de predecesores es
+ * lineal pero solo se ejecuta cuando el header tiene exactamente 2
+ * instr (raro fuera de loop headers).
+ *
+ * @return true si se hizo al menos una fusion (puede dispararse otro DCE).
+ */
+bool ir_pass_inline_loop_header(IrFunction &fn) {
+    bool changed = false;
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        IrBlock &B = fn.blocks[bi];
+        if (B.instrs.empty()) continue;
+        IrInstr &term = B.instrs.back();
+        if (term.op != IrOp::BR) continue; // solo BR incondicional
+        IrBlockId hid = term.target_block;
+        if (hid >= fn.blocks.size() || hid == static_cast<IrBlockId>(bi)) continue;
+        IrBlock &H = fn.blocks[hid];
+        // H debe terminar en BR_COND.  Las instrs pueden incluir CONSTs
+        // literales que materializan valores usados solo por el CMP final.
+        // Patron tipico: %k = const.i64 0; %z = cmp.ne.bool %x, %k; br.cond %z, T, F.
+        // Tambien permitimos el CMP en penultima posicion con 0..N CONSTs antes.
+        if (H.instrs.size() < 2) continue;
+        const IrInstr &h_last = H.instrs.back();
+        if (h_last.op != IrOp::BR_COND) continue;
+        // Buscar el CMP penultimo (h_last - 1) o anterior.  Las instrs
+        // entre el CMP y el BR_COND deben ser CONST puros (sin side effects).
+        size_t cmp_idx = H.instrs.size() - 2;
+        const IrInstr &h_cmp = H.instrs[cmp_idx];
+        bool is_cmp = (h_cmp.op == IrOp::CMP_EQ  || h_cmp.op == IrOp::CMP_NE
+                    || h_cmp.op == IrOp::CMP_LT  || h_cmp.op == IrOp::CMP_GT
+                    || h_cmp.op == IrOp::CMP_LE  || h_cmp.op == IrOp::CMP_GE
+                    || h_cmp.op == IrOp::CMP_ULT || h_cmp.op == IrOp::CMP_UGT
+                    || h_cmp.op == IrOp::CMP_ULE || h_cmp.op == IrOp::CMP_UGE);
+        if (!is_cmp) continue;
+        // Verificar que las instrs antes del CMP sean todas CONST (puras).
+        bool only_consts = true;
+        for (size_t k = 0; k < cmp_idx; ++k) {
+            if (H.instrs[k].op != IrOp::CONST) { only_consts = false; break; }
+        }
+        if (!only_consts) continue;
+        // El cmp.dst debe ser el unico operand del BR_COND.
+        if (h_last.operands.empty() || h_last.operands[0] != h_cmp.dst) continue;
+        // Contar predecesores de H.
+        int preds = 0;
+        for (size_t pi = 0; pi < fn.blocks.size(); ++pi) {
+            if (fn.blocks[pi].instrs.empty()) continue;
+            const IrInstr &pterm = fn.blocks[pi].instrs.back();
+            if (pterm.op == IrOp::BR && pterm.target_block == hid) ++preds;
+            else if (pterm.op == IrOp::BR_COND
+                  && (pterm.target_block == hid || pterm.false_block == hid))
+                ++preds;
+        }
+        if (preds != 1) continue; // mas de 1 pred o 0 -> no fusionar
+        // No tocar entry block: si H es entry, no podemos fusionarlo
+        // (entry no tiene predecesores; ya filtrado por preds!=1, pero
+        // doble check defensivo).
+        if (hid == 0) continue;
+        // El header NO debe tener PHI nodes (el primer instr debe ser CMP, no PHI).
+        // Ya implicito en H.instrs.size() == 2 con h0 = CMP.
+
+        // Aplicar la fusion:
+        //   1. Eliminar BR de B.
+        //   2. Append todas las instrs de H (CONSTs + CMP + BR_COND) al final de B.
+        //   3. Hoist de CONSTs: mover todas las IrOp::CONST justo despues de
+        //      las PHI nodes (CONSTs son puros, su orden es irrelevante para
+        //      la semantica).  Esto agrupa los CONSTs y deja a SUB+CMP+BR_COND
+        //      consecutivos en el final, habilitando peepholes como decjnz.
+        //   4. Limpiar H (queda inalcanzable, lo barren los demas pases).
+        //   5. Reescribir phi_args en sucesores de BR_COND: ref a H debe pasar a B.
+        IrBlockId t_true  = h_last.target_block;
+        IrBlockId t_false = h_last.false_block;
+
+        std::vector<IrInstr> moved;
+        moved.reserve(H.instrs.size());
+        for (auto &ins : H.instrs) moved.push_back(std::move(ins));
+        B.instrs.pop_back(); // remover BR de B
+        for (auto &ins : moved) B.instrs.push_back(std::move(ins));
+        H.instrs.clear();
+
+        // Hoist de CONSTs: estabilizamos el orden en B asi:
+        //   [PHIs...] [CONSTs...] [resto en orden original]
+        // Stable_partition mantiene el orden relativo de cada grupo.  Los
+        // CONSTs no tienen side effects ni dependen de instrucciones
+        // anteriores (su unico operand_id es @c imm), asi que moverlos
+        // hacia adelante no rompe SSA dominance: si un CONST se usaba a
+        // X, ahora esta definido aun antes que X.
+        {
+            std::vector<IrInstr> phis, consts, rest;
+            phis.reserve(4); consts.reserve(8); rest.reserve(B.instrs.size());
+            for (auto &ins : B.instrs) {
+                if (ins.op == IrOp::PHI)        phis.push_back(std::move(ins));
+                else if (ins.op == IrOp::CONST) consts.push_back(std::move(ins));
+                else                            rest.push_back(std::move(ins));
+            }
+            B.instrs.clear();
+            B.instrs.reserve(phis.size() + consts.size() + rest.size());
+            for (auto &ins : phis)   B.instrs.push_back(std::move(ins));
+            for (auto &ins : consts) B.instrs.push_back(std::move(ins));
+            for (auto &ins : rest)   B.instrs.push_back(std::move(ins));
+        }
+
+        auto rewrite_phi_block_ref = [&](IrBlockId target_id) {
+            if (target_id >= fn.blocks.size()) return;
+            IrBlock &T = fn.blocks[target_id];
+            for (auto &ins : T.instrs) {
+                if (ins.op != IrOp::PHI) break;
+                for (auto &pa : ins.phi_args) {
+                    if (pa.block == hid) pa.block = static_cast<IrBlockId>(bi);
+                }
+            }
+        };
+        rewrite_phi_block_ref(t_true);
+        rewrite_phi_block_ref(t_false);
+
+        changed = true;
+        // No avanzar bi: re-procesar B porque puede haber cadena
+        // (B -> H1 -> H2 inlinable transitivamente).
+        --bi;
+    }
+    return changed;
+}
+
 void ir_optimize(IrModule &mod, OptLevel level) {
     if (level == OptLevel::O0) return; // sin optimizacion
 
@@ -620,7 +766,9 @@ void ir_optimize(IrModule &mod, OptLevel level) {
                 any |= ir_pass_const_fold(fn);
                 any |= ir_pass_unreachable(fn);
                 any |= ir_pass_tailcall(fn);
-                // Segunda ronda de DCE tras plegado y TCO.
+                // Inline de header trivial de loop -> habilita decjnz fusion.
+                any |= ir_pass_inline_loop_header(fn);
+                // Segunda ronda de DCE tras plegado y TCO + loop header inline.
                 any |= ir_pass_dce(fn);
             }
 

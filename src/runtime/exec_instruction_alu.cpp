@@ -1282,4 +1282,177 @@ void exec_instr_setcc(ProcessVM *vm, const DecodedInstr &instr) {
     vm->registers.regs[dst_reg].qword(taken ? 1 : 0); // escribir resultado booleano en el registro
 }
 
+// =========================================================================
+// CMPJMP / CMPJMPU / DECJNZ -- fusion de cmp+jcc / dec+jnz (mejora hot loops)
+// =========================================================================
+
+/**
+ * @brief Helper interno: evalua el cond_byte (0x00..0x0D) contra los flags.
+ *
+ * Usa el mismo set que @c exec_instr_jmp y @c jmp.j*.  cond_byte > 0x0D
+ * cae al default = true (incondicional).  Sin syscalls; pure CPU work.
+ */
+// El tipo del campo flags::bits es interno; declaramos el helper como
+// template para deducir el tipo automaticamente sin requerir -fconcepts-ts.
+template<typename FlagsBits>
+static inline bool eval_jmp_cond(uint8_t cond, const FlagsBits &fl) noexcept {
+    switch (cond) {
+        case 0x00: return COND_EQ(fl); // ZF==1
+        case 0x01: return COND_NE(fl); // ZF==0
+        case 0x02: return COND_CS(fl); // CF==1
+        case 0x03: return COND_CC(fl); // CF==0
+        case 0x04: return COND_MI(fl); // SF==1
+        case 0x05: return COND_PL(fl); // SF==0
+        case 0x06: return COND_VS(fl); // OF==1
+        case 0x07: return COND_VC(fl); // OF==0
+        case 0x08: return COND_HI(fl); // CF==0 && ZF==0
+        case 0x09: return COND_LS(fl); // CF==1 || ZF==1
+        case 0x0A: return COND_GE(fl); // SF==OF
+        case 0x0B: return COND_LT(fl); // SF!=OF
+        case 0x0C: return (fl.ZF == 0 && fl.SF == fl.OF); // GT
+        case 0x0D: return (fl.ZF == 1 || fl.SF != fl.OF); // LE
+        default:   return true;
+    }
+}
+
+/**
+ * @brief Helper interno: hace cmp (a-b) + setea flags ZF/SF/CF/OF segun
+ *        signo, sin escribir resultado.  Reusa @c compute_with_flags +
+ *        @c CmpOp para mantener exactamente la misma semantica que las
+ *        instrucciones @c cmps / @c cmpu separadas.
+ */
+static inline void cmpjmp_set_flags(ProcessVM *vm,
+                                     uint64_t a,
+                                     uint64_t b,
+                                     bool is_signed) {
+    (void)compute_with_flags<uint64_t, CmpOp>(vm, a, b, is_signed);
+}
+
+/**
+ * @brief Implementacion de @c cmpjmp r_a, r_b, target (signed).
+ *
+ * Equivalente atomic a:
+ *   cmps r_a, r_b
+ *   jmp.cond target
+ * en una sola instruccion VM (reduce 2 instr -> 1 por comparacion).
+ */
+void exec_instr_cmpjmp(ProcessVM *vm, const DecodedInstr &instr) {
+    const auto &sd = instr.data_instruction.static_data;
+    const uint64_t a = vm->registers.regs[sd.r0].qword();
+    const uint64_t b = vm->registers.regs[sd.r1].qword();
+    cmpjmp_set_flags(vm, a, b, /*is_signed=*/true);
+    if (eval_jmp_cond(static_cast<uint8_t>(sd._pad), vm->registers.flags.bits)) {
+        write_rip(vm, static_cast<uint64_t>(sd.offset)); // salto absoluto u32
+    }
+}
+
+/**
+ * @brief Implementacion de @c cmpjmpu r_a, r_b, target (unsigned).
+ *
+ * Identica a @c exec_instr_cmpjmp pero con semantica unsigned (CmpOp con
+ * is_signed=false: CF se setea segun a<b unsigned, OF queda en 0).
+ */
+void exec_instr_cmpjmpu(ProcessVM *vm, const DecodedInstr &instr) {
+    const auto &sd = instr.data_instruction.static_data;
+    const uint64_t a = vm->registers.regs[sd.r0].qword();
+    const uint64_t b = vm->registers.regs[sd.r1].qword();
+    cmpjmp_set_flags(vm, a, b, /*is_signed=*/false);
+    if (eval_jmp_cond(static_cast<uint8_t>(sd._pad), vm->registers.flags.bits)) {
+        write_rip(vm, static_cast<uint64_t>(sd.offset));
+    }
+}
+
+/**
+ * @brief Implementacion de @c decjnz r_counter, target.
+ *
+ * Equivalente atomic a:
+ *   subs r_counter, 1   ; r_counter -= 1, setea flags
+ *   jmp.jne target      ; salta si ZF==0 (resultado != 0)
+ * en una sola instruccion VM.  Reduce 2-3 instr -> 1 por iteracion en
+ * loops contadores.  Tambien ahorra el `mov r14, 1` necesario para subs
+ * (que requiere reg, no imm).
+ */
+void exec_instr_decjnz(ProcessVM *vm, const DecodedInstr &instr) {
+    const auto &sd = instr.data_instruction.static_data;
+    const int reg_idx = sd.r0;
+    const uint64_t old_val = vm->registers.regs[reg_idx].qword();
+    // dec = a - 1.  Reusa SubOp para flags consistentes con `subs r, 1`.
+    const uint64_t new_val = compute_with_flags<uint64_t, SubOp>(
+        vm, old_val, /*b=*/1ULL, /*is_signed=*/true);
+    vm->registers.regs[reg_idx].qword(new_val);
+    // Saltar si new_val != 0 (equivale a jmp.jne post-subs).
+    if (new_val != 0ULL) {
+        write_rip(vm, static_cast<uint64_t>(sd.offset));
+    }
+}
+
+/**
+ * @brief Ejecuta @c fastpush <mask16>: empuja a la pila N registros marcados
+ *        en el bitmask en una sola instruccion.
+ *
+ * Estrategia hardware-aware:
+ *   1. @c __builtin_popcount calcula N en 1 ciclo (POPCNT instr en x86-64).
+ *   2. Decrementa RSP por (N*8) en una sola escritura al registro.
+ *   3. @c __builtin_ctz extrae el indice del bit set mas bajo en O(1) por
+ *      iteracion (TZCNT/BSF), evitando un loop de 16 iteraciones con if.
+ *   4. @c mask &= mask - 1 limpia el bit set mas bajo en 1 ciclo.
+ *   5. Las escrituras se hacen lineales en memoria, lo que la CPU prefetch
+ *      detecta y optimiza con write-combining + cache line filling.
+ *
+ * Convencion: r0 es el PRIMER push (mayor offset relativo a rsp final),
+ * r_max_set es el ULTIMO push (rsp final).  Esto permite que @c fastpop
+ * con el mismo mask restaure los valores exactamente.
+ */
+void exec_instr_fastpush(ProcessVM *vm, const DecodedInstr &instr) {
+    uint16_t mask = instr.data_instruction.mask_data.mask;
+    if (mask == 0) return;  // no-op: ningun bit puesto
+
+    const int count = __builtin_popcount(static_cast<unsigned int>(mask));
+    const uint64_t old_rsp = vm->registers.stack_pointer.qword();
+    const uint64_t new_rsp = old_rsp - static_cast<uint64_t>(count) * 8ULL;
+    vm->registers.stack_pointer.qword(new_rsp);
+
+    // r0 se empuja primero (queda en el offset MAS alto del nuevo frame).
+    // Iteramos los bits ascendentes y escribimos a offsets descendentes.
+    uint64_t slot = new_rsp + static_cast<uint64_t>(count - 1) * 8ULL;
+    while (mask) {
+        const int r = __builtin_ctz(static_cast<unsigned int>(mask));
+        const uint64_t val = vm->registers.regs[r].qword();
+        vm->vm_mem.write_u64(slot, val);
+        slot -= 8;
+        mask &= static_cast<uint16_t>(mask - 1);  // limpiar bit mas bajo
+    }
+}
+
+/**
+ * @brief Ejecuta @c fastpop <mask16>: desempila N registros del bitmask en
+ *        orden simetrico a @c fastpush.
+ *
+ * Misma estrategia hardware (POPCNT + TZCNT + bit clearing).  Las lecturas
+ * son lineales en memoria, optimas para prefetch.
+ *
+ * Para un mismo mask, @c fastpop revierte exactamente el efecto de
+ * @c fastpush: lee del slot de cada registro y avanza RSP por N*8 al final.
+ */
+void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr) {
+    uint16_t mask = instr.data_instruction.mask_data.mask;
+    if (mask == 0) return;
+
+    const int count = __builtin_popcount(static_cast<unsigned int>(mask));
+    const uint64_t rsp = vm->registers.stack_pointer.qword();
+
+    // Mismo orden de iteracion que fastpush, lectura desde offsets
+    // descendentes -> los valores se restauran a los registros correctos.
+    uint64_t slot = rsp + static_cast<uint64_t>(count - 1) * 8ULL;
+    while (mask) {
+        const int r = __builtin_ctz(static_cast<unsigned int>(mask));
+        const uint64_t val = vm->vm_mem.read_u64(slot);
+        vm->registers.regs[r].qword(val);
+        slot -= 8;
+        mask &= static_cast<uint16_t>(mask - 1);
+    }
+
+    vm->registers.stack_pointer.qword(rsp + static_cast<uint64_t>(count) * 8ULL);
+}
+
 } // namespace runtime
