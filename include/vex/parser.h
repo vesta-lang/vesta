@@ -37,7 +37,7 @@
  *   10. aditivo            + -
  *   11. multiplicativo     * / %
  *   12. unario prefijo     ! ~ - + ++ --
- *   13. postfijo           ()  ++  --  (solo en A.1)
+ *   13. postfijo           ()  ++  --  []  .  ?.  ?.[ ]  ?
  *   14. primaria           literales, identificadores, ( expr )
  */
 

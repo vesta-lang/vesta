@@ -324,7 +324,7 @@ namespace runtime {
         // Helper local para empujar (frame + return_pc) atomicamente.  Se
         // invoca varias veces consecutivas para construir la cadena AOP.
         // El parametro opcional @c around_target marca el frame como un
-        // advice AROUND con un target a invocar via @c proceed (A.5.4 ext).
+        // advice AROUND con un target original a invocar via @c proceed.
         //
         // NOTA: NO escribimos ret_to al stack VM.  El slot reservado por
         // `rsp -= 8` queda sin inicializar, lo cual es seguro porque:
@@ -470,7 +470,8 @@ namespace runtime {
         // Push frame para target (sin nuevo proceed_target: el target
         // no es AROUND de si mismo).  La calling convention preserva
         // r1=this y args ya en su sitio.
-        auto *frame            = vm->frame_pool.acquire(); // A.34.fix13
+        // Pool intrusivo en lugar de new/delete: O(1) acquire/release.
+        auto *frame            = vm->frame_pool.acquire();
         frame->prev            = vm->frame_stack;
         frame->method          = target;
         frame->return_pc       = ret_addr;
@@ -533,7 +534,8 @@ namespace runtime {
         // frame_base).  Ver explicacion extendida en CALLVIRT::push_step.
         auto push_step = [&](loader::MethodInfo *m, uint64_t ret_to) {
             const uint64_t cur_rsp = vm->registers.stack_pointer.qword();
-            auto *frame       = vm->frame_pool.acquire(); // A.34.fix13
+            // Pool intrusivo en lugar de new/delete: O(1) acquire/release.
+            auto *frame       = vm->frame_pool.acquire();
             frame->prev       = vm->frame_stack;
             frame->method     = m;
             frame->return_pc  = ret_to;
@@ -618,7 +620,8 @@ namespace runtime {
 
         // crear FrameHeader para soporte de excepciones
         const uint64_t cur_rsp = vm->registers.stack_pointer.qword();
-        auto *frame       = vm->frame_pool.acquire(); // A.34.fix13
+        // Pool intrusivo en lugar de new/delete: O(1) acquire/release.
+        auto *frame       = vm->frame_pool.acquire();
         frame->prev       = vm->frame_stack;
         frame->method     = method;
         frame->return_pc  = ret_addr;

@@ -123,7 +123,7 @@ namespace vex {
 
     /**
      * @struct EnumVariantInfo
-     * @brief Resumen de una variante de enum (Phase A.11 ADTs).
+     * @brief Resumen de una variante de enum (ADT, tagged union).
      *
      * @c tag es el indice asignado por el orden de declaracion (0..N-1).
      * @c field_types lista los tipos de los payload fields en orden.

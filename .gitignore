@@ -1,6 +1,10 @@
 # archivos ocultos y de configuración
 .*
 
+# archivos de memoria temporales
+memoria_*
+*docx
+
 # carpetas de configuración de IDEs y entornos virtuales
 .idea
 .xmake
