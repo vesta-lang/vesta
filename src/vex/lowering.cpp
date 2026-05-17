@@ -3423,6 +3423,11 @@ namespace vex {
                 ra.operands    = {};
                 ra.func_name   = fc.str();
                 ra.source_line = cc.loc.line;
+                // Marca como call-site: el helper findclass usa r5/r6/r12
+                // como scratch internos.  El emitter envuelve con save/restore
+                // de los regs live a traves del raw_asm.  Sin esto, SSA values
+                // asignados por regalloc a esos regs son clobreados silenciosamente.
+                ra.is_call_site = true;
                 fn_->append(current_block_, std::move(ra));
             }
 
@@ -4106,15 +4111,21 @@ namespace vex {
                         ra.type        = ir::IrType::VOID;
                         ra.dst         = ir::IR_NO_VALUE;
                         ra.operands    = {v_ptr, v_del};
+                        // Bug fix: si {src1} (deleter) esta en r1 (o el
+                        // regalloc lo asigna a r1 con CSE/SLF), el `mov r1,
+                        // {src0}` lo clobrea ANTES de callvmr.  Solucion:
+                        // staging via r14 (scratch) para garantizar que el
+                        // deleter sobrevive al setup de args.
                         ra.func_name   = std::string(
                             "// unique<T> cleanup (SRET): dispatch dinamico via slot+8\n"
                             "cmpu {src0}, 0\n"
                             "jmp.je ") + done_lbl + "\n"
                             "cmpu {src1}, 0\n"
                             "jmp.je " + default_lbl + "\n"
+                            "mov r14, {src1}\n"   // staging deleter
                             "mov r1, {src0}\n"
                             "mov r15, 1\n"
-                            "callvmr {src1}\n"
+                            "callvmr r14\n"
                             "jmp.jmp " + done_lbl + "\n"
                             + default_lbl + ":\n"
                             "mov r1, {src0}\n"
@@ -10169,6 +10180,9 @@ namespace vex {
             ra.dst         = v_dst;
             ra.func_name   = oss.str();
             ra.source_line = e->loc.line;
+            // findclass clobera r5/r6/r12 -- marca como call site
+            // para que el emitter save/restore regs vivos.
+            ra.is_call_site = true;
             fn_->append(current_block_, std::move(ra));
             out_value = v_dst;
             return true;
@@ -12383,6 +12397,7 @@ namespace vex {
         asm_ << "addsp rsp, 16\n";
     }
 
+
     void Lowering::generate_new_helpers(ir::IrModule &out) {
         // Para cada clase declarada en el modulo, generamos una funcion
         // __new_<Class>(arg1, ..., argN) -> handle (GcHandle).  El cuerpo
@@ -13067,6 +13082,7 @@ namespace vex {
                 fc.dst         = v_cls;
                 fc.func_name   = fc_oss.str();
                 fc.source_line = e->loc.line;
+                fc.is_call_site = true;  // findclass clobera r5/r6/r12
                 fn_->append(current_block_, std::move(fc));
             }
             // 2) getstatic {dst}, {src0}, offset_imm  -> v_val.
@@ -13270,6 +13286,7 @@ namespace vex {
                 fc.dst         = v_cls;
                 fc.func_name   = fc_oss.str();
                 fc.source_line = loc.line;
+                fc.is_call_site = true;  // findclass clobera r5/r6/r12
                 fn_->append(current_block_, std::move(fc));
             }
             // 2) setstatic {src0}, {src1}, offset_imm  (sin dst).
@@ -14389,6 +14406,7 @@ namespace vex {
                                             via hierarchy analysis cuando es
                                             necesario.  Default false = seguro. */
             icls.is_interface   = cl.is_interface;
+            icls.is_aspect      = cl.is_aspect;
             icls.has_destructor = cl.has_destructor;
             icls.has_destructible_field = cl.has_destructible_field;
             icls.is_runtime_predefined  = false;

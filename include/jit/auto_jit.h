@@ -28,6 +28,7 @@
 #define VESTA_JIT_AUTO_JIT_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -157,7 +158,9 @@ namespace jit {
         const ir::IrFunction &ir_fn,
         const std::unordered_map<std::string, size_t> *ir_lookup = nullptr,
         const std::vector<ir::IrFunction> *ir_functions = nullptr,
-        const std::unordered_map<std::string, uint64_t> *symbol_table = nullptr);
+        const std::unordered_map<std::string, uint64_t> *symbol_table = nullptr,
+        std::function<uint64_t(const std::string &)> resolve_native_fn = nullptr,
+        std::function<uint64_t(uint64_t)> read_vmem_u64 = nullptr);
 
 } // namespace jit
 

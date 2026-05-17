@@ -39,7 +39,10 @@
 #include "ir/ir_optimizer.h"
 #include "ir/liveness.h"
 #include "ir/regalloc.h"
+#include "ir/ssa_ir.h"
 #include <sstream>
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
@@ -463,15 +466,40 @@ static void emit_save_live_regs(EmitCtx &ctx, uint32_t call_pos,
         return;
     }
 
-    // Fallback: secuencia tradicional (1 reg, o cualquier reg GC presente).
+    // HYBRID save.  Sólo aplica si los GC regs vienen TODOS
+    // ANTES de los non-GC (orden de regs_to_save).  Si no, fallback al
+    // patrón individual.  Esto evita reordenar la pila respecto al patrón
+    // que el código posterior espera (cleanups SRET con dispatch dinámico,
+    // p.ej. test 110).
+    bool gc_first_ordered = true;
+    bool saw_nongc = false;
+    int  num_nongc_tail = 0;
+    for (int r : regs_to_save) {
+        const bool is_gc = reg_holds_gc_object(ctx, call_pos, r);
+        if (is_gc && saw_nongc) { gc_first_ordered = false; break; }
+        if (!is_gc) { saw_nongc = true; ++num_nongc_tail; }
+    }
+    if (gc_first_ordered && num_nongc_tail >= 2) {
+        // Emit gchandle+push de GC en orden, luego fastpush del cluster final.
+        uint32_t mask = 0;
+        for (int r : regs_to_save) {
+            if (reg_holds_gc_object(ctx, call_pos, r)) {
+                ctx.out << "    gchandle r14, " << reg_name(r) << "\n";
+                ctx.out << "    push r14\n";
+                ctx.r14_cache = -1;
+            } else {
+                if (r >= 0 && r < 16) mask |= (1u << r);
+            }
+        }
+        ctx.out << "    fastpush " << mask << "\n";
+        return;
+    }
+
+    // Fallback: secuencia tradicional (1 reg, mezcla GC interleaved, etc.)
     for (int r : regs_to_save) {
         if (reg_holds_gc_object(ctx, call_pos, r)) {
-            // gchandle r14, reg : r14 = handle del ptr en reg.  reg queda
-            // intacto con su host_ptr original (necesario para que el
-            // parallel-move siguiente pueda usarlo como source).
             ctx.out << "    gchandle r14, " << reg_name(r) << "\n";
             ctx.out << "    push r14\n";
-            // gchandle escribe a r14 -> invalidar cache.
             ctx.r14_cache = -1;
         } else {
             ctx.out << "    push " << reg_name(r) << "\n";
@@ -514,6 +542,36 @@ static void emit_restore_live_regs(EmitCtx &ctx, uint32_t call_pos,
             if (r >= 0 && r < 16) mask |= (1u << r);
         }
         ctx.out << "    fastpop " << mask << "\n";
+        return;
+    }
+
+    // HYBRID restore -- SIMETRICO al hybrid save.
+    bool gc_first_ordered = true;
+    bool saw_nongc = false;
+    int  num_nongc_tail = 0;
+    for (int r : regs_to_save) {
+        const bool is_gc = reg_holds_gc_object(ctx, call_pos, r);
+        if (is_gc && saw_nongc) { gc_first_ordered = false; break; }
+        if (!is_gc) { saw_nongc = true; ++num_nongc_tail; }
+    }
+    if (gc_first_ordered && num_nongc_tail >= 2) {
+        // Reverse del save: fastpop primero (los non-GC fueron pusheados al final),
+        // luego pop+gcderef+xchg de los GC en orden inverso.
+        uint32_t mask = 0;
+        for (int r : regs_to_save) {
+            if (!reg_holds_gc_object(ctx, call_pos, r) && r >= 0 && r < 16) {
+                mask |= (1u << r);
+            }
+        }
+        ctx.out << "    fastpop " << mask << "\n";
+        for (auto it = regs_to_save.rbegin(); it != regs_to_save.rend(); ++it) {
+            const int r = *it;
+            if (reg_holds_gc_object(ctx, call_pos, r)) {
+                ctx.out << "    pop " << reg_name(r) << "\n";
+                ctx.out << "    gcderef cur0, " << reg_name(r) << "\n";
+                ctx.out << "    xchg cur0, " << reg_name(r) << "\n";
+            }
+        }
         return;
     }
 
@@ -561,6 +619,28 @@ static void emit_restore_all_gc_aware(EmitCtx &ctx, uint32_t call_pos,
 //
 // Esta funcion NO se preocupa por valores vivos a traves del call: esa
 // preservacion debe haberse hecho con push antes de invocar este helper.
+// Carga args spilled directamente a su reg destino DESPUES del parallel-move.
+// Bug previo: cargar todos los spilled via load_src(_, 0) usaba siempre r14
+// como temp; con 2+ args spilled, el segundo load clobbeaba el primero, y
+// ambos terminaban con el mismo valor en moves[].  Fix: emitir spills tras
+// el parallel-move usando direct load `mov r_target, [slot]` (sin pasar por
+// scratch).  Para values is_gc_object spilled, anyade el gcderef+xchg que
+// load_src haria normalmente.
+static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg, ir::IrValueId vid) {
+    auto it = ctx.alloc.spill_map.find(vid);
+    if (it == ctx.alloc.spill_map.end()) return;  // no es spilled, no-op
+    const std::string rd = std::string(reg_name(target_reg));
+    ctx.out << "    mov r13, rbp\n";
+    ctx.out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
+    ctx.out << "    mov " << rd << ", [r13]\n";
+    ctx.r13_cache = -1;
+    if (target_reg == 14) ctx.r14_cache = -1;
+    if (ctx.is_gc_value(vid)) {
+        ctx.out << "    gcderef cur0, " << rd << "\n";
+        ctx.out << "    xchg cur0, " << rd << "\n";
+    }
+}
+
 static void emit_parallel_arg_moves(EmitCtx &ctx,
                                      std::vector<std::pair<int, std::string>> moves) {
     auto reg_str_of = [](int r) { return std::string(reg_name(r)); };
@@ -625,11 +705,52 @@ static void emit_parallel_arg_moves(EmitCtx &ctx,
 //   "op r_dst, r_src2"
 // Carga operandos derramados desde pila (src1->r14, src2->r13) si es necesario.
 // Almacena el resultado en pila si dst esta derramado.
+// Mapea mnemonic 2-operandos a su variante alu3 (3-op super-instr) si existe.
+// Devuelve nullptr si no hay alu3 para el opcode (caso DIV/MOD/SHL/SHR/SAR/CMP).
+static const char *alu3_mnemonic_for(const std::string &mnem) {
+    if (mnem == "adds") return "adds3";
+    if (mnem == "subs") return "subs3";
+    if (mnem == "muls") return "muls3";
+    if (mnem == "addu") return "addu3";
+    if (mnem == "subu") return "subu3";
+    if (mnem == "mulu") return "mulu3";
+    if (mnem == "and")  return "and3";
+    if (mnem == "or")   return "or3";
+    if (mnem == "xor")  return "xor3";
+    return nullptr;
+}
+
+// Emite operacion binaria de dos-direcciones:
+//   "mov r_dst, r_src1"
+//   "op  r_dst, r_src2"
+// O su super-instruccion equivalente cuando aplique:
+//   "OP3 r_dst, r_src1, r_src2"   (combina mov+op en una instr VM)
+//
+// Carga operandos derramados desde pila (src1->r14, src2->r13) si es necesario.
+// Almacena el resultado en pila si dst esta derramado.
 static void emit_binop(EmitCtx &ctx, const std::string &mnemonic,
                         IrValueId dst, IrValueId src1, IrValueId src2) {
     std::string rs1 = ctx.load_src(src1, 0); // r14 si derramado
     std::string rs2 = ctx.load_src(src2, 1); // r13 si derramado
     std::string rd  = ctx.dst_of(dst);
+
+    /* Super-instruccion alu3 si:
+     *   (a) existe variante 3-op para el mnemonic,
+     *   (b) rd != rs1 (sin esto el mov no se emite y la 2-op tradicional
+     *       es 1 instruccion -- igual coste, sin necesidad de cambio).
+     * Cuando rs1 / rs2 estan derramados (r14 / r13), alu3 los lee igual
+     * que la version 2-op: no hay restriccion en quien provee el operando. */
+    const char *m3 = alu3_mnemonic_for(mnemonic);
+    if (m3 != nullptr && rd != rs1) {
+        ctx.out << "    " << m3 << " " << rd << ", " << rs1 << ", " << rs2 << "\n";
+        /* Si rd es r14 / r13 (caso destino spilled), invalidar cache de
+         * constante igual que emit_mov_if_needed haria. */
+        if (rd == "r14") ctx.r14_cache = -1;
+        if (rd == "r13") ctx.r13_cache = -1;
+        ctx.store_spilled(dst);
+        return;
+    }
+
     emit_mov_if_needed(ctx, rd, rs1);
     ctx.out << "    " << mnemonic << " " << rd << ", " << rs2 << "\n";
     ctx.store_spilled(dst);
@@ -934,24 +1055,37 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id, IrBlockId succ_id) 
     }
     if (copies.empty()) return;
 
-    // Paso 2: separar copias en-registro de copias con derrames.
-    // Las copias con derrame se emiten de forma simple (carga/mov/almacena).
-    // Las copias totalmente en registro se someten al algoritmo de paralela.
-    std::vector<PhiCopy> reg_copies;
+    // Paso 2: separar copias en 3 categorias para preservar semantica
+    // "paralela" del PHI (todas las copias deben verse como simultaneas):
+    //
+    //   (a) spilled-dst:  cualquier cosa -> slot.  Debe emitirse PRIMERO
+    //       porque el src (sea reg o slot) tiene el valor OLD del frame
+    //       anterior, y queremos leerlo antes de que phase (b) lo cambie.
+    //   (b) reg-to-reg:   reg -> reg.  parallel-move clasico en medio.
+    //   (c) spilled-src reg-dst: slot -> reg.  Debe emitirse al FINAL,
+    //       porque el dst_reg podria ser fuente de alguna copia (b).
+    //
+    // Orden: phase (a) -> phase (b) -> phase (c).  Bug fix Phase D.7.opt:
+    // antes (c) se emitia ANTES de (b), clobeando el dst_reg antes de que
+    // (b) lo usara como fuente.
+    std::vector<PhiCopy> reg_copies;            // (b)
+    std::vector<PhiCopy> spilled_src_reg_dst;   // (c)
+    // Paso 2.a: spilled-dst (cualquier src -> slot).
     for (const auto &c : copies) {
         bool dst_in_reg = ctx.alloc.reg_map.count(c.dst) > 0;
         bool src_in_reg = ctx.alloc.reg_map.count(c.src) > 0;
         if (dst_in_reg && src_in_reg) {
             reg_copies.push_back(c);
-        } else {
-            // Al menos un operando esta derramado: copia secuencial segura
-            // (los derrames son slots distintos, no hay alias entre ellos y r14)
-            std::string r_src = ctx.load_src(c.src, 0);  // carga en r14 si spill
-            std::string r_dst;
-            bool dst_spilled = (ctx.alloc.spill_map.count(c.dst) > 0);
-            r_dst = dst_spilled ? reg_name(SCRATCH_REG) : reg_name(ctx.alloc.reg_map.at(c.dst));
+        } else if (!dst_in_reg) {
+            // dst spilled: load src y store al slot.  Si src es reg, el
+            // valor que leemos es el OLD pre-phi.
+            std::string r_src = ctx.load_src(c.src, 0);
+            std::string r_dst = reg_name(SCRATCH_REG);
             emit_mov_if_needed(ctx, r_dst, r_src);
-            if (dst_spilled) ctx.store_spilled(c.dst);
+            ctx.store_spilled(c.dst);
+        } else {
+            // dst en reg, src en slot.  Diferido a phase (c).
+            spilled_src_reg_dst.push_back(c);
         }
     }
 
@@ -1003,6 +1137,25 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id, IrBlockId succ_id) 
             }
             ctx.out << "    mov " << reg_name(cur) << ", " << reg_name(nxt) << "\n";
             cur = nxt;
+        }
+    }
+
+    // Paso 5 (phase c): spilled-src reg-dst.  Carga directa del slot al
+    // reg destino.  Seguro emitir DESPUES de los moves reg-to-reg porque
+    // dst_reg ya no es fuente de nadie.
+    for (const auto &c : spilled_src_reg_dst) {
+        auto it = ctx.alloc.spill_map.find(c.src);
+        if (it == ctx.alloc.spill_map.end()) continue;
+        int    d_reg = ctx.alloc.reg_map.at(c.dst);
+        std::string rd = reg_name(d_reg);
+        ctx.out << "    mov r13, rbp\n";
+        ctx.out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
+        ctx.out << "    mov " << rd << ", [r13]\n";
+        ctx.r13_cache = -1;
+        if (d_reg == 14) ctx.r14_cache = -1;
+        if (ctx.is_gc_value(c.src)) {
+            ctx.out << "    gcderef cur0, " << rd << "\n";
+            ctx.out << "    xchg cur0, " << rd << "\n";
         }
     }
 }
@@ -1685,14 +1838,25 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
 
             // 3. Argument marshalling con parallel-move.
+            // Fix: spilled args se cargan DESPUES del parallel-move
+            // directamente a su reg destino (evita clobber de r14).
             const size_t nargs = std::min(ins.operands.size(), (size_t)12);
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs);
             for (size_t ai = 0; ai < nargs; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai], 0);
-                moves.emplace_back(static_cast<int>(ai + 1), r_arg);
+                ir::IrValueId v = ins.operands[ai];
+                int target_reg  = static_cast<int>(ai + 1);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             // 4. argc + call.
             ctx.out << "    mov r15, " << nargs << "\n";
@@ -1743,12 +1907,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
             const size_t nargs = std::min(ins.operands.size(), (size_t)12);
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs);
             for (size_t ai = 0; ai < nargs; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai], 0);
-                moves.emplace_back(static_cast<int>(ai + 1), r_arg);
+                ir::IrValueId v = ins.operands[ai];
+                int target_reg  = static_cast<int>(ai + 1);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             ctx.out << "    mov r15, " << nargs << "\n";
             // CALLIND: el puntero de funcion vive en un registro -> usamos
@@ -1847,12 +2020,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const size_t total = ins.operands.size();
             const size_t nargs_decl = total > 0 ? std::min(total - 1, (size_t)12) : 0;
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs_decl);
             for (size_t ai = 0; ai < nargs_decl; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai + 1], 0);
-                moves.emplace_back(static_cast<int>(ai + 1), r_arg);
+                ir::IrValueId v = ins.operands[ai + 1];
+                int target_reg  = static_cast<int>(ai + 1);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             // Colocar el env_ptr en r14.  El pop saca el ultimo push
             // (env si env_pushed) que es el TOP correcto.
@@ -1899,15 +2081,24 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const size_t nargs = ins.operands.size() > 1
                                   ? std::min(ins.operands.size() - 1, (size_t)12) : 0;
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs + 1);
-            // r1 = this
+            // r1 = this (r_obj ya esta en reg via load_src arriba; no es spilled)
             moves.emplace_back(1, r_obj);
             // r2..r_{N+1} = args declarados
             for (size_t ai = 0; ai < nargs; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai + 1], 0);
-                moves.emplace_back(static_cast<int>(ai + 2), r_arg);
+                ir::IrValueId v = ins.operands[ai + 1];
+                int target_reg  = static_cast<int>(ai + 2);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             ctx.out << "    mov r15, " << (nargs + 1) << "\n";
             // El callvirt recibe el receptor en r1 (ya colocado por los
@@ -1949,13 +2140,22 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const size_t nargs = ins.operands.size() > 2
                                   ? std::min(ins.operands.size() - 2, (size_t)11) : 0;
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs + 1);
             moves.emplace_back(1, r_obj);
             for (size_t ai = 0; ai < nargs; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai + 2], 0);
-                moves.emplace_back(static_cast<int>(ai + 2), r_arg);
+                ir::IrValueId v = ins.operands[ai + 2];
+                int target_reg  = static_cast<int>(ai + 2);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             ctx.out << "    mov r15, " << (nargs + 1) << "\n";
             ctx.out << "    callm r1, r13\n";
@@ -2013,12 +2213,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
 
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs);
             for (size_t ai = 0; ai < nargs; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai + arg_offset], 0);
-                moves.emplace_back(static_cast<int>(ai + 1), r_arg);
+                ir::IrValueId v = ins.operands[ai + arg_offset];
+                int target_reg  = static_cast<int>(ai + 1);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             ctx.out << "    mov r15, " << nargs << "\n";
             if (is_indirect) {
@@ -2075,21 +2284,26 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // diferencia de x86-64 con la mitad inferior).  Los bits
             // altos del registro destino conservan su valor previo,
             // contaminando operaciones aritmeticas posteriores.  Si el
-            // tipo cargado es < 64 bits, hacemos zero-extend manual
-            // poniendo el registro entero a 0 antes del load.
+            // tipo cargado es < 64 bits, hacemos zero-extend.
+            //
+            // OPTIMIZACION (super-instruccion loadz/loadzh): cuando
+            // tsz < 8, en lugar del par `mov rd,0; mov rd_sz,[rp]` (10
+            // bytes / 2 instr VM) emitimos un solo `loadz/loadzh rd_sz,rp`
+            // (4 bytes / 1 instr VM).  Reduce dispatch + decode 50% para
+            // cargas i8/i16/i32 (el caso comun en bench_struct_field,
+            // bench_array_sum, y todo codigo con structs/arrays nativos).
+            // Para tsz == 8 (load 64-bit completo) seguimos con mov normal.
             const size_t tsz = ir_type_size(ins.type);
-            if (tsz < 8) {
-                ctx.out << "    mov " << rd_full << ", 0\n";
-            }
-            // Si el puntero apunta a memoria HOST (resultado de raw_alloc o
-            // derivado por aritmetica), usar `movh` (s=1) en lugar de `mov`
-            // para que el ejecutor lea desde el espacio del proceso host
-            // y no desde la memoria virtual de la VM.
             const bool host_ptr =
                 ins.operands[0] != IR_NO_VALUE
              && ctx.fn.values[ins.operands[0]].is_host_ptr;
-            const char *opcode = host_ptr ? "movh" : "mov";
-            ctx.out << "    " << opcode << " " << rd_sz << ", [" << rp << "]\n";
+            if (tsz < 8) {
+                const char *opc_z = host_ptr ? "loadzh" : "loadz";
+                ctx.out << "    " << opc_z << " " << rd_sz << ", " << rp << "\n";
+            } else {
+                const char *opcode = host_ptr ? "movh" : "mov";
+                ctx.out << "    " << opcode << " " << rd_sz << ", [" << rp << "]\n";
+            }
             // Sign-extension manual para tipos signed < 64 bits.  Sin esto
             // los i8/i16/i32 con valores negativos se cargan con bits
             // altos a 0 (debido al zero-extend manual de arriba), y
@@ -2098,7 +2312,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // convierte en 4294967295 i64).  La fix es shl + sar por
             // (64 - bits del tipo) que propaga el bit de signo.  Solo se
             // aplica a I8/I16/I32 (no a U*); I64 ya es full width.
-            if (tsz < 8 && (ins.type == IrType::I8
+            // Optimizacion (ir_pass_load_narrow @ O2): si narrow_only=true,
+            // todos los usos transitivos son arith narrow-safe (ADD/SUB/MUL/
+            // AND/OR/XOR) + STORE/RET del mismo ancho.  Los bits altos no
+            // importan, asi que podemos saltar el patron shl+sar (3 instr VM).
+            const bool skip_sext = ins.dst != IR_NO_VALUE
+                                && ctx.fn.values[ins.dst].narrow_only;
+            if (tsz < 8 && !skip_sext && (ins.type == IrType::I8
                          || ins.type == IrType::I16
                          || ins.type == IrType::I32)) {
                 const unsigned shift_bits = static_cast<unsigned>(64 - tsz * 8);
@@ -2679,16 +2899,22 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         // --- Intrinsics VM ---
         case IrOp::GETPROC:
-            if (ins.dst != IR_NO_VALUE)
-                ctx.out << "    getproc " << ctx.reg_of(ins.dst) << "\n";
+            if (ins.dst != IR_NO_VALUE) {
+                ctx.out << "    getproc " << ctx.dst_of(ins.dst) << "\n";
+                ctx.store_spilled(ins.dst);
+            }
             break;
         case IrOp::GETVM:
-            if (ins.dst != IR_NO_VALUE)
-                ctx.out << "    getvm " << ctx.reg_of(ins.dst) << "\n";
+            if (ins.dst != IR_NO_VALUE) {
+                ctx.out << "    getvm " << ctx.dst_of(ins.dst) << "\n";
+                ctx.store_spilled(ins.dst);
+            }
             break;
         case IrOp::GETMGR:
-            if (ins.dst != IR_NO_VALUE)
-                ctx.out << "    getmgr " << ctx.reg_of(ins.dst) << "\n";
+            if (ins.dst != IR_NO_VALUE) {
+                ctx.out << "    getmgr " << ctx.dst_of(ins.dst) << "\n";
+                ctx.store_spilled(ins.dst);
+            }
             break;
 
         // --- Coroutines / scheduler ---
@@ -2742,12 +2968,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // Args van en R1..R[N], donde N = operands.size() - 1.
             const size_t nargs = std::min(ins.operands.size() - 1, (size_t)12);
             std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
             moves.reserve(nargs);
             for (size_t ai = 0; ai < nargs; ++ai) {
-                std::string r_arg = ctx.load_src(ins.operands[ai + 1], 0);
-                moves.emplace_back(static_cast<int>(ai + 1), r_arg);
+                ir::IrValueId v = ins.operands[ai + 1];
+                int target_reg  = static_cast<int>(ai + 1);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
             }
             emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
 
             ctx.out << "    mov r15, " << nargs << "\n";
             // r_pc puede haber sido clobbered por el parallel-move si

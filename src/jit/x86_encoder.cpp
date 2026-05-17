@@ -141,8 +141,90 @@ namespace jit {
                 put8(out, 0x99);
                 return true;
             }
+            case MOp::MOVZX:
+            case MOp::MOVSX: {
+                /* MOVZX/MOVSX dst64, src_mem<width>.  Encoding:
+                 *   MOVZX r64, r/m8:  REX.W + 0F B6 /r
+                 *   MOVZX r64, r/m16: REX.W + 0F B7 /r
+                 *   MOVSX r64, r/m8:  REX.W + 0F BE /r
+                 *   MOVSX r64, r/m16: REX.W + 0F BF /r
+                 *   MOVSX r64, r/m32: REX.W + 63 /r    (MOVSXD)
+                 *
+                 * src.flags determina el ancho del operando fuente
+                 * (1/2/4 bytes).  Para src REG, usa src.width.
+                 * dst es siempre 64-bit. */
+                if (mi.dst.kind != MOperandKind::REG) {
+                    put8(out, 0xCC);
+                    return true;
+                }
+                const uint8_t src_width = (mi.src1.kind == MOperandKind::MEM)
+                                            ? mi.src1.flags
+                                            : mi.src1.width;
+                /* Determine opcode bytes. */
+                uint8_t op_byte1 = 0x0F;
+                uint8_t op_byte2 = 0;
+                bool single_byte = false;  /* true para MOVSXD (sin 0F) */
+                if (mi.op == MOp::MOVZX) {
+                    if (src_width == 1) op_byte2 = 0xB6;
+                    else if (src_width == 2) op_byte2 = 0xB7;
+                    else { put8(out, 0xCC); return true; }
+                } else {  /* MOVSX */
+                    if (src_width == 1) op_byte2 = 0xBE;
+                    else if (src_width == 2) op_byte2 = 0xBF;
+                    else if (src_width == 4) { single_byte = true; }
+                    else { put8(out, 0xCC); return true; }
+                }
+                if (mi.src1.kind == MOperandKind::REG) {
+                    const uint8_t rex = rex_byte(true, mi.dst.reg, mi.src1.reg);
+                    if (rex) put8(out, rex);
+                    if (single_byte) {
+                        put8(out, 0x63);
+                    } else {
+                        put8(out, op_byte1);
+                        put8(out, op_byte2);
+                    }
+                    put8(out, modrm(3, mi.dst.reg & 7, mi.src1.reg & 7));
+                } else if (mi.src1.kind == MOperandKind::MEM) {
+                    const uint8_t base  = mi.src1.reg;
+                    const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
+                    const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+                    const uint8_t rex = rex_byte(true, mi.dst.reg, base,
+                                                  has_index ? index : 0);
+                    if (rex) put8(out, rex);
+                    if (single_byte) {
+                        put8(out, 0x63);
+                    } else {
+                        put8(out, op_byte1);
+                        put8(out, op_byte2);
+                    }
+                    emit_modrm_mem(mi.src1, mi.dst.reg & 7, out);
+                } else {
+                    put8(out, 0xCC);
+                }
+                return true;
+            }
             case MOp::NEG:        emit_unary_alu(fn, mi, out, 3); return true;
             case MOp::NOT:        emit_unary_alu(fn, mi, out, 2); return true;
+            case MOp::INC: {
+                /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
+                const MOperand &dst = mi.dst;
+                if (dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
+                const uint8_t rex = rex_byte(true, 0, dst.reg);
+                if (rex) put8(out, rex);
+                put8(out, 0xFF);
+                put8(out, modrm(3, 0, dst.reg & 7));
+                return true;
+            }
+            case MOp::DEC: {
+                /* DEC r64: REX.W + 0xFF /1.  3 bytes total. */
+                const MOperand &dst = mi.dst;
+                if (dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
+                const uint8_t rex = rex_byte(true, 0, dst.reg);
+                if (rex) put8(out, rex);
+                put8(out, 0xFF);
+                put8(out, modrm(3, 1, dst.reg & 7));
+                return true;
+            }
             case MOp::SETCC:      emit_setcc(fn, mi, out); return true;
             case MOp::CMOVCC:     emit_cmovcc(fn, mi, out); return true;
             case MOp::JMP:        emit_jmp(fn, mi, out); return true;
@@ -291,28 +373,38 @@ namespace jit {
             return;
         }
 
-        /* Caso 4: MOV reg, [mem] */
+        /* Caso 4: MOV reg, [mem].  Ancho controlado por dst.width:
+         *   8 -> mov r64, [mem]  (REX.W + 0x8B)  -- qword load
+         *   4 -> mov r32, [mem]  (sin REX.W + 0x8B) -- dword load, zero-extend
+         *   2 -> mov r16, [mem]  (66 prefix + 0x8B)
+         *   1 -> mov r8,  [mem]  (0x8A) */
         if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::MEM) {
             const uint8_t base  = src.reg;
             const uint8_t index = static_cast<uint8_t>(src.mem_index());
             const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(true, dst.reg, base,
+            const uint8_t w = dst.width;
+            if (w == 2) put8(out, 0x66);  /* 16-bit override */
+            const bool need_rex_w = (w == 8);
+            const uint8_t rex = rex_byte(need_rex_w, dst.reg, base,
                                           has_index ? index : 0);
             if (rex) put8(out, rex);
-            put8(out, 0x8B);  /* MOV r64, r/m64 */
+            put8(out, (w == 1) ? 0x8A : 0x8B);
             emit_modrm_mem(src, dst.reg & 7, out);
             return;
         }
 
-        /* Caso 5: MOV [mem], reg */
+        /* Caso 5: MOV [mem], reg.  Ancho via src.width. */
         if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG) {
             const uint8_t base  = dst.reg;
             const uint8_t index = static_cast<uint8_t>(dst.mem_index());
             const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(true, src.reg, base,
+            const uint8_t w = src.width;
+            if (w == 2) put8(out, 0x66);
+            const bool need_rex_w = (w == 8);
+            const uint8_t rex = rex_byte(need_rex_w, src.reg, base,
                                           has_index ? index : 0);
             if (rex) put8(out, rex);
-            put8(out, 0x89);  /* MOV r/m64, r64 */
+            put8(out, (w == 1) ? 0x88 : 0x89);
             emit_modrm_mem(dst, src.reg & 7, out);
             return;
         }

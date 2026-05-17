@@ -194,6 +194,28 @@ namespace vm {
         {"cmps", {"cmps", OpArity::TWO}},
         {"mods", {"mods", OpArity::TWO}},
 
+        // Super-instrucciones ALU 3-operandos.  Combinan el patron
+        // `mov rd, rs1; OP rd, rs2` (2-address codegen cuando regalloc no
+        // pudo coalescer) en una sola instruccion VM.  Reduce dispatch +
+        // tiempo de decode.  Encoding FIXED_4 con un opcode extendido por
+        // variante (signed/unsigned x 6 ops).
+        {"adds3", {"adds3", OpArity::THREE}},
+        {"subs3", {"subs3", OpArity::THREE}},
+        {"muls3", {"muls3", OpArity::THREE}},
+        {"addu3", {"addu3", OpArity::THREE}},
+        {"subu3", {"subu3", OpArity::THREE}},
+        {"mulu3", {"mulu3", OpArity::THREE}},
+        {"and3",  {"and3",  OpArity::THREE}},
+        {"or3",   {"or3",   OpArity::THREE}},
+        {"xor3",  {"xor3",  OpArity::THREE}},
+
+        // Super-instruccion LOAD con zero-extend (1 instr en vez de 2).
+        // Sintaxis: loadz r_dst, r_src (arity TWO).  El size (8/16/32/64-bit)
+        // se selecciona por sufijo de tamano del registro destino igual que mov.
+        // loadz = memoria VM, loadzh = memoria HOST (host_ptr).
+        {"loadz",  {"loadz",  OpArity::TWO}},
+        {"loadzh", {"loadzh", OpArity::TWO}},
+
         {"setcc",    {"setcc",    OpArity::TWO}},
         {"tryenter", {"tryenter", OpArity::TWO}},
         {"tryleave", {"tryleave", OpArity::ZERO}},

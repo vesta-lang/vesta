@@ -60,7 +60,9 @@ namespace jit {
         vm_read_u64  = &vrt_vm_read_u64;
         vm_write_u64 = &vrt_vm_write_u64;
         findclass    = &vrt_findclass;
-        newobj       = &vrt_newobj;
+        newobj         = &vrt_newobj;
+        newobj_handle  = &vrt_newobj_handle;
+        callvirt_ic    = &vrt_callvirt_ic;
         defclass     = &vrt_defclass;
         deffield     = &vrt_deffield;
         defmethod    = &vrt_defmethod;

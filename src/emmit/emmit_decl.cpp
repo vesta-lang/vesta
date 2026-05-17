@@ -1752,6 +1752,115 @@ void emit_instr_addadvice(
 }
 
 /**
+ * @brief Emite super-instruccion LOAD con zero-extend (loadz / loadzh).
+ *
+ * Combina @c mov rd,0 + @c mov rd_sized,[rs] en una sola instruccion VM.
+ * Reduce el coste de cargar un i8/i16/i32 de la memoria con zero-extension
+ * a 64-bit, patron que el IR emitter genera para CADA LOAD i8/i16/i32.
+ *
+ * Sintaxis:  loadz r_dst_sized, r_src
+ * Encoding:  [0x00][0x7C][ctrl][regs]
+ *   ctrl bits 7-6 = mode (0=8b, 1=16b, 2=32b, 3=64b)  <- de r_dst.size_bits
+ *   ctrl bit  5   = is_host (1 = host_ptr, 0 = VM mem)
+ *   regs = (r_src<<4) | r_dst
+ *
+ * @c loadzh tiene la misma estructura pero opcode 0x7D y is_host=1.
+ *
+ * @param instruction_parser Instruccion parseada (2 operandos: reg, reg).
+ */
+void emit_instr_loadz(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (instruction_parser->operands.size() < 2)
+        throw std::runtime_error(
+            "emit_instr_loadz: '" + instruction_parser->opcode +
+            "' requires (r_dst, r_src)");
+
+    auto *reg_dst = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto *reg_src = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[1].get());
+
+    if (!reg_dst || !reg_src)
+        throw std::runtime_error(
+            "emit_instr_loadz: '" + instruction_parser->opcode +
+            "': operands must be (reg, reg)");
+
+    uint8_t mode    = encode_mode(reg_dst->size_bits); /* 0=8b..3=64b */
+    /* is_host se codifica en el bit s: 1 para loadzh (host), 0 para loadz (VM). */
+    uint8_t is_host = (now_instr->opcode2 == 0x7D) ? 1u : 0u;
+
+    emit_ctrl_byte(code_final, mode, is_host, 0, 0);
+    code_final.emit8(static_cast<uint8_t>(
+        (encode_reg_general(reg_src->name.c_str()) << 4) |
+        (encode_reg_general(reg_dst->name.c_str()) & 0x0F)));
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x mode=%d host=%d dst=%d src=%d\n",
+                instruction_parser->opcode.c_str(), now_instr->opcode2,
+                mode, is_host,
+                encode_reg_general(reg_dst->name.c_str()),
+                encode_reg_general(reg_src->name.c_str()));
+}
+
+/**
+ * @brief Emite super-instrucciones ALU 3-operandos.
+ *
+ * Combina `mov rd, rs1; OP rd, rs2` en una sola instruccion VM cuando rd
+ * NO coincide con rs1 (el patron que el regalloc coalesce no logra eliminar).
+ *
+ * Formato fisico FIXED_4:
+ *   [0x00][opcode2][byte2][byte3]
+ * donde:
+ *   opcode2 codifica la operacion (adds3=0x73, subs3=0x74, ..., signed/unsigned)
+ *   byte2 = (r_src1 << 4) | r_dst        (mismo nibble layout que mvtake/addadvice)
+ *   byte3 = (r_src2 << 4) | flags_low    (flags low siempre 0; reservado)
+ *
+ * Convencion textual:  adds3 r_dst, r_src1, r_src2
+ *
+ * @param instruction_parser Instruccion parseada (3 operandos registro).
+ */
+void emit_instr_alu3(
+    const vm::Instruction *instruction_parser,
+    ByteWriter &           code_final,
+    const InstrInfo *      now_instr,
+    Assembler *            assembly_ctx
+) {
+    if (instruction_parser->operands.size() < 3)
+        throw std::runtime_error(
+            "emit_instr_alu3: '" + instruction_parser->opcode +
+            "' requires (r_dst, r_src1, r_src2)");
+
+    auto *op0 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get());
+    auto *op1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[1].get());
+    auto *op2 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[2].get());
+
+    if (!op0 || !op1 || !op2)
+        throw std::runtime_error(
+            "emit_instr_alu3: '" + instruction_parser->opcode +
+            "': operands must be (reg, reg, reg)");
+
+    uint8_t r_dst  = encode_reg_general(op0->name.c_str()) & 0x0F;
+    uint8_t r_src1 = encode_reg_general(op1->name.c_str()) & 0x0F;
+    uint8_t r_src2 = encode_reg_general(op2->name.c_str()) & 0x0F;
+
+    uint8_t byte2 = static_cast<uint8_t>((r_src1 << 4) | r_dst);
+    uint8_t byte3 = static_cast<uint8_t>((r_src2 << 4));
+
+    code_final.emit8(byte2);
+    code_final.emit8(byte3);
+
+    DEBUG_PRINT("Emitiendo %s 0x%02x r_dst=%d r_src1=%d r_src2=%d\n",
+                instruction_parser->opcode.c_str(), now_instr->opcode2,
+                r_dst, r_src1, r_src2);
+}
+
+/**
  * @brief Emite los operandos de @c getstatic / @c setstatic (0x60 / 0x61).
  *
  * Formato fisico FIXED_8:

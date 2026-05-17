@@ -281,7 +281,7 @@ namespace gc {
         // mapa inverso.  Permite handle_for_ptr O(1) sin escanear handles_.
         if (addr != nullptr) {
             const uint8_t *payload = addr + sizeof(GcHeader);
-            ptr_to_handle_[payload] = h;
+            ptr_to_handle_.insert_or_assign(payload, h);
         }
         return h;
     }
@@ -314,14 +314,115 @@ namespace gc {
         // new_handle/release_handle/do_evacuate, asi que aqui no hay
         // escaneo lineal: una sola sonda en la tabla hash.
         if (host_payload_ptr == nullptr) return GC_NULL_HANDLE;
-        auto it = ptr_to_handle_.find(host_payload_ptr);
-        if (it == ptr_to_handle_.end()) return GC_NULL_HANDLE;
-        return it->second;
+        return ptr_to_handle_.find(host_payload_ptr);
     }
 
     // -------------------------------------------------------------------------
     // alloc
     // -------------------------------------------------------------------------
+
+    /* ===================================================================== */
+    /* PtrHandleMap: hash table flat para ptr->handle.                        */
+    /* ===================================================================== */
+
+    PtrHandleMap::PtrHandleMap() {
+        /* Capacidad inicial 64 (load < 0.5 => grow_at = 32). */
+        table_.resize(64, Entry{nullptr, GC_NULL_HANDLE});
+        mask_ = 63;
+        grow_at_ = 32;
+    }
+
+    void PtrHandleMap::clear() {
+        for (auto &e : table_) {
+            e.key   = nullptr;
+            e.value = GC_NULL_HANDLE;
+        }
+        live_count_ = 0;
+        used_       = 0;
+    }
+
+    void PtrHandleMap::reserve(size_t n) {
+        /* Crecer hasta que grow_at_ >= n. */
+        while (grow_at_ < n) grow();
+    }
+
+    void PtrHandleMap::grow() {
+        const size_t new_cap = (table_.size() == 0) ? 64 : table_.size() * 2;
+        std::vector<Entry> old_table = std::move(table_);
+        table_.assign(new_cap, Entry{nullptr, GC_NULL_HANDLE});
+        mask_ = new_cap - 1;
+        grow_at_ = new_cap / 2;
+        live_count_ = 0;
+        used_ = 0;
+        for (auto &e : old_table) {
+            if (is_live(e.key)) {
+                insert_or_assign(e.key, e.value);
+            }
+        }
+    }
+
+    bool PtrHandleMap::insert_or_assign(const uint8_t *key, GcHandle h) {
+        if (used_ + 1 > grow_at_) grow();
+        size_t idx = hash_ptr(key) & mask_;
+        size_t first_tomb = SIZE_MAX;
+        while (true) {
+            const uint8_t *k = table_[idx].key;
+            if (is_empty(k)) {
+                /* Si vimos un tombstone antes, usamos ese para mejor
+                 * locality + reuso.  Si no, este slot vacio. */
+                if (first_tomb != SIZE_MAX) {
+                    table_[first_tomb].key   = key;
+                    table_[first_tomb].value = h;
+                } else {
+                    table_[idx].key   = key;
+                    table_[idx].value = h;
+                    ++used_;
+                }
+                ++live_count_;
+                return true;
+            }
+            if (is_tomb(k)) {
+                if (first_tomb == SIZE_MAX) first_tomb = idx;
+            } else if (k == key) {
+                table_[idx].value = h;
+                return false;
+            }
+            idx = (idx + 1) & mask_;
+        }
+    }
+
+    GcHandle PtrHandleMap::find(const uint8_t *key) const noexcept {
+        if (table_.empty()) return GC_NULL_HANDLE;
+        size_t idx = hash_ptr(key) & mask_;
+        while (true) {
+            const uint8_t *k = table_[idx].key;
+            if (is_empty(k)) return GC_NULL_HANDLE;
+            if (k == key) return table_[idx].value;
+            idx = (idx + 1) & mask_;
+        }
+    }
+
+    bool PtrHandleMap::erase(const uint8_t *key) {
+        if (table_.empty()) return false;
+        size_t idx = hash_ptr(key) & mask_;
+        while (true) {
+            const uint8_t *k = table_[idx].key;
+            if (is_empty(k)) return false;
+            if (k == key) {
+                table_[idx].key   = tombstone();
+                table_[idx].value = GC_NULL_HANDLE;
+                --live_count_;
+                /* Mantenemos used_ contando este tombstone hasta el
+                 * proximo grow (compactara). */
+                return true;
+            }
+            idx = (idx + 1) & mask_;
+        }
+    }
+
+    /* ===================================================================== */
+    /* GcHeap::alloc                                                          */
+    /* ===================================================================== */
 
     GcHandle GcHeap::alloc(size_t size) {
         constexpr size_t ALIGN = 8;
@@ -504,17 +605,18 @@ namespace gc {
             //    (resultado de gcderef en CLASS instances o de strraw cuando
             //    apunta al inicio del StringObject).
             auto *ptr = reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(v));
-            auto it = ptr_to_handle_.find(ptr);
-            if (it != ptr_to_handle_.end()) {
-                const GcHandle h = it->second;
-                if (h < handles_.size() && handles_[h].live && handles_[h].addr) {
-                    auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
-                    if (hdr->color == GcColor::WHITE) {
-                        hdr->color = GcColor::BLACK;
-                        worklist.push_back(h);
+            {
+                const GcHandle h = ptr_to_handle_.find(ptr);
+                if (h != GC_NULL_HANDLE) {
+                    if (h < handles_.size() && handles_[h].live && handles_[h].addr) {
+                        auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
+                        if (hdr->color == GcColor::WHITE) {
+                            hdr->color = GcColor::BLACK;
+                            worklist.push_back(h);
+                        }
                     }
+                    return;
                 }
-                return;
             }
 
             // 3a. Interior scan en OldGen: el ptr puede caer DENTRO del
@@ -532,9 +634,8 @@ namespace gc {
                 if (hdr->color != GcColor::WHITE) return; // ya BLACK o DEAD
                 // Buscar el handle correspondiente al header.
                 uint8_t *payload = reinterpret_cast<uint8_t *>(hdr) + sizeof(GcHeader);
-                auto it2 = ptr_to_handle_.find(payload);
-                if (it2 == ptr_to_handle_.end()) return;
-                const GcHandle h = it2->second;
+                const GcHandle h = ptr_to_handle_.find(payload);
+                if (h == GC_NULL_HANDLE) return;
                 if (h >= handles_.size() || !handles_[h].live) return;
                 hdr->color = GcColor::BLACK;
                 worklist.push_back(h);
@@ -555,9 +656,8 @@ namespace gc {
                     if (ptr >= cursor && ptr < slot_end) {
                         if (hdr->color != GcColor::WHITE) return;
                         uint8_t *payload = cursor + sizeof(GcHeader);
-                        auto it3 = ptr_to_handle_.find(payload);
-                        if (it3 == ptr_to_handle_.end()) return;
-                        const GcHandle h = it3->second;
+                        const GcHandle h = ptr_to_handle_.find(payload);
+                        if (h == GC_NULL_HANDLE) return;
                         if (h >= handles_.size() || !handles_[h].live) return;
                         hdr->color = GcColor::BLACK;
                         worklist.push_back(h);
@@ -846,7 +946,7 @@ namespace gc {
         uint8_t *src_payload = src_raw + sizeof(GcHeader);
         uint8_t *dst_payload = dst_raw + sizeof(GcHeader);
         ptr_to_handle_.erase(src_payload);
-        ptr_to_handle_[dst_payload] = h;
+        ptr_to_handle_.insert_or_assign(dst_payload, h);
 
         // Forward pointer en payload original para detectar doble evacuacion.
         // Tambien registramos en forward_table_ para que update_stack_forwards

@@ -281,6 +281,23 @@ uint64_t vrt_invoke_native(void *fn, uint64_t argc, vrt_proc *proc);
 uint64_t vrt_callvirt(vrt_proc *proc, uint8_t *obj_payload, uint32_t vtbl_idx);
 
 /**
+ * @brief CALLVIRT con Inline Cache.  Igual que @c vrt_callvirt pero al final
+ *        actualiza el slot de cache pasado en @p ic_slot_addr con
+ *        (cls, jit_code) para que llamadas futuras al mismo call site
+ *        hagan dispatch directo sin pasar por esta funcion.
+ *
+ * El slot tiene 16 bytes:
+ *   - offset 0: cached_class_ptr
+ *   - offset 8: cached_jit_code
+ *
+ * Cuando ic_slot_addr == 0 o el metodo no es JIT-able (advice_chain,
+ * raw_asm complejo), NO actualiza el slot -> proximas llamadas seguiran
+ * yendo por miss path.
+ */
+uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
+                          uint32_t vtbl_idx, uint64_t ic_slot_addr);
+
+/**
  * @brief Dispatch dinamico via MethodInfo* (CALLM desde JIT).
  *
  * Equivalente runtime del opcode bytecode @c callm: dado un objeto
@@ -389,6 +406,37 @@ vrt_class *vrt_findclass(vrt_proc *proc, uint64_t params_vaddr);
  * @return host_ptr al payload del objeto recien creado, o nullptr si OOM.
  */
 uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls);
+
+/**
+ * @brief Aloca un nuevo objeto y devuelve directamente el GcHandle.
+ *
+ * Combina @c vrt_newobj + @c vrt_gc_handle_for_ptr en una sola llamada,
+ * ahorrando una runtime entry call (~30-50 ns por @c new X()).  Util
+ * para JIT que necesita el handle (no el host_ptr) para luego pasar a
+ * @c gcderef.  Reduce la cadena `newobj + gc_handle_for_ptr` (2 calls)
+ * a una sola.
+ *
+ * @return GcHandle del objeto creado, o @c VRT_NULL_HANDLE si OOM.
+ */
+vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls);
+
+/**
+ * @brief Phase D.7.opt: registra un handle para un raw_ptr de objeto ya
+ *        alocado por bump-pointer inline en JIT.
+ *
+ * El JIT-eated codigo emite el bump-pointer + init de @c GcHeader +
+ * @c ObjectHeader inline.  Luego llama esta funcion para crear el
+ * handle.  Solo hace @c handles_.push_back + @c PtrHandleMap.insert.
+ * Coste medido: ~7 ns vs ~25 ns de @c vrt_newobj completo.
+ *
+ * @param proc ProcessVM cuyo gc_heap se actualiza.
+ * @param raw  Puntero host al GcHeader (no al payload) del objeto
+ *             recien alocado inline.
+ * @return Handle creado.  El JIT generalmente lo descarta porque ya
+ *         tiene el host_ptr; el handle se mantiene en la HandleTable
+ *         para que @c ptr_to_handle_ + conservative scan funcionen.
+ */
+uint64_t vrt_register_alloc(vrt_proc *proc, uint8_t *raw);
 
 /**
  * @brief Define una nueva clase via DefClassParams (defclass bytecode).

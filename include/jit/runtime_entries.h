@@ -101,6 +101,10 @@ namespace jit {
         /* ----- Class registry (Phase D.3-G: findclass/newobj/defclass/...) ----- */
         vrt_class *(*findclass)       (vrt_proc *, uint64_t)                  = nullptr;
         uint8_t   *(*newobj)          (vrt_proc *, vrt_class *)                = nullptr;
+        /* Combinado newobj + gc_handle_for_ptr en una sola call (fast path JIT). */
+        vrt_handle (*newobj_handle)   (vrt_proc *, vrt_class *)                = nullptr;
+        /* CALLVIRT con Inline Cache (actualiza slot tras dispatch). */
+        uint64_t   (*callvirt_ic)     (vrt_proc *, uint8_t *, uint32_t, uint64_t) = nullptr;
         vrt_class *(*defclass)        (vrt_proc *, uint64_t)                  = nullptr;
         int32_t    (*deffield)        (vrt_proc *, vrt_class *, uint64_t)     = nullptr;
         uint32_t   (*defmethod)       (vrt_proc *, vrt_class *, uint64_t)     = nullptr;

@@ -34,13 +34,16 @@
 #include "jit/selector.h"
 
 #include "jit/auto_jit.h"
+#include "jit/jit_regalloc.h"
 #include "vesta_rt/abi.h"
 
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <set>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 namespace jit {
@@ -252,6 +255,23 @@ namespace jit {
         mf.name = ir_fn.name;
         bool unsupported = false;
 
+        /* regalloc del JIT.
+         *
+         * Computa una asignacion estatica de los VIDs mas usados a
+         * registros callee-saved (R12-R15).  El selector emite el
+         * codigo IGUAL que antes (siempre via slot stack); tras la
+         * generacion, aplicamos @c apply_jit_regalloc_rewrite que
+         * recorre las MInstrs y reemplaza accesos a @c [rbp+slot]
+         * con accesos directos al reg asignado.
+         *
+         * Para que el alignment del stack se mantenga, el regalloc
+         * fuerza un numero PAR de regs usados (0, 2, o 4).  El
+         * prologue/epilogue pushea/pop-ea cada uno antes/despues del
+         * @c push rbp.
+         *
+         * Si @c regalloc.empty(), nada cambia respecto al path original. */
+        const JitRegalloc regalloc = compute_jit_regalloc(ir_fn);
+
         /* Set para deduplicar warnings de IR ops no soportadas dentro de
          * la misma funcion: la misma op repetida en multiples lineas o
          * el mismo (op, linea) en multiples puntos solo se reporta una vez.
@@ -409,6 +429,15 @@ namespace jit {
                     MOperand::make_reg(PROC_REG)));
         }
 
+        /* preservar regs callee-saved usados por regalloc.
+         * Conteo PAR garantizado por @c compute_jit_regalloc para que el
+         * alignment del frame no cambie (cada push es 8 bytes; 2 o 4
+         * pushes anyaden 16 o 32 bytes, ambos multiplos de 16). */
+        for (MReg cs_reg : regalloc.callee_saved_used) {
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_unary(MOp::PUSH, {}, MOperand::make_reg(cs_reg)));
+        }
+
         /* push rbp ; mov rbp, rsp */
         mf.blocks[prologue].instrs.push_back(
             MInstr::make_unary(MOp::PUSH, {}, MOperand::make_reg(MReg::RBP)));
@@ -491,6 +520,63 @@ namespace jit {
                         store_op(mf, ins.dst, SCRATCH_A);
                         break;
                     }
+                    case IrOp::STR_LIT_ADDR: {
+                        /* %dst = direccion VM del literal de string indexado
+                         * por @c ins.imm en el bloque "code.s_<imm>" del
+                         * .velb.  Equivalente al codigo emitido por el
+                         * frontend: `mov rDst, @Absolute("code.s_<imm>")`.
+                         * Resolvemos en compile-time via
+                         * @c opts_.resolve_symbol que el Loader provee. */
+                        const std::string sym = "code.s_" + std::to_string(ins.imm);
+                        uint64_t addr = 0;
+                        if (opts_.resolve_symbol) {
+                            addr = opts_.resolve_symbol(sym);
+                        }
+                        if (addr == 0) {
+                            if (jit::g_jit_warn_unsupported) {
+                                auto key = std::make_pair(static_cast<int>(ins.op), ins.source_line);
+                                if (warned_ops.insert(key).second) {
+                                    std::fprintf(stderr,
+                                        "[jit] selector: STR_LIT_ADDR sin symbol '%s' en fn '%s' linea %u\n",
+                                        sym.c_str(), ir_fn.name.c_str(), ins.source_line);
+                                }
+                            }
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* mov rax, addr (via imm64 pool si necesario). */
+                        const uint32_t pool_idx = mf.intern_imm64(addr);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_imm64_idx(pool_idx)));
+                        store_op(mf, ins.dst, SCRATCH_A);
+                        break;
+                    }
+                    case IrOp::GETPROC: {
+                        /* %dst = ProcessVM* del proceso actual.  En VM_ABI,
+                         * proc esta en RBX (preservado a traves del prologue).
+                         * En NATIVE_ABI no hay un proc accesible -- marcar
+                         * unsupported. */
+                        if (opts_.mode != SelectorMode::VM_ABI) {
+                            if (jit::g_jit_warn_unsupported) {
+                                std::fprintf(stderr,
+                                    "[jit] selector: GETPROC requiere VM_ABI en fn '%s' linea %u\n",
+                                    ir_fn.name.c_str(), ins.source_line);
+                            }
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* mov rax, rbx; store rax -> slot[dst]. */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_reg(MReg::RBX)));
+                        store_op(mf, ins.dst, SCRATCH_A);
+                        break;
+                    }
                     case IrOp::CONST: {
                         if (ins.imm <= 0x7FFFFFFFULL ||
                             static_cast<int64_t>(ins.imm) >= -0x80000000LL) {
@@ -519,8 +605,6 @@ namespace jit {
                     case IrOp::OR:
                     case IrOp::XOR: {
                         if (ins.operands.size() < 2) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
-                        load_op(mf, ins.operands[1], SCRATCH_B);
                         MOp m_op = MOp::ADD;
                         switch (ins.op) {
                             case IrOp::ADD: m_op = MOp::ADD; break;
@@ -530,11 +614,59 @@ namespace jit {
                             case IrOp::XOR: m_op = MOp::XOR; break;
                             default: break;
                         }
-                        mf.blocks.back().instrs.push_back(
-                            MInstr::make_unary(m_op,
-                                MOperand::make_reg(SCRATCH_A),
-                                MOperand::make_reg(SCRATCH_B)));
-                        store_op(mf, ins.dst, SCRATCH_A);
+                        /* Fold de operando constante: si op1 es CONST y
+                         * cabe en imm32, emitir @c ALU scratch, imm32
+                         * directamente (evita el slot del const).  Para
+                         * ADD/SUB/AND/OR/XOR el encoder ya soporta la
+                         * variante imm32. */
+                        const ir::IrValueId op0 = ins.operands[0];
+                        const ir::IrValueId op1 = ins.operands[1];
+                        const bool op1_const = op1 < ir_fn.values.size()
+                            && ir_fn.values[op1].is_const;
+                        bool used_imm_fold = false;
+                        if (op1_const) {
+                            const int64_t cv = static_cast<int64_t>(
+                                ir_fn.values[op1].const_val);
+                            if (cv >= -0x80000000LL && cv <= 0x7FFFFFFFLL) {
+                                load_op(mf, op0, SCRATCH_A);
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(m_op,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_imm32(static_cast<int32_t>(cv))));
+                                store_op(mf, ins.dst, SCRATCH_A);
+                                used_imm_fold = true;
+                            }
+                        }
+                        /* Op0 const + commutativa: tambien tratamos
+                         * @c c + x = x + c.  No para SUB (no conmutativa). */
+                        if (!used_imm_fold
+                         && (ins.op == IrOp::ADD || ins.op == IrOp::AND
+                          || ins.op == IrOp::OR  || ins.op == IrOp::XOR)) {
+                            const bool op0_const = op0 < ir_fn.values.size()
+                                && ir_fn.values[op0].is_const;
+                            if (op0_const) {
+                                const int64_t cv = static_cast<int64_t>(
+                                    ir_fn.values[op0].const_val);
+                                if (cv >= -0x80000000LL && cv <= 0x7FFFFFFFLL) {
+                                    load_op(mf, op1, SCRATCH_A);
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(m_op,
+                                            MOperand::make_reg(SCRATCH_A),
+                                            MOperand::make_imm32(static_cast<int32_t>(cv))));
+                                    store_op(mf, ins.dst, SCRATCH_A);
+                                    used_imm_fold = true;
+                                }
+                            }
+                        }
+                        if (!used_imm_fold) {
+                            load_op(mf, op0, SCRATCH_A);
+                            load_op(mf, op1, SCRATCH_B);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(m_op,
+                                    MOperand::make_reg(SCRATCH_A),
+                                    MOperand::make_reg(SCRATCH_B)));
+                            store_op(mf, ins.dst, SCRATCH_A);
+                        }
                         break;
                     }
                     case IrOp::MUL: {
@@ -740,27 +872,76 @@ namespace jit {
                     }
 
                     /* --------- LOAD / STORE --------- */
+                    /* Bug fix 2026-05-16: LOAD/STORE deben respetar el ancho
+                     * del tipo (i32/i16/i8), no SIEMPRE qword.  El encoder
+                     * solo soporta MOV qword, asi que emulamos:
+                     *   LOAD: mov rax, qword [mem]; trunc/sign-extend a tipo.
+                     *   STORE: trunc/sign-extend src a tipo; mov [mem], rax.
+                     * Sin esto, ALLOCA 8 con STORE i32 deja upper bits con
+                     * basura del valor anterior, y LOAD i32 los lee como
+                     * parte del int -> wrong result (e.g. 0x200000002a en
+                     * vez de 0x2a). */
                     case IrOp::LOAD: {
                         if (ins.operands.empty()) break;
-                        /* LOAD %ptr -> %dst: LOAD ptr to scratch_b,
-                         * then mov scratch_a, [scratch_b], store to dst. */
                         load_op(mf, ins.operands[0], SCRATCH_B);
-                        mf.blocks.back().instrs.push_back(
-                            MInstr::make_unary(MOp::MOV,
-                                MOperand::make_reg(SCRATCH_A),
-                                MOperand::make_mem(SCRATCH_B, 0)));
+                        const uint64_t lbytes = ir_type_size_bytes(ins.type);
+                        const bool lsigned = ir_type_is_signed_int(ins.type);
+                        /* Emit native MOVZX/MOVSX para extension en 1 instr
+                         * (en lugar de mov dword + SHL+SHR/SAR).  Reglas:
+                         *   - i8/i16/i32 signed: MOVSX r64, r/m<w>
+                         *   - u8/u16: MOVZX r64, r/m<w>
+                         *   - u32: mov r32, r/m32  (zero-extend implicit por x86-64)
+                         *   - i64/u64: mov r64, r/m64 */
+                        if (lbytes == 0 || lbytes >= 8) {
+                            /* qword normal. */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(SCRATCH_A, 8),
+                                    MOperand::make_mem(SCRATCH_B, 0)));
+                        } else if (lsigned) {
+                            /* MOVSX r64, r/m<w>.  Uso flags del MEM operand
+                             * para indicar el ancho del source (no width,
+                             * que ya guarda packed index/scale). */
+                            MOperand mem_op = MOperand::make_mem(SCRATCH_B, 0);
+                            mem_op.flags = static_cast<uint8_t>(lbytes);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOVSX,
+                                    MOperand::make_reg(SCRATCH_A, 8),
+                                    mem_op));
+                        } else if (lbytes == 4) {
+                            /* u32: mov r32 zero-extends. */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(SCRATCH_A, 4),
+                                    MOperand::make_mem(SCRATCH_B, 0)));
+                        } else {
+                            /* u8/u16: MOVZX r64, r/m<w>.  Mismo truco con flags. */
+                            MOperand mem_op = MOperand::make_mem(SCRATCH_B, 0);
+                            mem_op.flags = static_cast<uint8_t>(lbytes);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOVZX,
+                                    MOperand::make_reg(SCRATCH_A, 8),
+                                    mem_op));
+                        }
                         store_op(mf, ins.dst, SCRATCH_A);
                         break;
                     }
                     case IrOp::STORE: {
                         if (ins.operands.size() < 2) break;
-                        /* STORE %val, %ptr */
                         load_op(mf, ins.operands[0], SCRATCH_A);
                         load_op(mf, ins.operands[1], SCRATCH_B);
+
+                        const uint64_t sbytes = ir_type_size_bytes(ins.type);
+                        /* Encoder ahora soporta MOV con width 1/2/4/8.
+                         * Solo necesitamos seteear el width del src reg. */
+                        const uint8_t w = (sbytes == 1 || sbytes == 2
+                                        || sbytes == 4 || sbytes == 8)
+                                        ? static_cast<uint8_t>(sbytes) : 8;
+                        MOperand src_op = MOperand::make_reg(SCRATCH_A, w);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_mem(SCRATCH_B, 0),
-                                MOperand::make_reg(SCRATCH_A)));
+                                src_op));
                         break;
                     }
 
@@ -958,6 +1139,159 @@ namespace jit {
                         break;
                     }
 
+                    /* --------- CALLN (FFI a plugin nativo) --------- */
+                    /*
+                     * %dst = calln.T @"lib:func"(%arg0, %arg1, ...)
+                     *
+                     * Resolvemos el simbolo nativo en compile-time via
+                     * @c opts_.resolve_native_fn (Loader provee la lambda
+                     * que usa FFI::load_native_module + resolve_native_symbol).
+                     * El resultado es un fn_ptr HOST que embebemos como
+                     * imm64 + emitimos CALL nativo con Native ABI.
+                     *
+                     * Calling convention de las funciones nativas Vesta:
+                     *   - Win64: rcx, rdx, r8, r9 (max 4 args en regs)
+                     *   - SysV:  rdi, rsi, rdx, rcx, r8, r9 (max 6)
+                     *   - Return en RAX
+                     */
+                    /* --------- NEWOBJ (instanciacion GC) --------- */
+                    /*
+                     * %dst = newobj.i64 %class_ptr
+                     *
+                     * Convencion del IR: dst = GcHandle (uint64).
+                     * Pasos:
+                     *   1. host_ptr = vrt_newobj(proc, class_ptr_slot)
+                     *   2. handle   = vrt_gc_handle_for_ptr(proc, host_ptr)
+                     *   3. slot[dst] = handle
+                     *
+                     * Mismo flujo que el mini-parser de raw_asm para
+                     * `newobj rN` (D.3-G).
+                     */
+                    case IrOp::NEWOBJ: {
+                        /* Optimizado 2026-05-16: usar vrt_newobj_handle (1 call
+                         * que combina alloc + handle_for_ptr) en lugar de los
+                         * 2 calls separados.  Ahorra ~30-50 ns por @c new X(). */
+                        if (ins.operands.empty()) break;
+                        if (opts_.runtime == nullptr
+                         || opts_.runtime->newobj_handle == nullptr) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->newobj_handle no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        if (opts_.mode != SelectorMode::VM_ABI) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "NEWOBJ requiere VM_ABI");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+#if defined(_WIN32)
+                        const MReg ABI0 = MReg::RCX;
+                        const MReg ABI1 = MReg::RDX;
+#else
+                        const MReg ABI0 = MReg::RDI;
+                        const MReg ABI1 = MReg::RSI;
+#endif
+                        /* vrt_newobj_handle(proc, cls) -> handle en RAX. */
+                        load_op(mf, ins.operands[0], ABI1);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ABI0),
+                                MOperand::make_reg(MReg::RBX)));
+                        const uint32_t pidx = mf.intern_imm64(
+                            reinterpret_cast<uint64_t>(opts_.runtime->newobj_handle));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_imm64_idx(pidx)));
+                        MInstr c1;
+                        c1.op = MOp::CALL;
+                        c1.src1 = MOperand::make_reg(MReg::RAX);
+                        emit_stackmap_for_safepoint(c1);
+                        mf.blocks.back().instrs.push_back(c1);
+                        /* slot[dst] = handle (en RAX). */
+                        if (ins.dst != ir::IR_NO_VALUE) {
+                            store_op(mf, ins.dst, MReg::RAX);
+                        }
+                        break;
+                    }
+
+                    case IrOp::CALLN: {
+                        if (opts_.resolve_native_fn == nullptr) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "resolve_native_fn no provisto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        uint64_t fn_addr = opts_.resolve_native_fn(ins.func_name);
+                        if (fn_addr == 0) {
+                            if (jit::g_jit_warn_unsupported) {
+                                auto key = std::make_pair(static_cast<int>(ins.op), ins.source_line);
+                                if (warned_ops.insert(key).second) {
+                                    std::fprintf(stderr,
+                                        "[jit] selector: CALLN '%s' no se pudo resolver en fn '%s' linea %u\n",
+                                        ins.func_name.c_str(),
+                                        ir_fn.name.c_str(),
+                                        ins.source_line);
+                                }
+                            }
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+
+                        /* Native ABI arg regs. */
+#if defined(_WIN32)
+                        static const MReg N_ARG_REGS[] = {
+                            MReg::RCX, MReg::RDX, MReg::R8, MReg::R9
+                        };
+                        constexpr size_t N_MAX_REG_ARGS = 4;
+#else
+                        static const MReg N_ARG_REGS[] = {
+                            MReg::RDI, MReg::RSI, MReg::RDX,
+                            MReg::RCX, MReg::R8, MReg::R9
+                        };
+                        constexpr size_t N_MAX_REG_ARGS = 6;
+#endif
+                        if (ins.operands.size() > N_MAX_REG_ARGS) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "CALLN con demasiados args (stack args no implementados)");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+
+                        /* Cargar cada operando al reg correspondiente.
+                         * Sin clobber porque cada reg es distinto. */
+                        for (size_t a = 0; a < ins.operands.size(); ++a) {
+                            load_op(mf, ins.operands[a], N_ARG_REGS[a]);
+                        }
+
+                        /* mov rax, fn_addr (via imm64 pool). */
+                        const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_imm64_idx(fn_pool_idx)));
+
+                        /* CALL rax + stackmap (el plugin nativo podria
+                         * triggear GC indirectamente). */
+                        MInstr call_instr;
+                        call_instr.op = MOp::CALL;
+                        call_instr.src1 = MOperand::make_reg(MReg::RAX);
+                        emit_stackmap_for_safepoint(call_instr);
+                        mf.blocks.back().instrs.push_back(call_instr);
+
+                        /* Resultado en RAX -> slot del dst. */
+                        if (ins.dst != ir::IR_NO_VALUE) {
+                            store_op(mf, ins.dst, MReg::RAX);
+                        }
+                        break;
+                    }
+
                     /* --------- CALLVIRT (dispatch dinamico v1 via runtime) --------- */
                     /*
                      * Despachamos a un runtime entry @c vrt_callvirt que hace
@@ -1024,7 +1358,129 @@ namespace jit {
                                 MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
                                 MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
 
-                        /* Paso 3 INLINE DISPATCH:
+                        /* INLINE CACHE monomorphic (si reserve_ic_slot disponible).
+                         *
+                         * Patron:
+                         *   load obj -> rax
+                         *   test rax,rax; jz fallback_null
+                         *   mov rcx, [rax+0]               ; class_ptr
+                         *   mov r10, ic_slot_addr           ; imm64
+                         *   cmp rcx, [r10]                  ; cached_class
+                         *   jne ic_miss
+                         *   mov rax, [r10+8]                ; cached_jit_code
+                         *   mov rcx, rbx                    ; proc
+                         *   call rax
+                         *   jmp continue
+                         * ic_miss:
+                         *   mov arg0=rbx, arg1=rax(obj), arg2=vtbl_idx, arg3=ic_slot
+                         *   call vrt_callvirt_ic
+                         *   jmp continue
+                         * fallback_null:
+                         *   ... null obj path (raro) ...
+                         *
+                         * Ventaja vs inline dispatch tradicional: hit elimina
+                         * 4 loads (vtable+method+jit_code+advice).  Coste por
+                         * hit ~5 instr (load class + cmp + branch + call).
+                         * Coste por miss ~vrt_callvirt_ic overhead (~50ns) +
+                         * actualizar slot (incluido en vrt_callvirt_ic).
+                         */
+                        uint64_t ic_slot_addr = 0;
+                        if (opts_.reserve_ic_slot) {
+                            ic_slot_addr = opts_.reserve_ic_slot();
+                        }
+                        if (ic_slot_addr != 0 && opts_.runtime
+                         && opts_.runtime->callvirt_ic) {
+                            const MLabelId ic_miss_label = mf.new_label();
+                            const MLabelId ic_continue_label = mf.new_label();
+                            /* load obj */
+                            load_op(mf, ins.operands[0], MReg::RAX);
+                            /* mov rcx, [rax+0]  (class_ptr) */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_mem(MReg::RAX, 0)));
+                            /* mov r10, ic_slot_addr (imm64 via pool) */
+                            const uint32_t ic_idx = mf.intern_imm64(ic_slot_addr);
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R10),
+                                MOperand::make_imm64_idx(ic_idx)));
+                            /* cmp rcx, [r10] (cached_class) */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::CMP,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_mem(MReg::R10, 0)));
+                            /* jne ic_miss */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_jcc(MCond::NE, ic_miss_label));
+                            /* HIT: mov rax, [r10+8] (cached_jit_code) */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::R10, 8)));
+                            /* mov rcx, rbx (proc) */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_reg(MReg::RBX)));
+                            /* call rax + stackmap */
+                            {
+                                MInstr hit_call;
+                                hit_call.op = MOp::CALL;
+                                hit_call.src1 = MOperand::make_reg(MReg::RAX);
+                                emit_stackmap_for_safepoint(hit_call);
+                                mf.blocks.back().instrs.push_back(hit_call);
+                            }
+                            /* jmp ic_continue */
+                            mf.blocks.back().instrs.push_back(MInstr::make_jmp(ic_continue_label));
+                            /* ic_miss: */
+                            mf.blocks.back().instrs.push_back(MInstr::make_label_def(ic_miss_label));
+                            /* Setup args para vrt_callvirt_ic(proc, obj, idx, slot). */
+                            load_op(mf, ins.operands[0], MReg::RAX);  /* obj */
+#if defined(_WIN32)
+                            const MReg ic_arg0 = MReg::RCX;  /* proc */
+                            const MReg ic_arg1 = MReg::RDX;  /* obj */
+                            const MReg ic_arg2 = MReg::R8;   /* vtbl_idx */
+                            const MReg ic_arg3 = MReg::R9;   /* ic_slot */
+#else
+                            const MReg ic_arg0 = MReg::RDI;
+                            const MReg ic_arg1 = MReg::RSI;
+                            const MReg ic_arg2 = MReg::RDX;
+                            const MReg ic_arg3 = MReg::RCX;
+#endif
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ic_arg0),
+                                MOperand::make_reg(MReg::RBX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ic_arg1),
+                                MOperand::make_reg(MReg::RAX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ic_arg2),
+                                MOperand::make_imm32(static_cast<int32_t>(vtbl_idx))));
+                            const uint32_t slot_idx2 = mf.intern_imm64(ic_slot_addr);
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ic_arg3),
+                                MOperand::make_imm64_idx(slot_idx2)));
+                            const uint64_t ic_fn = reinterpret_cast<uint64_t>(opts_.runtime->callvirt_ic);
+                            const uint32_t ic_fn_idx = mf.intern_imm64(ic_fn);
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_imm64_idx(ic_fn_idx)));
+                            {
+                                MInstr miss_call;
+                                miss_call.op = MOp::CALL;
+                                miss_call.src1 = MOperand::make_reg(MReg::RAX);
+                                emit_stackmap_for_safepoint(miss_call);
+                                mf.blocks.back().instrs.push_back(miss_call);
+                            }
+                            /* ic_continue: */
+                            mf.blocks.back().instrs.push_back(MInstr::make_label_def(ic_continue_label));
+                            /* Store result en proc->registers.regs[0] -> dst. */
+                            if (ins.dst != ir::IR_NO_VALUE) {
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(SCRATCH_A),
+                                    MOperand::make_mem(MReg::RBX, regs_base)));
+                                store_op(mf, ins.dst, SCRATCH_A);
+                            }
+                            break;
+                        }
+
+                        /* Paso 3 INLINE DISPATCH (sin IC):
                          *   load obj -> rax
                          *   test rax,rax; jz fallback
                          *   mov rcx, [rax + 0]        ; class_ptr (header @ offset 0)
@@ -1083,6 +1539,22 @@ namespace jit {
                             MOperand::make_reg(MReg::RCX)));
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_jcc(MCond::E, fallback_label));
+                        /* AOP fix 2026-05-16: si method->advice_chain != NULL,
+                         * el metodo tiene aspectos (@Before/@After/@Around).
+                         * Saltar el fast path inline (que invocaria solo el
+                         * body sin advices) y caer al slow path vrt_callvirt
+                         * que recorre la cadena correctamente.
+                         *
+                         *   mov rax, [rcx + ADVICE_CHAIN_OFFSET]
+                         *   test rax, rax; jnz fallback */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_mem(MReg::RCX, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET)));
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_reg(MReg::RAX)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jcc(MCond::NE, fallback_label));
                         /* mov rax, [rcx + JIT_CODE_OFFSET]  (method->jit_code) */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(MReg::RAX),
@@ -1194,9 +1666,17 @@ namespace jit {
                                 MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
                                 MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
 
-                        /* Native ABI: arg0=proc(rbx), arg1=obj_payload, arg2=method_ptr. */
-                        load_op(mf, ins.operands[0], SCRATCH_A);  /* obj host_ptr */
-                        load_op(mf, ins.operands[1], SCRATCH_C);  /* method ptr */
+                        /* Native ABI: arg0=proc(rbx), arg1=obj_payload, arg2=method_ptr.
+                         *
+                         * BUG FIX 2026-05-16: usar R10/R11 (caller-saved, no
+                         * arg regs) como temporales para evitar clobber.  El
+                         * codigo anterior usaba SCRATCH_C=RDX que ES cm_arg1
+                         * (Win64) o cm_arg2 (SysV) -- al mov-ear arg1 desde
+                         * RAX, sobrescribia RDX (method) antes de pasarlo
+                         * como arg2.  Resultado: vrt_callm(proc, obj, obj)
+                         * en vez de (proc, obj, method) -> retornaba 0. */
+                        load_op(mf, ins.operands[0], MReg::R10);  /* obj host_ptr */
+                        load_op(mf, ins.operands[1], MReg::R11);  /* method ptr */
 #if defined(_WIN32)
                         const MReg cm_arg0 = MReg::RCX;
                         const MReg cm_arg1 = MReg::RDX;
@@ -1213,11 +1693,11 @@ namespace jit {
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(cm_arg1),
-                                MOperand::make_reg(SCRATCH_A)));
+                                MOperand::make_reg(MReg::R10)));
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(cm_arg2),
-                                MOperand::make_reg(SCRATCH_C)));
+                                MOperand::make_reg(MReg::R11)));
 
                         const uint64_t fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->callm);
                         const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
@@ -1273,9 +1753,14 @@ namespace jit {
                                 MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
                                 MOperand::make_imm32(static_cast<int32_t>(nargs))));
 
-                        /* Native ABI: arg0=proc(rbx), arg1=fn_addr, arg2=env_addr. */
-                        load_op(mf, ins.func_ptr,    SCRATCH_A);   /* fn_addr */
-                        load_op(mf, ins.operands[0], SCRATCH_C);   /* env_addr */
+                        /* Native ABI: arg0=proc(rbx), arg1=fn_addr, arg2=env_addr.
+                         *
+                         * BUG FIX 2026-05-16: usar R10/R11 (caller-saved, no
+                         * arg regs) como temporales para evitar clobber.
+                         * Mismo issue que CALLM: SCRATCH_C=RDX colisiona con
+                         * cc_arg1(Win64)/cc_arg2(SysV). */
+                        load_op(mf, ins.func_ptr,    MReg::R10);   /* fn_addr */
+                        load_op(mf, ins.operands[0], MReg::R11);   /* env_addr */
 #if defined(_WIN32)
                         const MReg cc_arg0 = MReg::RCX;
                         const MReg cc_arg1 = MReg::RDX;
@@ -1292,11 +1777,11 @@ namespace jit {
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(cc_arg1),
-                                MOperand::make_reg(SCRATCH_A)));
+                                MOperand::make_reg(MReg::R10)));
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(cc_arg2),
-                                MOperand::make_reg(SCRATCH_C)));
+                                MOperand::make_reg(MReg::R11)));
 
                         const uint64_t fn_addr_cc = reinterpret_cast<uint64_t>(opts_.runtime->callclosure);
                         const uint32_t fn_pool_cc = mf.intern_imm64(fn_addr_cc);
@@ -1457,7 +1942,10 @@ namespace jit {
                                         VESTA_PROC_REGISTERS_OFFSET),
                                     MOperand::make_reg(MReg::RAX)));
                         }
-                        /* epilogue: mov rsp, rbp; pop rbp; [pop rbx]; ret */
+                        /* epilogue: mov rsp, rbp; pop rbp;
+                         *           [pop r15;..;pop r12];   (regalloc)
+                         *           [pop rbx];               (VM_ABI)
+                         *           ret */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(MReg::RSP),
@@ -1465,6 +1953,14 @@ namespace jit {
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::POP,
                                 MOperand::make_reg(MReg::RBP), {}));
+                        /* pop regs callee-saved en orden
+                         * inverso al push del prologue. */
+                        for (auto it = regalloc.callee_saved_used.rbegin();
+                             it != regalloc.callee_saved_used.rend(); ++it) {
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::POP,
+                                    MOperand::make_reg(*it), {}));
+                        }
                         if (opts_.mode == SelectorMode::VM_ABI) {
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::POP,
@@ -1713,6 +2209,101 @@ namespace jit {
                                     const std::string &dst = args[0];
                                     const std::string &src = args[1];
 
+                                    /* Placeholders del frontend Vex: {dst} y {srcN}
+                                     * referencian SSA values del IR instruction.
+                                     * {dst}  -> slot SSA del ins.dst (en frame nativo)
+                                     * {srcN} -> slot SSA de ins.operands[N]
+                                     *
+                                     * Patrones soportados aqui:
+                                     *   mov {dst}, rN     -> store SSA[dst] = VMreg[N]
+                                     *   mov {dst}, imm    -> store SSA[dst] = imm
+                                     *   mov rN, {srcK}    -> store VMreg[N] = SSA[srcK]
+                                     *   mov {dst}, {srcK} -> store SSA[dst] = SSA[srcK]
+                                     */
+                                    auto parse_placeholder = [&](const std::string &tok,
+                                                                  int &out_src_idx,
+                                                                  bool &is_dst) -> bool {
+                                        out_src_idx = -1;
+                                        is_dst = false;
+                                        if (tok == "{dst}") { is_dst = true; return true; }
+                                        if (tok.size() > 5
+                                         && tok[0] == '{' && tok.back() == '}'
+                                         && tok.compare(1, 3, "src") == 0) {
+                                            int n = 0;
+                                            for (size_t k = 4; k + 1 < tok.size(); ++k) {
+                                                if (!std::isdigit(static_cast<unsigned char>(tok[k]))) return false;
+                                                n = n * 10 + (tok[k] - '0');
+                                            }
+                                            out_src_idx = n;
+                                            return true;
+                                        }
+                                        return false;
+                                    };
+                                    int  ph_src_idx_d = -1;  bool ph_is_dst_d = false;
+                                    int  ph_src_idx_s = -1;  bool ph_is_dst_s = false;
+                                    const bool dst_is_ph = parse_placeholder(dst, ph_src_idx_d, ph_is_dst_d);
+                                    const bool src_is_ph = parse_placeholder(src, ph_src_idx_s, ph_is_dst_s);
+
+                                    if (dst_is_ph || src_is_ph) {
+                                        /* Helpers staged para SSA slots (en frame
+                                         * nativo, accesibles via [rbp - 8*(vid+1)]). */
+                                        auto stage_load_ssa = [&](MReg dst_reg, ir::IrValueId vid) {
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                MOperand::make_reg(dst_reg),
+                                                slot_mem(vid)));
+                                        };
+                                        auto stage_store_ssa = [&](ir::IrValueId vid, MReg src_reg) {
+                                            if (vid == ir::IR_NO_VALUE) return;
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                slot_mem(vid),
+                                                MOperand::make_reg(src_reg)));
+                                        };
+
+                                        /* Cargar valor a RAX. */
+                                        if (src_is_ph) {
+                                            if (ph_is_dst_s) {
+                                                if (ins.dst == ir::IR_NO_VALUE) { all_ok = false; break; }
+                                                stage_load_ssa(MReg::RAX, ins.dst);
+                                            } else {
+                                                if (ph_src_idx_s < 0
+                                                 || static_cast<size_t>(ph_src_idx_s) >= ins.operands.size()) {
+                                                    all_ok = false; break;
+                                                }
+                                                stage_load_ssa(MReg::RAX, ins.operands[ph_src_idx_s]);
+                                            }
+                                        } else {
+                                            /* src es VMreg o imm. */
+                                            int src_slot = vm_reg_slot_index(src);
+                                            if (src_slot >= 0) {
+                                                stage_load_slot(MReg::RAX, src_slot);
+                                            } else {
+                                                int64_t imm;
+                                                if (!parse_imm_int(src, imm)) { all_ok = false; break; }
+                                                stage_load_imm(MReg::RAX, imm);
+                                            }
+                                        }
+
+                                        /* Guardar de RAX al destino. */
+                                        if (dst_is_ph) {
+                                            if (ph_is_dst_d) {
+                                                if (ins.dst == ir::IR_NO_VALUE) { all_ok = false; break; }
+                                                stage_store_ssa(ins.dst, MReg::RAX);
+                                            } else {
+                                                if (ph_src_idx_d < 0
+                                                 || static_cast<size_t>(ph_src_idx_d) >= ins.operands.size()) {
+                                                    all_ok = false; break;
+                                                }
+                                                stage_store_ssa(ins.operands[ph_src_idx_d], MReg::RAX);
+                                            }
+                                        } else {
+                                            /* dst es VMreg. */
+                                            int dst_slot = vm_reg_slot_index(dst);
+                                            if (dst_slot < 0) { all_ok = false; break; }
+                                            stage_store_slot(dst_slot, MReg::RAX);
+                                        }
+                                        continue;
+                                    }
+
                                     /* resolver @Absolute("X") via callback.
                                      * `try_resolve_at` parsea `@Absolute("name")` o
                                      * `@StringRef("name")` y retorna la direccion
@@ -1802,17 +2393,126 @@ namespace jit {
                                         stage_call(reinterpret_cast<uint64_t>(opts_.runtime->vm_write_u64));
                                         continue;
                                     }
-                                    /* `mov rN, [rM]`:  vrt_vm_read_u64(proc, vaddr) */
+                                    /* `mov rN, [rM]`:  vrt_vm_read_u64(proc, vaddr).
+                                     *
+                                     *INLINING.  Si la linea
+                                     * ANTERIOR fue @c mov rM, @Absolute("X")
+                                     * cuya resolucion dio vaddr V, y tenemos
+                                     * @c read_vmem_u64, leemos el valor V[0..7]
+                                     * en compile-time y emitimos un MOV
+                                     * inmediato directo (1 instr, 0 calls)
+                                     * en lugar de la llamada a vm_read_u64.
+                                     *
+                                     * Esto elimina 1 runtime call por
+                                     * @c new ClassName() (la lectura del slot
+                                     * @c s_X que cachea @c ClassInfo*).  En
+                                     * benches @c 100_reflection_full con 30M
+                                     * iteraciones es uno de los hot calls. */
                                     if (dst_mem.empty() && !src_mem.empty()) {
                                         const int dst_slot = vm_reg_slot_index(dst);
                                         const int src_slot = vm_reg_slot_index(src_mem);
                                         if (dst_slot < 0 || src_slot < 0) { all_ok = false; break; }
-                                        stage_load_slot(ABI_ARG1, src_slot);  /* vaddr */
-                                        staged.push_back(MInstr::make_unary(MOp::MOV,
-                                            MOperand::make_reg(ABI_ARG0),
-                                            MOperand::make_reg(MReg::RBX)));
-                                        stage_call(reinterpret_cast<uint64_t>(opts_.runtime->vm_read_u64));
-                                        stage_store_slot(dst_slot, MReg::RAX);
+                                        /*si la linea ANTERIOR
+                                         * fue @c mov rM, @Absolute("X") con
+                                         * X resoluble a vaddr V, podemos:
+                                         *   (a) inlinear el valor si ya esta
+                                         *       cacheado (read_vmem_u64 != 0).
+                                         *   (b) si NO, emitir un check-cache
+                                         *       inline con IC slot.
+                                         *
+                                         * Hot path con IC slot (3 instrs +
+                                         * branch predicted): @c mov rN,
+                                         * [ic_slot]; @c test rN, rN; @c jne
+                                         * done -> 3-5 ns vs 30-50 ns del
+                                         * call a @c vrt_vm_read_u64. */
+                                        bool inlined = false;
+                                        if (dst_slot == src_slot
+                                         && li > 0) {
+                                            const std::string &prev_line = lines[li - 1];
+                                            size_t sp2 = prev_line.find_first_of(" \t");
+                                            std::string prev_op = (sp2 == std::string::npos)
+                                                ? prev_line : prev_line.substr(0, sp2);
+                                            if (prev_op == "mov") {
+                                                std::string prev_rest = trim_str(
+                                                    prev_line.substr(sp2));
+                                                auto prev_args = split_csv(prev_rest);
+                                                if (prev_args.size() == 2
+                                                 && prev_args[0] == src_mem
+                                                 && prev_args[1].find('@') != std::string::npos) {
+                                                    int64_t v_addr = 0;
+                                                    if (try_resolve_at(prev_args[1], v_addr)) {
+                                                        uint64_t cached_value = 0;
+                                                        if (opts_.read_vmem_u64) {
+                                                            cached_value = opts_.read_vmem_u64(
+                                                                static_cast<uint64_t>(v_addr));
+                                                        }
+                                                        if (cached_value != 0) {
+                                                            /* Inline directo con imm64. */
+                                                            stage_load_imm(MReg::RAX,
+                                                                static_cast<int64_t>(cached_value));
+                                                            stage_store_slot(dst_slot, MReg::RAX);
+                                                            inlined = true;
+                                                        } else if (opts_.reserve_ic_slot) {
+                                                            /* Inline cache: reservar 8 bytes en
+                                                             * code cache, init a 0.  Primera vez
+                                                             * popula via vm_read_u64; despues hot path. */
+                                                            const uint64_t ic = opts_.reserve_ic_slot();
+                                                            if (ic) {
+                                                                /* mov r10, ic_slot_addr */
+                                                                staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                                    MOperand::make_reg(MReg::R10),
+                                                                    MOperand::make_imm64_idx(
+                                                                        mf.intern_imm64(ic))));
+                                                                /* mov rax, [r10]  (load cached val) */
+                                                                staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                                    MOperand::make_reg(MReg::RAX),
+                                                                    MOperand::make_mem(MReg::R10, 0)));
+                                                                /* test rax, rax */
+                                                                MInstr ti;
+                                                                ti.op = MOp::TEST;
+                                                                ti.dst = MOperand::make_reg(MReg::RAX);
+                                                                ti.src1 = MOperand::make_reg(MReg::RAX);
+                                                                staged.push_back(ti);
+                                                                /* jne done */
+                                                                const MLabelId done_lbl = mf.new_label();
+                                                                staged.push_back(
+                                                                    MInstr::make_jcc(MCond::NE, done_lbl));
+                                                                /* Cold: vm_read_u64 + store IC. */
+                                                                stage_load_imm(ABI_ARG1,
+                                                                    static_cast<int64_t>(v_addr));
+                                                                staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                                    MOperand::make_reg(ABI_ARG0),
+                                                                    MOperand::make_reg(MReg::RBX)));
+                                                                stage_call(reinterpret_cast<uint64_t>(
+                                                                    opts_.runtime->vm_read_u64));
+                                                                /* mov [r10], rax  (cache result) */
+                                                                staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                                    MOperand::make_reg(MReg::R10),
+                                                                    MOperand::make_imm64_idx(
+                                                                        mf.intern_imm64(ic))));
+                                                                staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                                    MOperand::make_mem(MReg::R10, 0),
+                                                                    MOperand::make_reg(MReg::RAX)));
+                                                                /* done: */
+                                                                staged.push_back(
+                                                                    MInstr::make_label_def(done_lbl));
+                                                                /* Result in rax -> store al slot. */
+                                                                stage_store_slot(dst_slot, MReg::RAX);
+                                                                inlined = true;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (!inlined) {
+                                            stage_load_slot(ABI_ARG1, src_slot);  /* vaddr */
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                MOperand::make_reg(ABI_ARG0),
+                                                MOperand::make_reg(MReg::RBX)));
+                                            stage_call(reinterpret_cast<uint64_t>(opts_.runtime->vm_read_u64));
+                                            stage_store_slot(dst_slot, MReg::RAX);
+                                        }
                                         continue;
                                     }
                                     all_ok = false; break;
@@ -1836,28 +2536,61 @@ namespace jit {
                                  *   2. handle   = vrt_gc_handle_for_ptr(proc, host_ptr)
                                  *   3. r0       = handle
                                  * El frontend siempre hace `gcderef cur0, r0; xchg cur0, rM`
-                                 * justo despues, lo que re-deriva host_ptr de forma correcta. */
+                                 * justo despues, lo que re-deriva host_ptr de forma correcta.
+                                 *
+                                 * si las DOS lineas siguientes son
+                                 * exactamente @c gcderef cur0, r0 + @c xchg cur0, rM,
+                                 * fusionamos: llamamos directamente @c vrt_newobj
+                                 * (que retorna host_ptr) y guardamos en slot(rM)
+                                 * + slot(r0).  Salta 1 runtime call (vrt_gc_deref). */
                                 if (opcode == "newobj" && args.size() == 1
-                                 && opts_.runtime->newobj
-                                 && opts_.runtime->gc_handle_for_ptr) {
+                                 && opts_.runtime->newobj_handle) {
                                     const int slot = vm_reg_slot_index(args[0]);
                                     if (slot < 0) { all_ok = false; break; }
-                                    /* Step 1: vrt_newobj(proc, cls) -> host_ptr en RAX. */
+                                    /* Look-ahead: gcderef + xchg? */
+                                    bool fused = false;
+                                    if (li + 2 < lines.size()
+                                     && opts_.runtime->newobj) {
+                                        const std::string &l1 = lines[li + 1];
+                                        const std::string &l2 = lines[li + 2];
+                                        /* l1: "gcderef cur0, r0" */
+                                        /* l2: "xchg cur0, rM" */
+                                        size_t s1 = l1.find_first_of(" \t");
+                                        size_t s2 = l2.find_first_of(" \t");
+                                        std::string op1 = (s1 == std::string::npos) ? l1 : l1.substr(0, s1);
+                                        std::string op2 = (s2 == std::string::npos) ? l2 : l2.substr(0, s2);
+                                        if (op1 == "gcderef" && op2 == "xchg") {
+                                            std::string r1 = (s1 == std::string::npos) ? "" : trim_str(l1.substr(s1));
+                                            std::string r2 = (s2 == std::string::npos) ? "" : trim_str(l2.substr(s2));
+                                            auto a1 = split_csv(r1);
+                                            auto a2 = split_csv(r2);
+                                            if (a1.size() == 2 && a1[0] == "cur0" && a1[1] == "r0"
+                                             && a2.size() == 2 && a2[0] == "cur0") {
+                                                const int dest_slot = vm_reg_slot_index(a2[1]);
+                                                if (dest_slot >= 0) {
+                                                    /* Emitir: vrt_newobj(proc, cls) -> host_ptr en rax,
+                                                     * y storear a slot(rM) y slot(r0). */
+                                                    stage_load_slot(ABI_ARG1, slot);
+                                                    staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                        MOperand::make_reg(ABI_ARG0),
+                                                        MOperand::make_reg(MReg::RBX)));
+                                                    stage_call(reinterpret_cast<uint64_t>(opts_.runtime->newobj));
+                                                    stage_store_slot(dest_slot, MReg::RAX);
+                                                    stage_store_slot(0, MReg::RAX);  /* r0 = host_ptr tambien */
+                                                    li += 2;  /* skipear gcderef + xchg */
+                                                    fused = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (fused) continue;
+                                    /* Fallback: ruta original via newobj_handle + handle. */
                                     stage_load_slot(ABI_ARG1, slot);
                                     staged.push_back(MInstr::make_unary(MOp::MOV,
                                         MOperand::make_reg(ABI_ARG0),
                                         MOperand::make_reg(MReg::RBX)));
-                                    stage_call(reinterpret_cast<uint64_t>(opts_.runtime->newobj));
-                                    /* Step 2: vrt_gc_handle_for_ptr(proc, host_ptr) -> handle en RAX.
-                                     * El host_ptr esta en RAX; movemos primero a ABI_ARG1. */
-                                    staged.push_back(MInstr::make_unary(MOp::MOV,
-                                        MOperand::make_reg(ABI_ARG1),
-                                        MOperand::make_reg(MReg::RAX)));
-                                    staged.push_back(MInstr::make_unary(MOp::MOV,
-                                        MOperand::make_reg(ABI_ARG0),
-                                        MOperand::make_reg(MReg::RBX)));
-                                    stage_call(reinterpret_cast<uint64_t>(opts_.runtime->gc_handle_for_ptr));
-                                    /* Step 3: r0 = handle (uint32 zero-extended a u64). */
+                                    stage_call(reinterpret_cast<uint64_t>(opts_.runtime->newobj_handle));
+                                    /* r0 = handle. */
                                     stage_store_slot(0, MReg::RAX);
                                     continue;
                                 }
@@ -1905,18 +2638,64 @@ namespace jit {
                                     stage_store_slot(0, MReg::RAX);
                                     continue;
                                 }
-                                /* @c findmethod / @c findfield rN, rM */
+                                /* @c findmethod / @c findfield rN, rM (o {dst}, {srcN}) */
                                 if (opcode == "findmethod" && args.size() == 2
                                  && opts_.runtime->findmethod) {
-                                    const int dst_slot = vm_reg_slot_index(args[0]);
-                                    const int prm_slot = vm_reg_slot_index(args[1]);
-                                    if (dst_slot < 0 || prm_slot < 0) { all_ok = false; break; }
-                                    stage_load_slot(ABI_ARG1, prm_slot);
+                                    /* Helper: cargar argN como ABI_ARG1 desde
+                                     * VMreg, SSA value placeholder ({dst}/{srcK}), o imm. */
+                                    auto stage_load_arg_to = [&](MReg dst_reg, const std::string &tok) -> bool {
+                                        if (tok == "{dst}") {
+                                            if (ins.dst == ir::IR_NO_VALUE) return false;
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                MOperand::make_reg(dst_reg), slot_mem(ins.dst)));
+                                            return true;
+                                        }
+                                        if (tok.size() > 5 && tok[0] == '{'
+                                         && tok.back() == '}' && tok.compare(1, 3, "src") == 0) {
+                                            int n = 0;
+                                            for (size_t k = 4; k + 1 < tok.size(); ++k) {
+                                                if (!std::isdigit(static_cast<unsigned char>(tok[k]))) return false;
+                                                n = n * 10 + (tok[k] - '0');
+                                            }
+                                            if (n < 0 || static_cast<size_t>(n) >= ins.operands.size()) return false;
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                MOperand::make_reg(dst_reg), slot_mem(ins.operands[n])));
+                                            return true;
+                                        }
+                                        int s = vm_reg_slot_index(tok);
+                                        if (s >= 0) { stage_load_slot(dst_reg, s); return true; }
+                                        return false;
+                                    };
+                                    auto stage_store_arg_from = [&](const std::string &tok, MReg src_reg) -> bool {
+                                        if (tok == "{dst}") {
+                                            if (ins.dst == ir::IR_NO_VALUE) return false;
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                slot_mem(ins.dst), MOperand::make_reg(src_reg)));
+                                            return true;
+                                        }
+                                        if (tok.size() > 5 && tok[0] == '{'
+                                         && tok.back() == '}' && tok.compare(1, 3, "src") == 0) {
+                                            int n = 0;
+                                            for (size_t k = 4; k + 1 < tok.size(); ++k) {
+                                                if (!std::isdigit(static_cast<unsigned char>(tok[k]))) return false;
+                                                n = n * 10 + (tok[k] - '0');
+                                            }
+                                            if (n < 0 || static_cast<size_t>(n) >= ins.operands.size()) return false;
+                                            staged.push_back(MInstr::make_unary(MOp::MOV,
+                                                slot_mem(ins.operands[n]), MOperand::make_reg(src_reg)));
+                                            return true;
+                                        }
+                                        int s = vm_reg_slot_index(tok);
+                                        if (s >= 0) { stage_store_slot(s, src_reg); return true; }
+                                        return false;
+                                    };
+
+                                    if (!stage_load_arg_to(ABI_ARG1, args[1])) { all_ok = false; break; }
                                     staged.push_back(MInstr::make_unary(MOp::MOV,
                                         MOperand::make_reg(ABI_ARG0),
                                         MOperand::make_reg(MReg::RBX)));
                                     stage_call(reinterpret_cast<uint64_t>(opts_.runtime->findmethod));
-                                    stage_store_slot(dst_slot, MReg::RAX);
+                                    if (!stage_store_arg_from(args[0], MReg::RAX)) { all_ok = false; break; }
                                     continue;
                                 }
                                 if (opcode == "findfield" && args.size() == 2
@@ -2161,6 +2940,720 @@ namespace jit {
                 }
             }
             (void)mb;
+        }
+
+        /* Peep-hole post-emision (conservativo).
+         *
+         * Nota historica: iterar peephole+DSE 2 veces produjo codigo
+         * mas pequeno (~7%) pero ralentizo el wall time medido (~20%
+         * peor: 30ms -> 36ms en bench_jit_method) probablemente por
+         * efectos de alignment/cache.  Mantenemos 1 sola iteracion. */
+        {
+        /* Peep-hole post-emision (conservativo):
+         *
+         * Pattern 1: mov reg, reg con mismo reg -> eliminar (e.g. mov rax,rax).
+         *
+         * Pattern 2: LOAD redundante del mismo slot al mismo reg.
+         *   mov rax, [rbp-8]
+         *   ...                       (instrs que no clobean rax ni escriben [rbp-8])
+         *   mov rax, [rbp-8]   <-     ELIMINAR
+         *
+         * Pattern 3: LOAD a un reg distinto del slot ya cargado en otro reg.
+         *   mov rax, [rbp-8]   ; rax ahora tiene [rbp-8]
+         *   mov rcx, [rbp-8]   <-     CONVERTIR a "mov rcx, rax" (1 byte menos
+         *                             y elimina memory access en hot path)
+         *
+         * Pattern 4: STORE seguido del MISMO LOAD inmediato sin clobber.
+         *   mov [rbp-8], rax
+         *   mov rax, [rbp-8]   <-     ELIMINAR (rax ya tiene el valor)
+         *
+         * Limitaciones (conservadoras para evitar incorrectness):
+         *   - Solo dentro del MISMO block.
+         *   - CALL invalida TODOS los regs (caller-saved + safety).
+         *   - STORE invalida cualquier reg cuyo mem_slot coincida con dst.
+         *   - Cualquier ALU op invalida su dst reg.
+         */
+        /* Estado tracking compartido entre bloques (cross-block dataflow). */
+        struct RegState {
+            bool         valid     = false;
+            uint8_t      mem_base  = 255;
+            int32_t      mem_disp  = INT32_MIN;
+            uint8_t      mem_width = 255;
+            bool         has_imm32 = false;
+            int32_t      imm32_val = 0;
+        };
+
+        /* Predecesores de cada bloque (para entry_state inheritance).
+         * El selector NO setea succ_a/succ_b explicitamente; los derivamos
+         * escaneando las instrucciones JMP/JCC dentro de cada bloque. */
+        const size_t N_BLOCKS = mf.blocks.size();
+        std::unordered_map<uint32_t, size_t> label_to_block;
+        for (size_t i = 0; i < N_BLOCKS; ++i) {
+            if (mf.blocks[i].label_id != MLABEL_INVALID) {
+                label_to_block[mf.blocks[i].label_id] = i;
+            }
+        }
+        std::vector<std::vector<size_t>> preds(N_BLOCKS);
+        for (size_t i = 0; i < N_BLOCKS; ++i) {
+            const auto &binstrs = mf.blocks[i].instrs;
+            bool has_uncond_jmp = false;
+            for (const auto &mi : binstrs) {
+                if ((mi.op == MOp::JMP || mi.op == MOp::JCC)
+                 && mi.src1.kind == MOperandKind::LABEL) {
+                    auto it = label_to_block.find(
+                        static_cast<uint32_t>(mi.src1.value));
+                    if (it != label_to_block.end()) {
+                        preds[it->second].push_back(i);
+                    }
+                    if (mi.op == MOp::JMP) has_uncond_jmp = true;
+                }
+            }
+            /* Fall-through al siguiente bloque si NO hay JMP unconditional
+             * y este no es el ultimo bloque + tampoco termina en RET. */
+            if (!has_uncond_jmp && (i + 1) < N_BLOCKS) {
+                bool ends_in_ret = false;
+                for (const auto &mi : binstrs) {
+                    if (mi.op == MOp::RET) { ends_in_ret = true; break; }
+                }
+                if (!ends_in_ret) {
+                    preds[i + 1].push_back(i);
+                }
+            }
+        }
+        /* exit_states[i] = state del reg_has al final del bloque i. */
+        std::vector<std::array<RegState, 64>> exit_states(N_BLOCKS);
+
+        for (size_t bi = 0; bi < N_BLOCKS; ++bi) {
+            auto &block = mf.blocks[bi];
+            RegState reg_has[64];
+            /* Heredar entry_state: si exactamente 1 pred Y ese pred es
+             * ANTERIOR en orden (i.e. ya procesado), copiamos su exit_state.
+             * Si multiple preds, hacemos interseccion conservativa.  Si el
+             * unico pred es POSTERIOR (back-edge en loop), no heredamos. */
+            if (preds[bi].size() == 1 && preds[bi][0] < bi) {
+                for (int r = 0; r < 64; ++r) {
+                    reg_has[r] = exit_states[preds[bi][0]][r];
+                }
+            } else if (preds[bi].size() > 1) {
+                /* Interseccion: solo mantenemos un slot si TODOS los preds
+                 * (que ya fueron procesados) coinciden en el mismo (base,
+                 * disp, width).  Si algun pred es posterior (loop), no
+                 * heredamos esos slots (conservativo). */
+                bool first = true;
+                for (size_t p : preds[bi]) {
+                    if (p >= bi) {
+                        /* Pred no procesado aun (back-edge): invalidar todo. */
+                        for (int r = 0; r < 64; ++r) reg_has[r] = {};
+                        first = false;
+                        break;
+                    }
+                    if (first) {
+                        for (int r = 0; r < 64; ++r) {
+                            reg_has[r] = exit_states[p][r];
+                        }
+                        first = false;
+                    } else {
+                        for (int r = 0; r < 64; ++r) {
+                            if (reg_has[r].valid &&
+                                (reg_has[r].mem_base != exit_states[p][r].mem_base ||
+                                 reg_has[r].mem_disp != exit_states[p][r].mem_disp ||
+                                 reg_has[r].mem_width != exit_states[p][r].mem_width ||
+                                 !exit_states[p][r].valid)) {
+                                reg_has[r].valid = false;
+                            }
+                            if (reg_has[r].has_imm32 &&
+                                (!exit_states[p][r].has_imm32 ||
+                                 reg_has[r].imm32_val != exit_states[p][r].imm32_val)) {
+                                reg_has[r].has_imm32 = false;
+                            }
+                        }
+                    }
+                }
+            }
+            /* Tracking del ultimo SHL para detectar SHL+SAR pair. */
+            int last_shl_reg = -1;
+            int last_shl_count = -1;
+
+            /* Solo trackeamos slots SSA puros (base = RBP, sin index reg).
+             * Cualquier otra forma de memoria (e.g. [rcx], [rbp+rdx*8], etc.)
+             * puede tener aliasing con stores arbitrarios -> no safe. */
+            const uint8_t RBP_REG = reg_id(MReg::RBP);
+            auto is_slot_mem = [&](const MOperand &op) -> bool {
+                if (op.kind != MOperandKind::MEM) return false;
+                if (op.reg != RBP_REG) return false;
+                /* width packed: bits[1:0] scale, bits[7:2] index_reg.
+                 * Slot puro: index_reg=63 (none), scale=0. */
+                if ((op.width & 0xFC) != 0xFC) return false;
+                return true;
+            };
+
+            auto same_mem = [](const MOperand &op, uint8_t base,
+                               int32_t disp, uint8_t width) -> bool {
+                return op.kind == MOperandKind::MEM
+                    && op.reg   == base
+                    && op.value == disp
+                    && op.width == width;
+            };
+            auto invalidate_reg = [&](uint8_t r) {
+                if (r < 64) reg_has[r] = {};
+            };
+            auto invalidate_all = [&]() {
+                for (auto &r : reg_has) r = {};
+            };
+            /* Invalidar TODOS los regs que crean tener un slot que coincide
+             * con el slot recien escrito (porque ya no tienen ese valor). */
+            auto invalidate_slot_holders = [&](const MOperand &mem_op) {
+                if (mem_op.kind != MOperandKind::MEM) return;
+                for (auto &r : reg_has) {
+                    if (r.valid && r.mem_base == mem_op.reg
+                     && r.mem_disp == mem_op.value
+                     && r.mem_width == mem_op.width) {
+                        r = {};
+                    }
+                }
+            };
+
+            std::vector<MInstr> out;
+            out.reserve(block.instrs.size());
+
+            for (const auto &mi : block.instrs) {
+                MInstr emit_mi = mi;
+                bool skip = false;
+
+                /* Pattern 1: mov reg, reg con mismo reg. */
+                if (emit_mi.op == MOp::MOV
+                 && emit_mi.dst.kind == MOperandKind::REG
+                 && emit_mi.src1.kind == MOperandKind::REG
+                 && emit_mi.dst.reg == emit_mi.src1.reg) {
+                    skip = true;
+                }
+
+                /* Pattern 2/3/4: MOV reg, [mem].  SOLO si es slot SSA puro. */
+                if (!skip && emit_mi.op == MOp::MOV
+                 && emit_mi.dst.kind == MOperandKind::REG
+                 && emit_mi.src1.kind == MOperandKind::MEM
+                 && emit_mi.dst.reg < 64
+                 && is_slot_mem(emit_mi.src1)) {
+                    const uint8_t dst_r   = emit_mi.dst.reg;
+                    const uint8_t mem_b   = emit_mi.src1.reg;
+                    const int32_t mem_d   = emit_mi.src1.value;
+                    const uint8_t mem_w   = emit_mi.src1.width;
+                    /* Pattern 2: dst_r ya tiene este slot? -> skip. */
+                    if (reg_has[dst_r].valid
+                     && reg_has[dst_r].mem_base == mem_b
+                     && reg_has[dst_r].mem_disp == mem_d
+                     && reg_has[dst_r].mem_width == mem_w) {
+                        skip = true;
+                    } else {
+                        /* Pattern 3: algun OTRO reg ya tiene este slot? ->
+                         * convertir LOAD a mov reg, otro_reg.
+                         *
+                         * EXCEPCION (Phase D.7): si el slot corresponde a
+                         * un VID pinned por regalloc, NO convertir.  La
+                         * razon: tras el rewrite el slot se convierte en
+                         * un acceso a reg, asi que la "memory access
+                         * saving" de Pattern 3 es moot.  Peor: la
+                         * propagacion via otro reg ROMPE el destructive
+                         * in-place peephole post-rewrite (el m0 quedaria
+                         * con src=rcx en vez de src=r12 directo). */
+                        bool slot_pinned_by_regalloc = false;
+                        if (!regalloc.empty()
+                         && mem_b == reg_id(MReg::RBP)) {
+                            const int32_t vid = slot_offset_to_vid(mem_d);
+                            if (vid >= 0
+                             && regalloc.vid_to_reg.count(static_cast<ir::IrValueId>(vid))) {
+                                slot_pinned_by_regalloc = true;
+                            }
+                        }
+                        if (!slot_pinned_by_regalloc) {
+                            int src_reg_with_slot = -1;
+                            for (int r = 0; r < 64; ++r) {
+                                if (reg_has[r].valid
+                                 && reg_has[r].mem_base == mem_b
+                                 && reg_has[r].mem_disp == mem_d
+                                 && reg_has[r].mem_width == mem_w) {
+                                    src_reg_with_slot = r;
+                                    break;
+                                }
+                            }
+                            if (src_reg_with_slot >= 0
+                             && src_reg_with_slot != dst_r) {
+                                /* Reemplazar src1 con un REG operand. */
+                                emit_mi.src1 = MOperand::make_reg(
+                                    static_cast<MReg>(src_reg_with_slot));
+                            }
+                        }
+                    }
+                }
+
+                /* Pattern 5: SHL r, imm32; SAR r, imm32 con misma shift count
+                 * sobre un reg que viene de "mov r, imm32" sign-ext.
+                 * El sign-extend a partir de imm32 ya es canonico, por tanto
+                 * SHL+SAR son no-op cuando shift = 64 - 32 = 32.  Tambien
+                 * eliminamos cuando reg tiene "valor i32 valido" (limit comun).
+                 *
+                 * Tambien folding general: tras un STORE i32 (RMW eliminado en
+                 * favor de mov dword nativo), el reg del src tiene los bits
+                 * altos = sign-ext del valor de 32.  SHL+SAR es no-op tambien
+                 * cuando reg ya tiene un i32 sign-extended cargado via
+                 * mov32 (que x86-64 zero-extend automaticamente).
+                 *
+                 * Implementacion: si SHL count == SAR/SHR count siguiente, y el
+                 * reg origen es el mismo, asumimos canonico y skipeamos AMBOS. */
+                if (!skip
+                 && emit_mi.dst.kind == MOperandKind::REG
+                 && emit_mi.src1.kind == MOperandKind::IMM32
+                 && emit_mi.dst.reg < 64) {
+                    const uint8_t r = emit_mi.dst.reg;
+                    if (emit_mi.op == MOp::SHL) {
+                        /* Si shift count es 32 (= 64-32), y el reg viene de
+                         * un imm32 conocido (que cabe en i32), los upper bits
+                         * son sign-ext de ese imm.  SHL count + (proximo SAR
+                         * count) es no-op. */
+                        if (emit_mi.src1.value == 32
+                         && reg_has[r].has_imm32) {
+                            last_shl_reg = r;
+                            last_shl_count = emit_mi.src1.value;
+                            skip = true;
+                        }
+                    } else if (emit_mi.op == MOp::SAR
+                            || emit_mi.op == MOp::SHR) {
+                        if (last_shl_reg == r
+                         && last_shl_count == emit_mi.src1.value) {
+                            skip = true;
+                            last_shl_reg = -1;
+                        }
+                    }
+                }
+                if (!skip && emit_mi.op != MOp::SHL
+                 && emit_mi.op != MOp::SAR && emit_mi.op != MOp::SHR) {
+                    last_shl_reg = -1;
+                }
+
+                if (skip) continue;
+
+                /* Actualizar tracking POST-emit. */
+                if (emit_mi.op == MOp::MOV) {
+                    if (emit_mi.dst.kind == MOperandKind::REG
+                     && emit_mi.src1.kind == MOperandKind::MEM
+                     && emit_mi.dst.reg < 64) {
+                        /* LOAD desde slot SSA: tracking; LOAD desde otro mem:
+                         * invalidar dst reg (puede aliasing). */
+                        if (is_slot_mem(emit_mi.src1)) {
+                            reg_has[emit_mi.dst.reg] = {
+                                true, emit_mi.src1.reg,
+                                emit_mi.src1.value, emit_mi.src1.width};
+                        } else {
+                            invalidate_reg(emit_mi.dst.reg);
+                        }
+                    } else if (emit_mi.dst.kind == MOperandKind::REG
+                            && emit_mi.src1.kind == MOperandKind::REG
+                            && emit_mi.dst.reg < 64
+                            && emit_mi.src1.reg < 64) {
+                        reg_has[emit_mi.dst.reg] = reg_has[emit_mi.src1.reg];
+                    } else if (emit_mi.dst.kind == MOperandKind::MEM
+                            && emit_mi.src1.kind == MOperandKind::REG
+                            && emit_mi.src1.reg < 64) {
+                        if (is_slot_mem(emit_mi.dst)) {
+                            invalidate_slot_holders(emit_mi.dst);
+                            reg_has[emit_mi.src1.reg] = {
+                                true, emit_mi.dst.reg,
+                                emit_mi.dst.value, emit_mi.dst.width};
+                        } else {
+                            /* STORE a memoria arbitraria: cualquier slot
+                             * podria aliasing.  Invalidar TODOS los regs. */
+                            invalidate_all();
+                        }
+                    } else if (emit_mi.dst.kind == MOperandKind::MEM) {
+                        if (is_slot_mem(emit_mi.dst)) {
+                            invalidate_slot_holders(emit_mi.dst);
+                        } else {
+                            invalidate_all();  /* memoria arbitraria */
+                        }
+                    } else if (emit_mi.dst.kind == MOperandKind::REG
+                            && emit_mi.src1.kind == MOperandKind::IMM32
+                            && emit_mi.dst.reg < 64) {
+                        /* mov reg, imm32: trackear el valor para folding. */
+                        reg_has[emit_mi.dst.reg] = {};
+                        reg_has[emit_mi.dst.reg].has_imm32 = true;
+                        reg_has[emit_mi.dst.reg].imm32_val = emit_mi.src1.value;
+                    } else if (emit_mi.dst.kind == MOperandKind::REG) {
+                        invalidate_reg(emit_mi.dst.reg);
+                    }
+                } else if (emit_mi.op == MOp::CMP
+                        || emit_mi.op == MOp::TEST
+                        || emit_mi.op == MOp::JMP
+                        || emit_mi.op == MOp::JCC
+                        || emit_mi.op == MOp::RET) {
+                    /* CMP/TEST: solo afectan flags, no modifican dst.
+                     * JMP/JCC/RET: control flow, no escriben regs. */
+                } else if (emit_mi.dst.kind == MOperandKind::REG) {
+                    invalidate_reg(emit_mi.dst.reg);
+                } else if (emit_mi.dst.kind == MOperandKind::MEM) {
+                    if (is_slot_mem(emit_mi.dst)) {
+                        invalidate_slot_holders(emit_mi.dst);
+                    } else {
+                        invalidate_all();
+                    }
+                }
+
+                /* CALL clobera todos caller-saved + posible mem aliasing. */
+                if (emit_mi.op == MOp::CALL) {
+                    invalidate_all();
+                }
+
+                out.push_back(emit_mi);
+            }
+            block.instrs = std::move(out);
+            /* Guardar exit_state para el cross-block inheritance. */
+            for (int r = 0; r < 64; ++r) {
+                exit_states[bi][r] = reg_has[r];
+            }
+        }
+
+        /* Dead Store Elimination (DSE) DESPUES del peephole.
+         *
+         * Para cada slot SSA puro (RBP+disp con index=63), si NADIE lo lee
+         * en la funcion completa, todos los STOREs a el son dead.
+         * Ejecutamos DESPUES del peephole porque el peephole elimina
+         * LOADs redundantes (e.g. convierte mov reg, [slot] inmediatamente
+         * tras un mov [slot], reg en skip), dejando slots dead que el DSE
+         * puede limpiar.
+         *
+         * Beneficio: elimina muchos slots de SSA values intermedios que
+         * solo se usan localmente (el peephole los mantuvo en reg). */
+        {
+            const uint8_t RBP_REG_DSE = reg_id(MReg::RBP);
+            auto is_pure_slot = [&](const MOperand &op) -> bool {
+                return op.kind == MOperandKind::MEM
+                    && op.reg == RBP_REG_DSE
+                    && (op.width & 0xFC) == 0xFC;
+            };
+            std::unordered_set<int32_t> read_slots;
+            for (const auto &block : mf.blocks) {
+                for (const auto &mi : block.instrs) {
+                    if (mi.src1.kind == MOperandKind::MEM && is_pure_slot(mi.src1)) {
+                        read_slots.insert(mi.src1.value);
+                    }
+                    if (mi.src2.kind == MOperandKind::MEM && is_pure_slot(mi.src2)) {
+                        read_slots.insert(mi.src2.value);
+                    }
+                }
+            }
+            size_t dse_removed = 0;
+            for (auto &block : mf.blocks) {
+                std::vector<MInstr> out;
+                out.reserve(block.instrs.size());
+                for (const auto &mi : block.instrs) {
+                    if (mi.op == MOp::MOV
+                     && mi.dst.kind == MOperandKind::MEM
+                     && is_pure_slot(mi.dst)
+                     && read_slots.find(mi.dst.value) == read_slots.end()) {
+                        ++dse_removed;
+                        continue;
+                    }
+                    out.push_back(mi);
+                }
+                block.instrs = std::move(out);
+            }
+            (void)dse_removed;
+        }
+        }  /* end scope peephole+DSE */
+
+        /* Phase D.7: rewrite slot->reg + destructive in-place peephole.
+         *
+         * Orden FINAL determinado empiricamente (16ms wall en bench):
+         *   1. (arriba) Selector emite slot-based.
+         *   2. (arriba) Peephole + DSE optimiza slot-based.
+         *   3. (aqui)   Rewrite slot->reg sobre VIDs pinned.
+         *   4. (aqui)   Destructive in-place peephole (3-instr window:
+         *               mov scratch, regX; ALU; mov regX, scratch
+         *               -> ALU regX, src; con INC/DEC para +/-1).
+         *
+         * Si @c regalloc.empty() todo este bloque es no-op. */
+        if (!regalloc.empty()) {
+            apply_jit_regalloc_rewrite(mf, ir_fn, regalloc);
+
+            /* Helpers para el destructive peephole. */
+            auto is_callee_saved_pinned = [&](uint8_t reg_id) -> bool {
+                for (MReg cs : regalloc.callee_saved_used) {
+                    if (static_cast<uint8_t>(cs) == reg_id) return true;
+                }
+                return false;
+            };
+            auto is_scratch_reg = [](uint8_t reg_id) -> bool {
+                return reg_id == static_cast<uint8_t>(MReg::RAX)
+                    || reg_id == static_cast<uint8_t>(MReg::RCX)
+                    || reg_id == static_cast<uint8_t>(MReg::RDX);
+            };
+            auto is_inplace_alu = [](MOp op) -> bool {
+                return op == MOp::ADD || op == MOp::SUB
+                    || op == MOp::AND || op == MOp::OR
+                    || op == MOp::XOR || op == MOp::IMUL;
+            };
+
+            for (auto &block : mf.blocks) {
+                std::vector<MInstr> out;
+                out.reserve(block.instrs.size());
+
+                /* Tracking de equivalencias reg ≡ reg dentro del bloque.
+                 *
+                 * El peephole previo hace copy-prop: cuando ve @c mov
+                 * rcx,r12 seguido de uso de @c r12, propaga rcx en lugar.
+                 * Resultado: el patron destructivo aparece como
+                 *   mov rax, rcx   (donde rcx ≡ r12)
+                 *   add rax, 1
+                 *   mov r12, rax
+                 * Sin equivalence tracking, el m0.src1.reg = rcx no
+                 * matchea con m2.dst.reg = r12.  Con tracking, tratamos
+                 * rcx como equivalent a r12 en este punto. */
+                std::vector<int8_t> reg_equiv(32, -1);  /* equiv[r] = r' o -1 */
+                auto reg_equiv_root = [&](uint8_t r) -> uint8_t {
+                    /* Path-compress trivial: 1 nivel ya basta porque
+                     * registramos copias directas. */
+                    if (r < reg_equiv.size() && reg_equiv[r] >= 0) {
+                        return static_cast<uint8_t>(reg_equiv[r]);
+                    }
+                    return r;
+                };
+                auto invalidate_reg = [&](uint8_t r) {
+                    if (r < reg_equiv.size()) reg_equiv[r] = -1;
+                    /* Tambien invalida cualquier reg que apunte a r. */
+                    for (size_t k = 0; k < reg_equiv.size(); ++k) {
+                        if (reg_equiv[k] == static_cast<int8_t>(r)) {
+                            reg_equiv[k] = -1;
+                        }
+                    }
+                };
+
+                size_t i = 0;
+                while (i < block.instrs.size()) {
+                    if (i + 2 >= block.instrs.size()) {
+                        const MInstr &mi = block.instrs[i];
+                        /* Actualizar tracking de equiv para esta instr. */
+                        if (mi.op == MOp::MOV
+                         && mi.dst.kind == MOperandKind::REG
+                         && mi.src1.kind == MOperandKind::REG
+                         && mi.dst.reg < 32 && mi.src1.reg < 32) {
+                            invalidate_reg(mi.dst.reg);
+                            reg_equiv[mi.dst.reg] =
+                                static_cast<int8_t>(mi.src1.reg);
+                        } else if (mi.dst.kind == MOperandKind::REG) {
+                            invalidate_reg(mi.dst.reg);
+                        }
+                        out.push_back(mi);
+                        ++i;
+                        continue;
+                    }
+                    const MInstr &m0 = block.instrs[i];
+                    const MInstr &m1 = block.instrs[i + 1];
+                    const MInstr &m2 = block.instrs[i + 2];
+                    bool m0_ok = m0.op == MOp::MOV
+                        && m0.dst.kind == MOperandKind::REG
+                        && m0.src1.kind == MOperandKind::REG
+                        && is_scratch_reg(m0.dst.reg);
+                    /* Permitir m0.src1 pinned directamente O equivalente
+                     * a un reg pinned via copy-prop previa. */
+                    uint8_t src_root = m0_ok
+                        ? reg_equiv_root(m0.src1.reg)
+                        : 0;
+                    if (m0_ok && !is_callee_saved_pinned(m0.src1.reg)) {
+                        if (!is_callee_saved_pinned(src_root)) {
+                            m0_ok = false;
+                        }
+                    }
+                    /* Si m0.src1 es alias, usar el root para comparar
+                     * con m2.dst. */
+                    bool m2_ok = m0_ok
+                        && m2.op == MOp::MOV
+                        && m2.dst.kind == MOperandKind::REG
+                        && m2.src1.kind == MOperandKind::REG
+                        && (m2.dst.reg == m0.src1.reg
+                            || m2.dst.reg == src_root)
+                        && m2.src1.reg == m0.dst.reg;
+                    bool m1_ok = m2_ok
+                        && is_inplace_alu(m1.op)
+                        && m1.dst.kind == MOperandKind::REG
+                        && m1.dst.reg == m0.dst.reg
+                        && m1.src1.kind != MOperandKind::NONE;
+                    if (m1_ok && m1.src1.kind == MOperandKind::REG
+                     && m1.src1.reg == m0.dst.reg) {
+                        m1_ok = false;
+                    }
+                    if (m1_ok) {
+                        const uint8_t regX_id = m2.dst.reg;
+                        MOp final_op = m1.op;
+                        MOperand src_final = m1.src1;
+                        if (m1.src1.kind == MOperandKind::IMM32) {
+                            if (m1.op == MOp::ADD && m1.src1.value == 1) {
+                                final_op = MOp::INC;
+                                src_final.kind = MOperandKind::NONE;
+                            } else if (m1.op == MOp::SUB && m1.src1.value == 1) {
+                                final_op = MOp::DEC;
+                                src_final.kind = MOperandKind::NONE;
+                            } else if (m1.op == MOp::ADD && m1.src1.value == -1) {
+                                final_op = MOp::DEC;
+                                src_final.kind = MOperandKind::NONE;
+                            } else if (m1.op == MOp::SUB && m1.src1.value == -1) {
+                                final_op = MOp::INC;
+                                src_final.kind = MOperandKind::NONE;
+                            }
+                        }
+                        MInstr collapsed;
+                        collapsed.op = final_op;
+                        collapsed.dst = MOperand::make_reg(
+                            static_cast<MReg>(regX_id),
+                            m2.dst.width);
+                        collapsed.src1 = src_final;
+                        collapsed.source_pc = m1.source_pc;
+                        /* Invalidar equiv para regX (su valor cambia). */
+                        invalidate_reg(regX_id);
+                        out.push_back(collapsed);
+                        i += 3;
+                        continue;
+                    }
+                    /* No matchea -- emitir m0 y actualizar tracking. */
+                    if (m0.op == MOp::MOV
+                     && m0.dst.kind == MOperandKind::REG
+                     && m0.src1.kind == MOperandKind::REG
+                     && m0.dst.reg < 32 && m0.src1.reg < 32) {
+                        invalidate_reg(m0.dst.reg);
+                        reg_equiv[m0.dst.reg] = static_cast<int8_t>(m0.src1.reg);
+                    } else if (m0.dst.kind == MOperandKind::REG
+                            && m0.dst.reg < 32) {
+                        invalidate_reg(m0.dst.reg);
+                    }
+                    /* Cualquier CALL invalida TODOS los caller-saved. */
+                    if (m0.op == MOp::CALL || m0.op == MOp::SAFEPOINT) {
+                        for (size_t k = 0; k < reg_equiv.size(); ++k) {
+                            reg_equiv[k] = -1;
+                        }
+                    }
+                    out.push_back(m0);
+                    ++i;
+                }
+                block.instrs = std::move(out);
+            }
+
+            /* Cleanup post-destructive: eliminar dead reg writes y
+             * self-copy round-trips que quedan tras coalescing.
+             *
+             * Patron self-copy (PHI coalesce leftover):
+             *   mov rax, r13      ; m0: scratch <- reg
+             *   mov r13, rax      ; m1: reg <- scratch (mismo reg, mismo scratch)
+             *   -> ELIMINAR ambos (no-op si scratch dead despues)
+             *
+             * Patron dead reg write:
+             *   mov rax, imm32    ; rax = X
+             *   mov rax, ...      ; rax = Y  (sin intervening read de rax)
+             *   -> ELIMINAR el primero
+             *
+             * Iteramos UNA vez por bloque.  Para mayor agresividad
+             * podriamos iterar hasta fixed point, pero una pasada
+             * captura los casos comunes de la coalesce. */
+            for (auto &block : mf.blocks) {
+                std::vector<MInstr> out;
+                out.reserve(block.instrs.size());
+                for (size_t k = 0; k < block.instrs.size(); ++k) {
+                    const MInstr &cur = block.instrs[k];
+                    /* Self-copy pair: m_k+1 reverses m_k. */
+                    if (k + 1 < block.instrs.size()) {
+                        const MInstr &nxt = block.instrs[k + 1];
+                        if (cur.op == MOp::MOV
+                         && nxt.op == MOp::MOV
+                         && cur.dst.kind == MOperandKind::REG
+                         && cur.src1.kind == MOperandKind::REG
+                         && nxt.dst.kind == MOperandKind::REG
+                         && nxt.src1.kind == MOperandKind::REG
+                         && cur.dst.reg == nxt.src1.reg
+                         && cur.src1.reg == nxt.dst.reg) {
+                            /* No-op pair.  Skip ambos. */
+                            ++k;  /* skip nxt */
+                            continue;
+                        }
+                    }
+                    /* Dead reg write: m_k es @c mov reg, X y una instr
+                     * posterior en el mismo bloque escribe el mismo reg
+                     * en forma PURA (sin leerlo antes), antes de que
+                     * nadie lo lea.
+                     *
+                     * SUPER-CONSERVATIVO en v1: solo aplicamos a @c MOV
+                     * con src1 IMM32/IMM64.  Los casos comunes que esto
+                     * captura son @c mov rax, imm32 muerto (de un CONST
+                     * de IR que el imm fold ya reemplazo).  Casos mas
+                     * generales pueden romper correctness por dependencias
+                     * sutiles a traves de bloques o efectos secundarios. */
+                    if (cur.op == MOp::MOV
+                     && cur.dst.kind == MOperandKind::REG
+                     && (cur.src1.kind == MOperandKind::IMM32
+                      || cur.src1.kind == MOperandKind::IMM64_IDX)) {
+                        bool dead = false;
+                        const uint8_t target_reg = cur.dst.reg;
+                        auto reads_reg = [&](const MOperand &op) {
+                            return (op.kind == MOperandKind::REG
+                                    && op.reg == target_reg)
+                                || (op.kind == MOperandKind::MEM
+                                    && op.reg == target_reg);
+                        };
+                        for (size_t j = k + 1; j < block.instrs.size(); ++j) {
+                            const MInstr &later = block.instrs[j];
+                            /* Lectura via src1/src2: break (no dead). */
+                            if (reads_reg(later.src1) || reads_reg(later.src2)) {
+                                break;
+                            }
+                            /* dst como MEM con base = target_reg: lectura. */
+                            if (later.dst.kind == MOperandKind::MEM
+                             && later.dst.reg == target_reg) {
+                                break;
+                            }
+                            /* dst REG == target_reg: depende del op. */
+                            if (later.dst.kind == MOperandKind::REG
+                             && later.dst.reg == target_reg) {
+                                /* Ops que ESCRIBEN dst sin leerlo: pure write. */
+                                bool pure_write = false;
+                                switch (later.op) {
+                                    case MOp::MOV:
+                                    case MOp::MOVZX:
+                                    case MOp::MOVSX:
+                                    case MOp::LEA:
+                                    case MOp::POP:
+                                    case MOp::SETCC:
+                                        pure_write = true;
+                                        break;
+                                    default:
+                                        /* ALU (ADD/SUB/AND/OR/XOR/IMUL/
+                                         * NEG/NOT/SHL/SHR/SAR/INC/DEC),
+                                         * CMP, TEST, IDIV, CQO, CMOVCC,
+                                         * PUSH, JMP/JCC/CALL con reg
+                                         * target -> LEEN dst.  No es dead. */
+                                        break;
+                                }
+                                if (pure_write) {
+                                    dead = true;
+                                }
+                                break;  /* matched dst.reg, done. */
+                            }
+                            /* Conservative: parar en cualquier control flow
+                             * o call.  Tambien IDIV/CQO que clobean rax/rdx
+                             * implicitamente. */
+                            if (later.op == MOp::CALL
+                             || later.op == MOp::SAFEPOINT
+                             || later.op == MOp::JMP
+                             || later.op == MOp::JCC
+                             || later.op == MOp::RET
+                             || later.op == MOp::IDIV
+                             || later.op == MOp::CQO) {
+                                /* Si target_reg es rax/rdx, IDIV/CQO lo
+                                 * tocan.  Conservadoramente parar. */
+                                break;
+                            }
+                        }
+                        if (dead) continue;
+                    }
+                    out.push_back(cur);
+                }
+                block.instrs = std::move(out);
+            }
         }
 
         if (out_unsupported) *out_unsupported = unsupported;

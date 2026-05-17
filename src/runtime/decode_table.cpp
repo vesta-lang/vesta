@@ -2749,81 +2749,96 @@ namespace runtime {
             exec_instr_mvtake, decode_instr_two_op_reg
         },
 
-        /* 0x73 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x73  adds3 r_dst, r_src1, r_src2  (FIXED_4)
+                 Super-instruccion ADD signed con 3 operandos.  Combina
+                 `mov rd, rs1; adds rd, rs2` en una sola instruccion VM. */
+        {
+            "adds3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x74 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x74  subs3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "subs3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x75 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x75  muls3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "muls3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x76 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x76  addu3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "addu3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x77 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x77  subu3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "subu3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x78 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x78  mulu3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "mulu3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x79 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x79  and3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "and3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x7A */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x7A  or3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "or3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x7B */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x7B  xor3 r_dst, r_src1, r_src2  (FIXED_4) */
+        {
+            "xor3", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_alu3, decode_instr_raw_bytes
         },
 
-        /* 0x7C */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x7C  loadz r_dst, r_src  (FIXED_4)
+                 Super-instruccion: load N-bit con zero-extend a 64-bit en
+                 una sola instruccion VM.  Sustituye el patron tipico:
+                     mov r_dst, 0       ; (clear)
+                     mov r_dst.d, [src] ; (32-bit load preserving upper)
+                 que el emisor IR genera para LOAD i8/i16/i32/u8/u16/u32.
+                 Encoding:
+                     [0x00][0x7C][ctrl][regs]
+                     ctrl bits 7-6 = mode (0=8b, 1=16b, 2=32b, 3=64b)
+                     ctrl bit  5   = is_host (1 = host_ptr, 0 = VM mem)
+                     regs = (r_src<<4) | r_dst */
+        {
+            "loadz", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_loadz, decode_instr_simple_mov
         },
 
-        /* 0x7D */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x7D  loadzh r_dst, r_src  (FIXED_4)
+                 Variante HOST de loadz.  Mismo encoding pero el bit s
+                 del ctrl byte = 1.  Lee desde memoria del proceso host
+                 en lugar del vm_mem virtual. */
+        {
+            "loadzh", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_loadz, decode_instr_simple_mov
         },
 
         /* 0x7E */{

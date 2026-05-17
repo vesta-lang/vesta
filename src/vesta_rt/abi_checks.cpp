@@ -165,7 +165,6 @@ static_assert(offsetof(loader::MethodInfo, jit_code)
               == VESTA_METHODINFO_JIT_CODE_OFFSET,
               "ABI drift: offsetof(MethodInfo, jit_code) != VESTA_METHODINFO_JIT_CODE_OFFSET");
 
-/* advice_chain offset no validado aqui: el inline dispatch JIT (D.3-I) NO
- * mira advice_chain (cae a vrt_callvirt cuando hay advices via deteccion
- * runtime).  Si en el futuro se quiere inline + advice fast path, anyadir
- * el static_assert con el offset real medido.  Por ahora omitido. */
+static_assert(offsetof(loader::MethodInfo, advice_chain)
+              == VESTA_METHODINFO_ADVICE_CHAIN_OFFSET,
+              "ABI drift: offsetof(MethodInfo, advice_chain) != VESTA_METHODINFO_ADVICE_CHAIN_OFFSET");

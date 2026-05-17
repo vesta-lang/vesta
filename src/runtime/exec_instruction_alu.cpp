@@ -1455,4 +1455,161 @@ void exec_instr_fastpop(ProcessVM *vm, const DecodedInstr &instr) {
     vm->registers.stack_pointer.qword(rsp + static_cast<uint64_t>(count) * 8ULL);
 }
 
+// =========================================================================
+// SUPER-INSTRUCCIONES ALU 3-OPERANDOS (0x73-0x7B)
+//
+// Combinan el patron `mov rd, rs1; OP rd, rs2` en una sola instruccion VM.
+// Eliminacion del MOV intermedio cuando el regalloc no puede coalescer dst
+// con src1 (caso comun del 2-address codegen del IR emitter).
+//
+// Encoding FIXED_4: [0x00][opcode2][byte2][byte3]
+//   byte2 = (r_src1 << 4) | r_dst       (Convention B: decode_instr_raw_bytes
+//                                         deja byte2 en reg1, byte3 en reg2)
+//   byte3 = (r_src2 << 4) | flags_low   (flags reservados, low nibble = 0)
+//
+// La operacion se identifica por @c flags_info.opcode_index:
+//   0x73 adds3, 0x74 subs3, 0x75 muls3,
+//   0x76 addu3, 0x77 subu3, 0x78 mulu3,
+//   0x79 and3,  0x7A or3,   0x7B xor3.
+//
+// Flags actualizados igual que las variantes 2-op tradicionales (ZF/SF/CF/OF).
+// =========================================================================
+
+/**
+ * @brief Ejecuta una super-instruccion ALU 3-operandos.
+ *
+ * Lee r_src1 y r_src2 (de byte2 y byte3 respectivamente, despues de
+ * decode_instr_raw_bytes), realiza la operacion identificada por opcode_index,
+ * y almacena el resultado en r_dst.  Actualiza flags ZF/SF/CF/OF segun la
+ * semantica de la operacion (signed vs unsigned).
+ *
+ * @param vm    Puntero a la maquina virtual.
+ * @param instr Instruccion descodificada con byte2 en reg1, byte3 en reg2.
+ */
+void exec_instr_alu3(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t b2     = instr.data_instruction.reg_data.reg1;
+    const uint8_t b3     = instr.data_instruction.reg_data.reg2;
+    const uint8_t r_dst  = b2 & 0x0F;
+    const uint8_t r_src1 = (b2 >> 4) & 0x0F;
+    const uint8_t r_src2 = (b3 >> 4) & 0x0F;
+    const uint8_t opc    = instr.flags_info.opcode_index;
+
+    auto &regs = vm->registers.regs;
+    auto &fl   = vm->registers.flags.bits;
+    const uint64_t a = regs[r_src1].qword();
+    const uint64_t b = regs[r_src2].qword();
+    uint64_t res = 0;
+
+    switch (opc) {
+        case 0x73: case 0x76: // adds3 / addu3
+            res = a + b;
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            if (opc == 0x73) {
+                fl.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(res)) &
+                         (static_cast<int64_t>(b) ^ static_cast<int64_t>(res))) < 0;
+                fl.CF = 0;
+            } else {
+                fl.CF = res < a;
+                fl.OF = 0;
+            }
+            break;
+        case 0x74: case 0x77: // subs3 / subu3
+            res = a - b;
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            if (opc == 0x74) {
+                fl.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
+                         (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0;
+                fl.CF = 0;
+            } else {
+                fl.CF = a < b;
+                fl.OF = 0;
+            }
+            break;
+        case 0x75: // muls3
+            res = static_cast<uint64_t>(static_cast<int64_t>(a) * static_cast<int64_t>(b));
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            fl.CF = 0; fl.OF = 0;
+            break;
+        case 0x78: // mulu3
+            res = a * b;
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            fl.CF = 0; fl.OF = 0;
+            break;
+        case 0x79: // and3
+            res = a & b;
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            fl.CF = 0; fl.OF = 0;
+            break;
+        case 0x7A: // or3
+            res = a | b;
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            fl.CF = 0; fl.OF = 0;
+            break;
+        case 0x7B: // xor3
+            res = a ^ b;
+            regs[r_dst].qword(res);
+            fl.ZF = (res == 0);
+            fl.SF = static_cast<int64_t>(res) < 0;
+            fl.CF = 0; fl.OF = 0;
+            break;
+        default:
+            break;
+    }
+}
+
+// =========================================================================
+// LOADZ / LOADZH (0x7C / 0x7D): super-instr LOAD con zero-extend a 64-bit
+//
+// Combina @c mov rd,0 + @c mov rd_sized,[rs] en una sola instruccion VM.
+// La VM no zero-extiende implicitamente al escribir bytes parciales en un
+// reg (a diferencia de x86-64); por eso el IR emitter tipicamente emite el
+// @c mov rd,0 previo cuando carga i8/i16/i32 desde memoria.  loadz/loadzh
+// elimina esa instruccion adicional cargando el valor con zero-extend en
+// un solo paso.
+//
+// Encoding (FIXED_4, ya decoded por decode_instr_simple_mov):
+//   ctrl bits 7-6 = mode (0=8b, 1=16b, 2=32b, 3=64b)  -> @c flags_info.mode
+//   ctrl bit  5   = is_host  -> @c flags_info._signed_instruct
+//   regs:  reg1 (low nibble)  = r_dst
+//          reg2 (high nibble) = r_src (puntero base 64-bit)
+// =========================================================================
+void exec_instr_loadz(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t r_dst = instr.data_instruction.reg_data.reg1;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg2;
+    const uint8_t mode  = instr.flags_info.mode;
+    const bool   is_host = (instr.flags_info._signed_instruct != 0);
+    const uint64_t addr = vm->registers.regs[r_src].qword();
+
+    uint64_t val;
+    if (is_host) {
+        const uint8_t *p = reinterpret_cast<const uint8_t*>(addr);
+        switch (mode) {
+            case 0: val = *p; break;
+            case 1: val = *reinterpret_cast<const uint16_t*>(p); break;
+            case 2: val = *reinterpret_cast<const uint32_t*>(p); break;
+            default: val = *reinterpret_cast<const uint64_t*>(p); break;
+        }
+    } else {
+        switch (mode) {
+            case 0: val = vm->vm_mem.read_u8(addr);  break;
+            case 1: val = vm->vm_mem.read_u16(addr); break;
+            case 2: val = vm->vm_mem.read_u32(addr); break;
+            default: val = vm->vm_mem.read_u64(addr); break;
+        }
+    }
+    vm->registers.regs[r_dst].qword(val); // qword() escribe 64 bits = zero-extend implicito
+}
+
 } // namespace runtime
