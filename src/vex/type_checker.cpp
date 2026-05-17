@@ -1521,7 +1521,8 @@ namespace vex {
                 // ya completo.  Usar operator[] = porque la entrada existe.
                 struct_layouts_[s->name] = std::move(layout);
             } else if (decl->kind == ast::NodeKind::EnumDecl) {
-                // A.11 ADTs: registrar el enum con su layout (max_payload).
+                // Registrar el enum (ADT) con su layout: max_payload determina
+                // el tamano del slot (8 + 8*N_payload_fields_max) y los tags.
                 auto *en = static_cast<ast::EnumDecl *>(decl.get());
                 // Pre-pasada creo entradas vacias en enum_layouts_; un
                 // enum es "ya registrado" si tiene variantes.  Para
@@ -3377,9 +3378,12 @@ namespace vex {
             }
         }
         if (s->kind == SymbolKind::Function) {
-            // Tratamos las funciones como un tipo VOID a efectos de inferencia
-            // sin call; la llamada (CallExpr) lo manejara.  En A.1 no
-            // soportamos funciones de primer nivel (function pointers).
+            // Tratamos las funciones como un tipo VOID a efectos de
+            // inferencia cuando aparecen sin call directo; el caso CALL
+            // (CallExpr) lo manejara especificamente.  Pasar una funcion
+            // libre como argumento a un parametro @c fn(T) -> R esta
+            // soportado y se promociona explicitamente a function value
+            // en @c check_call (cubre el caso first-class).
             return Type{};
         }
         return s->type;
@@ -3508,7 +3512,7 @@ namespace vex {
             for (const auto &f : lay.static_fields) {
                 if (f.name == e->field_name) return f.type;
             }
-            // A.4.3: si no hay campo, buscar getter de propiedad
+            // Si no hay campo con ese nombre, buscar getter de propiedad
             // `get_<field_name>`.  Si existe, marcar como acceso de
             // propiedad y devolver su tipo de retorno.  El lowering ve
             // @c property_kind=1 y emite la llamada al accesor.
@@ -4448,8 +4452,11 @@ namespace vex {
         }
 
         // Caso A: obj.method(args) - callee es FieldAccessExpr.  El base
-        // puede ser de tipo CLASS (instancia) o STRUCT (no soportado en
-        // A.4.1, llegan en A.5+).
+        // debe ser de tipo CLASS (instancia con vtable).  Los structs son
+        // value types y sus metodos se desugaran a funciones libres
+        // tomando @c Struct* como primer argumento, asi que el dispatch
+        // de @c struct_instance.method() pasa por la ruta de free function
+        // call, no por aqui.
         if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
             auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
             const Type bt = check_expr(fa->base.get());
@@ -5405,11 +5412,13 @@ namespace vex {
             for (size_t i = 0; i < n; ++i) {
                 Type ta = check_expr(e->args[i].get());
                 const Type &tp = fn_type.fn_params[i];
-                // Coercion gap N (A.14): si el parametro espera FUNCTION
-                // y el argumento es un identifier que resuelve a una
-                // funcion top-level con firma compatible, sintetizar un
-                // function value (fn_addr, env_addr=0).  Patcheamos
-                // result_type del IdentExpr para que el lowering lo
+                // Promocion automatica de funcion top-level a function
+                // value cuando se pasa por nombre como argumento:  si el
+                // parametro espera FUNCTION y el argumento es un identifier
+                // que resuelve a una funcion declarada en el modulo con
+                // firma compatible, sintetizar un function value
+                // (fn_addr, env_addr=0).  Patcheamos result_type del
+                // IdentExpr para que el lowering lo
                 // reconozca y emita el slot de 16 bytes con env=0.
                 if (tp.kind == PrimitiveKind::FUNCTION
                  && ta.kind == PrimitiveKind::VOID

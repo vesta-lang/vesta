@@ -433,7 +433,8 @@ namespace vex {
         }
         (void)expect(TokenKind::RPAREN, "se esperaba ')' al cerrar la lista de parametros");
 
-        // Cuerpo: bloque obligatorio en A.1 (no hay extern aun).
+        // Cuerpo: bloque obligatorio para funciones Vex; las funciones
+        // sin cuerpo (FFI extern) se modelan via @c ExternFnDecl aparte.
         if (current_.kind != TokenKind::LBRACE) {
             error_here("se esperaba '{' para abrir el cuerpo de la funcion");
             return fn;
@@ -491,8 +492,10 @@ namespace vex {
     // ---------------------------------------------------------------------
     // Tipos.
     //
-    // En A.1 solo primitivos.  Punteros, arrays, generics se anyaden en
-    // hitos posteriores (esto se quedara como caso por defecto del switch).
+    // Cobertura actual: primitivos, punteros @c T*, arrays @c T[N] y
+    // @c T[], @c VirtualPtr<T>, generics @c Cls<T1, T2>, tipos de
+    // funcion @c fn(T) -> R, y @c nonnull T.  La rama del switch que
+    // no matche cae al case por defecto, que reporta error claro.
     // ---------------------------------------------------------------------
 
     bool Parser::looks_like_cast() const noexcept {
@@ -1222,7 +1225,7 @@ namespace vex {
         }
         c->name = consume().lexeme;
 
-        // Generics A.8: parametros de tipo opcionales `<T>`, `<K, V>`.
+        // Generics: parametros de tipo opcionales `<T>`, `<K, V>`.
         // Cada parametro es un identificador simple; la clase se trata
         // como plantilla y no se procesa como clase concreta hasta que
         // se instancie via `Box<i32>`.
@@ -1243,8 +1246,9 @@ namespace vex {
                 return nullptr;
             }
             c->super_name = consume().lexeme;
-            // Soporte de interfaces multiples llega en A.5: aqui ignoramos
-            // tokens adicionales ',' <ident> y los reportamos como no soportados.
+            // Despues de la superclase, una lista opcional de interfaces
+            // separadas por coma: @c class X : Base, IFoo, IBar.  El type
+            // checker valida que sean efectivamente interfaces.
             while (current_.kind == TokenKind::COMMA) {
                 (void)consume();
                 if (current_.kind == TokenKind::IDENTIFIER) {
@@ -1804,7 +1808,8 @@ namespace vex {
             case TokenKind::KW_THROW:      return parse_throw_stmt();
             case TokenKind::KW_SYNCHRONIZED: return parse_synchronized_stmt();
             case TokenKind::KW_MATCH: {
-                // A.11 ADTs: match como statement.  El parser de
+                // Match como statement (destructuring de ADT como
+                // sentencia de control de flujo).  El parser de
                 // expresion ya sabe parsear MatchExpr (rama en
                 // parse_primary), pero como statement queremos que NO
                 // exija un `;` final (igual que if/while/for).
@@ -2340,7 +2345,8 @@ namespace vex {
     }
 
     std::unique_ptr<ast::Expr> Parser::parse_postfix() {
-        // Postfix: x++, x--, x(args).  En A.1 solo estos tres.
+        // Operadores postfix soportados: x++, x--, x(args), x[i],
+        // x.field, x?.field, x?.[i], x?
         auto expr = parse_primary();
         while (true) {
             switch (current_.kind) {
@@ -2396,8 +2402,8 @@ namespace vex {
                     break;
                 }
                 case TokenKind::LBRACKET: {
-                    // Subscript: base[index].  En A.3.4.b se restringe a
-                    // base de tipo puntero; el type checker valida.
+                    // Subscript: base[index].  El type checker restringe la
+                    // base a tipo puntero o array (operacion de indexacion).
                     const SourceLoc loc = current_.loc;
                     (void)consume(); // '['
                     auto idx = std::make_unique<ast::IndexExpr>();
@@ -2617,8 +2623,8 @@ namespace vex {
                 auto e = std::make_unique<ast::NewExpr>();
                 e->loc        = loc;
                 e->class_name = consume().lexeme;
-                // Generics A.8: argumentos de tipo opcionales `<T>` para
-                // `new Box<i32>(42)`.
+                // Argumentos de tipo opcionales `<T1, T2, ...>` para
+                // instanciaciones genericas: @c new Box<i32>(42).
                 if (current_.kind == TokenKind::LT) {
                     (void)consume(); // '<'
                     while (current_.kind != TokenKind::GT

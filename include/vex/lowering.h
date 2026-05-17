@@ -130,7 +130,10 @@ namespace vex {
 
         /**
          * @brief Emite GETPROC y devuelve el SSA value (PTR al ProcessVM).
-         *        Usado por las variantes GC-aware de las colecciones (A.30).
+         *        Usado por las variantes GC-aware de las colecciones (cada
+         *        variante @c *_gc del plugin recibe @c proc como primer arg
+         *        para poder invocar @c gc_addref / @c gc_release sobre los
+         *        slots que contienen GcHandles).
          */
         ir::IrValueId emit_getproc(uint32_t source_line);
 
@@ -623,7 +626,7 @@ namespace vex {
         void           write_local(const std::string &name, ir::IrValueId v,
                                    ir::IrType ir_ty, uint32_t source_line);
 
-        // Helper para reportar features no soportadas en A.1.
+        // Helper para reportar features no soportadas por el lowering.
         void           unsupported(SourceLoc loc, const char *feature);
 
         void           error_at(SourceLoc loc, std::string msg);
@@ -759,7 +762,7 @@ namespace vex {
         /// @c *p = id) o a un slot de array (@c arr[i] = id).  Para esos
         /// locales NO registramos auto-free al exit del scope porque el
         /// caller (o el padre) toma posesion del handle y debera liberarlo
-        /// (o el GC lo gestionara cuando integremos GC roots en A.27.3+).
+        /// (o el GC lo gestionara via stack scanning conservativo).
         ///
         /// Conservador: si algun uso del local podria escapar segun los
         /// patrones detectados por @c scan_escaping_locals, se marca como
@@ -885,7 +888,8 @@ namespace vex {
             ///               coleccion primitiva.  Usa @c func_name para el
             ///               nombre del simbolo nativo y @c needs_proc para
             ///               decidir si emite GETPROC + lo prepende como
-            ///               primer argumento (variantes @c *_free_gc de A.30).
+            ///               primer argumento (variantes @c *_free_gc del
+            ///               plugin de colecciones GC-aware).
             ///               El regalloc trata el CALLN como cualquier call,
             ///               preservando regs caller-saved automaticamente.
             ///   SMARTPTR_FREE: libera un @c unique<T> al exit del scope.

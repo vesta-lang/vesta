@@ -1528,7 +1528,7 @@ namespace debug {
                     // bytes bajos = double scalar; los emitimos como bits
                     // y como valor f64.  El cliente decide formato.  El
                     // banco ZMM tiene 64 bytes; nos quedamos con los 8
-                    // primeros (representacion f64 escalar segun A.20).
+                    // primeros (representacion f64 escalar en bytes bajos).
                     uint64_t bits = 0;
                     const uint8_t *raw = p->registers.zmm[i].raw();
                     if (raw) std::memcpy(&bits, raw, sizeof(uint64_t));

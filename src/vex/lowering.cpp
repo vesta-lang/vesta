@@ -182,8 +182,8 @@ namespace vex {
             case PrimitiveKind::VOID: return ir::IrType::VOID;
             case PrimitiveKind::BOOL: return ir::IrType::BOOL;
             // CHAR no tiene contraparte directa en ir::IrType; mapeamos a U8
-            // (mismo ancho, semanticamente equivalente para A.1 que solo lo
-            // usa como entero pequenyo).
+            // (mismo ancho, semanticamente equivalente porque el frontend
+            // solo lo usa como entero pequenyo sin codepoint awareness).
             case PrimitiveKind::CHAR: return ir::IrType::U8;
             case PrimitiveKind::I8: return ir::IrType::I8;
             case PrimitiveKind::I16: return ir::IrType::I16;
@@ -403,11 +403,12 @@ namespace vex {
                     lower_function(fd, out_module);
                 }
             } else if (decl->kind == ast::NodeKind::GlobalVarDecl) {
-                // Las variables globales no se bajan en A.1, pero
-                // `const T NAME = lit;` SI funciona (lower_ident las
-                // inlinea como CONST en cada uso).  Solo avisamos para
-                // las globales NO-const o las que tienen inicializador
-                // no-literal (que efectivamente se ignoran).
+                // Las variables globales con storage real no estan soportadas
+                // en el frontend Vex actual.  Pero `const T NAME = lit;` SI
+                // funciona porque @c lower_ident las inlinea como CONST en
+                // cada uso (no necesitan storage).  Solo avisamos para las
+                // globales NO-const o las que tienen inicializador no-literal
+                // (que efectivamente se ignoran).
                 auto *gv            = static_cast<ast::GlobalVarDecl *>(decl.get());
                 bool  literal_const = gv->is_const && gv->init && (
                     gv->init->kind == ast::NodeKind::IntLitExpr
@@ -417,7 +418,7 @@ namespace vex {
                         && static_cast<ast::UnaryExpr *>(gv->init.get())->operand->kind == ast::NodeKind::IntLitExpr));
                 if (!literal_const) {
                     diags_.warning(decl->loc,
-                                   "variable global no-const ignorada (sin storage en A.1)");
+                                   "variable global no-const ignorada (sin storage real en este frontend)");
                 }
             }
         }
@@ -978,7 +979,7 @@ namespace vex {
                 lower_synchronized(static_cast<ast::SynchronizedStmt *>(s));
                 return;
             default:
-                unsupported(s->loc, "statement no soportado en A.1");
+                unsupported(s->loc, "statement no soportado por el lowering actual");
                 return;
         }
     }
@@ -1337,7 +1338,7 @@ namespace vex {
             // si el usuario intenta usar uno.
             if (vd->init) {
                 error_at(vd->loc,
-                         "lowering: inicializador de struct aun no soportado (A.3.3+)");
+                         "lowering: inicializador de struct aun no soportado en esta ruta");
             }
             return;
         }
@@ -1543,7 +1544,7 @@ namespace vex {
             bind(vd->name, addr);
             if (vd->init) {
                 error_at(vd->loc,
-                         "lowering: inicializador de array aun no soportado (A.3.5+)");
+                         "lowering: inicializador de array aun no soportado en esta ruta");
             }
             return;
         }
@@ -1753,8 +1754,9 @@ namespace vex {
         //
         // Limitacion: si el handle se devuelve (return xs) o se asigna a
         // otra variable que vive mas, el free aqui dejaria al caller con
-        // un handle invalido.  Para casos simples (variable local que no
-        // escapa) funciona correctamente.  Escape analysis es A.27+.
+        // un handle invalido.  El escape analysis basico marca esos
+        // locales en @c escaping_locals_ y omite el cleanup para ellos;
+        // los locales realmente locales si reciben el free automatico.
 
         // Destructor automatico (RAII) para instancias locales de
         // clase Vex que tienen `~ClassName()` declarado y NO escapan.
@@ -1939,7 +1941,9 @@ namespace vex {
         const ir::IrValueId cond = lower_expr(s->cond.get());
         // Si el tipo no es BOOL ya, el optimizador / emisor lo trataran
         // como "non-zero is true".  Para mas claridad podriamos insertar
-        // un cmp_ne con 0; en A.1 lo dejamos al backend.
+        // un cmp_ne con 0 explicito, pero el bytecode @c jmp.jne ya hace
+        // exactamente esa comparacion contra 0 sin instruccion adicional,
+        // asi que delegar al backend es la opcion mas eficiente.
 
         const ir::IrBlockId then_bb  = fn_->new_block("if_then");
         const bool          has_else = s->else_branch != nullptr;
@@ -4021,9 +4025,9 @@ namespace vex {
                     break;
                 }
                 case CleanupAction::Kind::CALLN_FREE: {
-                    // A.30.next - CALLN al free nativo de la coleccion
-                    // (variante GC o no-GC).  Para la variante *_gc
-                    // prependemos un GETPROC como primer argumento; el
+                    // CALLN al free nativo de la coleccion (variante GC
+                    // o no-GC).  Para la variante *_gc prependemos un
+                    // GETPROC como primer argumento; el
                     // regalloc trata el CALLN como call normal y preserva
                     // los regs vivos del caller.
                     std::vector<ir::IrValueId> args;
@@ -4721,7 +4725,7 @@ namespace vex {
             ra.op        = ir::IrOp::RAW_ASM;
             ra.type      = ir::IrType::PTR;
             ra.dst       = env_ptr;
-            ra.func_name = "// === A.10 closures: leer env_ptr de R14 ===\n"
+            ra.func_name = "// === prologue de closure helper: leer env_ptr de R14 ===\n"
                     "mov {dst}, r14\n";
             ra.source_line = e->loc.line;
             child_fn.append(entry, std::move(ra));
@@ -4752,9 +4756,11 @@ namespace vex {
                 ir::IrValueId addr_i = env_ptr;
                 if (i > 0) {
                     addr_i = child_fn.new_value(ir::IrType::PTR);
-                    // A.15 (gap O): propagar is_host_ptr para que el LOAD
-                    // siguiente sepa emitir movh contra heap raw cuando
-                    // el env vive en heap.
+                    // Propagar is_host_ptr para que el LOAD siguiente sepa
+                    // emitir @c movh contra heap raw cuando el env vive en
+                    // heap (caso de closures retornadas por una funcion,
+                    // donde el env sobrevive al stack del creador via
+                    // alocacion en heap GC).
                     if (child_fn.values[env_ptr].is_host_ptr) {
                         child_fn.values[addr_i].is_host_ptr = true;
                     }
@@ -5991,8 +5997,9 @@ namespace vex {
             case ast::NodeKind::StringLitExpr:
                 return lower_string_lit(static_cast<ast::StringLitExpr *>(e));
             case ast::NodeKind::NullLitExpr:
-                // Null en A.1 no esta cableado al tipo de referencia;
-                // por ahora se emite como cero del tipo i64.
+                // Null se modela como el escalar 0 del tipo i64; el type
+                // checker valida que solo se asigne a punteros / handles
+                // (donde 0 es la representacion canonica de "ausente").
                 return emit_const(ir::IrType::I64, 0, e->loc.line);
             case ast::NodeKind::IdentExpr:
                 return lower_ident(static_cast<ast::IdentExpr *>(e));
@@ -6023,7 +6030,7 @@ namespace vex {
             case ast::NodeKind::CastExpr:
                 return lower_cast_expr(static_cast<ast::CastExpr *>(e));
             default:
-                unsupported(e->loc, "expresion no soportada en A.1");
+                unsupported(e->loc, "expresion no soportada por el lowering actual");
                 return ir::IR_NO_VALUE;
         }
     }
@@ -6252,8 +6259,9 @@ namespace vex {
             // -- a implementar cuando los necesite.
             break;
         }
-        // A.18 fase B.3 - Constantes ENC_* (encoding numerico).
-        // Cero overhead: emit const i32 inline en el call site.
+        // Constantes ENC_* (encoding numerico para builtins de string como
+        // @c str_convert(s, ENC_UTF16)).  Cero overhead: emit const i32
+        // inline en el call site -- no necesitan storage como simbolos.
         {
             static const struct {
                 const char *name;
@@ -6270,11 +6278,13 @@ namespace vex {
                 }
             }
         }
-        // A.16 - Identificadores ANSI magicos.  Si el nombre es una
-        // constante predefinida (RED, GREEN, BOLD, RESET, etc.), emitir
-        // un STR_LIT_ADDR a la cadena ANSI correspondiente.  Cero
-        // overhead vs un string literal explicito; la deteccion es un
-        // lookup O(1) en una tabla estatica.
+        // Identificadores ANSI magicos.  Si el nombre es una constante
+        // predefinida (RED, GREEN, BOLD, RESET, etc.), emitir un
+        // STR_LIT_ADDR a la cadena ANSI correspondiente.  Cero overhead
+        // vs un string literal explicito; la deteccion es un lookup O(1)
+        // en una tabla estatica.  Permite que el usuario escriba
+        // @c println("Error: ${RED}..${RESET}") sin necesidad de
+        // memorizar los codigos ANSI ni de declararlos como constantes.
         {
             static const struct {
                 const char *name;
@@ -8102,11 +8112,12 @@ namespace vex {
             }
             rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft, e->loc.line);
 
-            // A.18.x.1 - WRITE de bit field: read-modify-write.  Si el
-            // campo es bit field, leemos el storage word completo, le
-            // limpiamos los bits del rango con AND inverse_mask, le
-            // metemos el valor con OR ((rhs & mask) << bit_offset), y
-            // hacemos STORE de vuelta.  Para campo normal: STORE directo.
+            // WRITE de bit field: read-modify-write.  Si el campo es bit
+            // field, leemos el storage word completo, le limpiamos los
+            // bits del rango con AND inverse_mask, le metemos el valor
+            // con OR ((rhs & mask) << bit_offset), y hacemos STORE de
+            // vuelta.  Para campo normal (no-bitfield): STORE directo
+            // del rhs sin lectura previa.
             const Type bt = fa->base ? fa->base->result_type : Type{};
             if (bt.kind == PrimitiveKind::STRUCT) {
                 const auto &layouts = tc_.struct_layouts();
@@ -8536,7 +8547,8 @@ namespace vex {
         const bool is_move       = (name == "move");
         const bool is_get        = (name == "ptr_of");
         const bool is_use_count  = (name == "use_count");
-        // A.18 - builtins de string.
+        // Builtins de string: cada uno baja a una sola instruccion bytecode
+        // dedicada (STRLEN, STRGETBYTES, STRRAW, etc.) sin pasar por CALLN.
         const bool is_str_length  = (name == "str_length");
         const bool is_str_bytes   = (name == "str_bytes");
         const bool is_str_cstr    = (name == "str_cstr");
@@ -9524,7 +9536,7 @@ namespace vex {
             return true;
         }
 
-        // ===== A.27.1 - dispose(xs) =====
+        // ===== Builtin dispose(xs) =====
         // Libera explicitamente una coleccion antes del exit del scope.
         // Emite CALLN al free fn correspondiente al tipo del local + reescribe
         // el binding local a 0 para que el cleanup automatico al exit pase
@@ -11443,8 +11455,10 @@ namespace vex {
             }
             // Si el owner es unique<T>/shared<T>, equivale a ptr_of(owner)
             // que carga slot+0.  Si es una variable plain, devolvemos
-            // &owner (su SSA value, que ya tiene is_host_ptr correcto via
-            // address-taken promotion del A.3.4.a).
+            // &owner (su SSA value, que ya tiene is_host_ptr correcto
+            // gracias al pre-pase de address-taken promotion: cualquier
+            // local cuya direccion se toma con @c & se promociona a slot
+            // estable en stack en lugar de vivir solo en un SSA value).
             const Type owner_t = e->args[0]->result_type;
             // F3 reborrow: si el arg ES un borrow/borrow_mut (var o param),
             // su SSA value YA ES el host_ptr al payload.  No queremos
@@ -12040,8 +12054,11 @@ namespace vex {
                 const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
                 fn.values[vid].is_param = true;
                 if (param_is_class) {
-                    // A.32.fix - param de tipo CLASS es host_ptr GC; el
-                    // regalloc debe refrescarlo via gchandle/gcderef.
+                    // Param de tipo CLASS es host_ptr a un objeto GC.
+                    // Marcamos @c is_gc_object para que el regalloc, al
+                    // salvar este reg alrededor de un CALL que pueda
+                    // disparar GC, lo haga via @c gchandle (handle estable)
+                    // y restaure con @c gcderef (host_ptr fresco post-GC).
                     fn.values[vid].is_host_ptr  = true;
                     fn.values[vid].is_gc_object = true;
                 } else if (param_is_host_ptr) {
@@ -13444,7 +13461,10 @@ namespace vex {
             if (!a) return ir::IR_NO_VALUE;
             // Auto-promocion literal -> StringObject cuando el parametro
             // espera STRING y el arg es un StringLit no interpolado.
-            // Mismo patron que lower_call para funciones libres (A.34.fix).
+            // Mismo patron que @c lower_call usa para funciones libres:
+            // sin esto, pasar @c helper("hola") a @c void helper(string s)
+            // pushearia la direccion cruda del literal como i64 (PTR) y
+            // el callee crashearia al hacer @c strraw s con ptr invalido.
             // Sin esto, str_cstr/str_bytes dentro del metodo trataban el
             // PTR del literal como GcHandle invalido y leian garbage.
             const bool param_is_string =
@@ -13929,10 +13949,13 @@ namespace vex {
                     return;
                 }
                 case ast::NodeKind::LambdaExpr: {
-                    // A.10 closures: las captures mutadas dentro del body
-                    // de la lambda deben ser address-taken en el outer
-                    // scope (capture-by-reference).  El env block guarda
-                    // su PUNTERO; el helper hace LOAD/STORE indirectos.
+                    // Captures mutables: las variables modificadas dentro
+                    // del cuerpo de la lambda deben ser address-taken en
+                    // el outer scope para que el modelo de captura-por-
+                    // referencia funcione.  El env block guarda el PUNTERO
+                    // al slot del owner; el helper de la lambda hace
+                    // LOAD/STORE indirectos sobre ese puntero, de modo
+                    // que las mutaciones se ven desde fuera del lambda.
                     auto *lam = static_cast<ast::LambdaExpr *>(e);
                     for (const auto &nm: lam->mutable_captures) {
                         address_taken_locals_.insert(nm);
@@ -13954,9 +13977,10 @@ namespace vex {
                 }
                 case ast::NodeKind::CallExpr: {
                     auto *c = static_cast<ast::CallExpr *>(e);
-                    // Borrow checker (A.36): lend(x) / lend_mut(x) sobre
-                    // una variable local plain requiere tomar su direccion
-                    // (el borrow ES un host_ptr al slot del local).
+                    // Borrow checker: lend(x) / lend_mut(x) sobre una
+                    // variable local plain requiere tomar su direccion
+                    // (un borrow ES, en runtime, un host_ptr al slot
+                    // donde vive el local; cero overhead vs un T*).
                     // Forzamos address-taken promotion para que el lowering
                     // deje el local en stack via ALLOCA + LOAD/STORE en
                     // lugar de en registro SSA puro.  Sin esto, lend(local)
@@ -14320,9 +14344,13 @@ namespace vex {
                                ir::IrType         ir_ty, uint32_t     source_line) {
         if (!address_taken_locals_.count(name)) {
             update_scope(name, v);
-            // A.17.y - Si la variable tiene slot activo en un try, ALSO
-            // emitir STORE al slot para que el throw + catch vea el ultimo
-            // valor escrito incluso tras corrupcion de registros.
+            // Si la variable tiene slot activo en un try, ADICIONALMENTE
+            // emitir STORE al slot.  El motivo: cuando ocurre un @c throw
+            // dentro del body del try, el handler en el catch necesita el
+            // ultimo valor de la variable, pero do_throw restaura el RSP
+            // y descarta cualquier @c push del save/restore alrededor de
+            // los CALLs.  Sin este STORE redundante, el catch leeria un
+            // registro con un valor obsoleto o corrupto.
             auto it_slot = try_spill_slots_.find(name);
             if (it_slot != try_spill_slots_.end()) {
                 // Usar el tipo real del valor para que el STORE escriba
@@ -14376,7 +14404,7 @@ namespace vex {
 
     void Lowering::unsupported(SourceLoc loc, const char *feature) {
         diags_.error(std::move(loc),
-                     std::string("lowering: caracteristica aun no soportada en A.1: ") + feature);
+                     std::string("lowering: caracteristica aun no soportada: ") + feature);
     }
 
     void Lowering::error_at(SourceLoc loc, std::string msg) {

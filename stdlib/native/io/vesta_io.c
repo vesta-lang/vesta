@@ -1,6 +1,6 @@
 /**
  * @file vesta_io.c
- * @brief Modulo de E/S de la stdlib nativa de VestaVM (A.16 fast I/O).
+ * @brief Modulo de E/S de la stdlib nativa de VestaVM (fast I/O buffered).
  *
  * Reemplaza la version original basada en @c fputs / @c printf con un buffer
  * global de 64 KB que delega en @c WriteConsoleW / @c WriteFile (Windows) o
@@ -478,7 +478,7 @@ VESTA_PLUGIN_EXPORT void vesta_init(const VestaPluginAPI *api) {
         g_atexit_registered = 1;
     }
 #if VESTA_IO_DEBUG
-    if (api) api->log("[vesta_io] cargado (A.16 buffered)");
+    if (api) api->log("[vesta_io] cargado (buffered I/O)");
 #endif
 }
 
@@ -612,8 +612,9 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println(uint64_t proc_ptr,
 
 /* -----------------------------------------------------------------------
  * Salida de valores numericos (sin acceso a memoria VM).
- * Cambio v A.16: vio_print_int / _uint / _hex / _float YA NO emiten '\n'.
- * Usar vio_println_int / _uint / _hex / _float si quieres salto.
+ * Convencion: las funciones @c vio_print_* NO emiten '\n' al final
+ * (consistencia semantica con @c print vs @c println).  Para incluir
+ * un salto de linea, usar las variantes @c vio_println_*.
  * ----------------------------------------------------------------------- */
 
 VESTA_PLUGIN_EXPORT uint64_t vio_print_int(uint64_t n) {
@@ -988,7 +989,7 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_float(uint64_t bits) {
 }
 
 /* -----------------------------------------------------------------------
- * Builtins nuevos A.16: bool, char, color, flush.
+ * Builtins de salida especializada: bool, char, color, flush.
  * ----------------------------------------------------------------------- */
 
 /**

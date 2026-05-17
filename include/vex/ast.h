@@ -19,15 +19,18 @@
  * por @c std::unique_ptr garantiza ownership claro y zero-cost frente a
  * @c shared_ptr (sin contadores atomicos).
  *
- * Subset cubierto en hito A.1:
- *   - ModuleNode (raiz): lista de FunctionDecl y GlobalVarDecl.
- *   - Statements: Block, VarDecl (local), ExprStmt, If, While, For (C),
- *                 Return, Break, Continue.
- *   - Expressions: literales (int/float/bool/null/char), Ident, Binary,
- *                  Unary, Assign, Call.
- *   - Type AST: solo PrimitiveTypeNode.  Punteros, arrays, generics,
- *               tipos referencia, etc. se anyaden en hitos posteriores
- *               sin tocar la base de la jerarquia (anyadir TypeKind nuevo).
+ * Cobertura actual del AST:
+ *   - ModuleNode (raiz): lista de FunctionDecl, GlobalVarDecl, ClassDecl,
+ *                       StructDecl, EnumDecl, ExternFnDecl.
+ *   - Statements: Block, VarDecl, ExprStmt, If, While, DoWhile, For (C),
+ *                 ForEach (Vex), Return, Break, Continue, Goto, Label,
+ *                 Try/Catch/Finally, Synchronized, Throw, Match.
+ *   - Expressions: literales (int/float/bool/null/char/string con
+ *                  interpolacion), Ident, Binary, Unary, Assign, Call,
+ *                  New, Spawn, RSpawn, Lambda, Match, Cast, FieldAccess,
+ *                  Index, This, InitList.
+ *   - Type AST: PrimitiveTypeNode + PointerTypeNode + ArrayTypeNode +
+ *               NamedTypeNode (con generics) + FunctionTypeNode.
  *
  * Decisiones de hardware:
  *   - NodeKind cabe en 1 byte; el discriminador se inlinea en cada nodo.
@@ -72,8 +75,8 @@ namespace vex::ast {
         TypeAliasDecl,
         StructDecl,
         ClassDecl,
-        EnumDecl,        ///< A.11 ADTs: declaracion de tipo algebraico (enum + variantes).
-        ExternFnDecl,    ///< A.24 - extern "lib.dll" fn name(params) -> ret; (FFI declarativo, 0 overhead).
+        EnumDecl,        ///< Declaracion de tipo algebraico (enum + variantes con/sin payload).
+        ExternFnDecl,    ///< @c extern "lib.dll" fn name(params) -> ret; (FFI declarativo, 0 overhead).
 
         // ----- Statements -----
         BlockStmt,
@@ -91,7 +94,7 @@ namespace vex::ast {
         TryStmt,         ///< try { ... } catch (T e) { ... }
         ThrowStmt,       ///< throw expr;
         ForEachStmt,     ///< for (T x : col) body
-        SynchronizedStmt,///< synchronized (obj) { ... }  (A.7.1: monenter/monexit con finally)
+        SynchronizedStmt,///< synchronized (obj) { ... }  (monenter/monexit con cleanup implicito en cada via de salida)
 
         // ----- Expressions -----
         IntLitExpr,
@@ -313,7 +316,7 @@ namespace vex::ast {
      * a otro PointerTypeNode envolviendo a T.  El type checker desenvuelve la
      * cadena para producir un @c Type plano (con shared_ptr<Type> como
      * pointee).  Punteros raw NO son rastreados por el GC y NO tienen
-     * verificacion de null en deref hasta que A.6 introduzca @c nonnull.
+     * verificacion de null en deref (solo el tipo @c nonnull T la fuerza).
      */
     struct PointerTypeNode : TypeNode {
         std::unique_ptr<TypeNode> pointee; ///< Tipo apuntado (puede ser otro puntero).
@@ -344,7 +347,7 @@ namespace vex::ast {
 
     /**
      * @struct FunctionTypeNode
-     * @brief Tipo de funcion: @c fn(T1, T2, ...) -> R (Phase A.10).
+     * @brief Tipo de funcion / closure: @c fn(T1, T2, ...) -> R.
      *
      * Permite declarar variables, parametros y campos cuyo tipo es una
      * funcion / closure.  El parser lo construye al ver el keyword @c fn
@@ -492,7 +495,7 @@ namespace vex::ast {
     struct FieldAccessExpr : Expr {
         std::unique_ptr<Expr> base;
         std::string           field_name;
-        /// @brief A.4.3: si !=0, el acceso resuelve a un accesor de
+        /// @brief Si !=0, el acceso resuelve a un accesor de
         /// propiedad y el lowering emite la llamada en vez de un
         /// getfield directo.  1 = getter (`obj.prop`), 2 = setter (lhs
         /// de un AssignExpr; @ref AssignExpr::is_property_set se marca
@@ -517,7 +520,7 @@ namespace vex::ast {
 
     struct AssignExpr : Expr {
         AssignOp              op;
-        std::unique_ptr<Expr> target;  // lvalue (IdentExpr en A.1; con punteros sera mas amplio)
+        std::unique_ptr<Expr> target;  // lvalue: IdentExpr, FieldAccess, IndexExpr o UnaryExpr Deref
         std::unique_ptr<Expr> value;
         AssignExpr() : Expr(NodeKind::AssignExpr) {}
     };
@@ -553,7 +556,7 @@ namespace vex::ast {
     struct NewExpr : Expr {
         std::string                        class_name;
         std::vector<std::unique_ptr<Expr>> args;
-        /// Argumentos de tipo para `new Box<i32>(42)` (A.8 generics).
+        /// Argumentos de tipo para @c new Box<i32>(42).
         /// Vacio para clases no genericas.  El type checker monomorphiza
         /// la clase plantilla y reemplaza class_name con el nombre del
         /// tipo concreto generado (ej. "Box_i32").
@@ -626,8 +629,9 @@ namespace vex::ast {
         ///                @c sched_idx (modulo num_schedulers para evitar
         ///                fuera de rango).  Sintaxis: `spawn on(expr) { body }`.
         ///
-        /// Cuando llegue @c rspawn (A.7.4) este enum se extendera con
-        /// @c Remote para distribucion cross-node.
+        /// Spawn distribuido cross-node se modela via @c RSpawnExpr en
+        /// lugar de extender este enum, porque cambia la semantica del
+        /// valor de retorno (Future<T> vs PID).
         enum class Policy : uint8_t {
             Auto   = 0,
             Here   = 1,
@@ -668,7 +672,7 @@ namespace vex::ast {
 
     /**
      * @struct LambdaExpr
-     * @brief Expresion lambda / closure inline (Phase A.10).
+     * @brief Expresion lambda / closure inline con captura lexica.
      *
      * Sintaxis aceptada por el parser:
      * @code
@@ -702,7 +706,7 @@ namespace vex::ast {
      */
     /**
      * @struct MatchArm
-     * @brief Una rama de un @c match: pattern + body (Phase A.11 ADTs).
+     * @brief Una rama de un @c match: pattern + body (destructuring de ADT).
      *
      * El patron puede ser:
      *   - Variant simple: @c Color.Red    (variant_name="Red", bindings vacio)
@@ -828,7 +832,7 @@ namespace vex::ast {
         /// Nombre del helper sintetico generado (@c __lambda_<N>).  El call
         /// site lo usa para emitir @c mov r_fn, @c \@Absolute("code." + name).
         std::string              synthetic_name;
-        /// A.15 (gap O): true si el env block se aloca en HEAP RAW
+        /// true si el env block se aloca en HEAP RAW
         /// (RAW_ALLOC) en lugar de en STACK (ALLOCA).  Lo activa el
         /// lowering cuando la funcion contenedora retorna FUNCTION; el
         /// helper sintetico marca @c env_ptr.is_host_ptr=true para que
@@ -910,11 +914,11 @@ namespace vex::ast {
      * @struct ForEachStmt
      * @brief @c for (T name : collection) body.
      *
-     * En A.6 MVP soportamos colecciones que sean arrays nativos con
-     * tamano conocido en compile time (T[N]) o decay-to-pointer (T[]).
-     * El lowering desazucara a un counted loop usando un indice oculto.
-     * Para T[N] usamos N como cota; para T[] el caller debe pasar un
-     * tamano (pendiente, MVP solo soporta T[N] inline).
+     * Soportamos colecciones que sean arrays nativos con tamano conocido
+     * en compile time (T[N]) o decay-to-pointer (T[]).  El lowering
+     * desazucara a un counted loop usando un indice oculto.  Para T[N]
+     * usamos N como cota; para T[] el caller debe pasar un tamano
+     * (limitacion actual: solo @c T[N] inline esta verificado).
      */
     struct ForEachStmt : Stmt {
         std::unique_ptr<TypeNode> iter_type;
@@ -1028,7 +1032,8 @@ namespace vex::ast {
      * @brief Declaracion (o definicion) de una funcion top-level.
      *
      * Si @c body es null, se trata de una declaracion sin definicion
-     * (extern, futura FFI).  En A.1 todas las funciones son @c body != null.
+     * (typicamente FFI extern; las funciones extern reales se modelan
+     * via @c ExternFnDecl, este caso queda como fallback general).
      */
     struct FunctionDecl : Node {
         std::unique_ptr<TypeNode>               return_type;
@@ -1119,7 +1124,7 @@ namespace vex::ast {
         std::unique_ptr<TypeNode> type;
         std::string               name;
         SourceLoc                 loc;
-        /// A.18 fase C - Bit field width.  0 = campo normal (byte-aligned).
+        /// Bit field width.  0 = campo normal (byte-aligned).
         /// >0 = bit field con esta cantidad de bits.  El type checker
         /// calcula bit_offset y los empaqueta en storage words del tipo
         /// declarado (i32 -> 32 bits por word, etc.).  Estilo C/C++.
