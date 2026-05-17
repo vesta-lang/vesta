@@ -211,6 +211,7 @@ int main(int argc, char *argv[]) {
                 cxxopts::value<uint32_t>())
             ("jit-warn",      "Imprimir warnings cada vez que el Selector encuentra una IR op no soportada (dedup por op+linea)")
             ("jit-stats",     "Imprimir snapshot final de counters del JIT: compiled/unsupported/no_ir + threshold")
+            ("jit-disasm",    "Volcar hex bytes + disasm (Capstone) de cada funcion JIT-compilada a stderr")
             // ---- opciones de runtime distribuido ----
             ("dist-port",         "Puerto VDP del servidor distribuido (0 = sin servidor TCP)",
                 cxxopts::value<uint16_t>()->default_value("0"))
@@ -353,6 +354,9 @@ int main(int argc, char *argv[]) {
     }
     if (result.count("jit-warn")) {
         jit::g_jit_warn_unsupported = true;
+    }
+    if (result.count("jit-disasm")) {
+        jit::g_jit_disasm = true;
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;
 

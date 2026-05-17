@@ -106,6 +106,50 @@ namespace jit {
         /// Si es nullptr o retorna 0, esos patrones siguen siendo
         /// rechazados como unsupported.
         std::function<uint64_t(const std::string &)> resolve_symbol{};
+
+        /// 2026-05-16: callback opcional para resolver funciones nativas
+        /// importadas via CALLN.  Recibe el nombre completo @c "lib:func"
+        /// (e.g. @c "stdlib/native/io/vesta_io:vio_println") y devuelve la
+        /// direccion HOST del simbolo nativo cargado (LoadLibraryA +
+        /// GetProcAddress).  Si retorna 0, la CALLN se marca @c unsupported
+        /// y el metodo cae a fallback interp.  Tipicamente el caller
+        /// resuelve usando @c loader::FFI::load_native_module +
+        /// @c resolve_native_symbol.
+        std::function<uint64_t(const std::string &)> resolve_native_fn{};
+
+        /// Callback para reservar un slot de Inline Cache (16 bytes:
+        /// cached_class_ptr + cached_jit_code, inicial 0).  Retorna la
+        /// addr HOST del slot.  El selector embebe esa addr en el codigo
+        /// emitido para CALLVIRT IC pattern.  Si es null, el selector
+        /// emite el inline dispatch tradicional (sin IC).
+        std::function<uint64_t()> reserve_ic_slot{};
+
+        /// Callback para leer un qword (u64) de @c vm_mem en compile-time.
+        /// Usado por el peephole de inlining: cuando el JIT ve
+        /// @c mov rN, @Absolute("code.s_X") + @c mov rN, [rN], lee el
+        /// valor cacheado en s_X (typically un @c ClassInfo* poblado por
+        /// @c __module_init que ya corrio antes del JIT compile) e
+        /// inlinea el constante como imm64, eliminando la llamada a
+        /// @c vrt_vm_read_u64 en cada iteracion del hot path.
+        /// Si retorna 0 o no esta seteado, el patron usa la ruta normal
+        /// (resolver vaddr + vrt_vm_read_u64).
+        std::function<uint64_t(uint64_t /*vaddr*/)> read_vmem_u64{};
+
+        /// Offset (en bytes) desde @c ProcessVM* hasta @c gc_heap.nursery_bump_.
+        /// Si != 0, el mini-parser del JIT inlinea bump-pointer allocation
+        /// emitiendo @c mov rax, [rbx + nursery_bump_off] +
+        /// @c lea rcx, [rax + total] + @c cmp rcx, [rbx + nursery_end_off]
+        /// + @c ja slow_path + @c mov [rbx + nursery_bump_off], rcx +
+        /// init GcHeader + init ObjectHeader + call @c vrt_register_alloc
+        /// para registrar el handle.  Saves ~30 ns por allocacion
+        /// (vs ~50 ns del call a @c vrt_newobj).
+        /// Si es 0, el JIT cae al call de @c vrt_newobj normal.
+        int32_t nursery_bump_offset = 0;
+        int32_t nursery_end_offset  = 0;
+        /// Direccion del runtime helper @c vrt_register_alloc (param 2
+        /// = host_ptr al GcHeader, register handle solo).  Si es 0, el
+        /// JIT no puede inlinear (fallback a @c vrt_newobj).
+        uint64_t register_alloc_addr = 0;
     };
 
     /**

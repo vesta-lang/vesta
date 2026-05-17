@@ -125,6 +125,91 @@ namespace gc {
     static constexpr GcHandle GC_NULL_HANDLE = UINT32_MAX;
 
     /**
+     * @class PtrHandleMap
+     * @brief Hash table flat open-addressing optimizada para
+     *        @c uint8_t* -> @c GcHandle.
+     *
+     * Reemplaza @c std::unordered_map<const uint8_t*, GcHandle> para el
+     * hot path del GC: inserts en @c new_handle, erases en
+     * @c release_handle / minor_gc sweep, finds en @c scan_stack_roots.
+     * std::unordered_map usa node-based allocation (1 malloc por insert
+     * ~10-15 ns).  Esta variante usa un solo @c std::vector<Entry>
+     * contiguo (cache-friendly + cero allocs por insert despues del
+     * grow inicial).
+     *
+     * = Algoritmo =
+     * - Buckets potencia de 2 (mask = capacity - 1).
+     * - Hash: @c (ptr >> 3) (los punteros host son 8-aligned).
+     * - Linear probing.
+     * - Tombstones para erase (key == reinterpret_cast<uint8_t*>(1)).
+     * - Resize a 2x cuando load > 0.5.
+     *
+     * Coste medio por operacion: ~5 ns vs ~20-30 ns de @c unordered_map.
+     */
+    class PtrHandleMap {
+    public:
+        struct Entry {
+            const uint8_t *key;
+            GcHandle       value;
+        };
+
+        PtrHandleMap();
+        ~PtrHandleMap() = default;
+
+        /** @brief Inserta o sobreescribe.  Retorna true si era nuevo. */
+        bool insert_or_assign(const uint8_t *key, GcHandle h);
+
+        /** @brief Busca el handle.  Retorna @c GC_NULL_HANDLE si no existe. */
+        GcHandle find(const uint8_t *key) const noexcept;
+
+        /** @brief Elimina la entrada.  Retorna true si existia. */
+        bool erase(const uint8_t *key);
+
+        /** @brief Tamano actual (numero de entradas vivas). */
+        size_t size() const noexcept { return live_count_; }
+
+        /** @brief True si vacio. */
+        bool empty() const noexcept { return live_count_ == 0; }
+
+        /** @brief Limpia todas las entradas (mantiene la capacidad). */
+        void clear();
+
+        /** @brief Reserva capacidad para al menos @p n entries. */
+        void reserve(size_t n);
+
+    private:
+        /// Sentinelas en el campo @c key.
+        static constexpr const uint8_t *EMPTY     = nullptr;
+        static constexpr uintptr_t      TOMB_RAW  = 1;
+
+        static inline const uint8_t *tombstone() {
+            return reinterpret_cast<const uint8_t *>(TOMB_RAW);
+        }
+        static inline bool is_empty(const uint8_t *k) {
+            return k == EMPTY;
+        }
+        static inline bool is_tomb(const uint8_t *k) {
+            return reinterpret_cast<uintptr_t>(k) == TOMB_RAW;
+        }
+        static inline bool is_live(const uint8_t *k) {
+            return !is_empty(k) && !is_tomb(k);
+        }
+        static inline size_t hash_ptr(const uint8_t *k) noexcept {
+            const uintptr_t p = reinterpret_cast<uintptr_t>(k);
+            /* Pointers son 8-aligned -> shift 3 bits removes redundancia. */
+            return static_cast<size_t>(p >> 3);
+        }
+
+        void grow();
+
+        std::vector<Entry> table_;     ///< buckets (capacity = potencia de 2)
+        size_t             mask_       = 0;  ///< capacity - 1
+        size_t             live_count_ = 0;  ///< entradas vivas (no tombstones)
+        size_t             used_       = 0;  ///< slots ocupados (live + tombstones)
+        size_t             grow_at_    = 0;  ///< trigger grow cuando used > grow_at_
+    };
+
+    /**
      * @brief Activa/desactiva el debug del GC en runtime.
      *
      * Cuando esta activado, las operaciones del GC (major_gc, minor_gc,
@@ -930,13 +1015,32 @@ namespace gc {
             return stats_;
         }
 
-    private:
-        vm::ArenaManager &arena_mgr_;
+        /**
+         * @brief Phase D.7.opt: wrapper publico de @c new_handle para que
+         *        @c vrt_register_alloc lo invoque tras inlinear bump-pointer.
+         *
+         * Solo debe usarse cuando el caller YA hizo bump-pointer + init de
+         * @c GcHeader + @c ObjectHeader.  Esta funcion SOLO crea el handle.
+         */
+        GcHandle register_alloc(uint8_t *raw) {
+            return new_handle(raw);
+        }
 
-        // --- Nursery ---
+    public:
+        // --- Nursery (publicos para inline bump-pointer en JIT) ---
+        //
+        // Phase D.7.opt: el JIT inlinea el fast path de alloc emitiendo
+        // accesos directos a @c nursery_bump_ y @c nursery_end_ via
+        // offset compile-time desde @c ProcessVM* (rbx en VM_ABI).
+        // Esto elimina la llamada a @c vrt_newobj para el caso comun
+        // (~5 ns inline vs ~20 ns runtime call).  Los demas usuarios
+        // siguen usando @c alloc() para preservar invariantes.
         uint8_t *nursery_base_     = nullptr; ///< Inicio del bloque Nursery.
         uint8_t *nursery_bump_     = nullptr; ///< Proximo byte libre (bump pointer).
         uint8_t *nursery_end_      = nullptr; ///< Fin del bloque Nursery.
+
+    private:
+        vm::ArenaManager &arena_mgr_;
         size_t   nursery_size_     = 0;       ///< Tamano total de la Nursery.
         uint64_t nursery_arena_id_ = 0;       ///< ID en ArenaManager para liberar al destruir.
 
@@ -1000,7 +1104,10 @@ namespace gc {
         ///   - release_handle() => erase
         ///   - do_evacuate()   => erase old + insert new tras mover el objeto
         /// El payload pointer es estable mientras el objeto no se evacue.
-        std::unordered_map<const uint8_t *, GcHandle> ptr_to_handle_;
+        /* Phase D.7.opt: reemplazado @c std::unordered_map por un flat
+         * hash map open-addressing para el hot path del GC (new_handle/
+         * release_handle ~20-30 ns -> ~5 ns por op). */
+        PtrHandleMap ptr_to_handle_;
 
         // --- Tabla de referencias debiles ---
         std::vector<WeakEntry> weak_table_; ///< Referencias debiles indexadas por uint32_t.

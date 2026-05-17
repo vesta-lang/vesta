@@ -755,6 +755,28 @@ namespace runtime {
     void exec_instr_mvtake(ProcessVM *vm, const DecodedInstr &instr);
 
     /**
+     * @brief Ejecuta super-instrucciones ALU 3-operandos (0x73-0x7B).
+     *
+     * Combina @c mov rd,rs1 + OP rd,rs2 en una sola instruccion VM.  La
+     * operacion se determina por opcode_index (0x73 adds3, 0x74 subs3,
+     * 0x75 muls3, 0x76 addu3, 0x77 subu3, 0x78 mulu3, 0x79 and3, 0x7A or3,
+     * 0x7B xor3).  Lee r_src1 y r_src2 de los nibbles altos de byte2 y
+     * byte3 respect., escribe en r_dst (nibble bajo de byte2).  Actualiza
+     * ZF/SF/CF/OF segun semantica de la operacion.
+     */
+    void exec_instr_alu3(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
+     * @brief Ejecuta super-instruccion LOAD con zero-extend (loadz / loadzh).
+     *
+     * Combina @c mov rd,0 + @c mov rd_sized,[rs] en una sola instruccion VM.
+     * El tamano (8/16/32/64 bits) se selecciona por @c flags_info.mode; el
+     * bit @c _signed_instruct = 1 indica que el puntero es HOST (loadzh
+     * opcode 0x7D), 0 = VM mem (loadz opcode 0x7C).
+     */
+    void exec_instr_loadz(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
      * @brief Ejecuta ADDCUR: suma un inmediato con signo al registro cursor indicado.
      *
      * Permite avanzar (imm > 0) o retroceder (imm < 0) el cursor en un numero

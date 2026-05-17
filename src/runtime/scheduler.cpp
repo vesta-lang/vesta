@@ -272,6 +272,13 @@ namespace runtime {
      *
      * @note Este metodo debe ejecutarse en un hilo dedicado del ThreadPool.
      */
+    // Pragma local: el threaded dispatch usa la extension GCC `&&label`
+    // (Labels as Values).  Es portable en GCC y Clang, no en MSVC -- el
+    // proyecto target principal es MinGW-GCC.  `-pedantic-errors` lo
+    // rechaza por defecto; suprimimos -Wpedantic en este archivo.
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wpedantic"
+
     void Scheduler::run_loop() {
         // continuar mientras no se solicite parada y la VM siga activa
         while (!should_kill && vm_reference.vm_running) {
@@ -345,19 +352,42 @@ namespace runtime {
                 /* Marcar el proceso como HALT.  No hay mas ejecucion interp. */
                 instance->state.store(HALT, std::memory_order_release);
                 instance->tsc = 1;  /* marcar que ya ejecuto algo */
+                /* BUG FIX 2026-05-16: decrementar alive_count.  El fast/slow
+                 * path normales decrementan cuando el proceso pasa a HALT
+                 * (lineas ~671 y ~767), pero el JIT entry path olvidaba
+                 * hacerlo.  Sin esto, alive_count queda en >0 aunque el
+                 * proceso ya termino -> has_alive_processes() retorna true
+                 * -> outer loop bloquea en sem.acquire() esperando un
+                 * make_ready() que nunca llega -> main thread bloqueado en
+                 * done_cv.wait() -> deadlock visible como "[jit] eager-
+                 * compiled main (...)" + cuelgue. */
+                alive_count--;
                 continue;  /* volver al outer loop a buscar otro proceso */
             }
 
             if (!has_hooks) {
-                // === FAST PATH: decode + execute directo sin FSM completa ni hooks ===
-                // perf: izar el state store fuera del bucle
-                // interno.  Las exec_fns que llaman on_event(EVT_HALT/IO_WAIT)
-                // requieren que state sea EXECUTE para que la FSM transicione
-                // correctamente (fsm[EXECUTE][EVT_X] -> proximo estado).
-                // Antes haciamos state.store(EXECUTE) y state.store(DECODE)
-                // en cada iteracion del while (~2 atomic stores/instr); ahora
-                // lo seteamos UNA vez aqui y el inner loop solo lo modifica
-                // cuando una exec_fn transiciona a HALT/WAIT_IO (raro).
+                // === FAST PATH: threaded computed-goto dispatch ===
+                //
+                // Reemplaza el patron switch+continue por un threaded
+                // interpreter clasico: cada handler del fast path acaba con
+                // su propio `goto *table[next_op]`, dando al branch predictor
+                // del CPU una entrada BTB unica por handler.  Para hot loops
+                // donde la secuencia de opcodes es repetitiva (mov;add;cmp;
+                // jcc), el predictor especializa cada sucesion y elimina los
+                // mispredicts del switch centralizado.
+                //
+                // Gana ~10-30% en MIPS sobre el switch + indirect call previo
+                // para benches dispatch-bound (tight_loop, struct_field).
+                //
+                // Requiere GCC/Clang (computed goto: `&&label` y `goto *p`).
+                // MSVC no lo soporta; si se compila con MSVC habria que
+                // mantener una alternativa con switch (no critica: el target
+                // primario es MinGW + GCC en TDM-GCC-64).
+                //
+                // El slow path (exec_cached para opcodes no inlineados)
+                // tambien se threadea: tras ejecutar, decode el siguiente y
+                // dispatch.  Solo se sale del chain cuando reductions llega
+                // a 0 o cuando un exec_fn transiciona a HALT/WAIT_IO.
                 instance->state.store(EXECUTE, std::memory_order_relaxed);
 
                 // traza de primera ejecucion del proceso para depuracion distribuida
@@ -398,18 +428,548 @@ namespace runtime {
                     }
                 }
 
-                while (instance->reductions_remaining > 0) {
-                    decode_instruction(instance); // descodificar la instruccion en PC
+                if (instance->reductions_remaining > 0) {
+                    /* === DISPATCH TABLE (built once per scheduler thread) ===
+                     * Indice:  bits 0-7 = opcode primario (is_not_extended)
+                     *          bit 8    = 1 si es opcode extendido
+                     * Default = L_SLOW para todo opcode sin fast path.
+                     * Solo opcodes con condicion fast-path-friendly listados. */
+                    /* Tabla read-only.  La inicializamos UNA vez por thread
+                     * via thread_local bool flag.  Las direcciones de label
+                     * son thread-local (cada thread ve su propio code
+                     * segment via PIC? -- en realidad mismo segmento, pero
+                     * la inicializacion es trivial y se beneficia de la
+                     * proteccion natural por flag local).  El acceso a
+                     * dispatch_table en sí es static (sin TLS overhead). */
+                    static void *dispatch_table[512];
+                    static bool dispatch_initialized = false;
+                    if (__builtin_expect(!dispatch_initialized, 0)) {
+                        for (int i = 0; i < 512; ++i) dispatch_table[i] = &&L_SLOW;
+                        /* Extended (is_not_extended==0x00): idx = 0x100 | opcode2 */
+                        dispatch_table[0x100 | 0x14] = &&L_MOV_RR;
+                        dispatch_table[0x100 | 0x15] = &&L_MOV_RI;
+                        dispatch_table[0x100 | 0x05] = &&L_ADD_RR;
+                        dispatch_table[0x100 | 0x08] = &&L_SUB_RR;
+                        dispatch_table[0x100 | 0x11] = &&L_CMP_RR;
+                        dispatch_table[0x100 | 0x17] = &&L_AND_RR;
+                        dispatch_table[0x100 | 0x18] = &&L_OR_RR;
+                        dispatch_table[0x100 | 0x19] = &&L_XOR_RR;
+                        dispatch_table[0x100 | 0x68] = &&L_CMPJMP_S;
+                        dispatch_table[0x100 | 0x69] = &&L_CMPJMP_U;
+                        /* Super-instrucciones ALU 3-operandos (0x73-0x7B) */
+                        dispatch_table[0x100 | 0x73] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x74] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x75] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x76] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x77] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x78] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x79] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x7A] = &&L_ALU3;
+                        dispatch_table[0x100 | 0x7B] = &&L_ALU3;
+                        /* loadz / loadzh (0x7C / 0x7D) caen al SLOW path:
+                         * el inlining provoca icache/BTB pressure que regresa
+                         * benches con muchos opcodes (poly, callvirt_hot).
+                         * El exec_cached(exec_instr_loadz) tiene call overhead
+                         * compensado por la reduccion drastica de instr count
+                         * (la mitad de ops por LOAD i32). */
+                        /* Primary opcode jmp/jcc */
+                        dispatch_table[0x11] = &&L_JCC;
+                        dispatch_initialized = true;
+                    }
 
-                    // inline-hot: fast path para los opcodes
-                    // mas comunes (mov reg-reg, mov reg-imm, add reg-reg,
-                    // cmp reg-reg con i64).  Estos cubren ~80% de las
-                    // instrucciones en los hot loops tipicos (loops
-                    // aritmeticos, copy reg, etc.).  El switch sobre
-                    // opcode_index suele compilar a jump table.  Para
-                    // opcodes que no encajen, fallthrough al exec_cached.
-                    DecodedInstr *d = instance->decoded_ptr;
-                    const auto    fl_inl = d->flags_info;  // copia local (1 carga)
+                    /* Inicial dispatch: decode + jump-table goto.  Inline
+                     * el icache hit-path igual que en NEXT_DISPATCH. */
+                    DecodedInstr *d = nullptr;
+                    decltype(instance->decoded_ptr->flags_info) fl_inl{};
+                    unsigned dispatch_idx;
+                    {
+                        const uint64_t _pc = instance->registers.rip.raw();
+                        DecodedInstr *_c = &instance->icache[icache_index(_pc)];
+                        if (__builtin_expect(
+                              _c->pc == _pc && instance->decoded_ptr != nullptr, 1)) {
+                            instance->decoded_ptr = _c;
+                        } else {
+                            decode_instruction(instance);
+                        }
+                    }
+                    d = instance->decoded_ptr;
+                    fl_inl = d->flags_info;
+                    dispatch_idx = (fl_inl.is_not_extended == 0x00)
+                                   ? (0x100u | fl_inl.opcode_index)
+                                   : fl_inl.is_not_extended;
+                    goto *dispatch_table[dispatch_idx];
+
+                    /* Macro NEXT: tail-call equivalente al dispatch inicial.
+                     * Decrementa reductions, sale si llego a 0, y hace el
+                     * goto indirecto al siguiente handler.  Inlineado al
+                     * final de cada handler -> cada uno tiene su PROPIO
+                     * indirect-jump-site -> BTB especializa por handler. */
+                    /* NEXT_DISPATCH inline el icache HIT path de
+                     * decode_instruction (~90% de los dispatches en hot
+                     * loops): pc -> icache_index -> cached entry + check.
+                     * Solo cae a la funcion en cache MISS.  Ahorra la
+                     * sobrecarga de la llamada (~1ns x N dispatches).
+                     * Sin LTO en MinGW el compilador no puede inlinear
+                     * decode_instruction automaticamente desde otra TU. */
+                    #define NEXT_DISPATCH() do { \
+                        if (__builtin_expect(--instance->reductions_remaining == 0, 0)) \
+                            goto BATCH_END; \
+                        const uint64_t _pc = instance->registers.rip.raw(); \
+                        DecodedInstr *_c = &instance->icache[icache_index(_pc)]; \
+                        if (__builtin_expect( \
+                              _c->pc == _pc && instance->decoded_ptr != nullptr, 1)) { \
+                            instance->decoded_ptr = _c; \
+                        } else { \
+                            decode_instruction(instance); \
+                        } \
+                        d = instance->decoded_ptr; \
+                        fl_inl = d->flags_info; \
+                        dispatch_idx = (fl_inl.is_not_extended == 0x00) \
+                                       ? (0x100u | fl_inl.opcode_index) \
+                                       : fl_inl.is_not_extended; \
+                        goto *dispatch_table[dispatch_idx]; \
+                    } while (0)
+
+                    /* ===================== HANDLERS FAST PATH ===================== */
+
+                    L_MOV_RR: {
+                        if (fl_inl.mode != 3 || fl_inl._signed_instruct != 0) goto L_SLOW;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        instance->registers.regs[r1].qword(
+                            instance->registers.regs[r2].qword());
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_MOV_RI: {
+                        if (fl_inl.mode != 3 || fl_inl.direction != 0
+                         || fl_inl._signed_instruct != 0) goto L_SLOW;
+                        const uint8_t r = d->data_instruction.inmmed_data.reg;
+                        instance->registers.regs[r].qword(
+                            d->data_instruction.inmmed_data.inmmed);
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_ADD_RR: {
+                        if (fl_inl.mode != 3) goto L_SLOW;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        const uint64_t a = regs[r1].qword();
+                        const uint64_t b = regs[r2].qword();
+                        const uint64_t res = a + b;
+                        regs[r1].qword(res);
+                        fl.ZF = (res == 0);
+                        fl.SF = (int64_t)res < 0;
+                        if (fl_inl._signed_instruct) {
+                            fl.OF = (((int64_t)a ^ (int64_t)res) &
+                                     ((int64_t)b ^ (int64_t)res)) < 0;
+                            fl.CF = 0;
+                        } else {
+                            fl.CF = res < a;
+                            fl.OF = 0;
+                        }
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_SUB_RR: {
+                        if (fl_inl.mode != 3) goto L_SLOW;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        const uint64_t a = regs[r1].qword();
+                        const uint64_t b = regs[r2].qword();
+                        const uint64_t res = a - b;
+                        regs[r1].qword(res);
+                        fl.ZF = (res == 0);
+                        fl.SF = (int64_t)res < 0;
+                        if (fl_inl._signed_instruct) {
+                            fl.OF = (((int64_t)a ^ (int64_t)b) &
+                                     ((int64_t)a ^ (int64_t)res)) < 0;
+                            fl.CF = 0;
+                        } else {
+                            fl.CF = a < b;
+                            fl.OF = 0;
+                        }
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_CMP_RR: {
+                        if (fl_inl.mode != 3) goto L_SLOW;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        const uint64_t a = regs[r1].qword();
+                        const uint64_t b = regs[r2].qword();
+                        const uint64_t res = a - b;
+                        fl.ZF = (res == 0);
+                        fl.SF = (int64_t)res < 0;
+                        if (fl_inl._signed_instruct) {
+                            fl.OF = (((int64_t)a ^ (int64_t)b) &
+                                     ((int64_t)a ^ (int64_t)res)) < 0;
+                            fl.CF = 0;
+                        } else {
+                            fl.CF = a < b;
+                            fl.OF = 0;
+                        }
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_AND_RR: {
+                        if (fl_inl.mode != 3) goto L_SLOW;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        const uint64_t res = regs[r1].qword() & regs[r2].qword();
+                        regs[r1].qword(res);
+                        fl.ZF = (res == 0); fl.SF = (int64_t)res < 0;
+                        fl.CF = 0; fl.OF = 0;
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_OR_RR: {
+                        if (fl_inl.mode != 3) goto L_SLOW;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        const uint64_t res = regs[r1].qword() | regs[r2].qword();
+                        regs[r1].qword(res);
+                        fl.ZF = (res == 0); fl.SF = (int64_t)res < 0;
+                        fl.CF = 0; fl.OF = 0;
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_XOR_RR: {
+                        if (fl_inl.mode != 3) goto L_SLOW;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint8_t r1 = d->data_instruction.reg_data.reg1;
+                        const uint8_t r2 = d->data_instruction.reg_data.reg2;
+                        const uint64_t res = regs[r1].qword() ^ regs[r2].qword();
+                        regs[r1].qword(res);
+                        fl.ZF = (res == 0); fl.SF = (int64_t)res < 0;
+                        fl.CF = 0; fl.OF = 0;
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_CMPJMP_S:
+                    L_CMPJMP_U: {
+                        const auto &sd = d->data_instruction.static_data;
+                        auto &regs2 = instance->registers.regs;
+                        auto &fl2   = instance->registers.flags.bits;
+                        const uint64_t a = regs2[sd.r0].qword();
+                        const uint64_t b = regs2[sd.r1].qword();
+                        const uint64_t res = a - b;
+                        fl2.ZF = (res == 0);
+                        fl2.SF = static_cast<int64_t>(res) < 0;
+                        if (fl_inl.opcode_index == 0x68) { // signed
+                            fl2.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
+                                      (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0;
+                            fl2.CF = 0;
+                        } else { // unsigned (0x69)
+                            fl2.CF = a < b;
+                            fl2.OF = 0;
+                        }
+                        const uint8_t cond = static_cast<uint8_t>(sd._pad);
+                        bool taken;
+                        switch (cond) {
+                            case 0x00: taken = (fl2.ZF == 1); break;
+                            case 0x01: taken = (fl2.ZF == 0); break;
+                            case 0x02: taken = (fl2.CF == 1); break;
+                            case 0x03: taken = (fl2.CF == 0); break;
+                            case 0x04: taken = (fl2.SF == 1); break;
+                            case 0x05: taken = (fl2.SF == 0); break;
+                            case 0x06: taken = (fl2.OF == 1); break;
+                            case 0x07: taken = (fl2.OF == 0); break;
+                            case 0x08: taken = (fl2.CF == 0 && fl2.ZF == 0); break;
+                            case 0x09: taken = (fl2.CF == 1 || fl2.ZF == 1); break;
+                            case 0x0A: taken = (fl2.SF == fl2.OF); break;
+                            case 0x0B: taken = (fl2.SF != fl2.OF); break;
+                            case 0x0C: taken = (fl2.ZF == 0 && fl2.SF == fl2.OF); break;
+                            case 0x0D: taken = (fl2.ZF == 1 || fl2.SF != fl2.OF); break;
+                            default:   taken = true; break;
+                        }
+                        if (taken) {
+                            instance->registers.rip.qword(static_cast<uint64_t>(sd.offset));
+                        } else {
+                            instance->registers.rip.qword(
+                                instance->registers.rip.raw() + fl_inl.size_instr);
+                        }
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    L_JCC: {
+                        const uint8_t  cond = d->data_instruction.inmmed_data.reg;
+                        const uint64_t addr = d->data_instruction.inmmed_data.inmmed;
+                        const auto    &fl   = instance->registers.flags.bits;
+                        bool taken;
+                        switch (cond) {
+                            case 0x00: taken = (fl.ZF == 1); break;
+                            case 0x01: taken = (fl.ZF == 0); break;
+                            case 0x02: taken = (fl.CF == 1); break;
+                            case 0x03: taken = (fl.CF == 0); break;
+                            case 0x04: taken = (fl.SF == 1); break;
+                            case 0x05: taken = (fl.SF == 0); break;
+                            case 0x06: taken = (fl.OF == 1); break;
+                            case 0x07: taken = (fl.OF == 0); break;
+                            case 0x08: taken = (fl.CF == 0 && fl.ZF == 0); break;
+                            case 0x09: taken = (fl.CF == 1 || fl.ZF == 1); break;
+                            case 0x0A: taken = (fl.SF == fl.OF); break;
+                            case 0x0B: taken = (fl.SF != fl.OF); break;
+                            case 0x0C: taken = (fl.ZF == 0 && fl.SF == fl.OF); break;
+                            case 0x0D: taken = (fl.ZF == 1 || fl.SF != fl.OF); break;
+                            default:   taken = true; break;
+                        }
+                        if (taken) {
+                            instance->registers.rip.qword(addr);
+                        } else {
+                            instance->registers.rip.qword(
+                                instance->registers.rip.raw() + fl_inl.size_instr);
+                        }
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    /* Super-instruccion ALU 3-operandos.  Una sola entrada
+                     * para los 9 opcodes (0x73-0x7B): switch interno por
+                     * opcode_index.  Convention B (decode_instr_raw_bytes):
+                     *   byte2 (reg1) = (r_src1<<4) | r_dst
+                     *   byte3 (reg2) = (r_src2<<4) | flags (low=0) */
+                    L_ALU3: {
+                        const uint8_t b2     = d->data_instruction.reg_data.reg1;
+                        const uint8_t b3     = d->data_instruction.reg_data.reg2;
+                        const uint8_t r_dst  = b2 & 0x0F;
+                        const uint8_t r_src1 = (b2 >> 4) & 0x0F;
+                        const uint8_t r_src2 = (b3 >> 4) & 0x0F;
+                        auto &regs = instance->registers.regs;
+                        auto &fl   = instance->registers.flags.bits;
+                        const uint64_t a = regs[r_src1].qword();
+                        const uint64_t b = regs[r_src2].qword();
+                        uint64_t res;
+                        switch (fl_inl.opcode_index) {
+                            case 0x73: /* adds3 */
+                                res = a + b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(res)) &
+                                         (static_cast<int64_t>(b) ^ static_cast<int64_t>(res))) < 0;
+                                fl.CF = 0;
+                                break;
+                            case 0x76: /* addu3 */
+                                res = a + b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = res < a;
+                                fl.OF = 0;
+                                break;
+                            case 0x74: /* subs3 */
+                                res = a - b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.OF = ((static_cast<int64_t>(a) ^ static_cast<int64_t>(b)) &
+                                         (static_cast<int64_t>(a) ^ static_cast<int64_t>(res))) < 0;
+                                fl.CF = 0;
+                                break;
+                            case 0x77: /* subu3 */
+                                res = a - b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = a < b;
+                                fl.OF = 0;
+                                break;
+                            case 0x75: /* muls3 */
+                                res = static_cast<uint64_t>(
+                                    static_cast<int64_t>(a) * static_cast<int64_t>(b));
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            case 0x78: /* mulu3 */
+                                res = a * b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            case 0x79: /* and3 */
+                                res = a & b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            case 0x7A: /* or3 */
+                                res = a | b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            case 0x7B: /* xor3 */
+                                res = a ^ b;
+                                regs[r_dst].qword(res);
+                                fl.ZF = (res == 0);
+                                fl.SF = static_cast<int64_t>(res) < 0;
+                                fl.CF = 0; fl.OF = 0;
+                                break;
+                            default:
+                                goto L_SLOW;
+                        }
+                        instance->registers.rip.qword(
+                            instance->registers.rip.raw() + fl_inl.size_instr);
+                        ++profiler_instr_counter;
+                        NEXT_DISPATCH();
+                    }
+
+                    /* ===================== SLOW PATH ===================== */
+                    L_SLOW: {
+                        vm_event evt;
+                        if (__builtin_expect(d->exec_cached != nullptr, 1)) {
+                            d->exec_cached(instance, *d);
+                            if (__builtin_expect(d->flags_info.blocking, 0)) {
+                                evt = EVT_IO_WAIT;
+                            } else {
+                                if (!d->flags_info.did_jump) {
+                                    instance->registers.rip.qword(
+                                        instance->registers.rip.raw()
+                                        + d->flags_info.size_instr);
+                                } else {
+                                    d->flags_info.did_jump = false;
+                                }
+                                ++profiler_instr_counter;
+                                evt = EVT_EXEC_DONE;
+                            }
+                        } else {
+                            on_event(EVT_HALT);
+                            evt = EVT_HALT;
+                        }
+                        instance->reductions_remaining--;
+
+                        if (__builtin_expect(evt == EVT_EXEC_DONE, 1)) {
+                            if (instance->reductions_remaining == 0) goto BATCH_END;
+                            {
+                                const uint64_t _pc = instance->registers.rip.raw();
+                                DecodedInstr *_c = &instance->icache[icache_index(_pc)];
+                                if (__builtin_expect(
+                                      _c->pc == _pc && instance->decoded_ptr != nullptr, 1)) {
+                                    instance->decoded_ptr = _c;
+                                } else {
+                                    decode_instruction(instance);
+                                }
+                            }
+                            d = instance->decoded_ptr;
+                            fl_inl = d->flags_info;
+                            dispatch_idx = (fl_inl.is_not_extended == 0x00)
+                                           ? (0x100u | fl_inl.opcode_index)
+                                           : fl_inl.is_not_extended;
+                            goto *dispatch_table[dispatch_idx];
+                        }
+
+                        /* HALT / DEAD: salir del dispatch chain con cleanup. */
+                        if (instance->state.load(std::memory_order_relaxed) == HALT
+                         || instance->state.load(std::memory_order_relaxed) == DEAD) {
+                            alive_count--;
+                            DIST_DBG("SCHED %u: proceso PID=(sched=%u local=%llu) -> %s  "
+                                     "r0=%llu err=%d tsc=%llu PC=0x%llX",
+                                     id_scheduler,
+                                     instance->pid.scheduler_id,
+                                     (unsigned long long)instance->pid.local_pid,
+                                     instance->state == HALT ? "HALT" : "DEAD",
+                                     (unsigned long long)instance->registers.regs[0].qword(),
+                                     (int)instance->err_thread,
+                                     (unsigned long long)instance->tsc,
+                                     (unsigned long long)instance->registers.rip.raw());
+                            if (instance->rspawn_future_id != 0 &&
+                                instance->rspawn_origin_node != 0xFFFFFFFFu &&
+                                vm_reference.dist_runtime) {
+                                vm_reference.dist_runtime->notify_rspawn_halt(instance);
+                            }
+                            instance = nullptr;
+                            goto BATCH_END;
+                        }
+
+                        /* WAIT_IO genuino: registro + wake_pending double-check. */
+                        DIST_DBG("SCHED %u: proceso PID=(sched=%u local=%llu) -> WAIT_IO "
+                                 "tsc=%llu PC=0x%llX err=%d",
+                                 id_scheduler,
+                                 instance->pid.scheduler_id,
+                                 (unsigned long long)instance->pid.local_pid,
+                                 (unsigned long long)instance->tsc,
+                                 (unsigned long long)instance->registers.rip.raw(),
+                                 (int)instance->err_thread);
+                        {
+                            vm_state expected = EXECUTE;
+                            instance->state.compare_exchange_strong(
+                                expected, WAIT_IO,
+                                std::memory_order_acq_rel,
+                                std::memory_order_acquire);
+                            if (instance->wake_pending.exchange(false,
+                                    std::memory_order_acq_rel)) {
+                                vm_state cur = instance->state.load(
+                                    std::memory_order_acquire);
+                                if (cur == WAIT_IO || cur == BLOCKED) {
+                                    instance->state.store(READY,
+                                        std::memory_order_release);
+                                    std::lock_guard<std::mutex> lock(queue_mutex);
+                                    ready_queue.push_back(instance);
+                                }
+                            }
+                        }
+                        instance = nullptr;
+                        goto BATCH_END;
+                    }
+
+                    BATCH_END: ;
+                    #undef NEXT_DISPATCH
+                }
+                /* DEAD CODE STUB BELOW: el codigo entre aqui y `} else {`
+                 * (slow path FSM hooks) son los restos del while+switch viejo
+                 * que ya estan reemplazados por el threaded dispatch arriba.
+                 * Mantenemos la envolvente `if (false) {...}` para que el
+                 * compilador elimine via DCE sin romper el balance de braces.
+                 * Eliminar completamente requiere un refactor mas grande
+                 * (re-balancear el cierre de `if (!has_hooks)`); deferido.
+                 * El `if (false)` es zero-cost en runtime (eliminado por DCE
+                 * a O2/O3 que es como compilamos). */
+                if (false) {
+                    DecodedInstr *d = instance ? instance->decoded_ptr : nullptr;
+                    auto fl_inl = d->flags_info;
+                    (void)d; (void)fl_inl;
 
                     // Predicate: instruccion extendida i64 SIN special-reg
                     // (s=0 para mov, signed/unsigned para ALU).
@@ -828,6 +1388,8 @@ namespace runtime {
             }
         }
     }
+
+    #pragma GCC diagnostic pop
 
     /**
      * @brief Genera una representacion textual del scheduler para depuracion.

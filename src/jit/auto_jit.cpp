@@ -19,12 +19,14 @@
 #include "jit/jit_compiler.h"
 #include "jit/code_cache.h"
 #include "jit/runtime_entries.h"
+#include "vesta_rt/public.h"
 #include "loader/loader.h"
 #include "loader/oop_types.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
 #include "ir/ssa_ir.h"
+#include <cstring>
 
 #include <capstone/capstone.h>
 
@@ -231,6 +233,70 @@ namespace jit {
                 return it == st_ptr->end() ? 0 : it->second;
             };
         }
+        /* Resolver native fn (CALLN): obtener acceso al FFI via el
+         * Loader del VM owning. */
+        /* IC slot reservation: aloca 16 bytes en el code cache (mismo
+         * pool RWX) y los zero-init.  El JIT-eated codigo lee/escribe
+         * estos bytes pero no los ejecuta. */
+        CodeCache *cc_ptr = g_code_cache;
+        mc_opts.reserve_ic_slot = [cc_ptr]() -> uint64_t {
+            uint8_t *slot = cc_ptr->alloc(16, 16);
+            if (slot) {
+                slot[0] = slot[1] = slot[2] = slot[3] = 0;
+                slot[4] = slot[5] = slot[6] = slot[7] = 0;
+                slot[8] = slot[9] = slot[10] = slot[11] = 0;
+                slot[12] = slot[13] = slot[14] = slot[15] = 0;
+            }
+            return reinterpret_cast<uint64_t>(slot);
+        };
+        ffi::FFI *ffi_ptr = &owning_vm.loader_public.ffi_loader;
+        auto native_resolver = [ffi_ptr](const std::string &name) -> uint64_t {
+            size_t colon = name.find(':');
+            if (colon == std::string::npos) return 0;
+            std::string lib  = name.substr(0, colon);
+            std::string func = name.substr(colon + 1);
+            try {
+                void *mod = ffi_ptr->load_native_module(lib);
+                if (!mod) return 0;
+                void *fn = ffi_ptr->resolve_native_symbol(mod, func);
+                return reinterpret_cast<uint64_t>(fn);
+            } catch (...) {
+                return 0;
+            }
+        };
+        mc_opts.resolve_native_fn = native_resolver;
+        /* lectura de vm_mem en compile-time para inlining.
+         * Permite que el JIT lea el valor cacheado en @c s_<X>
+         * (typically @c ClassInfo*) durante el compile de @c __new_<X>
+         * y emita @c mov rN, imm64 directo en lugar de @c vrt_vm_read_u64
+         * en cada iteracion.  El proceso (vm) tiene el static_data del
+         * .velb ya cargado al momento del JIT compile (poblado por
+         * @c __module_init durante el arranque). */
+        runtime::ProcessVM *proc_for_read = vm;
+        mc_opts.read_vmem_u64 = [proc_for_read](uint64_t vaddr) -> uint64_t {
+            try {
+                return proc_for_read->vm_mem.read_u64(vaddr);
+            } catch (...) {
+                return 0;
+            }
+        };
+        /* offsets desde @c ProcessVM* hacia los punteros
+         * @c nursery_bump_ y @c nursery_end_ del @c GcHeap embebido.
+         * Se computan en runtime via aritmetica de direcciones porque
+         * @c GcHeap NO es standard-layout (referencias + vector).  Una
+         * vez computados, el JIT los embebe como disp32 en las
+         * instrucciones x86-64 del bump-pointer inline. */
+        const int64_t nb_off = reinterpret_cast<int64_t>(&proc_for_read->gc_heap.nursery_bump_)
+                             - reinterpret_cast<int64_t>(proc_for_read);
+        const int64_t ne_off = reinterpret_cast<int64_t>(&proc_for_read->gc_heap.nursery_end_)
+                             - reinterpret_cast<int64_t>(proc_for_read);
+        if (nb_off >= INT32_MIN && nb_off <= INT32_MAX
+         && ne_off >= INT32_MIN && ne_off <= INT32_MAX) {
+            mc_opts.nursery_bump_offset = static_cast<int32_t>(nb_off);
+            mc_opts.nursery_end_offset  = static_cast<int32_t>(ne_off);
+            mc_opts.register_alloc_addr = reinterpret_cast<uint64_t>(
+                &vrt_register_alloc);
+        }
         /* Resolver user-fns: para evitar recursion arbitraria con cycles,
          * usamos cache global g_eager_cache + resolver simple no-recursive
          * (intenta lookup en cache; si no, intenta eager compile de la
@@ -239,7 +305,12 @@ namespace jit {
             const auto *lk_ptr = owning_lookup;
             const auto *fn_ptr = owning_funcs;
             const auto *st_ptr2 = owning_symtab;
-            mc_opts.resolve_user_fn = [lk_ptr, fn_ptr, st_ptr2](const std::string &n) -> uint64_t {
+            auto ic_reserver_mc = mc_opts.reserve_ic_slot;
+            auto vmem_reader_mc = mc_opts.read_vmem_u64;
+            const int32_t nb_off_mc = mc_opts.nursery_bump_offset;
+            const int32_t ne_off_mc = mc_opts.nursery_end_offset;
+            const uint64_t reg_alloc_mc = mc_opts.register_alloc_addr;
+            mc_opts.resolve_user_fn = [lk_ptr, fn_ptr, st_ptr2, native_resolver, ic_reserver_mc, vmem_reader_mc, nb_off_mc, ne_off_mc, reg_alloc_mc](const std::string &n) -> uint64_t {
                 auto cit = g_eager_cache.find(n);
                 if (cit != g_eager_cache.end()) {
                     if (cit->second == EAGER_IN_PROGRESS) return 0;
@@ -264,6 +335,12 @@ namespace jit {
                         return i2 == sp->end() ? 0 : i2->second;
                     };
                 }
+                child_opts.resolve_native_fn = native_resolver;
+                child_opts.reserve_ic_slot = ic_reserver_mc;
+                child_opts.read_vmem_u64 = vmem_reader_mc;
+                child_opts.nursery_bump_offset = nb_off_mc;
+                child_opts.nursery_end_offset  = ne_off_mc;
+                child_opts.register_alloc_addr = reg_alloc_mc;
                 CompileResult cres = g_compiler->compile_with_opts(child_ir, child_opts);
                 const uint64_t addr = cres.fn ? reinterpret_cast<uint64_t>(cres.fn) : 0;
                 g_eager_cache[n] = addr;
@@ -331,7 +408,9 @@ namespace jit {
         const ir::IrFunction &ir_fn,
         const std::unordered_map<std::string, size_t> *ir_lookup,
         const std::vector<ir::IrFunction> *ir_functions,
-        const std::unordered_map<std::string, uint64_t> *symbol_table) {
+        const std::unordered_map<std::string, uint64_t> *symbol_table,
+        std::function<uint64_t(const std::string &)> resolve_native_fn,
+        std::function<uint64_t(uint64_t)> read_vmem_u64) {
         /* Init lazy de threshold desde env (1 vez por proceso). */
         std::call_once(g_env_init_flag, init_threshold_from_env);
 
@@ -391,7 +470,13 @@ namespace jit {
              * la recursion pueda referenciar el mismo callback en cada
              * nivel.  Esto permite resolucion arbitrariamente profunda
              * sin perder el callback. */
-            *resolver_holder = [lookup_ptr, funcs_ptr, resolver_holder, sym_resolver]
+            CodeCache *cc_for_ic = g_code_cache;
+            auto ic_reserver = [cc_for_ic]() -> uint64_t {
+                uint8_t *slot = cc_for_ic->alloc(16, 16);
+                if (slot) std::memset(slot, 0, 16);
+                return reinterpret_cast<uint64_t>(slot);
+            };
+            *resolver_holder = [lookup_ptr, funcs_ptr, resolver_holder, sym_resolver, resolve_native_fn, ic_reserver, read_vmem_u64]
                                (const std::string &name) -> uint64_t {
                 /* Chequear cache primero. */
                 auto cit = g_eager_cache.find(name);
@@ -419,6 +504,9 @@ namespace jit {
                     g_runtime_entries->safepoint_handler);
                 opts.resolve_user_fn = *resolver_holder;  /* SAME resolver */
                 opts.resolve_symbol  = sym_resolver;      /* propagar Phase D.3-H */
+                opts.resolve_native_fn = resolve_native_fn;  /* propagar CALLN resolver */
+                opts.reserve_ic_slot = ic_reserver;          /* IC slots */
+                opts.read_vmem_u64 = read_vmem_u64;          /* Phase D.7.opt inline */
                 CompileResult cres = g_compiler->compile_with_opts(child_ir, opts);
                 const uint64_t addr = cres.fn ? reinterpret_cast<uint64_t>(cres.fn) : 0;
                 g_eager_cache[name] = addr;
@@ -449,6 +537,16 @@ namespace jit {
             g_runtime_entries->safepoint_handler);
         top_opts.resolve_user_fn = resolver;
         top_opts.resolve_symbol  = sym_resolver;
+        top_opts.resolve_native_fn = resolve_native_fn;
+        top_opts.read_vmem_u64 = read_vmem_u64;
+        {
+            CodeCache *cc_top = g_code_cache;
+            top_opts.reserve_ic_slot = [cc_top]() -> uint64_t {
+                uint8_t *slot = cc_top->alloc(16, 16);
+                if (slot) std::memset(slot, 0, 16);
+                return reinterpret_cast<uint64_t>(slot);
+            };
+        }
 
         /* Marcar IN_PROGRESS antes de compilar para detectar self-recursion. */
         if (!ir_fn.name.empty()) {
