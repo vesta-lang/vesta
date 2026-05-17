@@ -350,6 +350,39 @@ namespace Assembly::Bytecode {
          */
         {"mvtake",     {{0x00, 0x72, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
 
+        /* --- Super-instrucciones ALU 3-operandos (0x73-0x7B) ---
+         *  Combinan `mov rd, rs1; OP rd, rs2` en una sola instruccion VM.
+         *  Reduce dispatch + decode para el patron mas frecuente del 2-address
+         *  codegen cuando el regalloc no puede coalescer dst con src1.
+         *
+         *  Encoding FIXED_4: [0x00][opcode2][byte2][byte3]
+         *      byte2 = (r_src1 << 4) | r_dst
+         *      byte3 = (r_src2 << 4) | 0  (flags reservados)
+         *
+         *  Opcodes 0x73-0x75: signed (adds3, subs3, muls3).
+         *  Opcodes 0x76-0x78: unsigned (addu3, subu3, mulu3).
+         *  Opcodes 0x79-0x7B: bitwise (and3, or3, xor3) -- sin signo.
+         */
+        {"adds3", {{0x00, 0x73, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"subs3", {{0x00, 0x74, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"muls3", {{0x00, 0x75, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"addu3", {{0x00, 0x76, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"subu3", {{0x00, 0x77, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"mulu3", {{0x00, 0x78, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"and3",  {{0x00, 0x79, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"or3",   {{0x00, 0x7A, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+        {"xor3",  {{0x00, 0x7B, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_alu3}}},
+
+        /* --- Super-instruccion LOAD zero-extend (0x7C VM, 0x7D HOST) ---
+         *  loadz  rd_sized, r_src_ptr   - carga N-bit desde vm_mem, zero-extiende a 64b.
+         *  loadzh rd_sized, r_src_ptr   - igual pero desde memoria HOST.
+         *  Sustituye el patron `mov rd,0 + mov rd_sized,[rs]` (10 bytes -> 4 bytes,
+         *  2 instrucciones VM -> 1).  N se infiere del tamano del registro destino
+         *  (r11=64b, r11d=32b, r11w=16b, r11b=8b).
+         */
+        {"loadz",  {{0x00, 0x7C, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_loadz}}},
+        {"loadzh", {{0x00, 0x7D, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_loadz}}},
+
         /* --- Monitor / sincronizacion (0x35-0x39) ---
          *  monenter r_handle  -> adquiere el monitor del objeto GC
          *  monexit  r_handle  -> libera el monitor del objeto GC

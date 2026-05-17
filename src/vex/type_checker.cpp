@@ -1336,6 +1336,7 @@ namespace vex {
                     ClassLayout empty;
                     empty.name         = c->name;
                     empty.is_interface = c->is_interface;
+                    empty.is_aspect    = c->is_aspect;
                     class_layouts_.emplace(c->name, std::move(empty));
                 }
             } else if (decl->kind == ast::NodeKind::EnumDecl) {
@@ -3630,7 +3631,62 @@ namespace vex {
                         return Type{};
                     }
                 }
-                return Type{promote_arith(tl.kind, tr.kind)};
+                /* Narrowing de literales enteros 2026-05-16: si UN operando es
+                 * un IntLit (default i64) y el otro tiene un tipo entero
+                 * estrecho (i32/i16/i8/u32/u16/u8), y el literal CABE en ese
+                 * tipo, narrow el literal al tipo del otro.  Esto evita que
+                 * `i32 + 1` se baje como sext.i64 + add.i64 + trunc.i32
+                 * cuando puede ser add.i32 directo.
+                 *
+                 * Beneficio: el hot loop tipico (counter i32 += 1) baja a
+                 * `add.i32` puro en lugar de la cadena sext+add+trunc.  Cada
+                 * iteracion elimina 4 instrucciones IR (-> 4-7 instr maquina).
+                 */
+                auto narrow_int_lit_to = [&](ast::Expr *operand,
+                                              PrimitiveKind target) -> bool {
+                    if (!operand) return false;
+                    if (operand->kind != ast::NodeKind::IntLitExpr) return false;
+                    if (!is_integral(target)) return false;
+                    auto *il = static_cast<ast::IntLitExpr *>(operand);
+                    const int64_t v = static_cast<int64_t>(il->value);
+                    bool fits = false;
+                    switch (target) {
+                        case PrimitiveKind::I8:
+                            fits = v >= INT8_MIN && v <= INT8_MAX; break;
+                        case PrimitiveKind::I16:
+                            fits = v >= INT16_MIN && v <= INT16_MAX; break;
+                        case PrimitiveKind::I32:
+                            fits = v >= INT32_MIN && v <= INT32_MAX; break;
+                        case PrimitiveKind::I64:
+                            fits = true; break;
+                        case PrimitiveKind::U8:
+                            fits = v >= 0 && v <= 0xFF; break;
+                        case PrimitiveKind::U16:
+                            fits = v >= 0 && v <= 0xFFFF; break;
+                        case PrimitiveKind::U32:
+                            fits = v >= 0 && static_cast<uint64_t>(v) <= 0xFFFFFFFFULL; break;
+                        case PrimitiveKind::U64:
+                            fits = v >= 0; break;
+                        default:
+                            return false;
+                    }
+                    if (!fits) return false;
+                    /* Modificar el result_type del literal in-place. */
+                    il->result_type = Type{target};
+                    return true;
+                };
+                Type adj_l = tl;
+                Type adj_r = tr;
+                /* Si lhs es IntLit y rhs es entero estrecho que lo contiene. */
+                if (is_integral(tl.kind) && is_integral(tr.kind)
+                 && tl.kind != tr.kind) {
+                    if (narrow_int_lit_to(e->lhs.get(), tr.kind)) {
+                        adj_l = tr;
+                    } else if (narrow_int_lit_to(e->rhs.get(), tl.kind)) {
+                        adj_r = tl;
+                    }
+                }
+                return Type{promote_arith(adj_l.kind, adj_r.kind)};
             }
             case ast::BinOp::Eq:
             case ast::BinOp::Neq:

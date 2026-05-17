@@ -50,7 +50,9 @@
 
 #include <cctype>
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -400,14 +402,23 @@ namespace port {
                 if (ctx.fn && ins.operands[0] < ctx.fn->values.size()) {
                     st = ctx.fn->values[ins.operands[0]].type;
                 }
+                // Preferir el tipo del SSA value destino al de la instr.
+                // Fallback al tipo source si destino tambien queda VOID
+                // (caso comun en bitcasts identity sin tipo explicito).
+                ir::IrType dt = ins.type;
+                if (dt == ir::IrType::VOID
+                 && ctx.fn && ins.dst < ctx.fn->values.size()) {
+                    dt = ctx.fn->values[ins.dst].type;
+                }
+                if (dt == ir::IrType::VOID) dt = st;  /* identity */
                 bool src_is_int = (st != ir::IrType::F32 && st != ir::IrType::F64);
-                bool dst_is_int = (ins.type != ir::IrType::F32 && ins.type != ir::IrType::F64);
+                bool dst_is_int = (dt != ir::IrType::F32 && dt != ir::IrType::F64);
                 std::string e = value_expr(ctx, ins.operands[0]);
                 if (src_is_int && dst_is_int) {
-                    return cast_for(ins.type, false) + e;
+                    return cast_for(dt, false) + e;
                 }
                 // Cross-domain bitcast: usar gcc statement expr.
-                return "({ " + type_for(ins.type, false) + " __tmp; "
+                return "({ " + type_for(dt, false) + " __tmp; "
                        + "__builtin_memcpy(&__tmp, &(" + e + "), sizeof(__tmp)); __tmp; })";
             }
 
@@ -690,10 +701,18 @@ namespace port {
                 ? nullptr : lookup_class(cls->super_name);
             const uint32_t inherited_bound = super ? super->size_bytes : 0;
 
+            size_t emitted_fields = 0;
             for (const auto &f : cls->fields) {
                 if (f.offset < inherited_bound) continue;  // heredado, en __base
                 ctx.out << "    " << type_for(f.type, false) << " "
                         << f.name << ";\n";
+                ++emitted_fields;
+            }
+            // Si la clase es empty (sin fields propios ni heredados), emit
+            // un placeholder para que el struct sea valido en C99.  GCC con
+            // -pedantic rechaza empty structs.
+            if (emitted_fields == 0 && inherited_bound == 0) {
+                ctx.out << "    char __reserved;\n";
             }
             ctx.out << "};\n\n";
         }
@@ -801,6 +820,936 @@ namespace port {
     }
 
     // =========================================================================
+    //  Snippet loader (stdlib/port/c/<name>.v.c)
+    // =========================================================================
+
+    std::string CBackend::resolve_stdlib_dir() const {
+        // Si el usuario especifico un dir explicito, usarlo tal cual.
+        if (!opts_.stdlib_port_c_dir.empty()) return opts_.stdlib_port_c_dir;
+        // Autodetect: probar varios paths comunes desde cwd.  El executable
+        // path no es trivial de obtener cross-platform sin extra deps; los
+        // proyectos Vesta normalmente ejecutan desde el root del repo.
+        static const char *candidates[] = {
+            "stdlib/port/c",
+            "../stdlib/port/c",
+            "../../stdlib/port/c",
+        };
+        for (const char *c : candidates) {
+            std::string path = std::string(c) + "/vex_macros.v.c";
+            std::ifstream test(path.c_str());
+            if (test.good()) {
+                return std::string(c);
+            }
+        }
+        return "stdlib/port/c";  // fallback razonable
+    }
+
+    bool CBackend::emit_snippet(EmitContext &ctx, const std::string &name) {
+        std::string dir = resolve_stdlib_dir();
+        std::string path = dir + "/" + name + ".v.c";
+        std::ifstream in(path.c_str(), std::ios::binary);
+        if (!in.is_open()) {
+            ctx.out << "/* ERROR: snippet " << name << " no encontrado en "
+                    << path << " -- ejecuta desde el root del proyecto o usa "
+                    << "--port-stdlib-dir=PATH */\n";
+            fprintf(stderr, "[port C] snippet '%s' no encontrado en '%s'\n",
+                    name.c_str(), path.c_str());
+            return false;
+        }
+
+        // Parsear cabecera @c "// @vex-freestanding-skip: yes" para decidir
+        // si omitir en modo freestanding.  La cabecera esta en las primeras
+        // ~10 lineas.
+        std::string line;
+        bool freestanding_skip = false;
+        std::ostringstream content;
+        int header_lines = 0;
+        bool in_header = true;
+        while (std::getline(in, line)) {
+            if (in_header && line.size() > 3 && line[0] == '/' && line[1] == '/'
+             && line[2] == ' ' && line[3] == '@') {
+                // Cabecera de metadata.  Parse "@vex-freestanding-skip:".
+                auto pos = line.find("@vex-freestanding-skip:");
+                if (pos != std::string::npos) {
+                    auto val = line.substr(pos + 23);
+                    while (!val.empty() && (val[0] == ' ' || val[0] == '\t')) {
+                        val.erase(0, 1);
+                    }
+                    if (val.substr(0, 3) == "yes") freestanding_skip = true;
+                }
+                header_lines++;
+                continue;
+            }
+            // Primera linea no-header: salimos del modo header.
+            in_header = false;
+            content << line << "\n";
+        }
+
+        if (opts_.freestanding && freestanding_skip) {
+            ctx.out << "/* snippet '" << name << "' omitido en --port-freestanding */\n";
+            return true;
+        }
+
+        ctx.out << "/* === BEGIN snippet: " << name << " === */\n";
+        ctx.out << content.str();
+        ctx.out << "/* === END snippet: " << name << " === */\n\n";
+        return true;
+    }
+
+    // =========================================================================
+    //  Static data + string runtime
+    // =========================================================================
+
+    /**
+     * @brief Detecta si el modulo usa instrumentacion (vex_trace:*).
+     */
+    static bool module_uses_instrument(const ir::IrModule &mod) {
+        for (const auto &fn : mod.functions) {
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    if (ins.op != ir::IrOp::CALLN) continue;
+                    if (ins.func_name.find("vex_trace:enter") != std::string::npos
+                     || ins.func_name.find("vex_trace:leave") != std::string::npos)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @brief Detecta si el modulo usa async (future/await/fulfillhlt/spawn).
+     */
+    static bool module_uses_async(const ir::IrModule &mod) {
+        for (const auto &fn : mod.functions) {
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    if (ins.op == ir::IrOp::SPAWN_ARGS) return true;
+                    if (ins.op != ir::IrOp::RAW_ASM) continue;
+                    const std::string &t = ins.func_name;
+                    if (t.find("future\n") != std::string::npos
+                     || t.find("await {src0}") != std::string::npos
+                     || t.find("fulfillhlt {src0}") != std::string::npos) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @brief Detecta si el modulo usa try/catch (via raw_asm patterns
+     * tryenter/panic/tryleave del frontend Vex).
+     */
+    static bool module_uses_exceptions(const ir::IrModule &mod) {
+        for (const auto &fn : mod.functions) {
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    if (ins.op != ir::IrOp::RAW_ASM) continue;
+                    const std::string &t = ins.func_name;
+                    if (t == "tryenter {src0}, {src1}\n"
+                     || t == "tryleave\n"
+                     || t.find("panic r12") != std::string::npos) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @brief Detecta si el modulo usa strings (literales o ops).
+     */
+    static bool module_uses_strings(const ir::IrModule &mod) {
+        if (!mod.static_data.empty()) return true;
+        for (const auto &fn : mod.functions) {
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    if (ins.op == ir::IrOp::STR_LIT_ADDR) return true;
+                    if (ins.op == ir::IrOp::RAW_ASM
+                     && ins.func_name.compare(0, 3, "str") == 0)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void CBackend::emit_static_data(EmitContext &ctx, const ir::IrModule &mod) {
+        if (mod.static_data.empty()) return;
+        if (opts_.emit_comments) {
+            ctx.out << "/* Literales estaticos del modulo (interned por el frontend Vex) */\n";
+        }
+        for (size_t i = 0; i < mod.static_data.size(); ++i) {
+            const auto &bytes = mod.static_data[i];
+            // VEX_UNUSED silencia warning para literales no referenciados
+            // por el codigo emitido (clases con __module_init omitido).
+            ctx.out << "static VEX_UNUSED const unsigned char __str_" << i
+                    << "[" << bytes.size() + 1 << "] = { ";
+            // Emit byte-by-byte para preservar nuls intermedios y ser estricto
+            // con strict-aliasing/UB.  Sufijo nul para STRRAW + FFI seguro.
+            for (size_t b = 0; b < bytes.size(); ++b) {
+                if (b) ctx.out << ", ";
+                ctx.out << static_cast<unsigned>(bytes[b]);
+            }
+            if (!bytes.empty()) ctx.out << ", ";
+            ctx.out << "0 };\n";
+        }
+        ctx.out << "\n";
+    }
+
+    void CBackend::emit_string_runtime(EmitContext &ctx) {
+        // Runtime VexString embebido inline al inicio del .c.  Cuando el
+        // modulo no usa strings, este bloque NO se emite (cero overhead).
+        // Tracking de leaks: linked list per-thread + warning a stderr al
+        // exit del proceso (registrado via atexit).
+        ctx.out <<
+"/* =========================================================================\n"
+" * Runtime mini VexString embebido (mode=managed).\n"
+" * Layout: header 16 bytes + buffer flexible.  Operaciones de strings\n"
+" * (concat/equals/length/raw/bytes) usan estos helpers.  El usuario debe\n"
+" * llamar vex_str_free(s) cuando termine con un VexString* heap-alloc'd\n"
+" * (los marcados is_owned=1).  Al exit del programa, los unfreed se\n"
+" * reportan a stderr.\n"
+" * =========================================================================\n"
+" */\n"
+"typedef struct VexString {\n"
+"    struct VexString *__prev;\n"
+"    struct VexString *__next;\n"
+"    uint32_t byte_len;\n"
+"    uint32_t code_points;\n"
+"    uint8_t  is_owned;       /* 1=heap (free at vex_str_free), 0=literal */\n"
+"    uint8_t  __pad[3];\n"
+"    char    *data;\n"
+"} VexString;\n"
+"\n"
+"#ifndef VEX_TLS\n"
+"#  if defined(__GNUC__) || defined(__clang__)\n"
+"#    define VEX_TLS __thread\n"
+"#  elif defined(_MSC_VER)\n"
+"#    define VEX_TLS __declspec(thread)\n"
+"#  else\n"
+"#    define VEX_TLS\n"
+"#  endif\n"
+"#endif\n"
+"\n"
+"/* @c __thread + self-reference no funciona en algunos toolchains;\n"
+" * lazy-init en la primera inserccion al list. */\n"
+"static VEX_TLS VexString  vex_str_head_;\n"
+"static VEX_TLS int        vex_str_head_init_ = 0;\n"
+"static VEX_TLS int        vex_str_live_count_ = 0;\n"
+"static int                vex_str_atexit_registered_ = 0;\n"
+"\n"
+"static void vex_str_head_ensure_(void) {\n"
+"    if (!vex_str_head_init_) {\n"
+"        vex_str_head_.__prev = &vex_str_head_;\n"
+"        vex_str_head_.__next = &vex_str_head_;\n"
+"        vex_str_head_init_ = 1;\n"
+"    }\n"
+"}\n"
+"\n"
+"static void vex_str_track_(VexString *s) {\n"
+"    vex_str_head_ensure_();\n"
+"    s->__next = vex_str_head_.__next;\n"
+"    s->__prev = &vex_str_head_;\n"
+"    vex_str_head_.__next->__prev = s;\n"
+"    vex_str_head_.__next = s;\n"
+"    vex_str_live_count_++;\n"
+"}\n"
+"\n"
+"static void vex_str_untrack_(VexString *s) {\n"
+"    s->__prev->__next = s->__next;\n"
+"    s->__next->__prev = s->__prev;\n"
+"    s->__prev = s->__next = 0;\n"
+"    vex_str_live_count_--;\n"
+"}\n"
+"\n"
+"static void vex_str_atexit_warn_(void) {\n"
+"    if (vex_str_live_count_ > 0) {\n"
+"        fprintf(stderr,\n"
+"          \"[vex] warning: %d VexString blocks leaked at thread exit\\n\",\n"
+"          vex_str_live_count_);\n"
+"    }\n"
+"}\n"
+"\n"
+"static void vex_str_register_atexit_(void) {\n"
+"    if (!vex_str_atexit_registered_) {\n"
+"        vex_str_atexit_registered_ = 1;\n"
+"        atexit(vex_str_atexit_warn_);\n"
+"    }\n"
+"}\n"
+"\n"
+"/* Cuenta code points UTF-8 en un buffer (1 byte por cp ASCII, varios para multi-byte). */\n"
+"static uint32_t vex_str_count_cp_(const char *buf, uint32_t byte_len) {\n"
+"    uint32_t n = 0;\n"
+"    for (uint32_t i = 0; i < byte_len; ) {\n"
+"        unsigned char c = (unsigned char)buf[i];\n"
+"        uint32_t adv = 1;\n"
+"        if      ((c & 0x80) == 0x00) adv = 1;\n"
+"        else if ((c & 0xE0) == 0xC0) adv = 2;\n"
+"        else if ((c & 0xF0) == 0xE0) adv = 3;\n"
+"        else if ((c & 0xF8) == 0xF0) adv = 4;\n"
+"        i += adv;\n"
+"        n++;\n"
+"    }\n"
+"    return n;\n"
+"}\n"
+"\n"
+"/* Crea un VexString desde un literal de @c .rodata. NO trackeado, NO owned. */\n"
+"static VEX_UNUSED VexString *vex_str_from_lit(const char *lit, uint32_t byte_len) {\n"
+"    VexString *s = (VexString*)malloc(sizeof(VexString));\n"
+"    if (!s) return 0;\n"
+"    s->byte_len = byte_len;\n"
+"    s->code_points = vex_str_count_cp_(lit, byte_len);\n"
+"    s->is_owned = 0;\n"
+"    s->data = (char*)lit;\n"
+"    vex_str_track_(s);\n"
+"    vex_str_register_atexit_();\n"
+"    return s;\n"
+"}\n"
+"\n"
+"/* Crea un VexString desde un buffer de bytes (copia los datos). */\n"
+"static VEX_UNUSED VexString *vex_str_make(const char *buf, uint32_t byte_len) {\n"
+"    VexString *s = (VexString*)malloc(sizeof(VexString));\n"
+"    if (!s) return 0;\n"
+"    s->byte_len = byte_len;\n"
+"    s->code_points = vex_str_count_cp_(buf, byte_len);\n"
+"    s->is_owned = 1;\n"
+"    s->data = (char*)malloc(byte_len + 1);\n"
+"    if (!s->data) { free(s); return 0; }\n"
+"    memcpy(s->data, buf, byte_len);\n"
+"    s->data[byte_len] = 0;\n"
+"    vex_str_track_(s);\n"
+"    vex_str_register_atexit_();\n"
+"    return s;\n"
+"}\n"
+"\n"
+"/* Concatena dos strings. Devuelve nuevo VexString owned. */\n"
+"static VEX_UNUSED VexString *vex_str_concat(VexString *a, VexString *b) {\n"
+"    if (!a || !b) return 0;\n"
+"    uint32_t na = a->byte_len, nb = b->byte_len;\n"
+"    char *buf = (char*)malloc(na + nb + 1);\n"
+"    if (!buf) return 0;\n"
+"    memcpy(buf, a->data, na);\n"
+"    memcpy(buf + na, b->data, nb);\n"
+"    buf[na + nb] = 0;\n"
+"    VexString *r = (VexString*)malloc(sizeof(VexString));\n"
+"    if (!r) { free(buf); return 0; }\n"
+"    r->byte_len = na + nb;\n"
+"    r->code_points = a->code_points + b->code_points;\n"
+"    r->is_owned = 1;\n"
+"    r->data = buf;\n"
+"    vex_str_track_(r);\n"
+"    return r;\n"
+"}\n"
+"\n"
+"static VEX_UNUSED int vex_str_eq(VexString *a, VexString *b) {\n"
+"    if (a == b) return 1;\n"
+"    if (!a || !b) return 0;\n"
+"    if (a->byte_len != b->byte_len) return 0;\n"
+"    return memcmp(a->data, b->data, a->byte_len) == 0;\n"
+"}\n"
+"static VEX_UNUSED uint32_t vex_str_len(VexString *s)      { return s ? s->code_points : 0; }\n"
+"static VEX_UNUSED uint32_t vex_str_byte_len(VexString *s) { return s ? s->byte_len    : 0; }\n"
+"static VEX_UNUSED const char *vex_str_raw(VexString *s)   { return s ? s->data : (const char*)\"\"; }\n"
+"\n"
+"/* Libera explicitamente un VexString.  No-op si NULL.  Si es literal\n"
+"   (is_owned=0) solo libera el header (data esta en .rodata).  Si es\n"
+"   owned, libera tambien data. */\n"
+"static VEX_UNUSED void vex_str_free(VexString *s) {\n"
+"    if (!s) return;\n"
+"    vex_str_untrack_(s);\n"
+"    if (s->is_owned) free(s->data);\n"
+"    free(s);\n"
+"}\n"
+"\n";
+    }
+
+    void CBackend::emit_str_lit_addr(EmitContext &ctx,
+                                      ir::IrValueId dst,
+                                      uint64_t imm,
+                                      ir::IrType t) {
+        (void)t;
+        emit_assign_lhs(ctx, dst);
+        ctx.out << "(void*)__str_" << imm << ";\n";
+    }
+
+    // -------- Tabla compartida de reconocimiento raw_asm --------
+    //
+    // Mantenemos las firmas exactas que emite el frontend Vex.  Cualquier
+    // cambio en el lowering (ej. anyadir un atributo de instr) requiere
+    // actualizar esta tabla.  Compartido conceptualmente con el JIT
+    // selector (D.3-G) -- la diferencia es el destino: aqui emit C,
+    // alla emit MachineIR.
+
+    void CBackend::emit_raw_asm(EmitContext &ctx,
+                                  ir::IrValueId dst,
+                                  const std::string &asm_text,
+                                  const std::vector<ir::IrValueId> &operands,
+                                  ir::IrType t) {
+        // El tipo del dst determina como castear el resultado: PTR para
+        // strraw (host buffer) vs I64 para los handles internos.
+        const char *result_cast = (t == ir::IrType::PTR)
+            ? "(void*)" : "(int64_t)(intptr_t)";
+        // Helper para leer un VexString * desde una direccion VM (cuando
+        // el src es un puntero a memoria VM con buffer raw).  Aqui los
+        // strings se construyen siempre desde memoria VM (alloca + store
+        // de literales).  La direccion del buffer apunta al inicio de los
+        // bytes; le pasamos a vex_str_make directamente para que copie.
+
+        auto src = [&](size_t i) -> std::string {
+            if (i >= operands.size()) return "0";
+            return value_expr(ctx, operands[i]);
+        };
+        auto dst_lhs = [&]() {
+            if (dst != ir::IR_NO_VALUE) emit_assign_lhs(ctx, dst);
+            else                         ctx.indent();
+        };
+
+        // strmake {dst}, {src0 buffer_addr}, {src1 byte_len}
+        // El dst en el IR es i64 (handle); en C lo representamos como un
+        // puntero VexString* pero almacenado en int64_t -> cast inline.
+        if (asm_text == "strmake {dst}, {src0}, {src1}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)(intptr_t)vex_str_make((const char*)(intptr_t)"
+                    << src(0) << ", (uint32_t)" << src(1) << ");\n";
+            return;
+        }
+        if (asm_text == "strcat {dst}, {src0}, {src1}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)(intptr_t)vex_str_concat((VexString*)(intptr_t)"
+                    << src(0) << ", (VexString*)(intptr_t)" << src(1) << ");\n";
+            return;
+        }
+        if (asm_text == "strraw {dst}, {src0}\n") {
+            dst_lhs();
+            ctx.out << result_cast << "vex_str_raw((VexString*)(intptr_t)"
+                    << src(0) << ");\n";
+            return;
+        }
+        // strgetbytes {dst}, {src0 str} -> uint32 byte count
+        if (asm_text == "strgetbytes {dst}, {src0}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)vex_str_byte_len((VexString*)(intptr_t)"
+                    << src(0) << ");\n";
+            return;
+        }
+        if (asm_text == "strlen {dst}, {src0}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)vex_str_len((VexString*)(intptr_t)"
+                    << src(0) << ");\n";
+            return;
+        }
+        if (asm_text == "strcmp {dst}, {src0}, {src1}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)(vex_str_eq((VexString*)(intptr_t)" << src(0)
+                    << ", (VexString*)(intptr_t)" << src(1) << ") ? 0 : "
+                    << "memcmp(vex_str_raw((VexString*)(intptr_t)" << src(0)
+                    << "), vex_str_raw((VexString*)(intptr_t)" << src(1)
+                    << "), vex_str_byte_len((VexString*)(intptr_t)" << src(0) << ")));\n";
+            return;
+        }
+        // gchandle {dst}, {src0 host_ptr} -> handle (GC handle; en port C
+        // sin GC, devolvemos el ptr crudo como handle - no requiere lookup
+        // porque no hay HandleTable).
+        if (asm_text == "gchandle {dst}, {src0}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)(intptr_t)" << src(0) << ";\n";
+            return;
+        }
+        // gcderef cur0, {src0 handle}  +  xchg cur0, {dst}  ->  host_ptr
+        if (asm_text == "gcderef cur0, {src0}\nxchg cur0, {dst}\n") {
+            dst_lhs();
+            ctx.out << result_cast << "(intptr_t)" << src(0) << ";\n";
+            return;
+        }
+        // setmethdbg {src0}, {src1}  -> debug info para stack trace (no-op en C).
+        if (asm_text == "setmethdbg {src0}, {src1}\n") {
+            if (opts_.emit_comments) {
+                ctx.indent();
+                ctx.out << "/* setmethdbg no-op en port C */\n";
+            }
+            return;
+        }
+
+        // -------- Try/catch (substring patterns) --------
+        //
+        // El frontend Vex baja try/catch a SECUENCIAS de raw_asm que
+        // emulan la maquinaria de tryenter/throw/tryleave del bytecode.
+        // Pattern-match para reemitirlos en C con setjmp/longjmp +
+        // GCC labels-as-values (&&label + goto *ptr).
+        //
+        // Secuencia esperada por bloque try:
+        //   1. findclass FatalError              -> sentinel @c (void*)1
+        //   2. mov {dst}, @Absolute("code.<fn>_<handler_bb>") -> &&bb_id
+        //   3. tryenter {src0}, {src1}           -> setjmp + push frame
+        //   4. (body) panic                      -> longjmp
+        //   5. (handler) mov {dst}, r0           -> v_dst = vex_exc_value
+        //   6. tryleave                          -> pop frame
+
+        // (1) findclass FatalError.  Devolvemos un sentinel (no usado en C,
+        // pero debe ser non-null para que el codigo posterior siga la rama
+        // de "tipo encontrado").
+        if (asm_text.find("findclass") != std::string::npos
+         && asm_text.find("mov {dst}, r12") != std::string::npos) {
+            dst_lhs();
+            ctx.out << "(void*)1; /* findclass FatalError -> sentinel */\n";
+            return;
+        }
+
+        // (2) Cargar direccion de label de handler:
+        //   mov {dst}, @Absolute("code.<funcname>_<bbname>")
+        // En C: extraer <bbname>, buscar el block_id en la funcion actual,
+        // y emitir &&bb_<id> (labels-as-values GCC).
+        {
+            const std::string MOV_ABS = "mov {dst}, @Absolute(\"";
+            // Encontrar el patron incluso si hay lineas de comentario @c "// ..."
+            // antes -- el frontend Vex prepende a veces un comentario
+            // descriptivo a sus raw_asm.
+            size_t mov_pos = asm_text.find(MOV_ABS);
+            if (mov_pos != std::string::npos) {
+                auto open_q = mov_pos + MOV_ABS.size();
+                auto close_q = asm_text.find('"', open_q);
+                if (close_q != std::string::npos) {
+                    std::string full_label = asm_text.substr(open_q, close_q - open_q);
+                    // Quitar prefix "code." si presente.
+                    const std::string CODE_PFX = "code.";
+                    if (full_label.compare(0, CODE_PFX.size(), CODE_PFX) == 0) {
+                        full_label = full_label.substr(CODE_PFX.size());
+                    }
+                    // Si el resto tiene "<fn>_<bbname>", separamos por el
+                    // nombre de la funcion actual.
+                    std::string bb_target;
+                    if (ctx.fn) {
+                        const std::string &fnname = ctx.fn->name;
+                        if (full_label.compare(0, fnname.size(), fnname) == 0
+                         && full_label.size() > fnname.size()
+                         && full_label[fnname.size()] == '_') {
+                            bb_target = full_label.substr(fnname.size() + 1);
+                        }
+                    }
+                    if (!bb_target.empty() && ctx.fn) {
+                        // Buscar el block con ese nombre.
+                        for (const auto &bb : ctx.fn->blocks) {
+                            if (bb.name == bb_target) {
+                                dst_lhs();
+                                ctx.out << "(void*)&&bb_" << bb.id << ";\n";
+                                return;
+                            }
+                        }
+                    }
+                    // Fallback: literal string -> static data lookup.
+                    // El @Absolute apunta a una etiqueta de @c static_data
+                    // (e.g. code.s_0 para un literal).  En C, los literales
+                    // se exponen como @c __str_<i>.
+                    if (full_label.compare(0, 2, "s_") == 0) {
+                        std::string idx = full_label.substr(2);
+                        dst_lhs();
+                        ctx.out << "(void*)__str_" << idx << ";\n";
+                        return;
+                    }
+                    // Funcion (lambda o user): @Absolute("code.<fn_name>")
+                    // Cast al tipo del dst (i64 o ptr).  Lambdas se nombran
+                    // @c __lambda_<N> y son funciones libres globales.
+                    if (!full_label.empty()) {
+                        dst_lhs();
+                        if (t == ir::IrType::PTR) {
+                            ctx.out << "(void*)&"
+                                    << sanitize_name(full_label) << ";\n";
+                        } else {
+                            ctx.out << "(int64_t)(intptr_t)&"
+                                    << sanitize_name(full_label) << ";\n";
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        // (3) tryenter {src0=handler_ptr}, {src1=type_ptr}.  En C emitimos
+        // setjmp + push frame + on != 0 do goto handler.
+        if (asm_text == "tryenter {src0}, {src1}\n") {
+            ctx.indent();
+            ctx.out << "{\n";
+            ctx.indent_level++;
+            // Inicializacion explicita por campos para evitar
+            // -Wmissing-braces.  El jmp_buf se inicializa via setjmp; aqui
+            // basta con declarar la variable.
+            ctx.indent();
+            ctx.out << "vex_exc_frame __vex_f;\n";
+            ctx.indent();
+            ctx.out << "__vex_f.type_tag = (int64_t)(intptr_t)" << src(1) << ";\n";
+            ctx.indent();
+            ctx.out << "__vex_f.prev = vex_exc_top;\n";
+            ctx.indent();
+            ctx.out << "vex_exc_top = &__vex_f;\n";
+            ctx.indent();
+            ctx.out << "if (setjmp(__vex_f.buf) != 0) {\n";
+            ctx.indent_level++;
+            ctx.indent();
+            ctx.out << "vex_exc_top = __vex_f.prev;\n";
+            ctx.indent();
+            ctx.out << "goto *((void*)(intptr_t)" << src(0) << ");\n";
+            ctx.indent_level--;
+            ctx.indent();
+            ctx.out << "}\n";
+            ctx.indent_level--;
+            ctx.indent();
+            ctx.out << "}\n";
+            return;
+        }
+
+        // (4) catch handler bind:  // catch: bind r0 -> var\nmov {dst}, r0\n
+        // Lee @c vex_exc_value (set por panic).
+        if (asm_text.find("// catch:") != std::string::npos
+         && asm_text.find("mov {dst}, r0") != std::string::npos) {
+            if (dst != ir::IR_NO_VALUE
+             && ctx.tx != nullptr
+             && ctx.tx->use_count(dst) > 0) {
+                emit_assign_lhs(ctx, dst);
+                ctx.out << "(int64_t)vex_exc_value;\n";
+            } else if (opts_.emit_comments) {
+                ctx.indent();
+                ctx.out << "/* catch bind: dst no usado, asignacion suprimida */\n";
+            }
+            return;
+        }
+
+        // (5) panic r12, r11   -> set vex_exc_value + longjmp.  src0=msg_ptr,
+        // src1=len; en port C ignoramos len y guardamos msg como exc_value.
+        if (asm_text.find("panic r12, r11") != std::string::npos) {
+            // panic con mov hardcoded r12/r11 -- no tenemos los SSA values.
+            // El frontend pone los regs directamente.  Recuperamos r12 (msg)
+            // del bloque anterior si esta inmediato; sino emit longjmp con
+            // un mensaje generico.  Detalle: el patron full es:
+            //   mov r12, @Absolute("code.s_N")
+            //   mov r11, <len>
+            //   panic r12, r11
+            // El N del string lo podemos extraer del propio texto.
+            auto pos = asm_text.find("@Absolute(\"code.s_");
+            std::string msg_idx = "0";
+            if (pos != std::string::npos) {
+                pos += std::string("@Absolute(\"code.s_").size();
+                auto end = asm_text.find('"', pos);
+                if (end != std::string::npos) {
+                    msg_idx = asm_text.substr(pos, end - pos);
+                }
+            }
+            ctx.indent();
+            ctx.out << "vex_panic_with_str(__str_" << msg_idx << ");\n";
+            return;
+        }
+
+        // (6) tryleave -> pop frame.
+        if (asm_text == "tryleave\n") {
+            ctx.indent();
+            ctx.out << "if (vex_exc_top) vex_exc_top = vex_exc_top->prev;\n";
+            return;
+        }
+
+        // -------- Optional/Result unwrap (chequeo tag != 0) --------
+        // Si tag == 0 (None), llamamos a vex_throw(1).  Marcamos la rama
+        // como @c __builtin_expect(cond, 0) para que GCC la prediga como
+        // NO tomada -> branch prediction agresiva al fast path.
+        if (asm_text == "unwrap {dst}, {src0}\n") {
+            ctx.indent();
+            if (opts_.aggressive_opt) {
+                ctx.out << "if (__builtin_expect((int64_t)" << src(0)
+                        << " == 0, 0)) {\n";
+            } else {
+                ctx.out << "if ((int64_t)" << src(0) << " == 0) {\n";
+            }
+            ctx.indent_level++;
+            if (!opts_.freestanding) {
+                ctx.indent();
+                ctx.out << "fputs(\"[vex] unwrap of None\\n\", stderr);\n";
+            }
+            ctx.indent();
+            ctx.out << "vex_throw(1);\n";
+            ctx.indent_level--;
+            ctx.indent();
+            ctx.out << "}\n";
+            dst_lhs();
+            ctx.out << "(int64_t)" << src(0) << ";\n";
+            return;
+        }
+        // isnull para referencias nullable (PrimitiveKind class? / unwrap).
+        if (asm_text == "isnull {dst}, {src0}\n") {
+            dst_lhs();
+            ctx.out << "(int64_t)((int64_t)(intptr_t)" << src(0) << " == 0);\n";
+            return;
+        }
+
+        // -------- Async: future / await / fulfillhlt --------
+        // future\nmov {dst}, r0\n  -> vex_future_alloc()
+        if (asm_text.find("future\n") != std::string::npos
+         && asm_text.find("mov {dst}, r0") != std::string::npos) {
+            dst_lhs();
+            ctx.out << "vex_future_alloc();\n";
+            return;
+        }
+        // await {src0}\nmov {dst}, r0\n  -> vex_future_await(src0)
+        if (asm_text.find("await {src0}") != std::string::npos
+         && asm_text.find("mov {dst}, r0") != std::string::npos) {
+            dst_lhs();
+            ctx.out << "vex_future_await(" << src(0) << ");\n";
+            return;
+        }
+        // fulfillhlt {src0}, {src1}  -> fulfill + return (helper async exit)
+        if (asm_text.find("fulfillhlt {src0}, {src1}") != std::string::npos) {
+            ctx.indent();
+            ctx.out << "vex_future_fulfill(" << src(0) << ", " << src(1) << ");\n";
+            ctx.indent();
+            ctx.out << "return;\n";
+            return;
+        }
+
+        // -------- Closures con captura: leer env de R14 --------
+        // El frontend Vex emite "mov {dst}, r14" en el prologue de cada
+        // lambda que captura, para acceder al env_ptr (que llega en R14
+        // segun la calling convention bytecode).  En port C, la firma de
+        // la lambda es @c (void* __vex_env, ...) -> ret asi que basta
+        // exponer @c __vex_env como i64.
+        if (asm_text.find("leer env_ptr de R14") != std::string::npos
+         || asm_text == "mov {dst}, r14\n") {
+            dst_lhs();
+            if (t == ir::IrType::PTR) {
+                ctx.out << "(void*)__vex_env;\n";
+            } else {
+                ctx.out << "(int64_t)(intptr_t)__vex_env;\n";
+            }
+            return;
+        }
+
+        // Fallback: pattern desconocido.  Imprimimos truncado en el
+        // comentario para diagnostico + warning a stderr.
+        std::string preview = asm_text.substr(0, 60);
+        for (auto &c : preview) if (c == '\n') c = ' ';
+        ctx.indent();
+        ctx.out << "/* TODO unsupported raw_asm: \"" << preview;
+        if (asm_text.size() > 60) ctx.out << "...";
+        ctx.out << "\" */\n";
+        if (dst != ir::IR_NO_VALUE) {
+            emit_assign_lhs(ctx, dst);
+            ctx.out << "0;\n";
+        }
+        fprintf(stderr, "[port C] raw_asm no reconocido: \"%s\"\n",
+                preview.c_str());
+    }
+
+    // =========================================================================
+    //  Native call dispatch (CALLN)
+    // =========================================================================
+
+    void CBackend::emit_native_call(EmitContext &ctx,
+                                     ir::IrValueId dst,
+                                     const std::string &lib,
+                                     const std::string &sym,
+                                     const std::vector<ir::IrValueId> &args,
+                                     ir::IrType ret_type) {
+        (void)lib; (void)ret_type;
+        auto src = [&](size_t i) -> std::string {
+            if (i >= args.size()) return "0";
+            return value_expr(ctx, args[i]);
+        };
+
+        // ---- bridge a stdio.h C estandar para los vio_print_* ----
+        // (Asi el .c es standalone sin requerir vesta_io.dll/.so).
+        // vesta_io firma: la mayoria toma (proc_ptr, vm_addr, len) que en
+        // port C se ignora el proc_ptr (no hay ProcessVM).  Para los
+        // print_* simples: vio_print_int(proc, n) ignora proc, imprime n.
+        // Para los print_buf: vio_print_buf(host_ptr, len) -> fwrite stdout.
+
+        // -------- Instrumentacion: vex_trace:enter / vex_trace:exit --------
+        // El frontend emite estas calls con --instrument trace.  Default
+        // bridge: imprime a stderr con indentacion por depth (TLS counter).
+        // El usuario puede override declarando sus propias funciones
+        // @c "void vex_trace_enter(const char*)" y reemplazando este snippet.
+        // Detectar vex_trace por basename del lib path
+        // (puede venir como "vex_trace" o "stdlib/native/runtime/vex_trace").
+        auto basename_eq = [](const std::string &s, const char *base) {
+            size_t pos = s.rfind('/');
+            std::string b = (pos == std::string::npos) ? s : s.substr(pos + 1);
+            return b == base;
+        };
+        if (sym == "enter" && basename_eq(lib, "vex_trace")) {
+            // args: (proc_ptr, name_ptr).  Ignoramos proc_ptr en port C
+            // (no hay VM-proc; el nombre es ya un host_ptr a .rodata).
+            ctx.indent();
+            ctx.out << "vex_trace_enter((const char*)(intptr_t)" << src(1) << ");\n";
+            return;
+        }
+        if (sym == "leave" && basename_eq(lib, "vex_trace")) {
+            // args: (proc_ptr, name_ptr, return_value)
+            ctx.indent();
+            ctx.out << "vex_trace_leave((const char*)(intptr_t)" << src(1)
+                    << ", (int64_t)" << src(2) << ");\n";
+            return;
+        }
+
+        // Helpers de impresion: bridge a fputs/fwrite/printf de stdio.
+        if (sym == "vio_print_newline") {
+            ctx.indent(); ctx.out << "fputc('\\n', stdout);\n"; return;
+        }
+        if (sym == "vio_println_newline") {
+            ctx.indent(); ctx.out << "fputc('\\n', stdout);\n"; return;
+        }
+        if (sym == "vio_flush") {
+            ctx.indent(); ctx.out << "fflush(stdout);\n"; return;
+        }
+        if (sym == "vio_print_buf") {
+            // (host_ptr, byte_len)
+            ctx.indent();
+            ctx.out << "fwrite(" << src(0) << ", 1, (size_t)" << src(1)
+                    << ", stdout);\n";
+            return;
+        }
+        if (sym == "vio_print_cstr") {
+            ctx.indent();
+            ctx.out << "fputs((const char*)" << src(0) << ", stdout);\n";
+            return;
+        }
+        if (sym == "vio_print" || sym == "vio_println") {
+            // (host_ptr) NUL-terminated
+            ctx.indent();
+            ctx.out << "fputs((const char*)" << src(0) << ", stdout);\n";
+            if (sym == "vio_println") {
+                ctx.indent(); ctx.out << "fputc('\\n', stdout);\n";
+            }
+            return;
+        }
+        if (sym == "vio_print_int") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"%lld\", (long long)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_println_int") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"%lld\\n\", (long long)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_print_uint") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"%llu\", (unsigned long long)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_println_uint") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"%llu\\n\", (unsigned long long)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_print_hex") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"0x%llx\", (unsigned long long)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_print_bin" || sym == "vio_print_oct") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"" << (sym == "vio_print_bin" ? "0b%llb" : "0o%llo")
+                    << "\", (unsigned long long)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_print_ptr") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"%p\", (void*)(intptr_t)" << src(0) << ");\n";
+            return;
+        }
+        if (sym == "vio_print_bool") {
+            ctx.indent();
+            ctx.out << "fputs(((" << src(0) << ") ? \"true\" : \"false\"), stdout);\n";
+            return;
+        }
+        if (sym == "vio_print_float") {
+            // bits IEEE 754 como uint64; bitcast a double inline.
+            ctx.indent();
+            ctx.out << "{ union { uint64_t u; double d; } __u_; __u_.u = (uint64_t)"
+                    << src(0) << "; fprintf(stdout, \"%g\", __u_.d); }\n";
+            return;
+        }
+        // vio_print_color(code) -> escape ANSI \x1b[<code>m
+        if (sym == "vio_print_color") {
+            ctx.indent();
+            ctx.out << "fprintf(stdout, \"\\x1b[%lldm\", (long long)" << src(0) << ");\n";
+            return;
+        }
+
+        // ---- vio_*_to_vmbuf (interpolacion: rellena buffer VM, devuelve len) ----
+        // Bridge: usamos snprintf en host memory.  El "buffer VM" es solo un
+        // host_ptr en port C (sin ProcessVM).  Args: (proc, vm_addr, value).
+        // Devolvemos la longitud escrita (sin nul).
+        if (sym == "vio_int_to_vmbuf" || sym == "vio_uint_to_vmbuf"
+         || sym == "vio_hex_to_vmbuf" || sym == "vio_bool_to_vmbuf"
+         || sym == "vio_char_to_vmbuf" || sym == "vio_ptr_to_vmbuf") {
+            if (dst != ir::IR_NO_VALUE) emit_assign_lhs(ctx, dst);
+            else                         ctx.indent();
+            const char *fmt = "%lld";
+            const char *cast = "(long long)";
+            if      (sym == "vio_uint_to_vmbuf") { fmt = "%llu";   cast = "(unsigned long long)"; }
+            else if (sym == "vio_hex_to_vmbuf")  { fmt = "0x%llx"; cast = "(unsigned long long)"; }
+            else if (sym == "vio_bool_to_vmbuf") {
+                // Special: imprime "true"/"false".
+                ctx.out << "(int64_t)snprintf((char*)" << src(1) << ", 32, \"%s\", "
+                        << src(2) << " ? \"true\" : \"false\");\n";
+                return;
+            }
+            else if (sym == "vio_char_to_vmbuf") { fmt = "%c";    cast = "(int)"; }
+            else if (sym == "vio_ptr_to_vmbuf")  { fmt = "%p";    cast = "(void*)(intptr_t)"; }
+            ctx.out << "(int64_t)snprintf((char*)" << src(1) << ", 32, \""
+                    << fmt << "\", " << cast << src(2) << ");\n";
+            return;
+        }
+
+        // ---- vmath_* -> math.h C estandar ----
+        if (sym.compare(0, 6, "vmath_") == 0) {
+            // Cada vmath_* toma bits IEEE 754 como uint64 y devuelve idem.
+            // Mapping a libm: sqrt/pow/floor/ceil/round/fmin/fmax/log/log2/log10/sin/cos/tan/fabs.
+            std::string name = sym.substr(6);
+            if (dst != ir::IR_NO_VALUE) emit_assign_lhs(ctx, dst);
+            else                         ctx.indent();
+            if (name == "abs" || name == "imin" || name == "imax" || name == "clamp") {
+                // Variantes int.
+                if (name == "abs") ctx.out << "(int64_t)((" << src(0) << " < 0) ? -(" << src(0) << ") : (" << src(0) << "));\n";
+                else if (name == "imin") ctx.out << "(int64_t)((" << src(0) << " < " << src(1) << ") ? (" << src(0) << ") : (" << src(1) << "));\n";
+                else if (name == "imax") ctx.out << "(int64_t)((" << src(0) << " > " << src(1) << ") ? (" << src(0) << ") : (" << src(1) << "));\n";
+                else /* clamp */         ctx.out << "(int64_t)((" << src(0) << " < " << src(1) << ") ? (" << src(1) << ") : ((" << src(0) << " > " << src(2) << ") ? (" << src(2) << ") : (" << src(0) << ")));\n";
+                return;
+            }
+            // Float math: bitcast u64 -> double, call libm, bitcast back.
+            std::string fn = name;
+            // Renombrar fmin/fmax (igual nombre en libm).
+            ctx.out << "({ union { uint64_t u; double d; } __a_, __r_; __a_.u = (uint64_t)"
+                    << src(0) << "; ";
+            if (args.size() >= 2) {
+                ctx.out << "union { uint64_t u; double d; } __b_; __b_.u = (uint64_t)"
+                        << src(1) << "; ";
+                ctx.out << "__r_.d = " << fn << "(__a_.d, __b_.d); ";
+            } else {
+                ctx.out << "__r_.d = " << fn << "(__a_.d); ";
+            }
+            ctx.out << "(int64_t)__r_.u; });\n";
+            return;
+        }
+
+        // ---- Fallback: extern declaration + direct call ----
+        // El IR conoce la firma del callee (params + return) -- emit el
+        // tipo de funcion y hace cast inline al pointer.  Lo declaramos
+        // como extern; el usuario debe enlazar @c lib.  Si la lib es una
+        // DLL Windows / .so POSIX, el linker la resuelve via @c -l<lib>
+        // o equivalente.
+        if (dst != ir::IR_NO_VALUE) emit_assign_lhs(ctx, dst);
+        else                         ctx.indent();
+        ctx.out << "/* native call " << lib << ":" << sym << " */ ";
+        ctx.out << sym << "(";
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i) ctx.out << ", ";
+            ctx.out << value_expr(ctx, args[i]);
+        }
+        ctx.out << ");\n";
+    }
+
+    // =========================================================================
     //  Prelude / postamble
     // =========================================================================
 
@@ -814,51 +1763,255 @@ namespace port {
             ctx.out << " */\n\n";
         }
 
-        ctx.out << "#include <stdint.h>\n";
-        ctx.out << "#include <stdlib.h>\n";
-        ctx.out << "#include <string.h>\n";
-        if (opts_.exc == ExcMode::SetJmp) {
-            ctx.out << "#include <setjmp.h>\n";
+        // Detectar features usadas por el modulo para decidir que
+        // snippets cargar y que @c #include emitir.
+        bool uses_strings = module_uses_strings(mod);
+        bool uses_io = false;
+        bool uses_math = false;
+        for (const auto &fn : mod.functions) {
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    if (ins.op != ir::IrOp::CALLN && ins.op != ir::IrOp::CALL) continue;
+                    auto colon = ins.func_name.find(':');
+                    if (colon == std::string::npos) continue;
+                    std::string sym = ins.func_name.substr(colon + 1);
+                    if (sym.compare(0, 4, "vio_") == 0)   uses_io = true;
+                    if (sym.compare(0, 6, "vmath_") == 0) uses_math = true;
+                }
+            }
         }
+        bool uses_exc_inc = module_uses_exceptions(mod);
+        bool uses_inst    = module_uses_instrument(mod);
+        bool uses_unwrap = false;
+        for (const auto &fn : mod.functions) {
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    if (ins.op != ir::IrOp::RAW_ASM) continue;
+                    const std::string &t = ins.func_name;
+                    if (t == "unwrap {dst}, {src0}\n"
+                     || t == "isnull {dst}, {src0}\n") {
+                        uses_unwrap = true;
+                        break;
+                    }
+                }
+                if (uses_unwrap) break;
+            }
+            if (uses_unwrap) break;
+        }
+
+        // CPU target pragmas: habilitar instrucciones extendidas (AVX2/FMA/
+        // BMI2/etc) que GCC use al vectorizar/folding.  Solo emit si el
+        // usuario opto explicitamente via @c --port-arch.  El default es
+        // portable (sin pragmas, GCC infiere por @c -march en CLI).
+        if (!opts_.arch_target.empty()) {
+            const std::string &t = opts_.arch_target;
+            ctx.out << "#if defined(__GNUC__) || defined(__clang__)\n";
+            if (t == "native") {
+                ctx.out << "#  pragma GCC target(\"arch=native\")\n";
+                ctx.out << "#  pragma GCC optimize(\"O3\",\"unroll-loops\",\"tree-vectorize\")\n";
+            } else if (t == "x86-64-v2") {
+                ctx.out << "#  pragma GCC target(\"sse4.2,popcnt\")\n";
+            } else if (t == "x86-64-v3") {
+                ctx.out << "#  pragma GCC target(\"avx2,fma,bmi,bmi2,lzcnt\")\n";
+                ctx.out << "#  pragma GCC optimize(\"O3\",\"unroll-loops\",\"tree-vectorize\")\n";
+            } else if (t == "x86-64-v4") {
+                ctx.out << "#  pragma GCC target(\"avx512f,avx512dq,avx512cd,avx512bw,avx512vl,bmi2,fma\")\n";
+                ctx.out << "#  pragma GCC optimize(\"O3\",\"unroll-loops\",\"tree-vectorize\")\n";
+            } else {
+                ctx.out << "/* WARNING: --port-arch valor desconocido '"
+                        << t << "', usando portable */\n";
+            }
+            ctx.out << "#endif\n\n";
+        }
+
+        // Emit los @c #include necesarios.  Modo freestanding: nada
+        // automatico.  El usuario los pondra en su propio codigo si los
+        // necesita.
+        bool uses_async = module_uses_async(mod);
+        if (!opts_.freestanding) {
+            // _WIN32_WINNT debe definirse ANTES de cualquier header de
+            // Windows para habilitar APIs Vista+ (ConditionVariable, etc.)
+            // que async usa.  Definirlo siempre es inofensivo.
+            if (uses_async) {
+                ctx.out << "#if defined(_WIN32) && !defined(_WIN32_WINNT)\n";
+                ctx.out << "#  define _WIN32_WINNT 0x0600\n";
+                ctx.out << "#endif\n";
+            }
+            ctx.out << "#include <stdint.h>\n";
+            ctx.out << "#include <stdlib.h>\n";
+            ctx.out << "#include <string.h>\n";
+            if (opts_.exc == ExcMode::SetJmp || uses_exc_inc) {
+                ctx.out << "#include <setjmp.h>\n";
+            }
+            if (uses_strings || uses_io || uses_exc_inc || uses_unwrap || uses_inst) {
+                ctx.out << "#include <stdio.h>\n";
+            }
+            if (uses_math) ctx.out << "#include <math.h>\n";
+            if (opts_.gc == GcMode::Boehm) {
+                ctx.out << "#include <gc.h>\n";
+                // Redefinir malloc/free a Boehm GC.  Esto cubre todas las
+                // alocaciones del runtime VexString y RAW_ALLOC del IR.
+                ctx.out << "#define malloc(n)  GC_MALLOC(n)\n";
+                ctx.out << "#define free(p)    ((void)(p))  /* boehm gestiona */\n";
+                ctx.out << "#define calloc(n,s) GC_MALLOC((n)*(s))\n";
+            }
+        } else {
+            // En freestanding solo @c stdint.h (header puramente de tipos,
+            // siempre disponible incluso sin libc).  Setjmp si try/catch
+            // se usa.
+            ctx.out << "#include <stdint.h>\n";
+            if (uses_exc_inc) ctx.out << "#include <setjmp.h>\n";
+            ctx.out << "/* --port-freestanding: sin stdio/stdlib/string/math.\n"
+                    << " * El usuario debe proveer en su codigo:\n"
+                    << " *   - VEX_NORETURN void vex_throw(int code);\n"
+                    << " *   - void *memcpy/memset (si se usan strings/structs)\n"
+                    << " */\n";
+        }
+        // El @c gc.h y @c vesta_rt/*.h ya se emitieron arriba dentro del
+        // bloque de includes.  No duplicar.
         if (opts_.gc == GcMode::Vesta) {
             ctx.out << "#include \"vesta_rt/public.h\"\n";
             ctx.out << "#include \"vesta_rt/abi.h\"\n";
-        } else if (opts_.gc == GcMode::Boehm) {
-            ctx.out << "#include <gc.h>\n";
         }
         ctx.out << "\n";
 
-        ctx.out << "#if defined(__GNUC__) || defined(__clang__)\n";
-        ctx.out << "#  define VEX_RESTRICT __restrict__\n";
-        ctx.out << "#  define VEX_HOT      __attribute__((hot))\n";
-        ctx.out << "#  define VEX_COLD     __attribute__((cold))\n";
-        ctx.out << "#  define VEX_UNUSED   __attribute__((unused))\n";
-        ctx.out << "#  define VEX_NORETURN __attribute__((noreturn))\n";
-        ctx.out << "#  define VEX_UNREACHABLE __builtin_unreachable()\n";
-        ctx.out << "#else\n";
-        ctx.out << "#  define VEX_RESTRICT\n";
-        ctx.out << "#  define VEX_HOT\n";
-        ctx.out << "#  define VEX_COLD\n";
-        ctx.out << "#  define VEX_UNUSED\n";
-        ctx.out << "#  define VEX_NORETURN\n";
-        ctx.out << "#  define VEX_UNREACHABLE ((void)0)\n";
-        ctx.out << "#endif\n\n";
+        ctx.out << "\n";
+        // Snippets siempre presentes: macros + pragma silence.
+        emit_snippet(ctx, "vex_macros");
+        emit_snippet(ctx, "vex_pragma_silence");
 
-        // Solo emitir vex_throw si el modulo TIENE alguna IR op de excepcion.
-        // (Phase A: deteccion conservativa -- siempre emitir mientras se decide
-        //  el modelo final.)  Marcamos como VEX_UNUSED para silenciar warning.
-        if (opts_.exc == ExcMode::SetJmp) {
-            ctx.out << "/* Manejo de excepciones via setjmp/longjmp */\n";
-            ctx.out << "static jmp_buf vex_exc_buf;\n";
-            ctx.out << "static int     vex_exc_code;\n";
-            ctx.out << "static VEX_UNUSED VEX_NORETURN void vex_throw(int code) {\n";
-            ctx.out << "    vex_exc_code = code;\n";
-            ctx.out << "    longjmp(vex_exc_buf, 1);\n";
-            ctx.out << "}\n\n";
+        // vex_throw: hosted (setjmp) o freestanding (extern stub).
+        if (opts_.freestanding) {
+            emit_snippet(ctx, "vex_throw_freestanding");
+        } else if (opts_.exc == ExcMode::SetJmp) {
+            emit_snippet(ctx, "vex_throw_hosted");
         } else if (opts_.exc == ExcMode::None) {
             ctx.out << "static VEX_UNUSED VEX_NORETURN void vex_throw(int code) {\n";
             ctx.out << "    (void)code; abort();\n";
             ctx.out << "}\n\n";
+        }
+
+        // Runtime de excepciones de usuario (try/catch + panic).  Se emite
+        // solo si el modulo usa estos patrones para evitar simbolos muertos.
+        bool uses_exc = module_uses_exceptions(mod);
+        if (uses_exc) {
+            if (opts_.freestanding) {
+                emit_snippet(ctx, "vex_exception_freestanding");
+            } else {
+                emit_snippet(ctx, "vex_exception");
+            }
+        }
+        // FFI extern declarations: scan el modulo y emite @c extern firma
+        // para cada simbolo nativo unico.  Sin esto, GCC tira warnings de
+        // implicit-function-declaration y el linker tiene que inferir la
+        // firma.  Con esto, full type checking del compilador host.
+        {
+            std::unordered_set<std::string> declared;
+            for (const auto &fn : mod.functions) {
+                for (const auto &bb : fn.blocks) {
+                    for (const auto &ins : bb.instrs) {
+                        if (ins.op != ir::IrOp::CALL
+                         && ins.op != ir::IrOp::CALLN) continue;
+                        auto colon = ins.func_name.find(':');
+                        if (colon == std::string::npos) continue;
+                        const std::string lib = ins.func_name.substr(0, colon);
+                        const std::string sym = ins.func_name.substr(colon + 1);
+                        // Skip los builtins de vesta_io/vesta_math que
+                        // tienen bridges manuales (vio_*, vmath_*).
+                        if (sym.compare(0, 4, "vio_") == 0)   continue;
+                        if (sym.compare(0, 6, "vmath_") == 0) continue;
+                        if (sym == "__module_init")            continue;
+                        if (sym.compare(0, 6, "__new_") == 0)  continue;
+                        // Skip vex_trace:* (provistos por snippet inline).
+                        // Match por basename para tolerar tanto "vex_trace"
+                        // como "stdlib/native/runtime/vex_trace".
+                        {
+                            size_t pos = lib.rfind('/');
+                            std::string base = (pos == std::string::npos)
+                                ? lib : lib.substr(pos + 1);
+                            if (base == "vex_trace") continue;
+                        }
+                        if (declared.count(sym)) continue;
+                        declared.insert(sym);
+
+                        // Emit extern <ret> <sym>(<args>...).
+                        ctx.out << "extern " << type_for(ins.type, false)
+                                << " " << sanitize_name(sym) << "(";
+                        if (ins.operands.empty()) {
+                            ctx.out << "void";
+                        } else {
+                            for (size_t i = 0; i < ins.operands.size(); ++i) {
+                                if (i) ctx.out << ", ";
+                                ir::IrType at = ir::IrType::I64;
+                                if (ins.operands[i] < fn.values.size()) {
+                                    at = fn.values[ins.operands[i]].type;
+                                }
+                                ctx.out << type_for(at, false);
+                            }
+                        }
+                        ctx.out << ");\n";
+                    }
+                }
+            }
+            if (!declared.empty()) ctx.out << "\n";
+        }
+
+        // Static data (literales de string interned por el frontend Vex).
+        // Se emite ANTES del runtime + clases para que las referencias
+        // @c __str_<i> esten visibles a todo lo que sigue.
+        emit_static_data(ctx, mod);
+
+        // Runtime VexString si aplica.  Cero overhead si el modulo no
+        // usa strings (no se emite el bloque).  En freestanding, el
+        // snippet tiene @c freestanding-skip:yes y se omite -- error si
+        // el programa usa strings + freestanding.
+        if (uses_strings && opts_.strings == StringMode::Managed) {
+            emit_snippet(ctx, "vex_string");
+        }
+
+        // Runtime de instrumentacion si --instrument trace/profile fue activo.
+        // Detectamos el modo por presencia de CALLNs vex_trace:* (siempre
+        // trace por defecto; el usuario controla profile via env var o el
+        // backend puede emitir @c #define VEX_INSTRUMENT_MODE).
+        if (module_uses_instrument(mod)) {
+            /* Permitimos al usuario forzar el modo via @c VEX_INSTRUMENT_MODE
+             * al compilar el .c con @c gcc.  Default = 1 (solo trace). */
+            ctx.out << "#ifndef VEX_INSTRUMENT_MODE\n";
+            ctx.out << "/* 1=trace, 2=profile, 3=trace+profile.  Override con\n"
+                       "   gcc -DVEX_INSTRUMENT_MODE=N. */\n";
+            ctx.out << "#define VEX_INSTRUMENT_MODE 3\n";
+            ctx.out << "#endif\n\n";
+            emit_snippet(ctx, "vex_instrument");
+        }
+
+        // Async runtime (futures + spawn + monitors) si se usa.
+        if (module_uses_async(mod)) {
+            emit_snippet(ctx, "vex_async");
+
+            // Scan SPAWN_ARGS para recolectar las aridades necesarias y
+            // forward-declarar sus trampolines (el cuerpo se emite en
+            // @c emit_postamble).
+            std::unordered_set<size_t> arities;
+            for (const auto &fn : mod.functions) {
+                for (const auto &bb : fn.blocks) {
+                    for (const auto &ins : bb.instrs) {
+                        if (ins.op != ir::IrOp::SPAWN_ARGS) continue;
+                        if (ins.operands.size() > 2) {
+                            size_t n_total = ins.operands.size() - 1;
+                            arities.insert(n_total);
+                        }
+                    }
+                }
+            }
+            if (!arities.empty()) {
+                ctx.out << "/* Forward decls de spawn trampolines (bodies en postamble) */\n";
+                for (size_t N : arities) {
+                    ctx.out << "static void __vex_trampoline_" << N
+                            << "(int64_t packed);\n";
+                    spawn_trampoline_arities_.insert(N);
+                }
+                ctx.out << "\n";
+            }
         }
 
         // Emitir clases (structs + forward decls de metodos) ANTES de los
@@ -886,13 +2039,15 @@ namespace port {
              && lookup_class(n.substr(6))) {
                 continue;
             }
+            bool is_lambda = (fn.name.compare(0, 9, "__lambda_") == 0);
             ctx.out << type_for(fn.ret_type, false) << " "
                     << sanitize_name(fn.name) << "(";
+            if (is_lambda) ctx.out << "void*";
             if (fn.params.empty()) {
-                ctx.out << "void";
+                if (!is_lambda) ctx.out << "void";
             } else {
                 for (size_t i = 0; i < fn.params.size(); ++i) {
-                    if (i) ctx.out << ", ";
+                    if (i || is_lambda) ctx.out << ", ";
                     ir::IrValueId vid = fn.params[i];
                     if (vid < fn.values.size()) {
                         const auto &v = fn.values[vid];
@@ -931,6 +2086,47 @@ namespace port {
     }
 
     void CBackend::emit_postamble(EmitContext &ctx, const ir::IrModule &mod) {
+        // Emitir trampolines de SPAWN_ARGS para cada aridad usada.  El
+        // layout del payload es: @c args[0]=fn_ptr, @c args[1..N]=args.
+        // El trampoline castea @c fn_ptr al puntero de funcion correcto
+        // y llama con los args desempaquetados.  Free del payload tras
+        // la llamada para evitar leak.
+        if (!spawn_trampoline_arities_.empty()) {
+            ctx.out << "\n";
+            // Orden estable: emitir aridades ascendentes para legibilidad.
+            std::vector<size_t> arities(spawn_trampoline_arities_.begin(),
+                                          spawn_trampoline_arities_.end());
+            std::sort(arities.begin(), arities.end());
+            for (size_t N : arities) {
+                ctx.out << "static void __vex_trampoline_" << N
+                        << "(int64_t packed) {\n";
+                ctx.out << "    int64_t *a = (int64_t*)(intptr_t)packed;\n";
+                ctx.out << "    void (*fn)(";
+                for (size_t i = 0; i < N; ++i) {
+                    if (i) ctx.out << ", ";
+                    ctx.out << "int64_t";
+                }
+                ctx.out << ") = (void (*)(";
+                for (size_t i = 0; i < N; ++i) {
+                    if (i) ctx.out << ", ";
+                    ctx.out << "int64_t";
+                }
+                ctx.out << "))(intptr_t)a[0];\n";
+                /* Capturar args antes de free para no leerlos tras liberar. */
+                for (size_t i = 0; i < N; ++i) {
+                    ctx.out << "    int64_t a" << i << " = a[" << (i + 1) << "];\n";
+                }
+                ctx.out << "    free(a);\n";
+                ctx.out << "    fn(";
+                for (size_t i = 0; i < N; ++i) {
+                    if (i) ctx.out << ", ";
+                    ctx.out << "a" << i;
+                }
+                ctx.out << ");\n";
+                ctx.out << "}\n";
+            }
+        }
+
         bool has_main = false;
         ir::IrType main_ret = ir::IrType::VOID;
         for (const auto &fn : mod.functions) {
@@ -941,6 +2137,16 @@ namespace port {
             }
         }
         if (!has_main) return;
+        if (opts_.freestanding) {
+            // En freestanding NO emitimos un wrapper @c "int main()" --
+            // el usuario decide el entry point (e.g. _start del kernel,
+            // BootMain del bootloader).  Emitimos solo un comentario
+            // guia.  La funcion @c vex_main esta disponible para
+            // llamarse desde codigo del usuario.
+            ctx.out << "\n/* --port-freestanding: sin wrapper int main(). */\n";
+            ctx.out << "/* Llama a @c vex_main desde tu entry point custom. */\n";
+            return;
+        }
         ctx.out << "\n/* Entry point wrapper */\n";
         ctx.out << "int main(int argc, char **argv) {\n";
         ctx.out << "    (void)argc; (void)argv;\n";
@@ -974,6 +2180,83 @@ namespace port {
         // @c emit_return (LIFO).
         stack_alloc_in_fn_.clear();
 
+        // Analizar atributos: pure (const), cold, always_inline.
+        // Esta info informa al compilador host para mejor optimizacion.
+        struct FnAttrs {
+            bool is_const_pure   = false;  /* solo CONST/ALU/SEXT/etc + RET */
+            bool is_cold         = false;  /* contiene panic/throw exclusivo */
+            bool is_tiny_inline  = false;  /* <= 5 ops triviales */
+        } attrs;
+        if (opts_.aggressive_opt) {
+            size_t alu_only_count = 0;
+            bool has_call = false;
+            bool has_store = false;
+            bool has_load = false;
+            bool has_throw = false;
+            bool has_return = false;
+            size_t total_real_instrs = 0;
+            for (const auto &bb : fn.blocks) {
+                for (const auto &ins : bb.instrs) {
+                    using ir::IrOp;
+                    if (ins.op == IrOp::NOP || ins.op == IrOp::PHI) continue;
+                    total_real_instrs++;
+                    switch (ins.op) {
+                        case IrOp::CONST: case IrOp::MOV:
+                        case IrOp::ADD: case IrOp::SUB: case IrOp::MUL:
+                        case IrOp::DIV: case IrOp::MOD:
+                        case IrOp::AND: case IrOp::OR:  case IrOp::XOR:
+                        case IrOp::NEG: case IrOp::NOT:
+                        case IrOp::SHL: case IrOp::SHR: case IrOp::SAR:
+                        case IrOp::FADD: case IrOp::FSUB: case IrOp::FMUL: case IrOp::FDIV:
+                        case IrOp::FNEG: case IrOp::FABS: case IrOp::FSQRT:
+                        case IrOp::CMP_EQ: case IrOp::CMP_NE:
+                        case IrOp::CMP_LT: case IrOp::CMP_GT:
+                        case IrOp::CMP_LE: case IrOp::CMP_GE:
+                        case IrOp::CMP_ULT: case IrOp::CMP_UGT:
+                        case IrOp::CMP_ULE: case IrOp::CMP_UGE:
+                        case IrOp::CAST: case IrOp::ZEXT: case IrOp::SEXT: case IrOp::TRUNC:
+                        case IrOp::ITOF: case IrOp::UITOF:
+                        case IrOp::FTOI: case IrOp::FTOUI:
+                        case IrOp::F32TOF64: case IrOp::F64TOF32:
+                        case IrOp::BITCAST:
+                            alu_only_count++;
+                            break;
+                        case IrOp::RET: has_return = true; break;
+                        case IrOp::CALL: case IrOp::CALLN: case IrOp::CALLIND:
+                        case IrOp::CALLVIRT: case IrOp::CALLCLOSURE:
+                        case IrOp::CALLM: case IrOp::TAILCALL:
+                            has_call = true;
+                            // Detectar si el unico call es a vex_throw/panic
+                            // (heuristica para @c cold).
+                            if (ins.func_name.find("panic") != std::string::npos
+                             || ins.func_name == "vex_throw") {
+                                has_throw = true;
+                            }
+                            break;
+                        case IrOp::STORE: has_store = true; break;
+                        case IrOp::LOAD:  has_load  = true; break;
+                        case IrOp::RAW_ASM:
+                            if (ins.func_name.find("panic") != std::string::npos)
+                                has_throw = true;
+                            break;
+                        default: break;
+                    }
+                }
+            }
+            // Funcion pura: solo CONST/ALU + RET, sin call/load/store.
+            attrs.is_const_pure = (has_return && !has_call && !has_store
+                                                && !has_load && alu_only_count > 0
+                                                && fn.ret_type != ir::IrType::VOID);
+            // Funcion cold: termina con throw/panic exclusivamente.
+            attrs.is_cold = has_throw && !has_return;
+            // Funcion tiny inline: <= 5 instrucciones reales, sin loops.
+            // Detectar loops: bloques con back-edge (preds en multiple bloques
+            // del orden).  Aproximacion: si el numero de bloques == 1, no loops.
+            attrs.is_tiny_inline = (total_real_instrs <= 5
+                                  && fn.blocks.size() == 1
+                                  && has_return);
+        }
+
         // Si la funcion es un metodo @c Class__name, el primer parametro
         // es @c Class *self (no void*).  Tambien arriva el ctor (Class__ctor).
         bool is_method = false;
@@ -989,17 +2272,43 @@ namespace port {
             }
         }
 
+        // Lambdas (__lambda_<N>): emit con @c void* @c env como primer param
+        // para que la convencion coincida con CALLCLOSURE.  Si la lambda no
+        // captura, el env_addr sera @c NULL y el callee lo ignora.
+        bool is_lambda = (fn.name.compare(0, 9, "__lambda_") == 0);
+
+        // Atributos agresivos: const para puras, cold para throw-only,
+        // always_inline para accesors triviales.  Estos atributos vienen
+        // ANTES de @c "static" para que GCC los aplique a la definicion.
+        if (opts_.aggressive_opt && opts_.emit_compiler_hints) {
+            if (attrs.is_tiny_inline) {
+                ctx.out << "__attribute__((always_inline)) inline ";
+            }
+            if (attrs.is_const_pure) {
+                // @c __attribute__((const)) significa: el resultado depende
+                // SOLO de los argumentos; no lee memoria ni tiene side effects.
+                // Habilita CSE agresivo y elision de calls redundantes.
+                ctx.out << "__attribute__((const)) ";
+            }
+            if (attrs.is_cold) {
+                ctx.out << "VEX_COLD ";
+            }
+        }
+
         // Detectar "static" para metodos (para mantener simbolos privados al
         // archivo, evitando colisiones cross-modulo en builds futuros).
         if (is_method) ctx.out << "static ";
 
         ctx.out << type_for(fn.ret_type, false) << " "
                 << sanitize_name(fn.name) << "(";
+        if (is_lambda) {
+            ctx.out << "void *VEX_UNUSED __vex_env";
+        }
         if (fn.params.empty()) {
-            ctx.out << "void";
+            if (!is_lambda) ctx.out << "void";
         } else {
             for (size_t i = 0; i < fn.params.size(); ++i) {
-                if (i) ctx.out << ", ";
+                if (i || is_lambda) ctx.out << ", ";
                 ir::IrValueId vid = fn.params[i];
                 if (vid < fn.values.size()) {
                     const auto &v = fn.values[vid];
@@ -1014,7 +2323,12 @@ namespace port {
                     }
                     std::string t = type_for(v.type, v.is_host_ptr);
                     ctx.out << t << " ";
-                    if (v.is_host_ptr && opts_.emit_compiler_hints) {
+                    // @c __restrict__ en TODOS los pointer params: en Vex
+                    // los parametros no aliasing por convencion del lenguaje
+                    // (sin & address-of cross-param), asi habilitamos
+                    // vectorizacion automatica de GCC.
+                    if (opts_.emit_compiler_hints
+                     && (v.is_host_ptr || v.type == ir::IrType::PTR)) {
                         ctx.out << "VEX_RESTRICT ";
                     }
                     ctx.out << "v" << vid;
@@ -1453,6 +2767,20 @@ namespace port {
             return;
         }
 
+        // CALLN nativa: el func_name tiene forma "lib_path:sym".  Lo
+        // tratamos como un call C normal al simbolo @c sym, asumiendo
+        // que el usuario enlazara con la libreria correspondiente.
+        // Mapping especial para los builtins de @c vesta_io (vio_*) que
+        // exponen una API estandar de print -> bridge a stdio C, para que
+        // el .c sea standalone (sin necesitar @c vesta_io.dll).
+        auto colon = func_name.find(':');
+        if (colon != std::string::npos) {
+            std::string lib  = func_name.substr(0, colon);
+            std::string sym  = func_name.substr(colon + 1);
+            emit_native_call(ctx, dst, lib, sym, args, ret_type);
+            return;
+        }
+
         // Detect early: es esta llamada a @c __new_<X> con escape-free dst?
         // Si si, emitir STACK ALLOC en lugar de heap.  Tiene que decidirse
         // ANTES de emit_assign_lhs para evitar @c "v0 = Counter __stk..." rota.
@@ -1478,7 +2806,13 @@ namespace port {
             // mejor que C++ stack alloc.
             const ir::IrClass *cls = lookup_class(new_class_name);
             ctx.indent();
-            ctx.out << new_class_name << " __stk_" << dst << " = {0};\n";
+            // Inicializacion: empty struct + @c {0} da warning de
+            // "excess elements"; chequear si la clase tiene fields
+            // declarados o solo metodos.
+            bool has_any_field = (cls && !cls->fields.empty());
+            ctx.out << new_class_name << " __stk_" << dst;
+            if (has_any_field) ctx.out << " = {0}";
+            ctx.out << ";\n";
             bool has_ctor = false;
             if (cls) {
                 for (const auto &m : cls->methods) {
@@ -1601,6 +2935,86 @@ namespace port {
             emit_assign_lhs(ctx, dst);
             ctx.out << "0;\n";
         }
+    }
+
+    void CBackend::emit_call_closure(EmitContext &ctx,
+                                      ir::IrValueId dst,
+                                      ir::IrValueId fn_addr,
+                                      const std::vector<ir::IrValueId> &args,
+                                      ir::IrType ret_type,
+                                      const ir::IrInstr &ins) {
+        (void)ins;
+        // Layout IR: @c callclosure func_ptr=%fn_addr, operands=[%env, args...]
+        // donde @c fn_addr y @c env ya estan cargados como @c i64.  El
+        // primer argumento del callee es siempre @c env (void*).
+        if (args.empty()) {
+            ctx.indent();
+            ctx.out << "/* CALLCLOSURE sin env -- skip */\n";
+            return;
+        }
+        ir::IrValueId env = args[0];
+        std::vector<ir::IrValueId> real_args(args.begin() + 1, args.end());
+
+        if (ret_type != ir::IrType::VOID && dst != ir::IR_NO_VALUE) {
+            emit_assign_lhs(ctx, dst);
+        } else {
+            ctx.indent();
+        }
+        std::string ret_t = type_for(ret_type, false);
+        // Construir el tipo del function pointer: T (*)(void*, T_arg0, ...)
+        std::string fn_t = ret_t + "(*)(void*";
+        for (size_t i = 0; i < real_args.size(); ++i) {
+            fn_t += ", ";
+            ir::IrType at = ir::IrType::I64;
+            if (ctx.fn && real_args[i] < ctx.fn->values.size()) {
+                at = ctx.fn->values[real_args[i]].type;
+            }
+            fn_t += type_for(at, false);
+        }
+        fn_t += ")";
+
+        ctx.out << "((" << fn_t << ")(intptr_t)" << value_expr(ctx, fn_addr) << ")"
+                << "((void*)(intptr_t)" << value_expr(ctx, env);
+        for (auto a : real_args) {
+            ctx.out << ", " << value_expr(ctx, a);
+        }
+        ctx.out << ");\n";
+    }
+
+    void CBackend::emit_spawn_trampoline_call(EmitContext &ctx,
+                                                ir::IrValueId fn_ptr,
+                                                size_t argc,
+                                                const std::string &args_var) {
+        (void)fn_ptr;
+        spawn_trampoline_arities_.insert(argc);
+        ctx.indent();
+        ctx.out << "vex_spawn(__vex_trampoline_" << argc
+                << ", (int64_t)(intptr_t)" << args_var << ");\n";
+    }
+
+    void CBackend::emit_callm(EmitContext &ctx,
+                                ir::IrValueId dst,
+                                ir::IrValueId obj,
+                                ir::IrValueId method_ptr,
+                                const std::vector<ir::IrValueId> &args,
+                                ir::IrType ret_type) {
+        // En port C el dispatch dinamico via @c MethodInfo* no es viable
+        // sin ClassRegistry runtime.  La devirtualizacion compile-time
+        // (en lowering Vex) reescribe el patron a CALLVIRT cuando el tipo
+        // concreto del receiver es conocido.  Si llegamos aqui con CALLM,
+        // es que el receptor es genuinamente abstracto sin info -- emit
+        // stub que el usuario puede completar manualmente.
+        (void)method_ptr;
+        if (opts_.emit_comments) {
+            ctx.indent();
+            ctx.out << "/* CALLM no devirtualizable en compile time (receptor abstracto) */\n";
+        }
+        if (ret_type != ir::IrType::VOID && dst != ir::IR_NO_VALUE) {
+            emit_assign_lhs(ctx, dst);
+            ctx.out << "0;\n";
+        }
+        (void)obj; (void)args;
+        fprintf(stderr, "[port C] CALLM sin tipo concreto resuelto (receptor abstracto)\n");
     }
 
     void CBackend::emit_call_indirect(EmitContext &ctx,

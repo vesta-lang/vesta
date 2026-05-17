@@ -224,22 +224,36 @@ extern "C" {
  */
 #define VESTA_CLASSINFO_VTABLE_OFFSET      80
 #define VESTA_METHODINFO_JIT_CODE_OFFSET   104
+/* Offset del puntero advice_chain (cadena AOP BEFORE/AFTER/AROUND).
+ * Si != NULL, el inline dispatch JIT debe caer al slow path para que
+ * la cadena se ejecute correctamente.  Sin esto, el JIT salta al body
+ * del metodo target ignorando todos los advices. */
+#define VESTA_METHODINFO_ADVICE_CHAIN_OFFSET 152
 
 /* ========================================================================= */
 /* Codigos de FatalError (usados por vrt_throw_fatal)                         */
+/*                                                                            */
+/* CRITICO: estos valores DEBEN coincidir con el enum FatalKind definido en   */
+/* @c include/runtime/exception_runtime.h.  El throw_fatal del runtime usa    */
+/* el enum interno; si los valores no coinciden, el kind pasado por el JIT    */
+/* se traduce a un kind distinto al imprimir el error.  Fix 2026-05-16:       */
+/* sincronizados con FatalKind.                                               */
 /* ========================================================================= */
 
 #define VESTA_FATAL_NULL_POINTER            1
-#define VESTA_FATAL_OUT_OF_MEMORY           2
-#define VESTA_FATAL_ILLEGAL_INSTRUCTION     3
-#define VESTA_FATAL_STACK_OVERFLOW          4
-#define VESTA_FATAL_DIVISION_BY_ZERO        5
-#define VESTA_FATAL_INDEX_OUT_OF_BOUNDS     6
+#define VESTA_FATAL_DIVISION_BY_ZERO        2
+#define VESTA_FATAL_STACK_OVERFLOW          3
+#define VESTA_FATAL_STACK_UNDERFLOW         4
+#define VESTA_FATAL_ILLEGAL_INSTRUCTION     5
+#define VESTA_FATAL_INVALID_SYSCALL         6
 #define VESTA_FATAL_SEGMENTATION_FAULT      7
-#define VESTA_FATAL_NATIVE_EXCEPTION        8
-#define VESTA_FATAL_NATIVE_CRASH            9
-#define VESTA_FATAL_TYPE_MISMATCH           10
+#define VESTA_FATAL_NATIVE_CRASH            8
+#define VESTA_FATAL_NATIVE_EXCEPTION        9
+#define VESTA_FATAL_OUT_OF_MEMORY           10
 #define VESTA_FATAL_USER_ABORT              11
+/* Codigos NO presentes en FatalKind (specific to ABI public): */
+#define VESTA_FATAL_INDEX_OUT_OF_BOUNDS     12
+#define VESTA_FATAL_TYPE_MISMATCH           13
 
 /* ========================================================================= */
 /* Convenciones de calling                                                    */

@@ -232,6 +232,11 @@ namespace vex {
         /// que sea localizable via reflexion.  El validador rechaza @c new
         /// X() para layouts con esta marca.
         bool                         is_interface = false;
+        /// true si la clase es @c @Aspect (contiene @Before/@After/@Around).
+        /// Habilita el devirt monomorfico saber que CALLVIRTs no se pueden
+        /// resolver estaticamente en este modulo (los advice chains corren
+        /// al despachar dinamicamente; un CALL directo los saltaria).
+        bool                         is_aspect = false;
         /// true si la clase declara `~ClassName()`.  Computado tras
         /// agregar todos los metodos.  El type checker usa este flag para
         /// rechazar escapes ilegales: una instancia con destructor NO puede

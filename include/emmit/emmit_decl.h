@@ -844,6 +844,35 @@ namespace Assembly::Bytecode {
     );
 
     /**
+     * @brief Emite super-instrucciones ALU 3-operandos (adds3, subs3, etc.).
+     *
+     * Toma 3 operandos textuales: r_dst, r_src1, r_src2.  Empaqueta
+     * byte2 = (r_src1<<4)|r_dst y byte3 = (r_src2<<4)|flags.  El opcode prefix
+     * (0x00, opcode2 segun mnemonic) lo emite el helper estandar antes.
+     */
+    void emit_instr_alu3(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
+     * @brief Emite super-instruccion LOAD con zero-extend (loadz / loadzh).
+     *
+     * Fusion de @c mov rd,0 + @c mov rd_sized,[rs] en una sola instruccion VM.
+     * 2 operandos: r_dst (sized) y r_src (puntero base 64-bit).  El mode del
+     * ctrl byte se deriva de @c reg_dst->size_bits, el bit s indica si la
+     * carga es de memoria HOST (1) o VM (0).
+     */
+    void emit_instr_loadz(
+        const vm::Instruction *instruction_parser,
+        ByteWriter &           code_final,
+        const InstrInfo *      now_instr,
+        Assembler *            assembly_ctx
+    );
+
+    /**
      * @brief Emite los operandos de @c getstatic / @c setstatic (FIXED_8).
      *
      * 3 operandos textuales: dos registros y un offset (uint32).  Empaqueta

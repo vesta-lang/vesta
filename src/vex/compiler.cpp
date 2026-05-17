@@ -95,6 +95,9 @@ namespace vex {
         // sin recalcularlos.
         ir::IrModule irmod;
         Lowering lo(*mod, tc, res.diagnostics);
+        if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
+            lo.set_instrument_mode(opts.instrument_mode);
+        }
         const std::string mod_name = opts.module_name.empty() ? std::string("main")
                                                               : opts.module_name;
         if (!lo.run(irmod, mod_name)) {
@@ -208,13 +211,23 @@ namespace vex {
         emit_opts.emit_debug    = opts.emit_debug;
         emit_opts.module_name   = mod_name;
 
-        /* serializar el IR a bytes ANTES del
-         * emit (ir_emit_module puede mutar irmod internamente).  Estos
-         * bytes los pasara main.cpp al assembler -> Linker, que los
-         * insertara en la seccion @c @ir del .velb v3.  El Loader luego
-         * los deserializa para que el JIT auto-trigger pueda compilar
-         * las funciones hot directamente sin re-parsear .vex source. */
-        res.ir_section_bytes = ir::emit_ir_section(irmod.functions);
+        /* serializar el IR OPTIMIZADO a bytes para que el JIT compile la
+         * version post-optimizacion (incluyendo dead-alloc elim, DCE,
+         * etc.) en lugar de la version frontend cruda.
+         *
+         * Phase D.7.opt: corregido bug donde el .velb llevaba IR
+         * UNOPTIMIZED.  El JIT auto-trigger compilaba @c pruebas con la
+         * call a @c __new_Calculadora aunque el optimizer ya la habia
+         * eliminado a nivel .vel.
+         *
+         * Genera @c irmod_opt aplicando el mismo opt_level que el .vel
+         * pipeline para mantener consistencia entre @c .velb (JIT
+         * source) y @c .vel (interp source). */
+        {
+            ir::IrModule irmod_for_section = irmod;
+            ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level));
+            res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
+        }
 
         ir::EmitResult eres = ir::ir_emit_module(irmod, emit_opts);
         if (!eres.ok) {

@@ -458,6 +458,15 @@ namespace ir {
         /// @c this.field = new Inner(x)) ven @c this como host_ptr stale
         /// tras un minor GC -> escritura en memoria liberada -> segfault.
         bool        is_gc_object = false;
+        /// Optimizacion: si true, el resultado de un LOAD i8/i16/i32 NO necesita
+        /// sign-extension manual porque todos sus usos transitivos son operaciones
+        /// que preservan correctamente los bits bajos (ADD/SUB/MUL/AND/OR/XOR) y
+        /// terminan en STORE/RET del mismo ancho.  Lo marca @c ir_pass_load_narrow.
+        /// El emisor IR (case LOAD) consulta el flag para saltar el patron
+        /// @c shl/sar de 64-N bits, ahorrando 3 instrucciones VM por LOAD.
+        /// Bench struct_field: ~9 instr/iter menos = 270M instr ahorradas en 30M
+        /// iter del loop principal.
+        bool        narrow_only = false;
         uint64_t    const_val = 0;           ///< valor si is_const == true
     };
 
@@ -798,6 +807,9 @@ namespace ir {
 
         bool is_final     = false; ///< No puede ser heredada.  Permite mode TRIVIAL.
         bool is_interface = false; ///< Sin fields ni cuerpos; solo metodos abstractos.
+        bool is_aspect    = false; ///< @Aspect class: el modulo USA AOP.  El pase
+                                    ///< @c ir_pass_devirt_monomorphic debe skip-ear
+                                    ///< porque CALLVIRTs disparan advice chains.
         bool has_destructor = false; ///< Declara @c ~ClassName().
         /// El destructor (auto-sintetizado o explicito) tiene que recorrer
         /// fields tipo CLASS para llamar sus destructores tambien.  Set

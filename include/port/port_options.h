@@ -91,6 +91,40 @@ namespace port {
     };
 
     /**
+     * @brief Modo de instrumentacion para debugging del codigo generado.
+     */
+    enum class InstrumentMode {
+        None,    ///< Sin instrumentacion (default).
+        Trace,   ///< Emite @c vex_trace_enter/exit en cada funcion.  Imprime
+                 ///< a stderr con indentacion por depth.  Util para ver el
+                 ///< flow de ejecucion en debugging.
+        Profile, ///< Emite @c vex_profile_enter/exit que miden tiempo
+                 ///< (rdtsc o @c clock_gettime) por funcion.  Al exit
+                 ///< del programa imprime estadisticas por funcion:
+                 ///< count, total_ns, avg_ns.
+    };
+
+    /**
+     * @brief Politica de strings en el codigo generado.
+     */
+    enum class StringMode {
+        /// Strings como @c const @c char* crudo (literales en @c .rodata),
+        /// sin runtime helpers.  Las ops dinamicas (STRMAKE, STRCAT, STRLEN
+        /// que no sea sobre literales) emiten stubs "unsupported".  Util
+        /// cuando el programa solo usa strings literales para FFI.  Cero
+        /// runtime, cero alocacion.
+        Raw,
+
+        /// Strings via mini-runtime @c VexString embebido al inicio del .c:
+        ///   typedef struct { uint32_t byte_len; uint32_t code_points; ... } VexString;
+        /// Soporta @c STRMAKE/STRCAT/STREQ/STRLEN/STRRAW/STRGETBYTES con
+        /// helpers @c vex_str_*.  Tracking per-thread de alocaciones via
+        /// linked list; warning al exit del thread si quedan blocks vivos.
+        /// Default v1 (cubre el 99% de programas Vex con strings).
+        Managed,
+    };
+
+    /**
      * @brief Estilo de tipos en el codigo generado.
      */
     enum class TypeStyle {
@@ -117,9 +151,11 @@ namespace port {
      * @brief Configuracion completa del transpiler IR -> codigo destino.
      */
     struct PortOptions {
-        GcMode    gc        = GcMode::None;       ///< Default: no GC, malloc/free.
-        ExcMode   exc       = ExcMode::SetJmp;    ///< Default: setjmp/longjmp.
-        TypeStyle types     = TypeStyle::StdInt;  ///< Default: stdint.h portatil.
+        GcMode     gc        = GcMode::None;       ///< Default: no GC, malloc/free.
+        ExcMode    exc       = ExcMode::SetJmp;    ///< Default: setjmp/longjmp.
+        TypeStyle  types     = TypeStyle::StdInt;  ///< Default: stdint.h portatil.
+        StringMode strings   = StringMode::Managed; ///< Default: VexString managed.
+        InstrumentMode instrument = InstrumentMode::None; ///< Default: sin instrumentacion.
 
         /// Si true, emite comentarios verbose en el codigo generado:
         /// nombre IR de cada op, source_line del .vex original, anotaciones
@@ -154,6 +190,43 @@ namespace port {
         /// que quiere verificar que TODO el programa se baja sin gaps.
         /// Default: false (graceful: emit stub + warning a stderr).
         bool strict_unsupported = false;
+
+        /// Modo @c freestanding: no se emite ningun @c #include <stdio.h>
+        /// / @c <stdlib.h> / @c <math.h> automatico.  Los snippets de
+        /// runtime que dependen de la libc hosted se omiten; el programador
+        /// debe proveer en su codigo:
+        ///   - @c VEX_NORETURN @c "void @c vex_throw(int)"
+        ///   - @c vex_panic_with_str si usa try/catch
+        ///   - Bridges propios para print/IO si quiere strings
+        /// Usado para programacion de sistemas, bootloaders, kernels
+        /// donde no hay libc disponible.
+        bool freestanding = false;
+
+        /// Directorio donde estan los snippets @c .v.c (relativo a vm.exe
+        /// si vacio, o absoluto si comienza con / o letra de unidad).
+        /// Default: vacio = autodetect via @c argv[0].
+        std::string stdlib_port_c_dir;
+
+        /// Politica de targeting de CPU para el codigo generado:
+        ///   "" (default)   - portable, ningun pragma de CPU
+        ///   "native"       - @c "#pragma GCC target(\"arch=native\")" mas
+        ///                    flags agresivas (avx2,fma,bmi2 si soportadas)
+        ///   "x86-64-v2"    - SSE4.2, baseline para Linux moderno
+        ///   "x86-64-v3"    - AVX2 + FMA + BMI1/BMI2 (Haswell+)
+        ///   "x86-64-v4"    - AVX-512 (Skylake-X+)
+        /// El usuario tambien puede pasar @c -march=X al @c gcc al
+        /// compilar el @c .c -- estos pragmas solo HINTEAN al optimizer.
+        std::string arch_target;
+
+        /// Cuando true, emite atributos agresivos:
+        ///   - @c __attribute__((const)) en funciones puras detectadas
+        ///   - @c __attribute__((cold)) en paths que solo throw/panic
+        ///   - @c __builtin_expect en exception checks (rama unlikely)
+        ///   - @c __builtin_unreachable() tras @c vex_throw/longjmp
+        ///   - @c __restrict__ en TODOS los pointer params
+        ///   - @c __attribute__((always_inline)) en accesors triviales
+        /// Default: true (sin cambios en correctness, solo en perf).
+        bool aggressive_opt = true;
     };
 
     /**
@@ -173,6 +246,16 @@ namespace port {
      * @brief Parsea @c TypeStyle desde string CLI ("stdint", "builtin").
      */
     bool parse_type_style(const std::string &s, TypeStyle &out);
+
+    /**
+     * @brief Parsea @c StringMode desde string CLI ("raw", "managed").
+     */
+    bool parse_string_mode(const std::string &s, StringMode &out);
+
+    /**
+     * @brief Parsea @c InstrumentMode desde string CLI ("none", "trace", "profile").
+     */
+    bool parse_instrument_mode(const std::string &s, InstrumentMode &out);
 
 } // namespace port
 

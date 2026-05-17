@@ -313,7 +313,7 @@ namespace {
             : 0.0;
 
         /* Estimacion del interprete:
-         *   ~105 MIPS por thread segun CLAUDE.md (snapshot pre-JIT).
+         *   ~105 MIPS por thread  (snapshot pre-JIT).
          *   Speedup estimado = jit_mips / 105. */
         const double interp_mips = 105.0;
         const double speedup_vs_interp = jit_mips / interp_mips;

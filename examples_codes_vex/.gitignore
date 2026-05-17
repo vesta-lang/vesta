@@ -3,3 +3,4 @@
 *.ir
 out
 *.mmd
+*.c

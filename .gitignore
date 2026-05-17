@@ -1,3 +1,6 @@
+# archivos ocultos y de configuración
+.*
+
 # carpetas de configuración de IDEs y entornos virtuales
 .idea
 .xmake

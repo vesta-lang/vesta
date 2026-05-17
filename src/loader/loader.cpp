@@ -712,59 +712,120 @@ namespace loader {
         // poner ejecutable a la pila de ejecutuables
         executables.push_back(std::move(exe));
 
-        // ---- Eager JIT compile de `main` ----
-        // DESACTIVADO temporalmente porque cuando main eager-
-        // compila exitosamente con dependencias complejas (`__module_init`,
-        // `__new_<Class>`), la ejecucion del codigo JIT-eated puede crashear
-        // por estado runtime no inicializado (debug info registration,
-        // calling convention para runtime entries que asumen interp).
+        // ---- Eager JIT compile de `main` REACTIVADO (2026-05-16) ----
         //
-        // Volver a habilitar cuando: (a) tengamos un trampoline interp <-> JIT
-        // que pueda fallback en runtime si el JIT-eated code tiene un bug,
-        // o (b) main siempre se compile con un guard que verifique que cada
-        // callee se compila a una funcion JIT consistent.
+        // Bugs cerrados que bloqueaban este flow:
+        //   (a) enum mismatch VESTA_FATAL_* <-> FatalKind alineado.
+        //   (b) vrt_callm tiene fallback a bytecode interp sincronico
+        //       cuando JIT compile falla -- no devuelve 0 silente.
+        //   (c) wrappers dual VM/HOST en vrt_findclass/findmethod/findfield
+        //       detectan ptrs > 4GB como host ptrs (ALLOCA del JIT) y
+        //       leen via memcpy en lugar de vm_mem.read_bytes.
+        //   (d) bug clobber RDX en CALLM fix con R10/R11 scratch.
         //
-        // Hasta entonces, main ejecuta en interp y los CALLVIRT individuales
-        // siguen disparando JIT via threshold (e.g. Counter.inc se JIT-compila
-        // tras la primera invocacion).
-        /*  main eager-compile DESACTIVADO hasta D.4 (Inline Caches).
-         *
-         * Razon medida (bench_callvirt, 30M callvirt Counter.inc):
-         *   - interp:                          ~11.7s  (callvirt usa icache fast path)
-         *   - JIT con main eager-compile:      ~80s    (vrt_callvirt overhead dominante)
-         *
-         * El JIT'd main itera y llama vrt_callvirt PER iter, cada vrt_callvirt
-         * hace: NULL check + obj cast + class lookup + method lookup en vtable +
-         * jit_code check + (potencial maybe_compile_method) + enter_jit.  Sin
-         * inline cache, son ~50-100 ns por callvirt vs ~5 ns que el interp
-         * tarda con su icache (cached_class match).  Para 30M iter eso son
-         * 1.5-3 segundos extra vs interp.
-         *
-         * Solucion: D.4 Inline Caches.  Cada CALLVIRT en JIT emite:
-         *   mov rax, [obj+OBJ_CLASS_OFF]
-         *   cmp rax, [rip + ic_class_slot]
-         *   jne slow_path
-         *   call qword [rip + ic_method_slot]    ; direct call to cached method
-         *
-         * Mientras llega D.4, main siempre corre en interp.  Counter.inc
-         * sigue JIT-compilando via threshold (speedup C1 normal de 13x
-         * cuando el hot loop esta DENTRO de un metodo virtual). */
+        // Si el JIT main compila exitosamente, se ejecuta nativo via
+        // enter_jit en el scheduler.  Si falla parcialmente (algun raw_asm
+        // complejo no soportado), unsupported=true y caemos a interp.
         if (jit::g_jit_threshold != UINT32_MAX && !executables.empty()) {
             auto &last_exe = executables.back();
+            /* AOP fix 2026-05-16: si el programa tiene CUALQUIER metodo con
+             * advice_chain != null (i.e. usa @Before/@After/@Around), no
+             * eager-compile main.  El JIT-eated main hace CALLVIRT inline
+             * que no aplica advices, y el fallback a vrt_callvirt+interp
+             * tampoco los aplica correctamente (ejecuta solo el body sin
+             * setup de la cadena).  Resultado: doblar(21)=0 + advice no
+             * dispara.  Workaround: main siempre via interp cuando hay AOP. */
+            /* Detectar AOP y closures escaneando el IR (no ClassRegistry
+             * porque __module_init aun no se ejecuto).  Si el programa
+             * usa aspectos (addadvice) o closures (make_closure /
+             * callclosure), NO eager-compile main porque:
+             *   - AOP: el JIT inline dispatch no aplica advices, y el
+             *     fallback tampoco los aplica desde dentro de un JIT frame.
+             *   - Closures: el frontend emite VM bytecode vaddr para
+             *     __lambda_<N> que vrt_callclosure no puede saltar
+             *     correctamente con env_addr como host ptr (el lambda
+             *     bytecode interpreta R14 como VM vaddr). */
+            bool skip_main_jit = false;
+            bool has_closures = false;
+            for (const auto &irf : last_exe->ir_functions) {
+                for (const auto &block : irf.blocks) {
+                    for (const auto &ins : block.instrs) {
+                        if (ins.op == ir::IrOp::RAW_ASM &&
+                            ins.func_name.find("addadvice") != std::string::npos) {
+                            skip_main_jit = true;
+                            break;
+                        }
+                        if (ins.op == ir::IrOp::MAKE_CLOSURE
+                         || ins.op == ir::IrOp::CALLCLOSURE) {
+                            skip_main_jit = true;
+                            has_closures = true;
+                            break;
+                        }
+                    }
+                    if (skip_main_jit) break;
+                }
+                if (skip_main_jit) break;
+            }
+            const bool has_aop = skip_main_jit;
+            /* Si hay closures, desactivar JIT entero (no solo main eager).
+             * vrt_callclosure no puede pasar env_addr como VM vaddr a
+             * bytecode lambda (que interpreta R14 como VM), y el bytecode
+             * lambda crashea con segfault al leer env via vm_mem.  Hasta
+             * un fix proper (copy env to VM stack o JIT compile lambda),
+             * cualquier metodo invocado en programas con closures debe
+             * correr en interp. */
+            if (has_closures) {
+                jit::set_jit_threshold(UINT32_MAX);
+                if (jit::g_jit_warn_unsupported) {
+                    std::fprintf(stderr,
+                        "[jit] desactivado para este programa: usa closures (callclosure) que aun no son JIT-safe\n");
+                }
+            }
             auto it = last_exe->ir_lookup.find("main");
-            if (it != last_exe->ir_lookup.end()
+            if (!has_aop
+             && it != last_exe->ir_lookup.end()
              && it->second < last_exe->ir_functions.size()) {
                 const ir::IrFunction &ir_main = last_exe->ir_functions[it->second];
+                /* Resolver native fn (CALLN handler en Selector):
+                 * dado "lib:func", carga la DLL via FFI y resuelve el simbolo
+                 * a un host fn_ptr.  El Selector embebe el ptr como imm64
+                 * + emite CALL nativo.  Cero overhead runtime vs llamada
+                 * directa de C. */
+                ffi::FFI *ffi_ptr = &ffi_loader;
+                auto resolve_native = [ffi_ptr](const std::string &name) -> uint64_t {
+                    size_t colon = name.find(':');
+                    if (colon == std::string::npos) return 0;
+                    std::string lib  = name.substr(0, colon);
+                    std::string func = name.substr(colon + 1);
+                    try {
+                        void *mod = ffi_ptr->load_native_module(lib);
+                        if (!mod) return 0;
+                        void *fn = ffi_ptr->resolve_native_symbol(mod, func);
+                        return reinterpret_cast<uint64_t>(fn);
+                    } catch (...) {
+                        return 0;
+                    }
+                };
+                /* lectura compile-time de vm_mem.  El proceso
+                 * @c proccess ya tiene static_data del .velb cargado por
+                 * el linker; @c __module_init aun no corrio, pero los
+                 * literales del data section (e.g. name strings,
+                 * placeholders de @c s_<X>) si estan disponibles.  El
+                 * inlining espera por @c __module_init para tener los
+                 * @c ClassInfo* cacheados -- usualmente el eager-compile
+                 * de main happens DESPUES de __module_init en runtime.  */
+                runtime::ProcessVM *proc_for_read = proccess;
+                auto read_vmem_cb = [proc_for_read](uint64_t vaddr) -> uint64_t {
+                    try {
+                        return proc_for_read->vm_mem.read_u64(vaddr);
+                    } catch (...) {
+                        return 0;
+                    }
+                };
                 try {
-                    /* Reusar el JIT subsystem singleton (lazy init en auto_jit).
-                     * Pasar ir_lookup + ir_functions para que el selector pueda
-                     * resolver CALLs a user functions (e.g. __module_init,
-                     * __new_<Class>) via recursive eager-compile.
-                     * pasar symbol_table para resolver
-                     * @Absolute("X") references dentro de raw_asm. */
                     jit::CompileResult res = jit::eager_compile_function(
                         ir_main, &last_exe->ir_lookup, &last_exe->ir_functions,
-                        &last_exe->symbol_table);
+                        &last_exe->symbol_table, resolve_native, read_vmem_cb);
                     if (res.fn != nullptr) {
                         proccess->jit_entry_fn = reinterpret_cast<void *>(res.fn);
                         if (jit::g_jit_warn_unsupported) {
@@ -778,8 +839,7 @@ namespace loader {
                             res.unsupported ? 1 : 0);
                     }
                 } catch (...) {
-                    /* Cualquier excepcion en la compilacion eager se ignora;
-                     * el proceso se ejecuta en interp como antes. */
+                    /* Cualquier excepcion en la compilacion eager se ignora. */
                 }
             }
         }

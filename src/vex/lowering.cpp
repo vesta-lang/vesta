@@ -699,6 +699,19 @@ namespace vex {
             }
         }
 
+        // Instrumentacion: vex_trace:enter al inicio.  Solo para funciones
+        // de usuario (saltamos __module_init, __new_*, __async_*, __lambda_*,
+        // __spawn_* y wrappers internos).  El bytecode VM, JIT y ports
+        // heredan la instrumentacion porque vive en el IR.
+        if (instrument_mode_ != "none" && instrument_mode_ != ""
+            && fd->name != "__module_init"
+            && fd->name.compare(0, 6, "__new_") != 0
+            && fd->name.compare(0, 8, "__async_") != 0
+            && fd->name.compare(0, 9, "__lambda_") != 0
+            && fd->name.compare(0, 8, "__spawn_") != 0) {
+            emit_instrument_enter(fd->name, fd->loc.line);
+        }
+
         // Cuerpo.
         if (fd->body) {
             lower_block(fd->body.get());
@@ -712,6 +725,15 @@ namespace vex {
             // del RET implicito.  Garantiza liberacion incluso si la
             // funcion cae al final sin un return explicito.
             emit_cleanups_all();
+            // Instrumentacion: vex_trace:exit antes del RET implicito.
+            if (instrument_mode_ != "none" && instrument_mode_ != ""
+                && fd->name != "__module_init"
+                && fd->name.compare(0, 6, "__new_") != 0
+                && fd->name.compare(0, 8, "__async_") != 0
+                && fd->name.compare(0, 9, "__lambda_") != 0
+                && fd->name.compare(0, 8, "__spawn_") != 0) {
+                emit_instrument_exit(fd->name, ir::IR_NO_VALUE, fd->loc.line);
+            }
             ir::IrInstr ret{};
             ret.op   = ir::IrOp::RET;
             ret.type = fn.ret_type;
@@ -2855,6 +2877,20 @@ namespace vex {
         // El SSA value v_ret sobrevive: el regalloc garantiza que se mantenga
         // vivo hasta el RET (o se reescriba antes si conviene).
         emit_cleanups_all();
+        // Instrumentacion: vex_trace:exit antes del RET explicito.  Skipea
+        // helpers internos (mismo filtro que en lower_function).
+        if (instrument_mode_ != "none" && instrument_mode_ != ""
+            && fn_ != nullptr) {
+            const std::string &fname = fn_->name;
+            const bool is_helper = fname == "__module_init"
+                || fname.compare(0, 6, "__new_") == 0
+                || fname.compare(0, 8, "__async_") == 0
+                || fname.compare(0, 9, "__lambda_") == 0
+                || fname.compare(0, 8, "__spawn_") == 0;
+            if (!is_helper) {
+                emit_instrument_exit(fname, v_ret, s->loc.line);
+            }
+        }
         ir::IrInstr ret{};
         ret.op          = ir::IrOp::RET;
         ret.type        = fn_->ret_type;
@@ -2864,6 +2900,105 @@ namespace vex {
         }
         fn_->append(current_block_, std::move(ret));
         block_terminated_ = true;
+    }
+
+    // =========================================================================
+    //  Instrumentacion (vex_trace:enter / vex_trace:exit)
+    // =========================================================================
+    //
+    // Como el lowering emite CALLN a un nombre @c "vex_trace:enter" /
+    // @c "vex_trace:exit", todos los backends (bytecode VM, JIT, port C,
+    // futuros) heredan la instrumentacion automaticamente.  Cada backend
+    // resuelve el simbolo a su forma:
+    //   - bytecode VM: CALLN se resuelve via stdlib/native/runtime/vex_trace.dll
+    //   - JIT: idem (mismo CALLN dispatch)
+    //   - port C: emit_native_call lo bridgea a fprintf stderr (default)
+    //             o el usuario provee su propia implementacion.
+
+    void Lowering::emit_instrument_enter(const std::string &fn_name,
+                                          uint32_t line) {
+        if (!fn_ || !out_mod_) return;
+        // 1. Internar el nombre como literal en static_data.  Incluye nul
+        //    terminator para que sea NUL-terminated C string utilizable
+        //    por strdup/printf en cualquier backend hosted.
+        std::vector<uint8_t> bytes(fn_name.begin(), fn_name.end());
+        bytes.push_back(0);
+        const uint64_t name_idx = out_mod_->intern_static_data(std::move(bytes));
+
+        // 2. STR_LIT_ADDR: cargar ptr al literal en un SSA value.
+        const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr sa{};
+            sa.op          = ir::IrOp::STR_LIT_ADDR;
+            sa.type        = ir::IrType::PTR;
+            sa.dst         = v_name;
+            sa.imm         = name_idx;
+            sa.source_line = line;
+            fn_->append(current_block_, std::move(sa));
+        }
+
+        // 3. CALLN void a "vex_trace:enter"(proc_ptr, name_ptr).
+        //    El proc_ptr lo obtenemos via @c getproc; el plugin nativo
+        //    lo usa para @c vm_read_bytes del nombre.  En port C el
+        //    bridge ignora el proc_ptr.
+        const ir::IrValueId v_proc = emit_getproc(line);
+        ir::IrInstr call{};
+        call.op          = ir::IrOp::CALLN;
+        call.type        = ir::IrType::VOID;
+        call.dst         = ir::IR_NO_VALUE;
+        // El @c lib_path incluye el subdir bajo @c stdlib/native/ para
+        // que el loader pueda resolver la DLL via path relativo al
+        // @c vm.exe (igual convencion que vesta_io / vesta_math).
+        call.func_name   = "stdlib/native/runtime/vex_trace:enter";
+        call.operands    = {v_proc, v_name};
+        call.source_line = line;
+        fn_->append(current_block_, std::move(call));
+
+        // 4. Registrar el import nativo para que el linker .velb
+        //    incluya la libreria.
+        out_mod_->register_native_import(
+            "stdlib/native/runtime/vex_trace", "enter");
+    }
+
+    void Lowering::emit_instrument_exit(const std::string &fn_name,
+                                         ir::IrValueId v_ret,
+                                         uint32_t line) {
+        if (!fn_ || !out_mod_) return;
+        std::vector<uint8_t> bytes(fn_name.begin(), fn_name.end());
+        bytes.push_back(0);
+        const uint64_t name_idx = out_mod_->intern_static_data(std::move(bytes));
+
+        const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr sa{};
+            sa.op          = ir::IrOp::STR_LIT_ADDR;
+            sa.type        = ir::IrType::PTR;
+            sa.dst         = v_name;
+            sa.imm         = name_idx;
+            sa.source_line = line;
+            fn_->append(current_block_, std::move(sa));
+        }
+
+        // Si la funcion es void, pasar 0 como return value placeholder.
+        ir::IrValueId v_val = v_ret;
+        if (v_val == ir::IR_NO_VALUE) {
+            v_val = emit_const(ir::IrType::I64, 0, line);
+        }
+
+        const ir::IrValueId v_proc = emit_getproc(line);
+        ir::IrInstr call{};
+        call.op          = ir::IrOp::CALLN;
+        call.type        = ir::IrType::VOID;
+        call.dst         = ir::IR_NO_VALUE;
+        // Usamos @c leave en lugar de @c exit para evitar colision con la
+        // libc @c exit() cuando el port C emite @c extern declarations.
+        call.func_name   = "stdlib/native/runtime/vex_trace:leave";
+        call.operands    = {v_proc, v_name, v_val};
+        call.source_line = line;
+        fn_->append(current_block_, std::move(call));
+
+        out_mod_->register_native_import(
+            "stdlib/native/runtime/vex_trace", "leave");
     }
 
     // Forward decls de helpers definidos mas abajo en el TU.  Necesarias
@@ -3288,6 +3423,11 @@ namespace vex {
                 ra.operands    = {};
                 ra.func_name   = fc.str();
                 ra.source_line = cc.loc.line;
+                // Marca como call-site: el helper findclass usa r5/r6/r12
+                // como scratch internos.  El emitter envuelve con save/restore
+                // de los regs live a traves del raw_asm.  Sin esto, SSA values
+                // asignados por regalloc a esos regs son clobreados silenciosamente.
+                ra.is_call_site = true;
                 fn_->append(current_block_, std::move(ra));
             }
 
@@ -3971,15 +4111,21 @@ namespace vex {
                         ra.type        = ir::IrType::VOID;
                         ra.dst         = ir::IR_NO_VALUE;
                         ra.operands    = {v_ptr, v_del};
+                        // Bug fix: si {src1} (deleter) esta en r1 (o el
+                        // regalloc lo asigna a r1 con CSE/SLF), el `mov r1,
+                        // {src0}` lo clobrea ANTES de callvmr.  Solucion:
+                        // staging via r14 (scratch) para garantizar que el
+                        // deleter sobrevive al setup de args.
                         ra.func_name   = std::string(
                             "// unique<T> cleanup (SRET): dispatch dinamico via slot+8\n"
                             "cmpu {src0}, 0\n"
                             "jmp.je ") + done_lbl + "\n"
                             "cmpu {src1}, 0\n"
                             "jmp.je " + default_lbl + "\n"
+                            "mov r14, {src1}\n"   // staging deleter
                             "mov r1, {src0}\n"
                             "mov r15, 1\n"
-                            "callvmr {src1}\n"
+                            "callvmr r14\n"
                             "jmp.jmp " + done_lbl + "\n"
                             + default_lbl + ":\n"
                             "mov r1, {src0}\n"
@@ -9917,7 +10063,7 @@ namespace vex {
             // del host.  Si es VM (subsp+&local, STR_LIT_ADDR, etc.) usamos
             // `strmake` original que lee de vm_mem.  Esto cierra el bug
             // historico en el que `str_make(buffer.data, len)` con `data`
-            // mallocado retornaba zeros (ver Bug A en CLAUDE.md).
+            // mallocado retornaba zeros
             const bool ptr_is_host =
                 static_cast<size_t>(v_ptr) < fn_->values.size()
              && fn_->values[v_ptr].is_host_ptr;
@@ -10034,6 +10180,9 @@ namespace vex {
             ra.dst         = v_dst;
             ra.func_name   = oss.str();
             ra.source_line = e->loc.line;
+            // findclass clobera r5/r6/r12 -- marca como call site
+            // para que el emitter save/restore regs vivos.
+            ra.is_call_site = true;
             fn_->append(current_block_, std::move(ra));
             out_value = v_dst;
             return true;
@@ -11943,6 +12092,18 @@ namespace vex {
             const std::string saved_class = current_class_lowering_;
             current_class_lowering_       = cd->name;
 
+            // Instrumentacion: vex_trace:enter al inicio del metodo
+            // (igual filtro que en lower_function -- saltamos solo helpers
+            // sinteticos; los ctors/dtors/metodos normales se instrumentan).
+            if (instrument_mode_ != "none" && instrument_mode_ != ""
+                && fn.name != "__module_init"
+                && fn.name.compare(0, 6, "__new_") != 0
+                && fn.name.compare(0, 8, "__async_") != 0
+                && fn.name.compare(0, 9, "__lambda_") != 0
+                && fn.name.compare(0, 8, "__spawn_") != 0) {
+                emit_instrument_enter(fn.name, m->loc.line);
+            }
+
             lower_block(m->body.get());
 
             current_class_lowering_ = saved_class;
@@ -12052,6 +12213,15 @@ namespace vex {
 
             // Cierre: anadir RET por defecto si el body no termino con uno.
             if (!block_terminated_) {
+                // Instrumentacion: vex_trace:leave antes del RET implicito.
+                if (instrument_mode_ != "none" && instrument_mode_ != ""
+                    && fn.name != "__module_init"
+                    && fn.name.compare(0, 6, "__new_") != 0
+                    && fn.name.compare(0, 8, "__async_") != 0
+                    && fn.name.compare(0, 9, "__lambda_") != 0
+                    && fn.name.compare(0, 8, "__spawn_") != 0) {
+                    emit_instrument_exit(fn.name, ir::IR_NO_VALUE, m->loc.line);
+                }
                 ir::IrInstr ret{};
                 ret.op   = ir::IrOp::RET;
                 ret.type = fn.ret_type;
@@ -12226,6 +12396,7 @@ namespace vex {
         asm_ << "findclass r12, r12\n";
         asm_ << "addsp rsp, 16\n";
     }
+
 
     void Lowering::generate_new_helpers(ir::IrModule &out) {
         // Para cada clase declarada en el modulo, generamos una funcion
@@ -12802,6 +12973,9 @@ namespace vex {
         ins.operands    = std::move(arg_vals);
         ins.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ins));
+        // Trackear tipo concreto del resultado para devirtualizacion
+        // de calls via interface receiver en compile time.
+        ssa_concrete_class_[dst] = e->class_name;
         return dst;
     }
 
@@ -12908,6 +13082,7 @@ namespace vex {
                 fc.dst         = v_cls;
                 fc.func_name   = fc_oss.str();
                 fc.source_line = e->loc.line;
+                fc.is_call_site = true;  // findclass clobera r5/r6/r12
                 fn_->append(current_block_, std::move(fc));
             }
             // 2) getstatic {dst}, {src0}, offset_imm  -> v_val.
@@ -13111,6 +13286,7 @@ namespace vex {
                 fc.dst         = v_cls;
                 fc.func_name   = fc_oss.str();
                 fc.source_line = loc.line;
+                fc.is_call_site = true;  // findclass clobera r5/r6/r12
                 fn_->append(current_block_, std::move(fc));
             }
             // 2) setstatic {src0}, {src1}, offset_imm  (sin dst).
@@ -13341,22 +13517,45 @@ namespace vex {
                                       : fn_->new_value(ret_ir);
 
         // -----------------------------------------------------------------
-        // Polimorfismo via interface type.
+        // Devirtualizacion compile-time: si el tipo concreto del receptor
+        // es estaticamente conocido (via @c ssa_concrete_class_), reescribir
+        // el dispatch a CALLVIRT directo usando el vtable_idx del metodo en
+        // la clase concreta.  Tanto port C como JIT consumen este CALLVIRT
+        // como direct call, sin coste runtime de findmethod/callm.
         //
-        // Si el receptor esta tipado como interfaz, el vtable_index del
-        // metodo en la INTERFAZ no necesariamente coincide con el slot del
-        // mismo metodo en la CLASE concreta del objeto receptor (cada
-        // clase puede tener su propio orden de metodos).  Para resolver
-        // correctamente, hacemos lookup por nombre en runtime:
-        //   1. getclass r12, obj            ; ClassInfo* del objeto real
-        //   2. findmethod r_method, params  ; busca metodo por nombre
-        //   3. callm r1=obj, r_method       ; dispatch dinamico
-        //
-        // Coste: ~3-4 instrucciones extra por llamada vs CALLVIRT directo,
-        // pero garantiza correctness sin requerir method packing entre
-        // implementadoras.  Las llamadas a clases concretas (no-interfaz)
-        // siguen usando CALLVIRT con vtable_idx -> overhead cero.
+        // Aplica cuando el receptor es una variable interface tipada pero
+        // su SSA value viene directamente de un @c new ConcreteClass()
+        // (caso comun: @c IServicio s = new ImplA();).
         // -----------------------------------------------------------------
+        if (lay.is_interface) {
+            auto it_conc = ssa_concrete_class_.find(obj);
+            if (it_conc != ssa_concrete_class_.end()) {
+                const std::string &concrete_name = it_conc->second;
+                auto it_lay = tc_.class_layouts().find(concrete_name);
+                if (it_lay != tc_.class_layouts().end()) {
+                    const auto &conc_lay = it_lay->second;
+                    // Buscar metodo por nombre en la clase concreta.
+                    for (const auto &cm: conc_lay.methods) {
+                        if (cm.name == mtd->name && !cm.is_constructor) {
+                            // CALLVIRT directo con el vtable_idx de la
+                            // clase concreta -> backend devirtaliza.
+                            ir::IrInstr cv{};
+                            cv.op   = ir::IrOp::CALLVIRT;
+                            cv.type = ret_ir;
+                            cv.dst  = dst;
+                            cv.imm  = static_cast<uint64_t>(cm.vtable_index);
+                            cv.operands.push_back(obj);
+                            for (auto av: arg_vals) cv.operands.push_back(av);
+                            cv.source_line = e->loc.line;
+                            fn_->append(current_block_, std::move(cv));
+                            // Propagar tipo concreto del retorno si es
+                            // tambien tipo class conocido.
+                            return dst;
+                        }
+                    }
+                }
+            }
+        }
         if (lay.is_interface) {
             // Marcar obj como host_ptr (instancia GC-derivada).
             fn_->values[obj].is_host_ptr = true;
@@ -14207,6 +14406,7 @@ namespace vex {
                                             via hierarchy analysis cuando es
                                             necesario.  Default false = seguro. */
             icls.is_interface   = cl.is_interface;
+            icls.is_aspect      = cl.is_aspect;
             icls.has_destructor = cl.has_destructor;
             icls.has_destructible_field = cl.has_destructible_field;
             icls.is_runtime_predefined  = false;
