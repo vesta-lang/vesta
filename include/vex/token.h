@@ -258,6 +258,8 @@ namespace vex {
         SEMICOLON,          ///< ;
         COLON,              ///< :
         DOT,                ///< .
+        DOTDOT,             ///< ..  (rango exclusivo en comptime for)
+        DOTDOTEQ,           ///< ..= (rango inclusivo en comptime for)
         ARROW,              ///< ->
         FAT_ARROW,          ///< =>
         QUESTION,           ///< ?

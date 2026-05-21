@@ -3,7 +3,7 @@
 
 # archivos de memoria temporales
 memoria_*
-*docx
+
 
 # carpetas de configuración de IDEs y entornos virtuales
 .idea
@@ -67,3 +67,4 @@ tests/vex/test_vex_e2e.sh
 tem
 temp
 tmp
+presentacion

@@ -589,6 +589,26 @@ namespace runtime {
 
         ExceptionFrame *exc_frame_stack = nullptr; ///< Pila de frames TRYENTER activos
 
+        /**
+         * @brief Free list de @c ExceptionFrames reciclables.
+         *
+         * Cuando @c tryleave (bytecode o JIT inline) pop-ea un frame del
+         * @c exc_frame_stack, en lugar de hacer @c delete (que llama a
+         * @c free de libc, ~30-100 ns + fragmentation del heap), lo empuja
+         * a este free list via el campo @c prev.  Subsequent @c tryenter
+         * busca aqui primero; si esta vacio, hace @c new normal.
+         *
+         * Beneficios:
+         *   - Cero leak: los frames se reusan, no se descartan.
+         *   - O(1) per try/tryleave (sin malloc/free amortizado).
+         *   - Inline JIT tryleave puede usar este free list directamente
+         *     emitiendo solo 2 instrucciones extra (set prev + update head).
+         *
+         * Los frames del free list se liberan en el destructor del
+         * ProcessVM via @c free_exc_pool (en .cpp).
+         */
+        ExceptionFrame *exc_free_list = nullptr;
+
         /// Slot reusable para FatalError instance.  Aloca lazy en
         /// el primer @c throw_fatal y se reutiliza en throws sucesivos
         /// (evita alocacion en heap durante un error fatal, donde el GC

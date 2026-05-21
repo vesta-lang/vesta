@@ -83,6 +83,8 @@ namespace jit {
         throw_fatal = &vrt_throw_fatal;
         tryenter    = &vrt_tryenter;
         tryleave    = &vrt_tryleave;
+        throw_user  = &vrt_throw_user;
+        rethrow     = &vrt_rethrow;
 
         // -----------------------------------------------------------------
         // FFI: invocacion de funciones nativas via puntero (CALLN del
@@ -101,6 +103,11 @@ namespace jit {
         callm       = &vrt_callm;
         callclosure = &vrt_callclosure;
         calln       = &vrt_calln;
+        // Trampoline JIT->interp para CALL/CALLVM cuando la callee es
+        // user-defined pero no se pudo JIT-compilar.  Permite que main +
+        // helpers basicos compilen sin requerir que TODOS sus callees
+        // sean JIT-supported.
+        call_bc_function = &vrt_call_bc_function;
 
         // -----------------------------------------------------------------
         // Acceso a vm_mem (memoria virtual del proceso) y al class
@@ -151,8 +158,10 @@ namespace jit {
                monitor_enter     && monitor_exit     && monitor_wait      &&
                monitor_notify    && monitor_notify_all &&
                throw_fatal       && tryenter         && tryleave          &&
+               throw_user        && rethrow          &&
                invoke_native     && callvirt         &&
                callm             && callclosure     && calln            &&
+               call_bc_function  &&
                vm_read_u64       && vm_write_u64    &&
                findclass         && newobj          && defclass         &&
                deffield          && defmethod       && addadvice        &&
