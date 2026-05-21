@@ -231,6 +231,13 @@ namespace vex {
         ///
         /// @c pointee = tipo T del payload.
         SHARED_PTR,
+        /// Type-as-first-class-value.  Sentinela usado SOLO en
+        /// declaraciones de @c comptime const Type T = comptime_type<X>().
+        /// No tiene representacion runtime (cero bytes); el ComptimeConst
+        /// asociado lleva el @c Type real en su campo @c type_val.  Al
+        /// usar `T` en posicion de tipo, `type_from_node` lo resuelve via
+        /// @c comptime_const_values_.
+        TYPE_META,
         // Sentinela para construir tablas planas.
         COUNT
     };
@@ -629,6 +636,8 @@ namespace vex {
             // via campo extra del Type).
             case PrimitiveKind::UNIQUE_PTR: return 8;
             case PrimitiveKind::SHARED_PTR: return 8;
+            // TYPE_META: marcador comptime sin storage runtime.
+            case PrimitiveKind::TYPE_META: return 0;
             case PrimitiveKind::COUNT:  return 0;
         }
         return 0;
@@ -781,6 +790,7 @@ namespace vex {
             case PrimitiveKind::BORROW_MUT: return "borrow_mut";
             case PrimitiveKind::UNIQUE_PTR: return "unique";
             case PrimitiveKind::SHARED_PTR: return "shared";
+            case PrimitiveKind::TYPE_META: return "Type";
             case PrimitiveKind::COUNT:  return "<count>";
         }
         return "<unknown>";

@@ -121,6 +121,14 @@ namespace vex {
          */
         [[nodiscard]] const std::string &filename() const noexcept { return filename_; }
 
+        /**
+         * @brief Acceso de solo lectura al codigo fuente completo.
+         *
+         * Usado por @c Parser para realizar @c expr-capture en macros:
+         * extrae texto raw entre dos offsets de @c SourceLoc.
+         */
+        [[nodiscard]] const std::string &source_buffer() const noexcept { return source_; }
+
     private:
         /**
          * @brief Avanza un caracter y actualiza linea/columna.

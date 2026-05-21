@@ -1154,7 +1154,13 @@ namespace vex {
             case ',':  return emit(TokenKind::COMMA,     1);
             case ';':  return emit(TokenKind::SEMICOLON, 1);
             case ':':  return emit(TokenKind::COLON,     1);
-            case '.':  return emit(TokenKind::DOT,       1);
+            case '.':
+                /* A.39: `..` y `..=` para rangos en comptime for. */
+                if (peek_char(1) == '.' && peek_char(2) == '=') {
+                    return emit(TokenKind::DOTDOTEQ, 3);
+                }
+                if (peek_char(1) == '.') return emit(TokenKind::DOTDOT, 2);
+                return emit(TokenKind::DOT, 1);
             case '?':  return emit(TokenKind::QUESTION,  1);
             case '@':  return emit(TokenKind::AT,        1);
             default:

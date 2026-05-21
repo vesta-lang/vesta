@@ -674,6 +674,21 @@ namespace ir {
         std::vector<std::string> generic_type_args;     ///< concretos sustituidos (paralelo a type_params)
 
         /**
+         * @brief Phase MC.1: marca esta IrFunction como derivada del
+         * body de un `@Macro`.  El nombre suele ser `__macro_<original>`.
+         * El TypeChecker mantiene un mapa name -> IrFunction* para
+         * recuperarla al ejecutar el macro via la ComptimeVM (Phase MC.2+).
+         *
+         * NO afecta el codegen ni la ejecucion runtime: estas funciones
+         * NO son linkeadas desde call sites de codigo runtime; solo
+         * existen como bytecode invocable desde el TypeChecker durante
+         * compile-time evaluation.
+         *
+         * @c false para todas las IrFunctions regulares.
+         */
+        bool                     is_macro_compiled = false;
+
+        /**
          * @brief Crea un nuevo valor SSA en el pool.
          * @param type Tipo del valor.
          * @param name Nombre opcional (si vacio se genera "%%N").
