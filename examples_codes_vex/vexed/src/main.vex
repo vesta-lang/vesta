@@ -1067,7 +1067,7 @@ i64 make_tab_last_err    = 0;
 // Para activar: cambiar `comptime i32 DEBUG_LOG = 0;` -> `... = 1;` y rebuild.
 void diag_log(string msg) {
     if (DEBUG_LOG == 0) return;
-    Result<i64, i32> rfp = file_io.open_file("F:\\C\\VM\\examples_codes_vex\\vexed\\vexed_diag.log", "ab");
+    Result<i64, i32> rfp = file_io.open_file("vexed_diag.log", "ab");
     if (!isOk(rfp)) return;
     i64 fp = value(rfp);
     file_io.write_bytes(fp, str_cstr(msg), (i32) str_bytes(msg));
@@ -1196,15 +1196,11 @@ void toggle_comment_line(buffer.Buffer b) {
 }
 
 i32 main() {
-    diag_log("=== main ENTRY ===");
     screen.Screen sc = new screen.Screen();
-    diag_log("main: Screen constructed");
 
     // ---------- F2: Launcher TUI inicial ----------
     launcher.Launcher lc = new launcher.Launcher();
-    diag_log("main: Launcher constructed");
     launcher.LauncherResult lr = lc.run(sc);
-    diag_log("main: launcher.run returned mode=${lr.mode}");
     if (lr.mode == launcher.LR_CANCEL) {
         sc.show_cursor();
         sc.move_cursor(sc.rows, 1);
