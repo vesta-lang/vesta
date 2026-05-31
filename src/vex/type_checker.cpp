@@ -2015,6 +2015,17 @@ namespace vex {
         reg_builtin("imin",  Type{PrimitiveKind::I64}, {PrimitiveKind::I64, PrimitiveKind::I64});
         reg_builtin("imax",  Type{PrimitiveKind::I64}, {PrimitiveKind::I64, PrimitiveKind::I64});
         reg_builtin("clamp", Type{PrimitiveKind::I64}, {PrimitiveKind::I64, PrimitiveKind::I64, PrimitiveKind::I64});
+        // Math-IR-promote v2.2a: float + bit ops nuevos.
+        reg_builtin("trunc",    Type{PrimitiveKind::F64}, {PrimitiveKind::F64});
+        reg_builtin("iminu",    Type{PrimitiveKind::U64}, {PrimitiveKind::U64, PrimitiveKind::U64});
+        reg_builtin("imaxu",    Type{PrimitiveKind::U64}, {PrimitiveKind::U64, PrimitiveKind::U64});
+        reg_builtin("ilog2",    Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
+        reg_builtin("popcount", Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
+        reg_builtin("clz",      Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
+        reg_builtin("ctz",      Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
+        reg_builtin("bswap",    Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
+        reg_builtin("rotl",     Type{PrimitiveKind::U64}, {PrimitiveKind::U64, PrimitiveKind::U64});
+        reg_builtin("rotr",     Type{PrimitiveKind::U64}, {PrimitiveKind::U64, PrimitiveKind::U64});
 
         // Identificadores magicos para colores y atributos ANSI.
         //

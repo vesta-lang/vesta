@@ -115,6 +115,17 @@ namespace ir {
         {"fsqrt",      IrOp::FSQRT},
         {"fmin",       IrOp::FMIN},
         {"fmax",       IrOp::FMAX},
+        {"ffloor",     IrOp::FFLOOR},
+        {"fceil",      IrOp::FCEIL},
+        {"fround",     IrOp::FROUND},
+        {"ftrunc",     IrOp::FTRUNC},
+        // aritmetica entera extendida (Math-IR-promote wave 4)
+        {"iabs",       IrOp::IABS},
+        {"imin",       IrOp::IMIN},
+        {"imax",       IrOp::IMAX},
+        {"iminu",      IrOp::IMINU},
+        {"imaxu",      IrOp::IMAXU},
+        {"ilog2",      IrOp::ILOG2},
         // logica y desplazamientos
         {"and",        IrOp::AND},
         {"or",         IrOp::OR},
@@ -123,6 +134,13 @@ namespace ir {
         {"shl",        IrOp::SHL},
         {"shr",        IrOp::SHR},
         {"sar",        IrOp::SAR},
+        // bit ops extendidos (Math-IR-promote wave 4)
+        {"clz",        IrOp::CLZ},
+        {"ctz",        IrOp::CTZ},
+        {"popcnt",     IrOp::POPCNT},
+        {"byteswap",   IrOp::BYTESWAP},
+        {"rotl",       IrOp::ROTL},
+        {"rotr",       IrOp::ROTR},
         // comparaciones enteras
         {"cmp.eq",     IrOp::CMP_EQ},
         {"cmp.ne",     IrOp::CMP_NE},

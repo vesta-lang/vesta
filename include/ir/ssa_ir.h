@@ -163,6 +163,19 @@ namespace ir {
         MOD      = 0x14, ///< %dst = mod.T    %a, %b
         NEG      = 0x15, ///< %dst = neg.T    %a       (negacion entera unaria)
 
+        // ---- aritmetica entera extendida (0x16-0x1F) ----
+        // raw_asm-elim wave 4 / Math-IR-promote: ops con instr nativa
+        // universal (x86 cmov/sar+xor+sub, ARM csel/abs, RISC-V min/max/abs).
+        IABS     = 0x16, ///< %dst = iabs.T %a            (|a|; INT_MIN undef en signed)
+        IMIN     = 0x17, ///< %dst = imin.T %a, %b        (min signed via cmov/csel)
+        IMAX     = 0x18, ///< %dst = imax.T %a, %b        (max signed via cmov/csel)
+        IMINU    = 0x19, ///< %dst = iminu.T %a, %b       (min unsigned)
+        IMAXU    = 0x1A, ///< %dst = imaxu.T %a, %b       (max unsigned)
+        ILOG2    = 0x1B, ///< %dst = ilog2.u32 %a         (highest bit pos; undef si a=0)
+                          ///<   Equivale a @c (63 - clz(a)) para u64.  Util en allocators,
+                          ///<   capacity calculations, hashing.  x86: @c bsr (3c) o
+                          ///<   @c (63 ^ lzcnt) ; ARM: @c clz + sub; RISC-V: @c clz.
+
         // ---- aritmetica flotante (0x20-0x2F) ----
         FADD     = 0x20, ///< %dst = fadd.fN  %a, %b
         FSUB     = 0x21, ///< %dst = fsub.fN  %a, %b
@@ -173,8 +186,14 @@ namespace ir {
         FSQRT    = 0x26, ///< %dst = fsqrt.fN %a        (raiz cuadrada)
         FMIN     = 0x27, ///< %dst = fmin.fN  %a, %b
         FMAX     = 0x28, ///< %dst = fmax.fN  %a, %b
-        // 0x29..0x2B reservados (antes FFLOOR/FCEIL/FROUND, eliminados; el
-        // frontend Vex baja a CALLN(stdlib/native/math/vesta_math:vmath_*)).
+        FFLOOR   = 0x29, ///< %dst = ffloor.fN %a        (round toward -inf)
+        FCEIL    = 0x2A, ///< %dst = fceil.fN  %a        (round toward +inf)
+        FROUND   = 0x2B, ///< %dst = fround.fN %a        (round to nearest, banker's)
+        FTRUNC   = 0x2C, ///< %dst = ftrunc.fN %a        (round toward zero)
+                          ///<   raw_asm-elim wave 4: las 4 son single-instr en x86
+                          ///<   (@c roundsd con bits 0-1 de imm8 = rounding mode), en
+                          ///<   ARM (@c frintm/p/n/z), en WASM (@c f64.floor/ceil/nearest/trunc)
+                          ///<   y en RISC-V (@c fcvt.l.d con rounding mode).  Reactivados.
 
         // ---- logica y desplazamientos (0x30-0x3F) ----
         AND      = 0x30, ///< %dst = and.T    %a, %b
@@ -184,6 +203,13 @@ namespace ir {
         SHL      = 0x34, ///< %dst = shl.T    %a, %n   (desplazamiento a izquierda)
         SHR      = 0x35, ///< %dst = shr.T    %a, %n   (logico, sin signo)
         SAR      = 0x36, ///< %dst = sar.T    %a, %n   (aritmetico, con signo)
+        // ---- bit ops extendidos (0x37-0x3F) ---- raw_asm-elim wave 4 / Math-IR-promote.
+        CLZ      = 0x37, ///< %dst = clz.u32 %a           (count leading zeros; x86 lzcnt, ARM clz)
+        CTZ      = 0x38, ///< %dst = ctz.u32 %a           (count trailing zeros; x86 tzcnt)
+        POPCNT   = 0x39, ///< %dst = popcnt.u32 %a        (Hamming weight; x86 popcnt, ARM cnt)
+        BYTESWAP = 0x3A, ///< %dst = byteswap.T %a        (endian swap; x86 bswap, ARM rev)
+        ROTL     = 0x3B, ///< %dst = rotl.T %a, %n        (rotate left; x86 rol, ARM ror neg)
+        ROTR     = 0x3C, ///< %dst = rotr.T %a, %n        (rotate right; x86 ror, ARM ror)
 
         // ---- comparaciones enteras (0x40-0x47) ----
         CMP_EQ   = 0x40, ///< %dst = cmp.eq.T  %a, %b  -> bool

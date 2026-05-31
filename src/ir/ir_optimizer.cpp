@@ -16,11 +16,32 @@
 #include <vector>
 #include <queue>
 #include <cstdint>
+#include <cstring>
+#include <cmath>
+#include <limits>
 #include <functional>
 #include <sstream>
 #include <algorithm>
 
 namespace ir {
+
+/* Helpers locales para constant folding de math IR ops (Math-IR-promote
+ * v2.2c).  Preservan bits IEEE 754 via memcpy para no perder precision
+ * en el round-trip uint64 <-> double que el IR usa. */
+namespace {
+    inline double  bits_to_f64(uint64_t b) noexcept {
+        double d; std::memcpy(&d, &b, sizeof(d)); return d;
+    }
+    inline uint64_t f64_to_bits(double d) noexcept {
+        uint64_t b; std::memcpy(&b, &d, sizeof(b)); return b;
+    }
+    inline float   bits_to_f32(uint32_t b) noexcept {
+        float f; std::memcpy(&f, &b, sizeof(f)); return f;
+    }
+    inline uint32_t f32_to_bits(float f) noexcept {
+        uint32_t b; std::memcpy(&b, &f, sizeof(b)); return b;
+    }
+}  // namespace
 
 // =========================================================================
 //  Utilidades internas
@@ -330,6 +351,17 @@ void rewrite_as_const(IrInstr &ins, uint64_t imm) {
     ins.false_block = IR_NO_BLOCK;
 }
 
+/** @brief Como @c rewrite_as_const pero ademas marca @c is_const + @c const_val
+ *         en el @c IrValue correspondiente para que consumers downstream
+ *         (regalloc/selector imm32 fold) detecten la constante. */
+void rewrite_as_const_with_value(IrFunction &fn, IrInstr &ins, uint64_t imm) {
+    rewrite_as_const(ins, imm);
+    if (ins.dst != IR_NO_VALUE && ins.dst < fn.values.size()) {
+        fn.values[ins.dst].is_const  = true;
+        fn.values[ins.dst].const_val = imm;
+    }
+}
+
 } // namespace
 
 bool ir_pass_simplify(IrFunction &fn) {
@@ -376,7 +408,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                         rewrite_as_mov(ins, ins.operands[0]);
                         changed = true;
                     } else if (ins.operands[0] == ins.operands[1]) {
-                        rewrite_as_const(ins, 0);
+                        rewrite_as_const_with_value(fn, ins, 0);
                         const_vids[ins.dst] = 0;
                         changed = true;
                     }
@@ -390,7 +422,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                             rewrite_as_mov(ins, ins.operands[0]);
                             changed = true;
                         } else if (c == 0) {
-                            rewrite_as_const(ins, 0);
+                            rewrite_as_const_with_value(fn, ins, 0);
                             const_vids[ins.dst] = 0;
                             changed = true;
                         }
@@ -399,7 +431,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                             rewrite_as_mov(ins, ins.operands[1]);
                             changed = true;
                         } else if (c == 0) {
-                            rewrite_as_const(ins, 0);
+                            rewrite_as_const_with_value(fn, ins, 0);
                             const_vids[ins.dst] = 0;
                             changed = true;
                         }
@@ -417,7 +449,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                         /* x / x = 1 (cuidado con x = 0 -> division by zero,
                          * pero el codigo SSA implica que ya se ha dividido,
                          * asi que x != 0; seguro reescribir como const 1) */
-                        rewrite_as_const(ins, 1);
+                        rewrite_as_const_with_value(fn, ins, 1);
                         const_vids[ins.dst] = 1;
                         changed = true;
                     }
@@ -428,12 +460,12 @@ bool ir_pass_simplify(IrFunction &fn) {
                     int64_t c = 0;
                     /* x % 1 = 0 */
                     if (get_const(ins.operands[1], c) && c == 1) {
-                        rewrite_as_const(ins, 0);
+                        rewrite_as_const_with_value(fn, ins, 0);
                         const_vids[ins.dst] = 0;
                         changed = true;
                     } else if (ins.operands[0] == ins.operands[1]) {
                         /* x % x = 0 (x != 0 implicito) */
-                        rewrite_as_const(ins, 0);
+                        rewrite_as_const_with_value(fn, ins, 0);
                         const_vids[ins.dst] = 0;
                         changed = true;
                     }
@@ -445,7 +477,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                     /* commutative: probar ambos operandos */
                     if (get_const(ins.operands[1], c)) {
                         if (c == 0) {
-                            rewrite_as_const(ins, 0);
+                            rewrite_as_const_with_value(fn, ins, 0);
                             const_vids[ins.dst] = 0;
                             changed = true;
                         } else if (c == -1) {
@@ -454,7 +486,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                         }
                     } else if (get_const(ins.operands[0], c)) {
                         if (c == 0) {
-                            rewrite_as_const(ins, 0);
+                            rewrite_as_const_with_value(fn, ins, 0);
                             const_vids[ins.dst] = 0;
                             changed = true;
                         } else if (c == -1) {
@@ -475,7 +507,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                             rewrite_as_mov(ins, ins.operands[0]);
                             changed = true;
                         } else if (c == -1) {
-                            rewrite_as_const(ins, static_cast<uint64_t>(-1));
+                            rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(-1));
                             const_vids[ins.dst] = -1;
                             changed = true;
                         }
@@ -484,7 +516,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                             rewrite_as_mov(ins, ins.operands[1]);
                             changed = true;
                         } else if (c == -1) {
-                            rewrite_as_const(ins, static_cast<uint64_t>(-1));
+                            rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(-1));
                             const_vids[ins.dst] = -1;
                             changed = true;
                         }
@@ -504,7 +536,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                         rewrite_as_mov(ins, ins.operands[1]);
                         changed = true;
                     } else if (ins.operands[0] == ins.operands[1]) {
-                        rewrite_as_const(ins, 0);
+                        rewrite_as_const_with_value(fn, ins, 0);
                         const_vids[ins.dst] = 0;
                         changed = true;
                     }
@@ -537,7 +569,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                     int64_t c = 0;
                     if (get_const(ins.operands[0], c)) {
                         int64_t ext = sign_extend_from(c, from_t);
-                        rewrite_as_const(ins, static_cast<uint64_t>(ext));
+                        rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(ext));
                         const_vids[ins.dst] = ext;
                         changed = true;
                     }
@@ -556,7 +588,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                     int64_t c = 0;
                     if (get_const(ins.operands[0], c)) {
                         uint64_t z = static_cast<uint64_t>(c) & type_mask(from_t);
-                        rewrite_as_const(ins, z);
+                        rewrite_as_const_with_value(fn, ins, z);
                         const_vids[ins.dst] = static_cast<int64_t>(z);
                         changed = true;
                     }
@@ -584,7 +616,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                         } else {
                             out_val = static_cast<int64_t>(v);
                         }
-                        rewrite_as_const(ins, static_cast<uint64_t>(out_val));
+                        rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(out_val));
                         const_vids[ins.dst] = out_val;
                         changed = true;
                     }
@@ -603,10 +635,320 @@ bool ir_pass_simplify(IrFunction &fn) {
                     }
                     int64_t c = 0;
                     if (get_const(ins.operands[0], c)) {
-                        rewrite_as_const(ins, static_cast<uint64_t>(c));
+                        rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(c));
                         const_vids[ins.dst] = c;
                         changed = true;
                     }
+                    break;
+                }
+
+                /* ---- (D) Math IR ops constant folding (sprint v2.2c) ----
+                 *
+                 * Cuando todos los operandos son CONST conocidos, evaluamos
+                 * la operacion en compile-time y reemplazamos por CONST
+                 * literal.  Float ops preservan bits IEEE 754 via memcpy.
+                 * Habilita propagacion downstream (e.g. `sqrt(25.0) + 3.0`
+                 * pliega a CONST 8.0 directamente). */
+                case IrOp::FSQRT:
+                case IrOp::FABS:
+                case IrOp::FNEG:
+                case IrOp::FFLOOR:
+                case IrOp::FCEIL:
+                case IrOp::FROUND:
+                case IrOp::FTRUNC: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    const bool is_f32 = (ins.type == IrType::F32);
+                    double in_v = is_f32
+                        ? static_cast<double>(bits_to_f32(static_cast<uint32_t>(c0)))
+                        : bits_to_f64(static_cast<uint64_t>(c0));
+                    double out_v = 0.0;
+                    switch (ins.op) {
+                        case IrOp::FSQRT:  out_v = std::sqrt(in_v); break;
+                        case IrOp::FABS:   out_v = std::fabs(in_v); break;
+                        case IrOp::FNEG:   out_v = -in_v;           break;
+                        case IrOp::FFLOOR: out_v = std::floor(in_v); break;
+                        case IrOp::FCEIL:  out_v = std::ceil(in_v);  break;
+                        case IrOp::FROUND: out_v = std::nearbyint(in_v); break;
+                        case IrOp::FTRUNC: out_v = std::trunc(in_v); break;
+                        default: break;
+                    }
+                    uint64_t out_bits = is_f32
+                        ? static_cast<uint64_t>(f32_to_bits(static_cast<float>(out_v)))
+                        : f64_to_bits(out_v);
+                    rewrite_as_const_with_value(fn, ins, out_bits);
+                    const_vids[ins.dst] = static_cast<int64_t>(out_bits);
+                    changed = true;
+                    break;
+                }
+                case IrOp::FADD:
+                case IrOp::FSUB:
+                case IrOp::FMUL:
+                case IrOp::FDIV:
+                case IrOp::FMIN:
+                case IrOp::FMAX: {
+                    if (ins.operands.size() < 2) break;
+                    int64_t c0 = 0, c1 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    if (!get_const(ins.operands[1], c1)) break;
+                    const bool is_f32 = (ins.type == IrType::F32);
+                    auto bits_to_dbl = [&](int64_t v) -> double {
+                        return is_f32
+                            ? static_cast<double>(bits_to_f32(static_cast<uint32_t>(v)))
+                            : bits_to_f64(static_cast<uint64_t>(v));
+                    };
+                    double a = bits_to_dbl(c0);
+                    double b = bits_to_dbl(c1);
+                    double r = 0.0;
+                    bool ok = true;
+                    switch (ins.op) {
+                        case IrOp::FADD: r = a + b; break;
+                        case IrOp::FSUB: r = a - b; break;
+                        case IrOp::FMUL: r = a * b; break;
+                        case IrOp::FDIV:
+                            /* Folding de FDIV por 0 produciria NaN/Inf
+                             * deterministico en IEEE 754; aceptable. */
+                            r = a / b; break;
+                        case IrOp::FMIN: r = std::fmin(a, b); break;
+                        case IrOp::FMAX: r = std::fmax(a, b); break;
+                        default: ok = false; break;
+                    }
+                    if (!ok) break;
+                    uint64_t out_bits = is_f32
+                        ? static_cast<uint64_t>(f32_to_bits(static_cast<float>(r)))
+                        : f64_to_bits(r);
+                    rewrite_as_const_with_value(fn, ins, out_bits);
+                    const_vids[ins.dst] = static_cast<int64_t>(out_bits);
+                    changed = true;
+                    break;
+                }
+                case IrOp::IABS: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    /* INT_MIN -> UB en C; el IR doc dice "undef".  Para no
+                     * crashear, dejar como esta (no foldear). */
+                    if (c0 == std::numeric_limits<int64_t>::min()) break;
+                    int64_t r = c0 < 0 ? -c0 : c0;
+                    rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                    const_vids[ins.dst] = r;
+                    changed = true;
+                    break;
+                }
+                case IrOp::IMIN:
+                case IrOp::IMAX: {
+                    if (ins.operands.size() < 2) break;
+                    int64_t c0 = 0, c1 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    if (!get_const(ins.operands[1], c1)) break;
+                    int64_t r = (ins.op == IrOp::IMIN)
+                        ? (c0 < c1 ? c0 : c1)
+                        : (c0 > c1 ? c0 : c1);
+                    rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                    const_vids[ins.dst] = r;
+                    changed = true;
+                    break;
+                }
+                case IrOp::IMINU:
+                case IrOp::IMAXU: {
+                    if (ins.operands.size() < 2) break;
+                    int64_t c0 = 0, c1 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    if (!get_const(ins.operands[1], c1)) break;
+                    uint64_t u0 = static_cast<uint64_t>(c0);
+                    uint64_t u1 = static_cast<uint64_t>(c1);
+                    uint64_t r = (ins.op == IrOp::IMINU)
+                        ? (u0 < u1 ? u0 : u1)
+                        : (u0 > u1 ? u0 : u1);
+                    rewrite_as_const_with_value(fn, ins, r);
+                    const_vids[ins.dst] = static_cast<int64_t>(r);
+                    changed = true;
+                    break;
+                }
+                case IrOp::ILOG2: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    uint64_t u = static_cast<uint64_t>(c0);
+                    if (u == 0) break; /* undef segun doc IR; no foldear. */
+                    int r = 63;
+                #if defined(__GNUC__) || defined(__clang__)
+                    r = 63 - __builtin_clzll(u);
+                #else
+                    for (r = 63; r >= 0 && ((u >> r) & 1ULL) == 0; --r) {}
+                #endif
+                    rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                    const_vids[ins.dst] = r;
+                    changed = true;
+                    break;
+                }
+                case IrOp::POPCNT: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    uint64_t u = static_cast<uint64_t>(c0);
+                    int r;
+                #if defined(__GNUC__) || defined(__clang__)
+                    r = __builtin_popcountll(u);
+                #else
+                    r = 0; for (; u; u &= u - 1) ++r;
+                #endif
+                    rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                    const_vids[ins.dst] = r;
+                    changed = true;
+                    break;
+                }
+                case IrOp::CLZ: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    uint64_t u = static_cast<uint64_t>(c0);
+                    if (u == 0) break; /* clz(0) undef en x86 lzcnt; no foldear. */
+                    int r;
+                #if defined(__GNUC__) || defined(__clang__)
+                    r = __builtin_clzll(u);
+                #else
+                    r = 0; while (((u >> 63) & 1ULL) == 0) { u <<= 1; ++r; }
+                #endif
+                    rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                    const_vids[ins.dst] = r;
+                    changed = true;
+                    break;
+                }
+                case IrOp::CTZ: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    uint64_t u = static_cast<uint64_t>(c0);
+                    if (u == 0) break; /* ctz(0) undef. */
+                    int r;
+                #if defined(__GNUC__) || defined(__clang__)
+                    r = __builtin_ctzll(u);
+                #else
+                    r = 0; while ((u & 1ULL) == 0) { u >>= 1; ++r; }
+                #endif
+                    rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                    const_vids[ins.dst] = r;
+                    changed = true;
+                    break;
+                }
+                case IrOp::BYTESWAP: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    uint64_t u = static_cast<uint64_t>(c0);
+                #if defined(__GNUC__) || defined(__clang__)
+                    u = __builtin_bswap64(u);
+                #else
+                    u = ((u & 0xFF00000000000000ULL) >> 56)
+                      | ((u & 0x00FF000000000000ULL) >> 40)
+                      | ((u & 0x0000FF0000000000ULL) >> 24)
+                      | ((u & 0x000000FF00000000ULL) >> 8)
+                      | ((u & 0x00000000FF000000ULL) << 8)
+                      | ((u & 0x0000000000FF0000ULL) << 24)
+                      | ((u & 0x000000000000FF00ULL) << 40)
+                      | ((u & 0x00000000000000FFULL) << 56);
+                #endif
+                    rewrite_as_const_with_value(fn, ins, u);
+                    const_vids[ins.dst] = static_cast<int64_t>(u);
+                    changed = true;
+                    break;
+                }
+                case IrOp::ROTL:
+                case IrOp::ROTR: {
+                    if (ins.operands.size() < 2) break;
+                    int64_t c0 = 0, c1 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    if (!get_const(ins.operands[1], c1)) break;
+                    uint64_t u = static_cast<uint64_t>(c0);
+                    unsigned n = static_cast<unsigned>(c1) & 63u;
+                    uint64_t r = (ins.op == IrOp::ROTL)
+                        ? ((u << n) | (n ? (u >> (64 - n)) : 0))
+                        : ((u >> n) | (n ? (u << (64 - n)) : 0));
+                    rewrite_as_const_with_value(fn, ins, r);
+                    const_vids[ins.dst] = static_cast<int64_t>(r);
+                    changed = true;
+                    break;
+                }
+                case IrOp::ITOF: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    const bool is_f32 = (ins.type == IrType::F32);
+                    double d = static_cast<double>(c0);
+                    uint64_t b = is_f32
+                        ? static_cast<uint64_t>(f32_to_bits(static_cast<float>(d)))
+                        : f64_to_bits(d);
+                    rewrite_as_const_with_value(fn, ins, b);
+                    const_vids[ins.dst] = static_cast<int64_t>(b);
+                    changed = true;
+                    break;
+                }
+                case IrOp::UITOF: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    const bool is_f32 = (ins.type == IrType::F32);
+                    double d = static_cast<double>(static_cast<uint64_t>(c0));
+                    uint64_t b = is_f32
+                        ? static_cast<uint64_t>(f32_to_bits(static_cast<float>(d)))
+                        : f64_to_bits(d);
+                    rewrite_as_const_with_value(fn, ins, b);
+                    const_vids[ins.dst] = static_cast<int64_t>(b);
+                    changed = true;
+                    break;
+                }
+                case IrOp::FTOI:
+                case IrOp::FTOUI: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    /* El tipo de la SOURCE (no del dst) decide ancho.  Para
+                     * conservar correctness, leemos el tipo del operando. */
+                    IrType src_t = (ins.operands[0] < fn.values.size())
+                                   ? fn.values[ins.operands[0]].type
+                                   : IrType::F64;
+                    double v = (src_t == IrType::F32)
+                        ? static_cast<double>(bits_to_f32(static_cast<uint32_t>(c0)))
+                        : bits_to_f64(static_cast<uint64_t>(c0));
+                    /* Out-of-range -> UB en C; saltar fold para NaN/Inf y
+                     * valores que no entran en int64.  Conservador. */
+                    if (!std::isfinite(v)) break;
+                    if (ins.op == IrOp::FTOI) {
+                        if (v < -9.2233720368547758e18 || v > 9.2233720368547758e18) break;
+                        int64_t r = static_cast<int64_t>(v);
+                        rewrite_as_const_with_value(fn, ins, static_cast<uint64_t>(r));
+                        const_vids[ins.dst] = r;
+                    } else {
+                        if (v < 0.0 || v > 1.8446744073709552e19) break;
+                        uint64_t r = static_cast<uint64_t>(v);
+                        rewrite_as_const_with_value(fn, ins, r);
+                        const_vids[ins.dst] = static_cast<int64_t>(r);
+                    }
+                    changed = true;
+                    break;
+                }
+                case IrOp::F32TOF64: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    double d = static_cast<double>(bits_to_f32(static_cast<uint32_t>(c0)));
+                    uint64_t b = f64_to_bits(d);
+                    rewrite_as_const_with_value(fn, ins, b);
+                    const_vids[ins.dst] = static_cast<int64_t>(b);
+                    changed = true;
+                    break;
+                }
+                case IrOp::F64TOF32: {
+                    if (ins.operands.empty()) break;
+                    int64_t c0 = 0;
+                    if (!get_const(ins.operands[0], c0)) break;
+                    float f = static_cast<float>(bits_to_f64(static_cast<uint64_t>(c0)));
+                    uint64_t b = static_cast<uint64_t>(f32_to_bits(f));
+                    rewrite_as_const_with_value(fn, ins, b);
+                    const_vids[ins.dst] = static_cast<int64_t>(b);
+                    changed = true;
                     break;
                 }
 

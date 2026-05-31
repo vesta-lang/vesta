@@ -3856,6 +3856,88 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // Aplicar optimizaciones IR
     ir_optimize(mod, opts.opt_level);
 
+    // ===================================================================
+    // Math-IR-promote: pre-pase que convierte IR ops sin bytecode opcode
+    // a CALLN equivalente.  Estos ops (FMIN/FMAX/FFLOOR/FCEIL/FROUND/
+    // FTRUNC/IABS/IMIN/IMAX/IMINU/IMAXU/ILOG2/CLZ/CTZ/POPCNT/BYTESWAP/
+    // ROTL/ROTR) existen como IR ops para que:
+    //   (a) El optimizer pueda constant-fold cuando los operandos son
+    //       literales.
+    //   (b) El Selector JIT pueda emitir instrucciones nativas
+    //       (sqrtsd/roundsd/popcnt/lzcnt/etc.) sin mini-parser.
+    //
+    // El VM bytecode no tiene opcodes nativos para estas ops todavia, por
+    // lo que el emitter las convierte a CALLN al runtime vmath.  El path
+    // bytecode pasa por libreria; el path JIT emite hardware directo.
+    // Cuando el runtime gane opcodes nativos (futuro sprint), este
+    // pre-pase ignora los ops correspondientes.
+    {
+        struct VmathMap { IrOp op; const char *fn; ir::IrType ret_ir; };
+        static const VmathMap vmath_table[] = {
+            // Float: bits IEEE 754 in/out como u64.
+            { IrOp::FFLOOR,   "vmath_floor",    ir::IrType::F64 },
+            { IrOp::FCEIL,    "vmath_ceil",     ir::IrType::F64 },
+            { IrOp::FROUND,   "vmath_round",    ir::IrType::F64 },
+            { IrOp::FTRUNC,   "vmath_trunc",    ir::IrType::F64 },
+            { IrOp::FMIN,     "vmath_fmin",     ir::IrType::F64 },
+            { IrOp::FMAX,     "vmath_fmax",     ir::IrType::F64 },
+            // Int (signed/unsigned).
+            { IrOp::IABS,     "vmath_abs",      ir::IrType::I64 },
+            { IrOp::IMIN,     "vmath_min",      ir::IrType::I64 },
+            { IrOp::IMAX,     "vmath_max",      ir::IrType::I64 },
+            { IrOp::IMINU,    "vmath_minu",     ir::IrType::I64 },
+            { IrOp::IMAXU,    "vmath_maxu",     ir::IrType::I64 },
+            { IrOp::ILOG2,    "vmath_ilog2",    ir::IrType::I64 },
+            // Bit ops.
+            { IrOp::CLZ,      "vmath_clz",      ir::IrType::I64 },
+            { IrOp::CTZ,      "vmath_ctz",      ir::IrType::I64 },
+            { IrOp::POPCNT,   "vmath_popcount", ir::IrType::I64 },
+            { IrOp::BYTESWAP, "vmath_bswap",    ir::IrType::I64 },
+            { IrOp::ROTL,     "vmath_rotl",     ir::IrType::I64 },
+            { IrOp::ROTR,     "vmath_rotr",     ir::IrType::I64 },
+        };
+        const std::string lib_math = "stdlib/native/math/vesta_math";
+        bool any_used = false;
+        for (auto &fn : mod.functions) {
+            for (auto &bb : fn.blocks) {
+                for (auto &ins : bb.instrs) {
+                    for (const auto &m : vmath_table) {
+                        if (ins.op != m.op) continue;
+                        ins.op        = IrOp::CALLN;
+                        ins.func_name = lib_math + ":" + m.fn;
+                        // Mantener type del dst original.  El emitter de
+                        // CALLN ya sabe pasar args via R1..RN.
+                        any_used = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (any_used) {
+            // Registrar los imports usados.  Re-iteramos solo los que
+            // aparecieron (any_used=true).  Es O(N*M) pero solo corre 1
+            // vez por modulo + M es chico (~18 entries).
+            for (const auto &m : vmath_table) {
+                bool used_here = false;
+                for (const auto &fn : mod.functions) {
+                    for (const auto &bb : fn.blocks) {
+                        for (const auto &ins : bb.instrs) {
+                            if (ins.op == IrOp::CALLN
+                             && ins.func_name == lib_math + ":" + m.fn) {
+                                used_here = true; break;
+                            }
+                        }
+                        if (used_here) break;
+                    }
+                    if (used_here) break;
+                }
+                if (used_here) {
+                    mod.register_native_import(lib_math, m.fn);
+                }
+            }
+        }
+    }
+
     std::ostringstream out;
 
     // Cabecera del modulo
