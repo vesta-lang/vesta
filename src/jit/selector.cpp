@@ -2127,6 +2127,48 @@ namespace jit {
                         break;
                     }
 
+                    case ir::IrOp::READ_VM_REG: {
+                        /* raw_asm-elim wave 3: lee proc->registers.regs[imm].qword().
+                         * Layout: VESTA_PROC_REGISTERS_OFFSET + N*VESTA_REGISTER_SIZE
+                         * (declarado en vesta_rt/abi.h: REGISTERS_OFFSET=96, SIZE=8).
+                         * El acceso es desde RBX (proc) + offset, sin runtime call. */
+                        if (ins.dst != ir::IR_NO_VALUE && ins.imm <= 15) {
+                            const int32_t reg_offset = static_cast<int32_t>(
+                                VESTA_PROC_REGISTERS_OFFSET
+                                + static_cast<int64_t>(ins.imm) * VESTA_REGISTER_SIZE);
+                            /* mov rax, [rbx + reg_offset]. */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_mem(MReg::RBX, reg_offset)));
+                            store_op(mf, ins.dst, MReg::RAX);
+                        }
+                        break;
+                    }
+
+                    case ir::IrOp::RETHROW:
+                    case ir::IrOp::SHARED_STAT:
+                    case ir::IrOp::RSPAWN_RETURN:
+                    case ir::IrOp::SMARTPTR_FREE:
+                    case ir::IrOp::REFLECT_COUNT:
+                    case ir::IrOp::REFLECT_AT:
+                    case ir::IrOp::MOD_LOAD:
+                    case ir::IrOp::DLOPEN:
+                    case ir::IrOp::DLSYM: {
+                        /* raw_asm-elim wave 2+3: 4 ops nuevos no soportados
+                         * en JIT v1.  Caen a unsupported -> el bytecode interp
+                         * los maneja correctamente.  Phase D.13 (native
+                         * unwinding) cubrira RETHROW; SHARED_STAT, SMARTPTR_FREE
+                         * y RSPAWN_RETURN son de baja frecuencia y aparecen
+                         * en cleanups (no en hot path). */
+                        warn_unsupported(ins.op, ins.source_line,
+                            "wave-3 IR op no implementada en Selector v1");
+                        unsupported = true;
+                        mf.blocks.back().instrs.push_back(
+                            {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                        break;
+                    }
+
                     case ir::IrOp::GC_DEREF_HOST: {
                         /* raw_asm-elim 2026-05-28: handle GC -> host_ptr.
                          * Reemplaza el blob RAW_ASM viejo con un CALL

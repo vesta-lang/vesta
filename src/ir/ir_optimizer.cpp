@@ -105,6 +105,20 @@ static bool is_side_effecting(IrOp op) {
         case IrOp::CALLSUPER:  case IrOp::PROCEED:
         case IrOp::FULFILL_HLT:
         case IrOp::STRGETBYTES:
+        // raw_asm-elim wave 3: nuevos ops con efecto observable.
+        case IrOp::RETHROW:         // relanza excepcion (side-effect explicito)
+        case IrOp::SHARED_STAT:     // op=2 (gc_collect) dispara STW + sweep
+        case IrOp::READ_VM_REG:     // lee reg arbitrario; el optimizer no debe asumir purity
+        case IrOp::RSPAWN_RETURN:   // mov r0 + hlt fusionado, terminator
+        // raw_asm-elim wave 2: cleanup deterministico de smart pointers.
+        case IrOp::SMARTPTR_FREE:   // invoca deleter (free/CALLN/CALLVM); side-effect
+        // raw_asm-elim wave 2: reflexion queries (escriben a R0, consultan estado).
+        case IrOp::REFLECT_COUNT:
+        case IrOp::REFLECT_AT:
+        // raw_asm-elim wave 2: FFI runtime ops (cargan/descargan DLLs, side-effects).
+        case IrOp::MOD_LOAD:      // loadmod ejecuta main del plugin (call site)
+        case IrOp::DLOPEN:        // LoadLibrary/dlopen (side-effect en OS)
+        case IrOp::DLSYM:         // GetProcAddress/dlsym (lookup en DLL state)
         case IrOp::GETPID:  case IrOp::GETARGC: case IrOp::GETARG:
         // ensamblador incrustado (nunca eliminar; semantica opaca)
         case IrOp::RAW_ASM:
@@ -118,7 +132,8 @@ static bool is_side_effecting(IrOp op) {
 static bool is_terminator(IrOp op) {
     return op == IrOp::BR   || op == IrOp::BR_COND ||
            op == IrOp::RET  || op == IrOp::UNREACHABLE ||
-           op == IrOp::THROW;
+           op == IrOp::THROW || op == IrOp::RETHROW ||
+           op == IrOp::RSPAWN_RETURN || op == IrOp::FULFILL_HLT;
 }
 
 /** @brief Devuelve true si la instruccion es pura (apta para DCE y CSE). */

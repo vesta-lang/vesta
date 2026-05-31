@@ -372,6 +372,67 @@ namespace ir {
         REJECT    = 0xC3, ///< reject   %future_handle, %error  (rechazar con codigo)
         FULFILL_HLT = 0xC4, ///< fulfillhlt %fut, %val           (fusion atomica fulfill+hlt)
         STRGETBYTES = 0xC5, ///< %n = strgetbytes.i64 %str       (byte_len del StringObject)
+        RETHROW     = 0xC6, ///< rethrow                         (relanza current_exception del handler)
+                            ///<   Terminator de bloque sin operandos.  Baja al bytecode
+                            ///<   @c rethrow (extended NONE).  Solo valido dentro del cuerpo
+                            ///<   de un catch handler donde la VM tiene @c current_exception
+                            ///<   seteada; en cualquier otro contexto el runtime lanza
+                            ///<   FATAL_ILLEGAL_INSTRUCTION.  Reemplaza el viejo
+                            ///<   RAW_ASM "rethrow\n" usado en synchronized cleanup.
+        SHARED_STAT = 0xC7, ///< %dst = shared_stat.T %op_code    (Phase Z introspect)
+                            ///<   op_code (i32 imm): 0=live_count (-> u32), 1=bytes (-> u64),
+                            ///<                       2=gc_collect (-> void).
+                            ///<   Reemplaza RAW_ASM "sharedstat ..." con un IR op tipado;
+                            ///<   el bytecode emitido sigue siendo el opcode extended 0xAD.
+        READ_VM_REG = 0xC8, ///< %dst = read_vm_reg.T imm=N      (leer @c proc->registers.regs[N])
+                            ///<   Lectura directa de un VM register por indice (0..15).
+                            ///<   Util para closure helper prologue (R14 = env_ptr), o
+                            ///<   cualquier patron donde el frontend necesita acceder a un
+                            ///<   reg fuera de la calling convention estandar R1..R12.
+                            ///<   El bytecode emitido es @c "mov {dst}, rN".  Reemplaza
+                            ///<   RAW_ASM "mov {dst}, r14\n".
+        RSPAWN_RETURN = 0xC9, ///< rspawn_return %payload         (mov r0, %payload + hlt fusionado)
+                            ///<   Terminator de bloque especifico de rspawn bodies.  El runtime
+                            ///<   distribuido detecta HALT en un proceso con
+                            ///<   @c rspawn_future_id != 0, captura R0 como payload y envia
+                            ///<   VDP_FUTURE_FULFILL al nodo origen.  Reemplaza RAW_ASM
+                            ///<   "mov r0, {src0}\nhlt\n".
+        REFLECT_COUNT = 0xCB, ///< %dst = reflect_count.<kind> %cls
+                            ///<   Reflexion: cuenta methods (kind=0) o fields (kind=1).
+                            ///<   imm = sub-op.  El emisor bytecode produce
+                            ///<   @c "methodcount/fieldcount {src0}\nmov {dst}, r0\n".
+                            ///<   Reemplaza RAW_ASM equivalente.
+        MOD_LOAD    = 0xCD, ///< %dst = mod_load.<kind> %path_addr, %path_len
+                            ///<   imm = kind: 0=loadmod, 1=unloadmod.  El emitter genera:
+                            ///<   @c "<mnem> r_path, r_len\nmov {dst}, r0\n".  loadmod ejecuta el
+                            ///<   main del modulo cargado (call site), unloadmod marca el slot
+                            ///<   como libre y devuelve 1/0.  Reemplaza RAW_ASM equivalentes.
+        DLOPEN      = 0xCE, ///< %dst = dlopen %path_addr, %path_len  (FFI runtime LoadLibrary/dlopen)
+                            ///<   Devuelve handle i64 a la libreria cargada (o 0 si falla).
+                            ///<   Reemplaza RAW_ASM "dlopen {dst}, r12, r11".
+        DLSYM       = 0xCF, ///< %dst = dlsym %handle, %name_addr, %name_len
+                            ///<   Devuelve fn_addr i64 del simbolo (o 0 si no existe).
+                            ///<   Reemplaza RAW_ASM "dlsym {dst}, r12, r11, r10".
+        REFLECT_AT  = 0xCC, ///< %dst = reflect_at.<kind> %cls, %idx
+                            ///<   Reflexion: devuelve &cls->methods[i] (kind=0) o
+                            ///<   &cls->fields[i] (kind=1).  imm = sub-op.  El emisor
+                            ///<   produce @c "getmethat/getfldat {src0}, {src1}\nmov {dst}, r0\n".
+        SMARTPTR_FREE = 0xCA, ///< smartptr_free.<kind> %ptr [, %deleter_addr] [, "label"]
+                            ///<   Cleanup deterministico de unique<T> con dispatch segun
+                            ///<   @c imm = kind:
+                            ///<     0 = SRET_DISPATCH (operands=[ptr, deleter_addr_at_slot+8],
+                            ///<                       func_name="")
+                            ///<         si ptr==0 -> skip; si deleter==0 -> free(ptr);
+                            ///<         si no -> callvmr deleter_addr(ptr).
+                            ///<     1 = EXTERN_CALLN  (operands=[ptr], func_name="<lib>:<fn>")
+                            ///<         si ptr==0 -> skip; si no -> calln @Method(...).
+                            ///<     2 = VESTA_CALLVM  (operands=[ptr], func_name="<fn_label>")
+                            ///<         si ptr==0 -> skip; si no -> callvm @Absolute("code.<fn>").
+                            ///<
+                            ///<   Reemplaza 3 blobs RAW_ASM con cmpu+jmp+mov+call+labels.
+                            ///<   El emisor bytecode expande a la secuencia equivalente con
+                            ///<   labels unicos.  Marcado side-effecting (siempre invoca un
+                            ///<   destructor o free).
 
         // ---- Meta-OOP / reflexion / Phase Z extras (0x71-0x7C) ----
         // Movido fuera del 0xA0-0xAF (OOP/GC) y 0x80-0x8F (llamadas) que
