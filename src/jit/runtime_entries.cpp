@@ -122,6 +122,7 @@ namespace jit {
         vm_write_u32 = &vrt_vm_write_u32;
         vm_write_u16 = &vrt_vm_write_u16;
         vm_write_u8  = &vrt_vm_write_u8;
+        vm_translate = &vrt_vm_translate;
         findclass    = &vrt_findclass;
         newobj         = &vrt_newobj;
         newobj_handle  = &vrt_newobj_handle;
