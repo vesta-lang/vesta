@@ -459,6 +459,28 @@ void     vrt_vm_write_u32(vrt_proc *proc, uint64_t vaddr, uint32_t value);
 void     vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value);
 void     vrt_vm_write_u8 (vrt_proc *proc, uint64_t vaddr, uint8_t  value);
 
+/**
+ * @brief Traduce una VM-addr a host_ptr via vm_mem.
+ *
+ * Phase D.jit-mem-model FULL: usado por el JIT en cada LOAD/STORE
+ * cuyo puntero tiene IR is_host_ptr=false (VM-addr semantica).
+ * Para is_host_ptr=true el JIT emite native mov directo sin esta
+ * llamada.
+ *
+ * Diseno portable: confia en is_host_ptr del IR (semanticamente
+ * preciso, marcado por el frontend) en lugar de range checks
+ * arbitrarios que no son portables cross-arch.
+ *
+ * Delega a @c proc->vm_mem.operator[](vaddr) que fuerza la
+ * asignacion perezosa de la pagina si no existe (igual semantica
+ * que el interp).  Coste: ~30 ns por call (page cache lookup).
+ *
+ * @param proc proceso actual.
+ * @param vaddr VM-addr.
+ * @return host_ptr al byte correspondiente.
+ */
+uint8_t *vrt_vm_translate(vrt_proc *proc, uint64_t vaddr);
+
 /* ========================================================================= */
 /* Class registry runtime entries (defclass/findclass/newobj/etc)            */
 /* ========================================================================= */

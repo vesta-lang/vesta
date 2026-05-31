@@ -192,6 +192,36 @@ extern "C" {
 /// El JIT lo embebe como disp32 en las instrucciones inline.  Mismo patron
 /// que @c nursery_bump_offset.
 
+#ifdef __cplusplus
+namespace vesta_rt {
+    /* Phase D.jit-mem-model INLINE-CACHE: offsets resueltos en runtime
+     * via offsetof.  Defined en abi_checks.cpp. */
+    extern const int32_t kProcVmMemOffset;
+    extern const int32_t kVmMemCachedPageVaddrOffset;
+    extern const int32_t kVmMemCachedPageHostOffset;
+}
+#endif
+
+/* ----------------------------------------------------------------------- */
+/* VirtualMemory page cache offsets (Phase D.jit-mem-model INLINE-CACHE)  */
+/* ----------------------------------------------------------------------- */
+/* El JIT emite inline el page cache hit para LOAD/STORE sobre VM-addrs:
+ *   page = vaddr & ~0xFFF
+ *   if (page == proc->vm_mem.cached_page_vaddr
+ *    && (vaddr & 0xFFF) + size <= 4096)
+ *       host_ptr = proc->vm_mem.cached_page_host + (vaddr & 0xFFF)
+ *       <native mov>
+ *   else
+ *       call vrt_vm_read_u<size> / write_u<size>
+ *
+ * Coste hit (95% accesos secuenciales en mismo stack page): ~5 ns
+ * Coste miss/cross-page: ~30 ns (call al runtime entry).
+ *
+ * Los offsets NO se pueden #define: dependen del compilador y el layout
+ * runtime de ProcessVM/VirtualMemory.  Se exponen via variables extern
+ * resueltas en runtime por @c abi_checks.cpp y se pasan al selector
+ * via @c SelectorOptions::vm_mem_cached_page_*_offset. */
+
 /* ----------------------------------------------------------------------- */
 /* ClassInfo + MethodInfo offsets (inline dispatch CALLVIRT)  */
 /* ----------------------------------------------------------------------- */

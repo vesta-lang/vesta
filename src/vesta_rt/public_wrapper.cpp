@@ -805,6 +805,28 @@ void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value) {
     as_proc(proc)->vm_mem.write_u8(vaddr, value);
 }
 
+uint8_t *vrt_vm_translate(vrt_proc *proc, uint64_t vaddr) {
+    /* Phase D.jit-mem-model FULL: traduccion VM-addr -> host_ptr.
+     *
+     * Diseno portable: confiamos en que el frontend marca
+     * is_host_ptr correctamente en el IR.  El JIT emite la llamada
+     * a vrt_vm_translate SOLO para LOAD/STORE de ptrs con
+     * is_host_ptr=false (VM-addrs).  Para is_host_ptr=true (malloc
+     * /new/fields GC) usa native mov directo, sin traduccion.
+     *
+     * Asi evitamos range checks arbitrarios (no portables a
+     * arquitecturas distintas o programas con address layouts
+     * inusuales) y nos apoyamos en la informacion semantica que
+     * el frontend ya tiene.
+     *
+     * El JIT garantiza llamar solo con un VM-addr; aqui asumimos
+     * eso y delegamos a vm_mem.  Si vaddr == 0 retornamos null
+     * para mantener la semantica de deref nulo. */
+    if (vaddr == 0) return nullptr;
+    if (!proc) return nullptr;
+    return &as_proc(proc)->vm_mem[vaddr];
+}
+
 /* ----------------------------------------------------------------------- */
 /* Class registry runtime entries (Phase D.3-G)                            */
 /* ----------------------------------------------------------------------- */

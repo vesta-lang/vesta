@@ -118,6 +118,8 @@ namespace jit {
         void       (*vm_write_u32)    (vrt_proc *, uint64_t, uint32_t)        = nullptr;
         void       (*vm_write_u16)    (vrt_proc *, uint64_t, uint16_t)        = nullptr;
         void       (*vm_write_u8)     (vrt_proc *, uint64_t, uint8_t)         = nullptr;
+        /* Phase D.jit-mem-model FULL: translate VM-addr/host_ptr -> host_ptr. */
+        uint8_t   *(*vm_translate)    (vrt_proc *, uint64_t)                  = nullptr;
 
         /* ----- Class registry (Phase D.3-G: findclass/newobj/defclass/...) ----- */
         vrt_class *(*findclass)       (vrt_proc *, uint64_t)                  = nullptr;
