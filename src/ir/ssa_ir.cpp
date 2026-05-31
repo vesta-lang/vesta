@@ -196,6 +196,7 @@ namespace ir {
         {"array_load",   IrOp::ARRAY_LOAD},
         {"array_store",  IrOp::ARRAY_STORE},
         {"gcderef_ir",   IrOp::GCDEREF_IR},
+        {"gc_deref_host", IrOp::GC_DEREF_HOST},
         // excepciones
         {"throw",        IrOp::THROW},
         {"tryenter",     IrOp::TRYENTER},
@@ -748,6 +749,11 @@ namespace ir {
 
             case IrOp::GCDEREF_IR:
                 // gcderef_ir %handle
+                if (!ins.operands.empty()) { o << " "; print_val(o, fn, ins.operands[0]); }
+                break;
+
+            case IrOp::GC_DEREF_HOST:
+                // %dst = gc_deref_host.ptr %handle
                 if (!ins.operands.empty()) { o << " "; print_val(o, fn, ins.operands[0]); }
                 break;
 

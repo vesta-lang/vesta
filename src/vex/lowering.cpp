@@ -1383,16 +1383,15 @@ namespace vex {
             const ir::IrValueId v_old = param_bindings[pi].second;
             const ir::IrType    t_old = fn_->values[v_old].type;
             const ir::IrValueId v_new = fn_->new_value(t_old);
-            ir::IrInstr         ra{};
-            ra.op        = ir::IrOp::RAW_ASM;
-            ra.type      = t_old;
-            ra.dst       = v_new;
-            ra.operands  = {v_old};
-            ra.func_name = std::string(
-                "// nonnull param: assert non-null en entry\n"
-                "unwrap {dst}, {src0}\n");
-            ra.source_line = p->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            // raw_asm-elim 2026-05-28: nonnull param check via IrOp::UNWRAP
+            // (lanza FATAL_NULL_POINTER si src==0).  Reemplaza RAW_ASM.
+            ir::IrInstr uw{};
+            uw.op          = ir::IrOp::UNWRAP;
+            uw.type        = t_old;
+            uw.dst         = v_new;
+            uw.operands    = {v_old};
+            uw.source_line = p->loc.line;
+            fn_->append(current_block_, std::move(uw));
             // Re-bind: futuros usos de p->name resuelven al valor unwrapped.
             if (fn_->values[v_old].is_host_ptr) {
                 fn_->values[v_new].is_host_ptr = true;
@@ -3939,18 +3938,15 @@ namespace vex {
                                                 s->loc.line);
                 }
             }
-            // Optimizado: emitimos `fulfillhlt {src0}, {src1}` en lugar de
-            // `fulfill + hlt` separados (1 instr VM en lugar de 2).
-            ir::IrInstr ra{};
-            ra.op        = ir::IrOp::RAW_ASM;
-            ra.type      = ir::IrType::VOID;
-            ra.dst       = ir::IR_NO_VALUE;
-            ra.operands  = {async_fut_id_, v_payload};
-            ra.func_name = std::string(
-                "// @Async return -> fulfillhlt (fusionado)\n"
-                "fulfillhlt {src0}, {src1}\n");
-            ra.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            // raw_asm-elim 2026-05-28: usar IrOp::FULFILL_HLT directo.
+            // Fusion atomica fulfill+hlt en 1 instr VM, mismo bytecode.
+            ir::IrInstr fh{};
+            fh.op          = ir::IrOp::FULFILL_HLT;
+            fh.type        = ir::IrType::VOID;
+            fh.dst         = ir::IR_NO_VALUE;
+            fh.operands    = {async_fut_id_, v_payload};
+            fh.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(fh));
             block_terminated_ = true;
             return;
         }
@@ -12182,17 +12178,15 @@ namespace vex {
                 /* Campo CLASS: el slot guarda un GcHandle, no un host_ptr.
                  * Hacemos gcderef para obtener host_ptr fresco post-GC. */
                 if (ftype.kind == PrimitiveKind::CLASS) {
+                    // raw_asm-elim 2026-05-28: gcderef + xchg -> IrOp::GC_DEREF_HOST.
                     ir::IrValueId v_host = fn_->new_value(ir::IrType::I64);
                     fn_->values[v_host].is_host_ptr  = true;
                     fn_->values[v_host].is_gc_object = true;
                     ir::IrInstr deref{};
-                    deref.op        = ir::IrOp::RAW_ASM;
-                    deref.type      = ir::IrType::I64;
-                    deref.dst       = v_host;
-                    deref.operands  = {dst};
-                    deref.func_name = std::string(
-                        "gcderef cur0, {src0}\n"
-                        "xchg cur0, {dst}\n");
+                    deref.op          = ir::IrOp::GC_DEREF_HOST;
+                    deref.type        = ir::IrType::PTR;
+                    deref.dst         = v_host;
+                    deref.operands    = {dst};
                     deref.source_line = e->loc.line;
                     fn_->append(current_block_, std::move(deref));
                     out_value = v_host;
@@ -14964,14 +14958,12 @@ namespace vex {
             const ir::IrValueId v_host       = fn_->new_value(ir::IrType::I64);
             fn_->values[v_host].is_host_ptr  = true;
             fn_->values[v_host].is_gc_object = true; {
+                // raw_asm-elim 2026-05-28: gcderef + xchg -> IrOp::GC_DEREF_HOST.
                 ir::IrInstr ra{};
-                ra.op        = ir::IrOp::RAW_ASM;
-                ra.type      = ir::IrType::I64;
-                ra.dst       = v_host;
-                ra.operands  = {v_handle};
-                ra.func_name = std::string(
-                    "gcderef cur0, {src0}\n"
-                    "xchg cur0, {dst}\n");
+                ra.op          = ir::IrOp::GC_DEREF_HOST;
+                ra.type        = ir::IrType::PTR;
+                ra.dst         = v_host;
+                ra.operands    = {v_handle};
                 ra.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(ra));
             }
@@ -15266,24 +15258,35 @@ namespace vex {
                 out_value = v_dst;
                 return true;
             }
+            // raw_asm-elim 2026-05-28: isPresent(p) = (p != null) implementado
+            // como secuencia de 2 IR ops:
+            //   v_is_null = ISNULL(v_arg)   -> i32 (0 = not null, 1 = null)
+            //   v_dst     = XOR(v_is_null, 1) -> i32 (invierte el bit 0)
+            // Esto reemplaza el RAW_ASM original que hacia `isnull + mov r14,1 + xor`.
+            // Beneficios: DCE puede eliminar la cadena si v_dst no se usa, el
+            // Selector JIT trata cada paso natively, y CSE puede fundir
+            // multiples isPresent del mismo arg.  Mismo bytecode emitido.
+            const ir::IrValueId v_is_null = fn_->new_value(ir::IrType::I32);
+            {
+                ir::IrInstr in{};
+                in.op          = ir::IrOp::ISNULL;
+                in.type        = ir::IrType::I32;
+                in.dst         = v_is_null;
+                in.operands    = {v_arg};
+                in.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(in));
+            }
+            const ir::IrValueId v_one = emit_const(ir::IrType::I32, 1, e->loc.line);
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-            ir::IrInstr         ra{};
-            ra.op       = ir::IrOp::RAW_ASM;
-            ra.type     = ir::IrType::I32;
-            ra.dst      = v_dst;
-            ra.operands = {v_arg};
-            // Pasos:
-            //   isnull {dst}, {src0}  ; {dst} = 1 si nulo, 0 si no
-            //   mov r14, 1
-            //   xor {dst}, r14        ; invertir el bit (1 -> 0, 0 -> 1)
-            // El XOR de la VM es bit-a-bit; como solo el bit 0 esta puesto,
-            // queda el resultado deseado.
-            ra.func_name = std::string(
-                "isnull {dst}, {src0}\n"
-                "mov r14, 1\n"
-                "xor {dst}, r14\n");
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            {
+                ir::IrInstr xr{};
+                xr.op          = ir::IrOp::XOR;
+                xr.type        = ir::IrType::I32;
+                xr.dst         = v_dst;
+                xr.operands    = {v_is_null, v_one};
+                xr.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(xr));
+            }
             out_value = v_dst;
             return true;
         }
@@ -15427,33 +15430,39 @@ namespace vex {
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
-            const char *mnem = is_wait
-                                   ? "monwait"
-                                   : is_notify
-                                         ? "monnoti"
-                                         : "monnota";
-            // Una sola RAW_ASM hace ptr->handle + operacion en el mismo handle.
-            // BugFix t13: wait(obj) debe re-adquirir el monitor tras
-            // despertar (semantica Java/POSIX condvar).  Emitimos
-            // `monwait + monenter` en la misma RAW_ASM.  Tras notify, el
-            // monwait avanza PC y la siguiente instruccion (monenter)
-            // re-bloquea hasta obtener el monitor de nuevo.
-            const ir::IrValueId v_handle = fn_->new_value(ir::IrType::HANDLE);
-            ir::IrInstr         ra{};
-            ra.op        = ir::IrOp::RAW_ASM;
-            ra.type      = ir::IrType::HANDLE;
-            ra.dst       = v_handle;
-            ra.operands  = {v_obj};
-            std::string txt = std::string("// ") + name + "(obj) -> gchandle + " + mnem + "\n"
-                            + "gchandle {dst}, {src0}\n"
-                            + mnem + " {dst}\n";
-            if (is_wait) {
-                // Re-adquirir el monitor tras wake (Java condvar semantica).
-                txt += "monenter {dst}\n";
+            // raw_asm-elim 2026-05-28: reemplazado el blob RAW_ASM original
+            // por una secuencia de IR ops nativos (GC_HANDLE_FOR_PTR +
+            // MONWAIT/MONNOTI/MONNOTA + MONENTER opcional).  Beneficios:
+            //   (a) DCE puede eliminar el handle si la op se elimina.
+            //   (b) El Selector JIT no tiene que parsear texto raw_asm.
+            //   (c) Cada paso es individualmente reorderable por el optimizer.
+            //   (d) Cero overhead vs el RAW_ASM previo: mismo bytecode emitido.
+            //
+            // BugFix t13 preservado: wait(obj) re-adquiere el monitor tras
+            // despertar (semantica Java/POSIX condvar) via MONENTER explicito.
+            const ir::IrValueId v_handle = emit_gc_handle_for_ptr(v_obj, e->loc.line);
+            ir::IrOp mop = is_wait ? ir::IrOp::MONWAIT
+                         : is_notify ? ir::IrOp::MONNOTI
+                                     : ir::IrOp::MONNOTA;
+            {
+                ir::IrInstr mi{};
+                mi.op          = mop;
+                mi.type        = ir::IrType::VOID;
+                mi.dst         = ir::IR_NO_VALUE;
+                mi.operands    = {v_handle};
+                mi.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(mi));
             }
-            ra.func_name = std::move(txt);
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            if (is_wait) {
+                // Re-adquirir el monitor tras wake.
+                ir::IrInstr me{};
+                me.op          = ir::IrOp::MONENTER;
+                me.type        = ir::IrType::VOID;
+                me.dst         = ir::IR_NO_VALUE;
+                me.operands    = {v_handle};
+                me.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(me));
+            }
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -17180,18 +17189,15 @@ namespace vex {
                         ld.operands    = {addr};
                         ld.source_line = m->loc.line;
                         fn_->append(current_block_, std::move(ld));
-                        // 2b) field_val = host_ptr fresco via gcderef + xchg.
+                        // raw_asm-elim 2026-05-28: 2b) host_ptr fresco via IrOp::GC_DEREF_HOST.
                         const ir::IrValueId field_val       = fn_->new_value(ir::IrType::I64);
                         fn_->values[field_val].is_host_ptr  = true;
                         fn_->values[field_val].is_gc_object = true;
                         ir::IrInstr deref{};
-                        deref.op        = ir::IrOp::RAW_ASM;
-                        deref.type      = ir::IrType::I64;
-                        deref.dst       = field_val;
-                        deref.operands  = {v_handle};
-                        deref.func_name = std::string(
-                            "gcderef cur0, {src0}\n"
-                            "xchg cur0, {dst}\n");
+                        deref.op          = ir::IrOp::GC_DEREF_HOST;
+                        deref.type        = ir::IrType::PTR;
+                        deref.dst         = field_val;
+                        deref.operands    = {v_handle};
                         deref.source_line = m->loc.line;
                         fn_->append(current_block_, std::move(deref));
                         // 3) is_null = (field_val == 0)
@@ -18178,22 +18184,18 @@ namespace vex {
                     no.source_line = e->loc.line;
                     fn_->append(current_block_, std::move(no));
                 }
-                // Conversion handle -> host_ptr via runtime entry pattern.
-                // gcderef + xchg en un solo RAW_ASM (2 bytes-instrs unica
-                // pieza no-IR).
+                // raw_asm-elim 2026-05-28: handle -> host_ptr via IrOp::GC_DEREF_HOST.
+                // El IR op produce dst sin clobber del src; equivalente
+                // semanticamente al RAW_ASM previo `gcderef + xchg + mov`.
                 const ir::IrValueId v_obj = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_obj].is_host_ptr  = true;
                 fn_->values[v_obj].is_gc_object = true;
                 {
                     ir::IrInstr ra{};
-                    ra.op          = ir::IrOp::RAW_ASM;
+                    ra.op          = ir::IrOp::GC_DEREF_HOST;
                     ra.type        = ir::IrType::PTR;
                     ra.dst         = v_obj;
                     ra.operands    = {v_handle};
-                    ra.func_name   =
-                        "gcderef cur0, {src0}\n"
-                        "xchg cur0, {src0}\n"
-                        "mov {dst}, {src0}\n";
                     ra.source_line = e->loc.line;
                     fn_->append(current_block_, std::move(ra));
                 }
@@ -18537,17 +18539,15 @@ namespace vex {
         // del campo seria stale si el objeto migro a OldGen entre el store
         // y este load -> segfault al hacer @c callvirt o leer fields.
         if (ftyp.kind == PrimitiveKind::CLASS) {
+            // raw_asm-elim 2026-05-28: gcderef + xchg -> IrOp::GC_DEREF_HOST.
             ir::IrValueId v_host             = fn_->new_value(ir::IrType::I64);
             fn_->values[v_host].is_host_ptr  = true;
             fn_->values[v_host].is_gc_object = true;
             ir::IrInstr deref{};
-            deref.op        = ir::IrOp::RAW_ASM;
-            deref.type      = ir::IrType::I64;
-            deref.dst       = v_host;
-            deref.operands  = {dst};
-            deref.func_name = std::string(
-                "gcderef cur0, {src0}\n"
-                "xchg cur0, {dst}\n");
+            deref.op          = ir::IrOp::GC_DEREF_HOST;
+            deref.type        = ir::IrType::PTR;
+            deref.dst         = v_host;
+            deref.operands    = {dst};
             deref.source_line = e->loc.line;
             fn_->append(current_block_, std::move(deref));
             return v_host;

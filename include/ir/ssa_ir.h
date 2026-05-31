@@ -336,6 +336,15 @@ namespace ir {
         ARRAY_LOAD  = 0xAC, ///< %v = array_load.T %arr, %idx       (carga con MOVC SIB stride)
         ARRAY_STORE = 0xAD, ///< array_store.T %arr, %idx, %val     (escritura + gcwb si HANDLE)
         GCDEREF_IR  = 0xAE, ///< gcderef_ir %handle                 (gcderef a cur0; ver nota)
+        GC_DEREF_HOST = 0xAF, ///< %dst = gc_deref_host.ptr %handle    (GcHandle -> host_ptr al payload)
+                              ///<   Combina @c gcderef + @c xchg en 1 IR op.  El emisor
+                              ///<   bytecode genera @c "gcderef cur0, r_src" + @c "xchg cur0, r_dst",
+                              ///<   2 instr VM como antes (sin nuevo opcode de bytecode), pero
+                              ///<   el optimizer ahora puede aplicar CSE (deduplicar conversiones
+                              ///<   del mismo handle dentro de un bloque), DCE (eliminar si
+                              ///<   dst no se usa), y el Selector JIT no tiene que parsear el
+                              ///<   patron en raw_asm.  Reemplaza el viejo blob
+                              ///<   `RAW_ASM "gcderef cur0, {src0}\nxchg cur0, {dst}\n"`.
 
         // ---- manejo de excepciones (0xB0-0xBF) ----
         THROW       = 0xB0, ///< throw %exc_obj                     (lanzar excepcion)
