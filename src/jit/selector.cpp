@@ -385,7 +385,11 @@ namespace jit {
                 if (ins.dst == ir::IR_NO_VALUE
                  || ins.dst >= host_in_jit.size()) continue;
                 switch (ins.op) {
-                    case ir::IrOp::ALLOCA:
+                    /* Phase D.jit-mem-model VM-STACK: ALLOCA YA NO se
+                     * seedea como host_in_jit porque ahora produce
+                     * VM-addr (consistente con IR is_host_ptr=false).
+                     * Solo se mantienen las ops que GENUINAMENTE
+                     * producen host_ptr en runtime. */
                     case ir::IrOp::GC_ALLOC:
                     case ir::IrOp::GC_ALLOCP:
                     case ir::IrOp::GC_DEREF_HOST:
@@ -455,37 +459,13 @@ namespace jit {
             if (!changed) break;
         }
 
-        /* Bypass restaurado (sprint INLINE-CACHE partial): LOAD/STORE
-         * sobre puntero !host_in_jit -> abort JIT-compile.  Las
-         * funciones con VM-addr LOAD/STORE caen a interp (que maneja
-         * vm_mem correctamente via VirtualMemory).  El inline cache
-         * hit + fallback vm_read/write esta implementado abajo y
-         * disponible para activarse cuando el modelo de memoria
-         * unificado (Phase D.jit-mem-model VM-STACK) este listo. */
-        for (size_t bi_chk2 = 0; bi_chk2 < ir_fn.blocks.size(); ++bi_chk2) {
-            for (const auto &ins_chk : ir_fn.blocks[bi_chk2].instrs) {
-                if ((ins_chk.op == ir::IrOp::LOAD
-                  || ins_chk.op == ir::IrOp::STORE)
-                 && !ins_chk.operands.empty()) {
-                    const ir::IrValueId p =
-                        (ins_chk.op == ir::IrOp::STORE
-                         && ins_chk.operands.size() >= 2)
-                            ? ins_chk.operands[1]
-                            : ins_chk.operands[0];
-                    if (p == ir::IR_NO_VALUE || p >= host_in_jit.size()) continue;
-                    if (!host_in_jit[p]) {
-                        if (jit::g_jit_warn_unsupported) {
-                            std::fprintf(stderr,
-                                "[jit] selector: LOAD/STORE VM-ptr en fn '%s' "
-                                "linea %u; fallback a interp\n",
-                                ir_fn.name.c_str(), ins_chk.source_line);
-                        }
-                        if (out_unsupported) *out_unsupported = true;
-                        return mf;
-                    }
-                }
-            }
-        }
+        /* Phase D.jit-mem-model VM-STACK: el bypass que abortaba JIT
+         * para LOAD/STORE !host_in_jit ya NO es necesario.  El modelo
+         * unificado: ALLOCAs en VM-stack, host_ptrs en is_host_ptr=true.
+         * El LOAD/STORE path emite:
+         *   - host_in_jit=true (malloc/new/fields GC): native mov.
+         *   - !host_in_jit (VM-addr de ALLOCA/param): inline page cache
+         *     hit + fallback vrt_vm_read/write per-size.  */
 
         /* LICM para ALLOCA: las ALLOCAs en bloques no-entry causan
          * stack overflow si estan dentro de loops (cada iter consume
@@ -592,6 +572,18 @@ namespace jit {
         const size_t num_values = ir_fn.values.size();
         uint32_t slot_bytes = static_cast<uint32_t>(num_values * 8);
         if (slot_bytes & 15) slot_bytes = (slot_bytes + 15) & ~15u;
+
+        /* Phase D.jit-mem-model VM-STACK: reservamos 16 bytes extras al
+         * tope del frame (justo bajo los slots SSA) para:
+         *   - saved_vm_rsp: VM-RSP original al entry, restaurado al RET.
+         *   - hoisted_base:  VM-RSP post-hoist, base de las ALLOCAs hoisted.
+         * Offsets desde RBP (constantes durante toda la funcion).
+         * Solo se usan si la funcion tiene ALLOCAs; el overhead es 16
+         * bytes extra del frame en CADA funcion (insignificante). */
+        const int32_t vm_rsp_save_off  = -static_cast<int32_t>(slot_bytes + 8);
+        const int32_t hoisted_base_off = -static_cast<int32_t>(slot_bytes + 16);
+        const uint32_t VM_STACK_SLOTS_BYTES = 16;
+
         /* Padding fijo para alinear rsp + shadow space (solo Win64). */
         constexpr uint32_t ALIGN_PAD = 8;
 #if defined(_WIN32)
@@ -599,7 +591,7 @@ namespace jit {
 #else
         constexpr uint32_t SHADOW_SPACE = 0;
 #endif
-        uint32_t frame_size = slot_bytes + ALIGN_PAD + SHADOW_SPACE;
+        uint32_t frame_size = slot_bytes + VM_STACK_SLOTS_BYTES + ALIGN_PAD + SHADOW_SPACE;
         mf.stack_frame_size = frame_size;
 
         /* Internar la direccion del safepoint handler en el imm64_pool
@@ -734,38 +726,85 @@ namespace jit {
                     MOperand::make_imm32(static_cast<int32_t>(frame_size))));
         }
 
-        /* LICM ALLOCA hoist: reservar TODAS las ALLOCAs de bloques
-         * no-entry al inicio del prologue.  El slot stack persiste
-         * durante toda la funcion (libre al RET via leave).  El IR op
-         * ALLOCA dentro del loop body NO se procesa normalmente; en su
-         * lugar reescribimos su efecto a "mov dst, rbp - hoisted_off_from_rbp".
+        /* Phase D.jit-mem-model VM-STACK: ALLOCAs ahora viven en VM-stack
+         * (consistente con interp), no en host stack.  Eso permite:
+         *   - Mixing JIT/interp seguro (mismo modelo de memoria).
+         *   - Sin host stack overflow (i32[100000] etc. funcionan).
+         *   - LOAD/STORE sobre ALLOCA-derived ptr va por inline page
+         *     cache hit (~5 ns) o fallback vm_read/write.
          *
-         * Computamos offset desde rbp (estable durante toda la fn) en
-         * vez de desde rsp (cambia con sub/add) para que el ALLOCA en
-         * el body produzca el MISMO ptr en cada iter.
-         *
-         * Mapa: VID -> offset NEGATIVO desde rbp. */
-        std::unordered_map<ir::IrValueId, int32_t> hoisted_rbp_offset;
-        uint64_t hoisted_total = 0;
-        if (!hoisted_order.empty()) {
-            uint64_t accum = 0;
-            for (const auto &kv : hoisted_order) {
-                accum += kv.second;
-                /* La ALLOCA con accum bytes acumulados (entre la primera
-                 * hoisted y esta) ocupa [rbp - frame_size - accum,
-                 *                        rbp - frame_size - accum + kv.second).
-                 * El puntero al inicio del slot es rbp - frame_size - accum. */
-                const int64_t off_signed = -(static_cast<int64_t>(frame_size)
-                                            + static_cast<int64_t>(accum));
-                hoisted_rbp_offset[kv.first] = static_cast<int32_t>(off_signed);
+         * Detectamos si la fn tiene ALLOCAs (hoisted o no) para emitir
+         * el save de VM-RSP solo cuando sea necesario (cero overhead
+         * para fns sin ALLOCA, mayoria del codigo). */
+        bool fn_has_alloca = !hoisted_order.empty();
+        if (!fn_has_alloca && opts_.mode == SelectorMode::VM_ABI) {
+            for (const auto &blk : ir_fn.blocks) {
+                for (const auto &ins_chk : blk.instrs) {
+                    if (ins_chk.op == ir::IrOp::ALLOCA) {
+                        fn_has_alloca = true;
+                        break;
+                    }
+                }
+                if (fn_has_alloca) break;
             }
+        }
+
+        /* Save VM-RSP original al saved_vm_rsp slot.  Cualquier ALLOCA
+         * mas adelante modificara VM-RSP; el RET restaurara desde aqui. */
+        if (fn_has_alloca && opts_.mode == SelectorMode::VM_ABI) {
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_unary(MOp::MOV,
+                    MOperand::make_reg(SCRATCH_A),
+                    MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET)));
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_unary(MOp::MOV,
+                    MOperand::make_mem(MReg::RBP, vm_rsp_save_off),
+                    MOperand::make_reg(SCRATCH_A)));
+        }
+
+        /* LICM ALLOCA hoist en VM-stack: reservar todas las ALLOCAs de
+         * bloques no-entry al inicio del prologue, restando una sola vez
+         * de VM-RSP.  Cada ALLOCA hoisted retorna hoisted_base + offset_fijo.
+         *
+         * Mapa: VID -> offset POSITIVO desde hoisted_base (= VM-RSP
+         * post-hoist).  Computamos offsets tras conocer total. */
+        std::unordered_map<ir::IrValueId, int32_t> hoisted_vm_offset;
+        uint64_t hoisted_total = 0;
+        if (!hoisted_order.empty() && opts_.mode == SelectorMode::VM_ABI) {
+            uint64_t accum = 0;
+            for (const auto &kv : hoisted_order) accum += kv.second;
             hoisted_total = accum;
-            /* sub rsp, hoisted_total -- reserva todo el bloque hoisted. */
+            /* offset desde hoisted_base = total - accum_runup (orden de
+             * hoist en hoisted_order da la pila descendente del VM). */
+            uint64_t accum_runup = 0;
+            for (const auto &kv : hoisted_order) {
+                accum_runup += kv.second;
+                const int32_t off = static_cast<int32_t>(hoisted_total - accum_runup);
+                hoisted_vm_offset[kv.first] = off;
+            }
+            /* SCRATCH_A ya tiene VM-RSP original (cargado arriba).
+             *   sub rax, hoisted_total
+             *   mov [rbx + STACK_POINTER_OFFSET], rax
+             *   mov [rbp + hoisted_base_off], rax
+             * Despues cada ALLOCA hoisted reads [rbp + hoisted_base_off]
+             * + add fixed_offset. */
             mf.blocks[prologue].instrs.push_back(
                 MInstr::make_unary(MOp::SUB,
-                    MOperand::make_reg(MReg::RSP),
+                    MOperand::make_reg(SCRATCH_A),
                     MOperand::make_imm32(static_cast<int32_t>(hoisted_total))));
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_unary(MOp::MOV,
+                    MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET),
+                    MOperand::make_reg(SCRATCH_A)));
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_unary(MOp::MOV,
+                    MOperand::make_mem(MReg::RBP, hoisted_base_off),
+                    MOperand::make_reg(SCRATCH_A)));
         }
+
+        /* Map dummy para el codigo viejo que iteraba hoisted_rbp_offset.
+         * Lo reescribiremos abajo en el case ALLOCA usando hoisted_vm_offset. */
+        std::unordered_map<ir::IrValueId, int32_t> hoisted_rbp_offset; /* unused, kept for ABI */
 
         /* Params: copiar a slots stack segun el ABI activo. */
         if (opts_.mode == SelectorMode::NATIVE_ABI) {
@@ -1123,54 +1162,85 @@ namespace jit {
                         break;
                     }
 
-                    /* --------- ALLOCA --------- */
+                    /* --------- ALLOCA (Phase D.jit-mem-model VM-STACK) ---
+                     *
+                     * Las ALLOCAs viven en VM-stack (mismo modelo que
+                     * interp).  Asi:
+                     *   - El IR is_host_ptr=false del ALLOCA dst es
+                     *     consistente con el runtime real (VM-addr).
+                     *   - Mixing JIT/interp es seguro.
+                     *   - Arrays grandes (i32[100000]) no causan host
+                     *     stack overflow.
+                     *
+                     * Hoisted: addr = [rbp + hoisted_base_off] + offset_fijo
+                     *          (offset positivo precomputado en prologue).
+                     * Non-hoisted (entry):
+                     *          mov rax, [rbx + STACK_POINTER_OFFSET]
+                     *          sub rax, aligned_size
+                     *          mov [rbx + STACK_POINTER_OFFSET], rax
+                     *          mov [slot_dst], rax */
                     case IrOp::ALLOCA: {
-                        /* Si esta ALLOCA fue hoisted, computar su addr
-                         * RELATIVA a rbp (estable durante toda la fn).
-                         * En cada iter del loop, dst recibe el mismo ptr.
-                         * Patron: mov rax, rbp; add rax, off_signed (o
-                         * sub rax, |off_signed|); store dst, rax. */
-                        auto hoist_it = hoisted_rbp_offset.find(ins.dst);
-                        if (hoist_it != hoisted_rbp_offset.end()) {
-                            const int32_t off = hoist_it->second;
+                        if (opts_.mode != SelectorMode::VM_ABI) {
+                            /* NATIVE_ABI (tests sintieticos): mantener
+                             * host stack para compatibilidad. */
+                            const uint64_t size_bytes = ins.imm;
+                            if (size_bytes > 0 && size_bytes < INT32_MAX) {
+                                const uint64_t aligned =
+                                    (size_bytes + 15ULL) & ~15ULL;
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::SUB,
+                                        MOperand::make_reg(MReg::RSP),
+                                        MOperand::make_imm32(
+                                            static_cast<int32_t>(aligned))));
+                            }
+                            store_op(mf, ins.dst, MReg::RSP);
+                            break;
+                        }
+
+                        /* Hoisted: la reserva ya se hizo en el prologue;
+                         * solo computar el ptr dentro del bloque hoisted. */
+                        auto hv_it = hoisted_vm_offset.find(ins.dst);
+                        if (hv_it != hoisted_vm_offset.end()) {
+                            const int32_t off_in_block = hv_it->second;
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_reg(SCRATCH_A),
-                                    MOperand::make_reg(MReg::RBP)));
-                            if (off < 0) {
-                                mf.blocks.back().instrs.push_back(
-                                    MInstr::make_unary(MOp::SUB,
-                                        MOperand::make_reg(SCRATCH_A),
-                                        MOperand::make_imm32(-off)));
-                            } else if (off > 0) {
+                                    MOperand::make_mem(MReg::RBP, hoisted_base_off)));
+                            if (off_in_block != 0) {
                                 mf.blocks.back().instrs.push_back(
                                     MInstr::make_unary(MOp::ADD,
                                         MOperand::make_reg(SCRATCH_A),
-                                        MOperand::make_imm32(off)));
+                                        MOperand::make_imm32(off_in_block)));
                             }
                             store_op(mf, ins.dst, SCRATCH_A);
                             break;
                         }
-                        /* Reservar @c ins.imm bytes en el stack nativo y
-                         * almacenar el puntero en el slot del dst.  Estilo
-                         * "stack grow" en sitio -- el epilogue (`mov rsp,
-                         * rbp; pop rbp`) los libera automaticamente al RET.
-                         *
-                         * Alineamos a 16 bytes para mantener stack
-                         * discipline (calling convention SysV/Win64
-                         * requiere rsp 16-aligned ANTES de un CALL). */
+
+                        /* Non-hoisted (entry block).  Reservar en VM-stack
+                         * via proc->stack_pointer. */
                         const uint64_t size_bytes = ins.imm;
-                        if (size_bytes > 0 && size_bytes < INT32_MAX) {
-                            const uint64_t aligned =
-                                (size_bytes + 15ULL) & ~15ULL;
+                        const uint64_t aligned =
+                            (size_bytes > 0 && size_bytes < INT32_MAX)
+                                ? ((size_bytes + 15ULL) & ~15ULL)
+                                : 0ULL;
+                        /* mov rax, [rbx + STACK_POINTER_OFFSET] */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET)));
+                        if (aligned > 0) {
+                            /* sub rax, aligned */
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::SUB,
-                                    MOperand::make_reg(MReg::RSP),
-                                    MOperand::make_imm32(
-                                        static_cast<int32_t>(aligned))));
+                                    MOperand::make_reg(SCRATCH_A),
+                                    MOperand::make_imm32(static_cast<int32_t>(aligned))));
+                            /* mov [rbx + STACK_POINTER_OFFSET], rax */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET),
+                                    MOperand::make_reg(SCRATCH_A)));
                         }
-                        /* Guardar el puntero (rsp actual) en el slot dst. */
-                        store_op(mf, ins.dst, MReg::RSP);
+                        store_op(mf, ins.dst, SCRATCH_A);
                         break;
                     }
 
@@ -1307,21 +1377,142 @@ namespace jit {
                                 return mf;
                             }
 
-                            /* TEMP: inline cache deshabilitada para debug. */
-                            const bool inline_cache_ok = false;
-                            const MLabelId done_label = MLABEL_INVALID;
+                            /* Phase D.jit-mem-model INLINE-CACHE activado.
+                             *
+                             * Inline page cache hit: si la pagina del vaddr
+                             * coincide con cached_page_vaddr y no cruza
+                             * boundary, native mov directo (~5 ns).
+                             * Si miss/cross-page, fallback runtime call.
+                             *
+                             * Patron x86-64:
+                             *   mov rax, rcx           ; rcx = vaddr
+                             *   and rax, -4096
+                             *   cmp rax, [rbx + page_v_disp]
+                             *   jne miss
+                             *   mov rdx, rcx           ; offset = vaddr & 0xFFF
+                             *   and rdx, 4095
+                             *   [cmp rdx, 4096-size; ja miss  ; cross-page check]
+                             *   mov rax, [rbx + page_h_disp]
+                             *   add rax, rdx
+                             *   native MOV/MOVSX/MOVZX
+                             *   jmp done
+                             *  miss:
+                             *   ; runtime call vrt_vm_read_u<size>
+                             *  done: */
+                            const bool inline_cache_ok =
+                                vesta_rt::kProcVmMemOffset != 0
+                             && vesta_rt::kVmMemCachedPageVaddrOffset >= 0
+                             && vesta_rt::kVmMemCachedPageHostOffset >= 0;
+                            const MLabelId miss_label =
+                                inline_cache_ok ? mf.new_label() : MLABEL_INVALID;
+                            const MLabelId done_label =
+                                inline_cache_ok ? mf.new_label() : MLABEL_INVALID;
 
-                            /* Fallback: call vrt_vm_read_u<size>(proc, vaddr) */
+                            if (inline_cache_ok) {
+                                const int32_t page_v_disp =
+                                    vesta_rt::kProcVmMemOffset + vesta_rt::kVmMemCachedPageVaddrOffset;
+                                const int32_t page_h_disp =
+                                    vesta_rt::kProcVmMemOffset + vesta_rt::kVmMemCachedPageHostOffset;
+
+                                /* SCRATCH_B (RCX) tiene vaddr tras el
+                                 * load_op anterior.  Copiamos a SCRATCH_C
+                                 * (RDX) directamente con un MOV reg-reg
+                                 * (que NO es optimizable por slot peephole).
+                                 * Asi tenemos vaddr en ambos para usar
+                                 * en page-align (RAX) y offset (RDX). */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_C),
+                                        MOperand::make_reg(SCRATCH_B)));
+                                /* mov rax, rdx  (page-align candidate) */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_reg(SCRATCH_C)));
+                                /* and rax, -4096  (page-aligned vaddr) */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::AND,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_imm32(-4096)));
+                                /* cmp rax, [rbx + page_v_disp] */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::CMP,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_mem(JIT_PROC_REG, page_v_disp)));
+                                /* jne miss */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_jcc(MCond::NE, miss_label));
+                                /* Recompute offset within page sobre RDX
+                                 * (que tiene vaddr).  Tras este AND, RDX
+                                 * tiene offset (perdimos vaddr). */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::AND,
+                                        MOperand::make_reg(SCRATCH_C),
+                                        MOperand::make_imm32(4095)));
+                                /* Cross-page check si size > 1. */
+                                if (lbytes > 1) {
+                                    const int32_t max_off =
+                                        4096 - static_cast<int32_t>(lbytes);
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::CMP,
+                                            MOperand::make_reg(SCRATCH_C),
+                                            MOperand::make_imm32(max_off)));
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_jcc(MCond::A, miss_label));
+                                }
+                                /* mov rax, [rbx + page_h_disp]  ; cached_host */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_mem(JIT_PROC_REG, page_h_disp)));
+                                /* add rax, rdx  ; host_ptr = host_base + offset */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::ADD,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_reg(SCRATCH_C)));
+                                /* native LOAD desde [SCRATCH_A] segun size/sign. */
+                                if (lbytes == 0 || lbytes >= 8) {
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::MOV,
+                                            MOperand::make_reg(SCRATCH_A, 8),
+                                            MOperand::make_mem(SCRATCH_A, 0)));
+                                } else if (lsigned) {
+                                    MOperand mem_op = MOperand::make_mem(SCRATCH_A, 0);
+                                    mem_op.flags = static_cast<uint8_t>(lbytes);
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::MOVSX,
+                                            MOperand::make_reg(SCRATCH_A, 8),
+                                            mem_op));
+                                } else if (lbytes == 4) {
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::MOV,
+                                            MOperand::make_reg(SCRATCH_A, 4),
+                                            MOperand::make_mem(SCRATCH_A, 0)));
+                                } else {
+                                    MOperand mem_op = MOperand::make_mem(SCRATCH_A, 0);
+                                    mem_op.flags = static_cast<uint8_t>(lbytes);
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::MOVZX,
+                                            MOperand::make_reg(SCRATCH_A, 8),
+                                            mem_op));
+                                }
+                                /* jmp done -- el store_op comun al final
+                                 * tras done_label escribira SCRATCH_A. */
+                                mf.blocks.back().instrs.push_back(MInstr::make_jmp(done_label));
+                                /* miss: */
+                                mf.blocks.back().instrs.push_back(MInstr::make_label_def(miss_label));
+                            }
+
+                            /* Fallback: call vrt_vm_read_u<size>(proc, vaddr).
+                             * Re-cargar vaddr DIRECTAMENTE desde el slot a
+                             * NATIVE_ARG1 (RDX en Windows) -- no asumimos
+                             * que SCRATCH_B tenga vaddr porque el inline
+                             * cache hit lo machaco. */
+                            load_op(mf, p_vid, NATIVE_ARG1);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_reg(NATIVE_ARG0),
                                     MOperand::make_reg(JIT_PROC_REG)));
-                            if (NATIVE_ARG1 != SCRATCH_B) {
-                                mf.blocks.back().instrs.push_back(
-                                    MInstr::make_unary(MOp::MOV,
-                                        MOperand::make_reg(NATIVE_ARG1),
-                                        MOperand::make_reg(SCRATCH_B)));
-                            }
                             const uint32_t fn_pool_idx_l = mf.intern_imm64(fn_addr);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
@@ -1407,9 +1598,85 @@ namespace jit {
                                 return mf;
                             }
 
-                            /* TEMP: inline cache deshabilitada para debug. */
-                            const bool inline_cache_ok = false;
-                            const MLabelId done_label = MLABEL_INVALID;
+                            /* Phase D.jit-mem-model INLINE-CACHE STORE.
+                             * Mismo patron que LOAD pero escribiendo. */
+                            const bool inline_cache_ok =
+                                vesta_rt::kProcVmMemOffset != 0
+                             && vesta_rt::kVmMemCachedPageVaddrOffset >= 0
+                             && vesta_rt::kVmMemCachedPageHostOffset >= 0;
+                            const MLabelId miss_label =
+                                inline_cache_ok ? mf.new_label() : MLABEL_INVALID;
+                            const MLabelId done_label =
+                                inline_cache_ok ? mf.new_label() : MLABEL_INVALID;
+
+                            if (inline_cache_ok) {
+                                const int32_t page_v_disp =
+                                    vesta_rt::kProcVmMemOffset + vesta_rt::kVmMemCachedPageVaddrOffset;
+                                const int32_t page_h_disp =
+                                    vesta_rt::kProcVmMemOffset + vesta_rt::kVmMemCachedPageHostOffset;
+
+                                /* Cargar vaddr a SCRATCH_B (RCX) primero
+                                 * (load_op) y copiar a SCRATCH_C (RDX)
+                                 * con MOV reg-reg directo (no optimizable). */
+                                load_op(mf, ins.operands[1], SCRATCH_B);
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_C),
+                                        MOperand::make_reg(SCRATCH_B)));
+                                /* mov rax, rdx; and rax, -4096 */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_reg(SCRATCH_C)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::AND,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_imm32(-4096)));
+                                /* cmp rax, [rbx + page_v_disp]; jne miss */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::CMP,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_mem(JIT_PROC_REG, page_v_disp)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_jcc(MCond::NE, miss_label));
+                                /* and rdx, 4095  (offset within page) */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::AND,
+                                        MOperand::make_reg(SCRATCH_C),
+                                        MOperand::make_imm32(4095)));
+                                if (sbytes > 1) {
+                                    const int32_t max_off =
+                                        4096 - static_cast<int32_t>(sbytes);
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::CMP,
+                                            MOperand::make_reg(SCRATCH_C),
+                                            MOperand::make_imm32(max_off)));
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_jcc(MCond::A, miss_label));
+                                }
+                                /* host_ptr = cached_host + offset -> SCRATCH_B */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_B),
+                                        MOperand::make_mem(JIT_PROC_REG, page_h_disp)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::ADD,
+                                        MOperand::make_reg(SCRATCH_B),
+                                        MOperand::make_reg(SCRATCH_C)));
+                                /* load value -> SCRATCH_A + native store */
+                                load_op(mf, ins.operands[0], SCRATCH_A);
+                                const uint8_t hw = (sbytes == 1 || sbytes == 2
+                                                 || sbytes == 4 || sbytes == 8)
+                                                 ? static_cast<uint8_t>(sbytes) : 8;
+                                MOperand src_h = MOperand::make_reg(SCRATCH_A, hw);
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_mem(SCRATCH_B, 0),
+                                        src_h));
+                                mf.blocks.back().instrs.push_back(MInstr::make_jmp(done_label));
+                                /* miss: */
+                                mf.blocks.back().instrs.push_back(MInstr::make_label_def(miss_label));
+                            }
 
                             /* Fallback: call vrt_vm_write_u<size>(proc, vaddr, value).
                              * Cargar en orden vaddr, value, proc para evitar
@@ -1585,28 +1852,15 @@ namespace jit {
                             break;
                         }
 
-                        /* Phase D.jit-mem-model partial: si el trampoline
-                         * JIT->interp recibe args que son host_ptrs
-                         * (ALLOCAs del caller JIT, malloc, etc.), el
-                         * callee interp los tratara como VM-addrs y leera
-                         * garbage del vm_mem.  No hay traduccion posible
-                         * sin sprint full.  Abortar el JIT del caller. */
-                        if (is_bc_trampoline) {
-                            for (size_t a = 0; a < ins.operands.size(); ++a) {
-                                ir::IrValueId arg = ins.operands[a];
-                                if (arg < host_in_jit.size() && host_in_jit[arg]) {
-                                    if (jit::g_jit_warn_unsupported) {
-                                        std::fprintf(stderr,
-                                            "[jit] selector: trampoline JIT->interp a '%s' con arg host_ptr en fn '%s' linea %u; abort\n",
-                                            ins.func_name.c_str(),
-                                            ir_fn.name.c_str(),
-                                            ins.source_line);
-                                    }
-                                    if (out_unsupported) *out_unsupported = true;
-                                    return mf;
-                                }
-                            }
-                        }
+                        /* Phase D.jit-mem-model VM-STACK: el abort por
+                         * host_ptr-en-trampoline-arg YA NO es necesario:
+                         *   - ALLOCAs en JIT producen VM-addrs (consistente
+                         *     con interp), pasar al interp callee funciona.
+                         *   - malloc/new producen host_ptrs genuinos
+                         *     (is_host_ptr=true en IR), valid para plugins
+                         *     que los esperan asi (e.g. STRRAW host_ptr).
+                         * En ambos casos el interp callee ve un uint64
+                         * apropiado para su semantica. */
 
                         /* Trampoline JIT->interp: marshalling VM_ABI igual que
                          * is_user_call (args en proc->regs[1..N], R15=nargs)
@@ -2799,6 +3053,20 @@ namespace jit {
                                     MOperand::make_mem(MReg::RBX,
                                         VESTA_PROC_REGISTERS_OFFSET),
                                     MOperand::make_reg(MReg::RAX)));
+                            /* Phase D.jit-mem-model VM-STACK: restaurar
+                             * VM-RSP original si la fn modifico vm_stack
+                             * via ALLOCAs.  Usa SCRATCH_B (rcx) para no
+                             * clobbear RAX (return value). */
+                            if (fn_has_alloca) {
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_B),
+                                        MOperand::make_mem(MReg::RBP, vm_rsp_save_off)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET),
+                                        MOperand::make_reg(SCRATCH_B)));
+                            }
                         }
                         /* epilogue: mov rsp, rbp; pop rbp;
                          *           [pop r15;..;pop r12];   (regalloc)

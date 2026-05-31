@@ -185,6 +185,20 @@ extern "C" {
 /// Numero total de registros VM (R0..R15).
 #define VESTA_PROC_REGISTER_COUNT          16
 
+/// Offset de @c proc->registers.stack_pointer dentro de ProcessVM.
+/// El stack_pointer es el primer campo de @c context_registers_vm,
+/// y @c registers vive en offset (VESTA_PROC_REGISTERS_OFFSET - 32)
+/// dentro de ProcessVM.  Por tanto stack_pointer = registers_off + 0.
+/// Verificado en compile-time por @c abi_checks.cpp.
+///
+/// Usado por Phase D.jit-mem-model VM-STACK: el JIT modifica el VM-RSP
+/// al ejecutar ALLOCAs vex (consistente con interp `subsp`), salvando
+/// y restaurando el valor en prologue/epilogue.
+#define VESTA_PROC_STACK_POINTER_OFFSET    64
+
+/// Offset de @c proc->registers.base_pointer (similar al anterior).
+#define VESTA_PROC_BASE_POINTER_OFFSET     72
+
 /// El offset de @c exc_frame_stack dentro de @c ProcessVM NO es estable
 /// cross-build porque la struct tiene miembros no-POD antes (atomicos,
 /// vectores, GcHeap).  En lugar de un #define, se computa en runtime

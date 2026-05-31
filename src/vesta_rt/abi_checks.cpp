@@ -173,6 +173,17 @@ static_assert(offsetof(runtime::ProcessVM, registers)
               == VESTA_PROC_REGISTERS_OFFSET,
               "ABI drift: regs[0] no esta en VESTA_PROC_REGISTERS_OFFSET");
 
+/* Validacion stack_pointer + base_pointer offsets (Phase D.jit-mem-model
+ * VM-STACK).  El JIT los lee/escribe via disp32 inline. */
+static_assert(offsetof(runtime::ProcessVM, registers)
+              + offsetof(runtime::context_registers_vm, stack_pointer)
+              == VESTA_PROC_STACK_POINTER_OFFSET,
+              "ABI drift: stack_pointer no esta en VESTA_PROC_STACK_POINTER_OFFSET");
+static_assert(offsetof(runtime::ProcessVM, registers)
+              + offsetof(runtime::context_registers_vm, base_pointer)
+              == VESTA_PROC_BASE_POINTER_OFFSET,
+              "ABI drift: base_pointer no esta en VESTA_PROC_BASE_POINTER_OFFSET");
+
 /* ========================================================================= */
 /* ClassInfo + MethodInfo offsets (inline CALLVIRT dispatch)    */
 /* ========================================================================= */
