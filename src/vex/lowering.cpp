@@ -3955,21 +3955,20 @@ namespace vex {
         // VDP_FUTURE_FULFILL al nodo origen con R0 como payload.  El caller
         // local recibe el valor via `await fut`.
         if (is_rspawn_body_) {
+            // raw_asm-elim wave 3: rspawn body return via IrOp::RSPAWN_RETURN.
+            // Emite `mov r0, payload + hlt` fusionado; el runtime VDP detecta
+            // HALT en un proceso con rspawn_future_id != 0 y envia el valor.
             ir::IrValueId v_payload = v_ret;
             if (v_payload == ir::IR_NO_VALUE) {
                 v_payload = emit_const(ir::IrType::I64, 0, s->loc.line);
             }
-            ir::IrInstr ra{};
-            ra.op        = ir::IrOp::RAW_ASM;
-            ra.type      = ir::IrType::VOID;
-            ra.dst       = ir::IR_NO_VALUE;
-            ra.operands  = {v_payload};
-            ra.func_name = std::string(
-                "// rspawn body return -> mov r0, X + hlt (runtime envia R0 via VDP)\n"
-                "mov r0, {src0}\n"
-                "hlt\n");
-            ra.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr rr{};
+            rr.op          = ir::IrOp::RSPAWN_RETURN;
+            rr.type        = ir::IrType::VOID;
+            rr.dst         = ir::IR_NO_VALUE;
+            rr.operands    = {v_payload};
+            rr.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(rr));
             block_terminated_ = true;
             return;
         }
@@ -5274,35 +5273,21 @@ namespace vex {
                         // cmpu deleter, 0; jmp.je default  (deleter=0 -> RAW_FREE)
                         // mov r1, ptr; mov r15, 1; callvmr deleter; jmp done
                         // default: mov r1, ptr; (RAW_FREE inline)
-                        // done:
-                        ir::IrInstr ra{};
-                        ra.op          = ir::IrOp::RAW_ASM;
-                        ra.type        = ir::IrType::VOID;
-                        ra.dst         = ir::IR_NO_VALUE;
-                        ra.operands    = {v_ptr, v_del};
-                        // Bug fix: si {src1} (deleter) esta en r1 (o el
-                        // regalloc lo asigna a r1 con CSE/SLF), el `mov r1,
-                        // {src0}` lo clobrea ANTES de callvmr.  Solucion:
-                        // staging via r14 (scratch) para garantizar que el
-                        // deleter sobrevive al setup de args.
-                        ra.func_name   = std::string(
-                            "// unique<T> cleanup (SRET): dispatch dinamico via slot+8\n"
-                            "cmpu {src0}, 0\n"
-                            "jmp.je ") + done_lbl + "\n"
-                            "cmpu {src1}, 0\n"
-                            "jmp.je " + default_lbl + "\n"
-                            "mov r14, {src1}\n"   // staging deleter
-                            "mov r1, {src0}\n"
-                            "mov r15, 1\n"
-                            "callvmr r14\n"
-                            "jmp.jmp " + done_lbl + "\n"
-                            + default_lbl + ":\n"
-                            "mov r1, {src0}\n"
-                            "free r1\n"
-                            + done_lbl + ":\n";
-                        ra.source_line = it->source_line;
-                        ra.is_call_site = true;
-                        fn_->append(current_block_, std::move(ra));
+                        // raw_asm-elim wave 2: SMARTPTR_FREE kind=0 (SRET_DISPATCH).
+                        // El emitter expande a la secuencia equivalente con
+                        // labels unicos via contador thread-local; mismo
+                        // bytecode emitido.  Eliminamos done_lbl/default_lbl
+                        // ya que el emitter los genera internamente.
+                        ir::IrInstr sf{};
+                        sf.op           = ir::IrOp::SMARTPTR_FREE;
+                        sf.type         = ir::IrType::VOID;
+                        sf.dst          = ir::IR_NO_VALUE;
+                        sf.operands     = {v_ptr, v_del};
+                        sf.imm          = 0;   /* SRET_DISPATCH */
+                        sf.source_line  = it->source_line;
+                        sf.is_call_site = true;
+                        fn_->append(current_block_, std::move(sf));
+                        (void)done_lbl; (void)default_lbl; /* labels no usadas (emitter las genera) */
                     } else if (it->literal_deleter == "free") {
                         // Deleter por defecto: RAW_FREE (null-safe).
                         ir::IrInstr fr{};
@@ -5313,56 +5298,31 @@ namespace vex {
                         fr.source_line = it->source_line;
                         fn_->append(current_block_, std::move(fr));
                     } else if (it->literal_deleter.rfind("@extern:", 0) == 0) {
-                        // CALLN al simbolo nativo.  Formato del literal:
-                        // "@extern:<lib>:<fn>".  Extraemos "<lib>:<fn>"
-                        // que es el formato directo de CALLN.func_name.
-                        // Skip null si ptr == 0 (el deleter nativo puede
-                        // crashear con ptr null).  Usamos RAW_ASM con
-                        // labels unicas para evitar colisiones.
+                        // raw_asm-elim wave 2: SMARTPTR_FREE kind=1 (EXTERN_CALLN).
                         const std::string fn_label =
                             it->literal_deleter.substr(8);  // skip "@extern:"
-                        const uint32_t lbl = ++cleanup_label_seq_;
-                        const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
-                        // RAW_ASM: cmpu ptr, 0; jmp.je skip; mov r1, ptr; mov r15, 1;
-                        //          calln @Method("<lib>:<fn>"); skip:
-                        ir::IrInstr ra{};
-                        ra.op          = ir::IrOp::RAW_ASM;
-                        ra.type        = ir::IrType::VOID;
-                        ra.dst         = ir::IR_NO_VALUE;
-                        ra.operands    = {v_ptr};
-                        ra.func_name   = std::string(
-                            "// unique<T> cleanup (extern): CALLN deleter si ptr != 0\n"
-                            "cmpu {src0}, 0\n"
-                            "jmp.je ") + skip_lbl + "\n"
-                            "mov r1, {src0}\n"
-                            "mov r15, 1\n"
-                            "calln @Method(\"" + fn_label + "\")\n"
-                            + skip_lbl + ":\n";
-                        ra.source_line = it->source_line;
-                        ra.is_call_site = true;
-                        fn_->append(current_block_, std::move(ra));
+                        ir::IrInstr sf{};
+                        sf.op           = ir::IrOp::SMARTPTR_FREE;
+                        sf.type         = ir::IrType::VOID;
+                        sf.dst          = ir::IR_NO_VALUE;
+                        sf.operands     = {v_ptr};
+                        sf.imm          = 1;   /* EXTERN_CALLN */
+                        sf.func_name    = fn_label;  /* "<lib>:<fn>" */
+                        sf.source_line  = it->source_line;
+                        sf.is_call_site = true;
+                        fn_->append(current_block_, std::move(sf));
                     } else {
-                        // CALLVM al simbolo Vesta del usuario.  Igual que
-                        // CALLN pero con calling convention Vesta.  Skip
-                        // null por seguridad.
-                        const uint32_t lbl = ++cleanup_label_seq_;
-                        const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
-                        ir::IrInstr ra{};
-                        ra.op          = ir::IrOp::RAW_ASM;
-                        ra.type        = ir::IrType::VOID;
-                        ra.dst         = ir::IR_NO_VALUE;
-                        ra.operands    = {v_ptr};
-                        ra.func_name   = std::string(
-                            "// unique<T> cleanup (vesta): CALLVM deleter si ptr != 0\n"
-                            "cmpu {src0}, 0\n"
-                            "jmp.je ") + skip_lbl + "\n"
-                            "mov r1, {src0}\n"
-                            "mov r15, 1\n"
-                            "callvm @Absolute(\"code." + it->literal_deleter + "\")\n"
-                            + skip_lbl + ":\n";
-                        ra.source_line = it->source_line;
-                        ra.is_call_site = true;
-                        fn_->append(current_block_, std::move(ra));
+                        // raw_asm-elim wave 2: SMARTPTR_FREE kind=2 (VESTA_CALLVM).
+                        ir::IrInstr sf{};
+                        sf.op           = ir::IrOp::SMARTPTR_FREE;
+                        sf.type         = ir::IrType::VOID;
+                        sf.dst          = ir::IR_NO_VALUE;
+                        sf.operands     = {v_ptr};
+                        sf.imm          = 2;   /* VESTA_CALLVM */
+                        sf.func_name    = it->literal_deleter;  /* "<fn_label>" */
+                        sf.source_line  = it->source_line;
+                        sf.is_call_site = true;
+                        fn_->append(current_block_, std::move(sf));
                     }
                     break;
                 }
@@ -5613,14 +5573,14 @@ namespace vex {
                 me.source_line = s->loc.line;
                 fn_->append(current_block_, std::move(me));
             }
-            // rethrow no tiene IR op dedicado todavia; usa un RAW_ASM minimal.
-            ir::IrInstr ra{};
-            ra.op          = ir::IrOp::RAW_ASM;
-            ra.type        = ir::IrType::VOID;
-            ra.dst         = ir::IR_NO_VALUE;
-            ra.func_name   = "rethrow\n";
-            ra.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            // raw_asm-elim wave 3: rethrow IR op dedicado.  Terminator del
+            // bloque (re-lanza current_exception; nada sigue a esta instr).
+            ir::IrInstr rt{};
+            rt.op          = ir::IrOp::RETHROW;
+            rt.type        = ir::IrType::VOID;
+            rt.dst         = ir::IR_NO_VALUE;
+            rt.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(rt));
         }
         block_terminated_ = true; // rethrow es terminador del bloque
 
@@ -6206,14 +6166,15 @@ namespace vex {
             if (e->env_in_heap) {
                 child_fn.values[env_ptr].is_host_ptr = true;
             }
-            ir::IrInstr ra{};
-            ra.op        = ir::IrOp::RAW_ASM;
-            ra.type      = ir::IrType::PTR;
-            ra.dst       = env_ptr;
-            ra.func_name = "// === prologue de closure helper: leer env_ptr de R14 ===\n"
-                    "mov {dst}, r14\n";
-            ra.source_line = e->loc.line;
-            child_fn.append(entry, std::move(ra));
+            // raw_asm-elim wave 3: prologue del closure helper lee R14 (env_ptr)
+            // via IrOp::READ_VM_REG.  Reemplaza el viejo RAW_ASM `mov {dst}, r14`.
+            ir::IrInstr rr{};
+            rr.op          = ir::IrOp::READ_VM_REG;
+            rr.type        = ir::IrType::PTR;
+            rr.dst         = env_ptr;
+            rr.imm         = 14;   // R14 = env_ptr en la calling convention de callclosure
+            rr.source_line = e->loc.line;
+            child_fn.append(entry, std::move(rr));
 
             for (size_t i = 0; i < e->captures.size(); ++i) {
                 // Tipo del capture: usar el tipo guardado por el type
@@ -7204,26 +7165,22 @@ namespace vex {
         // regs al child antes de make_ready.  Aplica para Auto policy.
         const auto &caps = spawn_captured_ssa_values_;
         if (e->policy == ast::SpawnExpr::Policy::Auto && !caps.empty()) {
+            // raw_asm-elim wave 2: usar IrOp::SPAWN_ARGS nativo en lugar de
+            // raw_asm.  El IR emitter ya genera el parallel-move correcto
+            // del regalloc + spawnargs + restore.  operands[0]=r_pc,
+            // [1..N]=args; dst=PID encoded en R0.
             const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
             std::vector<ir::IrValueId> ops;
             ops.push_back(v_pc);
             for (auto v : caps) ops.push_back(v);
-            std::ostringstream txt;
-            for (size_t i = 0; i < caps.size(); ++i) {
-                txt << "mov r" << (i + 1) << ", {src" << (i + 1) << "}\n";
-            }
-            txt << "mov r15, " << caps.size() << "\n";
-            txt << "spawnargs {src0}\n";
-            txt << "mov {dst}, r0\n";
-            ir::IrInstr ra{};
-            ra.op           = ir::IrOp::RAW_ASM;
-            ra.type         = ir::IrType::I64;
-            ra.dst          = v_pid;
-            ra.operands     = std::move(ops);
-            ra.func_name    = txt.str();
-            ra.source_line  = e->loc.line;
-            ra.is_call_site = true;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr sa{};
+            sa.op           = ir::IrOp::SPAWN_ARGS;
+            sa.type         = ir::IrType::I64;
+            sa.dst          = v_pid;
+            sa.operands     = std::move(ops);
+            sa.source_line  = e->loc.line;
+            sa.is_call_site = true;
+            fn_->append(current_block_, std::move(sa));
             return v_pid;
         }
 
@@ -11794,18 +11751,16 @@ namespace vex {
                             out_value = emit_const(ir::IrType::I64, 0, src_line);
                             return true;
                         }
-                        /* mov dst, @Absolute("code.s_<idx>") via RAW_ASM. */
+                        // raw_asm-elim wave 2: usar IrOp::STR_LIT_ADDR
+                        // que ya emite `mov {dst}, @Absolute("code.s_N")`.
                         ir::IrValueId dst = fn_->new_value(ir::IrType::I64);
-                        std::ostringstream oss;
-                        oss << "mov {dst}, @Absolute(\"code.s_"
-                            << it->second << "\")\n";
-                        ir::IrInstr ra{};
-                        ra.op          = ir::IrOp::RAW_ASM;
-                        ra.type        = ir::IrType::I64;
-                        ra.dst         = dst;
-                        ra.func_name   = oss.str();
-                        ra.source_line = src_line;
-                        fn_->append(current_block_, std::move(ra));
+                        ir::IrInstr sl{};
+                        sl.op          = ir::IrOp::STR_LIT_ADDR;
+                        sl.type        = ir::IrType::PTR;
+                        sl.dst         = dst;
+                        sl.imm         = static_cast<uint64_t>(it->second);
+                        sl.source_line = src_line;
+                        fn_->append(current_block_, std::move(sl));
                         out_value = dst;
                         return true;
                     }
@@ -13535,29 +13490,29 @@ namespace vex {
             auto *             slit     = static_cast<ast::StringLitExpr *>(e->args[0].get());
             const uint64_t     path_idx = intern_class_name(*out_mod_, slit->value);
             const uint32_t     path_len = static_cast<uint32_t>(slit->value.size());
-            std::ostringstream oss;
-            // Cargar @Absolute("code.s_<idx>") en r12 (path_addr) y len en r11.
-            oss << "mov r12, @Absolute(\"code.s_" << path_idx << "\")\n";
-            oss << "mov r11, " << path_len << "\n";
-            // Emitir loadmod r12, r11.  El runtime auto-invoca el main del
-            // modulo via callvm-equivalente; cuando RET, R0 contiene el
-            // init_pc (puede ser 0 si load fallo o si el main lo sobrescribio).
-            oss << "loadmod r12, r11\n";
-            // Capturar R0 al SSA dst para que Vex pueda inspeccionarlo.
-            oss << "mov {dst}, r0\n";
+            // raw_asm-elim wave 2: usar STR_LIT_ADDR + emit_const + MOD_LOAD.
+            const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr sl{};
+                sl.op          = ir::IrOp::STR_LIT_ADDR;
+                sl.type        = ir::IrType::PTR;
+                sl.dst         = v_path_addr;
+                sl.imm         = path_idx;
+                sl.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(sl));
+            }
+            const ir::IrValueId v_path_len = emit_const(
+                ir::IrType::I64, path_len, e->loc.line);
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr         ra{};
-            ra.op          = ir::IrOp::RAW_ASM;
-            ra.type        = ir::IrType::I64;
-            ra.dst         = v_dst;
-            ra.func_name   = oss.str();
-            ra.source_line = e->loc.line;
-            // loadmod ejecuta el main del plugin como sub-llamada.  El plugin
-            // puede clobrear los regs caller-saved (R0..R12, R14, R15) antes
-            // de retornar.  Marcamos como call site para que el emitter
-            // emita save/restore de los locales vivos.
-            ra.is_call_site = true;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr ml{};
+            ml.op           = ir::IrOp::MOD_LOAD;
+            ml.type         = ir::IrType::I64;
+            ml.dst          = v_dst;
+            ml.operands     = {v_path_addr, v_path_len};
+            ml.imm          = 0;   /* loadmod */
+            ml.source_line  = e->loc.line;
+            ml.is_call_site = true;
+            fn_->append(current_block_, std::move(ml));
             out_value = v_dst;
             return true;
         }
@@ -13578,19 +13533,28 @@ namespace vex {
             auto *             slit     = static_cast<ast::StringLitExpr *>(e->args[0].get());
             const uint64_t     path_idx = intern_class_name(*out_mod_, slit->value);
             const uint32_t     path_len = static_cast<uint32_t>(slit->value.size());
-            std::ostringstream oss;
-            oss << "mov r12, @Absolute(\"code.s_" << path_idx << "\")\n";
-            oss << "mov r11, " << path_len << "\n";
-            oss << "unloadmod r12, r11\n";
-            oss << "mov {dst}, r0\n";
+            // raw_asm-elim wave 2: MOD_LOAD con kind=1 (unloadmod).
+            const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr sl{};
+                sl.op          = ir::IrOp::STR_LIT_ADDR;
+                sl.type        = ir::IrType::PTR;
+                sl.dst         = v_path_addr;
+                sl.imm         = path_idx;
+                sl.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(sl));
+            }
+            const ir::IrValueId v_path_len = emit_const(
+                ir::IrType::I64, path_len, e->loc.line);
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-            ir::IrInstr         ra{};
-            ra.op          = ir::IrOp::RAW_ASM;
-            ra.type        = ir::IrType::I32;
-            ra.dst         = v_dst;
-            ra.func_name   = oss.str();
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr ml{};
+            ml.op           = ir::IrOp::MOD_LOAD;
+            ml.type         = ir::IrType::I32;
+            ml.dst          = v_dst;
+            ml.operands     = {v_path_addr, v_path_len};
+            ml.imm          = 1;   /* unloadmod */
+            ml.source_line  = e->loc.line;
+            fn_->append(current_block_, std::move(ml));
             out_value = v_dst;
             return true;
         }
@@ -13712,18 +13676,27 @@ namespace vex {
             auto *             slit     = static_cast<ast::StringLitExpr *>(e->args[0].get());
             const uint64_t     path_idx = intern_class_name(*out_mod_, slit->value);
             const uint32_t     path_len = static_cast<uint32_t>(slit->value.size());
-            std::ostringstream oss;
-            oss << "mov r12, @Absolute(\"code.s_" << path_idx << "\")\n";
-            oss << "mov r11, " << path_len << "\n";
-            oss << "dlopen {dst}, r12, r11\n";
+            // raw_asm-elim wave 2: DLOPEN IR op.
+            const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr sl{};
+                sl.op          = ir::IrOp::STR_LIT_ADDR;
+                sl.type        = ir::IrType::PTR;
+                sl.dst         = v_path_addr;
+                sl.imm         = path_idx;
+                sl.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(sl));
+            }
+            const ir::IrValueId v_path_len = emit_const(
+                ir::IrType::I64, path_len, e->loc.line);
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr         ra{};
-            ra.op          = ir::IrOp::RAW_ASM;
-            ra.type        = ir::IrType::I64;
-            ra.dst         = v_dst;
-            ra.func_name   = oss.str();
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr dl{};
+            dl.op           = ir::IrOp::DLOPEN;
+            dl.type         = ir::IrType::I64;
+            dl.dst          = v_dst;
+            dl.operands     = {v_path_addr, v_path_len};
+            dl.source_line  = e->loc.line;
+            fn_->append(current_block_, std::move(dl));
             out_value = v_dst;
             return true;
         }
@@ -13750,22 +13723,27 @@ namespace vex {
             auto *         slit     = static_cast<ast::StringLitExpr *>(e->args[1].get());
             const uint64_t name_idx = intern_class_name(*out_mod_, slit->value);
             const uint32_t name_len = static_cast<uint32_t>(slit->value.size());
-            // Mover handle a r12 via RAW_ASM con substitucion {src0}, luego
-            // cargar name_addr en r11 y len en r10, llamar dlsym.
-            std::ostringstream oss;
-            oss << "mov r12, {src0}\n"; // handle (preserva valor SSA)
-            oss << "mov r11, @Absolute(\"code.s_" << name_idx << "\")\n";
-            oss << "mov r10, " << name_len << "\n";
-            oss << "dlsym {dst}, r12, r11, r10\n";
+            // raw_asm-elim wave 2: DLSYM IR op.
+            const ir::IrValueId v_name_addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr sl{};
+                sl.op          = ir::IrOp::STR_LIT_ADDR;
+                sl.type        = ir::IrType::PTR;
+                sl.dst         = v_name_addr;
+                sl.imm         = name_idx;
+                sl.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(sl));
+            }
+            const ir::IrValueId v_name_len = emit_const(
+                ir::IrType::I64, name_len, e->loc.line);
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr         ra{};
-            ra.op          = ir::IrOp::RAW_ASM;
-            ra.type        = ir::IrType::I64;
-            ra.dst         = v_dst;
-            ra.operands    = {v_handle};
-            ra.func_name   = oss.str();
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr ds{};
+            ds.op           = ir::IrOp::DLSYM;
+            ds.type         = ir::IrType::I64;
+            ds.dst          = v_dst;
+            ds.operands     = {v_handle, v_name_addr, v_name_len};
+            ds.source_line  = e->loc.line;
+            fn_->append(current_block_, std::move(ds));
             out_value = v_dst;
             return true;
         }
@@ -16225,31 +16203,21 @@ namespace vex {
             const ir::IrType ret_type = is_z10_bytes
                 ? ir::IrType::U64
                 : (is_z10_live_count ? ir::IrType::U32 : ir::IrType::VOID);
-            // Emitir const op_code en un SSA value que el RAW_ASM lee
-            // como segundo registro de sharedstat.
+            // raw_asm-elim wave 3: SHARED_STAT IR op dedicado.  El emit
+            // del bytecode usa `r14` como dst dummy para el caso VOID
+            // (op_code=2 gc_collect) automaticamente.
             const ir::IrValueId v_op = emit_const(
                 ir::IrType::I32, (uint64_t)op_code, e->loc.line);
             const ir::IrValueId v_dst = (ret_type == ir::IrType::VOID)
                 ? ir::IR_NO_VALUE
                 : fn_->new_value(ret_type);
-            ir::IrInstr ra{};
-            ra.op           = ir::IrOp::RAW_ASM;
-            ra.type         = ret_type;
-            ra.dst          = (ret_type == ir::IrType::VOID)
-                              ? ir::IR_NO_VALUE
-                              : v_dst;
-            // Para el caso VOID, usamos un dummy reg dst (r14) que el
-            // exec del opcode escribira pero nadie usa.  Para no-VOID,
-            // {dst} es el SSA value real.
-            if (ret_type == ir::IrType::VOID) {
-                ra.operands  = {v_op};
-                ra.func_name = "sharedstat r14, {src0}\n";
-            } else {
-                ra.operands  = {v_op};
-                ra.func_name = "sharedstat {dst}, {src0}\n";
-            }
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr ss{};
+            ss.op           = ir::IrOp::SHARED_STAT;
+            ss.type         = ret_type;
+            ss.dst          = v_dst;
+            ss.operands     = {v_op};
+            ss.source_line  = e->loc.line;
+            fn_->append(current_block_, std::move(ss));
             out_value = v_dst;
             return true;
         }
@@ -16688,21 +16656,16 @@ namespace vex {
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
-            const char *mnem = is_getMethods ? "methodcount" : "fieldcount";
+            // raw_asm-elim wave 2: REFLECT_COUNT con imm=0(methods) o 1(fields).
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-            ir::IrInstr ra{};
-            ra.op   = ir::IrOp::RAW_ASM;
-            ra.type = ir::IrType::I32;
-            ra.dst  = v_dst;
-            ra.operands.push_back(v_cls);
-            std::ostringstream oss;
-            oss << "// " << (is_getMethods ? "getMethods" : "getFields")
-                << "(cls) -> R0\n";
-            oss << mnem << " {src0}\n";
-            oss << "mov {dst}, r0\n";
-            ra.func_name   = oss.str();
-            ra.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ra));
+            ir::IrInstr rc{};
+            rc.op           = ir::IrOp::REFLECT_COUNT;
+            rc.type         = ir::IrType::I32;
+            rc.dst          = v_dst;
+            rc.operands     = {v_cls};
+            rc.imm          = is_getMethods ? 0 : 1;
+            rc.source_line  = e->loc.line;
+            fn_->append(current_block_, std::move(rc));
             out_value = v_dst;
             return true;
         }
@@ -16725,21 +16688,15 @@ namespace vex {
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
-            const char *mnem = is_getMethodAt ? "getmethat" : "getfldat";
+            // raw_asm-elim wave 2: REFLECT_AT con imm=0(method_at) o 1(field_at).
             const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
             ir::IrInstr ra{};
-            ra.op   = ir::IrOp::RAW_ASM;
-            ra.type = ir::IrType::I64;
-            ra.dst  = v_dst;
-            ra.operands.push_back(v_cls);
-            ra.operands.push_back(v_idx);
-            std::ostringstream oss;
-            oss << "// " << (is_getMethodAt ? "getMethodAt" : "getFieldAt")
-                << "(cls, i) -> R0\n";
-            oss << mnem << " {src0}, {src1}\n";
-            oss << "mov {dst}, r0\n";
-            ra.func_name   = oss.str();
-            ra.source_line = e->loc.line;
+            ra.op           = ir::IrOp::REFLECT_AT;
+            ra.type         = ir::IrType::I64;
+            ra.dst          = v_dst;
+            ra.operands     = {v_cls, v_idx};
+            ra.imm          = is_getMethodAt ? 0 : 1;
+            ra.source_line  = e->loc.line;
             fn_->append(current_block_, std::move(ra));
             out_value = v_dst;
             return true;

@@ -197,6 +197,16 @@ namespace ir {
         {"array_store",  IrOp::ARRAY_STORE},
         {"gcderef_ir",   IrOp::GCDEREF_IR},
         {"gc_deref_host", IrOp::GC_DEREF_HOST},
+        {"rethrow",      IrOp::RETHROW},
+        {"shared_stat",  IrOp::SHARED_STAT},
+        {"read_vm_reg",  IrOp::READ_VM_REG},
+        {"rspawn_return", IrOp::RSPAWN_RETURN},
+        {"smartptr_free", IrOp::SMARTPTR_FREE},
+        {"reflect_count", IrOp::REFLECT_COUNT},
+        {"reflect_at",   IrOp::REFLECT_AT},
+        {"mod_load",     IrOp::MOD_LOAD},
+        {"dlopen",       IrOp::DLOPEN},
+        {"dlsym",        IrOp::DLSYM},
         // excepciones
         {"throw",        IrOp::THROW},
         {"tryenter",     IrOp::TRYENTER},
@@ -505,6 +515,8 @@ namespace ir {
             ins.op == IrOp::SWAPCTX      || ins.op == IrOp::MEMCPY       ||
             ins.op == IrOp::TRYENTER     || ins.op == IrOp::GCWB_IR      ||
             ins.op == IrOp::GCDEREF_IR   || ins.op == IrOp::ARRAY_STORE  ||
+            ins.op == IrOp::RETHROW      || ins.op == IrOp::RSPAWN_RETURN ||
+            ins.op == IrOp::SMARTPTR_FREE ||
             ins.op == IrOp::STRFINALIZE) {
             print_type = false;
         }
@@ -755,6 +767,75 @@ namespace ir {
             case IrOp::GC_DEREF_HOST:
                 // %dst = gc_deref_host.ptr %handle
                 if (!ins.operands.empty()) { o << " "; print_val(o, fn, ins.operands[0]); }
+                break;
+
+            case IrOp::RETHROW:
+                // rethrow (sin operandos)
+                break;
+
+            case IrOp::SHARED_STAT:
+                // shared_stat.T %op_code
+                if (!ins.operands.empty()) { o << " "; print_val(o, fn, ins.operands[0]); }
+                break;
+
+            case IrOp::READ_VM_REG:
+                // read_vm_reg.T imm=N
+                o << " " << ins.imm;
+                break;
+
+            case IrOp::RSPAWN_RETURN:
+                // rspawn_return %payload
+                if (!ins.operands.empty()) { o << " "; print_val(o, fn, ins.operands[0]); }
+                break;
+
+            case IrOp::SMARTPTR_FREE:
+                // smartptr_free.kind=N %ptr [, %del] ["label"]
+                o << ".kind=" << ins.imm;
+                for (size_t i = 0; i < ins.operands.size(); ++i) {
+                    o << (i == 0 ? " " : ", ");
+                    print_val(o, fn, ins.operands[i]);
+                }
+                if (!ins.func_name.empty()) o << " \"" << ins.func_name << "\"";
+                break;
+
+            case IrOp::REFLECT_COUNT:
+                // reflect_count.kind=N %cls
+                o << ".kind=" << ins.imm;
+                if (!ins.operands.empty()) { o << " "; print_val(o, fn, ins.operands[0]); }
+                break;
+
+            case IrOp::REFLECT_AT:
+                // reflect_at.kind=N %cls, %idx
+                o << ".kind=" << ins.imm;
+                if (!ins.operands.empty()) {
+                    o << " "; print_val(o, fn, ins.operands[0]);
+                }
+                if (ins.operands.size() >= 2) {
+                    o << ", "; print_val(o, fn, ins.operands[1]);
+                }
+                break;
+
+            case IrOp::MOD_LOAD:
+                // mod_load.kind=N %path, %len
+                o << ".kind=" << ins.imm;
+                for (size_t i = 0; i < ins.operands.size(); ++i) {
+                    o << (i == 0 ? " " : ", ");
+                    print_val(o, fn, ins.operands[i]);
+                }
+                break;
+            case IrOp::DLOPEN:
+                // dlopen %path, %len
+                for (size_t i = 0; i < ins.operands.size(); ++i) {
+                    o << (i == 0 ? " " : ", ");
+                    print_val(o, fn, ins.operands[i]);
+                }
+                break;
+            case IrOp::DLSYM:
+                // dlsym %handle, %name, %len
+                for (size_t i = 0; i < ins.operands.size(); ++i) {
+                    o << (i == 0 ? " " : ", ");
+                    print_val(o, fn, ins.operands[i]);
+                }
                 break;
 
             case IrOp::ARRAY_ALLOC:

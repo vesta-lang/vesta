@@ -3345,6 +3345,163 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                         << ", " << ctx.reg_of(ins.operands[1]) << "\n";
             break;
 
+        // --- raw_asm-elim wave 3: ops nuevos sin operandos / con imm ---
+        case IrOp::RETHROW:
+            // rethrow: terminator del bloque, sin operandos.
+            ctx.out << "    rethrow\n";
+            break;
+        case IrOp::SHARED_STAT: {
+            // sharedstat r_dst, r_op_code
+            // op=0 (live_count) y op=1 (bytes) producen un valor en r_dst.
+            // op=2 (gc_collect) es void: usamos r14 dummy como dst.
+            if (ins.operands.empty()) break;
+            std::string r_op  = ctx.reg_of(ins.operands[0]);
+            std::string r_dst = (ins.dst != IR_NO_VALUE)
+                                ? ctx.dst_of(ins.dst)
+                                : std::string("r14");
+            ctx.out << "    sharedstat " << r_dst << ", " << r_op << "\n";
+            if (ins.dst != IR_NO_VALUE) ctx.store_spilled(ins.dst);
+            break;
+        }
+        case IrOp::READ_VM_REG: {
+            // mov {dst}, rN  (N = ins.imm).
+            if (ins.dst == IR_NO_VALUE) break;
+            if (ins.imm > 15) break;  // sanity check
+            ctx.out << "    mov " << ctx.dst_of(ins.dst)
+                    << ", r" << ins.imm << "\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+        case IrOp::RSPAWN_RETURN: {
+            // mov r0, payload + hlt fusionado.  Terminator del bloque.
+            if (ins.operands.empty()) break;
+            std::string r_payload = ctx.reg_of(ins.operands[0]);
+            // emit_mov_if_needed para evitar mov r0, r0 redundante.
+            if (r_payload != "r0") {
+                ctx.out << "    mov r0, " << r_payload << "\n";
+            }
+            ctx.out << "    hlt\n";
+            break;
+        }
+
+        case IrOp::MOD_LOAD: {
+            // raw_asm-elim wave 2: loadmod/unloadmod.
+            // imm=0 -> loadmod (ejecuta el main del plugin como sub-llamada,
+            //          R0 = init_pc o 0 si fallo).
+            // imm=1 -> unloadmod (libera el slot, R0 = 1 ok / 0 not_found).
+            if (ins.operands.size() < 2 || ins.dst == IR_NO_VALUE) break;
+            const char *mnem = (ins.imm == 0) ? "loadmod" : "unloadmod";
+            std::string r_path = ctx.load_src(ins.operands[0], 0);
+            std::string r_len  = ctx.load_src(ins.operands[1], 1);
+            std::string r_dst  = ctx.dst_of(ins.dst);
+            ctx.out << "    " << mnem << " " << r_path << ", " << r_len << "\n";
+            if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+        case IrOp::DLOPEN: {
+            // raw_asm-elim wave 2: LoadLibrary/dlopen wrapper.
+            // dlopen rDst, rPath, rLen (3-arg form, dst inline).
+            if (ins.operands.size() < 2 || ins.dst == IR_NO_VALUE) break;
+            std::string r_path = ctx.load_src(ins.operands[0], 0);
+            std::string r_len  = ctx.load_src(ins.operands[1], 1);
+            std::string r_dst  = ctx.dst_of(ins.dst);
+            ctx.out << "    dlopen " << r_dst << ", "
+                    << r_path << ", " << r_len << "\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+        case IrOp::DLSYM: {
+            // raw_asm-elim wave 2: GetProcAddress/dlsym wrapper.
+            // dlsym rDst, rHandle, rNameAddr, rNameLen (4-arg form).
+            if (ins.operands.size() < 3 || ins.dst == IR_NO_VALUE) break;
+            std::string r_handle = ctx.load_src(ins.operands[0], 0);
+            std::string r_name   = ctx.load_src(ins.operands[1], 1);
+            std::string r_len    = ctx.load_src(ins.operands[2], 2);
+            std::string r_dst    = ctx.dst_of(ins.dst);
+            ctx.out << "    dlsym " << r_dst << ", "
+                    << r_handle << ", " << r_name << ", " << r_len << "\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+
+        case IrOp::REFLECT_COUNT: {
+            // raw_asm-elim wave 2: methodcount/fieldcount.
+            // imm=0 -> methodcount, imm=1 -> fieldcount.
+            // Emite "<op> r_cls\nmov r_dst, r0\n" (resultado en R0).
+            if (ins.operands.empty() || ins.dst == IR_NO_VALUE) break;
+            const char *mnem = (ins.imm == 0) ? "methodcount" : "fieldcount";
+            std::string r_cls = ctx.load_src(ins.operands[0], 0);
+            std::string r_dst = ctx.dst_of(ins.dst);
+            ctx.out << "    " << mnem << " " << r_cls << "\n";
+            // Si r_dst ya es r0 (regalloc lucky), evita mov r0, r0.
+            if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+        case IrOp::REFLECT_AT: {
+            // raw_asm-elim wave 2: getmethat/getfldat.
+            // imm=0 -> getmethat, imm=1 -> getfldat.
+            if (ins.operands.size() < 2 || ins.dst == IR_NO_VALUE) break;
+            const char *mnem = (ins.imm == 0) ? "getmethat" : "getfldat";
+            std::string r_cls = ctx.load_src(ins.operands[0], 0);
+            std::string r_idx = ctx.load_src(ins.operands[1], 1);
+            std::string r_dst = ctx.dst_of(ins.dst);
+            ctx.out << "    " << mnem << " " << r_cls << ", " << r_idx << "\n";
+            if (r_dst != "r0") ctx.out << "    mov " << r_dst << ", r0\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+
+        case IrOp::SMARTPTR_FREE: {
+            // raw_asm-elim wave 2: cleanup deterministico de smart pointer
+            // con 3 variantes segun ins.imm:
+            //   0 = SRET_DISPATCH  -> operands=[ptr, del_addr], func_name=""
+            //   1 = EXTERN_CALLN   -> operands=[ptr], func_name="<lib>:<fn>"
+            //   2 = VESTA_CALLVM   -> operands=[ptr], func_name="<fn_label>"
+            //
+            // El emisor expande a la secuencia equivalente con labels
+            // unicas via contador estatico thread-local.  Reusa el espacio
+            // de labels global @c __sp_skip_<N> que el viejo RAW_ASM usaba.
+            if (ins.operands.empty()) break;
+            static thread_local uint64_t sp_label_seq = 0;
+            const uint64_t lbl = ++sp_label_seq;
+            std::string r_ptr = ctx.reg_of(ins.operands[0]);
+            if (ins.imm == 0 && ins.operands.size() >= 2) {
+                /* SRET_DISPATCH: deleter es runtime via slot+8 */
+                const std::string done_lbl = "__sp_done_" + std::to_string(lbl);
+                const std::string default_lbl = "__sp_default_" + std::to_string(lbl);
+                std::string r_del = ctx.reg_of(ins.operands[1]);
+                ctx.out << "    cmpu " << r_ptr << ", 0\n";
+                ctx.out << "    jmp.je " << done_lbl << "\n";
+                ctx.out << "    cmpu " << r_del << ", 0\n";
+                ctx.out << "    jmp.je " << default_lbl << "\n";
+                ctx.out << "    mov r14, " << r_del << "\n";   // staging deleter
+                if (r_ptr != "r1") ctx.out << "    mov r1, " << r_ptr << "\n";
+                ctx.out << "    mov r15, 1\n";
+                ctx.out << "    callvmr r14\n";
+                ctx.out << "    jmp.jmp " << done_lbl << "\n";
+                ctx.out << default_lbl << ":\n";
+                if (r_ptr != "r1") ctx.out << "    mov r1, " << r_ptr << "\n";
+                ctx.out << "    free r1\n";
+                ctx.out << done_lbl << ":\n";
+            } else if (ins.imm == 1 || ins.imm == 2) {
+                /* EXTERN_CALLN (1) o VESTA_CALLVM (2). */
+                const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
+                ctx.out << "    cmpu " << r_ptr << ", 0\n";
+                ctx.out << "    jmp.je " << skip_lbl << "\n";
+                if (r_ptr != "r1") ctx.out << "    mov r1, " << r_ptr << "\n";
+                ctx.out << "    mov r15, 1\n";
+                if (ins.imm == 1) {
+                    ctx.out << "    calln @Method(\"" << ins.func_name << "\")\n";
+                } else {
+                    ctx.out << "    callvm @Absolute(\"code." << ins.func_name << "\")\n";
+                }
+                ctx.out << skip_lbl << ":\n";
+            }
+            break;
+        }
+
         // --- string extra ---
         case IrOp::STRGETBYTES:
             if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
