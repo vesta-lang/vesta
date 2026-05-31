@@ -112,6 +112,17 @@ namespace jit {
         g_jit_threshold = threshold;
     }
 
+    /* Forzar lectura del env var VESTA_JIT_THRESHOLD (+ warn/disasm) AHORA
+     * en lugar de esperar al primer maybe_compile_*.  Util para que main.cpp
+     * llame al inicio y la eager-compile pass del Loader vea el threshold
+     * correcto.
+     *
+     * Idempotente: usa el mismo std::call_once que el path lazy.  Si ya
+     * corrio (otro thread o lazy fire previo), no-op. */
+    void init_threshold_from_env_now() noexcept {
+        std::call_once(g_env_init_flag, init_threshold_from_env);
+    }
+
     /* ===================================================================== */
     /* maybe_compile_method                                                   */
     /* ===================================================================== */
@@ -240,12 +251,16 @@ namespace jit {
          * estos bytes pero no los ejecuta. */
         CodeCache *cc_ptr = g_code_cache;
         mc_opts.reserve_ic_slot = [cc_ptr]() -> uint64_t {
-            uint8_t *slot = cc_ptr->alloc(16, 16);
+            /* PIC: 4 entries x 16 bytes (class + jit_code) = 64 bytes.
+             * Layout:
+             *   +0..+15  entry 0: [class_ptr][jit_code]
+             *   +16..+31 entry 1: [class_ptr][jit_code]
+             *   +32..+47 entry 2: [class_ptr][jit_code]
+             *   +48..+63 entry 3: [class_ptr][jit_code]
+             * Cache-line aligned (64 bytes). */
+            uint8_t *slot = cc_ptr->alloc(64, 64);
             if (slot) {
-                slot[0] = slot[1] = slot[2] = slot[3] = 0;
-                slot[4] = slot[5] = slot[6] = slot[7] = 0;
-                slot[8] = slot[9] = slot[10] = slot[11] = 0;
-                slot[12] = slot[13] = slot[14] = slot[15] = 0;
+                for (int i = 0; i < 64; ++i) slot[i] = 0;
             }
             return reinterpret_cast<uint64_t>(slot);
         };
@@ -805,16 +820,18 @@ namespace jit {
         std::lock_guard<std::mutex> cmlk(g_callvm_mtx);
         auto &cnt = g_callvm_counters[target_pc];
         if (cnt == UINT32_MAX) return;       /* ya intentado y fallo */
+        ++cnt;
         if (cnt < g_jit_threshold) {
-            ++cnt;
             return;
         }
-        /* Threshold cruzado: marcar como "intentando" antes del compile
-         * (con UINT32_MAX provisional) para que otros threads/iteraciones
-         * no entren al slow path en paralelo.  Si el compile falla, el
-         * valor queda en UINT32_MAX (cached failure).  Si exito, el pc-map
-         * captura todos los lookups subsiguientes -> el counter nunca se
-         * vuelve a consultar. */
+        /* cnt >= threshold: cruzamos.  Con threshold=1 (modo -m jit),
+         * esto ocurre en la PRIMERA invocacion: cnt pasa de 0 a 1.
+         * Marcar como "intentando" antes del compile (con UINT32_MAX
+         * provisional) para que otros threads/iteraciones no entren al
+         * slow path en paralelo.  Si el compile falla, el valor queda
+         * en UINT32_MAX (cached failure).  Si exito, el pc-map captura
+         * todos los lookups subsiguientes -> el counter nunca se vuelve
+         * a consultar. */
         cnt = UINT32_MAX;
 
         /* Buscar el IrFunction correspondiente a target_pc iterando los

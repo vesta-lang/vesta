@@ -284,6 +284,75 @@ namespace jit {
          * @c push rbp.
          *
          * Si @c regalloc.empty(), nada cambia respecto al path original. */
+        /* Safety: LOAD/STORE sobre ptr NO-host (VM stack ptr).
+         *
+         * El IR marca `is_host_ptr=false` para ptrs cuya semantica es
+         * VM-mem (interp convention).  El JIT emite `mov` host directo,
+         * que para esos ptrs lee/escribe memoria HOST con direccion VM
+         * -> garbage / page faults.
+         *
+         * Solucion proper requiere redisenyar el modelo de memoria del
+         * JIT (todos los ptrs son host, traducir en el boundary).  Es
+         * un sprint dedicado de 1-2 semanas con riesgo significativo
+         * de regression -- ver "Phase D.jit-mem-model" en el roadmap.
+         *
+         * Mientras tanto: fallback a interp para funciones con LOAD/STORE
+         * sobre is_host_ptr=false.  El interp maneja vm_mem correctamente
+         * via VirtualMemory.  Las funciones JIT-compilables (mayoria del
+         * codigo: ops escalares + ptr host de malloc/new) mantienen el
+         * speedup completo. */
+        for (size_t bi_chk2 = 0; bi_chk2 < ir_fn.blocks.size(); ++bi_chk2) {
+            for (const auto &ins_chk : ir_fn.blocks[bi_chk2].instrs) {
+                if ((ins_chk.op == ir::IrOp::LOAD
+                  || ins_chk.op == ir::IrOp::STORE)
+                 && !ins_chk.operands.empty()) {
+                    const ir::IrValueId p =
+                        (ins_chk.op == ir::IrOp::STORE && ins_chk.operands.size() >= 2)
+                            ? ins_chk.operands[1]
+                            : ins_chk.operands[0];
+                    if (p == ir::IR_NO_VALUE || p >= ir_fn.values.size()) continue;
+                    const auto &v = ir_fn.values[p];
+                    if (v.type == ir::IrType::PTR && !v.is_host_ptr) {
+                        if (jit::g_jit_warn_unsupported) {
+                            std::fprintf(stderr,
+                                "[jit] selector: LOAD/STORE VM-ptr en fn '%s' "
+                                "linea %u; fallback a interp (sprint "
+                                "Phase D.jit-mem-model pendiente)\n",
+                                ir_fn.name.c_str(), ins_chk.source_line);
+                        }
+                        if (out_unsupported) *out_unsupported = true;
+                        return mf;
+                    }
+                }
+            }
+        }
+
+        /* LICM para ALLOCA: las ALLOCAs en bloques no-entry causan
+         * stack overflow si estan dentro de loops (cada iter consume
+         * bytes sin liberarlos antes de la back-edge).  Solucion:
+         * hoist a entry.  Cada slot stack se reusa entre iteraciones.
+         *
+         * Construimos un mapa: VID de ALLOCA -> bytes a reservar.  En
+         * el prologue del MBlock entry emitimos los `sub rsp, N` para
+         * todas las ALLOCAs hoisted Y guardamos el `mov dst_slot, rsp`
+         * (ajustado al offset acumulado).  En el switch de IrOp::ALLOCA
+         * dentro del loop body, si el VID esta en el mapa, NO emitimos
+         * nada (ya esta hoisted). */
+        std::unordered_map<ir::IrValueId, uint64_t> hoisted_allocas;
+        std::vector<std::pair<ir::IrValueId, uint64_t>> hoisted_order;
+        for (size_t bi_chk = 1; bi_chk < ir_fn.blocks.size(); ++bi_chk) {
+            for (const auto &ins_chk : ir_fn.blocks[bi_chk].instrs) {
+                if (ins_chk.op == ir::IrOp::ALLOCA
+                 && ins_chk.dst != ir::IR_NO_VALUE) {
+                    const uint64_t bytes = ins_chk.imm;
+                    if (bytes == 0 || bytes >= INT32_MAX) continue;
+                    const uint64_t aligned = (bytes + 15ULL) & ~15ULL;
+                    hoisted_allocas[ins_chk.dst] = aligned;
+                    hoisted_order.emplace_back(ins_chk.dst, aligned);
+                }
+            }
+        }
+
         const JitRegalloc regalloc = compute_jit_regalloc(ir_fn);
 
         /* Sprint CCC: contar usos por VID para habilitar fusion CMP+BR_COND.
@@ -503,6 +572,39 @@ namespace jit {
                 MInstr::make_unary(MOp::SUB,
                     MOperand::make_reg(MReg::RSP),
                     MOperand::make_imm32(static_cast<int32_t>(frame_size))));
+        }
+
+        /* LICM ALLOCA hoist: reservar TODAS las ALLOCAs de bloques
+         * no-entry al inicio del prologue.  El slot stack persiste
+         * durante toda la funcion (libre al RET via leave).  El IR op
+         * ALLOCA dentro del loop body NO se procesa normalmente; en su
+         * lugar reescribimos su efecto a "mov dst, rbp - hoisted_off_from_rbp".
+         *
+         * Computamos offset desde rbp (estable durante toda la fn) en
+         * vez de desde rsp (cambia con sub/add) para que el ALLOCA en
+         * el body produzca el MISMO ptr en cada iter.
+         *
+         * Mapa: VID -> offset NEGATIVO desde rbp. */
+        std::unordered_map<ir::IrValueId, int32_t> hoisted_rbp_offset;
+        uint64_t hoisted_total = 0;
+        if (!hoisted_order.empty()) {
+            uint64_t accum = 0;
+            for (const auto &kv : hoisted_order) {
+                accum += kv.second;
+                /* La ALLOCA con accum bytes acumulados (entre la primera
+                 * hoisted y esta) ocupa [rbp - frame_size - accum,
+                 *                        rbp - frame_size - accum + kv.second).
+                 * El puntero al inicio del slot es rbp - frame_size - accum. */
+                const int64_t off_signed = -(static_cast<int64_t>(frame_size)
+                                            + static_cast<int64_t>(accum));
+                hoisted_rbp_offset[kv.first] = static_cast<int32_t>(off_signed);
+            }
+            hoisted_total = accum;
+            /* sub rsp, hoisted_total -- reserva todo el bloque hoisted. */
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_unary(MOp::SUB,
+                    MOperand::make_reg(MReg::RSP),
+                    MOperand::make_imm32(static_cast<int32_t>(hoisted_total))));
         }
 
         /* Params: copiar a slots stack segun el ABI activo. */
@@ -863,6 +965,32 @@ namespace jit {
 
                     /* --------- ALLOCA --------- */
                     case IrOp::ALLOCA: {
+                        /* Si esta ALLOCA fue hoisted, computar su addr
+                         * RELATIVA a rbp (estable durante toda la fn).
+                         * En cada iter del loop, dst recibe el mismo ptr.
+                         * Patron: mov rax, rbp; add rax, off_signed (o
+                         * sub rax, |off_signed|); store dst, rax. */
+                        auto hoist_it = hoisted_rbp_offset.find(ins.dst);
+                        if (hoist_it != hoisted_rbp_offset.end()) {
+                            const int32_t off = hoist_it->second;
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(SCRATCH_A),
+                                    MOperand::make_reg(MReg::RBP)));
+                            if (off < 0) {
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::SUB,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_imm32(-off)));
+                            } else if (off > 0) {
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::ADD,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_imm32(off)));
+                            }
+                            store_op(mf, ins.dst, SCRATCH_A);
+                            break;
+                        }
                         /* Reservar @c ins.imm bytes en el stack nativo y
                          * almacenar el puntero en el slot del dst.  Estilo
                          * "stack grow" en sitio -- el epilogue (`mov rsp,
@@ -966,9 +1094,10 @@ namespace jit {
                      * vez de 0x2a). */
                     case IrOp::LOAD: {
                         if (ins.operands.empty()) break;
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        const ir::IrValueId p_vid = ins.operands[0];
                         const uint64_t lbytes = ir_type_size_bytes(ins.type);
                         const bool lsigned = ir_type_is_signed_int(ins.type);
+                        load_op(mf, p_vid, SCRATCH_B);
                         /* Emit native MOVZX/MOVSX para extension en 1 instr
                          * (en lugar de mov dword + SHL+SHR/SAR).  Reglas:
                          *   - i8/i16/i32 signed: MOVSX r64, r/m<w>
@@ -1015,8 +1144,6 @@ namespace jit {
                         load_op(mf, ins.operands[1], SCRATCH_B);
 
                         const uint64_t sbytes = ir_type_size_bytes(ins.type);
-                        /* Encoder ahora soporta MOV con width 1/2/4/8.
-                         * Solo necesitamos seteear el width del src reg. */
                         const uint8_t w = (sbytes == 1 || sbytes == 2
                                         || sbytes == 4 || sbytes == 8)
                                         ? static_cast<uint8_t>(sbytes) : 8;
@@ -1700,31 +1827,40 @@ namespace jit {
                                 MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
                                 MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
 
-                        /* INLINE CACHE monomorphic (si reserve_ic_slot disponible).
+                        /* POLYMORPHIC INLINE CACHE (PIC, hasta 4 entries).
                          *
-                         * Patron:
+                         * Layout del slot (64 bytes, cache-line aligned):
+                         *   +0  [class_0][jit_code_0]
+                         *   +16 [class_1][jit_code_1]
+                         *   +32 [class_2][jit_code_2]
+                         *   +48 [class_3][jit_code_3]
+                         *
+                         * Patron emitido:
                          *   load obj -> rax
-                         *   test rax,rax; jz fallback_null
-                         *   mov rcx, [rax+0]               ; class_ptr
-                         *   mov r10, ic_slot_addr           ; imm64
-                         *   cmp rcx, [r10]                  ; cached_class
-                         *   jne ic_miss
-                         *   mov rax, [r10+8]                ; cached_jit_code
-                         *   mov rcx, rbx                    ; proc
+                         *   mov rcx, [rax+0]            ; class_ptr
+                         *   mov r10, slot_base          ; imm64
+                         *   cmp rcx, [r10 + 0];  je hit_call
+                         *     mov rax, [r10 + 8]
+                         *   cmp rcx, [r10 + 16]; je hit_call_1
+                         *     mov rax, [r10 + 24]
+                         *   cmp rcx, [r10 + 32]; je hit_call_2
+                         *     mov rax, [r10 + 40]
+                         *   cmp rcx, [r10 + 48]; je hit_call_3
+                         *     mov rax, [r10 + 56]
+                         *   jmp ic_miss
+                         * hit_call_N: -- todos convergen aqui con rax=jit_code
+                         *   mov rcx, rbx
                          *   call rax
                          *   jmp continue
                          * ic_miss:
-                         *   mov arg0=rbx, arg1=rax(obj), arg2=vtbl_idx, arg3=ic_slot
-                         *   call vrt_callvirt_ic
+                         *   call vrt_callvirt_ic(proc, obj, vtbl_idx, slot_base)
                          *   jmp continue
-                         * fallback_null:
-                         *   ... null obj path (raro) ...
                          *
-                         * Ventaja vs inline dispatch tradicional: hit elimina
-                         * 4 loads (vtable+method+jit_code+advice).  Coste por
-                         * hit ~5 instr (load class + cmp + branch + call).
-                         * Coste por miss ~vrt_callvirt_ic overhead (~50ns) +
-                         * actualizar slot (incluido en vrt_callvirt_ic).
+                         * Coste por hit: 1 load class + N cmp/je (1-4 segun
+                         * orden de las entries) + 1 load jit_code + call.
+                         * Una clase NUEVA en orden 0 = 5 instr (similar al MIC).
+                         * 4 clases distintas alternando = ~10-13 instr promedio.
+                         * Coste por miss: vrt_callvirt_ic + actualizar slot.
                          */
                         uint64_t ic_slot_addr = 0;
                         if (opts_.reserve_ic_slot) {
@@ -1732,8 +1868,9 @@ namespace jit {
                         }
                         if (ic_slot_addr != 0 && opts_.runtime
                          && opts_.runtime->callvirt_ic) {
-                            const MLabelId ic_miss_label = mf.new_label();
+                            const MLabelId ic_miss_label     = mf.new_label();
                             const MLabelId ic_continue_label = mf.new_label();
+                            const MLabelId hit_call_label    = mf.new_label();
                             /* load obj */
                             load_op(mf, ins.operands[0], MReg::RAX);
                             /* mov rcx, [rax+0]  (class_ptr) */
@@ -1745,22 +1882,41 @@ namespace jit {
                             mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(MReg::R10),
                                 MOperand::make_imm64_idx(ic_idx)));
-                            /* cmp rcx, [r10] (cached_class) */
-                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::CMP,
-                                MOperand::make_reg(MReg::RCX),
-                                MOperand::make_mem(MReg::R10, 0)));
-                            /* jne ic_miss */
-                            mf.blocks.back().instrs.push_back(
-                                MInstr::make_jcc(MCond::NE, ic_miss_label));
-                            /* HIT: mov rax, [r10+8] (cached_jit_code) */
-                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
-                                MOperand::make_reg(MReg::RAX),
-                                MOperand::make_mem(MReg::R10, 8)));
-                            /* mov rcx, rbx (proc) */
+                            /* 4 entries, secuencia para cada una:
+                             *   cmp rcx, [r10 + 16*e]
+                             *   jne skip_e
+                             *   mov rax, [r10 + 16*e + 8]
+                             *   jmp hit_call
+                             *   skip_e:
+                             * Tras la 4ta entry, si nada matcheo, jmp ic_miss. */
+                            for (int e = 0; e < 4; ++e) {
+                                const int32_t class_off = e * 16;
+                                const int32_t code_off  = e * 16 + 8;
+                                const MLabelId skip_e_label = mf.new_label();
+                                /* cmp rcx, [r10 + class_off] */
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::CMP,
+                                    MOperand::make_reg(MReg::RCX),
+                                    MOperand::make_mem(MReg::R10, class_off)));
+                                /* jne skip_e */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_jcc(MCond::NE, skip_e_label));
+                                /* mov rax, [r10 + code_off] */
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_mem(MReg::R10, code_off)));
+                                /* jmp hit_call */
+                                mf.blocks.back().instrs.push_back(MInstr::make_jmp(hit_call_label));
+                                /* skip_e: */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_label_def(skip_e_label));
+                            }
+                            /* Si llegamos aqui, ninguna entry matcheo -> miss. */
+                            mf.blocks.back().instrs.push_back(MInstr::make_jmp(ic_miss_label));
+                            /* hit_call: convergencia de los 4 hits con rax = jit_code. */
+                            mf.blocks.back().instrs.push_back(MInstr::make_label_def(hit_call_label));
                             mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(MReg::RCX),
                                 MOperand::make_reg(MReg::RBX)));
-                            /* call rax + stackmap */
                             {
                                 MInstr hit_call;
                                 hit_call.op = MOp::CALL;
@@ -1768,7 +1924,6 @@ namespace jit {
                                 emit_stackmap_for_safepoint(hit_call);
                                 mf.blocks.back().instrs.push_back(hit_call);
                             }
-                            /* jmp ic_continue */
                             mf.blocks.back().instrs.push_back(MInstr::make_jmp(ic_continue_label));
                             /* ic_miss: */
                             mf.blocks.back().instrs.push_back(MInstr::make_label_def(ic_miss_label));
@@ -2372,6 +2527,66 @@ namespace jit {
                                     MOperand::make_mem(MReg::RBX, reg_offset)));
                             store_op(mf, ins.dst, MReg::RAX);
                         }
+                        break;
+                    }
+
+                    /* FINDMETHOD / FINDFIELD: lookup por nombre en ClassRegistry.
+                     * Usado por interface dispatch (`shape.area()` con shape
+                     * tipado como interfaz) y reflexion runtime.
+                     *
+                     * Patron:
+                     *   load params_vaddr -> arg1
+                     *   mov arg0, rbx (proc)
+                     *   call vrt_findmethod / vrt_findfield
+                     *   store dst <- rax (MethodInfo* / FieldInfo*)
+                     *
+                     * Marca el dst como host_ptr (MethodInfo es host memoria). */
+                    case ir::IrOp::FINDMETHOD:
+                    case ir::IrOp::FINDFIELD: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FINDMETHOD/FINDFIELD: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t runtime_fn = (ins.op == ir::IrOp::FINDMETHOD)
+                            ? (opts_.runtime ? reinterpret_cast<uint64_t>(opts_.runtime->findmethod) : 0)
+                            : (opts_.runtime ? reinterpret_cast<uint64_t>(opts_.runtime->findfield)  : 0);
+                        if (runtime_fn == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->findmethod/findfield no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* Native ABI: arg0=proc, arg1=params_vaddr. */
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX;
+                        const MReg arg1 = MReg::RDX;
+                    #else
+                        const MReg arg0 = MReg::RDI;
+                        const MReg arg1 = MReg::RSI;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0),
+                            MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx  = mf.intern_imm64(runtime_fn);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        store_op(mf, ins.dst, MReg::RAX);
                         break;
                     }
 
@@ -4861,8 +5076,16 @@ namespace jit {
                             m2.dst.width);
                         collapsed.src1 = src_final;
                         collapsed.source_pc = m1.source_pc;
-                        /* Invalidar equiv para regX (su valor cambia). */
+                        /* Invalidar equiv para regX (su valor cambia) Y
+                         * para regA (m0.dst): el m0 original hacia
+                         * `mov regA, regB`, lo que estableceria
+                         * regA equiv regB.  Tras el collapse el m0 no
+                         * se ejecuta, asi que regA NO esta sincronizado
+                         * con regB.  Sin esto, un load_op posterior
+                         * `mov regA, regB` se eliminaria como
+                         * redundante, dejando regA con valor stale. */
                         invalidate_reg(regX_id);
+                        invalidate_reg(m0.dst.reg);
                         out.push_back(collapsed);
                         i += 3;
                         continue;

@@ -116,6 +116,12 @@ namespace jit {
         // -----------------------------------------------------------------
         vm_read_u64  = &vrt_vm_read_u64;
         vm_write_u64 = &vrt_vm_write_u64;
+        vm_read_u32  = &vrt_vm_read_u32;
+        vm_read_u16  = &vrt_vm_read_u16;
+        vm_read_u8   = &vrt_vm_read_u8;
+        vm_write_u32 = &vrt_vm_write_u32;
+        vm_write_u16 = &vrt_vm_write_u16;
+        vm_write_u8  = &vrt_vm_write_u8;
         findclass    = &vrt_findclass;
         newobj         = &vrt_newobj;
         newobj_handle  = &vrt_newobj_handle;

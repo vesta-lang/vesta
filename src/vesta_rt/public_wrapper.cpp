@@ -400,15 +400,54 @@ uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
         }
     }
 
-    /* Actualizar el slot IC: solo cuando hay jit_code Y NO hay advices
-     * (esos requieren fallback siempre).  Si advice_chain != null o
-     * jit_code == null, NO actualizar el slot -- de esa forma el slot
-     * permanece a 0 y el fast path inline siempre va al miss path. */
+    /* Actualizar el slot PIC (Polymorphic Inline Cache, 4 entries de
+     * 16 bytes cada una).  Layout:
+     *   slot[0,1]  -> entry 0: [class_ptr, jit_code]
+     *   slot[2,3]  -> entry 1
+     *   slot[4,5]  -> entry 2
+     *   slot[6,7]  -> entry 3
+     *
+     * Politica de reemplazo:
+     *   1. Si hay alguna entry con class==0 (libre), poner ahi.
+     *   2. Si todas estan ocupadas (4 tipos distintos vistos en este
+     *      call site = megamorfico), rotar: shift entries 1..3 a 0..2
+     *      y poner la nueva en [3].  Esto mantiene la "ultima vista"
+     *      al final, beneficiando el orden de chequeo del JIT (que
+     *      prueba entry 0 primero).
+     *
+     * Solo se actualiza si hay jit_code Y NO hay advices.  Sin
+     * jit_code el inline cache no sirve (no podriamos llamar
+     * directo); con advices necesitamos el slow path siempre. */
     if (ic_slot_addr != 0 && method->jit_code != nullptr
      && method->advice_chain == nullptr) {
         uint64_t *slot = reinterpret_cast<uint64_t *>(ic_slot_addr);
-        slot[0] = reinterpret_cast<uint64_t>(cls);
-        slot[1] = reinterpret_cast<uint64_t>(method->jit_code);
+        const uint64_t cls_u  = reinterpret_cast<uint64_t>(cls);
+        const uint64_t code_u = reinterpret_cast<uint64_t>(method->jit_code);
+        /* Buscar entry vacia.  Si la clase YA esta cacheada (caso raro
+         * de race en multi-thread), actualizar su jit_code. */
+        int free_idx = -1;
+        for (int i = 0; i < 4; ++i) {
+            const uint64_t s_cls = slot[i * 2];
+            if (s_cls == cls_u) {
+                slot[i * 2 + 1] = code_u;
+                free_idx = -2;  /* sentinel: ya cacheada, no insertar */
+                break;
+            }
+            if (free_idx < 0 && s_cls == 0) {
+                free_idx = i;
+            }
+        }
+        if (free_idx >= 0) {
+            slot[free_idx * 2]     = cls_u;
+            slot[free_idx * 2 + 1] = code_u;
+        } else if (free_idx == -1) {
+            /* Todas ocupadas con otras clases -> rotar.  Entry 0 cae,
+             * 1->0, 2->1, 3->2, nueva clase en 3. */
+            slot[0] = slot[2]; slot[1] = slot[3];
+            slot[2] = slot[4]; slot[3] = slot[5];
+            slot[4] = slot[6]; slot[5] = slot[7];
+            slot[6] = cls_u;   slot[7] = code_u;
+        }
     }
 
     if (method->jit_code != nullptr && method->advice_chain == nullptr) {
@@ -732,6 +771,38 @@ uint64_t vrt_vm_read_u64(vrt_proc *proc, uint64_t vaddr) {
 void vrt_vm_write_u64(vrt_proc *proc, uint64_t vaddr, uint64_t value) {
     if (!proc) return;
     as_proc(proc)->vm_mem.write_u64_fast(vaddr, value);
+}
+
+/* Variantes por tamano para LOAD/STORE de tipos menores que 8 bytes.
+ * El JIT las usa segun el ancho del IR LOAD/STORE para evitar:
+ *   (a) leer pagina no mapeada al final de la region (read_u64 sobre los
+ *       ultimos 4 bytes de una pagina cruzaria el limite).
+ *   (b) escribir 8 bytes sobrescribiendo el siguiente elemento del array
+ *       (4 bytes adyacentes corruptos).
+ * Cada variante delega al metodo size-specifico de @c VirtualMemory. */
+uint32_t vrt_vm_read_u32(vrt_proc *proc, uint64_t vaddr) {
+    if (!proc) return 0;
+    return as_proc(proc)->vm_mem.read_u32(vaddr);
+}
+uint16_t vrt_vm_read_u16(vrt_proc *proc, uint64_t vaddr) {
+    if (!proc) return 0;
+    return as_proc(proc)->vm_mem.read_u16(vaddr);
+}
+uint8_t vrt_vm_read_u8(vrt_proc *proc, uint64_t vaddr) {
+    if (!proc) return 0;
+    return as_proc(proc)->vm_mem.read_u8(vaddr);
+}
+void vrt_vm_write_u32(vrt_proc *proc, uint64_t vaddr, uint32_t value) {
+    if (!proc) return;
+    as_proc(proc)->vm_mem.write_u32(vaddr, value);
+}
+void vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value) {
+    if (!proc) return;
+    as_proc(proc)->vm_mem.write_u16(vaddr, value);
+}
+void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value) {
+    if (!proc) return;
+    as_proc(proc)->vm_mem.write_u8(vaddr, value);
 }
 
 /* ----------------------------------------------------------------------- */
