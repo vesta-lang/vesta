@@ -111,6 +111,13 @@ namespace jit {
         /* ----- VM memory access (Phase D.3-G) ----- */
         uint64_t   (*vm_read_u64)     (vrt_proc *, uint64_t)                 = nullptr;
         void       (*vm_write_u64)    (vrt_proc *, uint64_t, uint64_t)        = nullptr;
+        /* Variantes por tamano (LOAD/STORE de i8/i16/i32 desde VM-ptr). */
+        uint32_t   (*vm_read_u32)     (vrt_proc *, uint64_t)                 = nullptr;
+        uint16_t   (*vm_read_u16)     (vrt_proc *, uint64_t)                 = nullptr;
+        uint8_t    (*vm_read_u8)      (vrt_proc *, uint64_t)                 = nullptr;
+        void       (*vm_write_u32)    (vrt_proc *, uint64_t, uint32_t)        = nullptr;
+        void       (*vm_write_u16)    (vrt_proc *, uint64_t, uint16_t)        = nullptr;
+        void       (*vm_write_u8)     (vrt_proc *, uint64_t, uint8_t)         = nullptr;
 
         /* ----- Class registry (Phase D.3-G: findclass/newobj/defclass/...) ----- */
         vrt_class *(*findclass)       (vrt_proc *, uint64_t)                  = nullptr;

@@ -386,22 +386,32 @@ int main(int argc, char *argv[]) {
     //
     // --jit-warn activa el output detallado de IR ops no soportadas.
     // --jit-stats imprime el snapshot final al RET de main (independiente).
+    /* Prioridad: --jit-threshold > -m jit/-m interp explicito > env var
+     * VESTA_JIT_THRESHOLD > default (UINT32_MAX = JIT off).
+     *
+     * cxxopts retorna count("mode") == 0 cuando no se paso `-m` aunque
+     * la opcion tenga default_value("vm").  Usamos eso para distinguir
+     * "el usuario eligio -m algo" vs "default; mirar env var".
+     *
+     * Importante: leer el env var ANTES del Loader para que la
+     * eager-compile pass se dispare con el threshold correcto.  Sin esto
+     * el threshold se inicializa lazy en el primer maybe_compile_*, ya
+     * tarde para eager compile. */
     if (result.count("jit-threshold")) {
         jit::set_jit_threshold(result["jit-threshold"].as<uint32_t>());
     } else if (result.count("mode")) {
         const std::string m = result["mode"].as<std::string>();
         if (m == "jit") {
-            /* Preset: threshold=1 => cada metodo se JIT-compila a la
-             * primera invocacion.  Equivalente a la opcion explicita
-             * --jit-threshold 1.  Si el usuario quiere otro threshold,
-             * que use --jit-threshold N directamente. */
             jit::set_jit_threshold(1);
         } else if (m == "vm" || m == "interp") {
-            /* Desactiva el JIT explicitamente sobreescribiendo cualquier
-             * env var.  UINT32_MAX = JIT off, hook devuelve sin compilar
-             * en el fast path. */
             jit::set_jit_threshold(UINT32_MAX);
         }
+    } else {
+        /* Sin flags CLI explicitos -> consultar env var ahora.  Lo
+         * hacemos via la API publica que delega en el mismo
+         * std::call_once que el path lazy interno, asi futuras
+         * inicializaciones lazy son no-op (idempotente). */
+        jit::init_threshold_from_env_now();
     }
     if (result.count("jit-warn")) {
         jit::g_jit_warn_unsupported = true;

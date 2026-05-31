@@ -50,6 +50,20 @@ namespace jit {
      */
     void set_jit_threshold(uint32_t threshold) noexcept;
 
+    /**
+     * @brief Fuerza la lectura del env var @c VESTA_JIT_THRESHOLD (+ warn +
+     *        disasm) AHORA, en lugar de esperar al primer @c maybe_compile_*.
+     *
+     * Llamado por @c main al inicio para que la eager-compile pass del
+     * Loader vea el threshold del env var (sin esta llamada, threshold
+     * sigue siendo UINT32_MAX hasta que un callvirt/callvm trigger la
+     * inicializacion lazy, momento en que la oportunidad de eager compile
+     * ya paso).
+     *
+     * Idempotente: usa @c std::call_once internamente.  Llamadas
+     * subsiguientes son no-op. */
+    void init_threshold_from_env_now() noexcept;
+
     /* ===================================================================== */
     /* Sistema de warnings para depuracion del JIT                            */
     /* ===================================================================== */

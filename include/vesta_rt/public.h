@@ -451,6 +451,14 @@ uint64_t vrt_vm_read_u64(vrt_proc *proc, uint64_t vaddr);
  */
 void vrt_vm_write_u64(vrt_proc *proc, uint64_t vaddr, uint64_t value);
 
+/** @brief Variantes por tamano (necesarias para LOAD/STORE de i8/i16/i32). */
+uint32_t vrt_vm_read_u32(vrt_proc *proc, uint64_t vaddr);
+uint16_t vrt_vm_read_u16(vrt_proc *proc, uint64_t vaddr);
+uint8_t  vrt_vm_read_u8 (vrt_proc *proc, uint64_t vaddr);
+void     vrt_vm_write_u32(vrt_proc *proc, uint64_t vaddr, uint32_t value);
+void     vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value);
+void     vrt_vm_write_u8 (vrt_proc *proc, uint64_t vaddr, uint8_t  value);
+
 /* ========================================================================= */
 /* Class registry runtime entries (defclass/findclass/newobj/etc)            */
 /* ========================================================================= */

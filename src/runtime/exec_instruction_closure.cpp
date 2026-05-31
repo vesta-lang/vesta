@@ -37,6 +37,9 @@
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
+#include "jit/auto_jit.h"
+#include "jit/interp_jit_bridge.h"
+#include "vesta_rt/public.h"
 
 namespace runtime {
 
@@ -275,6 +278,41 @@ namespace runtime {
             vm->registers.stack_pointer.qword(frame->frame_base);
             vm->frame_stack = frame->prev; // desapilar el frame
             vm->frame_pool.release(frame); // fix13
+        }
+
+        // JIT dispatch para TAILCALL: igual que CALLVM/CALLVMR, pero la
+        // tail-call no tiene ret_addr propio.  Tras ejecutar el JIT, leemos
+        // el ret_addr del CALLER ORIGINAL desde la pila VM (que el frame
+        // del caller dejo cuando hizo CALLVM hace tiempo) y saltamos ahi.
+        // Equivale a un RET implicito tras la ejecucion JIT.
+        if (jit::g_pc_jit_active) {
+            if (void *jit_fn = jit::lookup_jit_code_at_pc(fn_addr)) {
+                jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
+                               reinterpret_cast<vrt_proc *>(vm));
+                // simular RET: pop ret_addr de la pila VM.
+                const uint64_t rsp = vm->registers.stack_pointer.qword();
+                const uint64_t ret_addr = vm->vm_mem.read_u64_fast(rsp);
+                vm->registers.stack_pointer.qword(rsp + 8);
+                write_rip(vm, ret_addr);
+                return;
+            }
+        }
+
+        // Trigger lazy compile.  Mismo razonamiento que en CALLVM: si el
+        // threshold se cruza Y el compile tiene exito, podemos dispatchar
+        // a JIT inmediatamente en esta misma invocacion, evitando perder
+        // toda la ejecucion del callee.
+        if (jit::g_jit_threshold != UINT32_MAX) {
+            jit::maybe_compile_callvm_target(vm, fn_addr);
+            if (void *jit_fn = jit::lookup_jit_code_at_pc(fn_addr)) {
+                jit::enter_jit(reinterpret_cast<jit::JitFn>(jit_fn),
+                               reinterpret_cast<vrt_proc *>(vm));
+                const uint64_t rsp = vm->registers.stack_pointer.qword();
+                const uint64_t ret_addr = vm->vm_mem.read_u64_fast(rsp);
+                vm->registers.stack_pointer.qword(rsp + 8);
+                write_rip(vm, ret_addr);
+                return;
+            }
         }
 
         // no se empuja nueva direccion de retorno: la del llamante ya esta en la pila
