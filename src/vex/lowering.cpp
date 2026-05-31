@@ -5119,14 +5119,16 @@ namespace vex {
                     break;
                 }
                 case CleanupAction::Kind::RAW_ASM: {
-                    ir::IrInstr ra{};
-                    ra.op          = ir::IrOp::RAW_ASM;
-                    ra.type        = ir::IrType::VOID;
-                    ra.dst         = ir::IR_NO_VALUE;
-                    ra.operands    = std::move(opnds);
-                    ra.func_name   = it->asm_text;
-                    ra.source_line = it->source_line;
-                    fn_->append(current_block_, std::move(ra));
+                    // raw_asm-elim wave 2: dead code.  Todas las creaciones
+                    // de CleanupAction setean su @c kind explicitamente a un
+                    // valor especifico (CALL_DTOR/CALLN_FREE/SMARTPTR_FREE/
+                    // SHAREDPTR_REL/SYNC_EXIT).  Si esta rama se alcanza, es
+                    // un bug del frontend que olvido setear el kind; emitir
+                    // diagnostico claro en lugar de raw_asm opaco.
+                    error_at(SourceLoc{"", it->source_line, 1},
+                        "internal: CleanupAction con Kind::RAW_ASM (default) "
+                        "alcanzado al exit del scope; el frontend debe setear "
+                        "un kind especifico (CALL_DTOR/CALLN_FREE/SMARTPTR_FREE/etc.)");
                     break;
                 }
                 case CleanupAction::Kind::SYNC_EXIT: {
@@ -12475,13 +12477,28 @@ namespace vex {
         const bool is_math_imin  = (name == "imin");
         const bool is_math_imax  = (name == "imax");
         const bool is_math_clamp = (name == "clamp");
+        // Math-IR-promote v2.2a: bit ops + new int/float ops.
+        const bool is_math_trunc    = (name == "trunc");
+        const bool is_math_iminu    = (name == "iminu");
+        const bool is_math_imaxu    = (name == "imaxu");
+        const bool is_math_ilog2    = (name == "ilog2");
+        const bool is_math_popcount = (name == "popcount");
+        const bool is_math_clz      = (name == "clz");
+        const bool is_math_ctz      = (name == "ctz");
+        const bool is_math_bswap    = (name == "bswap");
+        const bool is_math_rotl     = (name == "rotl");
+        const bool is_math_rotr     = (name == "rotr");
         const bool is_any_math   = is_math_sqrt || is_math_pow || is_math_fabs
                 || is_math_floor || is_math_ceil || is_math_round
                 || is_math_fmin || is_math_fmax
                 || is_math_log || is_math_log2 || is_math_log10
                 || is_math_sin || is_math_cos || is_math_tan
                 || is_math_abs || is_math_imin || is_math_imax
-                || is_math_clamp;
+                || is_math_clamp
+                || is_math_trunc || is_math_iminu || is_math_imaxu
+                || is_math_ilog2 || is_math_popcount
+                || is_math_clz || is_math_ctz || is_math_bswap
+                || is_math_rotl || is_math_rotr;
         // smart pointers builtins (unique<T> y shared<T>).
         const bool is_unique_box  = (name == "unique_box");
         const bool is_shared_box  = (name == "shared_box");
@@ -13799,29 +13816,136 @@ namespace vex {
         // imin, imax, clamp), el valor se devuelve como i64 directo.
         if (is_any_math) {
             const std::string lib_math = "stdlib/native/math/vesta_math";
+
+            // Math-IR-promote (raw_asm-elim wave 4): para builtins con IR
+            // op nativa (FSQRT/FABS/FMIN/FMAX/FFLOOR/FCEIL/FROUND/FTRUNC),
+            // emitir el IR op directamente.  Beneficios:
+            //   (a) Constant folding: sqrt(2.0) -> literal compile-time.
+            //   (b) Selector JIT puede emitir sqrtsd/andpd/roundsd nativos
+            //       (~4 ciclos) en lugar de CALLN (~50ns).
+            //   (c) Cross-target: cuando llegue ARM Selector, emitira fsqrt.d
+            //       sin tocar el IR.
+            // Fallback CALLN sigue activo para transcendentales (log/sin/cos/
+            // tan/pow/exp): libm los implementa mejor que cualquier inline.
+            auto emit_float_irop = [&](ir::IrOp op, size_t nargs) -> bool {
+                if (e->args.size() != nargs) {
+                    error_at(e->loc, std::string("'") + name + "': "
+                             + std::to_string(nargs) + " arg(s)");
+                    out_value = ir::IR_NO_VALUE;
+                    return true;
+                }
+                std::vector<ir::IrValueId> ops;
+                ops.reserve(nargs);
+                for (auto &a: e->args) {
+                    ir::IrValueId v = lower_expr(a.get());
+                    if (v == ir::IR_NO_VALUE) {
+                        out_value = ir::IR_NO_VALUE;
+                        return true;
+                    }
+                    // Promover f32 a f64 si hace falta (IR ops trabajan en f64).
+                    const ir::IrType vt = fn_->values[v].type;
+                    if (vt == ir::IrType::F32) {
+                        ir::IrValueId f64v = fn_->new_value(ir::IrType::F64);
+                        ir::IrInstr   ext{};
+                        ext.op          = ir::IrOp::F32TOF64;
+                        ext.type        = ir::IrType::F64;
+                        ext.dst         = f64v;
+                        ext.operands    = {v};
+                        ext.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(ext));
+                        v = f64v;
+                    } else if (vt != ir::IrType::F64) {
+                        // Si el arg no es float, lo dejamos como esta (el
+                        // emitter trata bits como i64 o el caller hizo cast).
+                    }
+                    ops.push_back(v);
+                }
+                const ir::IrValueId v_dst = fn_->new_value(ir::IrType::F64);
+                ir::IrInstr in{};
+                in.op          = op;
+                in.type        = ir::IrType::F64;
+                in.dst         = v_dst;
+                in.operands    = std::move(ops);
+                in.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(in));
+                out_value = v_dst;
+                return true;
+            };
+            // Math-IR-promote: despachar a IR op directamente para los que
+            // tienen instr hardware nativa (target-agnostico).  Beneficios:
+            //   (a) FSQRT/FABS/FNEG bajan a bytecode VM nativo (fsqrt/fabs/
+            //       fneg, ~5ns) en lugar de CALLN (~50ns).
+            //   (b) Para FMIN/FMAX/FFLOOR/FCEIL/FROUND/FTRUNC el bytecode
+            //       todavia no tiene opcodes; el IR emitter (ir_emitter.cpp)
+            //       tiene un pre-pase que los convierte a CALLN equivalente.
+            //   (c) El Selector JIT (futuro) emite sqrtsd/andpd/minsd/roundsd
+            //       nativos sin tocar el frontend.
+            //   (d) Constant folding (cuando se anyada) funciona uniforme.
+            if (is_math_sqrt)  return emit_float_irop(ir::IrOp::FSQRT,  1);
+            if (is_math_fabs)  return emit_float_irop(ir::IrOp::FABS,   1);
+            if (is_math_fmin)  return emit_float_irop(ir::IrOp::FMIN,   2);
+            if (is_math_fmax)  return emit_float_irop(ir::IrOp::FMAX,   2);
+            if (is_math_floor) return emit_float_irop(ir::IrOp::FFLOOR, 1);
+            if (is_math_ceil)  return emit_float_irop(ir::IrOp::FCEIL,  1);
+            if (is_math_round) return emit_float_irop(ir::IrOp::FROUND, 1);
+            if (is_math_trunc) return emit_float_irop(ir::IrOp::FTRUNC, 1);
+
+            // Math-IR-promote v2.2a: bit ops + int ops adicionales.
+            // Producen i64 (no float).  Lambda paralela a emit_float_irop.
+            auto emit_int_irop = [&](ir::IrOp op, size_t nargs) -> bool {
+                if (e->args.size() != nargs) {
+                    error_at(e->loc, std::string("'") + name + "': "
+                             + std::to_string(nargs) + " arg(s)");
+                    out_value = ir::IR_NO_VALUE;
+                    return true;
+                }
+                std::vector<ir::IrValueId> ops;
+                ops.reserve(nargs);
+                for (auto &a : e->args) {
+                    ir::IrValueId v = lower_expr(a.get());
+                    if (v == ir::IR_NO_VALUE) {
+                        out_value = ir::IR_NO_VALUE;
+                        return true;
+                    }
+                    ops.push_back(cast_if_needed(v, fn_->values[v].type,
+                                                  ir::IrType::I64, e->loc.line));
+                }
+                const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr in{};
+                in.op          = op;
+                in.type        = ir::IrType::I64;
+                in.dst         = v_dst;
+                in.operands    = std::move(ops);
+                in.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(in));
+                out_value = v_dst;
+                return true;
+            };
+            if (is_math_iminu)    return emit_int_irop(ir::IrOp::IMINU,    2);
+            if (is_math_imaxu)    return emit_int_irop(ir::IrOp::IMAXU,    2);
+            if (is_math_ilog2)    return emit_int_irop(ir::IrOp::ILOG2,    1);
+            if (is_math_popcount) return emit_int_irop(ir::IrOp::POPCNT,   1);
+            if (is_math_clz)      return emit_int_irop(ir::IrOp::CLZ,      1);
+            if (is_math_ctz)      return emit_int_irop(ir::IrOp::CTZ,      1);
+            if (is_math_bswap)    return emit_int_irop(ir::IrOp::BYTESWAP, 1);
+            if (is_math_rotl)     return emit_int_irop(ir::IrOp::ROTL,     2);
+            if (is_math_rotr)     return emit_int_irop(ir::IrOp::ROTR,     2);
+            // Promocion IMIN/IMAX/IABS a IR op tambien (los wires antiguos
+            // CALLN siguen activos abajo pero el pre-pase los re-wirea).
+            if (is_math_abs)  return emit_int_irop(ir::IrOp::IABS, 1);
+            if (is_math_imin) return emit_int_irop(ir::IrOp::IMIN, 2);
+            if (is_math_imax) return emit_int_irop(ir::IrOp::IMAX, 2);
+
+            // Camino CALLN tradicional para transcendentales (log/exp/sin/cos/tan/pow)
+            // e ints (abs/imin/imax/clamp).  libm los implementa mejor que cualquier
+            // inline que podamos emitir.
             std::string       func_name;
             size_t            expected_args = 1;
             ir::IrType        ret_ir        = ir::IrType::F64;
             ir::IrType        arg_ir        = ir::IrType::I64; // por defecto pasa bits f64 como i64
             bool              dst_is_float  = true;
-            if (is_math_sqrt) {
-                func_name = "vmath_sqrt";
-            } else if (is_math_pow) {
+            if (is_math_pow) {
                 func_name     = "vmath_pow";
-                expected_args = 2;
-            } else if (is_math_fabs) {
-                func_name = "vmath_fabs";
-            } else if (is_math_floor) {
-                func_name = "vmath_floor";
-            } else if (is_math_ceil) {
-                func_name = "vmath_ceil";
-            } else if (is_math_round) {
-                func_name = "vmath_round";
-            } else if (is_math_fmin) {
-                func_name     = "vmath_fmin";
-                expected_args = 2;
-            } else if (is_math_fmax) {
-                func_name     = "vmath_fmax";
                 expected_args = 2;
             } else if (is_math_log) {
                 func_name = "vmath_log";

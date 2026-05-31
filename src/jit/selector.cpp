@@ -286,6 +286,27 @@ namespace jit {
          * Si @c regalloc.empty(), nada cambia respecto al path original. */
         const JitRegalloc regalloc = compute_jit_regalloc(ir_fn);
 
+        /* Sprint CCC: contar usos por VID para habilitar fusion CMP+BR_COND.
+         * El selector emite `xor rax,rax; cmp; setcc; store` para CMP_* y
+         * luego `load; test; jcc` para BR_COND -- 8 instr.  Con fusion:
+         * `cmp; jcc<cond>` -- 2 instr.  Solo seguro cuando el resultado del
+         * CMP_* tiene EXACTAMENTE un uso (el BR_COND).  use_count cubre
+         * todos los operands + phi_args. */
+        std::vector<uint32_t> use_count(ir_fn.values.size(), 0);
+        for (const auto &blk : ir_fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                for (ir::IrValueId v : ins.operands) {
+                    if (v != ir::IR_NO_VALUE && v < use_count.size()) use_count[v]++;
+                }
+                for (const auto &pa : ins.phi_args) {
+                    if (pa.value != ir::IR_NO_VALUE && pa.value < use_count.size())
+                        use_count[pa.value]++;
+                }
+                if (ins.func_ptr != ir::IR_NO_VALUE && ins.func_ptr < use_count.size())
+                    use_count[ins.func_ptr]++;
+            }
+        }
+
         /* Set para deduplicar warnings de IR ops no soportadas dentro de
          * la misma funcion: la misma op repetida en multiples lineas o
          * el mismo (op, linea) en multiples puntos solo se reporta una vez.
@@ -554,7 +575,17 @@ namespace jit {
                         MOperand::make_imm32(n_instrs)));
             }
 
-            for (const auto &ins : ir_block.instrs) {
+            /* Estado de fusion CMP+BR_COND por bloque.  Reseteo al inicio.
+             * Sprint CCC: el cmp se EMITE en el BR_COND (no en el CMP_*)
+             * para que el safepoint de back-edge no clobree flags. */
+            bool          fused_cmp_active = false;
+            MCond         fused_cmp_cond   = MCond::E;
+            ir::IrValueId fused_cmp_dst    = ir::IR_NO_VALUE;
+            ir::IrValueId fused_cmp_op0    = ir::IR_NO_VALUE;
+            ir::IrValueId fused_cmp_op1    = ir::IR_NO_VALUE;
+
+            for (size_t ins_idx = 0; ins_idx < ir_block.instrs.size(); ++ins_idx) {
+                const auto &ins = ir_block.instrs[ins_idx];
                 using IrOp = ir::IrOp;
                 switch (ins.op) {
                     /* --------- Mov / Const --------- */
@@ -630,8 +661,8 @@ namespace jit {
                         break;
                     }
                     case IrOp::CONST: {
-                        if (ins.imm <= 0x7FFFFFFFULL ||
-                            static_cast<int64_t>(ins.imm) >= -0x80000000LL) {
+                        const int64_t cv = static_cast<int64_t>(ins.imm);
+                        if (cv >= -0x80000000LL && cv <= 0x7FFFFFFFLL) {
                             /* Cabe en imm32 sign-ext.  Usar MOV r, imm32. */
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
@@ -1009,6 +1040,39 @@ namespace jit {
                     case IrOp::CMP_ULE:
                     case IrOp::CMP_UGE: {
                         if (ins.operands.size() < 2) break;
+
+                        /* Sprint CCC: deteccion de fusion CMP+BR_COND.
+                         * Si la siguiente IR instr es BR_COND con
+                         * operands[0] == este dst Y el dst solo tiene UN uso
+                         * (este BR_COND), emitimos solo CMP y dejamos la
+                         * condicion en flags.  El BR_COND handler emite jcc
+                         * directo sin re-test.  Ahorra ~6 instr/iter en
+                         * loops aritmeticos. */
+                        bool fuse = false;
+                        if (ins.dst != ir::IR_NO_VALUE
+                         && ins.dst < use_count.size()
+                         && use_count[ins.dst] == 1
+                         && ins_idx + 1 < ir_block.instrs.size()) {
+                            const auto &nxt = ir_block.instrs[ins_idx + 1];
+                            if (nxt.op == IrOp::BR_COND
+                             && !nxt.operands.empty()
+                             && nxt.operands[0] == ins.dst) {
+                                fuse = true;
+                            }
+                        }
+
+                        if (fuse) {
+                            /* NO emitimos cmp aqui; lo emitiremos en el
+                             * BR_COND DESPUES del safepoint poll para que
+                             * el handler no clobree las flags. */
+                            fused_cmp_active = true;
+                            fused_cmp_cond   = cond_for_cmp_op(ins.op);
+                            fused_cmp_dst    = ins.dst;
+                            fused_cmp_op0    = ins.operands[0];
+                            fused_cmp_op1    = ins.operands[1];
+                            break;
+                        }
+
                         /* Patron correcto: zero RAX PRIMERO (sin daniar
                          * flags posteriores), luego CMP, luego SETCC.
                          * Si invertimos orden (CMP + XOR), el XOR
@@ -1376,6 +1440,127 @@ namespace jit {
                     }
 
                     case IrOp::CALLN: {
+                        /* Math-IR-promote v2.2c interception: el pre-pase del
+                         * IR emitter convierte IABS/IMIN/IMAX/IMINU/IMAXU/
+                         * ILOG2 (y otros) a CALLN a vmath_* porque el bytecode
+                         * VM no tiene opcode nativo.  Para el JIT, sin embargo,
+                         * podemos emitir cmov/sar/xor inline directo (~5 instr
+                         * vs ~50ns CALLN).  Detectamos por func_name. */
+                        if (ins.func_name == "stdlib/native/math/vesta_math:vmath_abs"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_min"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_max"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_minu"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_maxu"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_ilog2"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_rotl"
+                         || ins.func_name == "stdlib/native/math/vesta_math:vmath_rotr") {
+                            const std::string &fn = ins.func_name;
+                            if (fn.find("vmath_abs") != std::string::npos) {
+                                if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                                    unsupported = true;
+                                    mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                                    break;
+                                }
+                                load_op(mf, ins.operands[0], SCRATCH_A);
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(SCRATCH_C),
+                                        MOperand::make_reg(SCRATCH_A)));
+                                /* sar rdx, 63 -- forma 2-operand (dst, imm). */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::SAR,
+                                        MOperand::make_reg(SCRATCH_C),
+                                        MOperand::make_imm32(63)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::XOR,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_reg(SCRATCH_C)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::SUB,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_reg(SCRATCH_C)));
+                                store_op(mf, ins.dst, SCRATCH_A);
+                                break;
+                            }
+                            if (fn.find("vmath_ilog2") != std::string::npos) {
+                                if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                                    unsupported = true;
+                                    mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                                    break;
+                                }
+                                load_op(mf, ins.operands[0], SCRATCH_B);
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::LZCNT,
+                                        MOperand::make_reg(MReg::RAX),
+                                        MOperand::make_reg(SCRATCH_B)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::NEG,
+                                        MOperand::make_reg(MReg::RAX),
+                                        MOperand::make_reg(MReg::RAX)));
+                                /* add rax, 63 -- usar SUB con neg trick o
+                                 * ADD r/imm32 (forma 2-op: dst, imm32). */
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::ADD,
+                                        MOperand::make_reg(MReg::RAX),
+                                        MOperand::make_imm32(63)));
+                                store_op(mf, ins.dst, MReg::RAX);
+                                break;
+                            }
+                            /* ROTL/ROTR: cuenta en CL (RCX low byte).  El
+                             * encoder de SHL/SAR ya emite `rol/ror r64, cl`
+                             * cuando src es REG==RCX.  Patron:
+                             *   load val -> RAX
+                             *   load cnt -> RCX (CL ya esta listo)
+                             *   rol/ror rax, cl
+                             *   store dst <- rax  */
+                            if (fn.find("vmath_rotl") != std::string::npos
+                             || fn.find("vmath_rotr") != std::string::npos) {
+                                if (ins.dst == ir::IR_NO_VALUE
+                                 || ins.operands.size() < 2) {
+                                    unsupported = true;
+                                    mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                                    break;
+                                }
+                                load_op(mf, ins.operands[0], SCRATCH_A);
+                                load_op(mf, ins.operands[1], SCRATCH_B);
+                                const MOp rot_op = (fn.find("vmath_rotl") != std::string::npos)
+                                    ? MOp::ROL : MOp::ROR;
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(rot_op,
+                                        MOperand::make_reg(SCRATCH_A),
+                                        MOperand::make_reg(SCRATCH_B)));
+                                store_op(mf, ins.dst, SCRATCH_A);
+                                break;
+                            }
+                            /* IMIN/IMAX/IMINU/IMAXU. */
+                            if (ins.dst == ir::IR_NO_VALUE || ins.operands.size() < 2) {
+                                unsupported = true;
+                                mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                                break;
+                            }
+                            load_op(mf, ins.operands[0], SCRATCH_A);
+                            load_op(mf, ins.operands[1], SCRATCH_B);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::CMP,
+                                    MOperand::make_reg(SCRATCH_A),
+                                    MOperand::make_reg(SCRATCH_B)));
+                            MCond cc;
+                            if (fn.find("vmath_minu") != std::string::npos)      cc = MCond::A;
+                            else if (fn.find("vmath_maxu") != std::string::npos) cc = MCond::B;
+                            else if (fn.find("vmath_min")  != std::string::npos) cc = MCond::G;
+                            else                                                  cc = MCond::L; /* vmath_max */
+                            {
+                                MInstr i;
+                                i.op = MOp::CMOVCC;
+                                i.variant = static_cast<uint8_t>(cc);
+                                i.dst  = MOperand::make_reg(SCRATCH_A);
+                                i.src1 = MOperand::make_reg(SCRATCH_B);
+                                mf.blocks.back().instrs.push_back(i);
+                            }
+                            store_op(mf, ins.dst, SCRATCH_A);
+                            break;
+                        }
+
                         if (opts_.resolve_native_fn == nullptr) {
                             warn_unsupported(ins.op, ins.source_line,
                                 "resolve_native_fn no provisto");
@@ -1995,8 +2180,18 @@ namespace jit {
                     }
                     case IrOp::BR_COND: {
                         if (ins.operands.empty()) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
-                        /* SAFEPOINT antes del condicional si alguna rama es back-edge. */
+
+                        /* Sprint CCC: fusion CMP+BR_COND.  Si el CMP_*
+                         * anterior nos paso operands+cond, emitimos cmp
+                         * DESPUES del safepoint poll para no clobrear flags. */
+                        const bool use_fused =
+                            fused_cmp_active
+                         && fused_cmp_dst == ins.operands[0];
+
+                        /* SAFEPOINT antes del condicional si alguna rama es back-edge.
+                         * Importante: emitimos PRIMERO el safepoint (que toca
+                         * flags via cmp byte [rbx],0) y LUEGO el cmp fusionado
+                         * o el load+test estandar. */
                         const bool is_back =
                             opts_.mode == SelectorMode::VM_ABI &&
                             ((ins.target_block <= static_cast<ir::IrBlockId>(bi)) ||
@@ -2005,6 +2200,19 @@ namespace jit {
                             MInstr sp_instr = MInstr::make_safepoint(safepoint_pool_idx_);
                             emit_stackmap_for_safepoint(sp_instr);
                             mf.blocks.back().instrs.push_back(sp_instr);
+                        }
+
+                        if (use_fused) {
+                            /* Emitir cmp DESPUES del safepoint para que las
+                             * flags lleguen vivas al jcc. */
+                            load_op(mf, fused_cmp_op0, SCRATCH_B);
+                            load_op(mf, fused_cmp_op1, SCRATCH_C);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::CMP,
+                                    MOperand::make_reg(SCRATCH_B),
+                                    MOperand::make_reg(SCRATCH_C)));
+                        } else {
+                            load_op(mf, ins.operands[0], SCRATCH_A);
                         }
 
                         /* PHI elimination con cond branching.
@@ -2040,17 +2248,38 @@ namespace jit {
                             }
                         };
 
-                        /* test rax, rax */
-                        mf.blocks.back().instrs.push_back(
-                            MInstr::make_unary(MOp::TEST,
-                                MOperand::make_reg(SCRATCH_A),
-                                MOperand::make_reg(SCRATCH_A)));
+                        /* Si NO esta fusionado, emitir test rax,rax (load+test).
+                         * Si SI esta fusionado, las flags ya estan del CMP
+                         * emitido arriba y mov-based PHI copies no las tocan. */
+                        const auto invert_cond = [](MCond c) -> MCond {
+                            switch (c) {
+                                case MCond::E:  return MCond::NE;
+                                case MCond::NE: return MCond::E;
+                                case MCond::L:  return MCond::GE;
+                                case MCond::GE: return MCond::L;
+                                case MCond::G:  return MCond::LE;
+                                case MCond::LE: return MCond::G;
+                                case MCond::B:  return MCond::AE;
+                                case MCond::AE: return MCond::B;
+                                case MCond::A:  return MCond::BE;
+                                case MCond::BE: return MCond::A;
+                                default:        return MCond::NE;
+                            }
+                        };
+                        const MCond taken_cond = use_fused ? fused_cmp_cond  : MCond::NE;
+                        const MCond skip_cond  = use_fused ? invert_cond(fused_cmp_cond) : MCond::E;
+                        if (!use_fused) {
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::TEST,
+                                    MOperand::make_reg(SCRATCH_A),
+                                    MOperand::make_reg(SCRATCH_A)));
+                        }
 
                         if (!t_has_phi && !f_has_phi) {
                             /* Fast path: no PHIs, codigo identico al original. */
                             if (ins.target_block < block_labels.size()) {
                                 mf.blocks.back().instrs.push_back(
-                                    MInstr::make_jcc(MCond::NE,
+                                    MInstr::make_jcc(taken_cond,
                                         block_labels[ins.target_block]));
                             }
                             if (ins.false_block < block_labels.size()) {
@@ -2063,7 +2292,7 @@ namespace jit {
                              *            Label fallback: PHIs false + JMP false. */
                             const MLabelId skip_taken_lbl = mf.new_label();
                             mf.blocks.back().instrs.push_back(
-                                MInstr::make_jcc(MCond::E, skip_taken_lbl));
+                                MInstr::make_jcc(skip_cond, skip_taken_lbl));
                             /* PHIs del taken */
                             emit_phi_copies_for_target(ins.target_block);
                             if (ins.target_block < block_labels.size()) {
@@ -2166,6 +2395,480 @@ namespace jit {
                         unsupported = true;
                         mf.blocks.back().instrs.push_back(
                             {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                        break;
+                    }
+
+                    /* ==================================================
+                     * Math-IR-promote v2.2a: bit ops nativos en JIT.
+                     *
+                     * Cada uno baja a 1 instr nativa x86 (1-4 ciclos):
+                     *   POPCNT: F3 0F B8  popcnt rd, rs    (3c, SSE4.2)
+                     *   CLZ:    F3 0F BD  lzcnt rd, rs     (3c, BMI1)
+                     *   CTZ:    F3 0F BC  tzcnt rd, rs     (3c, BMI1)
+                     *   BSWAP:  0F C8+rd  bswap rd         (2c, baseline)
+                     *   ROTL:   D1/C1 /0  rol rd, imm      (1c)
+                     *   ROTR:   D1/C1 /1  ror rd, imm      (1c)
+                     *
+                     * Compara vs CALLN a vmath_*: ~50ns -> ~3ns = 15-20x.
+                     * ================================================== */
+                    case ir::IrOp::POPCNT:
+                    case ir::IrOp::CLZ:
+                    case ir::IrOp::CTZ: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* Bug fix 2026-05-31: usar SCRATCH_B (RCX) como src
+                         * y RAX como dst para evitar que el regalloc rewrite
+                         * elimine un MOV RAX, RAX falsamente identidad.
+                         *
+                         * Sintoma original: cuando el regalloc tenia el
+                         * operando pinned a un reg distinto Y la instr previa
+                         * dejaba un valor STALE en RAX, el load_op(op0, RAX)
+                         * se rewriteaba a `MOV RAX, R<pinned>` pero por algun
+                         * motivo no aparecia en la salida, dejando RAX con el
+                         * valor anterior (e.g. resultado de un ADD previo).
+                         * Patron seguro: cargar a RCX (distinto del dst RAX),
+                         * luego `popcnt RAX, RCX`. */
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        const MOp mop =
+                            (ins.op == ir::IrOp::POPCNT) ? MOp::POPCNT :
+                            (ins.op == ir::IrOp::CLZ)    ? MOp::LZCNT :
+                                                            MOp::TZCNT;
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(mop,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(SCRATCH_B)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::BYTESWAP: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* BSWAP es unario in-place (solo dst).  Cargar a
+                         * RCX primero, copiar a RAX, bswap RAX, store.  El
+                         * copy intermedio garantiza que RAX recibe el valor
+                         * recien cargado (no uno stale). */
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(SCRATCH_B)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::BSWAP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::RAX)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    /* ==================================================
+                     * Math-IR-promote v2.2c+: IABS/IMIN/IMAX nativos en JIT
+                     * via cmov.  Antes caian al pre-pase (CALLN a vmath_*).
+                     *
+                     * Patrones:
+                     *   IABS:    mov rax, src
+                     *            mov rdx, rax
+                     *            sar rdx, 63        ; rdx = -1 si neg, 0 si pos
+                     *            xor rax, rdx       ; flip bits si neg
+                     *            sub rax, rdx       ; +1 si neg => |x|
+                     *
+                     *   IMIN/IMAX/IMINU/IMAXU:
+                     *            mov rax, a
+                     *            mov rcx, b
+                     *            cmp rax, rcx
+                     *            cmov<cond> rax, rcx
+                     *     IMIN signed:    cmovg  (rax > rcx -> tomar rcx)
+                     *     IMAX signed:    cmovl  (rax < rcx -> tomar rcx)
+                     *     IMINU unsigned: cmova  (rax > rcx u -> tomar rcx)
+                     *     IMAXU unsigned: cmovb  (rax < rcx u -> tomar rcx)
+                     *
+                     * Coste: ~4-5 instr maquina vs ~50ns por CALLN.  ~10-15x.
+                     * ================================================== */
+                    case ir::IrOp::IABS: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "IABS: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* Branchless abs (3 ops + 2 movs).
+                         * Mas rapido que neg+cmov porque evita la dep
+                         * sobre flags.  Funciona para todos los i64 excepto
+                         * INT_MIN (mismo undef que el IR docea). */
+                        load_op(mf, ins.operands[0], SCRATCH_A);  /* rax = x */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(SCRATCH_C),
+                                MOperand::make_reg(SCRATCH_A)));  /* rdx = x */
+                        /* sar rdx, 63 -> rdx = -1 si neg, 0 si pos */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::SAR,
+                                MOperand::make_reg(SCRATCH_C),
+                                MOperand::make_imm32(63)));
+                        /* xor rax, rdx */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::XOR,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_reg(SCRATCH_C)));
+                        /* sub rax, rdx */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::SUB,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_reg(SCRATCH_C)));
+                        store_op(mf, ins.dst, SCRATCH_A);
+                        break;
+                    }
+                    case ir::IrOp::IMIN:
+                    case ir::IrOp::IMAX:
+                    case ir::IrOp::IMINU:
+                    case ir::IrOp::IMAXU: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "IMIN/IMAX: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_A);  /* rax = a */
+                        load_op(mf, ins.operands[1], SCRATCH_B);  /* rcx = b */
+                        /* cmp rax, rcx */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::CMP,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_reg(SCRATCH_B)));
+                        /* cmov<cc> rax, rcx */
+                        const MCond cc =
+                            (ins.op == ir::IrOp::IMIN)  ? MCond::G  :
+                            (ins.op == ir::IrOp::IMAX)  ? MCond::L  :
+                            (ins.op == ir::IrOp::IMINU) ? MCond::A  :
+                                                           MCond::B;
+                        {
+                            MInstr i;
+                            i.op = MOp::CMOVCC;
+                            i.variant = static_cast<uint8_t>(cc);
+                            i.dst  = MOperand::make_reg(SCRATCH_A);
+                            i.src1 = MOperand::make_reg(SCRATCH_B);
+                            mf.blocks.back().instrs.push_back(i);
+                        }
+                        store_op(mf, ins.dst, SCRATCH_A);
+                        break;
+                    }
+                    case ir::IrOp::ILOG2: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "ILOG2: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* ilog2(u64 x) = 63 - clz(x).  Asumimos x != 0 (UB
+                         * documentada).  Emitimos lzcnt + neg + add 63. */
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::LZCNT,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(SCRATCH_B)));
+                        /* rax = 63 - rax  ==> neg rax; add rax, 63 */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::NEG,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::RAX)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::ADD,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_imm32(63)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    /* ==================================================
+                     * Math-IR-promote v2.2b: FP nativas en JIT con XMM.
+                     *
+                     * Patron memory-roundtrip via MOVQ:
+                     *   load_op(op0, RCX)        ; rcx <- bits f64 desde slot
+                     *   MOVQ_GP_XMM XMM0, RCX    ; xmm0 = rcx (4 bytes)
+                     *   <SQRTSD/MINSD/...> XMM0  ; op nativa (~4-6 ciclos)
+                     *   MOVQ_XMM_GP RAX, XMM0    ; rax = xmm0
+                     *   store_op(dst, RAX)
+                     *
+                     * Compara vs CALLN: ~50ns + libm sqrt ~10ns = 60ns.
+                     * Nativo: ~4-6 ciclos + 4 movs (~3ns total).  ~20x.
+                     *
+                     * XMM0/XMM1 hardcoded como scratch (regalloc D.7 no
+                     * pina XMM, asi que es seguro).
+                     * ================================================== */
+                    case ir::IrOp::FADD:
+                    case ir::IrOp::FSUB:
+                    case ir::IrOp::FMUL:
+                    case ir::IrOp::FDIV: {
+                        /* FP binary: load both ops to XMM0/XMM1, op, store. */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FADD/FSUB/FMUL/FDIV: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM1),
+                                MOperand::make_reg(SCRATCH_B)));
+                        const MOp mop =
+                            (ins.op == ir::IrOp::FADD) ? MOp::ADDSD :
+                            (ins.op == ir::IrOp::FSUB) ? MOp::SUBSD :
+                            (ins.op == ir::IrOp::FMUL) ? MOp::MULSD :
+                                                          MOp::DIVSD;
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(mop,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(MReg::XMM1)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::ITOF:
+                    case ir::IrOp::UITOF: {
+                        /* CVTSI2SD xmm, gp.  ITOF interpreta signed; UITOF
+                         * para u64 con bit 63 set requeriria correccion
+                         * extra (no implementado en v1; rare). */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "ITOF/UITOF: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::CVTSI2SD,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::FTOI:
+                    case ir::IrOp::FTOUI: {
+                        /* CVTTSD2SI gp, xmm.  Truncacion hacia cero. */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FTOI/FTOUI: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::CVTTSD2SI,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    case ir::IrOp::FSQRT: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FSQRT: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);  /* rcx = bits */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::SQRTSD,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(MReg::XMM0)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::FMIN:
+                    case ir::IrOp::FMAX: {
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FMIN/FMAX: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* op0 -> xmm0, op1 -> xmm1, minsd xmm0, xmm1. */
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM1),
+                                MOperand::make_reg(SCRATCH_B)));
+                        const MOp mop = (ins.op == ir::IrOp::FMIN)
+                                          ? MOp::MINSD : MOp::MAXSD;
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(mop,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(MReg::XMM1)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::FFLOOR:
+                    case ir::IrOp::FCEIL:
+                    case ir::IrOp::FROUND:
+                    case ir::IrOp::FTRUNC: {
+                        /* ROUNDSD xmm0, xmm0, imm8 (mode 0/1/2/3). */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FROUND family: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        const uint8_t mode =
+                            (ins.op == ir::IrOp::FROUND) ? 0 :  /* nearest */
+                            (ins.op == ir::IrOp::FFLOOR) ? 1 :  /* down */
+                            (ins.op == ir::IrOp::FCEIL)  ? 2 :  /* up */
+                                                            3;  /* trunc */
+                        MInstr round_instr;
+                        round_instr.op      = MOp::ROUNDSD;
+                        round_instr.variant = mode;
+                        round_instr.dst     = MOperand::make_reg(MReg::XMM0);
+                        round_instr.src1    = MOperand::make_reg(MReg::XMM0);
+                        mf.blocks.back().instrs.push_back(round_instr);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::FABS:
+                    case ir::IrOp::FNEG: {
+                        /* GP-only via bitwise mask en los bits IEEE 754:
+                         *   FABS: AND con 0x7FFFFFFFFFFFFFFF (clear sign bit)
+                         *   FNEG: XOR con 0x8000000000000000 (flip sign bit)
+                         * Mas eficiente que XMM via SSE-mask (sin static_data).
+                         * SCRATCH_A=RAX para la mask, SCRATCH_B=RCX para val. */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FABS/FNEG: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        const uint64_t mask = (ins.op == ir::IrOp::FABS)
+                            ? 0x7FFFFFFFFFFFFFFFULL
+                            : 0x8000000000000000ULL;
+                        /* mov rax, imm64 via pool. */
+                        const uint32_t mask_idx = mf.intern_imm64(mask);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_imm64_idx(mask_idx)));
+                        /* and rcx, rax  o  xor rcx, rax  (2-operand: dst = dst OP src). */
+                        const MOp mop = (ins.op == ir::IrOp::FABS)
+                                          ? MOp::AND : MOp::XOR;
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(mop,
+                                MOperand::make_reg(SCRATCH_B),
+                                MOperand::make_reg(MReg::RAX)));
+                        store_op(mf, ins.dst, SCRATCH_B);
+                        break;
+                    }
+
+                    case ir::IrOp::ROTL:
+                    case ir::IrOp::ROTR: {
+                        /* Sprint BBB: ROTL/ROTR nativo via rol/ror r64, cl.
+                         * El encoder de SHL/SAR ya soporta la forma reg-cl
+                         * (variante D3 /subop) cuando src es REG==RCX.
+                         * Patron:
+                         *   load val -> RAX
+                         *   load cnt -> RCX (CL = low byte de RCX)
+                         *   rol/ror rax, cl
+                         *   store dst <- rax  */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "ROTL/ROTR: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        const MOp rot_op =
+                            (ins.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(rot_op,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_reg(SCRATCH_B)));
+                        store_op(mf, ins.dst, SCRATCH_A);
                         break;
                     }
 

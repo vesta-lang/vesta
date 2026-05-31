@@ -188,6 +188,15 @@ namespace jit {
                     vi.excluded = true;
                     continue;
                 }
+                /* Excluir CONSTS: rematerializan baratos como imm32 en
+                 * el selector.  Pinearlos a reg + coalescing con phi dst
+                 * provoca corrupcion silenciosa cuando el CONST se usa
+                 * tanto como phi_arg como en otra parte del loop (el
+                 * reg coalescido lleva el valor del phi, no del const). */
+                if (val.is_const) {
+                    vi.excluded = true;
+                    continue;
+                }
             }
         }
 
