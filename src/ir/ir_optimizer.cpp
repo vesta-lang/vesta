@@ -90,6 +90,12 @@ static bool is_side_effecting(IrOp op) {
         case IrOp::GC_ALLOCP:
         case IrOp::GC_PROMOTE: case IrOp::GC_DEMOTE:
         case IrOp::GC_HANDLE_FOR_PTR:
+        // GC_DEREF_HOST: handle -> host_ptr.  Conservative: marked side-effecting
+        // porque el host_ptr puede cambiar tras un major_gc (moving GC) y CSE
+        // erroneamente fusionaria dos derefs separados por un CALL.  Cuando
+        // llegue Phase D.8 con CSE block-aware con clobber model, se puede
+        // relajar a "pure within block until next CALL/alloc".
+        case IrOp::GC_DEREF_HOST:
         case IrOp::ATOMIC_LD_I64: case IrOp::ATOMIC_ST_I64:
         case IrOp::ATOMIC_CAS_I64: case IrOp::ATOMIC_ADD_I64:
         case IrOp::GETSTATIC: case IrOp::SETSTATIC:

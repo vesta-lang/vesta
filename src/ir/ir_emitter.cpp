@@ -2736,6 +2736,31 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
+        case IrOp::GC_DEREF_HOST: {
+            // %dst = gc_deref_host.ptr %handle
+            //
+            // Reemplaza el viejo blob RAW_ASM:
+            //     gcderef cur0, {src0}
+            //     xchg    cur0, {dst}
+            //
+            // El primer paso baja el host_ptr del payload del handle a cur0
+            // (special register).  El segundo lo intercambia con el registro
+            // general destino.  Tras el xchg, cur0 queda con el valor previo
+            // del dst (basura, descartada).
+            //
+            // El resultado dst es un host_ptr al payload del objeto GC.
+            // Marcarlo @c is_host_ptr permite que LOAD/STORE posteriores
+            // emitan @c movh en lugar de @c mov (memoria host vs VM).
+            if (ins.dst != IR_NO_VALUE && !ins.operands.empty()) {
+                std::string rs = ctx.load_src(ins.operands[0], 0);
+                std::string rd = ctx.dst_of(ins.dst);
+                ctx.out << "    gcderef cur0, " << rs << "\n";
+                ctx.out << "    xchg cur0, " << rd << "\n";
+                ctx.store_spilled(ins.dst);
+            }
+            break;
+        }
+
         case IrOp::ARRAY_ALLOC: {
             // %h = array_alloc.T %len
             // Layout en memoria VM: [u64 length][data[len * sizeof(T)]]

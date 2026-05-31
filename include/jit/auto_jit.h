@@ -165,6 +165,84 @@ namespace jit {
         int32_t exc_free_list_offset = 0,
         uint64_t jit_instr_counter_addr = 0);
 
+    /* ===================================================================== */
+    /* Sprint D.5-callvm-hook: dispatch interp -> JIT en CALLVM                */
+    /* ===================================================================== */
+
+    /**
+     * @brief Flag rapido (fast path): true si HAY al menos una funcion
+     *        registrada en el mapa @c pc -> jit_code.  Permite que
+     *        @c exec_instr_callvm haga una sola lectura atomic relaxed
+     *        antes de tocar el mapa (que requiere lock).
+     *
+     * Diseño: cuando JIT esta desactivado o no se ha compilado nada,
+     * @c g_pc_jit_active == false -> @c exec_instr_callvm evita
+     * lookup_jit_code_at_pc completamente.  Tan pronto como una funcion
+     * se eager-compila, el flag se setea a true para siempre (no se
+     * resetea por invalidate -- el coste de 1 hashmap lookup adicional
+     * por callvm tras un invalidate es despreciable).
+     */
+    extern bool g_pc_jit_active;
+
+    /**
+     * @brief Registra que la funcion en @p vaddr (bytecode VM address)
+     *        tiene codigo nativo JIT en @p fn.
+     *
+     * Llamado tras cada compilacion eager exitosa.  Multiples llamadas
+     * con el mismo @p vaddr sobreescriben (caso re-compile tras deopt).
+     *
+     * @param vaddr Direccion VM del primer byte del bytecode de la funcion.
+     * @param fn    Puntero al codigo nativo (calling convention
+     *              @c JitFn(vrt_proc*) -> uint64_t).
+     */
+    void register_jit_code_at_pc(uint64_t vaddr, void *fn) noexcept;
+
+    /**
+     * @brief Lookup O(1) amortizado: devuelve el ptr nativo si la funcion
+     *        @p vaddr tiene JIT, sino @c nullptr.
+     *
+     * Llamado por @c exec_instr_callvm en cada invocacion (solo cuando
+     * @c g_pc_jit_active == true).  Thread-safe via lock interno.
+     *
+     * @param vaddr Direccion VM del target del CALLVM.
+     * @return      Codigo JIT o @c nullptr.
+     */
+    void *lookup_jit_code_at_pc(uint64_t vaddr) noexcept;
+
+    /**
+     * @brief Limpia el mapa @c pc -> jit_code (no libera el code cache).
+     *        Util para tests; en produccion no se usa.
+     */
+    void clear_jit_code_at_pc_map() noexcept;
+
+    /**
+     * @brief Sprint D.5-callvm-trigger: dispara la compilacion JIT de la
+     *        funcion en @p target_pc cuando un CALLVM la invoca
+     *        repetidamente desde codigo interpretado.
+     *
+     * Llamado por @c exec_instr_callvm en cada CALLVM cuyo target NO
+     * tiene jit_code en el pc-map (lookup miss).  Mantiene un counter
+     * por PC; al cruzar @c g_jit_threshold, intenta compilar la funcion.
+     *
+     * El compile usa el pipeline completo de @c eager_compile_function
+     * (con resolver recursivo) asi los callees se compilan transitively.
+     * Sentinela @c UINT32_MAX en el counter = "ya intentado y fallo"
+     * (no reintenta para evitar oscilacion compile/fail/recompile).
+     *
+     * Fast path coste (counter < threshold): ~30 ns (1 lock + 1 hash
+     * lookup + 1 increment).  Tras cualquier compile exitoso, el
+     * pc-map captura todos los CALLVMs subsiguientes -> el trigger
+     * NUNCA se vuelve a invocar para ese PC.  Funcion sin IR -> cached
+     * failure inmediato.
+     *
+     * @param vm        Proceso virtual actual (necesario para acceder
+     *                  al Loader del VM).
+     * @param target_pc Direccion VM del primer byte del bytecode de la
+     *                  funcion que el CALLVM esta apuntando.
+     */
+    void maybe_compile_callvm_target(runtime::ProcessVM *vm,
+                                     uint64_t target_pc) noexcept;
+
 } // namespace jit
 
 #endif // VESTA_JIT_AUTO_JIT_H

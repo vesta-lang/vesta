@@ -2127,6 +2127,58 @@ namespace jit {
                         break;
                     }
 
+                    case ir::IrOp::GC_DEREF_HOST: {
+                        /* raw_asm-elim 2026-05-28: handle GC -> host_ptr.
+                         * Reemplaza el blob RAW_ASM viejo con un CALL
+                         * limpio a vrt_gc_deref(proc, handle).  Coste
+                         * runtime: ~30 ns vs ~5 ns gcderef+xchg bytecode,
+                         * pero gana cero patron-matching textual + stackmap
+                         * automatico + compatibilidad con regalloc.
+                         * C2 futuro puede inlinear el lookup. */
+                        if (ins.operands.size() == 1
+                         && ins.dst != ir::IR_NO_VALUE
+                         && opts_.runtime != nullptr
+                         && opts_.runtime->gc_deref != nullptr) {
+                            const uint64_t fn_addr = reinterpret_cast<uint64_t>(
+                                opts_.runtime->gc_deref);
+#if defined(_WIN32)
+                            const MReg arg0 = MReg::RCX;
+                            const MReg arg1 = MReg::RDX;
+#else
+                            const MReg arg0 = MReg::RDI;
+                            const MReg arg1 = MReg::RSI;
+#endif
+                            /* mov arg0, rbx (proc). */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(arg0),
+                                    MOperand::make_reg(MReg::RBX)));
+                            /* mov arg1, [slot[handle]]. */
+                            load_op(mf, ins.operands[0], arg1);
+                            /* mov rax, fn_addr (via imm64 pool). */
+                            const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_imm64_idx(fn_pool_idx)));
+                            /* call rax + stackmap. */
+                            MInstr call_instr;
+                            call_instr.op = MOp::CALL;
+                            call_instr.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(call_instr);
+                            mf.blocks.back().instrs.push_back(call_instr);
+                            /* host_ptr en RAX -> slot[dst]. */
+                            store_op(mf, ins.dst, MReg::RAX);
+                        } else {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->gc_deref null o operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                        }
+                        break;
+                    }
+
                     case ir::IrOp::RAW_ASM: {
                         /* RAW_ASM lleva texto assembly .vel en func_name.
                          * El JIT NO tiene un assembler embebido, asi que
