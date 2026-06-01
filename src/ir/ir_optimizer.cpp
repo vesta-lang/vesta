@@ -432,6 +432,233 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn) {
     return changed;
 }
 
+//==============================================================================
+//  Pase ir_pass_promote_local_raw_alloc
+//
+//  Convierte `malloc(N_const) + ... + free(p)` locales sin escape a un
+//  `ALLOCA host_alloca`.  El JIT selector emite `sub rsp, N` (host stack);
+//  el RAW_FREE correspondiente se reemplaza por NOP porque el stack se
+//  libera automaticamente al exit de la funcion (mov rsp, rbp + pop rbp).
+//
+//  Beneficio: malloc/free de ~200-500 ns por iter en hot loops -> ~1 ns
+//  (sub/add rsp).  Speedup del alloc puro ~100-500x.
+//==============================================================================
+
+bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
+    if (fn.is_native) return false;
+    if (fn.values.empty()) return false;
+
+    constexpr uint64_t MAX_PROMOTE_SIZE = 65536; // bytes
+
+    // Collect RAW_ALLOC candidates (CONST size, size razonable).
+    struct AllocSite {
+        size_t       block_idx;
+        size_t       ins_idx;
+        IrValueId    dst;
+        uint64_t     size_bytes;
+    };
+    std::vector<AllocSite> candidates;
+
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const auto &blk = fn.blocks[bi];
+        for (size_t ii = 0; ii < blk.instrs.size(); ++ii) {
+            const auto &ins = blk.instrs[ii];
+            if (ins.op != IrOp::RAW_ALLOC) continue;
+            if (ins.operands.empty()) continue;
+            if (ins.dst == IR_NO_VALUE) continue;
+            const IrValueId size_vid = ins.operands[0];
+            if (size_vid >= fn.values.size()) continue;
+            const auto &size_v = fn.values[size_vid];
+            if (!size_v.is_const) continue;
+            const uint64_t bytes = size_v.const_val;
+            if (bytes == 0 || bytes > MAX_PROMOTE_SIZE) continue;
+            candidates.push_back({bi, ii, ins.dst, bytes});
+        }
+    }
+    if (candidates.empty()) return false;
+
+    // Para cada candidato, hacer escape analysis:
+    //   - forward fix-point: marcar valores derivados del dst.
+    //   - rechazar si algun derivado llega a un uso prohibido (RETURN,
+    //     STORE a memoria GC, CALL externo distinto del RAW_FREE).
+    bool changed = false;
+    for (auto &c : candidates) {
+        // derivados[v] = true si v puede ser un alias del dst (forward
+        // flow desde el RAW_ALLOC dst a traves de ADD/SUB/BITCAST/MOV/
+        // CAST/*EXT/TRUNC/PHI).
+        std::vector<bool> derivados(fn.values.size(), false);
+        derivados[c.dst] = true;
+        bool prop = true;
+        int iters = 0;
+        while (prop && iters++ < 32) {
+            prop = false;
+            for (const auto &blk : fn.blocks) {
+                for (const auto &ins : blk.instrs) {
+                    if (ins.dst == IR_NO_VALUE) continue;
+                    if (ins.dst >= derivados.size()) continue;
+                    if (derivados[ins.dst]) continue;
+                    auto check = [&](IrValueId v) -> bool {
+                        return v != IR_NO_VALUE
+                            && v < derivados.size()
+                            && derivados[v];
+                    };
+                    bool any_d = false;
+                    switch (ins.op) {
+                        case IrOp::ADD:    case IrOp::SUB:
+                        case IrOp::BITCAST:case IrOp::MOV:
+                        case IrOp::CAST:   case IrOp::SEXT:
+                        case IrOp::ZEXT:   case IrOp::TRUNC:
+                            for (auto v : ins.operands) if (check(v)) { any_d = true; break; }
+                            break;
+                        case IrOp::PHI:
+                            for (auto &pa : ins.phi_args) if (check(pa.value)) { any_d = true; break; }
+                            break;
+                        default: break;
+                    }
+                    if (any_d) {
+                        derivados[ins.dst] = true;
+                        prop = true;
+                    }
+                }
+            }
+        }
+
+        // Escape check: contar RAW_FREEs que reciben un derivado, y
+        // rechazar si hay usos prohibidos.
+        bool escapes = false;
+        std::vector<std::pair<size_t,size_t>> free_sites;  // (block_idx, ins_idx)
+
+        auto is_derived = [&](IrValueId v) -> bool {
+            return v != IR_NO_VALUE
+                && v < derivados.size()
+                && derivados[v];
+        };
+
+        for (size_t bi = 0; bi < fn.blocks.size() && !escapes; ++bi) {
+            const auto &blk = fn.blocks[bi];
+            for (size_t ii = 0; ii < blk.instrs.size() && !escapes; ++ii) {
+                const auto &ins = blk.instrs[ii];
+
+                switch (ins.op) {
+                    case IrOp::RET:
+                    case IrOp::TAILCALL:
+                    case IrOp::RSPAWN_RETURN:
+                    case IrOp::FULFILL_HLT:
+                        // El ptr llega a return / tailcall / fulfill -> escapa.
+                        for (auto v : ins.operands) {
+                            if (is_derived(v)) { escapes = true; break; }
+                        }
+                        break;
+
+                    case IrOp::RAW_FREE:
+                        // Free directo: marca el site para eliminar
+                        // si la promocion procede.  NO marca escape.
+                        if (!ins.operands.empty() && is_derived(ins.operands[0])) {
+                            free_sites.push_back({bi, ii});
+                        }
+                        break;
+
+                    case IrOp::STORE: {
+                        // STORE val, addr.  Si val es derivado y la addr
+                        // apunta a memoria GC o globals, ESCAPA.  Si addr
+                        // es local (otro ALLOCA / RAW_ALLOC del mismo
+                        // scope), tracking conservativo: marcar escape
+                        // SOLO si la addr es is_host_ptr=false (= memoria
+                        // GC) o si el target es un global.
+                        //
+                        // MVP conservativo: cualquier STORE de un derivado
+                        // a una direccion que NO sea otro derivado del
+                        // mismo ALLOCA cuenta como escape.
+                        if (ins.operands.size() >= 2) {
+                            const IrValueId val_v = ins.operands[0];
+                            const IrValueId addr_v = ins.operands[1];
+                            if (is_derived(val_v) && !is_derived(addr_v)) {
+                                escapes = true;
+                            }
+                        }
+                        break;
+                    }
+
+                    case IrOp::CALL:
+                    case IrOp::CALLVIRT:
+                    case IrOp::CALLM:
+                    case IrOp::CALLIND:
+                    case IrOp::CALLCLOSURE:
+                    case IrOp::CALLN: {
+                        // El ptr pasado a otra fn ESCAPA conservativamente.
+                        // Excepcion: si fuera el callee es de tipo "trampoline
+                        // pure" (no toca el ptr), seria seguro -- pero no
+                        // tenemos esa info aqui.  Conservador: escape.
+                        for (auto v : ins.operands) {
+                            if (is_derived(v)) { escapes = true; break; }
+                        }
+                        if (ins.func_ptr != IR_NO_VALUE && is_derived(ins.func_ptr)) {
+                            escapes = true;
+                        }
+                        break;
+                    }
+
+                    case IrOp::THROW:
+                        // El ptr llega a throw -> escapa cross-frame.
+                        for (auto v : ins.operands) {
+                            if (is_derived(v)) { escapes = true; break; }
+                        }
+                        break;
+
+                    default: break;
+                }
+            }
+        }
+
+        if (escapes) continue;
+        if (free_sites.empty()) continue;  // sin free -> es leak, no promovemos
+
+        // Promote: convertir RAW_ALLOC en ALLOCA con host_alloca=true.
+        // El bytecode emitter ya respeta host_alloca y emite el path
+        // de `alloc N + htrack` (que el runtime libera al RET del frame
+        // automaticamente).  El JIT selector emite `sub rsp, N` (host
+        // stack directo, sin allocator).
+        auto &alloc_ins = fn.blocks[c.block_idx].instrs[c.ins_idx];
+        alloc_ins.op = IrOp::ALLOCA;
+        alloc_ins.imm = c.size_bytes;
+        alloc_ins.type = IrType::I8;  // ALLOCA convencion: type=I8, imm=N bytes
+        alloc_ins.host_alloca = true;
+        alloc_ins.operands.clear();  // ALLOCA no toma operands (tamano en imm)
+
+        // Marcar el dst como is_host_ptr para que LOAD/STORE emitan movh.
+        if (c.dst < fn.values.size()) {
+            fn.values[c.dst].is_host_ptr = true;
+        }
+
+        // Marcar los RAW_FREE para eliminacion completa.  Usamos un sentinel
+        // (op=NOP con operands vacios y dst=IR_NO_VALUE).  Despues compactamos.
+        for (auto &fs : free_sites) {
+            auto &free_ins = fn.blocks[fs.first].instrs[fs.second];
+            free_ins.op = IrOp::NOP;
+            free_ins.operands.clear();
+            free_ins.dst = IR_NO_VALUE;
+            free_ins.imm = 0;
+        }
+
+        changed = true;
+    }
+
+    // Compactar bloques: eliminar instrucciones NOP introducidas por
+    // este pass.  El bytecode emitter de NOP emite `nop1` que NO esta
+    // soportado correctamente por el decoder (decode_fn=nullptr).
+    // Mas seguro eliminar fisicamente las RAW_FREE convertidas.
+    if (changed) {
+        for (auto &blk : fn.blocks) {
+            auto &is = blk.instrs;
+            is.erase(std::remove_if(is.begin(), is.end(), [](const IrInstr &i) {
+                return i.op == IrOp::NOP && i.operands.empty() && i.dst == IR_NO_VALUE;
+            }), is.end());
+        }
+    }
+
+    return changed;
+}
+
 // =========================================================================
 //  Pase ir_pass_simplify
 // =========================================================================
@@ -3620,6 +3847,20 @@ void ir_optimize(IrModule &mod, OptLevel level) {
     if (level >= OptLevel::O1) {
         for (auto &fn : mod.functions) {
             if (!fn.is_native) ir_pass_promote_callned_allocas(fn);
+        }
+    }
+
+    /* Promocionar malloc(N_const)+free(p) locales sin escape a
+     * ALLOCA host_alloca.  Convierte ~200-500 ns por alloc/free en
+     * loops a ~1 ns (sub/add rsp del host stack).  UNA pasada.
+     * Skippable via VESTA_NO_PROMOTE_RAW_ALLOC=1 para A/B testing. */
+    if (level >= OptLevel::O1) {
+        const char *skip = std::getenv("VESTA_NO_PROMOTE_RAW_ALLOC");
+        const bool do_promote = !(skip && skip[0] != '\0' && skip[0] != '0');
+        if (do_promote) {
+            for (auto &fn : mod.functions) {
+                if (!fn.is_native) ir_pass_promote_local_raw_alloc(fn);
+            }
         }
     }
 

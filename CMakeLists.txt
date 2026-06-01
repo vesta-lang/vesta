@@ -274,6 +274,13 @@ target_compile_options(vm PRIVATE
 if (WIN32)
 target_link_options(vm PRIVATE
         -static
+        # Stack reserve 128 MB para el thread principal (donde corre el
+        # scheduler single-thread bypass + JIT que aloca buffers grandes
+        # via host_alloca, arrays nativos `u8[N]` con N grande, etc).
+        # Default Win64 era 1 MB que limita programas con recursion profunda
+        # o arrays nativos grandes en stack.  La memoria es VirtualAlloc
+        # RESERVE (no commit) -- solo paginas tocadas consumen memoria real.
+        -Wl,--stack,134217728   # 128 MB reserve (commit on touch)
 )
 endif()
 
