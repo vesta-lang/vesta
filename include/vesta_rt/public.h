@@ -116,6 +116,28 @@ vrt_handle vrt_gc_alloc(vrt_proc *proc, size_t size);
 vrt_handle vrt_gc_alloc_pinned(vrt_proc *proc, size_t size);
 
 /**
+ * @brief Aloca un bloque de memoria HOST cruda (no GC-managed).
+ *
+ * Equivalente a @c malloc(size) del C runtime: devuelve un puntero
+ * dereferenciable directamente por codigo C nativo (Win32, POSIX, etc).
+ * El bloque vive hasta que se invoca @c vrt_raw_free.  No participa
+ * del GC: el caller es responsable de liberarlo.
+ *
+ * Usado por callbacks Vex que necesitan alocar structs (WNDCLASSEXW,
+ * MSG, etc) o buffers para pasar a APIs nativas que esperan host_ptr.
+ *
+ * @return Puntero host dereferenciable, o @c NULL si OOM.
+ */
+uint8_t *vrt_raw_alloc(vrt_proc *proc, size_t size);
+
+/**
+ * @brief Libera un bloque previamente alocalizado con @c vrt_raw_alloc.
+ *
+ * Idempotente para ptr=NULL (no-op).  Doble free es undefined behavior.
+ */
+void vrt_raw_free(vrt_proc *proc, uint8_t *ptr);
+
+/**
  * @brief Resuelve un handle a su puntero host actual.
  * @return @c NULL si el handle es invalido o ya colectado.
  *

@@ -257,6 +257,19 @@ namespace jit {
     void maybe_compile_callvm_target(runtime::ProcessVM *vm,
                                      uint64_t target_pc) noexcept;
 
+    class CodeCache;  // fwd decl
+    /**
+     * @brief Acceso al CodeCache global del JIT subsystem.
+     *
+     * Inicializa el subsistema JIT (lazy via @c std::call_once) si aun no
+     * existe.  Util para clientes externos al JIT que necesitan alocar
+     * codigo nativo (e.g. @c runtime::get_or_generate_native_thunk para
+     * callbacks Vex -> C, Sprint B.1).
+     *
+     * Thread-safe.  Retorna un puntero no-nulo.
+     */
+    CodeCache *get_or_init_code_cache() noexcept;
+
 } // namespace jit
 
 #endif // VESTA_JIT_AUTO_JIT_H

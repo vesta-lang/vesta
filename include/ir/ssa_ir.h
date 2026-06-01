@@ -727,6 +727,16 @@ namespace ir {
         /// invalidados cuando la callee corre.
         bool     is_call_site = false;
 
+        /// Phase D.jit-mem-model AUTO-PROMOTE: si true en un IrOp::ALLOCA,
+        /// el JIT emite ese ALLOCA en host stack (en lugar de VM-stack).
+        /// El ptr resultante es directamente dereferenciable por code C
+        /// nativo (e.g. para `&local` pasado a Win API).  Lo marca el IR
+        /// pass `ir_pass_promote_callned_allocas` cuando el dst del ALLOCA
+        /// fluye a un arg de CALLN.  El bytecode emit del interp lo
+        /// IGNORA (sigue emitiendo `subsp` VM-stack) -- en interp, el
+        /// patron `&local -> CALLN` requiere JIT activo o malloc explicito.
+        bool     host_alloca = false;
+
         IrInstr() : op(IrOp::NOP), type(IrType::VOID), dst(IR_NO_VALUE),
                     imm(0), func_ptr(IR_NO_VALUE),
                     target_block(IR_NO_BLOCK), false_block(IR_NO_BLOCK),

@@ -385,18 +385,29 @@ namespace jit {
                 if (ins.dst == ir::IR_NO_VALUE
                  || ins.dst >= host_in_jit.size()) continue;
                 switch (ins.op) {
-                    /* Phase D.jit-mem-model VM-STACK: ALLOCA YA NO se
-                     * seedea como host_in_jit porque ahora produce
-                     * VM-addr (consistente con IR is_host_ptr=false).
-                     * Solo se mantienen las ops que GENUINAMENTE
-                     * producen host_ptr en runtime. */
+                    /* ALLOCA con host_alloca=true (AUTO-PROMOTE): el JIT
+                     * lo emite en host stack, asi el dst es genuino
+                     * host_ptr.  Seedear como host_in_jit hace que LOAD/
+                     * STORE sobre derivados use native mov directo (sin
+                     * inline cache). */
+                    case ir::IrOp::ALLOCA:
+                        if (ins.host_alloca) host_in_jit[ins.dst] = 1u;
+                        break;
                     case ir::IrOp::GC_ALLOC:
                     case ir::IrOp::GC_ALLOCP:
                     case ir::IrOp::GC_DEREF_HOST:
                     case ir::IrOp::NEWOBJ:
                     case ir::IrOp::RAW_ALLOC:
-                    case ir::IrOp::STR_LIT_ADDR:
                         host_in_jit[ins.dst] = 1u;
+                        break;
+                    /* STR_LIT_ADDR produce un VM-addr (offset al slot de
+                     * static_data en proc->vm_mem), NO un host_ptr.  Si lo
+                     * seedeamos como host_in_jit, el LOAD/STORE subsiguiente
+                     * emitiria un native mov directo y page-fault.  Dejar
+                     * SIN marca: el LOAD/STORE caera al inline cache +
+                     * fallback vrt_vm_read/write que SI maneja VM-addrs. */
+                    case ir::IrOp::STR_LIT_ADDR:
+                        /* host_in_jit[ins.dst] permanece 0. */
                         break;
                     default: break;
                 }
@@ -891,6 +902,12 @@ namespace jit {
                 switch (ins.op) {
                     /* --------- Mov / Const --------- */
                     case IrOp::NOP: break;
+                    /* Markers semanticos para C2 (Phase D.8): no producen
+                     * codigo, solo metadata.  La construccion real (ALLOCA
+                     * + STOREs) la emite el lowering DESPUES del marker. */
+                    case IrOp::MAKE_CLOSURE: break;
+                    case IrOp::MAKE_VARIANT: break;
+                    case IrOp::MATCH_VARIANT: break;
                     case IrOp::PHI: {
                         /* D.3-A: PHI es no-op en el successor.  Los copies
                          * para asignar el valor correcto al slot del dst
@@ -930,6 +947,61 @@ namespace jit {
                             break;
                         }
                         /* mov rax, addr (via imm64 pool si necesario). */
+                        const uint32_t pool_idx = mf.intern_imm64(addr);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(SCRATCH_A),
+                                MOperand::make_imm64_idx(pool_idx)));
+                        store_op(mf, ins.dst, SCRATCH_A);
+                        break;
+                    }
+                    case IrOp::LABEL_ADDR: {
+                        /* %dst = direccion VM del label `code.<func_name>`
+                         * resuelta por el linker.  Equivalente al codigo
+                         * emitido por el frontend interp:
+                         *   `mov rDst, @Absolute("code.<func_name>")`.
+                         *
+                         * Sprint JIT-cross-fn 2026-06-01: necesario para
+                         * `as_native_callback(fn)` builtin (B.1) y para
+                         * cualquier funcion que necesite el PC virtual
+                         * de otra fn Vex como valor (passing fn por valor,
+                         * trampolines, registro de handlers, etc.).
+                         *
+                         * El nombre del label vive en @c ins.func_name.
+                         * Lo resolvemos via @c opts_.resolve_symbol con
+                         * el prefijo `code.` igual que el bytecode emit. */
+                        if (ins.func_name.empty()) {
+                            if (jit::g_jit_warn_unsupported) {
+                                std::fprintf(stderr,
+                                    "[jit] selector: LABEL_ADDR sin func_name en fn '%s' linea %u\n",
+                                    ir_fn.name.c_str(), ins.source_line);
+                            }
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const std::string sym = "code." + ins.func_name;
+                        uint64_t addr = 0;
+                        if (opts_.resolve_symbol) {
+                            addr = opts_.resolve_symbol(sym);
+                        }
+                        if (addr == 0) {
+                            if (jit::g_jit_warn_unsupported) {
+                                auto key = std::make_pair(static_cast<int>(ins.op), ins.source_line);
+                                if (warned_ops.insert(key).second) {
+                                    std::fprintf(stderr,
+                                        "[jit] selector: LABEL_ADDR sin symbol '%s' en fn '%s' linea %u\n",
+                                        sym.c_str(), ir_fn.name.c_str(), ins.source_line);
+                                }
+                            }
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* mov rax, addr (via imm64 pool).  Asi el JIT
+                         * emite secuencia de 10 bytes:
+                         *   48 B8 <imm64>  ;  mov rax, imm64
+                         * Y guardamos rax al slot del dst. */
                         const uint32_t pool_idx = mf.intern_imm64(addr);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
@@ -1183,6 +1255,31 @@ namespace jit {
                         if (opts_.mode != SelectorMode::VM_ABI) {
                             /* NATIVE_ABI (tests sintieticos): mantener
                              * host stack para compatibilidad. */
+                            const uint64_t size_bytes = ins.imm;
+                            if (size_bytes > 0 && size_bytes < INT32_MAX) {
+                                const uint64_t aligned =
+                                    (size_bytes + 15ULL) & ~15ULL;
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::SUB,
+                                        MOperand::make_reg(MReg::RSP),
+                                        MOperand::make_imm32(
+                                            static_cast<int32_t>(aligned))));
+                            }
+                            store_op(mf, ins.dst, MReg::RSP);
+                            break;
+                        }
+
+                        /* Phase D.jit-mem-model AUTO-PROMOTE: si el ALLOCA
+                         * esta marcado `host_alloca=true` (por el IR pass
+                         * ir_pass_promote_callned_allocas), emit host stack
+                         * (sub rsp, N) -- el ptr resultante es directamente
+                         * dereferenciable por code C nativo.  Auto-liberado
+                         * por epilogue del JIT (mov rsp, rbp).
+                         *
+                         * Esto permite `&local` -> CALLN natural C-style:
+                         *   u8[1024] buf;
+                         *   ReadFile(h, &buf[0], 1024, ...); */
+                        if (ins.host_alloca) {
                             const uint64_t size_bytes = ins.imm;
                             if (size_bytes > 0 && size_bytes < INT32_MAX) {
                                 const uint64_t aligned =
@@ -2256,6 +2353,74 @@ namespace jit {
                                 mf.blocks.back().instrs.push_back(i);
                             }
                             store_op(mf, ins.dst, SCRATCH_A);
+                            break;
+                        }
+
+                        /* Sprint JIT-cross-fn 2026-06-01: CALLNI (FFI runtime
+                         * indirect).  El frontend emite IrOp::CALLN con
+                         * func_name="__callni__:" y operands[0] = host_ptr
+                         * al simbolo nativo (resuelto en runtime via
+                         * ffi_sym/dlsym).  operands[1..] son los args.  El
+                         * selector lo trata como un CALL normal pero con
+                         * fn_addr cargado desde el SSA value en lugar del
+                         * resolver compile-time. */
+                        const bool is_callni =
+                            ins.func_name.size() >= 11
+                         && ins.func_name.compare(0, 11, "__callni__:") == 0;
+
+                        if (is_callni) {
+                            if (ins.operands.empty()) {
+                                warn_unsupported(ins.op, ins.source_line,
+                                    "CALLNI sin fn_ptr operand");
+                                unsupported = true;
+                                mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                                break;
+                            }
+                            /* Native ABI arg regs. */
+#if defined(_WIN32)
+                            static const MReg N_ARG_REGS_NI[] = {
+                                MReg::RCX, MReg::RDX, MReg::R8, MReg::R9
+                            };
+                            constexpr size_t N_MAX_REG_ARGS_NI = 4;
+#else
+                            static const MReg N_ARG_REGS_NI[] = {
+                                MReg::RDI, MReg::RSI, MReg::RDX,
+                                MReg::RCX, MReg::R8, MReg::R9
+                            };
+                            constexpr size_t N_MAX_REG_ARGS_NI = 6;
+#endif
+                            const size_t nargs_ni = ins.operands.size() - 1;
+                            if (nargs_ni > N_MAX_REG_ARGS_NI) {
+                                warn_unsupported(ins.op, ins.source_line,
+                                    "CALLNI con demasiados args (stack args no impl)");
+                                unsupported = true;
+                                mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                                break;
+                            }
+                            /* Guardar fn_ptr en R11 (caller-saved, no es arg
+                             * reg en ningun ABI, no clobbered por load_op
+                             * que usa RAX/RCX/RDX como scratch).  Asi evitamos
+                             * push/pop que podrian desalinear el stack. */
+                            load_op(mf, ins.operands[0], MReg::R11);
+                            /* Cargar args a N_ARG_REGS.  load_op puede usar
+                             * RAX como scratch pero NO R11. */
+                            for (size_t a = 0; a < nargs_ni; ++a) {
+                                load_op(mf, ins.operands[a + 1], N_ARG_REGS_NI[a]);
+                            }
+                            /* mov rax, r11  (CALL via rax) */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_reg(MReg::R11)));
+                            /* CALL rax + stackmap. */
+                            MInstr call_ni_instr;
+                            call_ni_instr.op = MOp::CALL;
+                            call_ni_instr.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(call_ni_instr);
+                            mf.blocks.back().instrs.push_back(call_ni_instr);
+                            if (ins.dst != ir::IR_NO_VALUE) {
+                                store_op(mf, ins.dst, MReg::RAX);
+                            }
                             break;
                         }
 
@@ -3641,6 +3806,146 @@ namespace jit {
                         break;
                     }
 
+                    case ir::IrOp::F32TOF64: {
+                        /* f32 -> f64 widening via CVTSS2SD.  El operand en
+                         * IR llega como GP (bits IEEE 754 f32 en low 32);
+                         * pasar a XMM, ejecutar CVT, devolver bits f64 a GP. */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "F32TOF64: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::CVTSS2SD,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(MReg::XMM0)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+                    case ir::IrOp::F64TOF32: {
+                        /* f64 -> f32 narrowing via CVTSD2SS.  Bits IEEE
+                         * llegan como GP (f64), bajamos a XMM, CVT, devolvemos
+                         * los bits low 32 (f32) a GP. */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "F64TOF32: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::CVTSD2SS,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(MReg::XMM0)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::XMM0)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    case ir::IrOp::FCMP_EQ:
+                    case ir::IrOp::FCMP_NE:
+                    case ir::IrOp::FCMP_LT:
+                    case ir::IrOp::FCMP_GT:
+                    case ir::IrOp::FCMP_LE:
+                    case ir::IrOp::FCMP_GE: {
+                        /* Float compare: load both ops, UCOMISD, SETcc.
+                         *
+                         * UCOMISD setea ZF/PF/CF segun:
+                         *   unordered (NaN): ZF=1, PF=1, CF=1
+                         *   greater:         ZF=0, PF=0, CF=0
+                         *   less:            ZF=0, PF=0, CF=1
+                         *   equal:           ZF=1, PF=0, CF=0
+                         *
+                         * Cond codes para SETcc (con A,B,E,NE = unsigned-like):
+                         *   ==     -> SETE       (ZF=1, ignora NaN como equal -- ojo)
+                         *           Mejor: para evitar NaN==NaN=true, usar:
+                         *             setnp tmp; sete dst; and dst, tmp
+                         *   !=     -> SETNE | NaN
+                         *           setp tmp; setne dst; or dst, tmp
+                         *   <      -> SETB
+                         *   >      -> SETA
+                         *   <=     -> SETBE
+                         *   >=     -> SETAE
+                         *
+                         * Para v1, omito el handling de NaN para EQ/NE
+                         * (NaN==NaN dara true en EQ; comportamiento C-like
+                         * sin -ffast-math).  El usuario que necesite NaN
+                         * estricto puede usar `isnan(x) || ...`. */
+                        if (ins.dst == ir::IR_NO_VALUE
+                         || ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FCMP_*: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* xor rax, rax  para limpiar bits altos antes del SETcc. */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::XOR,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::RAX)));
+                        /* Cargar ambos operandos a XMM0/XMM1. */
+                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(SCRATCH_B)));
+                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                MOperand::make_reg(MReg::XMM1),
+                                MOperand::make_reg(SCRATCH_B)));
+                        /* UCOMISD xmm0, xmm1 -> ZF/PF/CF. */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::UCOMISD,
+                                MOperand::make_reg(MReg::XMM0),
+                                MOperand::make_reg(MReg::XMM1)));
+                        /* SETcc al  segun comparacion. */
+                        MCond cc;
+                        switch (ins.op) {
+                            case ir::IrOp::FCMP_EQ: cc = MCond::E;  break;
+                            case ir::IrOp::FCMP_NE: cc = MCond::NE; break;
+                            case ir::IrOp::FCMP_LT: cc = MCond::B;  break;
+                            case ir::IrOp::FCMP_GT: cc = MCond::A;  break;
+                            case ir::IrOp::FCMP_LE: cc = MCond::BE; break;
+                            case ir::IrOp::FCMP_GE: cc = MCond::AE; break;
+                            default: cc = MCond::E; break;
+                        }
+                        {
+                            MInstr i;
+                            i.op = MOp::SETCC;
+                            i.variant = static_cast<uint8_t>(cc);
+                            i.dst = MOperand::make_reg(MReg::RAX);
+                            mf.blocks.back().instrs.push_back(i);
+                        }
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
                     case ir::IrOp::ROTL:
                     case ir::IrOp::ROTR: {
                         /* Sprint BBB: ROTL/ROTR nativo via rol/ror r64, cl.
@@ -3672,6 +3977,89 @@ namespace jit {
                         break;
                     }
 
+                    case ir::IrOp::RAW_ALLOC: {
+                        /* RAW_ALLOC(size) -> host_ptr.  CALL a vrt_raw_alloc(proc, size).
+                         * Equivale a @c malloc(size) del C runtime.
+                         * El bloque vive hasta @c RAW_FREE manual. */
+                        if (ins.operands.size() == 1
+                         && ins.dst != ir::IR_NO_VALUE
+                         && opts_.runtime != nullptr
+                         && opts_.runtime->raw_alloc != nullptr) {
+                            const uint64_t fn_addr = reinterpret_cast<uint64_t>(
+                                opts_.runtime->raw_alloc);
+#if defined(_WIN32)
+                            const MReg arg0 = MReg::RCX;
+                            const MReg arg1 = MReg::RDX;
+#else
+                            const MReg arg0 = MReg::RDI;
+                            const MReg arg1 = MReg::RSI;
+#endif
+                            /* mov arg1, [slot[size]]. */
+                            load_op(mf, ins.operands[0], arg1);
+                            /* mov arg0, rbx (proc). */
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(arg0),
+                                    MOperand::make_reg(MReg::RBX)));
+                            const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_imm64_idx(fn_pool_idx)));
+                            MInstr call_instr;
+                            call_instr.op = MOp::CALL;
+                            call_instr.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(call_instr);
+                            mf.blocks.back().instrs.push_back(call_instr);
+                            store_op(mf, ins.dst, MReg::RAX);
+                        } else {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->raw_alloc null o operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                        }
+                        break;
+                    }
+                    case ir::IrOp::RAW_FREE: {
+                        /* RAW_FREE(ptr) -> void.  CALL a vrt_raw_free(proc, ptr).
+                         * Equivale a @c free(ptr) del C runtime. */
+                        if (ins.operands.size() == 1
+                         && opts_.runtime != nullptr
+                         && opts_.runtime->raw_free != nullptr) {
+                            const uint64_t fn_addr = reinterpret_cast<uint64_t>(
+                                opts_.runtime->raw_free);
+#if defined(_WIN32)
+                            const MReg arg0 = MReg::RCX;
+                            const MReg arg1 = MReg::RDX;
+#else
+                            const MReg arg0 = MReg::RDI;
+                            const MReg arg1 = MReg::RSI;
+#endif
+                            load_op(mf, ins.operands[0], arg1);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(arg0),
+                                    MOperand::make_reg(MReg::RBX)));
+                            const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_imm64_idx(fn_pool_idx)));
+                            MInstr call_instr;
+                            call_instr.op = MOp::CALL;
+                            call_instr.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(call_instr);
+                            mf.blocks.back().instrs.push_back(call_instr);
+                        } else {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->raw_free null o operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                        }
+                        break;
+                    }
                     case ir::IrOp::GC_DEREF_HOST: {
                         /* raw_asm-elim 2026-05-28: handle GC -> host_ptr.
                          * Reemplaza el blob RAW_ASM viejo con un CALL

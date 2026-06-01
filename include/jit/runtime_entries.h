@@ -67,6 +67,10 @@ namespace jit {
         void       (*gc_release)      (vrt_proc *, vrt_handle)               = nullptr;
         void       (*gc_write_barrier)(vrt_proc *, vrt_handle)               = nullptr;
 
+        /* ----- Memoria HOST raw (malloc/free no-GC) ----- */
+        uint8_t   *(*raw_alloc)       (vrt_proc *, size_t)                   = nullptr;
+        void       (*raw_free)        (vrt_proc *, uint8_t *)                = nullptr;
+
         /* ----- Monitores ----- */
         int32_t    (*monitor_enter)        (vrt_proc *, vrt_handle)          = nullptr;
         void       (*monitor_exit)         (vrt_proc *, vrt_handle)          = nullptr;

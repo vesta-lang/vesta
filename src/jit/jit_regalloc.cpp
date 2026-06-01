@@ -81,6 +81,26 @@ namespace jit {
                 info[iv.id].last_use_pos = iv.end;
             }
 
+            /* Fix critico: params nacen con def=0 (sintetico) y end=0.
+             * Si su primer uso real esta en pos=0, mark_use(p, 0) NO actualiza
+             * end porque `0 > 0` es false.  Quedan con rango [0,0] que el
+             * ranges_overlap con touching `<=` trata como no-solapado ->
+             * varios params terminan compartiendo el mismo reg.
+             *
+             * Fix: para cada param que tenga >=1 uso, garantizar que
+             * end > def asi su live range tiene ancho >0 y conflicta
+             * correctamente con los otros params. */
+            for (ir::IrValueId pid : fn.params) {
+                if (pid >= info.size()) continue;
+                auto &pinfo = info[pid];
+                if (pinfo.def_pos == UINT32_MAX) continue;
+                if (pinfo.last_use_pos <= pinfo.def_pos) {
+                    /* Extender al menos hasta el siguiente "tick" para que
+                     * varios params (todos con def=0) solapen entre si. */
+                    pinfo.last_use_pos = pinfo.def_pos + 1;
+                }
+            }
+
             /* Contar usos lexicos y detectar CALLs.
              *
              * use_count es heuristica para priorizar pinning (mas usos =

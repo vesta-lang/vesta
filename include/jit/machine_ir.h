@@ -345,6 +345,8 @@ namespace jit {
         CVTSI2SD    = 74,   ///< CVTSI2SD xmm, r64 (F2 REX.W 0F 2A /r) -- int signed -> f64
         CVTTSD2SI   = 75,   ///< CVTTSD2SI r64, xmm (F2 REX.W 0F 2C /r) -- f64 -> int truncado
         UCOMISD     = 76,   ///< UCOMISD xmm_a, xmm_b (66 0F 2E /r) -- f64 compare, set ZF/PF/CF
+        CVTSS2SD    = 77,   ///< CVTSS2SD xmm, xmm (F3 0F 5A /r) -- f32 -> f64 (widen)
+        CVTSD2SS    = 78,   ///< CVTSD2SS xmm, xmm (F2 0F 5A /r) -- f64 -> f32 (narrow)
 
         COUNT       = 80
     };

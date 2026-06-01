@@ -25,6 +25,7 @@
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/exception_runtime.h"
+#include "runtime/host_alloca_tracker.h"
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
@@ -147,6 +148,9 @@ namespace runtime {
                 while (vm->frame_stack != nullptr && vm->frame_stack != saved_fs) {
                     loader::FrameHeader *tmp = vm->frame_stack;
                     vm->frame_stack = tmp->prev;
+                    // Sprint MMM-ext leak-fix: liberar host_allocas del
+                    // frame que se descarta durante el unwind del throw.
+                    host_alloca_release_all(vm, tmp);
                     vm->frame_pool.release(tmp); // fix13
                 }
                 // Restaurar R1..R15 (R0 lo sobreescribimos con la
@@ -193,6 +197,8 @@ namespace runtime {
                     while (cur != nullptr && cur != frame) {
                         loader::FrameHeader *tmp = cur;
                         cur = cur->prev;
+                        // Sprint MMM-ext leak-fix.
+                        host_alloca_release_all(vm, tmp);
                         vm->frame_pool.release(tmp); // fix13
                     }
                     vm->frame_stack = frame; // restaurar el frame del handler
@@ -210,11 +216,21 @@ namespace runtime {
             // handler no encontrado en este frame: subir al anterior
             loader::FrameHeader *done = frame;
             frame = frame->prev;
+            // Sprint MMM-ext leak-fix: liberar host_allocas antes de
+            // descartar el frame durante el unwind.
+            host_alloca_release_all(vm, done);
             vm->frame_pool.release(done); // fix13
         }
 
-        // excepcion no capturada en ningun frame: matar el proceso
-        vm->frame_stack = nullptr;
+        // excepcion no capturada en ningun frame: matar el proceso.
+        // Antes de matarlo, liberar host_allocas de cualquier frame
+        // remanente para no leakear al destruir el ProcessVM.
+        while (vm->frame_stack != nullptr) {
+            loader::FrameHeader *tmp = vm->frame_stack;
+            vm->frame_stack = tmp->prev;
+            host_alloca_release_all(vm, tmp);
+            vm->frame_pool.release(tmp);
+        }
         vm->scheduler.on_event(EVT_ERROR);
     }
 

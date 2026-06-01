@@ -2281,6 +2281,98 @@ namespace vex {
             return;
         }
 
+        // C-style string init para arrays byte-like: `u8[N] arr = "literal"`.
+        // Detecta el patron y emite STOREs byte-a-byte del contenido del
+        // string literal, con zerificacion del resto si N > strlen.  Si
+        // strlen > N reporta error (truncation, comportamiento C).
+        // No se promueve el literal a StringObject (es array de bytes
+        // crudo, sin GC).  Aceptamos solo literales no interpolados.
+        if (sem_type.kind == PrimitiveKind::ARRAY && vd->init
+            && vd->init->kind == ast::NodeKind::StringLitExpr
+            && sem_type.pointee
+            && (sem_type.pointee->kind == PrimitiveKind::U8
+             || sem_type.pointee->kind == PrimitiveKind::I8
+             || sem_type.pointee->kind == PrimitiveKind::CHAR)) {
+            auto *sl = static_cast<ast::StringLitExpr *>(vd->init.get());
+            if (sl->is_interpolated()) {
+                error_at(vd->loc, "init de array con string no acepta interpolacion");
+                return;
+            }
+            const std::string &bytes  = sl->value;
+            const uint32_t     str_n  = (uint32_t)bytes.size();
+            const uint32_t     arr_n  = sem_type.array_size > 0
+                                          ? (uint32_t)sem_type.array_size
+                                          : str_n;
+            if (str_n > arr_n) {
+                error_at(vd->loc, "literal de string (" + std::to_string(str_n)
+                                + " bytes) mas grande que el array (" + std::to_string(arr_n) + ")");
+                return;
+            }
+            const Type      elem_t   = *sem_type.pointee;
+            const ir::IrType ir_elem  = ir_type_from_primitive(elem_t.kind);
+            const uint32_t   elem_sz  = (uint32_t)primitive_size_bytes(elem_t.kind);
+            // ALLOCA del array (siempre arr_n elementos).
+            ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr al{};
+                al.op          = ir::IrOp::ALLOCA;
+                al.type        = ir::IrType::I8;
+                al.dst         = addr;
+                al.imm         = (uint64_t)arr_n * elem_sz;
+                al.source_line = vd->loc.line;
+                fn_->append(current_block_, std::move(al));
+            }
+            // STORE byte-a-byte del string.
+            for (uint32_t i = 0; i < str_n; ++i) {
+                ir::IrValueId v_val = emit_const(ir_elem,
+                                                 (uint64_t)(uint8_t)bytes[i],
+                                                 vd->loc.line);
+                ir::IrValueId v_addr_i = addr;
+                if (i > 0) {
+                    ir::IrValueId v_off = emit_const(ir::IrType::I64,
+                                                     (uint64_t)i * elem_sz,
+                                                     vd->loc.line);
+                    v_addr_i = fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr ad{};
+                    ad.op          = ir::IrOp::ADD;
+                    ad.type        = ir::IrType::I64;
+                    ad.dst         = v_addr_i;
+                    ad.operands    = {addr, v_off};
+                    ad.source_line = vd->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                }
+                ir::IrInstr st{};
+                st.op          = ir::IrOp::STORE;
+                st.type        = ir_elem;
+                st.operands    = {v_val, v_addr_i};
+                st.source_line = vd->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            // Zerificar el resto (semantica C: padding a cero).
+            for (uint32_t i = str_n; i < arr_n; ++i) {
+                ir::IrValueId v_zero = emit_const(ir_elem, 0, vd->loc.line);
+                ir::IrValueId v_off  = emit_const(ir::IrType::I64,
+                                                   (uint64_t)i * elem_sz,
+                                                   vd->loc.line);
+                ir::IrValueId v_addr_i = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr   ad{};
+                ad.op          = ir::IrOp::ADD;
+                ad.type        = ir::IrType::I64;
+                ad.dst         = v_addr_i;
+                ad.operands    = {addr, v_off};
+                ad.source_line = vd->loc.line;
+                fn_->append(current_block_, std::move(ad));
+                ir::IrInstr st{};
+                st.op          = ir::IrOp::STORE;
+                st.type        = ir_elem;
+                st.operands    = {v_zero, v_addr_i};
+                st.source_line = vd->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            bind(vd->name, addr);
+            return;
+        }
+
         // Array init C-style: `i32 arr[N] = {e0, e1, ...};`.
         // Detectamos InitListExpr en el inicializador y emitimos:
         //   ALLOCA del array (igual que sin init).
@@ -11593,6 +11685,46 @@ namespace vex {
         // Cero overhead runtime: la salida es un solo IrOp::CONST (o
         // STRMAKE para strings).
         // -----------------------------------------------------------------
+        // Sprint B.1: as_native_callback(fn) -> i64 (host_ptr al thunk).
+        //
+        // Lowering: emite CALLN a vesta_runtime:vex_get_native_thunk con:
+        //   r1 = @Absolute("code.<fn_name>")  (PC virtual de la fn Vex)
+        //   r2 = argc (numero de parametros que la fn Vex recibe)
+        // El runtime genera (o reusa) un thunk x86-64 callable con cc C
+        // nativa y devuelve el host_ptr.
+        if (name == "as_native_callback" && e->args.size() == 1) {
+            auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
+            if (fn_id == nullptr) {
+                error_at(e->loc, "as_native_callback: arg debe ser identificador de fn Vex");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            /* Resolver la signature de la fn Vex para conocer argc. */
+            uint32_t argc = 0;
+            const FunctionSig *fsig = tc_.function_sig_by_name(fn_id->name);
+            if (fsig != nullptr) {
+                argc = (uint32_t)fsig->param_types.size();
+            }
+            const uint32_t src_line = e->loc.line;
+            /* v_fn_pc = LABEL_ADDR("code.<fn_name>") */
+            ir::IrValueId v_fn_pc = emit_label_addr(fn_id->name, src_line);
+            /* v_argc = CONST i64 */
+            ir::IrValueId v_argc = emit_const(ir::IrType::I64, (uint64_t)argc, src_line);
+            /* CALLN @Method("vesta_runtime:vex_get_native_thunk", v_fn_pc, v_argc). */
+            out_mod_->register_native_import("vesta_runtime", "vex_get_native_thunk");
+            ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
+            ir::IrInstr cl{};
+            cl.op          = ir::IrOp::CALLN;
+            cl.type        = ir::IrType::I64;
+            cl.dst         = v_dst;
+            cl.func_name   = "vesta_runtime:vex_get_native_thunk";
+            cl.operands    = {v_fn_pc, v_argc};
+            cl.source_line = src_line;
+            fn_->append(current_block_, std::move(cl));
+            out_value = v_dst;
+            return true;
+        }
+
         if (!e->type_args.empty()
          && (name == "sizeof" || name == "alignof"
           || name == "typename" || name == "type_id"

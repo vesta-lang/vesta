@@ -17,6 +17,7 @@
  * GCWB, GCCONFIG, GCALLOC, GCDEREF y las operaciones de cursor (READCUR, WRITECUR).
  */#include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
+#include "runtime/host_alloca_tracker.h"
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
@@ -283,6 +284,28 @@ namespace runtime {
         // correcta para move-to-self: el ownership "vuelve a si mismo"
         // pero el slot original queda invalidado).
         vm->vm_mem.write_u64(src_addr, 0ULL);
+    }
+
+    /**
+     * @brief Registra el host_ptr en r_ptr para cleanup automatico
+     * cuando el frame actual se destruye (RET / do_throw / TAILCALL).
+     *
+     * Sprint MMM-ext leak-fix (opcode 0x7E, FIXED_4).  Emitido por el
+     * bytecode emit del interp tras un `alloc` cuyo IR ALLOCA lleva
+     * flag `host_alloca=true`.  Si no hay frame activo (codigo
+     * top-level), el ptr queda sin tracking y debe liberarse
+     * manualmente (caso raro).
+     *
+     * encoding: [0x00][0x7E][byte2][0x00], byte2 = (r_ptr<<4) | 0.
+     * El decode_instr_two_op_reg pone reg1=r_ptr.
+     */
+    void exec_instr_htrack(ProcessVM *vm, const DecodedInstr &instr) {
+        const uint8_t  r_ptr = instr.data_instruction.reg_data.reg1;
+        const uint64_t ptr   = vm->registers.regs[r_ptr].qword();
+        if (vm->frame_stack != nullptr && ptr != 0) {
+            host_alloca_track(vm->frame_stack,
+                              reinterpret_cast<uint8_t *>(ptr));
+        }
     }
 
     // -------------------------------------------------------------------------

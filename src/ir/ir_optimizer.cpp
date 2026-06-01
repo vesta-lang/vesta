@@ -247,6 +247,192 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn) {
 }
 
 // =========================================================================
+//  Pase ir_pass_promote_callned_allocas
+//
+//  Phase D.jit-mem-model AUTO-PROMOTE: detecta `&local` (ALLOCAs) que
+//  fluyen a CALLN (funciones nativas).  Esos ALLOCAs SE PROMUEVEN a host
+//  stack via marca `is_host_ptr=true` en el dst del ALLOCA.  El JIT
+//  selector consulta esa marca y emite host stack en lugar de VM-stack.
+//
+//  Sin esta promocion, &local seria una VM-addr que la funcion nativa
+//  trataria como host_ptr -> garbage/crash.  Con la promocion, &local
+//  es un host_ptr genuino dereferenciable directamente por code C.
+//
+//  Permite escribir codigo natural C-style:
+//
+//      u8[1024] buf;
+//      ReadFile(handle, &buf[0], 1024, &bytes_read, null);
+//
+//  El frontend NO necesita anotaciones del usuario (@host etc).  El
+//  analisis es backward-flow desde args PTR de cada CALLN.
+//
+//  Algoritmo:
+//    1. Forward seed: por cada CALLN, marca todos sus operands como
+//       "reaches_calln".
+//    2. Backward fix-point: si dst ya marcado, propagar a operands a
+//       traves de ADD/SUB/BITCAST/MOV/CAST/SEXT/ZEXT/TRUNC/PHI/LOAD.
+//    3. Final: ALLOCAs cuyo dst esta marcado -> set is_host_ptr=true.
+//       Tambien propagar is_host_ptr forward por la cadena de uses para
+//       que LOAD/STORE de pointers derivados emita native mov.
+// =========================================================================
+
+bool ir_pass_promote_callned_allocas(IrFunction &fn) {
+    if (fn.is_native) return false;
+    if (fn.values.empty()) return false;
+
+    /* Step 1: detectar valores que llegan a args de CALLN. */
+    std::vector<bool> reaches_calln(fn.values.size(), false);
+    bool found_any_calln = false;
+    for (const auto &blk : fn.blocks) {
+        for (const auto &ins : blk.instrs) {
+            if (ins.op == IrOp::CALLN) {
+                found_any_calln = true;
+                for (auto opv : ins.operands) {
+                    if (opv != IR_NO_VALUE && opv < reaches_calln.size()) {
+                        reaches_calln[opv] = true;
+                    }
+                }
+            }
+        }
+    }
+    if (!found_any_calln) return false;
+
+    /* Step 2: backward fix-point a traves de ops ptr-arithmetic. */
+    bool changed_bp = true;
+    int max_iter = 16;
+    while (changed_bp && max_iter-- > 0) {
+        changed_bp = false;
+        for (const auto &blk : fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                if (ins.dst == IR_NO_VALUE) continue;
+                if (ins.dst >= reaches_calln.size()) continue;
+                if (!reaches_calln[ins.dst]) continue;
+                /* Propagar a operands segun op. */
+                switch (ins.op) {
+                    case IrOp::ADD:
+                    case IrOp::SUB:
+                    case IrOp::BITCAST:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                    case IrOp::SEXT:
+                    case IrOp::ZEXT:
+                    case IrOp::TRUNC:
+                    case IrOp::LOAD:
+                        for (auto opv : ins.operands) {
+                            if (opv != IR_NO_VALUE && opv < reaches_calln.size()
+                             && !reaches_calln[opv]) {
+                                reaches_calln[opv] = true;
+                                changed_bp = true;
+                            }
+                        }
+                        break;
+                    case IrOp::PHI:
+                        for (const auto &pa : ins.phi_args) {
+                            if (pa.value != IR_NO_VALUE && pa.value < reaches_calln.size()
+                             && !reaches_calln[pa.value]) {
+                                reaches_calln[pa.value] = true;
+                                changed_bp = true;
+                            }
+                        }
+                        break;
+                    default: break;
+                }
+            }
+        }
+    }
+
+    /* Step 3: marcar ALLOCAs cuyo dst alcanza CALLN con
+     * `host_alloca=true` y recolectar sus dsts para insertar
+     * `RAW_FREE` antes de cada RET de la funcion.  El interp YA respeta
+     * `host_alloca` en su bytecode emit: emite `alloc N` (RAW_ALLOC
+     * bytecode) en lugar de `subsp`, y el `free` correspondiente lo
+     * provee el RAW_FREE insertado aqui. */
+    bool changed = false;
+    std::vector<IrValueId> promoted_dsts;
+    for (auto &blk : fn.blocks) {
+        for (auto &ins : blk.instrs) {
+            if (ins.op == IrOp::ALLOCA
+             && ins.dst != IR_NO_VALUE
+             && ins.dst < reaches_calln.size()
+             && reaches_calln[ins.dst]
+             && !ins.host_alloca) {
+                ins.host_alloca = true;
+                promoted_dsts.push_back(ins.dst);
+                changed = true;
+            }
+        }
+    }
+
+    /* Step 4 (post-leak-fix 2026-06-01): el cleanup en exit-points
+     * ahora lo hace el runtime via `htrack` + cleanup automatico al
+     * destruir el frame.  El bytecode emit del case ALLOCA emite
+     * `htrack r_dst` tras el `alloc`; el frame guarda los ptrs en una
+     * lista lazy y los libera en RET / do_throw / TAILCALL.
+     *
+     * Ventajas vs la version anterior (RAW_FREE inserted en IR):
+     *   - Cubre THROW cross-frame correctamente (do_throw libera al
+     *     pop frames durante unwind).
+     *   - Cubre todos los exit paths sin enumerar IR ops (los exits
+     *     del runtime son responsables del cleanup).
+     *   - Sin transformaciones IR extra: el IR queda mas limpio. */
+
+    /* Step 5: propagar is_host_ptr=true forward por las ops derivadas
+     * (ADD/SUB/BITCAST/MOV/CAST/*EXT/TRUNC/PHI) desde el dst de cada
+     * ALLOCA promovida.  Necesario para que LOAD/STORE downstream
+     * emitan `movh` (host mem) en lugar de `mov` (vm mem).
+     *
+     * Ahora que el interp tambien respeta `host_alloca` y emite `alloc
+     * N` (RAW_ALLOC bytecode) en lugar de `subsp` VM-stack, el ptr ES
+     * host genuino: propagar es seguro y correcto tanto para interp
+     * como para JIT. */
+    if (!promoted_dsts.empty()) {
+        /* Seed: marcar los dsts promovidos. */
+        for (auto vid : promoted_dsts) {
+            if (vid < fn.values.size()) {
+                fn.values[vid].is_host_ptr = true;
+            }
+        }
+        /* Fix-point forward propagation. */
+        bool prop_changed = true;
+        while (prop_changed) {
+            prop_changed = false;
+            for (auto &blk : fn.blocks) {
+                for (auto &ins : blk.instrs) {
+                    if (ins.dst == IR_NO_VALUE
+                     || ins.dst >= fn.values.size()) continue;
+                    auto &dst_v = fn.values[ins.dst];
+                    if (dst_v.is_host_ptr) continue;
+                    bool any_host = false;
+                    auto check = [&](IrValueId v) {
+                        if (v == IR_NO_VALUE
+                         || v >= fn.values.size()) return;
+                        if (fn.values[v].is_host_ptr) any_host = true;
+                    };
+                    switch (ins.op) {
+                        case IrOp::ADD: case IrOp::SUB:
+                        case IrOp::BITCAST: case IrOp::MOV:
+                        case IrOp::CAST: case IrOp::SEXT:
+                        case IrOp::ZEXT: case IrOp::TRUNC:
+                            for (auto v : ins.operands) check(v);
+                            break;
+                        case IrOp::PHI:
+                            for (auto &pa : ins.phi_args) check(pa.value);
+                            break;
+                        default: break;
+                    }
+                    if (any_host) {
+                        dst_v.is_host_ptr = true;
+                        prop_changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    return changed;
+}
+
+// =========================================================================
 //  Pase ir_pass_simplify
 // =========================================================================
 //
@@ -3422,6 +3608,19 @@ void ir_optimize(IrModule &mod, OptLevel level) {
      * el codigo expandido. */
     if (level >= OptLevel::O1) {
         ir_pass_inline(mod);
+    }
+
+    /* Phase D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a
+     * CALLN como is_host_ptr=true.  El JIT selector las emite en host
+     * stack; el ptr resultante es directamente dereferenciable por
+     * funciones nativas (Win API, libc, etc.).  Sin esto, `&local`
+     * pasado a CALLN seria VM-addr -> garbage.  Cero anotaciones del
+     * usuario: el analisis es backward-flow desde args PTR de CALLN.
+     * UNA pasada (no se itera con el resto). */
+    if (level >= OptLevel::O1) {
+        for (auto &fn : mod.functions) {
+            if (!fn.is_native) ir_pass_promote_callned_allocas(fn);
+        }
     }
 
     // Iterar hasta punto fijo o maximo 8 pasadas

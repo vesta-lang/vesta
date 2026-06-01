@@ -460,6 +460,10 @@ namespace vm {
         /* --- Move-and-take (primitivo de smart pointers unique<T> / shared<T>) --- */
         {"mvtake",    {"mvtake",    OpArity::TWO}},
 
+        /* --- Sprint MMM-ext leak-fix: registra host_ptr para cleanup
+         *     automatico cuando el frame actual se destruye. --- */
+        {"htrack",    {"htrack",    OpArity::ONE}},
+
         /* --- Phase Z: memoria compartida cross-process ---
          *  Todos arity TWO (reg, reg).  El lowering los emite cuando un
          *  objeto tiene SHARED_HANDLE_BIT puesto.  Stubs registrados aqui

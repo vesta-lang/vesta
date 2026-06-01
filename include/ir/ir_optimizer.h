@@ -142,6 +142,24 @@ bool ir_pass_dce(IrFunction &fn);
 bool ir_pass_dead_alloc_elim(IrFunction &fn);
 
 /**
+ * @brief Promueve ALLOCAs cuyo ptr fluye a CALLN a host stack.
+ *
+ * Phase D.jit-mem-model AUTO-PROMOTE: detecta `&local` que llega a
+ * funciones nativas (CALLN).  Marca el dst del ALLOCA como
+ * `is_host_ptr=true`, lo que hace que el JIT lo emita en host stack
+ * (en lugar de VM-stack) -- el ptr resultante es genuino dereferenciable
+ * directamente por code C nativo.
+ *
+ * Permite sintaxis C-style sin anotaciones:
+ *
+ *     u8[1024] buf;
+ *     ReadFile(handle, &buf[0], 1024, ...);
+ *
+ * @return true si se promociono alguna ALLOCA.
+ */
+bool ir_pass_promote_callned_allocas(IrFunction &fn);
+
+/**
  * @brief Pase de simplificacion algebraica + folding de cast constantes
  *        + simplificacion de phis triviales.
  *
