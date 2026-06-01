@@ -21,6 +21,7 @@
 #include "runtime/decode_instruction.h"
 #include "runtime/exception_runtime.h"
 #include "runtime/native_invoke.h"
+#include "runtime/host_alloca_tracker.h"  // Sprint MMM-ext leak-fix
 #include "loader/oop_types.h"
 #include "jit/auto_jit.h"             // D.5-callvm-hook: lookup_jit_code_at_pc
 #include "jit/interp_jit_bridge.h"    // D.5-callvm-hook: enter_jit
@@ -460,6 +461,10 @@ namespace runtime {
             if (frame->around_chain_owns && frame->around_chain != nullptr) {
                 delete[] frame->around_chain;
             }
+            // Sprint MMM-ext leak-fix: liberar host_allocas registrados
+            // en este frame antes de devolverlo al pool.  No-op si el
+            // frame no contiene ningun host_alloca.
+            host_alloca_release_all(vm, frame);
             // LR3: si el NEXT step es un AFTER_RETURNING (inject_r0_to_reg!=0),
             // copiar R0 actual (return value del current frame) al reg destino
             // del next.  Asi el advice ve el return value como su arg.

@@ -353,6 +353,9 @@ namespace Assembly::Bytecode {
          */
         {"mvtake",     {{0x00, 0x72, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_reg}}},
 
+        /* --- Sprint MMM-ext leak-fix: htrack r_ptr (FIXED_4, REG, 1 operando) --- */
+        {"htrack",     {{0x00, 0x7E, InstrSizeMode::FIXED_4, AddressingMode::REG, emit_instr_one_reg}}},
+
         /* --- Phase Z: memoria compartida cross-process (0xA6-0xAD) ---
          *  Stubs registrados para que el assembler acepte estos mnemonicos
          *  emitidos por el lowering Phase Z.  El runtime ejecuta versiones

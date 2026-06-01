@@ -34,6 +34,7 @@
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/exception_runtime.h"
+#include "runtime/host_alloca_tracker.h"
 #include "gc/gc_heap.h"
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
@@ -277,6 +278,9 @@ namespace runtime {
             // restaurar SP al punto de entrada del frame actual para liberar su espacio
             vm->registers.stack_pointer.qword(frame->frame_base);
             vm->frame_stack = frame->prev; // desapilar el frame
+            // Sprint MMM-ext leak-fix: TAILCALL descarta el frame actual
+            // sin pasar por RET, asi que liberamos host_allocas aqui.
+            host_alloca_release_all(vm, frame);
             vm->frame_pool.release(frame); // fix13
         }
 

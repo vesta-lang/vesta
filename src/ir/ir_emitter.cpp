@@ -645,11 +645,23 @@ static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg, ir::IrValueId vi
     auto it = ctx.alloc.spill_map.find(vid);
     if (it == ctx.alloc.spill_map.end()) return;  // no es spilled, no-op
     const std::string rd = std::string(reg_name(target_reg));
-    ctx.out << "    mov r13, rbp\n";
-    ctx.out << "    subu r13, " << ((it->second + 1) * 8) << "\n";
-    ctx.out << "    mov " << rd << ", [r13]\n";
-    ctx.r13_cache = -1;
-    if (target_reg == 14) ctx.r14_cache = -1;
+    /* Scratch para el addr.  Usamos r14 (scratch general) cuando target!=14;
+     * cuando target ES r14 reutilizamos el mismo reg (el flujo
+     * mov r14,rbp -> subu r14 -> mov r14,[r14] funciona porque el ultimo
+     * mov sobreescribe r14 con el valor cargado).
+     *
+     * Importante: NO usar r13 como scratch.  En el path CALLNI (FFI runtime
+     * indirecto), r13 contiene el fn_ptr a invocar -- pisarlo aqui causa
+     * que el callni salte a memoria invalida.  r14 esta siempre libre en
+     * este punto porque parallel_arg_moves ya termino y r14 es el scratch
+     * de cycle-breaking que liberamos al final del parallel-move. */
+    const char *scratch_reg = "r14";
+    ctx.out << "    mov " << scratch_reg << ", rbp\n";
+    ctx.out << "    subu " << scratch_reg << ", " << ((it->second + 1) * 8) << "\n";
+    ctx.out << "    mov " << rd << ", [" << scratch_reg << "]\n";
+    /* Invalidamos los caches que hayan sido clobered. */
+    ctx.r14_cache = -1;
+    if (target_reg == 13) ctx.r13_cache = -1;
     if (ctx.is_gc_value(vid)) {
         ctx.out << "    gcderef cur0, " << rd << "\n";
         ctx.out << "    xchg cur0, " << rd << "\n";
@@ -2428,6 +2440,38 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // (variables struct); otros frontends pueden usar
             // type=i64, imm=N para arrays de N qwords.
             const uint64_t bytes = ins.imm * ir_type_size(ins.type);
+
+            // AUTO-PROMOTE (Phase D.jit-mem-model MMM ext, 2026-06-01):
+            // si `ir_pass_promote_callned_allocas` marco esta ALLOCA con
+            // `host_alloca=true`, su dst fluye a un CALLN nativo.  Emitir
+            // `alloc N` (RAW_ALLOC bytecode) en lugar de `subsp` para
+            // que el ptr sea host genuino dereferenciable directamente
+            // por la libreria C.  El IR pass tambien inserto RAW_FREE
+            // antes de cada RET / RSPAWN_RETURN / FULFILL_HLT para
+            // evitar leaks en exits normales.  THROW sin try/catch que
+            // envuelva sigue pudiendo leakear (sprint sucesor cubrira
+            // tracking runtime para cleanup en do_throw).
+            if (ins.host_alloca && ins.dst != IR_NO_VALUE) {
+                // Tratar como CALL: `alloc` clobrea r0 implicitamente y
+                // puede ejecutar codigo arbitrario (slab grow).
+                const uint32_t call_pos = lin_pos_of(ctx, bb.id, idx);
+                std::vector<int> regs_to_save =
+                    live_regs_through_call(ctx, call_pos, ins.dst);
+                emit_save_live_regs(ctx, call_pos, regs_to_save);
+                ctx.out << "    mov r0, " << bytes << "\n";
+                ctx.out << "    alloc r0\n";
+                emit_mov_if_needed(ctx, ctx.reg_of(ins.dst), "r0");
+                ctx.store_spilled(ins.dst);
+                // Sprint MMM-ext leak-fix: registrar el ptr en el frame
+                // actual via `htrack`.  RET / do_throw / TAILCALL liberan
+                // automaticamente sin necesidad de RAW_FREE explicito.
+                // Cubre TODOS los exit paths (incluido throw cross-frame).
+                std::string rd_track = ctx.dst_of(ins.dst);
+                ctx.out << "    htrack " << rd_track << "\n";
+                emit_restore_live_regs(ctx, call_pos, regs_to_save);
+                break;
+            }
+
             ctx.out << "    subsp rsp, " << bytes << "\n";
             if (ins.dst != IR_NO_VALUE) {
                 std::string rd = ctx.dst_of(ins.dst);

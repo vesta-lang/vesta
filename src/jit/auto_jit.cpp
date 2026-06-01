@@ -20,6 +20,7 @@
 #include "jit/code_cache.h"
 #include "jit/runtime_entries.h"
 #include "vesta_rt/public.h"
+#include "ffi/virtual_lib_registry.h"  // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
 #include "loader/oop_types.h"
 #include "runtime/proceso_runtime.h"
@@ -95,6 +96,17 @@ namespace jit {
             g_runtime_entries->resolve();
             g_compiler        = new JitCompiler(*g_code_cache, *g_runtime_entries);
         }
+    }
+
+    /* Sprint B.1: expose el CodeCache global al runtime (native_callback.cpp).
+     * Bypass el namespace anonimo de los singletons; el caller solo recibe
+     * un puntero const-correcto. */
+    CodeCache *get_or_init_code_cache() noexcept {
+        std::call_once(g_jit_init_flag, init_jit_subsystem);
+        return g_code_cache;
+    }
+
+    namespace {
 
         /* Cache global de compilaciones eager: nombre -> ptr al codigo nativo.
          * Sentinela IN_PROGRESS (1) marca compilation en curso para detectar
@@ -270,6 +282,15 @@ namespace jit {
             if (colon == std::string::npos) return 0;
             std::string lib  = name.substr(0, colon);
             std::string func = name.substr(colon + 1);
+            /* Sprint JIT-cross-fn 2026-06-01: virtual lib registry FIRST.
+             * Permite resolver libs in-process como "vesta_runtime",
+             * "vesta_comptime" via punteros C registrados sin pasar por
+             * LoadLibrary.  Bloqueante para callbacks B.1 (el thunk
+             * generator vive en `vex_get_native_thunk` virtual fn). */
+            void *vfn = ffi::lookup_virtual_fn(lib, func);
+            if (vfn != nullptr) {
+                return reinterpret_cast<uint64_t>(vfn);
+            }
             try {
                 void *mod = ffi_ptr->load_native_module(lib);
                 if (!mod) return 0;
@@ -389,6 +410,19 @@ namespace jit {
                 g_eager_cache[n] = addr;
                 if (cres.fn) ++g_jit_compiled_count;
                 else         ++g_jit_unsupported_count;
+                /* Sprint JIT-cross-fn 2026-06-01: registrar pc -> jit_code
+                 * en el mapa global para que `lookup_jit_code_at_pc` pueda
+                 * encontrar las callees compiladas en cascade.  Sin esto,
+                 * `as_native_callback(fn)` no podia obtener el thunk para
+                 * fns compiladas via cascade (solo via top-level eager o
+                 * via maybe_compile_*). */
+                if (cres.fn && st_ptr2) {
+                    auto sit = st_ptr2->find("code." + n);
+                    if (sit != st_ptr2->end() && sit->second != 0) {
+                        register_jit_code_at_pc(sit->second,
+                                                reinterpret_cast<void *>(cres.fn));
+                    }
+                }
                 if (g_jit_warn_unsupported) {
                     if (cres.fn) {
                         std::fprintf(stderr, "[jit] eager compiled '%s' (%zu bytes, %zu MInstrs)\n",
@@ -729,7 +763,19 @@ namespace jit {
      */
     namespace {
         std::unordered_map<uint64_t, uint32_t> g_callvm_counters;
+        std::unordered_map<uint64_t, uint8_t>  g_callvm_attempts; /* JIT-cross-fn 2026-06-01 */
         std::mutex                              g_callvm_mtx;
+        /* Sprint JIT-cross-fn counter cache reintentos:
+         * Cuando un compile attempt falla, en lugar de marcar
+         * `cnt = UINT32_MAX` permanente, registramos un attempt count.
+         * El proximo intento ocurre tras RETRY_INTERVAL invocaciones
+         * adicionales.  Tras MAX_ATTEMPTS fails, queda como cached
+         * failure final (UINT32_MAX).  Asi cuando una fn falla por
+         * contexto temporal (e.g. dep callee no estaba compilada
+         * todavia), reintentar puede tener exito si el contexto
+         * cambia entre invocaciones (ahora callee ya esta JIT-eada). */
+        constexpr uint32_t kCompileRetryInterval = 1000;
+        constexpr uint8_t  kCompileMaxAttempts   = 3;
         /* pc -> name (lazy por executable).  Key: puntero al Executable.  */
         std::unordered_map<const void *,
             std::unordered_map<uint64_t, std::string>> g_exec_pc_to_name;
@@ -809,7 +855,9 @@ namespace jit {
     void maybe_compile_callvm_target(runtime::ProcessVM *vm,
                                      uint64_t target_pc) noexcept {
         std::call_once(g_env_init_flag, init_threshold_from_env);
-        if (g_jit_threshold == UINT32_MAX) return;
+        if (g_jit_threshold == UINT32_MAX) {
+            return;
+        }
         /* Si ya esta compilado (otro hilo gano la carrera), salir. */
         if (lookup_jit_code_at_pc(target_pc) != nullptr) return;
 
@@ -819,20 +867,30 @@ namespace jit {
          * contencion innecesaria entre CALLVM hot path y CALLVIRT path. */
         std::lock_guard<std::mutex> cmlk(g_callvm_mtx);
         auto &cnt = g_callvm_counters[target_pc];
-        if (cnt == UINT32_MAX) return;       /* ya intentado y fallo */
+        if (cnt == UINT32_MAX) return;       /* cached failure FINAL */
         ++cnt;
         if (cnt < g_jit_threshold) {
             return;
         }
-        /* cnt >= threshold: cruzamos.  Con threshold=1 (modo -m jit),
-         * esto ocurre en la PRIMERA invocacion: cnt pasa de 0 a 1.
-         * Marcar como "intentando" antes del compile (con UINT32_MAX
-         * provisional) para que otros threads/iteraciones no entren al
-         * slow path en paralelo.  Si el compile falla, el valor queda
-         * en UINT32_MAX (cached failure).  Si exito, el pc-map captura
-         * todos los lookups subsiguientes -> el counter nunca se vuelve
-         * a consultar. */
-        cnt = UINT32_MAX;
+
+        /* Sprint JIT-cross-fn counter cache reintentos:
+         * Determinar si toca compilar AHORA segun attempt count.
+         * Attempt #i ocurre cuando cnt = threshold + i * RETRY_INTERVAL. */
+        auto &att = g_callvm_attempts[target_pc];
+        if (att >= kCompileMaxAttempts) {
+            /* Ya agotamos los reintentos -- marcar permanente. */
+            cnt = UINT32_MAX;
+            return;
+        }
+        const uint32_t needed = g_jit_threshold
+                              + static_cast<uint32_t>(att) * kCompileRetryInterval;
+        if (cnt < needed) {
+            /* Aun no toca el siguiente attempt; warming. */
+            return;
+        }
+        /* Esta es la attempt #(att+1).  Incrementar attempt antes del
+         * compile para que reintentos paralelos no entren simultaneo. */
+        ++att;
 
         /* Buscar el IrFunction correspondiente a target_pc iterando los
          * executables del VM.  Construir pc->name lazy por executable. */
@@ -856,7 +914,29 @@ namespace jit {
             }
             auto pn_it = pc_to_name.find(target_pc);
             if (pn_it == pc_to_name.end()) continue;
-            const std::string &candidate_name = pn_it->second;
+            std::string candidate_name = pn_it->second;
+            /* Sprint JIT-cross-fn 2026-06-01: el frontend Vex anyade
+             * sufijo `_entry_<N>` al label del bytecode (entry block).
+             * El ir_lookup usa el nombre limpio.  Strip el sufijo si
+             * existe para que el lookup matchee. */
+            {
+                const std::string suffix = "_entry_";
+                auto pos = candidate_name.rfind(suffix);
+                if (pos != std::string::npos) {
+                    /* Confirmar que tras el sufijo solo hay digitos. */
+                    bool only_digits = true;
+                    for (size_t k = pos + suffix.size();
+                         k < candidate_name.size(); ++k) {
+                        if (candidate_name[k] < '0' || candidate_name[k] > '9') {
+                            only_digits = false;
+                            break;
+                        }
+                    }
+                    if (only_digits) {
+                        candidate_name = candidate_name.substr(0, pos);
+                    }
+                }
+            }
             auto lit = exe->ir_lookup.find(candidate_name);
             if (lit == exe->ir_lookup.end()) continue;
             if (lit->second >= exe->ir_functions.size()) continue;
@@ -884,6 +964,11 @@ namespace jit {
             if (colon == std::string::npos) return 0;
             std::string lib  = name.substr(0, colon);
             std::string func = name.substr(colon + 1);
+            /* Sprint JIT-cross-fn: virtual lib registry FIRST. */
+            void *vfn = ffi::lookup_virtual_fn(lib, func);
+            if (vfn != nullptr) {
+                return reinterpret_cast<uint64_t>(vfn);
+            }
             try {
                 void *mod = ffi_ptr->load_native_module(lib);
                 if (!mod) return 0;

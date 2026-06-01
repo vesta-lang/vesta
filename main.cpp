@@ -175,10 +175,14 @@ static void apply_dist_config(runtime::VM *vm, const cxxopts::ParseResult &resul
 }
 
 
+/* forzar registro de virtual fns runtime (callbacks Vex->C). */
+extern "C" void runtime_ensure_vex_callback_registered(void);
+
 int main(int argc, char *argv[]) {
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
     asm_multi_process::run_and_capture("chcp 65001");
 #endif
+    runtime_ensure_vex_callback_registered();
 
     // ------------------------------------------------------------------
     // Subcomando especial: @c vm pkg <subcmd> ...

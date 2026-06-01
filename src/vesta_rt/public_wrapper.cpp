@@ -42,6 +42,7 @@
 #include "loader/oop_types.h"
 #include "runtime/decode_instruction.h"
 #include "runtime/exception_runtime.h"
+#include "runtime/host_alloca_tracker.h"
 #include "runtime/manager_runtime.h"
 #include "runtime/native_invoke.h"
 #include "runtime/proceso_runtime.h"
@@ -87,6 +88,20 @@ vrt_handle vrt_gc_alloc(vrt_proc *proc, size_t size) {
 vrt_handle vrt_gc_alloc_pinned(vrt_proc *proc, size_t size) {
     if (!proc) return VRT_NULL_HANDLE;
     return as_proc(proc)->gc_heap.alloc_pinned(size);
+}
+
+/* Raw heap host (malloc/free): bloque no-GC, dereferenciable directo
+ * por codigo C nativo.  Usado por callbacks que necesitan alocar
+ * structs Win32/POSIX para pasar a APIs nativas. */
+uint8_t *vrt_raw_alloc(vrt_proc *proc, size_t size) {
+    if (!proc) return nullptr;
+    uint64_t ptr = as_proc(proc)->raw_alloc.alloc(size);
+    return reinterpret_cast<uint8_t *>(ptr);
+}
+
+void vrt_raw_free(vrt_proc *proc, uint8_t *ptr) {
+    if (!proc || !ptr) return;
+    as_proc(proc)->raw_alloc.free(reinterpret_cast<uint64_t>(ptr));
 }
 
 uint8_t *vrt_gc_deref(vrt_proc *proc, vrt_handle h) {
@@ -585,6 +600,8 @@ static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
     if (p->frame_stack == frame) {
         /* No se hizo pop -- liberar el frame manualmente. */
         p->frame_stack = saved_frame_stack;
+        /* Sprint MMM-ext leak-fix. */
+        runtime::host_alloca_release_all(p, frame);
         p->frame_pool.release(frame);
     }
     p->decoded_ptr = saved_decoded_ptr;

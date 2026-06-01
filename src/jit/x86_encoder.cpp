@@ -323,6 +323,46 @@ namespace jit {
                 put8(out, modrm(3, gp & 7, xs & 7));
                 return true;
             }
+            case MOp::CVTSS2SD: {
+                /* CVTSS2SD xmm, xmm: F3 + (REX) + 0F + 5A + ModR/M.
+                 * Convierte f32 a f64 (widening). */
+                if (mi.dst.kind != MOperandKind::REG
+                 || mi.src1.kind != MOperandKind::REG) {
+                    put8(out, 0xCC); return true;
+                }
+                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
+                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+                put8(out, 0xF3);
+                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+                if (rex_R || rex_B) {
+                    put8(out, 0x40 | (rex_R << 2) | rex_B);
+                }
+                put8(out, 0x0F);
+                put8(out, 0x5A);
+                put8(out, modrm(3, xd & 7, xs & 7));
+                return true;
+            }
+            case MOp::CVTSD2SS: {
+                /* CVTSD2SS xmm, xmm: F2 + (REX) + 0F + 5A + ModR/M.
+                 * Convierte f64 a f32 (narrowing, truncacion). */
+                if (mi.dst.kind != MOperandKind::REG
+                 || mi.src1.kind != MOperandKind::REG) {
+                    put8(out, 0xCC); return true;
+                }
+                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
+                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+                put8(out, 0xF2);
+                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+                if (rex_R || rex_B) {
+                    put8(out, 0x40 | (rex_R << 2) | rex_B);
+                }
+                put8(out, 0x0F);
+                put8(out, 0x5A);
+                put8(out, modrm(3, xd & 7, xs & 7));
+                return true;
+            }
             case MOp::UCOMISD: {
                 /* UCOMISD xmm_a, xmm_b: 66 + (REX) + 0F + 2E + ModR/M.
                  * Compara dos f64; setea ZF/PF/CF para SETCC/JCC. */

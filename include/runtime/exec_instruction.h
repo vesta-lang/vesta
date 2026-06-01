@@ -755,6 +755,21 @@ namespace runtime {
     void exec_instr_mvtake(ProcessVM *vm, const DecodedInstr &instr);
 
     /**
+     * @brief Registra el host_ptr en r_ptr para cleanup automatico
+     * en RET / do_throw / TAILCALL del frame actual (opcode 0x7E).
+     *
+     * Sprint MMM-ext leak-fix (2026-06-01).  Tras `alloc` que produce
+     * un host_ptr y cuyo IR ALLOCA tenia `host_alloca=true` (marcado
+     * por @c ir_pass_promote_callned_allocas), el bytecode emit
+     * inserta @c htrack para que el ptr se libere al destruir el
+     * frame, sin necesidad de RAW_FREE explicito ni leaks en throw.
+     *
+     * Si no hay frame activo (codigo top-level fuera de cualquier
+     * funcion), es no-op.
+     */
+    void exec_instr_htrack(ProcessVM *vm, const DecodedInstr &instr);
+
+    /**
      * @brief Ejecuta super-instrucciones ALU 3-operandos (0x73-0x7B).
      *
      * Combina @c mov rd,rs1 + OP rd,rs2 en una sola instruccion VM.  La

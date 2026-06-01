@@ -425,6 +425,8 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_meta.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_coro.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_alloca_tracker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/native_callback.cpp
 
         # Distribucion - VDP protocol + mailbox + dirty tracker
         ${CMAKE_CURRENT_SOURCE_DIR}/src/distrib/mailbox.cpp

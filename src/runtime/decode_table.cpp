@@ -2842,11 +2842,18 @@ namespace runtime {
             exec_instr_loadz, decode_instr_simple_mov
         },
 
-        /* 0x7E */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x7E  htrack r_ptr (FIXED_4)
+                 Sprint MMM-ext leak-fix (2026-06-01): registra el host_ptr
+                 en r_ptr para cleanup automatico cuando el frame actual
+                 se destruye (RET / do_throw / TAILCALL).  Emitido por el
+                 bytecode emit del interp DESPUES de un `alloc` cuyo IR
+                 ALLOCA lleva flag `host_alloca=true`.  Cero overhead para
+                 frames que no contienen host_allocas (no-op si nadie lo
+                 invoca). */
+        {
+            "htrack", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_htrack, decode_instr_two_op_reg
         },
 
         /* 0x7F */{

@@ -66,6 +66,14 @@ namespace jit {
         gc_write_barrier  = &vrt_gc_write_barrier;
 
         // -----------------------------------------------------------------
+        // Raw HOST memory (malloc/free no-GC).  Usado por RAW_ALLOC y
+        // RAW_FREE del IR, frecuentes en callbacks que necesitan alocar
+        // structs Win32 / POSIX para pasar a APIs nativas.
+        // -----------------------------------------------------------------
+        raw_alloc          = &vrt_raw_alloc;
+        raw_free           = &vrt_raw_free;
+
+        // -----------------------------------------------------------------
         // Monitores (sync primitives sobre objetos GC).  El JIT emite
         // calls a estos en lugar de inlinar el codigo del monitor porque
         // los waits y notifications cooperan con el scheduler.

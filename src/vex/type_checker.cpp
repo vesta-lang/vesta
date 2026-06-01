@@ -47,6 +47,12 @@
 
 #include "ffi/virtual_lib_registry.h"  // registrar vex_static_assert
 
+/* extern "C" decl global del thunk generator.  La impl esta
+ * en src/runtime/native_callback.cpp.  La registramos como virtual_fn
+ * "vesta_runtime:vex_get_native_thunk" para que el builtin Vex
+ * `as_native_callback(fn)` la invoque via CALLN. */
+extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t argc);
+
 namespace vex {
 
     /* TypeChecker activo (thread_local) para los virtual
@@ -217,6 +223,13 @@ namespace vex {
             ffi::register_virtual_fn(
                 "vesta_comptime", "comptime_compile",
                 reinterpret_cast<void *>(&vex_comptime_compile));
+            /* Sprint B.1: thunk generator para callbacks Vex -> C nativos.
+             * Builtin `as_native_callback(fn)` se baja a un CALLN a esta
+             * fn que retorna el host_ptr al thunk callable con cc nativa.
+             * El extern "C" decl global esta arriba del namespace. */
+            ffi::register_virtual_fn(
+                "vesta_runtime", "vex_get_native_thunk",
+                reinterpret_cast<void *>(&::vex_get_native_thunk));
         });
     }
 
@@ -2026,6 +2039,17 @@ namespace vex {
         reg_builtin("bswap",    Type{PrimitiveKind::U64}, {PrimitiveKind::U64});
         reg_builtin("rotl",     Type{PrimitiveKind::U64}, {PrimitiveKind::U64, PrimitiveKind::U64});
         reg_builtin("rotr",     Type{PrimitiveKind::U64}, {PrimitiveKind::U64, PrimitiveKind::U64});
+
+        /* Sprint B.1: callback Vex -> C nativo.  Toma una fn Vex como
+         * argumento y devuelve un host_ptr (i64) a un thunk con cc C
+         * estandar (Win64 o SysV).  El check_call hace bypass especial
+         * para validar que el arg es una IdentExpr a una funcion
+         * declarada (no a un lambda value).  Sintaxis:
+         *
+         *   i32 mi_cmp(u8* a, u8* b) { ... }
+         *   u64 cb = as_native_callback(mi_cmp);
+         *   qsort(arr, n, sz, cb);  // C llama a mi_cmp via cc nativa */
+        reg_builtin("as_native_callback", Type{PrimitiveKind::I64}, {PrimitiveKind::PTR});
 
         // Identificadores magicos para colores y atributos ANSI.
         //
@@ -9165,6 +9189,35 @@ namespace vex {
         // CLASS, PTR, ARRAY, o entero arbitrario sin que el bypass del
         // type checker se queje del tipo.  El lowering despacha al
         // CALLN apropiado convirtiendo a uint64.
+        /* Sprint B.1: as_native_callback(fn_name) bypass.  Acepta IdentExpr
+         * que resuelve a Function (no a Variable).  Captura el nombre +
+         * argc para que el lowering emita la secuencia correcta. */
+        if (id->name == "as_native_callback") {
+            if (e->args.size() != 1) {
+                diags_.error(e->loc, "'as_native_callback' espera 1 argumento (nombre de funcion Vex)");
+                return Type{PrimitiveKind::I64};
+            }
+            auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
+            if (fn_id == nullptr) {
+                diags_.error(e->args[0]->loc,
+                    "'as_native_callback' requiere un identificador de funcion (no expresion)");
+                return Type{PrimitiveKind::I64};
+            }
+            /* Lookup del simbolo via lookup_with_depth. */
+            size_t depth = 0;
+            const Symbol *sym = lookup_with_depth(fn_id->name, &depth);
+            if (sym == nullptr || sym->kind != SymbolKind::Function) {
+                diags_.error(fn_id->loc,
+                    "'as_native_callback': '" + fn_id->name + "' no es una funcion conocida");
+                return Type{PrimitiveKind::I64};
+            }
+            /* Marcamos result_type del IdentExpr como I64 sentinela para
+             * que el lowering reconozca el patron (sin pasar por lower_ident
+             * normal que daria error de simbolo). */
+            fn_id->result_type = Type{PrimitiveKind::I64};
+            return Type{PrimitiveKind::I64};
+        }
+
         const bool is_io_print_relaxed =
             (id->name == "print" || id->name == "println" || id->name == "echo"
           || id->name == "print_ptr" || id->name == "print_gchandle");
