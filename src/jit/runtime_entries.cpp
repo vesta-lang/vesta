@@ -145,6 +145,17 @@ namespace jit {
         findfield    = &vrt_findfield;
         setmethdbg   = &vrt_setmethdbg;
 
+        // ----- String ops (Sprint JIT-cobertura 2026-06-01) -----
+        str_make      = &vrt_str_make;
+        str_len       = &vrt_str_len;
+        str_get_bytes = &vrt_str_get_bytes;
+        str_raw       = &vrt_str_raw;
+        str_cat       = &vrt_str_cat;
+        str_cmp       = &vrt_str_cmp;
+        // ----- Panic + GC alloc payload -----
+        panic_str        = &vrt_panic_str;
+        gc_alloc_payload = &vrt_gc_alloc_payload;
+
         // -----------------------------------------------------------------
         // Safepoint: poll (cheap check del flag global) + handler (slow
         // path cuando el GC pidio stop).  El poll lo INLINA el JIT en
@@ -181,6 +192,9 @@ namespace jit {
                findclass         && newobj          && defclass         &&
                deffield          && defmethod       && addadvice        &&
                findmethod        && findfield       && setmethdbg       &&
+               str_make          && str_len         && str_get_bytes   &&
+               str_raw           && str_cat         && str_cmp          &&
+               panic_str         && gc_alloc_payload &&
                safepoint_poll    && safepoint_handler;
     }
 

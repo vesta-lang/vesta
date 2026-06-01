@@ -140,6 +140,18 @@ namespace jit {
         void      *(*findfield)       (vrt_proc *, uint64_t)                  = nullptr;
         void       (*setmethdbg)      (vrt_proc *, uint64_t)                  = nullptr;
 
+        /* ----- String ops (Sprint JIT-cobertura 2026-06-01) ----- */
+        vrt_handle (*str_make)        (vrt_proc *, uint64_t, uint32_t)        = nullptr;
+        uint64_t   (*str_len)         (vrt_proc *, vrt_handle)                = nullptr;
+        uint64_t   (*str_get_bytes)   (vrt_proc *, vrt_handle)                = nullptr;
+        uint64_t   (*str_raw)         (vrt_proc *, vrt_handle)                = nullptr;
+        vrt_handle (*str_cat)         (vrt_proc *, vrt_handle, vrt_handle)    = nullptr;
+        int64_t    (*str_cmp)         (vrt_proc *, vrt_handle, vrt_handle)    = nullptr;
+
+        /* ----- Panic + GC alloc payload (Sprint JIT-cobertura) ----- */
+        void       (*panic_str)         (vrt_proc *, uint64_t, uint32_t)      = nullptr;
+        uint8_t   *(*gc_alloc_payload)  (vrt_proc *, size_t)                  = nullptr;
+
         /* ----- Safepoint ----- */
         void       (*safepoint_poll)    (vrt_proc *)                         = nullptr;
         void       (*safepoint_handler) (vrt_proc *)                         = nullptr;

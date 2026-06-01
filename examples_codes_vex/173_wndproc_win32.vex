@@ -165,7 +165,7 @@ i32 main() {
         }
     }
 
-    Sleep(3000);  // Esperar 1 segundo
+    Sleep(3000);  // Esperar 3 segundos
 
     DestroyWindow(hwnd);
 
