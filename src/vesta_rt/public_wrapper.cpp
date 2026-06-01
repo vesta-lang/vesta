@@ -47,6 +47,8 @@
 #include "runtime/native_invoke.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
+#include "runtime/string_runtime.h"
+#include "loader/string_object.h"
 
 #include <cstring>
 
@@ -1127,6 +1129,117 @@ void vrt_setmethdbg(vrt_proc *proc, uint64_t params_vaddr) {
     runtime::register_method_debug(
         reinterpret_cast<loader::MethodInfo *>(sp.method_ptr),
         fbuf, flen, sp.start_line);
+}
+
+/* =========================================================================
+ * Sprint JIT-cobertura (2026-06-01): wrappers para string ops.
+ *
+ * Cada wrapper recibe handles/args directos del codigo JIT (Native ABI:
+ * proc en RCX/RDI, args en RDX/RSI/R8/RDX/...).  Delega a las helpers
+ * publicas expuestas en @c runtime/string_runtime.h.
+ * =========================================================================
+ */
+
+/* PANIC: lanza FatalError(USER_ABORT, msg) leyendo el mensaje de
+ * vm_mem[msg_addr, msg_addr+msg_len).  Equivalente al opcode bytecode
+ * panic.  Convierte el path FATAL_USER_ABORT del runtime entry
+ * throw_fatal a una API mas directa para el JIT. */
+void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len) {
+    if (!proc) return;
+    runtime::ProcessVM *p = as_proc(proc);
+    char msg[512];
+    if (msg_len >= sizeof(msg)) msg_len = sizeof(msg) - 1;
+    if (msg_len > 0 && msg_vaddr != 0) {
+        p->vm_mem.read_bytes(msg_vaddr, msg, msg_len);
+    }
+    msg[msg_len] = '\0';
+    /* throw_fatal(proc, FATAL_USER_ABORT, msg) -- nunca retorna.  El
+     * handler del JIT (run_jit -> longjmp) propaga la excepcion al
+     * frame de tryenter mas cercano o termina el proceso si no hay
+     * uno. */
+    runtime::throw_fatal(p, runtime::FATAL_USER_ABORT, msg);
+}
+
+/* GC_ALLOCP: alloc en GC heap + deref + devuelve host_ptr al payload.
+ * Combinacion atomica que el opcode bytecode gcallocp implementa en
+ * 1 instr.  Para el JIT usamos 1 CALL nativo en lugar de 2. */
+uint8_t *vrt_gc_alloc_payload(vrt_proc *proc, size_t size) {
+    if (!proc) return nullptr;
+    runtime::ProcessVM *p = as_proc(proc);
+    vrt_handle h = vrt_gc_alloc(proc, size);
+    if (h == VRT_NULL_HANDLE) return nullptr;
+    return p->gc_heap.deref(h);
+}
+
+/* STRMAKE: %dst = strmake.handle vm_addr, byte_len.  La codificacion la
+ * detectamos como UTF-8 por defecto (mismo path que el opcode bytecode);
+ * el helper interno auto-compacta a ASCII si todos los bytes son < 0x80. */
+vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr, uint32_t byte_len) {
+    if (!proc) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    if (byte_len > (1u << 24)) return VRT_NULL_HANDLE; /* sanity: 16 MB cap */
+    /* Leer bytes desde memoria VM a buffer host. */
+    std::vector<uint8_t> buf(byte_len);
+    if (byte_len > 0) {
+        p->vm_mem.read_bytes(vm_addr, buf.data(), byte_len);
+    }
+    return static_cast<vrt_handle>(
+        runtime::make_string_flat(p, buf.data(), byte_len,
+                                  UINT32_MAX, /* length: auto-ASCII fallback */
+                                  loader::StringEncoding::UTF8));
+}
+
+/* STRLEN: numero de code points del StringObject. */
+uint64_t vrt_str_len(vrt_proc *proc, vrt_handle h) {
+    if (!proc || h == VRT_NULL_HANDLE) return 0;
+    runtime::ProcessVM *p = as_proc(proc);
+    uint8_t *payload = p->gc_heap.deref(static_cast<gc::GcHandle>(h));
+    if (!payload) return 0;
+    auto *s = reinterpret_cast<loader::StringObject *>(payload);
+    return static_cast<uint64_t>(s->length);
+}
+
+/* STRGETBYTES: byte_len del StringObject. */
+uint64_t vrt_str_get_bytes(vrt_proc *proc, vrt_handle h) {
+    if (!proc || h == VRT_NULL_HANDLE) return 0;
+    runtime::ProcessVM *p = as_proc(proc);
+    uint8_t *payload = p->gc_heap.deref(static_cast<gc::GcHandle>(h));
+    if (!payload) return 0;
+    auto *s = reinterpret_cast<loader::StringObject *>(payload);
+    return static_cast<uint64_t>(s->byte_len);
+}
+
+/* STRRAW: host pointer al buffer de bytes (offset 40 dentro del payload
+ * del StringObject).  Materializa ROPE/SLICE primero. */
+uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h) {
+    if (!proc || h == VRT_NULL_HANDLE) return 0;
+    runtime::ProcessVM *p = as_proc(proc);
+    gc::GcHandle flat = runtime::flatten_string_public(
+        p, static_cast<gc::GcHandle>(h));
+    uint8_t *payload = p->gc_heap.deref(flat);
+    if (!payload) return 0;
+    /* StringObject layout: header(24) + encoding(1) + pad(3) + length(4)
+     *                       + byte_len(4) + hash(4) + data[] @ offset 40. */
+    return reinterpret_cast<uint64_t>(payload + 40);
+}
+
+/* STRCAT: %dst = strcat.handle a, b.  Crea un ROPE O(1) (lazy concat). */
+vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) {
+    if (!proc) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    return static_cast<vrt_handle>(
+        runtime::strcat_public(p,
+            static_cast<gc::GcHandle>(a),
+            static_cast<gc::GcHandle>(b)));
+}
+
+/* STRCMP: comparacion lexicografica.  Returns -1, 0 o 1. */
+int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b) {
+    if (!proc) return -1;
+    runtime::ProcessVM *p = as_proc(proc);
+    return runtime::strcmp_public(p,
+        static_cast<gc::GcHandle>(a),
+        static_cast<gc::GcHandle>(b));
 }
 
 } /* extern "C" */

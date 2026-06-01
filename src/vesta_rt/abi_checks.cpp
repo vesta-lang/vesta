@@ -192,6 +192,10 @@ static_assert(offsetof(loader::ClassInfo, vtable)
               == VESTA_CLASSINFO_VTABLE_OFFSET,
               "ABI drift: offsetof(ClassInfo, vtable) != VESTA_CLASSINFO_VTABLE_OFFSET");
 
+static_assert(offsetof(loader::ClassInfo, static_data)
+              == VESTA_CLASSINFO_STATIC_DATA_OFFSET,
+              "ABI drift: offsetof(ClassInfo, static_data) != VESTA_CLASSINFO_STATIC_DATA_OFFSET");
+
 static_assert(offsetof(loader::MethodInfo, jit_code)
               == VESTA_METHODINFO_JIT_CODE_OFFSET,
               "ABI drift: offsetof(MethodInfo, jit_code) != VESTA_METHODINFO_JIT_CODE_OFFSET");

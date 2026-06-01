@@ -1273,4 +1273,66 @@ gc::GcHandle make_string_flat(ProcessVM *vm,
     return alloc_flat(vm, data, byte_len, effective_length, enc);
 }
 
+/* =========================================================================
+ * Sprint JIT-cobertura (2026-06-01): exposicion publica de helpers
+ * internos de strings para que los wrappers vrt_str_* (en
+ * src/vesta_rt/public_wrapper.cpp) puedan delegar sin necesidad de
+ * construir DecodedInstr falsos.
+ *
+ * Las funciones publicas son thin wrappers sobre las helpers static
+ * `flatten_string` y `alloc_rope` ya implementadas arriba.
+ * =========================================================================
+ */
+gc::GcHandle flatten_string_public(ProcessVM *vm, gc::GcHandle h) noexcept {
+    if (!vm || h == gc::GC_NULL_HANDLE) return gc::GC_NULL_HANDLE;
+    return flatten_string(vm, h);
+}
+
+gc::GcHandle strcat_public(ProcessVM *vm,
+                            gc::GcHandle a,
+                            gc::GcHandle b) noexcept {
+    if (!vm) return gc::GC_NULL_HANDLE;
+    uint8_t *pa = vm->gc_heap.deref(a);
+    uint8_t *pb = vm->gc_heap.deref(b);
+    if (!pa || !pb) return gc::GC_NULL_HANDLE;
+    auto *sa = reinterpret_cast<loader::StringObject *>(pa);
+    auto *sb = reinterpret_cast<loader::StringObject *>(pb);
+    /* Si uno es vacio devolvemos el otro sin alocar (mismo path que
+     * exec_instr_strcat). */
+    if (sa->byte_len == 0) return b;
+    if (sb->byte_len == 0) return a;
+    /* Combinamos length + byte_len + encoding del rope segun los
+     * children.  Mismo algoritmo que exec_instr_strcat: encoding del
+     * rope = ASCII si ambos son ASCII, sino UTF-8.  depth=0 para
+     * indicar que es el root del rope tree. */
+    const uint32_t total_len = sa->length + sb->length;
+    const uint32_t total_bytes = sa->byte_len + sb->byte_len;
+    const auto enc = (sa->encoding == static_cast<uint8_t>(loader::StringEncoding::ASCII)
+                   && sb->encoding == static_cast<uint8_t>(loader::StringEncoding::ASCII))
+        ? loader::StringEncoding::ASCII : loader::StringEncoding::UTF8;
+    return alloc_rope(vm, a, b, total_len, total_bytes, enc, /*depth=*/0);
+}
+
+int64_t strcmp_public(ProcessVM *vm,
+                       gc::GcHandle a,
+                       gc::GcHandle b) noexcept {
+    if (!vm) return -1;
+    gc::GcHandle fa = flatten_string(vm, a);
+    gc::GcHandle fb = flatten_string(vm, b);
+    uint8_t *pa = vm->gc_heap.deref(fa);
+    uint8_t *pb = vm->gc_heap.deref(fb);
+    if (!pa || !pb) return -1;
+    auto *sa = reinterpret_cast<loader::StringObject *>(pa);
+    auto *sb = reinterpret_cast<loader::StringObject *>(pb);
+    const uint8_t *da = reinterpret_cast<const uint8_t *>(sa) + 40;  // data offset
+    const uint8_t *db = reinterpret_cast<const uint8_t *>(sb) + 40;
+    const uint32_t la = sa->byte_len;
+    const uint32_t lb = sb->byte_len;
+    const uint32_t lmin = la < lb ? la : lb;
+    int c = std::memcmp(da, db, lmin);
+    if (c != 0) return (c < 0) ? -1 : 1;
+    if (la == lb) return 0;
+    return (la < lb) ? -1 : 1;
+}
+
 } // namespace runtime

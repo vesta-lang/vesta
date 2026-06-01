@@ -274,6 +274,15 @@ namespace vesta_rt {
  * el layout en oop_types.h, el build falla aqui forzando actualizacion.
  */
 #define VESTA_CLASSINFO_VTABLE_OFFSET      80
+/* Offset del puntero static_data (uint8_t*) en ClassInfo.  Apunta a un
+ * bloque host de bytes con los valores de los static fields.  Usado por
+ * GETSTATIC / SETSTATIC en JIT para load/store directo sin runtime call:
+ *
+ *   mov rax, [rax + VESTA_CLASSINFO_VTABLE_OFFSET + 16] ; (vtable=80, vtable_size=8, padding+static_data=16+x)
+ *
+ * El offset exacto se valida via static_assert en abi_checks.cpp.
+ */
+#define VESTA_CLASSINFO_STATIC_DATA_OFFSET 96
 #define VESTA_METHODINFO_JIT_CODE_OFFSET   104
 /* Offset del puntero advice_chain (cadena AOP BEFORE/AFTER/AROUND).
  * Si != NULL, el inline dispatch JIT debe caer al slow path para que

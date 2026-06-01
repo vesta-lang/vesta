@@ -613,6 +613,47 @@ void *vrt_findfield(vrt_proc *proc, uint64_t params_vaddr);
 void vrt_setmethdbg(vrt_proc *proc, uint64_t params_vaddr);
 
 /* ========================================================================= */
+/* String operations (Sprint JIT-cobertura 2026-06-01)                       */
+/* ========================================================================= */
+
+/**
+ * @brief Lanza FatalError(USER_ABORT, msg) leyendo el mensaje de
+ *        vm_mem.  Equivalente al opcode PANIC.
+ *
+ * @param proc      Proceso actual.
+ * @param msg_vaddr Direccion VM del mensaje.
+ * @param msg_len   Longitud en bytes (cap 511).
+ */
+void vrt_panic_str(vrt_proc *proc, uint64_t msg_vaddr, uint32_t msg_len);
+
+/**
+ * @brief Combinacion atomica GC_ALLOCP: alloc + deref + devuelve
+ *        host_ptr al payload.  Mismo path que el opcode gcallocp.
+ */
+uint8_t *vrt_gc_alloc_payload(vrt_proc *proc, size_t size);
+
+/**
+ * @brief Crea un StringObject FLAT desde un buffer en memoria VM.
+ *        Equivalente al opcode STRMAKE.  Autodetecta ASCII vs UTF-8.
+ */
+vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr, uint32_t byte_len);
+
+/** @brief Devuelve el numero de code-points del string. */
+uint64_t vrt_str_len(vrt_proc *proc, vrt_handle h);
+
+/** @brief Devuelve el byte_len del StringObject. */
+uint64_t vrt_str_get_bytes(vrt_proc *proc, vrt_handle h);
+
+/** @brief Devuelve host_ptr al buffer de bytes (materializa ROPE/SLICE). */
+uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h);
+
+/** @brief Concatena dos StringObjects en un ROPE O(1). */
+vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b);
+
+/** @brief Comparacion lexicografica.  Returns -1/0/1. */
+int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b);
+
+/* ========================================================================= */
 /* Safepoint (Phase E - infrastructure stub)                                  */
 /* ========================================================================= */
 

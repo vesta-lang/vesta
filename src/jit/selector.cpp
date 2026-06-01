@@ -5444,6 +5444,655 @@ namespace jit {
                         break;
                     }
 
+                    /* ==================================================
+                     * Sprint JIT-cobertura (2026-06-01): IR ops anyadidos
+                     * para subir cobertura del JIT del 63% al ~85%+.
+                     *
+                     * Patron comun: CALL nativo a vrt_* con marshalling
+                     * Native ABI (Win64 RCX/RDX/R8/R9 o SysV RDI/RSI/RDX/RCX)
+                     * + stackmap automatico en el call site para precise GC.
+                     * ================================================== */
+
+                    /* FINDCLASS: %dst = ClassInfo* por nombre (lookup en
+                     * ClassRegistry).  Patron: CALL vrt_findclass(proc, params).
+                     * Mismo shape que FINDMETHOD/FINDFIELD. */
+                    case ir::IrOp::FINDCLASS: {
+                        if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "FINDCLASS: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->findclass) : 0;
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->findclass no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    /* GC_HANDLE_FOR_PTR: %dst = GcHandle (uint32 zero-ext) a
+                     * partir de host_ptr al payload.  CALL vrt_gc_handle_for_ptr. */
+                    case ir::IrOp::GC_HANDLE_FOR_PTR: {
+                        if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "GC_HANDLE_FOR_PTR: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->gc_handle_for_ptr) : 0;
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->gc_handle_for_ptr no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    /* TRYENTER: push ExceptionFrame{handler_pc, type}.
+                     * CALL vrt_tryenter(proc, handler_pc, type_class).
+                     * No produce dst. */
+                    case ir::IrOp::TRYENTER: {
+                        if (ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "TRYENTER: requiere 2 operandos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->tryenter) : 0;
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->tryenter no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX, arg2 = MReg::R8;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);  /* handler_pc */
+                        load_op(mf, ins.operands[1], arg2);  /* type_class */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        break;
+                    }
+
+                    /* TRYLEAVE: pop top ExceptionFrame. CALL vrt_tryleave(proc). */
+                    case ir::IrOp::TRYLEAVE: {
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->tryleave) : 0;
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->tryleave no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX;
+                    #else
+                        const MReg arg0 = MReg::RDI;
+                    #endif
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        break;
+                    }
+
+                    /* GETSTATIC: %dst = i64 desde cls->static_data + offset.
+                     * Acceso DIRECTO a memoria host (sin runtime call):
+                     *   mov rax, [cls_slot]                                ; rax = ClassInfo*
+                     *   mov rax, [rax + VESTA_CLASSINFO_STATIC_DATA_OFFSET] ; rax = static_data ptr
+                     *   mov rax, [rax + imm32_offset]                       ; rax = i64 value
+                     *   store_op(dst, rax)
+                     *
+                     * ~3 instr vs ~50ns de CALL runtime entry. */
+                    case ir::IrOp::GETSTATIC: {
+                        if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "GETSTATIC: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], MReg::RAX);
+                        /* rax = cls->static_data (host_ptr) */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_mem(MReg::RAX, VESTA_CLASSINFO_STATIC_DATA_OFFSET)));
+                        /* rax = *(rax + offset)  -- imm caps a int32 */
+                        const int32_t off = static_cast<int32_t>(ins.imm);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_mem(MReg::RAX, off)));
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    /* ISNULL: %dst = (src == 0) ? 1 : 0.  Emit:
+                     *   load src -> rax
+                     *   xor rcx, rcx          ; rcx = 0
+                     *   test rax, rax         ; ZF=1 si rax==0
+                     *   sete cl               ; cl = 1 si ZF
+                     *   store dst <- rcx
+                     */
+                    case ir::IrOp::ISNULL: {
+                        if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "ISNULL: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], MReg::RAX);
+                        /* xor rcx, rcx (clear destino antes del setcc para
+                         * zero-extend los bits altos; setcc solo escribe AL) */
+                        mf.blocks.back().instrs.push_back(MInstr::make_binary(MOp::XOR,
+                            MOperand::make_reg(SCRATCH_B),
+                            MOperand::make_reg(SCRATCH_B), {}));
+                        mf.blocks.back().instrs.push_back(MInstr::make_binary(MOp::TEST,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_reg(MReg::RAX), {}));
+                        {
+                            MInstr setcc{};
+                            setcc.op = MOp::SETCC;
+                            setcc.variant = static_cast<uint8_t>(MCond::E);
+                            setcc.dst = MOperand::make_reg(SCRATCH_B, 1);
+                            mf.blocks.back().instrs.push_back(setcc);
+                        }
+                        store_op(mf, ins.dst, SCRATCH_B);
+                        break;
+                    }
+
+                    /* THROW: lanza una excepcion user-defined.  CALL
+                     * vrt_throw_user(proc, exc_handle).  Nunca retorna
+                     * normalmente (longjmp al handler de tryenter).
+                     * No produce dst. */
+                    case ir::IrOp::THROW: {
+                        if (ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "THROW: requiere operand 0 (exception handle)");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->throw_user) : 0;
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->throw_user no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        /* Marca block como terminado: throw nunca retorna. */
+                        break;
+                    }
+
+                    /* PANIC: lanza FatalError(USER_ABORT, msg).  CALL
+                     * vrt_panic_str(proc, msg_vaddr, msg_len).  Mismo path
+                     * que el opcode bytecode panic. */
+                    case ir::IrOp::PANIC: {
+                        if (ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "PANIC: requiere 2 operandos (msg_addr, msg_len)");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->panic_str) : 0;
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->panic_str no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX, arg2 = MReg::R8;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);  /* msg_vaddr */
+                        load_op(mf, ins.operands[1], arg2);  /* msg_len */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        break;
+                    }
+
+                    /* GC_ALLOC: %dst = vrt_gc_alloc(proc, size) -- handle.
+                     * GC_ALLOCP: %dst = vrt_gc_alloc_payload(proc, size) -- host_ptr.
+                     * Ambos toman size en operand 0 (CONST i64 tipico). */
+                    case ir::IrOp::GC_ALLOC:
+                    case ir::IrOp::GC_ALLOCP: {
+                        if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "GC_ALLOC/GC_ALLOCP: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t fn_addr = (ins.op == ir::IrOp::GC_ALLOC)
+                            ? (opts_.runtime ? reinterpret_cast<uint64_t>(opts_.runtime->gc_alloc) : 0)
+                            : (opts_.runtime ? reinterpret_cast<uint64_t>(opts_.runtime->gc_alloc_payload) : 0);
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->gc_alloc[/_payload] no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);  /* size */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    /* MONENTER/MONEXIT/MONWAIT/MONNOTI/MONNOTA: monitor ops.
+                     * CALL vrt_monitor_*(proc, obj_handle).  No producen dst
+                     * (excepto el lock_depth de monitor_enter pero es opaque).
+                     * Convencion: el IR pasa el GcHandle del object como
+                     * operands[0] (uint32 zero-ext en el slot).
+                     *
+                     * Multiples ops comparten el mismo shape de marshalling. */
+                    case ir::IrOp::MONENTER:
+                    case ir::IrOp::MONEXIT:
+                    case ir::IrOp::MONWAIT:
+                    case ir::IrOp::MONNOTI:
+                    case ir::IrOp::MONNOTA: {
+                        if (ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "MONITOR op: requiere operand 0 (obj handle)");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        uint64_t fn_addr = 0;
+                        if (opts_.runtime) {
+                            switch (ins.op) {
+                                case ir::IrOp::MONENTER:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->monitor_enter); break;
+                                case ir::IrOp::MONEXIT:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->monitor_exit); break;
+                                case ir::IrOp::MONWAIT:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->monitor_wait); break;
+                                case ir::IrOp::MONNOTI:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->monitor_notify); break;
+                                case ir::IrOp::MONNOTA:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->monitor_notify_all); break;
+                                default: break;
+                            }
+                        }
+                        if (fn_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->monitor_* no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
+                    #endif
+                        load_op(mf, ins.operands[0], arg1);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        /* MONENTER devuelve int32 (1 OK / 0 fail) en RAX --
+                         * pero el IR no captura el dst (semanticamente es
+                         * void).  No hacemos store_op. */
+                        break;
+                    }
+
+                    /* STRMAKE/STRLEN/STRGETBYTES/STRRAW/STRCAT/STRCMP:
+                     * delegan a vrt_str_* con marshalling Native ABI.
+                     *
+                     * STRMAKE:    dst = vrt_str_make(proc, vm_addr, byte_len)
+                     * STRLEN:     dst = vrt_str_len(proc, str_handle)
+                     * STRGETBYTES: dst = vrt_str_get_bytes(proc, str_handle)
+                     * STRRAW:     dst = vrt_str_raw(proc, str_handle)  -> host_ptr
+                     * STRCAT:     dst = vrt_str_cat(proc, a, b)
+                     * STRCMP:     dst = vrt_str_cmp(proc, a, b)
+                     */
+                    case ir::IrOp::STRMAKE:
+                    case ir::IrOp::STRLEN:
+                    case ir::IrOp::STRGETBYTES:
+                    case ir::IrOp::STRRAW:
+                    case ir::IrOp::STRCAT:
+                    case ir::IrOp::STRCMP: {
+                        if (ins.dst == ir::IR_NO_VALUE) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "STR* op: dst invalido");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        uint64_t fn_addr = 0;
+                        size_t nargs = 0;
+                        if (opts_.runtime) {
+                            switch (ins.op) {
+                                case ir::IrOp::STRMAKE:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->str_make);
+                                    nargs = 2; break;
+                                case ir::IrOp::STRLEN:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->str_len);
+                                    nargs = 1; break;
+                                case ir::IrOp::STRGETBYTES:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->str_get_bytes);
+                                    nargs = 1; break;
+                                case ir::IrOp::STRRAW:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->str_raw);
+                                    nargs = 1; break;
+                                case ir::IrOp::STRCAT:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->str_cat);
+                                    nargs = 2; break;
+                                case ir::IrOp::STRCMP:
+                                    fn_addr = reinterpret_cast<uint64_t>(opts_.runtime->str_cmp);
+                                    nargs = 2; break;
+                                default: break;
+                            }
+                        }
+                        if (fn_addr == 0 || ins.operands.size() < nargs) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->str_* no resuelto u operandos insuficientes");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                    #if defined(_WIN32)
+                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX, arg2 = MReg::R8;
+                    #else
+                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
+                    #endif
+                        if (nargs >= 1) load_op(mf, ins.operands[0], arg1);
+                        if (nargs >= 2) load_op(mf, ins.operands[1], arg2);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
+                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    /* UNWRAP: %dst = unwrap %src.  Si src == 0, lanza
+                     * NullPointerException (FATAL_NULL_POINTER capturable);
+                     * si no, dst = src.  Patron equivalente al opcode
+                     * bytecode unwrap.
+                     *
+                     * Emit:
+                     *   mov rax, [src_slot]
+                     *   test rax, rax
+                     *   jne ok
+                     *   mov rcx, proc; mov rdx, FATAL_NULL_POINTER;
+                     *   mov r8, msg_ptr (literal "unwrap on null"); call throw_fatal
+                     *   ok:
+                     *   store dst <- rax
+                     *
+                     * Para simplicidad v1: NO emit el label + branch.  En su
+                     * lugar, llamar a un helper inline vrt_unwrap que hace
+                     * el null check + throw.  Eso es 1 call vs ~6 instrs y
+                     * mantiene el codigo del JIT mas compacto.  Como vrt_unwrap
+                     * no existe, fallback a una secuencia simple:
+                     *   load src -> rax
+                     *   test rax, rax
+                     *   jne ok
+                     *   <call throw_fatal>
+                     *   ok: store dst <- rax
+                     */
+                    case ir::IrOp::UNWRAP: {
+                        if (ins.dst == ir::IR_NO_VALUE || ins.operands.empty()) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "UNWRAP: operandos invalidos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const uint64_t throw_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->throw_fatal) : 0;
+                        if (throw_addr == 0) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "runtime->throw_fatal no resuelto");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        /* load src -> RAX */
+                        load_op(mf, ins.operands[0], MReg::RAX);
+                        /* test rax, rax (sets ZF=1 si rax==0) */
+                        mf.blocks.back().instrs.push_back(MInstr::make_binary(
+                            MOp::TEST,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_reg(MReg::RAX), {}));
+                        /* JNE ok (saltar al store_op si != 0).  Asignamos
+                         * un nuevo label local a este block. */
+                        const MLabelId ok_lbl = mf.new_label();
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jcc(MCond::NE, ok_lbl));
+                        /* throw_fatal(proc, FATAL_NULL_POINTER=1, msg_ptr_0).
+                         * msg=0 es valido (throw_fatal default a "unwrap"). */
+                    #if defined(_WIN32)
+                        const MReg targ0 = MReg::RCX, targ1 = MReg::RDX, targ2 = MReg::R8;
+                    #else
+                        const MReg targ0 = MReg::RDI, targ1 = MReg::RSI, targ2 = MReg::RDX;
+                    #endif
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(targ0), MOperand::make_reg(MReg::RBX)));
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(targ1),
+                            MOperand::make_imm32(static_cast<int32_t>(VESTA_FATAL_NULL_POINTER))));
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(targ2),
+                            MOperand::make_imm32(0)));
+                        const uint32_t fn_idx = mf.intern_imm64(throw_addr);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(fn_idx)));
+                        {
+                            MInstr ic;
+                            ic.op = MOp::CALL;
+                            ic.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(ic);
+                            mf.blocks.back().instrs.push_back(ic);
+                        }
+                        /* ok: label */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_label_def(ok_lbl));
+                        /* Tras el branch, RAX (cargado al principio) es el
+                         * valor unwrapped.  Store al dst. */
+                        store_op(mf, ins.dst, MReg::RAX);
+                        break;
+                    }
+
+                    /* SETSTATIC: cls->static_data + offset = val.
+                     *   mov rax, [cls_slot]
+                     *   mov rax, [rax + STATIC_DATA_OFFSET]
+                     *   mov rcx, [val_slot]
+                     *   mov [rax + offset], rcx
+                     */
+                    case ir::IrOp::SETSTATIC: {
+                        if (ins.operands.size() < 2) {
+                            warn_unsupported(ins.op, ins.source_line,
+                                "SETSTATIC: requiere 2 operandos");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back(
+                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        load_op(mf, ins.operands[0], MReg::RAX);  /* cls */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_mem(MReg::RAX, VESTA_CLASSINFO_STATIC_DATA_OFFSET)));
+                        load_op(mf, ins.operands[1], SCRATCH_B);  /* val (RCX) */
+                        const int32_t off = static_cast<int32_t>(ins.imm);
+                        mf.blocks.back().instrs.push_back(MInstr::make_binary(MOp::MOV,
+                            MOperand::make_mem(MReg::RAX, off),
+                            MOperand::make_reg(SCRATCH_B), {}));
+                        break;
+                    }
+
                     default:
                         /* Op no soportada en v1.  Marcar como unsupported
                          * y emitir INT3 para que la ejecucion crashee
