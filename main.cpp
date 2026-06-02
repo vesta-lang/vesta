@@ -424,6 +424,12 @@ int main(int argc, char *argv[]) {
         jit::g_jit_disasm = true;
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;
+    /* Sprint string-perf-6: --stats o --jit-stats activan el counter MIPS
+     * per-block en JIT.  Sin estos flags el JIT corre sin overhead de
+     * instrumentacion (35-50% mas rapido en hot loops con muchos bloques). */
+    if (result.count("stats") || jit_stats_requested) {
+        jit::g_jit_emit_instr_counter = true;
+    }
 
     if (result.count("help")) {
         vesta::scout() << options.help() << std::endl;

@@ -54,6 +54,12 @@ namespace jit {
      */
     bool     g_jit_warn_unsupported  = false;
     bool     g_jit_disasm            = false;
+    /* Sprint string-perf-6 (2026-06-02): emit del MIPS counter per-block
+     * en el JIT.  Default OFF porque cuesta ~3ns por block ejecutado;
+     * en hot loops con muchos bloques (e.g. bench_branch_unpredict con
+     * 13 blocks/iter) el overhead puede llegar al 50%.  Solo se activa
+     * cuando el usuario pide --stats o VESTA_JIT_STATS=1. */
+    bool     g_jit_emit_instr_counter = false;
     uint64_t g_jit_compiled_count    = 0;
     uint64_t g_jit_unsupported_count = 0;
     uint64_t g_jit_no_ir_count       = 0;
@@ -80,6 +86,12 @@ namespace jit {
             const char *dis = std::getenv("VESTA_JIT_DISASM");
             if (dis && dis[0] != '\0' && dis[0] != '0') {
                 g_jit_disasm = true;
+            }
+            /* VESTA_JIT_STATS=1 -> emit del MIPS counter per-block (opt-in
+             * porque cuesta ~3ns/block; en hot loops el overhead es alto). */
+            const char *stats = std::getenv("VESTA_JIT_STATS");
+            if (stats && stats[0] != '\0' && stats[0] != '0') {
+                g_jit_emit_instr_counter = true;
             }
         }
 
@@ -353,8 +365,10 @@ namespace jit {
          * referencia al scheduler estable durante su vida; su counter
          * vive en una addr fija.  Embebemos directo como imm64 en el
          * codigo emitido. */
-        mc_opts.jit_instr_counter_addr =
-            reinterpret_cast<uint64_t>(&proc_for_read->scheduler.profiler_jit_instr_counter);
+        /* Sprint string-perf-6: counter solo se emite si --stats / VESTA_JIT_STATS=1. */
+        mc_opts.jit_instr_counter_addr = g_jit_emit_instr_counter
+            ? reinterpret_cast<uint64_t>(&proc_for_read->scheduler.profiler_jit_instr_counter)
+            : 0;
         /* Resolver user-fns: para evitar recursion arbitraria con cycles,
          * usamos cache global g_eager_cache + resolver simple no-recursive
          * (intenta lookup en cache; si no, intenta eager compile de la
@@ -997,8 +1011,10 @@ namespace jit {
             if (off64  >= INT32_MIN && off64  <= INT32_MAX) exc_off       = static_cast<int32_t>(off64);
             if (free64 >= INT32_MIN && free64 <= INT32_MAX) exc_free_off  = static_cast<int32_t>(free64);
         }
-        const uint64_t jit_counter_addr = reinterpret_cast<uint64_t>(
-            &vm->scheduler.profiler_jit_instr_counter);
+        /* Sprint string-perf-6: counter solo se emite si --stats / VESTA_JIT_STATS=1. */
+        const uint64_t jit_counter_addr = g_jit_emit_instr_counter
+            ? reinterpret_cast<uint64_t>(&vm->scheduler.profiler_jit_instr_counter)
+            : 0;
 
         /* Llamar a eager_compile_function que ya hace el trabajo
          * completo: construye el resolver recursivo, registra en

@@ -162,6 +162,104 @@ static bool is_pure(IrOp op) {
     return !is_side_effecting(op);
 }
 
+/**
+ * @brief Sprint mem-perf string_hot (2026-06-02): ops "alloc-pure"
+ * hoistables por LICM.
+ *
+ * Algunas operaciones de strings (STRMAKE, STRCAT, STRINTERN, STRCONV,
+ * STRRESERVE) son side-effecting (alocan en GcHeap) PERO su semantica
+ * solo depende del CONTENIDO de los operandos.  Es decir, dos invocaciones
+ * con los mismos operandos producen StringObjects con identical bytes;
+ * solo difieren en el handle (GcHandle es opaco al programador y los
+ * builtins de string tipo STRLEN/STRCMP/STRRAW/STRGETBYTES operan sobre
+ * bytes, no comparan handles).
+ *
+ * Por tanto LICM puede hoistar estas ops cuando sus operandos son
+ * loop-invariant.  Beneficio masivo en patrones como
+ *
+ *   while (i < N) {
+ *       string s = base + suffix;     // STRCAT con bases invariant
+ *       if (str_equals(s, "lit")) {   // STRMAKE "lit" invariant
+ *           ...
+ *       }
+ *   }
+ *
+ * donde la version sin hoist hace N allocs de ROPEs identicos; con hoist
+ * 1 sola alloc.  El bench string_hot pasa de 393 ms a sub-100 ms en interp.
+ *
+ * NO incluye STRCMP/STRLEN/STRRAW/STRGETBYTES/STRHASH (esos NO alocan;
+ * ya son @c is_pure y LICM los toma).  NO incluye STRFLAT/STRFINALIZE
+ * (mutan estructuras compartidas).
+ */
+static bool is_licm_hoistable_alloc(IrOp op) {
+    switch (op) {
+        // STRCAT/STRINTERN/STRCONV/STRFLAT operan SOBRE HANDLES (GcHandles),
+        // no leen memoria mutable; alocacion idempotente con resultado
+        // content-equal por args.  Safe para hoist.
+        case IrOp::STRCAT:
+        case IrOp::STRINTERN:
+        case IrOp::STRCONV:
+        case IrOp::STRRESERVE:
+            return true;
+        // STRMAKE requiere chequeo extra (ver @c strmake_reads_immutable).
+        case IrOp::STRMAKE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief Verifica si el vm_addr operand de un STRMAKE viene de
+ * memoria INMUTABLE (STR_LIT_ADDR -> static_data).
+ *
+ * Sprint string-perf-2 bug fix (2026-06-02): LICM solo puede hoistar
+ * STRMAKE si el operand vm_addr apunta a memoria que NO muta dentro
+ * del loop.  STR_LIT_ADDR retorna un offset al static_data del modulo
+ * (read-only por convencion).  Cualquier otro origen (ALLOCA, malloc,
+ * field load, etc.) puede ser mutable.
+ *
+ * Tracing simple: busca el IrOp que produce @p vm_addr.  Si es
+ * STR_LIT_ADDR, safe.  Si es ADD entre STR_LIT_ADDR y CONST (offset
+ * dentro del bloque literal), tambien safe.  Otros casos -> unsafe.
+ */
+static bool strmake_reads_immutable(const IrFunction &fn, IrValueId vm_addr) {
+    if (vm_addr == IR_NO_VALUE || vm_addr >= fn.values.size()) return false;
+    // Buscar el IrOp que define vm_addr.
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.dst != vm_addr) continue;
+            switch (ins.op) {
+                case IrOp::STR_LIT_ADDR:
+                    return true;
+                case IrOp::ADD:
+                case IrOp::SUB: {
+                    // ADD/SUB de STR_LIT_ADDR + const -> tambien immutable.
+                    if (ins.operands.size() != 2) return false;
+                    // Recurse en operand[0] (asumiendo que es la base ptr).
+                    if (strmake_reads_immutable(fn, ins.operands[0])) {
+                        // operand[1] debe ser CONST (offset literal).
+                        IrValueId off = ins.operands[1];
+                        if (off < fn.values.size() && fn.values[off].is_const) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                case IrOp::BITCAST:
+                case IrOp::MOV:
+                    if (ins.operands.size() == 1) {
+                        return strmake_reads_immutable(fn, ins.operands[0]);
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        }
+    }
+    return false;
+}
+
 // =========================================================================
 //  Pase DCE (Dead Code Elimination)
 // =========================================================================
@@ -433,6 +531,292 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn) {
 }
 
 //==============================================================================
+//  Sprint string-perf-8 (2026-06-02): ir_pass_promote_local_allocas
+//
+//  Promueve ALLOCAs LOCALES (no escapan al interp, no se pasan a CALL*,
+//  no se almacenan en memoria heap) a `host_alloca=true`.  Esto permite
+//  que el JIT emita `sub rsp, N` en host stack y los LOAD/STORE
+//  derivados usen `mov [rbp+offset]` nativo (1 instr) en lugar del
+//  inline page cache hit + fallback runtime call (~10 instr).
+//
+//  Caso tipico: struct value-type local (e.g. `Vec3 v = {1,2,3};` con
+//  field access en hot loop).  bench_struct_field paga ~10 instrs por
+//  cada `v.x` o `v.x = ...`; tras la promocion, 1 instr.
+//
+//  Algoritmo:
+//    1. Recolectar ALLOCAs candidatas (no `host_alloca` ya, dst valido).
+//    2. Por cada candidate, calcular el set transitivo `derived` via
+//       forward-flow desde su dst a traves de ADD/SUB/BITCAST/MOV/etc.
+//    3. Por cada uso del candidate o sus derivados, clasificar:
+//       - SAFE: LOAD/STORE addr/ADD/SUB/CMP/BITCAST/MOV/CAST/etc.
+//       - UNSAFE: CALL*/RET/THROW/TAILCALL si operand esta en derived;
+//         STORE val (no addr) en derived implica escape.
+//    4. Si TODOS los usos son SAFE, set host_alloca=true.
+//
+//  Diferencias con `ir_pass_promote_callned_allocas`:
+//    - Aquel promueve para CALLN nativos (host_ptr REQUERIDO para
+//      pasarlo a la fn nativa).  Este promueve por OPORTUNIDAD (host
+//      stack es mas rapido que VM stack en JIT).
+//    - Aquel marca ALLOCAs que ALCANZAN un CALLN.  Este marca ALLOCAs
+//      que NO escapan a ningun sitio.
+//==============================================================================
+
+bool ir_pass_promote_local_allocas(IrFunction &fn) {
+    if (fn.is_native) return false;
+    if (fn.values.empty()) return false;
+
+    /* Step 1: identificar ALLOCAs candidatas (no host_alloca ya). */
+    std::vector<IrValueId> candidates;
+    candidates.reserve(8);
+    for (const auto &blk : fn.blocks) {
+        for (const auto &ins : blk.instrs) {
+            if (ins.op == IrOp::ALLOCA
+             && ins.dst != IR_NO_VALUE
+             && !ins.host_alloca) {
+                candidates.push_back(ins.dst);
+            }
+        }
+    }
+    if (candidates.empty()) return false;
+
+    /* Step 2: forward-flow del conjunto "derivado" desde TODAS las
+     * ALLOCAs candidatas.  Mantenemos una map vid -> origen (uno de los
+     * candidates) para que el escape de UN candidato no contamine los
+     * otros.
+     *
+     * Simplificacion: usamos un solo set "all_derived" + map dst->src.
+     * Si un dst tiene multiple sources (PHI con args de distintos
+     * candidates), conservativo: marcamos AMBOS como unsafe. */
+    std::vector<int8_t> derived_from(fn.values.size(), -1);  /* -1 = no, >=0 = idx en candidates */
+    std::vector<bool>   ambiguous(fn.values.size(), false);  /* derivado de >1 candidate */
+
+    auto set_derived = [&](IrValueId v, int8_t origin) {
+        if (v >= fn.values.size()) return false;
+        if (derived_from[v] == -1) {
+            derived_from[v] = origin;
+            return true;
+        }
+        if (derived_from[v] != origin) {
+            ambiguous[v] = true;
+        }
+        return false;
+    };
+    /* Seed: cada candidate es derived from itself. */
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        set_derived(candidates[i], static_cast<int8_t>(i & 0x7F));
+    }
+
+    /* Propagacion forward.  Cota dura 16 iter para convergencia. */
+    bool changed = true;
+    int it = 16;
+    while (changed && it-- > 0) {
+        changed = false;
+        for (const auto &blk : fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size()) continue;
+                if (derived_from[ins.dst] >= 0) continue;  /* ya marcado */
+                auto from_op = [&](IrValueId v) -> int {
+                    if (v == IR_NO_VALUE || v >= fn.values.size()) return -1;
+                    return derived_from[v];
+                };
+                switch (ins.op) {
+                    case IrOp::ADD: case IrOp::SUB:
+                    case IrOp::BITCAST: case IrOp::MOV:
+                    case IrOp::CAST: case IrOp::SEXT:
+                    case IrOp::ZEXT: case IrOp::TRUNC:
+                        for (auto opv : ins.operands) {
+                            int from = from_op(opv);
+                            if (from >= 0) {
+                                if (set_derived(ins.dst, static_cast<int8_t>(from)))
+                                    changed = true;
+                                break;
+                            }
+                        }
+                        break;
+                    case IrOp::PHI:
+                        for (const auto &pa : ins.phi_args) {
+                            int from = from_op(pa.value);
+                            if (from >= 0) {
+                                if (set_derived(ins.dst, static_cast<int8_t>(from)))
+                                    changed = true;
+                                break;
+                            }
+                        }
+                        break;
+                    default: break;
+                }
+            }
+        }
+    }
+
+    /* Step 3: clasificar usos.  Para cada candidate, escape=true si
+     * cualquier uso del candidate o sus derivados es UNSAFE.
+     *
+     * UNSAFE ops:
+     *   - CALL/CALLVIRT/CALLM/CALLN/CALLIND/CALLCLOSURE: cualquier operand
+     *     que sea derived es escape (el callee puede ser interp).
+     *   - RET/THROW/TAILCALL: cualquier operand derived es escape.
+     *   - STORE: si el VAL (operands[0]) es derived (pero NO el addr en
+     *     operands[1]), escapa a memoria fuera del candidato.  Si addr
+     *     ES derived, OK (es access local).
+     *
+     * SAFE ops sobre derived:
+     *   - LOAD addr=derived: OK (lee del slot local).
+     *   - STORE addr=derived val=non-derived: OK (escribe al slot local).
+     *   - ADD/SUB/BITCAST/MOV/CAST/SEXT/ZEXT/TRUNC/PHI: ya tracked.
+     *   - CMP: read-only.
+     *   - ALLOCA itself: el propio seed.
+     */
+    /* uint8_t en lugar de bool para evitar std::vector<bool>::reference. */
+    std::vector<uint8_t> escapes(candidates.size(), 0u);
+    auto mark_escape = [&](IrValueId v) {
+        if (v == IR_NO_VALUE || v >= derived_from.size()) return;
+        if (derived_from[v] < 0) return;
+        if (ambiguous[v]) {
+            /* multiple candidates -> escapan TODOS por conservadurismo. */
+            for (size_t k = 0; k < escapes.size(); ++k) escapes[k] = 1u;
+            return;
+        }
+        int idx = derived_from[v];
+        if (idx >= 0 && static_cast<size_t>(idx) < escapes.size()) {
+            escapes[idx] = 1u;
+        }
+    };
+
+    auto is_derived = [&](IrValueId v) -> bool {
+        if (v == IR_NO_VALUE || v >= derived_from.size()) return false;
+        return derived_from[v] >= 0;
+    };
+
+    /* Whitelist de SAFE ops: solo estas pueden tener operands derived
+     * sin que el ptr "escape" del alcance JIT-local.  Cualquier OTRA op
+     * (RAW_ASM, CALL*, GC_*, FINDCLASS, etc.) se trata como UNSAFE por
+     * defecto (los operands derived marcan escape). */
+    auto is_safe_op = [](IrOp op) -> bool {
+        switch (op) {
+            /* ALLOCA: seed.  No escapa por si misma. */
+            case IrOp::ALLOCA:
+            /* Aritmetica entera: produce nuevo valor, tracked via
+             * derived_from. */
+            case IrOp::ADD: case IrOp::SUB: case IrOp::MUL:
+            case IrOp::DIV: case IrOp::MOD: case IrOp::NEG:
+            case IrOp::AND: case IrOp::OR:  case IrOp::XOR: case IrOp::NOT:
+            case IrOp::SHL: case IrOp::SHR: case IrOp::SAR:
+            /* Casts: forward. */
+            case IrOp::BITCAST: case IrOp::MOV:
+            case IrOp::CAST: case IrOp::SEXT:
+            case IrOp::ZEXT: case IrOp::TRUNC:
+            /* CMP: read-only. */
+            case IrOp::CMP_EQ: case IrOp::CMP_NE:
+            case IrOp::CMP_LT: case IrOp::CMP_GT:
+            case IrOp::CMP_LE: case IrOp::CMP_GE:
+            case IrOp::CMP_ULT: case IrOp::CMP_UGT:
+            case IrOp::CMP_ULE: case IrOp::CMP_UGE:
+            /* Control flow: no escapa el ptr. */
+            case IrOp::BR: case IrOp::BR_COND:
+            case IrOp::NOP: case IrOp::CONST:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    for (const auto &blk : fn.blocks) {
+        for (const auto &ins : blk.instrs) {
+            if (ins.op == IrOp::LOAD) {
+                /* LOAD addr=operands[0]: addr derived OK (lee slot).
+                 * dst NO se considera derived del candidate (es el
+                 * valor cargado de memoria, no el ptr). */
+                continue;
+            }
+            if (ins.op == IrOp::STORE) {
+                /* STORE val=operands[0], addr=operands[1].
+                 * addr derived -> OK (escribe al slot).
+                 * val derived -> ESCAPA (escribe el PTR a memoria). */
+                if (ins.operands.size() >= 2 && is_derived(ins.operands[0])) {
+                    mark_escape(ins.operands[0]);
+                }
+                continue;
+            }
+            if (ins.op == IrOp::PHI) {
+                /* PHI: si el dst NO es derived pero phi_args SI lo son,
+                 * los args "salen" del dominio local -> escape. */
+                if (ins.dst < derived_from.size()
+                 && derived_from[ins.dst] < 0) {
+                    for (const auto &pa : ins.phi_args) mark_escape(pa.value);
+                }
+                continue;
+            }
+            if (is_safe_op(ins.op)) continue;
+
+            /* UNSAFE op (CALL*, RAW_ASM, GC_*, FINDCLASS, RET, THROW, ...).
+             * Cualquier operand derived escapa. */
+            for (auto opv : ins.operands) mark_escape(opv);
+            for (const auto &pa : ins.phi_args) mark_escape(pa.value);
+        }
+    }
+
+    /* Step 4: promover ALLOCAs que NO escapan. */
+    bool any_promoted = false;
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (escapes[i]) continue;
+        IrValueId v = candidates[i];
+        for (auto &blk : fn.blocks) {
+            for (auto &ins : blk.instrs) {
+                if (ins.op == IrOp::ALLOCA && ins.dst == v && !ins.host_alloca) {
+                    ins.host_alloca = true;
+                    /* NO explicit_free: el JIT libera con leave/ret;
+                     * el interp con htrack + frame cleanup. */
+                    any_promoted = true;
+                    /* Propagar is_host_ptr al dst para que el dataflow
+                     * de host_in_jit del JIT lo recoja. */
+                    if (v < fn.values.size()) {
+                        fn.values[v].is_host_ptr = true;
+                    }
+                }
+            }
+        }
+    }
+    if (!any_promoted) return false;
+
+    /* Step 5: propagar is_host_ptr forward por las cadenas de derived. */
+    bool prop = true; int p_it = 16;
+    while (prop && p_it-- > 0) {
+        prop = false;
+        for (auto &blk : fn.blocks) {
+            for (auto &ins : blk.instrs) {
+                if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size()) continue;
+                auto &dv = fn.values[ins.dst];
+                if (dv.is_host_ptr) continue;
+                bool any_host = false;
+                auto chk = [&](IrValueId v) {
+                    if (v != IR_NO_VALUE && v < fn.values.size()
+                     && fn.values[v].is_host_ptr) any_host = true;
+                };
+                switch (ins.op) {
+                    case IrOp::ADD: case IrOp::SUB:
+                    case IrOp::BITCAST: case IrOp::MOV:
+                    case IrOp::CAST: case IrOp::SEXT:
+                    case IrOp::ZEXT: case IrOp::TRUNC:
+                        for (auto opv : ins.operands) { chk(opv); if (any_host) break; }
+                        break;
+                    case IrOp::PHI:
+                        for (const auto &pa : ins.phi_args) { chk(pa.value); if (any_host) break; }
+                        break;
+                    default: break;
+                }
+                if (any_host) {
+                    dv.is_host_ptr = true;
+                    prop = true;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+
+//==============================================================================
 //  Pase ir_pass_promote_local_raw_alloc
 //
 //  Convierte `malloc(N_const) + ... + free(p)` locales sin escape a un
@@ -630,15 +1014,22 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
             fn.values[c.dst].is_host_ptr = true;
         }
 
-        // Marcar los RAW_FREE para eliminacion completa.  Usamos un sentinel
-        // (op=NOP con operands vacios y dst=IR_NO_VALUE).  Despues compactamos.
-        for (auto &fs : free_sites) {
-            auto &free_ins = fn.blocks[fs.first].instrs[fs.second];
-            free_ins.op = IrOp::NOP;
-            free_ins.operands.clear();
-            free_ins.dst = IR_NO_VALUE;
-            free_ins.imm = 0;
-        }
+        // Sprint mem-loop-fix (2026-06-02): PRESERVAR los RAW_FREE
+        // explicitos en lugar de eliminarlos.  Bottleneck encontrado
+        // en bench mem_malloc_free: el path original eliminaba RAW_FREE
+        // y dependia de `host_alloca_release_all` al RET del frame,
+        // pero si el ALLOCA esta DENTRO de un loop (inlineado o no),
+        // el vector @c host_allocas del frame acumula N punteros
+        // tracked sin liberar -- O(N) memoria + O(N) cleanup al RET.
+        //
+        // Con el RAW_FREE preservado, el alloc/free emparejan
+        // correctamente DENTRO de cada iteracion del loop.  El ALLOCA
+        // se marca con @c host_alloca_explicit_free=true para que el
+        // bytecode emit del interp SKIPE el `htrack` (porque el free
+        // explicito ya libera el ptr en su sitio).
+        alloc_ins.host_alloca_explicit_free = true;
+        // NO eliminar los RAW_FREE: dejarlos para que el bytecode emit
+        // los convierta en `free` opcodes correctamente.
 
         changed = true;
     }
@@ -2040,6 +2431,16 @@ bool ir_pass_dse(IrFunction &fn) {
                 case IrOp::NEWOBJ: case IrOp::GC_ALLOC:
                 case IrOp::RAW_ALLOC: case IrOp::RAW_FREE:
                 case IrOp::THROW: case IrOp::TRYENTER: case IrOp::TRYLEAVE:
+                // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE/STRCAT/
+                // STRCONV LEEN memoria en runtime (STRMAKE lee vm_mem para
+                // construir el StringObject; STRCAT puede materializar bytes;
+                // STRCONV lee el src y escribe el converted).  Sin invalidar
+                // last_store_val, DSE elimina STOREs previos pensando que
+                // nadie los lee, pero STRMAKE LOS LEE en runtime.
+                // Bug reproducido en patron `buf[i]=X; STRMAKE(buf); buf[i]=Y;
+                // STRMAKE(buf)`: el primer set de stores se eliminaba.
+                case IrOp::STRMAKE: case IrOp::STRCAT: case IrOp::STRCONV:
+                case IrOp::STRFLAT: case IrOp::STRINTERN: case IrOp::STRRESERVE:
                     last_store_idx.clear();
                     last_store_val.clear();
                     break;
@@ -3183,10 +3584,23 @@ bool ir_pass_licm(IrFunction &fn) {
 
         /* Helper: instr es candidato para mover? */
         auto is_invariant_candidate = [&](const IrInstr &ins) -> bool {
-            if (!is_pure(ins.op)) return false;
+            /* Sprint mem-perf string_hot: anyadir STRMAKE/STRCAT/STRINTERN/
+             * STRCONV/STRRESERVE como hoistables a pesar de side-effecting.
+             * El alloc-identity no es observable; el contenido si.  Ver
+             * @c is_licm_hoistable_alloc. */
+            if (!is_pure(ins.op) && !is_licm_hoistable_alloc(ins.op)) return false;
             if (ins.op == IrOp::PHI) return false;
             if (ins.preserve) return false;
             if (ins.dst == IR_NO_VALUE) return false;
+            /* Sprint string-perf-2 bug fix: STRMAKE solo es seguro hoistar
+             * si su vm_addr operand apunta a memoria immutable (literal
+             * en static_data via STR_LIT_ADDR).  Para mutable buffers
+             * (ALLOCA + stores), hoistar = capturar bytes en momento
+             * incorrecto. */
+            if (ins.op == IrOp::STRMAKE) {
+                if (ins.operands.empty()) return false;
+                if (!strmake_reads_immutable(fn, ins.operands[0])) return false;
+            }
             /* Ops que LEEN memoria: solo hoistables si NO hay writes en el
              * loop (v1 sin alias analysis).  Conservador pero correcto. */
             switch (ins.op) {
@@ -3570,6 +3984,18 @@ static bool is_sched_barrier(IrOp op) {
         case IrOp::SETFIELD: case IrOp::ARRAY_STORE:
         case IrOp::MEMCPY:
         case IrOp::STRFINALIZE: case IrOp::GCWB_IR:
+        // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE LEE
+        // bytes desde vm_mem en runtime (via vm_addr).  Sin marcarla
+        // como barrera, el scheduler podia reordenar STOREs a vm_mem
+        // PASADO la STRMAKE, leyendo bytes stale.  Bug capturado en
+        // patron `buf[i]=X; STRMAKE(buf); buf[i]=Y; STRMAKE(buf)`
+        // donde el segundo STORE quedaba post-STRMAKE.
+        // STRCAT/STRCONV/STRFLAT NO leen vm_mem (operan sobre handles),
+        // pero pueden disparar alloc -> GC -> rearrange objects.  Mas
+        // seguro tratar TODAS las str ops alloc-side como barreras
+        // hasta confirmar safety por op.
+        case IrOp::STRMAKE: case IrOp::STRCAT: case IrOp::STRCONV:
+        case IrOp::STRFLAT: case IrOp::STRINTERN: case IrOp::STRRESERVE:
         case IrOp::FUTURE: case IrOp::AWAIT: case IrOp::FULFILL: case IrOp::REJECT:
         case IrOp::FULFILL_HLT:
         case IrOp::MSGSEND: case IrOp::MSGRECV:
@@ -3824,6 +4250,200 @@ bool ir_pass_schedule(IrFunction &fn) {
 }
 
 // =========================================================================
+//  Pase ir_pass_loop_memcpy_idiom (Sprint mem-perf 2026-06-02)
+// =========================================================================
+//
+// Reconocimiento de loop-idiom byte-a-byte de la forma:
+//
+//   while_header:
+//       %i_phi = phi.u64 [%i_init, pred]  [%i_next, body]
+//       %cond  = cmp.ult.bool %i_phi, %N_ub
+//       br.cond %cond, body, exit
+//   body:
+//       (%i_or_cast = bitcast %i_phi)?
+//       %src_p = add.ptr %src_base, %i_or_cast
+//       %dst_p = add.ptr %dst_base, %i_or_cast
+//       %v     = load.u8 %src_p
+//       store %v, %dst_p
+//       %i_next = add %i_phi, %1_const
+//       br while_header
+//
+// Lo reemplaza por una sola @c CALLN a @c vio_memcpy.  La libc nativa
+// vectoriza con SSE/AVX/AVX-512 segun la CPU, asi el copy loop se
+// acelera ~50-100x sin necesidad de SIMD codegen explicito.
+//
+// Pre-condiciones:
+//   - El bloque body tiene EXACTAMENTE los 6-7 instrs del patron.
+//   - El PHI del header solo tiene un valor de loop-carry (no PHIs
+//     multiples).
+//   - %i_init es CONST 0 (o cualquier const; usado como offset inicial
+//     que ignoramos -- el memcpy copia [0, N)).  Por simplicidad
+//     exigimos 0.
+//   - %i_next = add %i_phi, 1 (step de 1).
+//
+// Tras el match: el body se reemplaza por `CALLN vio_memcpy(dst, src,
+// N) + br exit`.  El header sigue invocando body solo la primera vez;
+// la siguiente iteracion el cond falla porque body cambio el flow.
+// Mas correcto: el body NO retorna a header (br exit directo), asi
+// el loop nunca itera.
+bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
+    bool changed = false;
+    if (fn.is_native) return false;
+
+    for (size_t hi = 0; hi < fn.blocks.size(); ++hi) {
+        IrBlock &header = fn.blocks[hi];
+        // Header debe tener exactamente: 1 phi, 1 cmp, 1 br.cond.
+        if (header.instrs.size() != 3) continue;
+        const IrInstr &phi    = header.instrs[0];
+        const IrInstr &cmp_in = header.instrs[1];
+        const IrInstr &brc    = header.instrs[2];
+        if (phi.op != IrOp::PHI) continue;
+        if (phi.phi_args.size() != 2) continue;
+        if (cmp_in.op != IrOp::CMP_ULT && cmp_in.op != IrOp::CMP_LT) continue;
+        if (brc.op != IrOp::BR_COND) continue;
+        if (brc.operands.empty() || brc.operands[0] != cmp_in.dst) continue;
+        if (cmp_in.operands.size() != 2 || cmp_in.operands[0] != phi.dst) continue;
+        IrValueId v_N = cmp_in.operands[1];
+        IrBlockId body_id = brc.target_block;
+        IrBlockId exit_id = brc.false_block;
+        if (body_id >= fn.blocks.size() || exit_id >= fn.blocks.size()) continue;
+
+        // Identificar el predecessor (entry) y el body en los phi_args.
+        IrValueId v_init = IR_NO_VALUE;
+        IrBlockId pred_id = IR_NO_VALUE;
+        IrValueId v_next = IR_NO_VALUE;
+        IrBlockId loop_pred = IR_NO_VALUE;
+        for (const auto &pa : phi.phi_args) {
+            if (pa.block == body_id) { v_next = pa.value; loop_pred = pa.block; }
+            else                      { v_init = pa.value; pred_id   = pa.block; }
+        }
+        if (v_init == IR_NO_VALUE || v_next == IR_NO_VALUE) continue;
+
+        // %i_init debe ser CONST 0.
+        if (v_init >= fn.values.size() || !fn.values[v_init].is_const) continue;
+        if (fn.values[v_init].const_val != 0) continue;
+
+        // Body matching.
+        IrBlock &body = fn.blocks[body_id];
+        // Patron flexible: 5 o 6 instrs (con o sin bitcast).
+        if (body.instrs.size() < 5 || body.instrs.size() > 7) continue;
+        // Ultima instr debe ser br header.
+        const IrInstr &body_term = body.instrs.back();
+        if (body_term.op != IrOp::BR) continue;
+        if (body_term.target_block != header.id) continue;
+
+        // Buscar: load.u8, store, add (= i+1).
+        IrValueId v_src_p = IR_NO_VALUE, v_dst_p = IR_NO_VALUE;
+        IrValueId v_loaded = IR_NO_VALUE;
+        IrValueId v_inc_step = IR_NO_VALUE;
+        IrValueId v_index_used = IR_NO_VALUE;
+        bool found_load = false, found_store = false, found_inc = false;
+        IrValueId v_src_base = IR_NO_VALUE, v_dst_base = IR_NO_VALUE;
+        for (const auto &ins : body.instrs) {
+            if (ins.op == IrOp::LOAD && ins.type == IrType::U8
+             && ins.operands.size() == 1) {
+                v_src_p  = ins.operands[0];
+                v_loaded = ins.dst;
+                found_load = true;
+            } else if (ins.op == IrOp::STORE && ins.operands.size() >= 2) {
+                if (ins.operands[0] != v_loaded) { found_store = false; break; }
+                v_dst_p = ins.operands[1];
+                found_store = true;
+            } else if (ins.op == IrOp::ADD && ins.operands.size() == 2
+                    && ins.dst == v_next) {
+                if (ins.operands[0] != phi.dst) continue;
+                v_inc_step = ins.operands[1];
+                found_inc = true;
+            } else if (ins.op == IrOp::ADD && ins.operands.size() == 2) {
+                // posible add.ptr base + index -- lo procesamos despues.
+            } else if (ins.op == IrOp::BITCAST && ins.operands.size() == 1
+                    && ins.operands[0] == phi.dst) {
+                // ok, lo trataremos como un alias del index.
+            } else if (ins.op == IrOp::BR) {
+                // terminator OK
+            } else {
+                // instr inesperada -> rechazar.
+                found_load = false;
+                break;
+            }
+        }
+        if (!found_load || !found_store || !found_inc) continue;
+
+        // v_inc_step debe ser const 1.
+        if (v_inc_step >= fn.values.size() || !fn.values[v_inc_step].is_const) continue;
+        if (fn.values[v_inc_step].const_val != 1) continue;
+
+        // Identificar bases via los ADDs.  Cada add.ptr produce v_src_p o v_dst_p.
+        // operands son (base, index).  Index debe ser phi.dst o un bitcast de phi.dst.
+        auto resolve_base = [&](IrValueId pv) -> IrValueId {
+            for (const auto &ins : body.instrs) {
+                if (ins.op == IrOp::ADD && ins.dst == pv
+                 && ins.operands.size() == 2) {
+                    IrValueId idx = ins.operands[1];
+                    bool ok = (idx == phi.dst);
+                    if (!ok) {
+                        // chequear bitcast
+                        for (const auto &b2 : body.instrs) {
+                            if (b2.op == IrOp::BITCAST && b2.dst == idx
+                             && !b2.operands.empty() && b2.operands[0] == phi.dst) {
+                                ok = true; break;
+                            }
+                        }
+                    }
+                    if (ok) return ins.operands[0];
+                }
+            }
+            return IR_NO_VALUE;
+        };
+        v_src_base = resolve_base(v_src_p);
+        v_dst_base = resolve_base(v_dst_p);
+        if (v_src_base == IR_NO_VALUE || v_dst_base == IR_NO_VALUE) continue;
+
+        // OK match completo.  Reemplazar el body por:
+        //   CALLN vio_memcpy(dst, src, N) + br exit
+        IrInstr call_ins;
+        call_ins.op = IrOp::CALLN;
+        call_ins.type = IrType::I64;
+        call_ins.dst = IR_NO_VALUE;
+        call_ins.func_name = "stdlib/native/io/vesta_io:vio_memcpy";
+        call_ins.operands = { v_dst_base, v_src_base, v_N };
+        call_ins.source_line = body.instrs.front().source_line;
+
+        IrInstr br_exit;
+        br_exit.op = IrOp::BR;
+        br_exit.target_block = exit_id;
+        br_exit.dst = IR_NO_VALUE;
+
+        body.instrs.clear();
+        body.instrs.push_back(call_ins);
+        body.instrs.push_back(br_exit);
+
+        // Fix succs/preds: body ya no apunta a header.
+        body.succs.clear();
+        body.succs.push_back(exit_id);
+        // Quitar body de header.preds (mantener el original pred).
+        auto &hpreds = header.preds;
+        hpreds.erase(std::remove(hpreds.begin(), hpreds.end(), body_id),
+                     hpreds.end());
+        // Anyadir body a exit.preds si no esta.
+        IrBlock &exit_blk = fn.blocks[exit_id];
+        if (std::find(exit_blk.preds.begin(), exit_blk.preds.end(), body_id)
+            == exit_blk.preds.end()) {
+            exit_blk.preds.push_back(body_id);
+        }
+        // Quitar el phi_arg de body en el PHI del header (ahora 1-arg).
+        IrInstr &header_phi = fn.blocks[hi].instrs[0];
+        header_phi.phi_args.erase(
+            std::remove_if(header_phi.phi_args.begin(), header_phi.phi_args.end(),
+                [body_id](const IrPhiArg &pa) { return pa.block == body_id; }),
+            header_phi.phi_args.end());
+
+        changed = true;
+    }
+    return changed;
+}
+
+// =========================================================================
 //  Punto de entrada principal
 // =========================================================================
 
@@ -3847,6 +4467,20 @@ void ir_optimize(IrModule &mod, OptLevel level) {
     if (level >= OptLevel::O1) {
         for (auto &fn : mod.functions) {
             if (!fn.is_native) ir_pass_promote_callned_allocas(fn);
+        }
+    }
+
+    /* Sprint string-perf-8 (2026-06-02): promueve ALLOCAs LOCALES (no
+     * escapan a CALL*, RET, THROW, etc.) a `host_alloca=true`.  El JIT
+     * emite `sub rsp, N` en host stack y los LOAD/STORE usan native mov
+     * directo (1 instr) en lugar del inline cache check (~10 instr).
+     * Skippable via VESTA_NO_PROMOTE_LOCAL_ALLOCAS=1 para A/B testing. */
+    if (level >= OptLevel::O1) {
+        const char *skip = std::getenv("VESTA_NO_PROMOTE_LOCAL_ALLOCAS");
+        if (!skip || skip[0] == '\0' || skip[0] == '0') {
+            for (auto &fn : mod.functions) {
+                if (!fn.is_native) ir_pass_promote_local_allocas(fn);
+            }
         }
     }
 

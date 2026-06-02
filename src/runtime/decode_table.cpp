@@ -2862,62 +2862,60 @@ namespace runtime {
             Assembly::Bytecode::InstrSizeMode::FIXED_1,
             nullptr, nullptr
         },
-
-        /* 0x80 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x80  fmin dst, src: FP min escalar nativo */
+        {
+            "fmin", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fmin, decode_instr_simple_mov
         },
 
-
-        /* 0x81 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x81  fmax dst, src: FP max escalar nativo */
+        {
+            "fmax", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fmax, decode_instr_simple_mov
         },
 
-        /* 0x82 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x82  ffloor dst, src: FP floor escalar nativo */
+        {
+            "ffloor", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_ffloor, decode_instr_simple_mov
         },
 
-        /* 0x83 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x83  fceil dst, src: FP ceil escalar nativo */
+        {
+            "fceil", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fceil, decode_instr_simple_mov
         },
 
-        /* 0x84 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x84  fround dst, src: FP round escalar nativo */
+        {
+            "fround", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_fround, decode_instr_simple_mov
         },
 
-        /* 0x85 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x85  ftrunc dst, src: FP trunc escalar nativo */
+        {
+            "ftrunc", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_ftrunc, decode_instr_simple_mov
         },
 
-        /* 0x86 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x86  bitg2z fX, rN: bitcast GP -> ZMM directo */
+        {
+            "bitg2z", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_bitg2z, decode_instr_simple_mov
         },
 
-        /* 0x87 */{
-            //
-            "", Assembly::Bytecode::AddressingMode::COUNT,
-            Assembly::Bytecode::InstrSizeMode::FIXED_1,
-            nullptr, nullptr
+        /* 0x87  bitz2g rN, fX: bitcast ZMM -> GP directo */
+        {
+            "bitz2g", Assembly::Bytecode::AddressingMode::REG,
+            Assembly::Bytecode::InstrSizeMode::FIXED_4,
+            exec_instr_bitz2g, decode_instr_simple_mov
         },
 
         /* 0x88 */{

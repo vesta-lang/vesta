@@ -629,7 +629,17 @@ namespace jit {
             /* MOV r64, imm64: REX.W + B8+r + imm64 */
             put8(out, rex_byte(true, 0, dst.reg));
             put8(out, 0xB8 + (dst.reg & 7));
+            const size_t imm64_pos = out.size();
             put64(out, v64);
+            /* Sprint fib-recursion: si este idx esta en self_ref_imm64_indices,
+             * registrar la posicion del imm64 emitido para que el JitCompiler
+             * pueda parchearlo con code_start tras la asignacion final. */
+            for (uint32_t sref_idx : fn.self_ref_imm64_indices) {
+                if (sref_idx == idx) {
+                    fn.self_ref_byte_offsets.push_back(imm64_pos);
+                    break;
+                }
+            }
             return;
         }
 

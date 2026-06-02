@@ -81,6 +81,16 @@ namespace jit {
     extern bool g_jit_warn_unsupported;
 
     /**
+     * @brief Sprint string-perf-6: gate del MIPS counter per-block en JIT.
+     * Default false; main.cpp lo activa cuando se pasa --stats o
+     * VESTA_JIT_STATS=1.  Sin esto el JIT no emite las 2 instrs
+     * `mov rax, imm64; add [rax], N` per block, ahorrando ~3 ns per
+     * block ejecutado.  En hot loops con muchos bloques pequenos
+     * (e.g. branch_unpredict) la diferencia llega al 30-50% del wall.
+     */
+    extern bool g_jit_emit_instr_counter;
+
+    /**
      * @brief Si true, tras cada compilacion exitosa se imprime a stderr
      *        el dump de las MInstrs generadas + el disasm hex/asm del
      *        codigo nativo via Capstone.  Activado por env var

@@ -1739,6 +1739,23 @@ namespace runtime {
      */
     void exec_instr_fnarrow(ProcessVM *vm, const DecodedInstr &instr);
 
+    /** @brief FMIN escalar (0x80): reg1 = fmin(reg1, reg2). */
+    void exec_instr_fmin(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief FMAX escalar (0x81): reg1 = fmax(reg1, reg2). */
+    void exec_instr_fmax(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief FFLOOR escalar (0x82): reg1 = floor(reg2). */
+    void exec_instr_ffloor(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief FCEIL escalar (0x83): reg1 = ceil(reg2). */
+    void exec_instr_fceil(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief FROUND escalar (0x84): reg1 = round(reg2). */
+    void exec_instr_fround(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief FTRUNC escalar (0x85): reg1 = trunc(reg2). */
+    void exec_instr_ftrunc(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief BITG2Z (0x86): bitcast GP reg -> ZMM reg (sin memoria). */
+    void exec_instr_bitg2z(ProcessVM *vm, const DecodedInstr &instr);
+    /** @brief BITZ2G (0x87): bitcast ZMM reg -> GP reg (sin memoria). */
+    void exec_instr_bitz2g(ProcessVM *vm, const DecodedInstr &instr);
+
     /**
      * @brief FMOVI: carga un inmediato IEEE 754 en un registro ZMM.
      * @param vm    Proceso virtual.

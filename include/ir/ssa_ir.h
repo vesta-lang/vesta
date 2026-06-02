@@ -737,6 +737,17 @@ namespace ir {
         /// patron `&local -> CALLN` requiere JIT activo o malloc explicito.
         bool     host_alloca = false;
 
+        /// Sprint mem-loop-fix (2026-06-02): si true en un ALLOCA con
+        /// `host_alloca=true`, indica que el RAW_FREE original SE
+        /// PRESERVO en el IR (no fue eliminado por el promote pass).
+        /// El bytecode emit del interp NO debe llamar @c htrack para
+        /// no acumular en el vector @c host_allocas del frame -- el
+        /// RAW_FREE preservado libera explicitamente el ptr en su
+        /// posicion correcta (al fin de cada iteracion, no al RET).
+        /// Resuelve el bottleneck del bench @c mem_malloc_free donde
+        /// 5M iter acumulaban 5M ptrs tracked sin liberar.
+        bool     host_alloca_explicit_free = false;
+
         IrInstr() : op(IrOp::NOP), type(IrType::VOID), dst(IR_NO_VALUE),
                     imm(0), func_ptr(IR_NO_VALUE),
                     target_block(IR_NO_BLOCK), false_block(IR_NO_BLOCK),

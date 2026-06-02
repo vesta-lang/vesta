@@ -60,6 +60,16 @@ namespace runtime {
                                        loader::StringEncoding::ASCII) noexcept;
 
     /**
+     * @brief Helper unificado para STRMAKE desde memoria VM.  Misma fast
+     * path que @c exec_instr_strmake: stack buf (<=256 B) + single-pass
+     * FNV-1a 64-bit + intern lookup-first.  Usado por @c vrt_str_make
+     * (JIT) para evitar duplicar logica y bypasear las optimizaciones.
+     */
+    gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
+                                          uint64_t vm_addr,
+                                          uint32_t byte_len) noexcept;
+
+    /**
      * @brief Materializa un StringObject ROPE/SLICE a FLAT (operacion
      * identidad si ya es FLAT).  Usado por STRRAW del JIT antes de
      * devolver el puntero host.
