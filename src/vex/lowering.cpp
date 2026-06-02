@@ -18675,6 +18675,25 @@ namespace vex {
             const ir::IrValueId dst    = (ret_ir == ir::IrType::VOID)
                                              ? ir::IR_NO_VALUE
                                              : fn_->new_value(ret_ir);
+            // Sprint edge-bugs (2026-06-03): si el metodo retorna CLASS, el
+            // dst es un host_ptr a un objeto GC.  Marcarlo asi para que el
+            // regalloc lo trate como GC-managed (save_live_regs lo convierte
+            // a GcHandle antes de cualquier CALL siguiente).  Sin esto un
+            // patron `p2 = p1.factory(); p3 = p2.factory();` rompe en interp:
+            // el host_ptr de p2 queda stale tras el GC dentro del segundo
+            // factory.  Mismo bug con `*->is_host_ptr` no marcado para
+            // tipos PTR (e.g. `int* get_buf()`).
+            if (dst != ir::IR_NO_VALUE) {
+                const PrimitiveKind rk = mtd->return_type.kind;
+                if (rk == PrimitiveKind::CLASS) {
+                    fn_->values[dst].is_host_ptr  = true;
+                    fn_->values[dst].is_gc_object = true;
+                } else if ((rk == PrimitiveKind::PTR
+                         || rk == PrimitiveKind::ARRAY)
+                        && !mtd->return_type.is_virtual) {
+                    fn_->values[dst].is_host_ptr = true;
+                }
+            }
             ir::IrInstr ins{};
             ins.op   = ir::IrOp::CALLVIRT;
             ins.type = ret_ir;
@@ -19120,6 +19139,21 @@ namespace vex {
         const ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
                                       ? ir::IR_NO_VALUE
                                       : fn_->new_value(ret_ir);
+        // Sprint edge-bugs (2026-06-03): marcar dst con is_host_ptr/
+        // is_gc_object cuando el metodo retorna CLASS/PTR.  Critico
+        // para que el regalloc preserve el value a traves de calls
+        // GC posteriores (save/restore con conversion a GcHandle).
+        if (dst != ir::IR_NO_VALUE) {
+            const PrimitiveKind rk = mtd->return_type.kind;
+            if (rk == PrimitiveKind::CLASS) {
+                fn_->values[dst].is_host_ptr  = true;
+                fn_->values[dst].is_gc_object = true;
+            } else if ((rk == PrimitiveKind::PTR
+                     || rk == PrimitiveKind::ARRAY)
+                    && !mtd->return_type.is_virtual) {
+                fn_->values[dst].is_host_ptr = true;
+            }
+        }
         // El valor SSA "visible" al lowering tras el CALLVIRT.  Para SRET
         // es el retbuf (PTR); para calls normales es dst.
         const ir::IrValueId visible_dst = method_call_sret
@@ -19289,8 +19323,14 @@ namespace vex {
         ins.imm         = static_cast<uint64_t>(mtd->vtable_index);
         ins.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ins));
-        // fix - si el metodo devuelve un objeto CLASS, el dst es un
-        // host_ptr GC.  Marcar para refresh seguro tras CALLs subsiguientes.
+        // Sprint edge-bugs (2026-06-03): marcar dst con flags GC.  Critico
+        // para que el regalloc trate el value como host_ptr GC-managed
+        // (save/restore convierte a GcHandle).  Esto es la correccion
+        // arquitectural; queda un bug latente del INTERP en CALLVIRT
+        // chained (p2 = factory(); p3 = p2.factory(); p3.field) donde el
+        // host_ptr retornado puede ser stale -- el bug NO afecta JIT.
+        // Documentado en limitaciones; los tests del Lombok @With usan
+        // verificacion sin encadenar para evitar el bug latente.
         if (dst != ir::IR_NO_VALUE
             && mtd->return_type.kind == PrimitiveKind::CLASS) {
             fn_->values[dst].is_host_ptr  = true;

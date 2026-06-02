@@ -275,8 +275,30 @@ namespace runtime {
 
         if (vm->frame_stack != nullptr) {
             loader::FrameHeader *frame = vm->frame_stack;
-            // restaurar SP al punto de entrada del frame actual para liberar su espacio
-            vm->registers.stack_pointer.qword(frame->frame_base);
+            // Sprint edge-bugs (2026-06-03): si el frame fue creado por
+            // CALLVIRT/CALLM/CALLSUPER/CALLCLOSURE (frame OOP), su push_step
+            // NO escribio el ret_addr al stack VM (optimizacion: RET detecta
+            // el match por @c RSP == frame_base - 8 y usa @c frame->return_pc
+            // cacheado).  Pero TAILCALL aqui pop ese frame y deja al next
+            // callee.  Cuando ESE callee ejecute su propio RET, leera del
+            // stack -- y el slot estaba sin inicializar, NO con el ret_addr.
+            // Resultado: el RET final salta al SENTINEL HLT (que el Loader
+            // push'eo al iniciar el proceso) y el codigo del caller original
+            // jamas continua.
+            //
+            // Fix: ANTES de pop el frame, escribir return_pc al slot
+            // [frame_base - 8] que push_step reservo pero dejo basura.
+            // Asi el callee tailcalled, al hacer su RET normal, lee el
+            // ret_addr correcto del stack.  MANTENEMOS RSP en frame_base - 8
+            // (no subir a frame_base) para que el slot del ret_addr quede
+            // por debajo del rsp del callee y NO sea sobreescrito por su
+            // enter (que push rbp en [rsp - 8] = [frame_base - 16]).
+            // Tras el ret del callee, RSP = frame_base (consumido el slot).
+            vm->vm_mem.write_u64_fast(frame->frame_base - 8, frame->return_pc);
+            // RSP queda en frame_base - 8 (no se modifica aqui).  Esto es
+            // SIMETRICO con el callvm clasico: callvm push ret_addr +
+            // rsp -= 8.  El callee_tailcalled enter/leave/ret hace el
+            // resto.
             vm->frame_stack = frame->prev; // desapilar el frame
             // Sprint MMM-ext leak-fix: TAILCALL descarta el frame actual
             // sin pasar por RET, asi que liberamos host_allocas aqui.
@@ -366,23 +388,16 @@ namespace runtime {
         const uint64_t val   = vm->registers.regs[r_src].qword();
 
         if (val == 0) {
-            // Valor nulo: lanzar NullPointerException via el mismo
-            // mecanismo que la instruccion `throw`, para que sea
-            // capturable por try/catch.  Si no hay handler en
-            // exc_frame_stack, el throw escala a error fatal del thread
-            // (THREAD_NULL_POINTER).  Esto unifica el modelo: unwrap
-            // failure y throw user-level se procesan por el mismo
-            // unwinder.
-            uint64_t ex_ptr = vm->raw_alloc.alloc(sizeof(loader::ObjectHeader));
-            if (ex_ptr != 0) {
-                auto *hdr      = reinterpret_cast<loader::ObjectHeader *>(ex_ptr);
-                hdr->class_ptr = nullptr;                    // excepcion sin ClassInfo (catch-all)
-                hdr->flags     = loader::OBJ_FLAG_RAW_OWNED;
-                hdr->hash_code = 0;
-            }
-            // Forward declaration: do_throw vive en exec_instruction_oop.cpp.
-            extern void do_throw(ProcessVM *vm, uint64_t exception_ptr);
-            do_throw(vm, ex_ptr);
+            // Sprint edge-bugs (2026-06-02): lanzar FatalError capturable.
+            // Antes: ObjectHeader con class_ptr=nullptr que el `catch (FatalError)`
+            // del usuario NUNCA matcheaba porque `is_instance_of(null, FatalError)`
+            // siempre da false.  Resultado: unwrap(None) terminaba el proceso
+            // silenciosamente sin ejecutar el catch.
+            // Solucion: usar throw_fatal con FATAL_NULL_POINTER, que el
+            // exception_runtime registra como instancia REAL de FatalError ->
+            // is_instance_of(FatalError, FatalError) == true -> catch matchea.
+            runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
+                "unwrap sobre Optional/Result/referencia null");
             return;
         }
 

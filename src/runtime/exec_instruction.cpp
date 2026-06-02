@@ -21,6 +21,7 @@
 #include "runtime/decode_instruction.h"
 #include "runtime/exception_runtime.h"
 #include "runtime/native_invoke.h"
+#include <cstdio>
 #include "runtime/host_alloca_tracker.h"  // Sprint MMM-ext leak-fix
 #include "loader/oop_types.h"
 #include "jit/auto_jit.h"             // D.5-callvm-hook: lookup_jit_code_at_pc

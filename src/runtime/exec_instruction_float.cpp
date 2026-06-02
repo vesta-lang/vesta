@@ -848,17 +848,27 @@ void exec_instr_fcmp(ProcessVM *vm, const DecodedInstr &instr) {
 
     bool zf, sf, cf;
 
+    /* Sprint edge-bugs (2026-06-02): semantica IEEE 754 correcta para
+     * unordered (NaN).  Antes el codigo emulaba x86 UCOMISD que setea
+     * ZF=1 para unordered (junto con PF=1) -- pero Vex no expone PF,
+     * asi que el frontend trataba "NaN == NaN" como TRUE (ZF=1 -> je
+     * salta a then).
+     *
+     * Fix: IEEE 754 dice TODAS las comparaciones con NaN son false
+     * EXCEPT `!=` que es true.  Para que `jmp.je` no salte erroneamente
+     * en NaN, ZF=0; SF=0 hace que `jl/jg` tampoco salten.  CF=1 marca
+     * el estado unordered (para codigo futuro que quiera detectarlo). */
     if (is_f32) {
         const float va = a.read_f32();
         const float vb = b.read_f32();
         cf = std::isnan(va) || std::isnan(vb);
-        if (cf) { zf = true; sf = false; }
+        if (cf) { zf = false; sf = false; }
         else    { zf = (va == vb); sf = (va < vb); }
     } else {
         const double va = a.read_f64();
         const double vb = b.read_f64();
         cf = std::isnan(va) || std::isnan(vb);
-        if (cf) { zf = true; sf = false; }
+        if (cf) { zf = false; sf = false; }
         else    { zf = (va == vb); sf = (va < vb); }
     }
 
