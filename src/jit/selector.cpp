@@ -4341,11 +4341,19 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        /* xor rax, rax  para limpiar bits altos antes del SETcc. */
+                        /* xor rax/rcx, ANTES de UCOMISD para no clobear
+                         * las flags que setea (ZF/PF/CF).  Si los xor
+                         * vinieran despues, la PF leida por SETNP/SETP
+                         * seria la del XOR (result=0 -> PF=1), no de
+                         * UCOMISD.  Bug capturado con bench_float_inf. */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::XOR,
                                 MOperand::make_reg(MReg::RAX),
                                 MOperand::make_reg(MReg::RAX)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::XOR,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_reg(MReg::RCX)));
                         /* Cargar ambos operandos a XMM0/XMM1. */
                         load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
@@ -4357,12 +4365,31 @@ namespace jit {
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM1),
                                 MOperand::make_reg(SCRATCH_B)));
-                        /* UCOMISD xmm0, xmm1 -> ZF/PF/CF. */
+                        /* UCOMISD xmm0, xmm1 -> ZF/PF/CF.
+                         *   unordered (NaN): ZF=1, PF=1, CF=1
+                         *   greater:         ZF=0, PF=0, CF=0
+                         *   less:            ZF=0, PF=0, CF=1
+                         *   equal:           ZF=1, PF=0, CF=0  */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::UCOMISD,
                                 MOperand::make_reg(MReg::XMM0),
                                 MOperand::make_reg(MReg::XMM1)));
-                        /* SETcc al  segun comparacion. */
+
+                        /* Sprint edge-bugs (2026-06-02): NaN-safe FCMP.
+                         * UCOMISD setea ZF=1 cuando unordered (NaN), lo
+                         * que confunde `SETE` (devuelve true) y rompe
+                         * IEEE 754 (NaN == NaN debe ser false).
+                         *
+                         * Solucion: combinar el SETcc con la PF para
+                         * distinguir ordered-equal de unordered:
+                         *   EQ:  SETNP tmp; SETE dst; AND dst, tmp   (false si NaN)
+                         *   NE:  SETP  tmp; SETNE dst; OR  dst, tmp  (true  si NaN)
+                         *   LT/GT/LE/GE: usar SETB/SETA/SETBE/SETAE.
+                         *     Esos cc devuelven false si NaN (CF=1+PF=1 -> SETB true).
+                         *     Pero IEEE dice "ordered <" false si NaN.  Necesitamos
+                         *     `SETB AND SETNP` para LT, `SETA AND SETNP` para GT, etc. */
+                        const bool is_eq = (ins.op == ir::IrOp::FCMP_EQ);
+                        const bool is_ne = (ins.op == ir::IrOp::FCMP_NE);
                         MCond cc;
                         switch (ins.op) {
                             case ir::IrOp::FCMP_EQ: cc = MCond::E;  break;
@@ -4373,12 +4400,51 @@ namespace jit {
                             case ir::IrOp::FCMP_GE: cc = MCond::AE; break;
                             default: cc = MCond::E; break;
                         }
-                        {
-                            MInstr i;
-                            i.op = MOp::SETCC;
-                            i.variant = static_cast<uint8_t>(cc);
-                            i.dst = MOperand::make_reg(MReg::RAX);
-                            mf.blocks.back().instrs.push_back(i);
+                        if (is_ne) {
+                            /* RCX = SETP (PF=1 if unordered).
+                             * RAX = SETNE.
+                             * RAX = RAX | RCX  (true si NaN o NE). */
+                            {
+                                MInstr i;
+                                i.op = MOp::SETCC;
+                                i.variant = static_cast<uint8_t>(MCond::P);
+                                i.dst = MOperand::make_reg(MReg::RCX);
+                                mf.blocks.back().instrs.push_back(i);
+                            }
+                            {
+                                MInstr i;
+                                i.op = MOp::SETCC;
+                                i.variant = static_cast<uint8_t>(MCond::NE);
+                                i.dst = MOperand::make_reg(MReg::RAX);
+                                mf.blocks.back().instrs.push_back(i);
+                            }
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::OR,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_reg(MReg::RCX)));
+                        } else {
+                            /* EQ/LT/GT/LE/GE: enmascara con SETNP para
+                             * ignorar NaN (cualquier comparacion ordered
+                             * con NaN debe dar false). */
+                            {
+                                MInstr i;
+                                i.op = MOp::SETCC;
+                                i.variant = static_cast<uint8_t>(MCond::NP);
+                                i.dst = MOperand::make_reg(MReg::RCX);
+                                mf.blocks.back().instrs.push_back(i);
+                            }
+                            {
+                                MInstr i;
+                                i.op = MOp::SETCC;
+                                i.variant = static_cast<uint8_t>(cc);
+                                i.dst = MOperand::make_reg(MReg::RAX);
+                                mf.blocks.back().instrs.push_back(i);
+                            }
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::AND,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_reg(MReg::RCX)));
+                            (void)is_eq;
                         }
                         store_op(mf, ins.dst, MReg::RAX);
                         break;

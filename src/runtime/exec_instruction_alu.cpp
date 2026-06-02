@@ -26,6 +26,9 @@
  *  - @c exec_instr_syscall / @c exec_instr_int                             : llamadas al sistema
  */
 #include "runtime/exec_instruction.h"
+#include "runtime/exception_runtime.h"
+#include <cstdio>
+#include <cstdlib>
 
 namespace runtime {
 
@@ -274,11 +277,14 @@ struct MulOp {
  * Division por cero o desbordamiento con signo establece OF y CF.
  */
 struct DivOp {
-    static constexpr bool is_compare = false; // el cociente se escribe de vuelta
+    static constexpr bool is_compare    = false; // el cociente se escribe de vuelta
+    static constexpr bool is_division   = true;  // trait detectado por compute_with_flags
 
-    /** @brief Returns a / b (quotient only; divide-by-zero must be checked by caller). */
+    /** @brief Returns a / b (quotient only; divide-by-zero must be checked by caller).
+     *  Sprint edge-bugs: guard explicito anti-UB.  La verificacion real
+     *  con throw_fatal vive en compute_with_flags antes de compute. */
     template<typename T>
-    static inline T compute(T a, T b) { return a / b; }
+    static inline T compute(T a, T b) { return (b == 0) ? T(0) : a / b; }
 
     /** @brief Sets OF/CF on divide-by-zero or IDIV INT_MIN/-1. */
     template<typename T>
@@ -450,10 +456,52 @@ struct SarOp {
  * @param  is_signed Selecciona semantica de flags con signo vs sin signo.
  * @return           El resultado calculado (mismo tipo T).
  */
+// Sprint edge-bugs (2026-06-02): detection SFINAE de Op::is_division.  Si la
+// estructura Op declara `static constexpr bool is_division = true` y el
+// divisor es cero, lanzamos FatalError capturable ANTES de tocar compute().
+// Por defecto (Op sin el trait) la rama se compila-fuera (constexpr false).
+template<typename Op, typename = void>
+struct OpIsDivision : std::false_type {};
+template<typename Op>
+struct OpIsDivision<Op, std::void_t<decltype(Op::is_division)>>
+    : std::integral_constant<bool, Op::is_division> {};
+
 template<typename T, typename Op>
 inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed) {
     using UT              = std::make_unsigned_t<T>;     // vista sin signo para verificaciones de flags a nivel de bits
-    T res                 = Op::compute(a, b);           // ejecutar la operacion
+    T res;
+    if constexpr (OpIsDivision<Op>::value) {
+        if (b == 0) {
+            // division (o modulo) por cero: lanzar FatalError capturable.
+            // throw_fatal hace longjmp al frame mas cercano con tryenter; si
+            // no hay handler activo, deja vm en estado HALT con err_thread.
+            throw_fatal(vm, FATAL_DIVISION_BY_ZERO,
+                "division (o modulo) por cero");
+            return T(0);                                  // unreachable; setea defensivo
+        }
+        if (is_signed) {
+            using ST = std::make_signed_t<T>;
+            ST sa = (ST)a;
+            ST sb = (ST)b;
+            if (sa == std::numeric_limits<ST>::min() && sb == -1) {
+                // IDIV INT_MIN / -1: desbordamiento; tratar como FATAL.
+                throw_fatal(vm, FATAL_DIVISION_BY_ZERO,
+                    "desbordamiento en division signed (INT_MIN / -1)");
+                return T(0);
+            }
+            // Sprint edge-bugs (2026-06-02): bug de signo en MOD/DIV.  Las tablas
+            // usan binary_wrapper<uint32_t, ModOp> aun para is_signed=true.
+            // Esto hacia que -7 % 3 (a=0xFFFFFFF9, b=3) computase 0 unsigned.
+            // Convencion C/x86: el signo del resultado sigue el dividendo.
+            // Para corregir, reinterpretamos los operandos como signed cuando
+            // is_signed=true y la operacion es division.
+            res = (T)Op::template compute<ST>(sa, sb);
+        } else {
+            res = Op::compute(a, b);                     // semantica unsigned
+        }
+    } else {
+        res = Op::compute(a, b);                         // ejecutar la operacion
+    }
     vm->registers.flags.bits.ZF = (res == 0);            // ZF: el resultado es cero
     constexpr int SIGN_BIT       = sizeof(T) * 8 - 1;   // indice del bit de mayor peso (signo)
     vm->registers.flags.bits.SF  = (static_cast<UT>(res) >> SIGN_BIT) & 1; // SF: bit de signo del resultado
@@ -1142,7 +1190,8 @@ void exec_instr_movc_reg(ProcessVM *vm, const DecodedInstr &instr) {
  * Division por cero: resultado = 0, CF = 1, OF = 1.
  */
 struct ModOp {
-    static constexpr bool is_compare = false; // el resultado se escribe de vuelta
+    static constexpr bool is_compare  = false; // el resultado se escribe de vuelta
+    static constexpr bool is_division = true;  // trait para compute_with_flags
 
     /** @brief Returns a % b (divide-by-zero must be checked externally; we return 0). */
     template<typename T>

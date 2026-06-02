@@ -765,8 +765,19 @@ def all_runs(cmd: list[str], env: dict | None, runs: int,
     total = max(0, warmup) + runs
     times = []
     timer = run_timed_vex if use_vex_walltime else run_timed
+    # Sprint bench-retry (2026-06-03): el subprocess puede fallar
+    # ocasionalmente por causas externas (carga del sistema, AV scan
+    # momentaneo, race con file lock).  Reintentar hasta 3 veces antes
+    # de marcar el bench como FAIL real.  Si el binario en si fuera
+    # buggy, los 3 reintentos fallarian sistematicamente; si la falla
+    # es flaky por entorno, un reintento la cubre.
+    MAX_ATTEMPTS = 3
     for i in range(total):
-        ms = timer(cmd, env=env, timeout=timeout, cwd=cwd)
+        ms = -1.0
+        for attempt in range(MAX_ATTEMPTS):
+            ms = timer(cmd, env=env, timeout=timeout, cwd=cwd)
+            if ms >= 0:
+                break
         if ms < 0:
             return []
         if i >= warmup:
@@ -1622,10 +1633,33 @@ def main() -> int:
                               "cambiar el codigo de reporte sin re-medir."))
     parser.add_argument("--no-html", action="store_true",
                         help="No generar bench_plots/index.html")
+    # Sprint bench-fair (2026-06-03): measurement methodology.
+    parser.add_argument("--fair", action="store_true", default=True,
+                        help=("FAIR MODE (default): mide wall externo para "
+                              "TODOS los lenguajes (incluye fork + runtime "
+                              "init).  Es la metrica honesta -- 'cuanto tarda "
+                              "el usuario al invocar el programa'.  Vex paga "
+                              "sus ~30ms de VM init igual que Python/Java pagan "
+                              "su startup.  Benches cortos quedan dominados "
+                              "por init y se ve realmente el coste."))
+    parser.add_argument("--unfair", dest="fair", action="store_false",
+                        help=("UNFAIR MODE (legacy): mide wall externo para "
+                              "C/C++/Python/Java pero wall INTERNO (--stats) "
+                              "para Vex.  Sobreestima Vex en benches cortos "
+                              "porque excluye sus ~30ms de VM init.  Util "
+                              "solo para diagnostico del scheduler interno."))
     args = parser.parse_args()
 
     project_root = find_project_root(Path(__file__).parent)
     info(f"project root: {C.BOLD}{project_root}{C.RESET}")
+    if args.fair:
+        info(f"measurement: {C.BOLD}{C.CYAN}FAIR{C.RESET} (wall externo "
+             f"para TODOS los lenguajes; incluye fork + runtime init).  "
+             f"Vex paga sus ~30ms de VM init igual que Python ~15ms / Java ~80ms.")
+    else:
+        info(f"measurement: {C.BOLD}{C.YELLOW}UNFAIR (legacy){C.RESET} "
+             f"-- Vex usa Wall time interno --stats (sin VM init); otros "
+             f"langs usan wall externo.  Sobreestima Vex en benches cortos.")
 
     # Sprint bench-from-json: short-circuit del flujo normal cuando el
     # usuario solo quiere re-renderizar reportes desde un JSON previo.
@@ -1803,9 +1837,11 @@ def main() -> int:
                          f"{tc[ln].label} run ({args.runs}x"
                          + (f"+{warm}W" if warm > 0 else "")
                          + ")")
-            # Sprint bench-walltime: para langs Vex usar el Wall time
-            # interno (--stats); para otros, wall externo.
-            use_vex_wt = ln in ("vex_interp", "vex_jit")
+            # Sprint bench-fair (2026-06-03): por default mode FAIR usa
+            # wall externo para TODOS los lenguajes (incluye fork + runtime
+            # init).  Mode --unfair restaura el comportamiento legacy
+            # (Vex usa --stats interno, otros wall externo).
+            use_vex_wt = (not args.fair) and ln in ("vex_interp", "vex_jit")
             with Spinner(label_run, color=tc[ln].color):
                 runs_ms = all_runs(cmd, env=env, runs=args.runs,
                                     timeout=args.timeout, cwd=cwd,

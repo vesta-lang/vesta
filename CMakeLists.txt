@@ -210,6 +210,16 @@ add_subdirectory(libs/SourceCode/keystone)
 
 
 add_executable(vm ${VM_SOURCES})
+
+# Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
+# semantica IEEE 754 estricta (NaN, Inf).  -ffast-math global asume no
+# NaN/Inf, lo que folda isnan(x) a false y rompe FCMP con NaN.
+# Override por-archivo: -fno-fast-math + -fno-finite-math-only.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
+    PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
+)
+
 target_include_directories(vm
         PRIVATE ${VM_INCLUDES}
 )
@@ -433,6 +443,11 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_coro.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_alloca_tracker.cpp
+        # Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
+        # operaciones IEEE 754 (FCMP con NaN, etc.) y NO puede usar
+        # -ffast-math (que rompe isnan/isinf + asume no NaN).  Override
+        # con flags por-archivo: -fno-fast-math + -fno-finite-math-only.
+        # set_source_files_properties debe ir DESPUES de listar las sources.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/native_callback.cpp
 
         # Distribucion - VDP protocol + mailbox + dirty tracker

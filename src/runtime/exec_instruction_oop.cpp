@@ -27,6 +27,7 @@
 #include "runtime/exception_runtime.h"
 #include "runtime/host_alloca_tracker.h"
 #include "gc/gc_heap.h"
+#include <cstdio>
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
 

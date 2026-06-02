@@ -126,6 +126,14 @@ static bool is_side_effecting(IrOp op) {
         case IrOp::CALLSUPER:  case IrOp::PROCEED:
         case IrOp::FULFILL_HLT:
         case IrOp::STRGETBYTES:
+        // Sprint edge-bugs (2026-06-02): ops que pueden lanzar FatalError
+        // capturable o disparar AV recovery.  DCE no debe eliminarlas aunque
+        // su dst quede no-usado: el side-effect (fault) es observable.  La
+        // penalizacion en perf es modesta porque mem-CSE/constant-fold ya
+        // simplifican casos seguros (e.g. DIV por constante != 0 se folde).
+        case IrOp::LOAD:
+        case IrOp::DIV: case IrOp::MOD:
+        case IrOp::FDIV:
         // raw_asm-elim wave 3: nuevos ops con efecto observable.
         case IrOp::RETHROW:         // relanza excepcion (side-effect explicito)
         case IrOp::SHARED_STAT:     // op=2 (gc_collect) dispara STW + sweep
@@ -2235,8 +2243,14 @@ bool ir_pass_const_fold(IrFunction &fn) {
                     case IrOp::ADD:     res = a + b;                        break;
                     case IrOp::SUB:     res = a - b;                        break;
                     case IrOp::MUL:     res = a * b;                        break;
-                    case IrOp::DIV:     res = (sb != 0) ? (uint64_t)(sa / sb) : 0; break;
-                    case IrOp::MOD:     res = (sb != 0) ? (uint64_t)(sa % sb) : 0; break;
+                    /* Sprint edge-bugs (2026-06-02): si el divisor es CONST 0,
+                     * NO foldear -- dejar la operacion en runtime para que el
+                     * interp/JIT lance FatalError capturable.  Antes esto se
+                     * foldeaba a 0 silencioso ocultando el bug del programa. */
+                    case IrOp::DIV:     if (sb == 0) { folded = false; break; }
+                                        res = (uint64_t)(sa / sb); break;
+                    case IrOp::MOD:     if (sb == 0) { folded = false; break; }
+                                        res = (uint64_t)(sa % sb); break;
                     case IrOp::AND:     res = a & b;                        break;
                     case IrOp::OR:      res = a | b;                        break;
                     case IrOp::XOR:     res = a ^ b;                        break;
@@ -2284,7 +2298,49 @@ bool ir_pass_const_fold(IrFunction &fn) {
                     case IrOp::NEG:     res = (uint64_t)(-sa);  break;
                     case IrOp::NOT:     res = ~a;                break;
                     case IrOp::ZEXT:    res = a;                 break;
-                    case IrOp::TRUNC:   res = a & 0xFFFFFFFFULL; break;
+                    case IrOp::TRUNC: {
+                        /* Sprint edge-bugs (2026-06-02): TRUNC debe
+                         * preservar el signo si el tipo destino es
+                         * signed (i8/i16/i32).  Antes hacia
+                         * `a & 0xFFFFFFFF` lo que para `-7` (signed i32)
+                         * truncado dejaba `0x00000000FFFFFFF9` -- valor
+                         * UNSIGNED 4294967289, no -7.  Operaciones
+                         * downstream (e.g. const-fold de `mod.i32`) lo
+                         * interpretaban como positivo -> resultado
+                         * equivocado del modulo signed.
+                         *
+                         * Fix: para tipos signed, sign-extender el bit
+                         * mas alto del ancho destino al resto del u64.
+                         * Para unsigned, mask simple. */
+                        uint64_t mask;
+                        bool sign_extend = false;
+                        switch (ins.type) {
+                            case IrType::I8:
+                                mask = 0xFFULL; sign_extend = true; break;
+                            case IrType::I16:
+                                mask = 0xFFFFULL; sign_extend = true; break;
+                            case IrType::I32:
+                                mask = 0xFFFFFFFFULL; sign_extend = true; break;
+                            case IrType::U8:  mask = 0xFFULL; break;
+                            case IrType::U16: mask = 0xFFFFULL; break;
+                            case IrType::U32: mask = 0xFFFFFFFFULL; break;
+                            case IrType::BOOL: mask = 0x1ULL; break;
+                            default:
+                                /* Sin truncacion real (mismo ancho). */
+                                mask = 0xFFFFFFFFFFFFFFFFULL;
+                                break;
+                        }
+                        res = a & mask;
+                        if (sign_extend) {
+                            const uint64_t sign_bit = (mask >> 1) + 1;
+                            if (res & sign_bit) {
+                                /* Bit alto del ancho destino set -> negativo.
+                                 * Or-ear los bits altos para sign-extend a u64. */
+                                res |= ~mask;
+                            }
+                        }
+                        break;
+                    }
                     case IrOp::MOV:     res = a;                 break;
                     default: folded = false; break;
                 }
@@ -2441,6 +2497,25 @@ bool ir_pass_dse(IrFunction &fn) {
                 // STRMAKE(buf)`: el primer set de stores se eliminaba.
                 case IrOp::STRMAKE: case IrOp::STRCAT: case IrOp::STRCONV:
                 case IrOp::STRFLAT: case IrOp::STRINTERN: case IrOp::STRRESERVE:
+                // Sprint edge-bugs (2026-06-02): MVTAKE_IR muta memoria
+                // (copia src->dst + zerifica src), por lo que invalida
+                // last_store_val para ambos punteros.  Conservadoramente
+                // clearamos todo el mapa.  Sin esto, ptr_of() despues de
+                // move() retornaba el host_ptr ORIGINAL (SLF leia el store
+                // anterior al mvtake) en vez del 0 que el runtime escribio.
+                case IrOp::MVTAKE_IR:
+                // GC_PROMOTE/GC_DEMOTE copian memoria cross-heap.
+                case IrOp::GC_PROMOTE: case IrOp::GC_DEMOTE:
+                // ATOMIC_ST_I64 / ATOMIC_CAS_I64 / ATOMIC_ADD_I64 escriben
+                // memoria; ATOMIC_LD_I64 lee (que es OK para SLF si no hay
+                // store intermedio, pero conservativo clearamos).
+                case IrOp::ATOMIC_LD_I64: case IrOp::ATOMIC_ST_I64:
+                case IrOp::ATOMIC_CAS_I64: case IrOp::ATOMIC_ADD_I64:
+                // SMARTPTR_FREE invoca deleter que puede tocar memoria.
+                case IrOp::SMARTPTR_FREE:
+                // FFI runtime puede mutar cualquier cosa.
+                case IrOp::DLOPEN: case IrOp::DLSYM:
+                case IrOp::MOD_LOAD:
                     last_store_idx.clear();
                     last_store_val.clear();
                     break;
