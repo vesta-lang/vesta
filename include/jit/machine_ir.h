@@ -575,6 +575,19 @@ namespace jit {
         /// slots GC vivos en ese punto especifico.
         std::vector<Stackmap>      stackmaps;
 
+        /// Sprint mem-loop-fix-v2 / fib-recursion (2026-06-02):
+        /// indices del @c imm64_pool que contienen referencias a la
+        /// PROPIA funcion (self-recursive call).  El encoder, al emitir
+        /// un MOV reg,imm64 cuyo @c IMM64_IDX matchea, registra la
+        /// posicion del imm64 en @c self_ref_byte_offsets.  Tras alocar
+        /// el code cache, el JitCompiler escribe @c code_start en cada
+        /// una de esas posiciones para resolver las self-refs.
+        std::vector<uint32_t>      self_ref_imm64_indices;
+        /// Posiciones (byte offsets) DENTRO de la code emitida donde
+        /// hay un imm64 self-ref que necesita patching.  Poblado por
+        /// el encoder.
+        std::vector<size_t>        self_ref_byte_offsets;
+
         /** @brief Reserva un nuevo label_id (zero overhead). */
         MLabelId new_label() {
             const uint32_t id = next_label_id++;

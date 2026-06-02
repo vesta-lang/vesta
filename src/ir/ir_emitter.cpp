@@ -820,23 +820,17 @@ static void emit_unop(EmitCtx &ctx, const std::string &mnemonic,
 static void emit_gp_to_zmm_bits(EmitCtx &ctx,
                                  const std::string &gp_reg,
                                  const std::string &zmm_reg) {
-    ctx.out << "    subsp rsp, 8\n";
-    ctx.out << "    mov r15, rsp\n";
-    ctx.out << "    mov [r15], " << gp_reg << "\n";
-    ctx.out << "    fload " << zmm_reg << ", r15\n";
-    ctx.out << "    addsp rsp, 8\n";
+    // Sprint string-perf-5 (2026-06-02): bitcast directo via opcode bitg2z.
+    // Antes: 5 instrucciones VM (subsp + mov r15,rsp + mov [r15],gp +
+    // fload + addsp).  Ahora: 1 instruccion -> ~5x speedup en FP-heavy.
+    ctx.out << "    bitg2z " << zmm_reg << ", " << gp_reg << "\n";
 }
 
 static void emit_zmm_to_gp_bits(EmitCtx &ctx,
                                  const std::string &zmm_reg,
                                  const std::string &gp_reg) {
-    // El orden de operandos de fstore es r1=gp_addr, r2=zmm_src (al reves
-    // que fload).  Documentado en src/emmit/emmit_decl.cpp:2034.
-    ctx.out << "    subsp rsp, 8\n";
-    ctx.out << "    mov r15, rsp\n";
-    ctx.out << "    fstore r15, " << zmm_reg << "\n";
-    ctx.out << "    mov " << gp_reg << ", [r15]\n";
-    ctx.out << "    addsp rsp, 8\n";
+    // Sprint string-perf-5: bitcast directo via opcode bitz2g (1 instr VM).
+    ctx.out << "    bitz2g " << gp_reg << ", " << zmm_reg << "\n";
 }
 
 // Emite una operacion float binaria con bitcast automatico.
@@ -1504,6 +1498,27 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         case IrOp::FSQRT:
             if (!ins.operands.empty())
                 emit_float_unop(ctx, "fsqrt", ins.type,
+                                 ins.dst, ins.operands[0]);
+            break;
+        // Sprint string-perf-5: FP unarios nativos (opcodes 0x82-0x85).
+        case IrOp::FFLOOR:
+            if (!ins.operands.empty())
+                emit_float_unop(ctx, "ffloor", ins.type,
+                                 ins.dst, ins.operands[0]);
+            break;
+        case IrOp::FCEIL:
+            if (!ins.operands.empty())
+                emit_float_unop(ctx, "fceil", ins.type,
+                                 ins.dst, ins.operands[0]);
+            break;
+        case IrOp::FROUND:
+            if (!ins.operands.empty())
+                emit_float_unop(ctx, "fround", ins.type,
+                                 ins.dst, ins.operands[0]);
+            break;
+        case IrOp::FTRUNC:
+            if (!ins.operands.empty())
+                emit_float_unop(ctx, "ftrunc", ins.type,
                                  ins.dst, ins.operands[0]);
             break;
         // --- Conversion de tipos ---
@@ -2466,8 +2481,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 // actual via `htrack`.  RET / do_throw / TAILCALL liberan
                 // automaticamente sin necesidad de RAW_FREE explicito.
                 // Cubre TODOS los exit paths (incluido throw cross-frame).
-                std::string rd_track = ctx.dst_of(ins.dst);
-                ctx.out << "    htrack " << rd_track << "\n";
+                //
+                // Sprint mem-loop-fix (2026-06-02): SKIPEAR htrack cuando
+                // el promote pass marco la ALLOCA con explicit_free=true.
+                // El RAW_FREE preservado en el IR libera el ptr en su
+                // sitio (al fin de cada iteracion del loop), sin
+                // acumular en el vector host_allocas del frame.
+                // Bottleneck antes: 5M iter de malloc(96)+free -> 20s
+                // por acumular 5M ptrs tracked sin liberar hasta RET.
+                if (!ins.host_alloca_explicit_free) {
+                    std::string rd_track = ctx.dst_of(ins.dst);
+                    ctx.out << "    htrack " << rd_track << "\n";
+                }
                 emit_restore_live_regs(ctx, call_pos, regs_to_save);
                 break;
             }
@@ -2566,9 +2591,42 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             std::string rp = ctx.load_src(ins.operands[1], 1); // puntero destino
             // Sufijo de tamano para que mov escriba exactamente sizeof(type)
             // bytes (no 8 por defecto).  Igual que en LOAD.
+            //
+            // Sprint mem-loop-fix (2026-06-02): el bug previo aplicaba el
+            // sufijo SOLO cuando el operando estaba en registro.  Si el
+            // valor venia de spill (rv = "r14"/"r13" tras load_src), se
+            // emitia `movh [rp], r14` sin sufijo = QWORD STORE (8 bytes)
+            // aunque el IR pidiera STORE i32 (4 bytes).
+            //
+            // Consecuencia: en un slot del slab de 16 bytes, escribir
+            // `buf[3]` con qword corrompia los bytes 12-19 (4 bytes fuera
+            // del slot, en el slot vecino).  Repro:
+            // `examples_codes_vex/59_arraylist.vex`.
+            //
+            // Fix: SIEMPRE aplicar sufijo segun ins.type, incluso cuando
+            // el reg es scratch del spill (r14/r13).  La VM ya soporta
+            // las variantes sized del `mov`/`movh` (b/w/d/q).
             std::string rv_sized = rv;
             if (ctx.is_in_reg(ins.operands[0])) {
                 rv_sized = reg_name_sized(ctx.reg_num(ins.operands[0]), ins.type);
+            } else {
+                // Operando spilled: rv es "r14" o "r13".  Aplicar sufijo
+                // de tamano segun ins.type.  reg_num_for_name retorna el
+                // indice 13/14 para construir el nombre sized.
+                int reg_idx = -1;
+                if (rv == "r13") reg_idx = 13;
+                else if (rv == "r14") reg_idx = 14;
+                else if (rv.size() >= 2 && rv[0] == 'r') {
+                    // rN con N > 9 o N < 13/14 (e.g. r12, r10).  Parse.
+                    char *endp = nullptr;
+                    long n = std::strtol(rv.c_str() + 1, &endp, 10);
+                    if (endp != rv.c_str() + 1 && n >= 0 && n <= 15) {
+                        reg_idx = static_cast<int>(n);
+                    }
+                }
+                if (reg_idx >= 0) {
+                    rv_sized = reg_name_sized(reg_idx, ins.type);
+                }
             }
             const bool host_ptr =
                 ins.operands[1] != IR_NO_VALUE
@@ -3918,13 +3976,18 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     {
         struct VmathMap { IrOp op; const char *fn; ir::IrType ret_ir; };
         static const VmathMap vmath_table[] = {
-            // Float: bits IEEE 754 in/out como u64.
-            { IrOp::FFLOOR,   "vmath_floor",    ir::IrType::F64 },
-            { IrOp::FCEIL,    "vmath_ceil",     ir::IrType::F64 },
-            { IrOp::FROUND,   "vmath_round",    ir::IrType::F64 },
-            { IrOp::FTRUNC,   "vmath_trunc",    ir::IrType::F64 },
-            { IrOp::FMIN,     "vmath_fmin",     ir::IrType::F64 },
-            { IrOp::FMAX,     "vmath_fmax",     ir::IrType::F64 },
+            // Sprint string-perf-5 (2026-06-02): FMIN/FMAX/FFLOOR/FCEIL/
+            // FROUND/FTRUNC ahora tienen opcodes bytecode nativos
+            // (0x80-0x85) y se emiten directamente como mnemonicos en el
+            // switch.  Removidos del pre-pase para evitar CALLN overhead
+            // (~150ns -> ~5ns por op en interp).
+            //
+            // { IrOp::FFLOOR,   "vmath_floor",    ir::IrType::F64 },
+            // { IrOp::FCEIL,    "vmath_ceil",     ir::IrType::F64 },
+            // { IrOp::FROUND,   "vmath_round",    ir::IrType::F64 },
+            // { IrOp::FTRUNC,   "vmath_trunc",    ir::IrType::F64 },
+            // { IrOp::FMIN,     "vmath_fmin",     ir::IrType::F64 },
+            // { IrOp::FMAX,     "vmath_fmax",     ir::IrType::F64 },
             // Int (signed/unsigned).
             { IrOp::IABS,     "vmath_abs",      ir::IrType::I64 },
             { IrOp::IMIN,     "vmath_min",      ir::IrType::I64 },

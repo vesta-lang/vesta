@@ -160,6 +160,20 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn);
 bool ir_pass_promote_callned_allocas(IrFunction &fn);
 
 /**
+ * @brief Sprint string-perf-8: promueve ALLOCAs LOCALES (no escapan a
+ *        CALL/RET/THROW/STORE-de-ptr) a `host_alloca=true`.
+ *
+ * Permite que el JIT emita los LOAD/STORE derivados como `mov` nativo
+ * directo (1 instr) en lugar del inline page cache check (~10 instr).
+ *
+ * Caso tipico: struct value-type local con field access en hot loop.
+ * Speedup esperado en bench_struct_field: 5x (150ms -> 30ms en JIT).
+ *
+ * @return true si se promociono alguna ALLOCA.
+ */
+bool ir_pass_promote_local_allocas(IrFunction &fn);
+
+/**
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin
  *        escape a `ALLOCA host_alloca`.
  *

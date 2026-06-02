@@ -1188,4 +1188,98 @@ void exec_instr_fnarrow(ProcessVM *vm, const DecodedInstr &instr) {
     d.write_f32(static_cast<float>(s.read_f64()));
 }
 
+// =========================================================================
+// Sprint string-perf-5 (2026-06-02): opcodes FP nativos para fmin/fmax/
+// ffloor/fceil/fround/ftrunc.  Antes el interp pagaba CALLN (~150 ns) por
+// cada op via Math-IR-promote -> vmath_*.  Ahora son ~3 ns escalares.
+// Solo escalar (mode=0); packed cae a path generico via std::fmin etc.
+// =========================================================================
+
+void exec_instr_fmin(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst    = instr.data_instruction.reg_data.reg1;
+    const uint8_t src    = instr.data_instruction.reg_data.reg2;
+    const bool    is_f32 = (instr.flags_info._signed_instruct != 0);
+    ZmmRegister       &d = vm->registers.zmm[dst];
+    const ZmmRegister &s = vm->registers.zmm[src];
+    if (is_f32) d.write_f32(std::fmin(d.read_f32(), s.read_f32()));
+    else        d.write_f64(std::fmin(d.read_f64(), s.read_f64()));
+}
+
+void exec_instr_fmax(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst    = instr.data_instruction.reg_data.reg1;
+    const uint8_t src    = instr.data_instruction.reg_data.reg2;
+    const bool    is_f32 = (instr.flags_info._signed_instruct != 0);
+    ZmmRegister       &d = vm->registers.zmm[dst];
+    const ZmmRegister &s = vm->registers.zmm[src];
+    if (is_f32) d.write_f32(std::fmax(d.read_f32(), s.read_f32()));
+    else        d.write_f64(std::fmax(d.read_f64(), s.read_f64()));
+}
+
+void exec_instr_ffloor(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst    = instr.data_instruction.reg_data.reg1;
+    const uint8_t src    = instr.data_instruction.reg_data.reg2;
+    const bool    is_f32 = (instr.flags_info._signed_instruct != 0);
+    ZmmRegister       &d = vm->registers.zmm[dst];
+    const ZmmRegister &s = vm->registers.zmm[src];
+    if (is_f32) d.write_f32(std::floor(s.read_f32()));
+    else        d.write_f64(std::floor(s.read_f64()));
+}
+
+void exec_instr_fceil(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst    = instr.data_instruction.reg_data.reg1;
+    const uint8_t src    = instr.data_instruction.reg_data.reg2;
+    const bool    is_f32 = (instr.flags_info._signed_instruct != 0);
+    ZmmRegister       &d = vm->registers.zmm[dst];
+    const ZmmRegister &s = vm->registers.zmm[src];
+    if (is_f32) d.write_f32(std::ceil(s.read_f32()));
+    else        d.write_f64(std::ceil(s.read_f64()));
+}
+
+void exec_instr_fround(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst    = instr.data_instruction.reg_data.reg1;
+    const uint8_t src    = instr.data_instruction.reg_data.reg2;
+    const bool    is_f32 = (instr.flags_info._signed_instruct != 0);
+    ZmmRegister       &d = vm->registers.zmm[dst];
+    const ZmmRegister &s = vm->registers.zmm[src];
+    if (is_f32) d.write_f32(std::round(s.read_f32()));
+    else        d.write_f64(std::round(s.read_f64()));
+}
+
+void exec_instr_ftrunc(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t dst    = instr.data_instruction.reg_data.reg1;
+    const uint8_t src    = instr.data_instruction.reg_data.reg2;
+    const bool    is_f32 = (instr.flags_info._signed_instruct != 0);
+    ZmmRegister       &d = vm->registers.zmm[dst];
+    const ZmmRegister &s = vm->registers.zmm[src];
+    if (is_f32) d.write_f32(std::trunc(s.read_f32()));
+    else        d.write_f64(std::trunc(s.read_f64()));
+}
+
+// =========================================================================
+// Sprint string-perf-5: bitcast GP<->ZMM directo (sin memory roundtrip).
+// Reemplaza la secuencia de 5 instrucciones (subsp/mov/mov/fload/addsp)
+// por 1 sola op.  Speedup ~5x en FP-heavy loops del interp.
+// =========================================================================
+
+/** @brief BITG2Z (0x86): mueve bits IEEE de GP reg a ZMM reg (sin memoria).
+ * Encoding: reg1 (nibble bajo) = ZMM dst, reg2 (nibble alto) = GP src. */
+void exec_instr_bitg2z(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t zmm_dst = instr.data_instruction.reg_data.reg1;
+    const uint8_t gp_src  = instr.data_instruction.reg_data.reg2;
+    auto &z = vm->registers.zmm[zmm_dst];
+    uint64_t bits = vm->registers.regs[gp_src].qword();
+    __builtin_memcpy(z.data, &bits, 8);
+    __builtin_memset(z.data + 8, 0, 56);
+}
+
+/** @brief BITZ2G (0x87): mueve bits IEEE de ZMM reg a GP reg (sin memoria).
+ * Encoding: reg1 (nibble bajo) = ZMM src, reg2 (nibble alto) = GP dst. */
+void exec_instr_bitz2g(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t zmm_src = instr.data_instruction.reg_data.reg1;
+    const uint8_t gp_dst  = instr.data_instruction.reg_data.reg2;
+    uint64_t bits;
+    __builtin_memcpy(&bits, vm->registers.zmm[zmm_src].data, 8);
+    vm->registers.regs[gp_dst].qword(bits);
+}
+
 } // namespace runtime

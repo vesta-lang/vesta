@@ -64,6 +64,11 @@ deepseck*
 tests/vex/test_vex_e2e.sh
 
 # temporales
+
+doc/exhaustive_tests*
+__pycache__
+bench_plots/*
+
 tem
 temp
 tmp
@@ -423,4 +428,4 @@ doc/BUG*
 doc/FIXES*
 tests/vex/bench_shared_runner.sh
 tests/vex/test_vex_vexi_format.cpp
-doc/exhaustive_tests*
+bench_results.json

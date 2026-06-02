@@ -191,6 +191,65 @@ namespace jit {
                     slot_mem(vid)));
         }
 
+        /**
+         * @brief Sprint string-perf-6: variante de load_op que REMATERIALIZA
+         * constantes pequenas como inmediato en lugar de cargarlas del slot
+         * stack en cada uso.  Cierra una regresion grave (~30-50%) en hot
+         * loops con muchas constantes (e.g. branch_unpredict tenia el `0`
+         * y el `1` cargados del stack 4 veces por iter).
+         *
+         * Seguro tras Sprint LANG.fix-5 porque los CONSTS estan EXCLUIDOS
+         * del regalloc (`val.is_const -> vi.excluded = true`) y por tanto
+         * no pueden coalescer con phis: el bug previo de corrupcion no
+         * aplica aqui.
+         *
+         * Estrategia:
+         *   - Si val no es CONST: load normal `mov reg, [slot]`.
+         *   - Si CONST con valor 0: `xor reg, reg` (3 bytes vs 7-9 del load).
+         *   - Si CONST cabe en imm32 signed: `mov reg, imm32` (5-6 bytes).
+         *   - Si CONST cabe en imm64: `mov reg, imm64` (10 bytes; mejor que
+         *     un load si el slot esta en cache cold, equivalente si caliente).
+         */
+        void load_op_rematerializable(MFunction &mf, const ir::IrFunction &fn,
+                                       ir::IrValueId vid, MReg dst) {
+            if (vid < fn.values.size()) {
+                const auto &val = fn.values[vid];
+                if (val.is_const) {
+                    const int64_t cv = static_cast<int64_t>(val.const_val);
+                    if (cv == 0) {
+                        /* xor dst, dst -> rax = 0 en 2-3 bytes, sin flags
+                         * problem porque el caller emite cmp inmediatamente
+                         * despues (su flags es lo que importa). */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_binary(MOp::XOR,
+                                MOperand::make_reg(dst),
+                                MOperand::make_reg(dst),
+                                MOperand::make_reg(dst)));
+                        return;
+                    }
+                    if (cv >= INT32_MIN && cv <= INT32_MAX) {
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(dst),
+                                MOperand::make_imm32(static_cast<int32_t>(cv))));
+                        return;
+                    }
+                    /* imm64: usar pool. */
+                    const uint32_t idx = mf.intern_imm64(val.const_val);
+                    mf.blocks.back().instrs.push_back(
+                        MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(dst),
+                            MOperand::make_imm64_idx(idx)));
+                    return;
+                }
+            }
+            /* Default: load del slot. */
+            mf.blocks.back().instrs.push_back(
+                MInstr::make_unary(MOp::MOV,
+                    MOperand::make_reg(dst),
+                    slot_mem(vid)));
+        }
+
         /** @brief Emite MOV [slot], reg (STORE result). */
         void store_op(MFunction &mf, ir::IrValueId vid, MReg src) {
             if (vid == ir::IR_NO_VALUE) return;
@@ -351,6 +410,21 @@ namespace jit {
          * y fallback vm_read/write (VM-addr). */
         std::vector<uint8_t> host_in_jit(ir_fn.values.size(), 0u);
 
+        /* Sprint mem-loop-fix (2026-06-02): identificar VIDs que vienen
+         * de un ALLOCA con `host_alloca && host_alloca_explicit_free`.
+         * En el JIT, esos ALLOCAs emiten `sub rsp, N` (host stack), asi
+         * que el RAW_FREE asociado (preservado por el promote pass para
+         * que el INTERP no acumule htrack) debe ser SKIPPED en el JIT.
+         * Llamar `vrt_raw_free` sobre un ptr de host stack es crash
+         * garantizado.  El set se llena en el pre-pase y se consulta
+         * en el case IrOp::RAW_FREE. */
+        std::vector<uint8_t> skip_raw_free_vid(ir_fn.values.size(), 0u);
+
+        /* Sprint mem-loop-fix-v2 (2026-06-02): tamano del ALLOCA por VID
+         * para emitir `add rsp, aligned(N)` en el RAW_FREE matching,
+         * manteniendo el host stack balanceado per-iteracion en loops. */
+        std::vector<uint64_t> alloca_size_by_vid(ir_fn.values.size(), 0ull);
+
         /* Seed inicial.  Tres categorias:
          *   1. Valores con IR is_host_ptr=true: marcados por el frontend
          *      (malloc/new/fields GC).  Son host_ptr en TODO modelo.
@@ -391,7 +465,21 @@ namespace jit {
                      * STORE sobre derivados use native mov directo (sin
                      * inline cache). */
                     case ir::IrOp::ALLOCA:
-                        if (ins.host_alloca) host_in_jit[ins.dst] = 1u;
+                        if (ins.host_alloca) {
+                            host_in_jit[ins.dst] = 1u;
+                            /* Sprint mem-loop-fix-v2: AMBOS casos
+                             * (con/sin explicit_free) emiten `sub rsp, N`
+                             * en host stack.  La diferencia es que el
+                             * explicit_free TAMBIEN debe emitir `add rsp, N`
+                             * en el RAW_FREE matching para no acumular
+                             * stack en loops.  Marcamos skip_raw_free_vid
+                             * + guardamos size para el RAW_FREE. */
+                            if (ins.host_alloca_explicit_free
+                             && ins.dst < skip_raw_free_vid.size()) {
+                                skip_raw_free_vid[ins.dst] = 1u;
+                                alloca_size_by_vid[ins.dst] = ins.imm;
+                            }
+                        }
                         break;
                     case ir::IrOp::GC_ALLOC:
                     case ir::IrOp::GC_ALLOCP:
@@ -432,6 +520,34 @@ namespace jit {
                         return false;
                     };
 
+                    /* Sprint mem-loop-fix: propaga skip_raw_free_vid
+                     * cuando un operand viene de un ALLOCA con
+                     * host_alloca_explicit_free.  Cualquier deriv
+                     * (BITCAST/ADD/etc) hereda el flag para que el
+                     * RAW_FREE sobre el deriv tambien se skipee. */
+                    auto any_op_skip_free = [&]() {
+                        for (ir::IrValueId v : ins.operands) {
+                            if (v != ir::IR_NO_VALUE
+                             && v < skip_raw_free_vid.size()
+                             && skip_raw_free_vid[v]) return true;
+                        }
+                        return false;
+                    };
+
+                    /* Sprint mem-loop-fix-v2: hereda size del operand
+                     * para que el RAW_FREE sobre el deriv sepa cuanto
+                     * add rsp emitir. */
+                    auto inherit_alloca_size = [&]() -> uint64_t {
+                        for (ir::IrValueId v : ins.operands) {
+                            if (v != ir::IR_NO_VALUE
+                             && v < alloca_size_by_vid.size()
+                             && alloca_size_by_vid[v] != 0) {
+                                return alloca_size_by_vid[v];
+                            }
+                        }
+                        return 0;
+                    };
+
                     switch (ins.op) {
                         case ir::IrOp::ADD:
                         case ir::IrOp::SUB:
@@ -443,6 +559,17 @@ namespace jit {
                         case ir::IrOp::TRUNC:
                             if (any_op_host()) {
                                 host_in_jit[ins.dst] = 1u;
+                                changed = true;
+                            }
+                            if (ins.dst < skip_raw_free_vid.size()
+                             && !skip_raw_free_vid[ins.dst]
+                             && any_op_skip_free()) {
+                                skip_raw_free_vid[ins.dst] = 1u;
+                                if (ins.dst < alloca_size_by_vid.size()
+                                 && alloca_size_by_vid[ins.dst] == 0) {
+                                    alloca_size_by_vid[ins.dst] =
+                                        inherit_alloca_size();
+                                }
                                 changed = true;
                             }
                             break;
@@ -917,7 +1044,7 @@ namespace jit {
                     }
                     case IrOp::MOV: {
                         if (ins.operands.empty()) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         store_op(mf, ins.dst, SCRATCH_A);
                         break;
                     }
@@ -1084,7 +1211,7 @@ namespace jit {
                             const int64_t cv = static_cast<int64_t>(
                                 ir_fn.values[op1].const_val);
                             if (cv >= -0x80000000LL && cv <= 0x7FFFFFFFLL) {
-                                load_op(mf, op0, SCRATCH_A);
+                                load_op_rematerializable(mf, ir_fn, op0, SCRATCH_A);
                                 mf.blocks.back().instrs.push_back(
                                     MInstr::make_unary(m_op,
                                         MOperand::make_reg(SCRATCH_A),
@@ -1104,7 +1231,7 @@ namespace jit {
                                 const int64_t cv = static_cast<int64_t>(
                                     ir_fn.values[op0].const_val);
                                 if (cv >= -0x80000000LL && cv <= 0x7FFFFFFFLL) {
-                                    load_op(mf, op1, SCRATCH_A);
+                                    load_op_rematerializable(mf, ir_fn, op1, SCRATCH_A);
                                     mf.blocks.back().instrs.push_back(
                                         MInstr::make_unary(m_op,
                                             MOperand::make_reg(SCRATCH_A),
@@ -1115,8 +1242,8 @@ namespace jit {
                             }
                         }
                         if (!used_imm_fold) {
-                            load_op(mf, op0, SCRATCH_A);
-                            load_op(mf, op1, SCRATCH_B);
+                            load_op_rematerializable(mf, ir_fn, op0, SCRATCH_A);
+                            load_op_rematerializable(mf, ir_fn, op1, SCRATCH_B);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(m_op,
                                     MOperand::make_reg(SCRATCH_A),
@@ -1127,8 +1254,8 @@ namespace jit {
                     }
                     case IrOp::MUL: {
                         if (ins.operands.size() < 2) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
-                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::IMUL,
                                 MOperand::make_reg(SCRATCH_A),
@@ -1140,7 +1267,7 @@ namespace jit {
                     /* --------- Unarias --------- */
                     case IrOp::NEG: {
                         if (ins.operands.empty()) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::NEG,
                                 MOperand::make_reg(SCRATCH_A), {}));
@@ -1149,7 +1276,7 @@ namespace jit {
                     }
                     case IrOp::NOT: {
                         if (ins.operands.empty()) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::NOT,
                                 MOperand::make_reg(SCRATCH_A), {}));
@@ -1162,7 +1289,7 @@ namespace jit {
                     case IrOp::SHR:
                     case IrOp::SAR: {
                         if (ins.operands.size() < 2) break;
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         /* Detectar si el operando 1 es un CONST en el IR.
                          * Si es, usamos la variante imm8 del shift.  Si
                          * no, fallback a unsupported (el encoder no
@@ -1215,8 +1342,8 @@ namespace jit {
                          * si era operando aliasado).  Nuestro patron de
                          * "load operandos a scratch antes de op" garantiza
                          * que no hay aliasing problematic. */
-                        load_op(mf, ins.operands[0], MReg::RAX);
-                        load_op(mf, ins.operands[1], MReg::RCX);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], MReg::RCX);
                         /* CQO */
                         MInstr cqo;
                         cqo.op = MOp::CQO;
@@ -1278,7 +1405,26 @@ namespace jit {
                          *
                          * Esto permite `&local` -> CALLN natural C-style:
                          *   u8[1024] buf;
-                         *   ReadFile(h, &buf[0], 1024, ...); */
+                         *   ReadFile(h, &buf[0], 1024, ...);
+                         *
+                         * Sprint mem-loop-fix (2026-06-02): EXCEPCION cuando
+                         * `host_alloca_explicit_free=true`.  El IR pass
+                         * `ir_pass_promote_local_raw_alloc` marca asi a
+                         * ALLOCAs que tienen un RAW_FREE explicito
+                         * preservado (caso `malloc(N)+...+free(p)` dentro
+                         * de un loop).  Si emitiesemos `sub rsp, N` para
+                         * cada iter, el host stack crece 96 bytes/iter
+                         * sin liberar (no hay `add rsp` correspondiente)
+                         * -> 5M iter * 96 = 480 MB stack exhaustion ->
+                         * SEGV.  En este caso, caer al path slab
+                         * (CALL vrt_raw_alloc + el RAW_FREE preservado
+                         * llama vrt_raw_free correctamente).  */
+                        /* Sprint mem-loop-fix-v2: AMBOS casos
+                         * (con/sin explicit_free) emiten `sub rsp, N`.
+                         * El RAW_FREE matching emite `add rsp, N` para
+                         * balancear el stack per-iteracion (ver case
+                         * RAW_FREE).  Asi loops con malloc/free dentro
+                         * de cuerpos inlineados no acumulan stack. */
                         if (ins.host_alloca) {
                             const uint64_t size_bytes = ins.imm;
                             if (size_bytes > 0 && size_bytes < INT32_MAX) {
@@ -1371,7 +1517,7 @@ namespace jit {
                         const bool src_signed = ir_type_is_signed_int(src_t);
 
                         /* Cargar src a SCRATCH_A (RAX). */
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
 
                         if (dst_bytes < src_bytes) {
                             /* TRUNCATE: shift left + shift right segun signo
@@ -1426,7 +1572,7 @@ namespace jit {
                         const bool lsigned = ir_type_is_signed_int(ins.type);
                         const bool ptr_is_host = (p_vid < host_in_jit.size()
                                               && host_in_jit[p_vid]);
-                        load_op(mf, p_vid, SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, p_vid, SCRATCH_B);
 
                         if (!ptr_is_host
                          && opts_.mode == SelectorMode::VM_ABI
@@ -1605,7 +1751,7 @@ namespace jit {
                              * NATIVE_ARG1 (RDX en Windows) -- no asumimos
                              * que SCRATCH_B tenga vaddr porque el inline
                              * cache hit lo machaco. */
-                            load_op(mf, p_vid, NATIVE_ARG1);
+                            load_op_rematerializable(mf, ir_fn, p_vid, NATIVE_ARG1);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_reg(NATIVE_ARG0),
@@ -1715,7 +1861,7 @@ namespace jit {
                                 /* Cargar vaddr a SCRATCH_B (RCX) primero
                                  * (load_op) y copiar a SCRATCH_C (RDX)
                                  * con MOV reg-reg directo (no optimizable). */
-                                load_op(mf, ins.operands[1], SCRATCH_B);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                                 mf.blocks.back().instrs.push_back(
                                     MInstr::make_unary(MOp::MOV,
                                         MOperand::make_reg(SCRATCH_C),
@@ -1761,7 +1907,7 @@ namespace jit {
                                         MOperand::make_reg(SCRATCH_B),
                                         MOperand::make_reg(SCRATCH_C)));
                                 /* load value -> SCRATCH_A + native store */
-                                load_op(mf, ins.operands[0], SCRATCH_A);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                                 const uint8_t hw = (sbytes == 1 || sbytes == 2
                                                  || sbytes == 4 || sbytes == 8)
                                                  ? static_cast<uint8_t>(sbytes) : 8;
@@ -1778,8 +1924,8 @@ namespace jit {
                             /* Fallback: call vrt_vm_write_u<size>(proc, vaddr, value).
                              * Cargar en orden vaddr, value, proc para evitar
                              * clobber. */
-                            load_op(mf, ins.operands[1], NATIVE_ARG1); /* vaddr */
-                            load_op(mf, ins.operands[0], NATIVE_ARG2); /* value */
+                            load_op_rematerializable(mf, ir_fn, ins.operands[1], NATIVE_ARG1); /* vaddr */
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], NATIVE_ARG2); /* value */
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_reg(NATIVE_ARG0),
@@ -1800,8 +1946,8 @@ namespace jit {
                         }
 
                         /* host_ptr STORE: native mov. */
-                        load_op(mf, ins.operands[0], SCRATCH_A);
-                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                         const uint8_t w = (sbytes == 1 || sbytes == 2
                                         || sbytes == 4 || sbytes == 8)
                                         ? static_cast<uint8_t>(sbytes) : 8;
@@ -1868,8 +2014,8 @@ namespace jit {
                                 MOperand::make_reg(SCRATCH_A),
                                 MOperand::make_reg(SCRATCH_A)));
                         /* Cargar operands en RCX/RDX (no tocan flags). */
-                        load_op(mf, ins.operands[0], SCRATCH_B);
-                        load_op(mf, ins.operands[1], SCRATCH_C);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_C);
                         /* cmp rcx, rdx (sets flags). */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::CMP,
@@ -1886,7 +2032,68 @@ namespace jit {
                     }
 
                     /* --------- Calls --------- */
+                    /* Sprint fib-recursion (2026-06-02): TAILCALL se trata
+                     * como CALL normal + RET implicito.  Pierde la
+                     * optimizacion de "no growing call stack" del TCO
+                     * verdadero, pero permite compilar `main` cuando el
+                     * IR optimizer convierte `return fn(args)` en
+                     * tailcall.  El JIT no puede emitir el verdadero TCO
+                     * (jump en lugar de call) sin coordinacion con el
+                     * regalloc + frame cleanup.  Trade-off aceptado en
+                     * v1: paridad con interp (que tambien lo trata como
+                     * CALL+RET cuando no hay loop oportunista). */
+                    case IrOp::TAILCALL:
                     case IrOp::CALL: {
+                        /* Sprint fib-recursion: helper para emitir epilogue
+                         * tras TAILCALL (= CALL + RET).  RAX ya contiene
+                         * el return value (cargado en cada path).  Tambien
+                         * lo escribe a proc->regs[0] para que el caller
+                         * bytecode lo vea, y emite el cleanup del frame
+                         * + ret host. */
+                        const bool is_tailcall = (ins.op == IrOp::TAILCALL);
+                        auto emit_tailcall_epilogue = [&]() {
+                            if (!is_tailcall) return;
+                            /* Cargar return value en RAX desde proc->regs[0]
+                             * (donde el callee lo escribio) y propagarlo. */
+                            if (opts_.mode == SelectorMode::VM_ABI) {
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(MReg::RAX),
+                                        MOperand::make_mem(MReg::RBX,
+                                            VESTA_PROC_REGISTERS_OFFSET)));
+                                /* Restaurar VM-RSP si modificamos vm_stack. */
+                                if (fn_has_alloca) {
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::MOV,
+                                            MOperand::make_reg(SCRATCH_B),
+                                            MOperand::make_mem(MReg::RBP, vm_rsp_save_off)));
+                                    mf.blocks.back().instrs.push_back(
+                                        MInstr::make_unary(MOp::MOV,
+                                            MOperand::make_mem(MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET),
+                                            MOperand::make_reg(SCRATCH_B)));
+                                }
+                            }
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RSP),
+                                    MOperand::make_reg(MReg::RBP)));
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::POP,
+                                    MOperand::make_reg(MReg::RBP), {}));
+                            for (auto it = regalloc.callee_saved_used.rbegin();
+                                 it != regalloc.callee_saved_used.rend(); ++it) {
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::POP,
+                                        MOperand::make_reg(*it), {}));
+                            }
+                            if (opts_.mode == SelectorMode::VM_ABI) {
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::POP,
+                                        MOperand::make_reg(MReg::RBX), {}));
+                            }
+                            mf.blocks.back().instrs.push_back(MInstr::make_ret());
+                        };
+
                         /* D.3-B: resolver el func_name a una direccion runtime. */
                         uint64_t fn_addr =
                             resolve_runtime_entry(ins.func_name, opts_.runtime);
@@ -1899,6 +2106,24 @@ namespace jit {
                         if (fn_addr == 0 && opts_.resolve_user_fn) {
                             fn_addr = opts_.resolve_user_fn(ins.func_name);
                             if (fn_addr != 0) is_user_call = true;
+                        }
+
+                        /* Sprint fib-recursion (2026-06-02): self-recursive
+                         * call.  El resolver devuelve 0 con EAGER_IN_PROGRESS
+                         * porque la funcion aun esta compilando.  Marcamos
+                         * el imm64 como self-ref + usamos sentinel 0; el
+                         * JitCompiler parchea con code_start tras la
+                         * asignacion final.  Esto evita el trampoline
+                         * JIT->interp para self-recursion (huge speedup
+                         * en fib/factorial/etc.). */
+                        bool is_self_ref = false;
+                        if (fn_addr == 0
+                         && opts_.mode == SelectorMode::VM_ABI
+                         && !ins.func_name.empty()
+                         && ins.func_name == ir_fn.name) {
+                            is_self_ref = true;
+                            is_user_call = true;
+                            fn_addr = 0;  /* placeholder; se parchea post-encode */
                         }
 
                         /* D.4-fix: trampoline JIT->interp.  Si NO se resolvio
@@ -1915,6 +2140,7 @@ namespace jit {
                         bool is_bc_trampoline = false;
                         uint64_t bc_entry_va = 0;
                         if (fn_addr == 0
+                         && !is_self_ref  /* Sprint fib-recursion: self-call no usa trampoline */
                          && opts_.runtime != nullptr
                          && opts_.runtime->call_bc_function != nullptr
                          && opts_.resolve_symbol
@@ -1929,7 +2155,7 @@ namespace jit {
                             }
                         }
 
-                        if (fn_addr == 0) {
+                        if (fn_addr == 0 && !is_self_ref) {
                             /* No resolvido - marcar unsupported. */
                             if (jit::g_jit_warn_unsupported) {
                                 /* Dedup por (op, line) -- callsites repetidos a
@@ -1970,7 +2196,7 @@ namespace jit {
 
                             /* Paso 1: stage args en proc->regs[1..N]. */
                             for (size_t a = 0; a < nargs && a < 12; ++a) {
-                                load_op(mf, ins.operands[a], SCRATCH_A);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[a], SCRATCH_A);
                                 const int32_t off = regs_base +
                                     static_cast<int32_t>((a + 1) * 8);
                                 mf.blocks.back().instrs.push_back(
@@ -2033,6 +2259,7 @@ namespace jit {
                                         ins.source_line);
                                 }
                             }
+                            emit_tailcall_epilogue();
                             break;
                         }
 
@@ -2045,7 +2272,7 @@ namespace jit {
 
                             /* Paso 1: stage args en regs[1..N]. */
                             for (size_t a = 0; a < nargs && a < 12; ++a) {
-                                load_op(mf, ins.operands[a], SCRATCH_A);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[a], SCRATCH_A);
                                 const int32_t off = regs_base + static_cast<int32_t>((a + 1) * 8);
                                 mf.blocks.back().instrs.push_back(
                                     MInstr::make_unary(MOp::MOV,
@@ -2069,6 +2296,19 @@ namespace jit {
                                     MOperand::make_reg(MReg::RBX)));
                             /* Paso 4: mov rax, fn_addr; call rax + stackmap. */
                             const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
+                            /* Sprint fib-recursion: marcar pool idx como
+                             * self-ref si applicable.  Dedup contra dobles
+                             * inserts (multi-site dentro de la misma fn
+                             * comparte el mismo idx via intern_imm64). */
+                            if (is_self_ref) {
+                                bool already_marked = false;
+                                for (uint32_t v : mf.self_ref_imm64_indices) {
+                                    if (v == fn_pool_idx) { already_marked = true; break; }
+                                }
+                                if (!already_marked) {
+                                    mf.self_ref_imm64_indices.push_back(fn_pool_idx);
+                                }
+                            }
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_reg(MReg::RAX),
@@ -2086,6 +2326,7 @@ namespace jit {
                                         MOperand::make_mem(MReg::RBX, regs_base)));
                                 store_op(mf, ins.dst, SCRATCH_A);
                             }
+                            emit_tailcall_epilogue();
                             break;
                         }
 
@@ -2125,7 +2366,7 @@ namespace jit {
                          * Como cada load_op solo escribe a un reg distinto,
                          * el orden no importa (sin clobber cross-arg). */
                         for (size_t a = 0; a < ins.operands.size(); ++a) {
-                            load_op(mf, ins.operands[a], ARG_REGS[a]);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[a], ARG_REGS[a]);
                         }
 
                         /* mov rax, fn_addr (via imm64 pool) */
@@ -2152,6 +2393,7 @@ namespace jit {
                         if (ins.dst != ir::IR_NO_VALUE) {
                             store_op(mf, ins.dst, MReg::RAX);
                         }
+                        emit_tailcall_epilogue();
                         break;
                     }
 
@@ -2184,9 +2426,39 @@ namespace jit {
                      * `newobj rN` (D.3-G).
                      */
                     case IrOp::NEWOBJ: {
-                        /* Optimizado 2026-05-16: usar vrt_newobj_handle (1 call
-                         * que combina alloc + handle_for_ptr) en lugar de los
-                         * 2 calls separados.  Ahorra ~30-50 ns por @c new X(). */
+                        /* Sprint alloc-inline (2026-06-02): inline nursery
+                         * bump-pointer alloc cuando los offsets estan
+                         * resueltos.  El fast-path emite:
+                         *
+                         *   mov  rdx, [class_slot]            ; cls
+                         *   mov  ecx, [rdx + 24]              ; instance_size (u32)
+                         *   add  ecx, 8                       ; + GcHeader
+                         *   add  ecx, 7                       ; round up to 8
+                         *   and  ecx, ~7
+                         *   mov  rax, [rbx + nursery_bump]    ; bump
+                         *   lea  r8,  [rax + rcx]             ; new_bump
+                         *   cmp  r8,  [rbx + nursery_end]
+                         *   ja   slow_path
+                         *   mov  [rbx + nursery_bump], r8     ; commit bump
+                         *   mov  [rax], ecx                   ; GcHeader.size
+                         *   mov  dword [rax + 4], 0           ; color/gen = 0
+                         *   mov  [rax + 8], rdx               ; ObjectHeader.class_ptr
+                         *   mov  dword [rax + 16], 1          ; flags = GC_OWNED
+                         *   ; (proc=rbx, raw=rax ya OK para Native ABI)
+                         *   mov  rdi/rcx, rbx                 ; arg0
+                         *   mov  rsi/rdx, rax                 ; arg1
+                         *   call vrt_register_alloc           ; -> handle en RAX
+                         *   jmp  done
+                         * slow_path:
+                         *   mov  arg0, rbx; mov arg1, cls
+                         *   call vrt_newobj_handle            ; -> handle en RAX
+                         * done:
+                         *   mov [slot dst], rax
+                         *
+                         * Ahorra: bump + init headers inline (~3 ns) vs
+                         * la version vieja que entraba TODA al runtime
+                         * (~25 ns).  Net ~20 ns por alloc.
+                         */
                         if (ins.operands.empty()) break;
                         if (opts_.runtime == nullptr
                          || opts_.runtime->newobj_handle == nullptr) {
@@ -2210,24 +2482,190 @@ namespace jit {
                         const MReg ABI0 = MReg::RDI;
                         const MReg ABI1 = MReg::RSI;
 #endif
-                        /* vrt_newobj_handle(proc, cls) -> handle en RAX. */
-                        load_op(mf, ins.operands[0], ABI1);
+                        /* Sprint alloc-inline REVERT (2026-06-02): el
+                         * inline bump-pointer + call register_alloc no
+                         * trajo ganancia neta porque register_alloc
+                         * (new_handle) cuesta lo mismo que el call
+                         * directo a vrt_newobj_handle.  Y el inline
+                         * anyade ~14 instrs por iter que CAUSAN
+                         * regresion ~20-30% en hot loops de NEWOBJ.
+                         *
+                         * Forzar el path "directo" (call a
+                         * vrt_newobj_handle) siempre, hasta que tengamos
+                         * un esquema de handle mas barato que justifique
+                         * el inline. */
+                        const bool can_inline = false;
+                        (void)opts_.nursery_bump_offset;
+                        (void)opts_.nursery_end_offset;
+                        (void)opts_.register_alloc_addr;
+
+                        if (!can_inline) {
+                            /* Fallback: call vrt_newobj_handle (path viejo). */
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], ABI1);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(ABI0),
+                                    MOperand::make_reg(MReg::RBX)));
+                            const uint32_t pidx = mf.intern_imm64(
+                                reinterpret_cast<uint64_t>(opts_.runtime->newobj_handle));
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_imm64_idx(pidx)));
+                            MInstr c1;
+                            c1.op = MOp::CALL;
+                            c1.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(c1);
+                            mf.blocks.back().instrs.push_back(c1);
+                            if (ins.dst != ir::IR_NO_VALUE) {
+                                store_op(mf, ins.dst, MReg::RAX);
+                            }
+                            break;
+                        }
+
+                        /* INLINE FAST-PATH.
+                         * Layout regs:
+                         *   ABI1 (RDX win / RSI linux) = class_ptr
+                         *   RAX  = bump (objeto recien alocado, raw ptr)
+                         *   RCX  = total size (u32, escalado a 8 bytes)
+                         *   R8   = new_bump
+                         *   R9   = scratch
+                         */
+                        const MLabelId lbl_slow = mf.new_label();
+                        const MLabelId lbl_done = mf.new_label();
+
+                        /* Cargar class_ptr a ABI1. */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], ABI1);
+
+                        /* mov ecx, [ABI1 + 24]  ; instance_size u32 (zero-ext a rcx). */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RCX, 4),
+                                MOperand::make_mem(ABI1, 24)));
+                        /* add rcx, 15 (= 8 GcHeader + 7 padding) */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::ADD,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_imm32(15)));
+                        /* and rcx, ~7 (align 8) */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::AND,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_imm32(static_cast<int32_t>(~7))));
+                        /* mov rax, [rbx + nursery_bump_off] */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::RBX,
+                                    opts_.nursery_bump_offset)));
+                        /* mov r8, rax ; new_bump = bump */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R8),
+                                MOperand::make_reg(MReg::RAX)));
+                        /* add r8, rcx */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_binary(MOp::ADD,
+                                MOperand::make_reg(MReg::R8),
+                                MOperand::make_reg(MReg::R8),
+                                MOperand::make_reg(MReg::RCX)));
+                        /* cmp r8, [rbx + nursery_end_off] */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_binary(MOp::CMP,
+                                MOperand{},
+                                MOperand::make_reg(MReg::R8),
+                                MOperand::make_mem(MReg::RBX,
+                                    opts_.nursery_end_offset)));
+                        /* ja lbl_slow */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jcc(MCond::A, lbl_slow));
+                        /* mov [rbx + nursery_bump_off], r8 ; commit */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RBX,
+                                    opts_.nursery_bump_offset),
+                                MOperand::make_reg(MReg::R8)));
+                        /* GcHeader init: mov dword [rax], ecx (size). */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RAX, 0),
+                                MOperand::make_reg(MReg::RCX, 4)));
+                        /* mov dword [rax+4], 0  ; color=WHITE/gen=YOUNG/etc.
+                         * Usar reg de 32 bits para que el encoding sea dword. */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RAX, 4),
+                                MOperand::make_imm32(0)));
+                        /* ObjectHeader.class_ptr = ABI1 (offset 8 desde raw). */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RAX, 8),
+                                MOperand::make_reg(ABI1)));
+                        /* ObjectHeader.flags (offset 16) = OBJ_FLAG_GC_OWNED (=1). */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RAX, 16),
+                                MOperand::make_imm32(1)));
+                        /* Llamar vrt_register_alloc(proc=rbx, raw=rax).
+                         * Native ABI: arg0=ABI0, arg1=ABI1.
+                         * Pero RAX es el ptr (no podemos copiar a ABI1
+                         * todavia porque ABI1 ya contiene cls; tras este
+                         * call, cls ya no se necesita). */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ABI1),
+                                MOperand::make_reg(MReg::RAX)));
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(ABI0),
                                 MOperand::make_reg(MReg::RBX)));
-                        const uint32_t pidx = mf.intern_imm64(
-                            reinterpret_cast<uint64_t>(opts_.runtime->newobj_handle));
+                        {
+                            const uint32_t pidx = mf.intern_imm64(
+                                opts_.register_alloc_addr);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_imm64_idx(pidx)));
+                        }
+                        {
+                            MInstr c1;
+                            c1.op = MOp::CALL;
+                            c1.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(c1);
+                            mf.blocks.back().instrs.push_back(c1);
+                        }
+                        /* jmp done */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jmp(lbl_done));
+
+                        /* slow_path: */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_label_def(lbl_slow));
+                        /* Recargar class_ptr (puede haber sido clobbered). */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], ABI1);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
-                                MOperand::make_reg(MReg::RAX),
-                                MOperand::make_imm64_idx(pidx)));
-                        MInstr c1;
-                        c1.op = MOp::CALL;
-                        c1.src1 = MOperand::make_reg(MReg::RAX);
-                        emit_stackmap_for_safepoint(c1);
-                        mf.blocks.back().instrs.push_back(c1);
-                        /* slot[dst] = handle (en RAX). */
+                                MOperand::make_reg(ABI0),
+                                MOperand::make_reg(MReg::RBX)));
+                        {
+                            const uint32_t pidx = mf.intern_imm64(
+                                reinterpret_cast<uint64_t>(
+                                    opts_.runtime->newobj_handle));
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RAX),
+                                    MOperand::make_imm64_idx(pidx)));
+                        }
+                        {
+                            MInstr c1;
+                            c1.op = MOp::CALL;
+                            c1.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(c1);
+                            mf.blocks.back().instrs.push_back(c1);
+                        }
+                        /* done: */
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_label_def(lbl_done));
                         if (ins.dst != ir::IR_NO_VALUE) {
                             store_op(mf, ins.dst, MReg::RAX);
                         }
@@ -2256,7 +2694,7 @@ namespace jit {
                                     mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
                                     break;
                                 }
-                                load_op(mf, ins.operands[0], SCRATCH_A);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                                 mf.blocks.back().instrs.push_back(
                                     MInstr::make_unary(MOp::MOV,
                                         MOperand::make_reg(SCRATCH_C),
@@ -2283,7 +2721,7 @@ namespace jit {
                                     mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
                                     break;
                                 }
-                                load_op(mf, ins.operands[0], SCRATCH_B);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                                 mf.blocks.back().instrs.push_back(
                                     MInstr::make_unary(MOp::LZCNT,
                                         MOperand::make_reg(MReg::RAX),
@@ -2316,8 +2754,8 @@ namespace jit {
                                     mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
                                     break;
                                 }
-                                load_op(mf, ins.operands[0], SCRATCH_A);
-                                load_op(mf, ins.operands[1], SCRATCH_B);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                                 const MOp rot_op = (fn.find("vmath_rotl") != std::string::npos)
                                     ? MOp::ROL : MOp::ROR;
                                 mf.blocks.back().instrs.push_back(
@@ -2333,8 +2771,8 @@ namespace jit {
                                 mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
                                 break;
                             }
-                            load_op(mf, ins.operands[0], SCRATCH_A);
-                            load_op(mf, ins.operands[1], SCRATCH_B);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::CMP,
                                     MOperand::make_reg(SCRATCH_A),
@@ -2401,11 +2839,11 @@ namespace jit {
                              * reg en ningun ABI, no clobbered por load_op
                              * que usa RAX/RCX/RDX como scratch).  Asi evitamos
                              * push/pop que podrian desalinear el stack. */
-                            load_op(mf, ins.operands[0], MReg::R11);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::R11);
                             /* Cargar args a N_ARG_REGS.  load_op puede usar
                              * RAX como scratch pero NO R11. */
                             for (size_t a = 0; a < nargs_ni; ++a) {
-                                load_op(mf, ins.operands[a + 1], N_ARG_REGS_NI[a]);
+                                load_op_rematerializable(mf, ir_fn, ins.operands[a + 1], N_ARG_REGS_NI[a]);
                             }
                             /* mov rax, r11  (CALL via rax) */
                             mf.blocks.back().instrs.push_back(
@@ -2472,7 +2910,7 @@ namespace jit {
                         /* Cargar cada operando al reg correspondiente.
                          * Sin clobber porque cada reg es distinto. */
                         for (size_t a = 0; a < ins.operands.size(); ++a) {
-                            load_op(mf, ins.operands[a], N_ARG_REGS[a]);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[a], N_ARG_REGS[a]);
                         }
 
                         /* mov rax, fn_addr (via imm64 pool). */
@@ -2543,13 +2981,13 @@ namespace jit {
 
                         /* Paso 1: escribir args a proc->registers.regs[1..N+1].
                          * regs[1] = obj (operands[0]); regs[2..N+1] = args. */
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_mem(MReg::RBX, regs_base + 8),
                                 MOperand::make_reg(SCRATCH_A)));
                         for (size_t a = 0; a < nargs; ++a) {
-                            load_op(mf, ins.operands[a + 1], SCRATCH_A);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[a + 1], SCRATCH_A);
                             const int32_t off = regs_base + static_cast<int32_t>((a + 2) * 8);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
@@ -2608,7 +3046,7 @@ namespace jit {
                             const MLabelId ic_continue_label = mf.new_label();
                             const MLabelId hit_call_label    = mf.new_label();
                             /* load obj */
-                            load_op(mf, ins.operands[0], MReg::RAX);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
                             /* mov rcx, [rax+0]  (class_ptr) */
                             mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(MReg::RCX),
@@ -2664,7 +3102,7 @@ namespace jit {
                             /* ic_miss: */
                             mf.blocks.back().instrs.push_back(MInstr::make_label_def(ic_miss_label));
                             /* Setup args para vrt_callvirt_ic(proc, obj, idx, slot). */
-                            load_op(mf, ins.operands[0], MReg::RAX);  /* obj */
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);  /* obj */
 #if defined(_WIN32)
                             const MReg ic_arg0 = MReg::RCX;  /* proc */
                             const MReg ic_arg1 = MReg::RDX;  /* obj */
@@ -2734,7 +3172,7 @@ namespace jit {
                         const MLabelId continue_label = mf.new_label();
 
                         /* Load obj a RAX. */
-                        load_op(mf, ins.operands[0], MReg::RAX);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
                         /* test rax,rax; jz fallback */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
                             MOperand::make_reg(MReg::RAX),
@@ -2816,7 +3254,7 @@ namespace jit {
                         mf.blocks.back().instrs.push_back(MInstr::make_label_def(fallback_label));
 
                         /* SLOW PATH: vrt_callvirt(proc, obj, vtbl_idx). */
-                        load_op(mf, ins.operands[0], SCRATCH_A);  /* obj host_ptr */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);  /* obj host_ptr */
 #if defined(_WIN32)
                         const MReg arg0 = MReg::RCX;
                         const MReg arg1 = MReg::RDX;
@@ -2881,13 +3319,13 @@ namespace jit {
                         const int32_t  regs_base = static_cast<int32_t>(VESTA_PROC_REGISTERS_OFFSET);
 
                         /* Stage args: regs[1]=obj, regs[2..N+1]=args. */
-                        load_op(mf, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_mem(MReg::RBX, regs_base + 8),
                                 MOperand::make_reg(SCRATCH_A)));
                         for (size_t a = 0; a < nargs; ++a) {
-                            load_op(mf, ins.operands[a + 2], SCRATCH_A);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[a + 2], SCRATCH_A);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_mem(MReg::RBX,
@@ -2908,8 +3346,8 @@ namespace jit {
                          * RAX, sobrescribia RDX (method) antes de pasarlo
                          * como arg2.  Resultado: vrt_callm(proc, obj, obj)
                          * en vez de (proc, obj, method) -> retornaba 0. */
-                        load_op(mf, ins.operands[0], MReg::R10);  /* obj host_ptr */
-                        load_op(mf, ins.operands[1], MReg::R11);  /* method ptr */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::R10);  /* obj host_ptr */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], MReg::R11);  /* method ptr */
 #if defined(_WIN32)
                         const MReg cm_arg0 = MReg::RCX;
                         const MReg cm_arg1 = MReg::RDX;
@@ -2974,7 +3412,7 @@ namespace jit {
 
                         /* Stage args: regs[1..N]=args. */
                         for (size_t a = 0; a < nargs; ++a) {
-                            load_op(mf, ins.operands[a + 1], SCRATCH_A);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[a + 1], SCRATCH_A);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_mem(MReg::RBX,
@@ -2992,8 +3430,8 @@ namespace jit {
                          * arg regs) como temporales para evitar clobber.
                          * Mismo issue que CALLM: SCRATCH_C=RDX colisiona con
                          * cc_arg1(Win64)/cc_arg2(SysV). */
-                        load_op(mf, ins.func_ptr,    MReg::R10);   /* fn_addr */
-                        load_op(mf, ins.operands[0], MReg::R11);   /* env_addr */
+                        load_op_rematerializable(mf, ir_fn, ins.func_ptr,    MReg::R10);   /* fn_addr */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::R11);   /* env_addr */
 #if defined(_WIN32)
                         const MReg cc_arg0 = MReg::RCX;
                         const MReg cc_arg1 = MReg::RDX;
@@ -3047,7 +3485,7 @@ namespace jit {
                                 /* Buscar el phi_arg que corresponde al bloque actual. */
                                 for (const auto &arg : pin.phi_args) {
                                     if (arg.block == static_cast<ir::IrBlockId>(bi)) {
-                                        load_op(mf, arg.value, SCRATCH_A);
+                                        load_op_rematerializable(mf, ir_fn, arg.value, SCRATCH_A);
                                         store_op(mf, pin.dst, SCRATCH_A);
                                         break;
                                     }
@@ -3096,14 +3534,14 @@ namespace jit {
                         if (use_fused) {
                             /* Emitir cmp DESPUES del safepoint para que las
                              * flags lleguen vivas al jcc. */
-                            load_op(mf, fused_cmp_op0, SCRATCH_B);
-                            load_op(mf, fused_cmp_op1, SCRATCH_C);
+                            load_op_rematerializable(mf, ir_fn, fused_cmp_op0, SCRATCH_B);
+                            load_op_rematerializable(mf, ir_fn, fused_cmp_op1, SCRATCH_C);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::CMP,
                                     MOperand::make_reg(SCRATCH_B),
                                     MOperand::make_reg(SCRATCH_C)));
                         } else {
-                            load_op(mf, ins.operands[0], SCRATCH_A);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
                         }
 
                         /* PHI elimination con cond branching.
@@ -3131,7 +3569,7 @@ namespace jit {
                                 if (pin.op != ir::IrOp::PHI) break;
                                 for (const auto &arg : pin.phi_args) {
                                     if (arg.block == static_cast<ir::IrBlockId>(bi)) {
-                                        load_op(mf, arg.value, SCRATCH_A);
+                                        load_op_rematerializable(mf, ir_fn, arg.value, SCRATCH_A);
                                         store_op(mf, pin.dst, SCRATCH_A);
                                         break;
                                     }
@@ -3207,7 +3645,7 @@ namespace jit {
                         /* Cargar return value en RAX (si existe). */
                         if (!ins.operands.empty()
                          && ins.operands[0] != ir::IR_NO_VALUE) {
-                            load_op(mf, ins.operands[0], MReg::RAX);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
                         }
                         /* VM_ABI: ademas escribir RAX a proc->registers.regs[0]
                          * para que el caller bytecode/interprete vea el return.
@@ -3321,7 +3759,7 @@ namespace jit {
                         const MReg arg0 = MReg::RDI;
                         const MReg arg1 = MReg::RSI;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0),
                             MOperand::make_reg(MReg::RBX)));
@@ -3400,7 +3838,7 @@ namespace jit {
                          * valor anterior (e.g. resultado de un ADD previo).
                          * Patron seguro: cargar a RCX (distinto del dst RAX),
                          * luego `popcnt RAX, RCX`. */
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         const MOp mop =
                             (ins.op == ir::IrOp::POPCNT) ? MOp::POPCNT :
                             (ins.op == ir::IrOp::CLZ)    ? MOp::LZCNT :
@@ -3426,7 +3864,7 @@ namespace jit {
                          * RCX primero, copiar a RAX, bswap RAX, store.  El
                          * copy intermedio garantiza que RAX recibe el valor
                          * recien cargado (no uno stale). */
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(MReg::RAX),
@@ -3475,7 +3913,7 @@ namespace jit {
                          * Mas rapido que neg+cmov porque evita la dep
                          * sobre flags.  Funciona para todos los i64 excepto
                          * INT_MIN (mismo undef que el IR docea). */
-                        load_op(mf, ins.operands[0], SCRATCH_A);  /* rax = x */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);  /* rax = x */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(SCRATCH_C),
@@ -3511,8 +3949,8 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_A);  /* rax = a */
-                        load_op(mf, ins.operands[1], SCRATCH_B);  /* rcx = b */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);  /* rax = a */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);  /* rcx = b */
                         /* cmp rax, rcx */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::CMP,
@@ -3547,7 +3985,7 @@ namespace jit {
                         }
                         /* ilog2(u64 x) = 63 - clz(x).  Asumimos x != 0 (UB
                          * documentada).  Emitimos lzcnt + neg + add 63. */
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::LZCNT,
                                 MOperand::make_reg(MReg::RAX),
@@ -3594,12 +4032,12 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
                                 MOperand::make_reg(SCRATCH_B)));
-                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM1),
@@ -3634,7 +4072,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::CVTSI2SD,
                                 MOperand::make_reg(MReg::XMM0),
@@ -3658,7 +4096,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
@@ -3681,7 +4119,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);  /* rcx = bits */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);  /* rcx = bits */
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
@@ -3709,12 +4147,12 @@ namespace jit {
                             break;
                         }
                         /* op0 -> xmm0, op1 -> xmm1, minsd xmm0, xmm1. */
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
                                 MOperand::make_reg(SCRATCH_B)));
-                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM1),
@@ -3746,7 +4184,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
@@ -3785,7 +4223,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         const uint64_t mask = (ins.op == ir::IrOp::FABS)
                             ? 0x7FFFFFFFFFFFFFFFULL
                             : 0x8000000000000000ULL;
@@ -3819,7 +4257,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
@@ -3848,7 +4286,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
@@ -3909,12 +4347,12 @@ namespace jit {
                                 MOperand::make_reg(MReg::RAX),
                                 MOperand::make_reg(MReg::RAX)));
                         /* Cargar ambos operandos a XMM0/XMM1. */
-                        load_op(mf, ins.operands[0], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM0),
                                 MOperand::make_reg(SCRATCH_B)));
-                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                         mf.blocks.back().instrs.push_back(
                             MInstr::make_unary(MOp::MOVQ_GP_XMM,
                                 MOperand::make_reg(MReg::XMM1),
@@ -3965,8 +4403,8 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], SCRATCH_A);
-                        load_op(mf, ins.operands[1], SCRATCH_B);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);
                         const MOp rot_op =
                             (ins.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
                         mf.blocks.back().instrs.push_back(
@@ -3995,7 +4433,7 @@ namespace jit {
                             const MReg arg1 = MReg::RSI;
 #endif
                             /* mov arg1, [slot[size]]. */
-                            load_op(mf, ins.operands[0], arg1);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                             /* mov arg0, rbx (proc). */
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
@@ -4024,6 +4462,41 @@ namespace jit {
                     case ir::IrOp::RAW_FREE: {
                         /* RAW_FREE(ptr) -> void.  CALL a vrt_raw_free(proc, ptr).
                          * Equivale a @c free(ptr) del C runtime. */
+                        /* Sprint mem-loop-fix (2026-06-02): SKIP el free
+                         * cuando el ptr proviene de un ALLOCA con
+                         * host_alloca_explicit_free.  En el JIT esos
+                         * ALLOCAs emiten `sub rsp, N` (host stack),
+                         * que se libera con `leave/ret` del frame.
+                         * Llamar `vrt_raw_free(proc, host_stack_ptr)`
+                         * seria un crash (intentaria free sobre un
+                         * ptr NO alocado por el RawAllocator).  El
+                         * skip es solo para el JIT -- el INTERP SI
+                         * ejecuta el `free` opcode porque ahi el
+                         * ALLOCA si emitio `alloc` real. */
+                        if (ins.operands.size() == 1
+                         && ins.operands[0] != ir::IR_NO_VALUE
+                         && ins.operands[0] < skip_raw_free_vid.size()
+                         && skip_raw_free_vid[ins.operands[0]]) {
+                            /* Sprint mem-loop-fix-v2: en lugar de SKIP,
+                             * emite `add rsp, aligned(N)` para balancear
+                             * el `sub rsp, N` del ALLOCA matching.  Asi
+                             * loops con malloc(N)+...+free(p) no acumulan
+                             * stack (480 MB en el bench mem_malloc_free
+                             * antes del fix -> crash silente). */
+                            const uint64_t size =
+                                (ins.operands[0] < alloca_size_by_vid.size())
+                                    ? alloca_size_by_vid[ins.operands[0]] : 0;
+                            if (size > 0 && size < INT32_MAX) {
+                                const uint64_t aligned =
+                                    (size + 15ULL) & ~15ULL;
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_unary(MOp::ADD,
+                                        MOperand::make_reg(MReg::RSP),
+                                        MOperand::make_imm32(
+                                            static_cast<int32_t>(aligned))));
+                            }
+                            break;
+                        }
                         if (ins.operands.size() == 1
                          && opts_.runtime != nullptr
                          && opts_.runtime->raw_free != nullptr) {
@@ -4036,7 +4509,7 @@ namespace jit {
                             const MReg arg0 = MReg::RDI;
                             const MReg arg1 = MReg::RSI;
 #endif
-                            load_op(mf, ins.operands[0], arg1);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                             mf.blocks.back().instrs.push_back(
                                 MInstr::make_unary(MOp::MOV,
                                     MOperand::make_reg(arg0),
@@ -4087,7 +4560,7 @@ namespace jit {
                                     MOperand::make_reg(arg0),
                                     MOperand::make_reg(MReg::RBX)));
                             /* mov arg1, [slot[handle]]. */
-                            load_op(mf, ins.operands[0], arg1);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                             /* mov rax, fn_addr (via imm64 pool). */
                             const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
                             mf.blocks.back().instrs.push_back(
@@ -4156,7 +4629,7 @@ namespace jit {
                                     MOperand::make_reg(arg0),
                                     MOperand::make_reg(MReg::RBX)));
                             /* mov arg1, [slot[src0]]. */
-                            load_op(mf, ins.operands[0], arg1);
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
 
                             /* mov rax, fn_addr (via imm64 pool). */
                             const uint32_t fn_pool_idx = mf.intern_imm64(fn_addr);
@@ -5480,7 +5953,7 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5524,7 +5997,7 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5569,8 +6042,8 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);  /* handler_pc */
-                        load_op(mf, ins.operands[1], arg2);  /* type_class */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);  /* handler_pc */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], arg2);  /* type_class */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5637,7 +6110,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], MReg::RAX);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
                         /* rax = cls->static_data (host_ptr) */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(MReg::RAX),
@@ -5667,7 +6140,7 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], MReg::RAX);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
                         /* xor rcx, rcx (clear destino antes del setcc para
                          * zero-extend los bits altos; setcc solo escribe AL) */
                         mf.blocks.back().instrs.push_back(MInstr::make_binary(MOp::XOR,
@@ -5715,7 +6188,7 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5760,8 +6233,8 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);  /* msg_vaddr */
-                        load_op(mf, ins.operands[1], arg2);  /* msg_len */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);  /* msg_vaddr */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], arg2);  /* msg_len */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5807,7 +6280,7 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);  /* size */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);  /* size */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5874,7 +6347,7 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI;
                     #endif
-                        load_op(mf, ins.operands[0], arg1);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5956,8 +6429,96 @@ namespace jit {
                     #else
                         const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
                     #endif
-                        if (nargs >= 1) load_op(mf, ins.operands[0], arg1);
-                        if (nargs >= 2) load_op(mf, ins.operands[1], arg2);
+                        if (nargs >= 1) load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
+                        if (nargs >= 2) load_op_rematerializable(mf, ir_fn, ins.operands[1], arg2);
+
+                        // Sprint string-perf-2 (2026-06-02): inline cache
+                        // per call site para STRMAKE.  Layout del slot (24 B):
+                        //   +0..+7   cached_arg1 (vm_addr o ha)
+                        //   +8..+15  cached_arg2 (byte_len o hb; 0 si nargs==1)
+                        //   +16..+23 cached_result (GcHandle; 0 = miss)
+                        //
+                        // En cada call site, check si args matchean cache.
+                        // Hit: ~6 instr (~5 ns).  Miss: full CALL + actualizar
+                        // slot (~250 ns).  Para STRMAKE/STRCAT con args
+                        // repetidos en hot loops (literales, prefix-suffix
+                        // recurrente) la ganancia es 50x.  LICM ya hoista la
+                        // mayoria pero esto cubre los casos cross-function +
+                        // patrones que LICM no atrapa.
+                        //
+                        // Solo aplica a STRMAKE/STRCAT/STRCMP (ops puros con
+                        // resultado determinista por args).  STRLEN/STRRAW/
+                        // STRGETBYTES tienen su propio fast path en el
+                        // runtime (header read directo).
+                        // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE
+                        // EXCLUIDO del JIT IC.  Su vm_addr es una direccion
+                        // de memoria runtime, NO un value-deterministic
+                        // handle.  Cachear por vm_addr es unsafe cuando los
+                        // bytes en esa direccion mutan (caso comun: `&local`
+                        // o `&buf[i]` con stores intermedios).
+                        //
+                        // STRCAT/STRCMP SI son safe: sus args son GcHandles
+                        // (canonicos via intern), asi mismos handles ->
+                        // mismo resultado deterministico.  IC por handle es
+                        // semanticamente correcto.
+                        //
+                        // El runtime intern hash cache (hash de contenido)
+                        // ya cubre las STRMAKEs de literales -- ~50ns hit.
+                        // El JIT IC anyadia ~5ns vs ~50ns, pero a costo de
+                        // correctness.  Diferencia despreciable.
+                        // Sprint string-perf-2 debug (2026-06-02): IC
+                        // deshabilitado temporalmente para validar
+                        // correctness en bench string_workout.
+                        // TODO: re-enable tras determinar causa raiz
+                        // de discrepancia interp vs JIT.
+                        bool use_ic = false;
+                        (void)opts_.reserve_ic_slot;
+                        uint64_t str_ic_slot = 0;
+                        MLabelId ic_hit_label = 0, ic_miss_label = 0, ic_done_label = 0;
+                        if (use_ic) {
+                            str_ic_slot = opts_.reserve_ic_slot();
+                            use_ic = (str_ic_slot != 0);
+                        }
+                        if (use_ic) {
+                            ic_hit_label  = mf.new_label();
+                            ic_miss_label = mf.new_label();
+                            ic_done_label = mf.new_label();
+                            // R10 = ic_slot_addr
+                            const uint32_t slot_idx = mf.intern_imm64(str_ic_slot);
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R10),
+                                MOperand::make_imm64_idx(slot_idx)));
+                            // cmp arg1, [r10+0]; jne miss
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::CMP,
+                                MOperand::make_reg(arg1),
+                                MOperand::make_mem(MReg::R10, 0)));
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_jcc(MCond::NE, ic_miss_label));
+                            if (nargs >= 2) {
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::CMP,
+                                    MOperand::make_reg(arg2),
+                                    MOperand::make_mem(MReg::R10, 8)));
+                                mf.blocks.back().instrs.push_back(
+                                    MInstr::make_jcc(MCond::NE, ic_miss_label));
+                            }
+                            // mov rax, [r10+16]; test rax,rax; je miss (handle 0 = empty)
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::R10, 16)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_binary(
+                                MOp::TEST,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::RAX)));
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_jcc(MCond::E, ic_miss_label));
+                            // hit: jmp done
+                            mf.blocks.back().instrs.push_back(MInstr::make_jmp(ic_done_label));
+                            // miss:
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_label_def(ic_miss_label));
+                        }
+
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
                         const uint32_t fn_idx = mf.intern_imm64(fn_addr);
@@ -5970,6 +6531,44 @@ namespace jit {
                             ic.src1 = MOperand::make_reg(MReg::RAX);
                             emit_stackmap_for_safepoint(ic);
                             mf.blocks.back().instrs.push_back(ic);
+                        }
+                        if (use_ic) {
+                            // Tras CALL, RAX = nuevo handle.  Persistir args
+                            // + handle en slot (R10 puede haber sido clobbered
+                            // por el CALL: re-cargar).  Re-load args desde
+                            // su slot original via load_op (idempotente).
+                            const uint32_t slot_idx2 = mf.intern_imm64(str_ic_slot);
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R10),
+                                MOperand::make_imm64_idx(slot_idx2)));
+                            // Save rax to a temp (will be clobbered by load_op).
+                            // Use R11 (caller-saved scratch, libre).
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R11), MOperand::make_reg(MReg::RAX)));
+                            // Re-load args from their SSA slots back to arg1/arg2.
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);
+                            if (nargs >= 2) load_op_rematerializable(mf, ir_fn, ins.operands[1], arg2);
+                            // mov [r10+0], arg1
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::R10, 0),
+                                MOperand::make_reg(arg1)));
+                            // mov [r10+8], arg2 (or 0 if nargs==1)
+                            if (nargs >= 2) {
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_mem(MReg::R10, 8),
+                                    MOperand::make_reg(arg2)));
+                            }
+                            // mov [r10+16], r11 (cached handle)
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::R10, 16),
+                                MOperand::make_reg(MReg::R11)));
+                            // mov rax, r11 (restore result for store_op)
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_reg(MReg::R11)));
+                            // done:
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_label_def(ic_done_label));
                         }
                         store_op(mf, ins.dst, MReg::RAX);
                         break;
@@ -6020,7 +6619,7 @@ namespace jit {
                             break;
                         }
                         /* load src -> RAX */
-                        load_op(mf, ins.operands[0], MReg::RAX);
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
                         /* test rax, rax (sets ZF=1 si rax==0) */
                         mf.blocks.back().instrs.push_back(MInstr::make_binary(
                             MOp::TEST,
@@ -6081,11 +6680,11 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        load_op(mf, ins.operands[0], MReg::RAX);  /* cls */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);  /* cls */
                         mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(MReg::RAX),
                             MOperand::make_mem(MReg::RAX, VESTA_CLASSINFO_STATIC_DATA_OFFSET)));
-                        load_op(mf, ins.operands[1], SCRATCH_B);  /* val (RCX) */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], SCRATCH_B);  /* val (RCX) */
                         const int32_t off = static_cast<int32_t>(ins.imm);
                         mf.blocks.back().instrs.push_back(MInstr::make_binary(MOp::MOV,
                             MOperand::make_mem(MReg::RAX, off),
@@ -6494,6 +7093,25 @@ namespace jit {
                     invalidate_all();
                 }
 
+                /* Sprint string-perf-3 bug fix (2026-06-02): IDIV y CQO
+                 * tienen RAX y RDX como dst IMPLICITOS (no en emit_mi.dst).
+                 * IDIV reg: RAX = quot, RDX = rem.  CQO: sign-extend RAX
+                 * -> RDX.  Sin invalidar estos regs en el tracker, la
+                 * siguiente `mov rax, [slot]` despues de un IDIV se
+                 * considera redundante (tracker piensa que rax aun tiene
+                 * el valor pre-idiv) y se elide -> el codigo emitido
+                 * NO recarga el operando del siguiente DIV/MOD, y los
+                 * resultados son incorrectos.
+                 *
+                 * Bug capturado: `bB[1] = 48 + ((i / 10) % 10)` en bench
+                 * string_workout daba '4' en lugar de '0' a partir de
+                 * iter 102400 porque la segunda DIV reusaba RAX = i/10
+                 * en lugar de cargar `i` de nuevo. */
+                if (emit_mi.op == MOp::IDIV || emit_mi.op == MOp::CQO) {
+                    invalidate_reg(static_cast<uint8_t>(MReg::RAX));
+                    invalidate_reg(static_cast<uint8_t>(MReg::RDX));
+                }
+
                 out.push_back(emit_mi);
             }
             block.instrs = std::move(out);
@@ -6501,6 +7119,179 @@ namespace jit {
             for (int r = 0; r < 64; ++r) {
                 exit_states[bi][r] = reg_has[r];
             }
+        }
+
+        /* -------------------------------------------------------------
+         * Sprint string-perf-7 (2026-06-02): store-load forwarding con
+         * lookahead.
+         *
+         * Patron observable (e.g. xorshift en bench_branch_unpredict):
+         *   1. STORE [slot]<-rX       (resultado de SHL/etc al slot)
+         *   2. MOV rX, anything       (clobber de rX por la siguiente op)
+         *   3. MOV rY, [slot]         (LOAD del mismo slot a otro reg)
+         *
+         * El peephole reg_has actual NO captura esto porque al clobber
+         * rX en (2), olvida que el slot tenia el valor de rX.  En (3)
+         * busca un reg con ese slot, no encuentra, y emite el LOAD.
+         *
+         * Optimizacion: si entre (1) y (3) hay un clobber de rX pero
+         * NADIE escribe al slot ni a rY entre (1) y el primer clobber
+         * de rX, INSERTAMOS `mov rY, rX` justo despues de (1) y
+         * ELIMINAMOS (3).  Net: store(1byte mem write) + reg-to-reg
+         * mov(0.5 ciclo) vs store + load(1byte mem read).  Ahorra el
+         * mem-load (~5 ciclos cuando hay cache miss; ~1 ciclo si hit).
+         * ------------------------------------------------------------- */
+        {
+            const uint8_t RBP_REG = reg_id(MReg::RBP);
+            auto is_pure_slot = [&](const MOperand &op) -> bool {
+                return op.kind == MOperandKind::MEM
+                    && op.reg == RBP_REG
+                    && (op.width & 0xFC) == 0xFC;
+            };
+            auto is_store_to_slot = [&](const MInstr &mi) -> bool {
+                return mi.op == MOp::MOV
+                    && mi.dst.kind == MOperandKind::MEM
+                    && is_pure_slot(mi.dst)
+                    && mi.src1.kind == MOperandKind::REG;
+            };
+            auto is_load_from_slot = [&](const MInstr &mi) -> bool {
+                return mi.op == MOp::MOV
+                    && mi.dst.kind == MOperandKind::REG
+                    && mi.src1.kind == MOperandKind::MEM
+                    && is_pure_slot(mi.src1);
+            };
+            auto same_slot = [](const MOperand &a, const MOperand &b) -> bool {
+                return a.reg == b.reg
+                    && a.value == b.value
+                    && (a.width & 0xFC) == (b.width & 0xFC);
+            };
+            /* True si la instr escribe rX (clobber/redefine). */
+            auto clobbers_reg = [&](const MInstr &mi, uint8_t r) -> bool {
+                if (mi.dst.kind == MOperandKind::REG && mi.dst.reg == r)
+                    return true;
+                /* CALL clobbea caller-saved.  Conservativo: clobea todo. */
+                if (mi.op == MOp::CALL)
+                    return true;
+                /* IDIV/CQO clobean RAX/RDX. */
+                if (mi.op == MOp::IDIV || mi.op == MOp::CQO) {
+                    if (r == static_cast<uint8_t>(MReg::RAX)
+                     || r == static_cast<uint8_t>(MReg::RDX))
+                        return true;
+                }
+                return false;
+            };
+
+            const int LOOKAHEAD = 24;  /* ventana de busqueda; basta para
+                                        * patrones tipicos de xorshift +
+                                        * load-store inmediatos. */
+            size_t fwd_applied = 0;
+            for (auto &block : mf.blocks) {
+                auto &instrs = block.instrs;
+                /* Marcamos LOADs a eliminar via flag; al final compact. */
+                std::vector<bool> kill(instrs.size(), false);
+                /* Inserts pendientes: (index_after, mov_dst_reg, mov_src_reg). */
+                std::vector<std::tuple<size_t, uint8_t, uint8_t>> inserts;
+
+                for (size_t i = 0; i < instrs.size(); ++i) {
+                    if (!is_store_to_slot(instrs[i])) continue;
+                    const auto &store = instrs[i];
+                    const uint8_t rX = store.src1.reg;
+                    const MOperand slot_mem_op = store.dst;
+                    /* Si rX < 64 (= GP). */
+                    if (rX >= 64) continue;
+
+                    /* Scan ventana adelante. */
+                    bool rx_clobbered = false;
+                    size_t clobber_idx = 0;
+                    const size_t lim = std::min(instrs.size(), i + 1 + LOOKAHEAD);
+                    for (size_t j = i + 1; j < lim; ++j) {
+                        const auto &mj = instrs[j];
+                        /* Si STORE al MISMO slot, slot reescrito -> stop. */
+                        if (is_store_to_slot(mj) && same_slot(mj.dst, slot_mem_op)) break;
+                        /* Si STORE a memoria arbitraria (no slot), conservativo: stop. */
+                        if (mj.op == MOp::MOV && mj.dst.kind == MOperandKind::MEM
+                            && !is_pure_slot(mj.dst)) break;
+                        if (mj.op == MOp::CALL) break;  /* clobea regs + memoria */
+
+                        if (!rx_clobbered && clobbers_reg(mj, rX)) {
+                            rx_clobbered = true;
+                            clobber_idx = j;
+                        }
+
+                        /* Buscar LOAD del MISMO slot a otro reg. */
+                        if (is_load_from_slot(mj)
+                         && same_slot(mj.src1, slot_mem_op)
+                         && mj.dst.reg < 64
+                         && mj.dst.reg != rX) {
+                            const uint8_t rY = mj.dst.reg;
+                            /* Verificar que rY no fue escrito entre i+1 y j-1
+                             * (si lo fue, no podemos pre-cargar). */
+                            bool ry_safe = true;
+                            for (size_t k = i + 1; k < j; ++k) {
+                                if (clobbers_reg(instrs[k], rY)) {
+                                    ry_safe = false; break;
+                                }
+                            }
+                            if (!ry_safe) continue;
+                            /* Caso A: rX NO fue clobbed entre (i+1) y j.
+                             * El peephole reg_has YA podria optimizar; aqui
+                             * sirve como respaldo. */
+                            if (!rx_clobbered) {
+                                /* Reemplazar load por mov rY, rX (sin insertar). */
+                                instrs[j].src1 = MOperand::make_reg(static_cast<MReg>(rX));
+                                ++fwd_applied;
+                                continue;
+                            }
+                            /* Caso B: rX fue clobbed en clobber_idx (< j).
+                             * Insertar `mov rY, rX` justo despues del store
+                             * (idx i+1) y eliminar el load. */
+                            inserts.emplace_back(i + 1, rY, rX);
+                            kill[j] = true;
+                            ++fwd_applied;
+                        }
+                    }
+                }
+
+                if (kill.empty() && inserts.empty()) continue;
+
+                /* Aplicar: construir nueva lista con los inserts + sin los
+                 * loads marcados.  Recorremos en orden; al llegar a un index
+                 * en `inserts`, insertamos `mov rY, rX` antes. */
+                std::vector<MInstr> rebuilt;
+                rebuilt.reserve(instrs.size() + inserts.size());
+                /* Ordenar inserts por index ASC. */
+                std::sort(inserts.begin(), inserts.end(),
+                          [](const auto &a, const auto &b) {
+                              return std::get<0>(a) < std::get<0>(b);
+                          });
+                size_t ins_idx = 0;
+                for (size_t i = 0; i < instrs.size(); ++i) {
+                    while (ins_idx < inserts.size()
+                        && std::get<0>(inserts[ins_idx]) == i) {
+                        const uint8_t rY = std::get<1>(inserts[ins_idx]);
+                        const uint8_t rX = std::get<2>(inserts[ins_idx]);
+                        rebuilt.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(static_cast<MReg>(rY)),
+                                MOperand::make_reg(static_cast<MReg>(rX))));
+                        ++ins_idx;
+                    }
+                    if (kill[i]) continue;
+                    rebuilt.push_back(instrs[i]);
+                }
+                /* Inserts despues del ultimo index (rare). */
+                while (ins_idx < inserts.size()) {
+                    const uint8_t rY = std::get<1>(inserts[ins_idx]);
+                    const uint8_t rX = std::get<2>(inserts[ins_idx]);
+                    rebuilt.push_back(
+                        MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(static_cast<MReg>(rY)),
+                            MOperand::make_reg(static_cast<MReg>(rX))));
+                    ++ins_idx;
+                }
+                block.instrs = std::move(rebuilt);
+            }
+            (void)fwd_applied;
         }
 
         /* Dead Store Elimination (DSE) DESPUES del peephole.

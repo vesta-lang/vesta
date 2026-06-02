@@ -1178,15 +1178,14 @@ vrt_handle vrt_str_make(vrt_proc *proc, uint64_t vm_addr, uint32_t byte_len) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
     if (byte_len > (1u << 24)) return VRT_NULL_HANDLE; /* sanity: 16 MB cap */
-    /* Leer bytes desde memoria VM a buffer host. */
-    std::vector<uint8_t> buf(byte_len);
-    if (byte_len > 0) {
-        p->vm_mem.read_bytes(vm_addr, buf.data(), byte_len);
-    }
+    /* Sprint string-perf-4 (2026-06-02): bypass del path antiguo
+     * (heap std::vector + make_string_flat sin cache).  Delega al
+     * helper compartido con exec_instr_strmake -> stack buf <=256 B,
+     * single-pass FNV-1a 64-bit, intern lookup-first, alloc_flat con
+     * precomputed_hash.  Speedup esperado en JIT: ~3-5x en hot loops
+     * porque el 95%+ de STRMAKEs hit cache. */
     return static_cast<vrt_handle>(
-        runtime::make_string_flat(p, buf.data(), byte_len,
-                                  UINT32_MAX, /* length: auto-ASCII fallback */
-                                  loader::StringEncoding::UTF8));
+        runtime::make_string_from_vm_mem(p, vm_addr, byte_len));
 }
 
 /* STRLEN: numero de code points del StringObject. */

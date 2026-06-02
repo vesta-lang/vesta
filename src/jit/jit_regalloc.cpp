@@ -285,10 +285,28 @@ namespace jit {
                 const auto &a = info[a_idx];
                 const auto &b = info[b_idx];
                 if (!ranges_overlap(a, b)) return false;
-                /* Son partners? -> overlap benigno. */
+                /* Sprint string-perf-3 bug fix (2026-06-02): phi-partner
+                 * coalescing solo es safe cuando uno de los VIDs MUERE en
+                 * el punto del phi (live range termina <= def del otro).
+                 * Si ambos viven MAS ALLA del phi-copy point (e.g., un
+                 * phi_arg que se usa DESPUES del loop ademas del phi),
+                 * compartir reg les hace pisar valores -> bug correctness.
+                 *
+                 * Caso clasico: `string c = pat; while (...) c = ...;
+                 * str_equals(c, pat)`.  %pat es phi_arg de %c.  El
+                 * coalescing los unia a un solo reg, pero el strcmp
+                 * post-loop necesita AMBOS valores -- pisaba pat con
+                 * el ultimo c.
+                 *
+                 * Test: si A es phi_arg de B (= B en phi_partners[A]),
+                 * el coalescing es safe SOLO si A muere antes/en el def
+                 * de B (a.last_use <= b.def_pos).  Idem inversa. */
                 auto it = phi_partners.find(a.vid);
                 if (it != phi_partners.end() && it->second.count(b.vid)) {
-                    return false;
+                    /* Son partners: chequear si uno muere al definirse el otro. */
+                    if (a.last_use_pos <= b.def_pos) return false; /* a -> b clean */
+                    if (b.last_use_pos <= a.def_pos) return false; /* b -> a clean */
+                    /* Ambos sobreviven al punto del phi -> overlap REAL. */
                 }
                 return true;
             };
