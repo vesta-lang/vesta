@@ -33,6 +33,9 @@
 
 /* hook JIT en CALLVIRT fast path. */
 #include "jit/interp_jit_bridge.h"
+
+/* Sprint D.6 (2026-06-03): profile counters runtime. */
+#include "runtime/profile.h"
 #include "vesta_rt/public.h"
 
 #include <time.h>
@@ -307,6 +310,15 @@ namespace runtime {
 
         auto *hdr = reinterpret_cast<loader::ObjectHeader *>(obj_ptr);
         loader::ClassInfo *cls = hdr->class_ptr; // obtener la clase del objeto
+
+        // Sprint D.6: profile type observation per call site.  Fast path
+        // colapsa a 1 atomic load relaxed + branch predicted-not-taken
+        // cuando el profiler no esta activo (default).
+        if (__builtin_expect(
+                runtime::profile::g_profile.active.load(std::memory_order_relaxed),
+                0)) {
+            runtime::profile::profile_callvirt(vm->registers.rip.raw(), cls);
+        }
 
         // ---------- Inline cache (monomorphic) ----------
         // En la mayoria de programas, el call site siempre ve la MISMA clase.
@@ -678,6 +690,16 @@ namespace runtime {
             runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
                 "CALLM: deref de objeto null");
             return;
+        }
+        // Sprint D.6: type observation para CALLM (dispatch dinamico
+        // via puntero a MethodInfo; comun en codigo polimorfico tras
+        // findmethod cuando el frontend NO puede devirtualizar).
+        if (__builtin_expect(
+                runtime::profile::g_profile.active.load(std::memory_order_relaxed),
+                0)) {
+            auto *hdr = reinterpret_cast<loader::ObjectHeader *>(obj_ptr);
+            runtime::profile::profile_callvirt(
+                vm->registers.rip.raw(), hdr->class_ptr);
         }
         auto *method = reinterpret_cast<loader::MethodInfo *>(
             vm->registers.regs[r_method].qword());

@@ -22,6 +22,7 @@
 #include "gc/raw_allocator.h"
 #include "loader/oop_types.h"
 #include "util/simd_copy.h"
+#include "runtime/profile.h"
 
 namespace runtime {
 
@@ -326,6 +327,13 @@ namespace runtime {
     void exec_instr_newobj(ProcessVM *vm, const DecodedInstr &instr) {
         const uint8_t r_cls = instr.data_instruction.reg_data.reg1; // registro con el puntero ClassInfo
         auto *cls = reinterpret_cast<loader::ClassInfo *>(vm->registers.regs[r_cls].qword());
+
+        // Sprint D.6 (2026-06-03): alloc count para escape analysis en C2.
+        if (__builtin_expect(
+                profile::g_profile.active.load(std::memory_order_relaxed),
+                0)) {
+            profile::profile_newobj(vm->registers.rip.raw());
+        }
 
         if (cls == nullptr) {
             // clase nula: devolver handle invalido
