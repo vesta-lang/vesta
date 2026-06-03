@@ -68,7 +68,7 @@ tests/vex/test_vex_e2e.sh
 
 doc/exhaustive_tests*
 __pycache__
-bench_plots/*
+bench_plots/per_bench/*
 
 tem
 temp
