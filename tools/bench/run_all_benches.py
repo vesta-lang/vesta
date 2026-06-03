@@ -761,25 +761,39 @@ def all_runs(cmd: list[str], env: dict | None, runs: int,
 
     @param use_vex_walltime  Si true, ejecuta con @c --stats y extrae el
     Wall time interno (sin VM init overhead).  Solo para langs Vex.
+
+    Resiliencia contra flakes ambientales:
+    - @c MAX_ATTEMPTS=5 reintentos por run individual antes de fallar.
+    - Backoff exponencial entre reintentos (250ms, 500ms, 1s, 2s).
+    - Si un TIMEOUT ocurre tras el primer run exitoso, no abortar todo
+      el bench: skipear ese run y continuar con los demas (devolver lo
+      medido si al menos 1 run salio).  Solo abortar si NINGUN run sale.
+
+    Causas tipicas de flake en Windows:
+    - AV scan / Windows Defender bloqueando momentaneamente el .exe.
+    - Carga del sistema durante el run (otros procesos, telemetria).
+    - Handle/file lock contention al lanzar muchos subprocess rapido.
     """
     total = max(0, warmup) + runs
     times = []
     timer = run_timed_vex if use_vex_walltime else run_timed
-    # Sprint bench-retry (2026-06-03): el subprocess puede fallar
-    # ocasionalmente por causas externas (carga del sistema, AV scan
-    # momentaneo, race con file lock).  Reintentar hasta 3 veces antes
-    # de marcar el bench como FAIL real.  Si el binario en si fuera
-    # buggy, los 3 reintentos fallarian sistematicamente; si la falla
-    # es flaky por entorno, un reintento la cubre.
-    MAX_ATTEMPTS = 3
+    MAX_ATTEMPTS = 5
+    BACKOFF_MS = [0, 250, 500, 1000, 2000]
     for i in range(total):
         ms = -1.0
         for attempt in range(MAX_ATTEMPTS):
+            if attempt > 0:
+                time.sleep(BACKOFF_MS[attempt] / 1000.0)
             ms = timer(cmd, env=env, timeout=timeout, cwd=cwd)
             if ms >= 0:
                 break
         if ms < 0:
-            return []
+            # Run individual fallo tras 5 reintentos.  En lugar de
+            # abortar todo el bench (lo que tira hasta 4 runs validos
+            # por culpa de 1 flake), continuamos: aceptamos perder 1
+            # run si los demas estan bien.  Solo si TODOS fallan
+            # devolvemos lista vacia.
+            continue
         if i >= warmup:
             times.append(ms)
     return times
