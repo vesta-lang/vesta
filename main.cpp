@@ -29,6 +29,7 @@
 #include "cli/vsh.h"
 #include "ir/ir_emitter.h"
 #include "jit/auto_jit.h"
+#include "runtime/profile.h"          // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
 #include "cli/runtime_api_commands.h"
@@ -242,6 +243,9 @@ int main(int argc, char *argv[]) {
             ("jit-warn",      "Imprimir warnings cada vez que el Selector encuentra una IR op no soportada (dedup por op+linea)")
             ("jit-stats",     "Imprimir snapshot final de counters del JIT: compiled/unsupported/no_ir + threshold")
             ("jit-disasm",    "Volcar hex bytes + disasm (Capstone) de cada funcion JIT-compilada a stderr")
+            // ---- opciones de profiling (D.6 PGO) ----
+            ("profile",       "Generar @c .vprof con branch/type/alloc counters al exit (PGO para C2). Path opcional; default: 'program.vprof'.",
+                cxxopts::value<std::string>()->implicit_value("program.vprof"))
             // ---- opciones de runtime distribuido ----
             ("dist-port",         "Puerto VDP del servidor distribuido (0 = sin servidor TCP)",
                 cxxopts::value<uint16_t>()->default_value("0"))
@@ -422,6 +426,21 @@ int main(int argc, char *argv[]) {
     }
     if (result.count("jit-disasm")) {
         jit::g_jit_disasm = true;
+    }
+    /* Sprint D.6 (2026-06-03): activar profile counters runtime.  El
+     * --profile [path] inicializa el collector y registra el atexit
+     * handler para dump automatico al finalizar el proceso.  Tambien
+     * se respeta la env var VESTA_PROFILE_DUMP cuando el flag no esta. */
+    {
+        std::string profile_path;
+        if (result.count("profile")) {
+            profile_path = result["profile"].as<std::string>();
+        } else if (const char *env = std::getenv("VESTA_PROFILE_DUMP")) {
+            profile_path = env;
+        }
+        if (!profile_path.empty()) {
+            runtime::profile::profile_init(profile_path);
+        }
     }
     const bool jit_stats_requested = result.count("jit-stats") > 0;
     /* Sprint string-perf-6: --stats o --jit-stats activan el counter MIPS

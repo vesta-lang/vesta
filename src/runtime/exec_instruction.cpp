@@ -27,6 +27,7 @@
 #include "jit/auto_jit.h"             // D.5-callvm-hook: lookup_jit_code_at_pc
 #include "jit/interp_jit_bridge.h"    // D.5-callvm-hook: enter_jit
 #include "vesta_rt/public.h"          // D.5-callvm-hook: vrt_proc
+#include "runtime/profile.h"          // Sprint D.6 (2026-06-03): PGO counters
 
 #include "ffi/native_ffi.h"
 
@@ -344,6 +345,16 @@ namespace runtime {
             case 0x0C: taken = (fl.ZF == 0 && fl.SF == fl.OF); break; // GT
             case 0x0D: taken = (fl.ZF == 1 || fl.SF != fl.OF); break; // LE
             default:   taken = true; break; // incondicional (0x0F y otros)
+        }
+
+        // Sprint D.6 (2026-06-03): branch frequency counter para PGO.
+        // Solo registramos branches CONDICIONALES (cond < 0x0E); los
+        // incondicionales (0x0F+) no aportan info al C2.
+        if (cond < 0x0E
+            && __builtin_expect(
+                   profile::g_profile.active.load(std::memory_order_relaxed),
+                   0)) {
+            profile::profile_branch(vm->registers.rip.raw(), taken);
         }
 
         if (taken)

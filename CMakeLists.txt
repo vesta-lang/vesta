@@ -443,6 +443,8 @@ set(VESTA_RT_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_coro.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/host_alloca_tracker.cpp
+        # Sprint D.6 (2026-06-03): profile counters runtime para PGO + C2.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/profile.cpp
         # Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
         # operaciones IEEE 754 (FCMP con NaN, etc.) y NO puede usar
         # -ffast-math (que rompe isnan/isinf + asume no NaN).  Override

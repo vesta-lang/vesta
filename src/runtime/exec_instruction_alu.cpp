@@ -27,6 +27,7 @@
  */
 #include "runtime/exec_instruction.h"
 #include "runtime/exception_runtime.h"
+#include "runtime/profile.h"   // Sprint D.6 (2026-06-03): PGO counters
 #include <cstdio>
 #include <cstdlib>
 
@@ -1390,7 +1391,15 @@ void exec_instr_cmpjmp(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t a = vm->registers.regs[sd.r0].qword();
     const uint64_t b = vm->registers.regs[sd.r1].qword();
     cmpjmp_set_flags(vm, a, b, /*is_signed=*/true);
-    if (eval_jmp_cond(static_cast<uint8_t>(sd._pad), vm->registers.flags.bits)) {
+    const bool taken = eval_jmp_cond(static_cast<uint8_t>(sd._pad),
+                                     vm->registers.flags.bits);
+    // Sprint D.6: profile counter para branches fusionados.
+    if (__builtin_expect(
+            runtime::profile::g_profile.active.load(std::memory_order_relaxed),
+            0)) {
+        runtime::profile::profile_branch(vm->registers.rip.raw(), taken);
+    }
+    if (taken) {
         write_rip(vm, static_cast<uint64_t>(sd.offset)); // salto absoluto u32
     }
 }
@@ -1406,7 +1415,15 @@ void exec_instr_cmpjmpu(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t a = vm->registers.regs[sd.r0].qword();
     const uint64_t b = vm->registers.regs[sd.r1].qword();
     cmpjmp_set_flags(vm, a, b, /*is_signed=*/false);
-    if (eval_jmp_cond(static_cast<uint8_t>(sd._pad), vm->registers.flags.bits)) {
+    const bool taken = eval_jmp_cond(static_cast<uint8_t>(sd._pad),
+                                     vm->registers.flags.bits);
+    // Sprint D.6: profile counter para branches fusionados unsigned.
+    if (__builtin_expect(
+            runtime::profile::g_profile.active.load(std::memory_order_relaxed),
+            0)) {
+        runtime::profile::profile_branch(vm->registers.rip.raw(), taken);
+    }
+    if (taken) {
         write_rip(vm, static_cast<uint64_t>(sd.offset));
     }
 }
@@ -1430,7 +1447,14 @@ void exec_instr_decjnz(ProcessVM *vm, const DecodedInstr &instr) {
         vm, old_val, /*b=*/1ULL, /*is_signed=*/true);
     vm->registers.regs[reg_idx].qword(new_val);
     // Saltar si new_val != 0 (equivale a jmp.jne post-subs).
-    if (new_val != 0ULL) {
+    const bool taken = (new_val != 0ULL);
+    // Sprint D.6: profile counter para decjnz (loop counter).
+    if (__builtin_expect(
+            runtime::profile::g_profile.active.load(std::memory_order_relaxed),
+            0)) {
+        runtime::profile::profile_branch(vm->registers.rip.raw(), taken);
+    }
+    if (taken) {
         write_rip(vm, static_cast<uint64_t>(sd.offset));
     }
 }
