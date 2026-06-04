@@ -128,9 +128,8 @@ namespace jit {
     } // namespace
 
     bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
-                     const CallResolver &resolve_call, uint64_t callvirt_addr,
-                     uint64_t gc_deref_addr, uint64_t gc_handle_addr,
-                     uint64_t raw_alloc_addr) {
+                     const CallResolver &resolve_call, const VregEntries &ent,
+                     const CallResolver &resolve_native) {
         out = MFunction{};
         out.name = fn.name;
         out.vreg_count = static_cast<uint32_t>(fn.values.size());
@@ -166,6 +165,15 @@ namespace jit {
          * para emitir SHL/SHR/SAR dst, imm en vez de via CL. */
         std::vector<uint8_t>  v_is_const(fn.values.size(), 0);
         std::vector<int64_t>  v_const(fn.values.size(), 0);
+
+        /* Crea un vreg temporal nuevo (GP, no-GC) para secuencias inline
+         * (p.ej. el inline de vmath_abs). */
+        auto new_tmp = [&]() -> ir::IrValueId {
+            const ir::IrValueId id = out.vreg_count++;
+            out.vreg_class.push_back(RegClass::GP);
+            out.vreg_is_gc.push_back(0);
+            return static_cast<ir::IrValueId>(id);
+        };
 
         for (size_t b = 0; b < NB; ++b) {
             const ir::IrBlock &ib = fn.blocks[b];
@@ -459,9 +467,9 @@ namespace jit {
                     case ir::IrOp::RAW_ALLOC: {
                         flush_pending();
                         const uint64_t addr =
-                            (in.op == ir::IrOp::GC_DEREF_HOST)     ? gc_deref_addr  :
-                            (in.op == ir::IrOp::GC_HANDLE_FOR_PTR) ? gc_handle_addr :
-                                                                     raw_alloc_addr;
+                            (in.op == ir::IrOp::GC_DEREF_HOST)     ? ent.gc_deref  :
+                            (in.op == ir::IrOp::GC_HANDLE_FOR_PTR) ? ent.gc_handle :
+                                                                     ent.raw_alloc;
                         if (!vm || addr == 0) {
                             vreg_dbg(fn.name.c_str(), "gc_runtime"); return false;
                         }
@@ -525,7 +533,7 @@ namespace jit {
                      * regs[0]. */
                     case ir::IrOp::CALLVIRT: {
                         flush_pending();
-                        if (!vm || callvirt_addr == 0) {
+                        if (!vm || ent.callvirt == 0) {
                             vreg_dbg(fn.name.c_str(), "callvirt(no-vm/no-addr)");
                             return false;
                         }
@@ -553,11 +561,62 @@ namespace jit {
                             MOperand::make_reg(idx_reg, 8),
                             MOperand::make_imm32(static_cast<int32_t>(vtbl_idx))));
                         /* 3. CALL vrt_callvirt. */
-                        O.push_back(MInstr::make_call_abs(out.intern_imm64(callvirt_addr)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callvirt)));
                         /* 4. Resultado en regs[0]. */
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                 vm_reg_mem(0)));
+                        break;
+                    }
+
+                    /* CALLN: FFI a funcion nativa.  CALL DIRECTO a la direccion
+                     * resuelta en compile-time (resolve_native) -- NO via el
+                     * dispatcher runtime vrt_calln (mas lento).  Los args van a
+                     * arg_regs host (convencion C) via ARG; CALL_ABS hace el
+                     * parallel-move + CALL.  Resultado en RAX. */
+                    case ir::IrOp::CALLN: {
+                        flush_pending();
+                        /* Inline de math intrinsics (principio: evitar el
+                         * runtime).  vmath_abs -> sar/xor/sub (~4 instr) en vez
+                         * de un CALL a vesta_math. */
+                        if (in.func_name.find("vmath_abs") != std::string::npos
+                         && in.dst != ir::IR_NO_VALUE && in.operands.size() == 1) {
+                            const ir::IrValueId tmp = new_tmp();
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(tmp),
+                                vr(in.operands[0])));
+                            O.push_back(MInstr::make_binary(MOp::SAR, vr(tmp),
+                                vr(tmp), MOperand::make_imm32(63)));
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                vr(in.operands[0])));
+                            O.push_back(MInstr::make_binary(MOp::XOR, vr(in.dst),
+                                vr(in.dst), vr(tmp)));
+                            O.push_back(MInstr::make_binary(MOp::SUB, vr(in.dst),
+                                vr(in.dst), vr(tmp)));
+                            break;
+                        }
+                        if (!resolve_native) {
+                            vreg_dbg(fn.name.c_str(), "calln(no-resolver)"); return false;
+                        }
+                        const uint64_t fn_addr = resolve_native(in.func_name);
+                        if (fn_addr == 0) {
+                            vreg_dbg(fn.name.c_str(), "calln-unresolved"); return false;
+                        }
+                        const size_t nargs = in.operands.size();
+#if defined(_WIN32)
+                        const size_t nmax = 4;
+#else
+                        const size_t nmax = 6;
+#endif
+                        if (nargs > nmax) {  // stack args no soportados
+                            vreg_dbg(fn.name.c_str(), "calln-args"); return false;
+                        }
+                        for (size_t a = 0; a < nargs; ++a)
+                            O.push_back(MInstr::make_arg(static_cast<uint8_t>(a),
+                                vr(in.operands[a])));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(fn_addr)));
+                        if (in.dst != ir::IR_NO_VALUE)
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                MOperand::make_reg(MReg::RAX, 8)));
                         break;
                     }
 

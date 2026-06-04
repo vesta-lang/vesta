@@ -34,15 +34,12 @@ namespace jit {
 
     uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                           const CallResolver &resolve_call,
-                          uint64_t callvirt_addr,
-                          uint64_t gc_deref_addr,
-                          uint64_t gc_handle_addr,
-                          uint64_t raw_alloc_addr) {
+                          const VregEntries &ent,
+                          const CallResolver &resolve_native) {
         /* 1. Seleccionar MachineIR de vregs (VM_ABI).  Si la funcion usa un
          *    op fuera del subset soportado, abortar -> fallback. */
         MFunction mf;
-        if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, callvirt_addr,
-                         gc_deref_addr, gc_handle_addr, raw_alloc_addr))
+        if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native))
             return nullptr;
 
         const TargetRegInfo &tri = target_x86_64_vm_abi();

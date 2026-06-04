@@ -41,10 +41,8 @@ namespace jit {
      */
     uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
                           const CallResolver &resolve_call = {},
-                          uint64_t callvirt_addr = 0,
-                          uint64_t gc_deref_addr = 0,
-                          uint64_t gc_handle_addr = 0,
-                          uint64_t raw_alloc_addr = 0);
+                          const VregEntries &ent = {},
+                          const CallResolver &resolve_native = {});
 
 } // namespace jit
 
