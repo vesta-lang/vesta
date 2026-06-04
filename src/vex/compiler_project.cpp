@@ -37,6 +37,13 @@
 #include "vex/module_interop.h"
 #include "vex/module_resolver.h"
 #include "vex/parser.h"
+// IMPORTANTE: incluir los headers de diagramas DESPUES de parser.h / lowering.h
+// para que la fwd decl @c namespace ast { struct ModuleNode; } del header
+// resuelva correctamente al tipo @c vex::ast::ModuleNode ya conocido en
+// este punto.  De otra forma el compilador interpreta @c ast::ModuleNode
+// como @c ::ast::ModuleNode (global), causando mismatch de tipos.
+#include "vex/graphviz_diagrams.h"
+#include "vex/mermaid_diagrams.h"
 #include "vex/type_checker.h"
 #include "vex/vexi_format.h"
 
@@ -670,7 +677,18 @@ CompileResult compile_vex_project(const std::string &root_path,
             std::cerr << ln.str();
         }
 
-        const uint64_t source_hash = vexi_fnv1a(pm.source);
+        // Mezclamos opts.instrument_mode (y cualquier flag futuro que
+        // afecte la emision IR/bytecode) en el source_hash para que el
+        // cache se invalide automaticamente al cambiar entre "trace"/"none".
+        // Sin esto, builds con cache de un modo distinto producen
+        // `.vel` con relocations sin resolver -> SEGV silente en runtime
+        // (limitacion MC.12 documentada).
+        uint64_t source_hash = vexi_fnv1a(pm.source);
+        if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
+            const uint64_t instrument_hash = vexi_fnv1a(opts.instrument_mode);
+            source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL
+                         + (source_hash << 6) + (source_hash >> 2);
+        }
 
         // ---- M4: cache hit path ----
         // Solo se aplica a DEPS, no al root.  Verifica:
@@ -1445,6 +1463,39 @@ CompileResult compile_vex_project(const std::string &root_path,
     res.vel_text          = std::move(eres.vel_text);
     res.ir_section_bytes  = ir::emit_ir_section(merged.functions);
     res.ok                = !res.diagnostics.has_errors();
+
+    // Diagramas (Mermaid / Graphviz) del AST del root + IR mergeado +
+    // .vel final.  En el path project compile (multi-fichero) el AST
+    // que se diagrama es el root (work.back() en topo order).  Los IR
+    // pre y post-opt se diagraman desde @c merged (sin distincion de
+    // pre vs post porque @c ir_optimize ya corrio sobre merged; el
+    // diagrama "pre" es identico al "post" en project compile -- esto
+    // es una limitacion documentada del modelo merge IR).
+    const auto &root_pm = work.back();
+    if (root_pm.ast) {
+        if (opts.dump_mermaid_ast) {
+            res.mermaid_ast = mermaid_from_ast(*root_pm.ast);
+        }
+        if (opts.dump_graphviz_ast) {
+            res.graphviz_ast = graphviz_from_ast(*root_pm.ast);
+        }
+    }
+    if (opts.dump_mermaid_ir_pre || opts.dump_mermaid_ir_post) {
+        std::string ir_text = mermaid_from_ir_module(merged, "IR (merged + optimized)");
+        if (opts.dump_mermaid_ir_pre)  res.mermaid_ir_pre  = ir_text;
+        if (opts.dump_mermaid_ir_post) res.mermaid_ir_post = ir_text;
+    }
+    if (opts.dump_graphviz_ir_pre || opts.dump_graphviz_ir_post) {
+        std::string ir_text = graphviz_from_ir_module(merged, "IR (merged + optimized)");
+        if (opts.dump_graphviz_ir_pre)  res.graphviz_ir_pre  = ir_text;
+        if (opts.dump_graphviz_ir_post) res.graphviz_ir_post = ir_text;
+    }
+    if (opts.dump_mermaid_vel) {
+        res.mermaid_vel = mermaid_from_vel_text(res.vel_text);
+    }
+    if (opts.dump_graphviz_vel) {
+        res.graphviz_vel = graphviz_from_vel_text(res.vel_text);
+    }
 
     // Phase M5.B: poblar dep_paths con los paths canonicos de TODOS los
     // modulos compilados (incluido root).  main.cpp persistira el project

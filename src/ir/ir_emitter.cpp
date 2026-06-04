@@ -419,21 +419,41 @@ static std::vector<int> live_regs_through_call(const EmitCtx &ctx,
     return regs;
 }
 
-// true si el reg @p r contiene un IrValueId con is_gc_object.
-// Iteramos `ctx.alloc.reg_map` (reg -> id) en sentido inverso para encontrar
-// CUAL valor esta efectivamente en ese registro AL momento del CALL.  El
-// regalloc puede haber asignado mas de un IrValueId al mismo reg en
-// distintos puntos del programa, pero el live-range analysis garantiza que
-// solo uno este vivo a traves del call.
+// true si el reg @p r contiene un IrValueId con is_gc_object EN call_pos.
+//
+// BugFix C (2026-06-04): cuando el regalloc reusa el mismo reg para
+// multiples values con live ranges que se traslapan por imprecision del
+// liveness analysis (extension via live_out + back-edges), encontrar
+// CUAL value es REALMENTE el que esta en el reg AL MOMENTO del call.
+// La heuristica antigua retornaba @c true si CUALQUIER value asignado
+// a @p r y con liveness range cubriendo @p call_pos era is_gc_object.
+// Eso provocaba que values is_gc_object=false (e.g. counter int) se
+// trataran como handles -> @c gchandle producia @c GC_NULL_HANDLE ->
+// push/pop devolvia nullptr -> AV al primer deref.
+//
+// Fix: elegir el value con @c def_pos MAS GRANDE entre los candidatos.
+// Ese es el value MAS RECIENTEMENTE definido y por tanto el realmente
+// presente en el reg en @p call_pos (los anteriores ya fueron clobereados
+// por la asignacion posterior).  Si NO hay ningun candidato gc, retorna
+// false (el reg contiene un value no-gc en este punto del programa).
 static bool reg_holds_gc_object(const EmitCtx &ctx, uint32_t call_pos, int r) {
+    bool     found_any   = false;
+    uint32_t best_def    = 0;
+    bool     best_is_gc  = false;
     for (const auto &iv : ctx.liveness.intervals) {
         if (!(iv.def <= call_pos && call_pos < iv.end)) continue;
         auto it = ctx.alloc.reg_map.find(iv.id);
         if (it == ctx.alloc.reg_map.end() || it->second != r) continue;
         if (static_cast<size_t>(iv.id) >= ctx.fn.values.size()) continue;
-        if (ctx.fn.values[iv.id].is_gc_object) return true;
+        // Elegir el value mas recientemente definido (mayor iv.def) entre
+        // los candidatos asignados al mismo reg con range que cubre call_pos.
+        if (!found_any || iv.def > best_def) {
+            found_any  = true;
+            best_def   = iv.def;
+            best_is_gc = ctx.fn.values[iv.id].is_gc_object;
+        }
     }
-    return false;
+    return found_any && best_is_gc;
 }
 
 // emite el save de los regs vivos antes de un CALL.  Para los
