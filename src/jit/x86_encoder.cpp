@@ -521,6 +521,10 @@ namespace jit {
             case MOp::COMMENT:
                 /* skip en release */
                 return true;
+            case MOp::ARG:
+                /* pseudo: el rewrite ya lo expandio a moves a arg_regs antes
+                 * del CALL.  No deberia llegar aqui; si llega, no emite. */
+                return true;
             case MOp::SAFEPOINT: {
                 /* poll expansion: lee safepoint_flag desde [rbx+0],
                  * si != 0 salta al slow path que llama al handler.
@@ -599,11 +603,17 @@ namespace jit {
         const MOperand &dst = mi.dst;
         const MOperand &src = mi.src1;
 
-        /* Caso 1: MOV reg, reg */
+        /* Caso 1: MOV reg, reg.  Ancho via dst.width (commit 9):
+         *   8 -> REX.W + 0x89 (mov r64,r64)
+         *   4 -> 0x89 sin REX.W (mov r32,r32 -> zero-extiende a 64)
+         *   2 -> 66 + 0x89; 1 -> 0x88. */
         if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
-            const uint8_t rex = rex_byte(true, src.reg, dst.reg);
+            const uint8_t w = dst.width;
+            if (w == 2) put8(out, 0x66);
+            const bool need_rex_w = (w == 8);
+            const uint8_t rex = rex_byte(need_rex_w, src.reg, dst.reg);
             if (rex) put8(out, rex);
-            put8(out, 0x89);  /* MOV r/m64, r64 */
+            put8(out, (w == 1) ? 0x88 : 0x89);
             put8(out, modrm(3, src.reg & 7, dst.reg & 7));
             return;
         }
