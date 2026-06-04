@@ -344,6 +344,27 @@ namespace jit {
         mf.name = ir_fn.name;
         bool unsupported = false;
 
+        /* Phase D.7-exc (2026-06-04): exception handling.  El modelo v1 del
+         * throw (do_throw modifica proc->rip + epilogue + el scheduler reanuda
+         * el handler en INTERP) SOLO funciona si el catch esta en bytecode
+         * separado.  Cuando el metodo se JIT-compila ENTERO, el handler vive en
+         * el frame JIT y sus valores SSA estan en slots del HOST stack que el
+         * interp no ve -> estado corrupto -> segfault (caso 30_unwrap_null).
+         *
+         * Hasta el sprint dedicado de unwinding host-aware (landing pad host +
+         * longjmp manual, parte de D.13), los metodos con TRYENTER caen a
+         * interp -- que maneja las excepciones correctamente.  CERO coste para
+         * el happy path: los metodos sin try/catch tienen JIT completo; las
+         * excepciones son el camino EXCEPCIONAL (raro y ya lento por diseno). */
+        for (const auto &blk : ir_fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                if (ins.op == ir::IrOp::TRYENTER) {
+                    if (out_unsupported) *out_unsupported = true;
+                    return mf;
+                }
+            }
+        }
+
         /* regalloc del JIT.
          *
          * Computa una asignacion estatica de los VIDs mas usados a
