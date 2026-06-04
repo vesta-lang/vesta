@@ -42,4 +42,4 @@ tests = "vesta --vex tests/run_all.vex -o tests/run_all && vesta --run tests/run
 #
 # Uso:
 #   vesta pkg run diagrams
-diagrams = "vesta --vex src/main.vex -o vexed --diagram-all --diagram-format both"
+diagrams = "vesta --vex src/main.vex -o vexed --diagram-all --diagram-format all"

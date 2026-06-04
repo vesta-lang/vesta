@@ -431,3 +431,7 @@ tests/vex/bench_shared_runner.sh
 tests/vex/test_vex_vexi_format.cpp
 bench_results.json
 
+doc/HISTORY.md
+examples_codes_vex/vexed/vexed.ir.post.dot
+examples_codes_vex/vexed/vexed.ir.pre.dot
+examples_codes_vex/vexed/vexed.vel.dot

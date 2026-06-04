@@ -43,6 +43,7 @@
 // este punto.  De otra forma el compilador interpreta @c ast::ModuleNode
 // como @c ::ast::ModuleNode (global), causando mismatch de tipos.
 #include "vex/graphviz_diagrams.h"
+#include "vex/html_diagrams.h"
 #include "vex/mermaid_diagrams.h"
 #include "vex/type_checker.h"
 #include "vex/vexi_format.h"
@@ -742,11 +743,18 @@ CompileResult compile_vex_project(const std::string &root_path,
                         // Hash match -> intentar cargar tambien el .vexir.
                         std::vector<uint8_t> ibytes;
                         if (read_file_bytes_(ip, ibytes) && !ibytes.empty()) {
-                            std::vector<ir::IrFunction> fns;
-                            if (ir::parse_ir_section(ibytes, 0,
-                                                      ibytes.size(), fns)) {
+                            // BugFix M.vexir-sd: cargar el modulo COMPLETO
+                            // (functions + static_data + globals).  El formato
+                            // viejo (solo functions) perdia el static_data del
+                            // dep -> relocaciones `code.s_*` colgantes en el
+                            // `.velb` con cache caliente.  Un `.vexir` viejo
+                            // falla el magic y cae a recompilar.
+                            ir::IrModule dep_mod;
+                            if (ir::parse_ir_module_cache(ibytes, dep_mod)) {
                                 pm.vexi = std::move(pr.module_);
-                                pm.ir.functions = std::move(fns);
+                                pm.ir.functions  = std::move(dep_mod.functions);
+                                pm.ir.static_data = std::move(dep_mod.static_data);
+                                pm.ir.globals    = std::move(dep_mod.globals);
                                 pm.ok = true;
                                 if (verbose_cache) {
                                     std::ostringstream tmp; tmp << "[vex-cache] hit: "
@@ -986,7 +994,11 @@ CompileResult compile_vex_project(const std::string &root_path,
             }
             // Phase M5.A L.17: escritura atomica (rename temp file).
             (void)write_file_atomic_(vp, vbytes);
-            auto ibytes = ir::emit_ir_section(pm.ir.functions);
+            // BugFix M.vexir-sd: persistir el modulo COMPLETO (functions +
+            // static_data + globals) para que un dep cache-hit aporte sus
+            // slots `code.s_*` al merge.  emit_ir_section (solo functions)
+            // los perdia.
+            auto ibytes = ir::emit_ir_module_cache(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
             // Phase M5.C L.18: ademas del .vexi (interfaz) + .vexir (IR
             // serializado), emitir el .vel del dep solo (sin merge) para
@@ -1479,6 +1491,9 @@ CompileResult compile_vex_project(const std::string &root_path,
         if (opts.dump_graphviz_ast) {
             res.graphviz_ast = graphviz_from_ast(*root_pm.ast);
         }
+        if (opts.dump_html_ast) {
+            res.html_ast = html_from_ast(*root_pm.ast);
+        }
     }
     if (opts.dump_mermaid_ir_pre || opts.dump_mermaid_ir_post) {
         std::string ir_text = mermaid_from_ir_module(merged, "IR (merged + optimized)");
@@ -1490,11 +1505,21 @@ CompileResult compile_vex_project(const std::string &root_path,
         if (opts.dump_graphviz_ir_pre)  res.graphviz_ir_pre  = ir_text;
         if (opts.dump_graphviz_ir_post) res.graphviz_ir_post = ir_text;
     }
+    if (opts.dump_html_ir_pre || opts.dump_html_ir_post) {
+        // Proyecto multi-fichero: el IR ya esta merged + optimizado, asi que
+        // pre y post comparten el mismo grafo (igual que Mermaid/Graphviz).
+        std::string html = html_from_ir_module(merged, "SSA IR (merged + optimized)");
+        if (opts.dump_html_ir_pre)  res.html_ir_pre  = html;
+        if (opts.dump_html_ir_post) res.html_ir_post = html;
+    }
     if (opts.dump_mermaid_vel) {
         res.mermaid_vel = mermaid_from_vel_text(res.vel_text);
     }
     if (opts.dump_graphviz_vel) {
         res.graphviz_vel = graphviz_from_vel_text(res.vel_text);
+    }
+    if (opts.dump_html_vel) {
+        res.html_vel = html_from_vel_text(res.vel_text);
     }
 
     // Phase M5.B: poblar dep_paths con los paths canonicos de TODOS los
