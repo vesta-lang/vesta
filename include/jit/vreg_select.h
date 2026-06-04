@@ -44,10 +44,25 @@ namespace jit {
     using CallResolver = std::function<uint64_t(const std::string &)>;
 
     /**
+     * @struct VregEntries
+     * @brief Direcciones de runtime entries que el selector vreg necesita para
+     *        bajar ops que llaman al runtime.  0 = no disponible (esos ops caen
+     *        a fallback).  Se construye desde @c RuntimeEntries en @c auto_jit.
+     */
+    struct VregEntries {
+        uint64_t callvirt   = 0;  ///< vrt_callvirt(proc, obj, vtbl_idx)
+        uint64_t gc_deref   = 0;  ///< vrt_gc_deref(proc, handle)
+        uint64_t gc_handle  = 0;  ///< vrt_gc_handle_for_ptr(proc, host_ptr)
+        uint64_t raw_alloc  = 0;  ///< vrt_raw_alloc(proc, size)
+        uint64_t calln      = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
+    };
+
+    /**
      * @brief Selecciona MachineIR de vregs desde @p fn.
      *
      * @param fn   Funcion IR (subset soportado: ver arriba).
      * @param out  MFunction destino (se sobrescribe).
+     * @param ent  Direcciones de runtime entries (callvirt/gc/raw_alloc/calln).
      * @return     @c true si TODOS los ops estan soportados y @p out es
      *             valido; @c false si encuentra un op fuera del subset (en
      *             ese caso @p out queda indefinido y el caller hace fallback).
@@ -55,10 +70,8 @@ namespace jit {
     bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                      AbiKind abi = AbiKind::HOST_LEAF,
                      const CallResolver &resolve_call = {},
-                     uint64_t callvirt_addr = 0,
-                     uint64_t gc_deref_addr = 0,
-                     uint64_t gc_handle_addr = 0,
-                     uint64_t raw_alloc_addr = 0);
+                     const VregEntries &ent = {},
+                     const CallResolver &resolve_native = {});
 
 } // namespace jit
 

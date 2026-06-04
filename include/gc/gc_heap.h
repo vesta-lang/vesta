@@ -94,6 +94,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdlib>   // std::realloc/free/abort (HandleTable)
+#include <utility>   // std::move (HandleTable)
 #include <vector>
 #include <unordered_set>
 
@@ -338,6 +340,75 @@ namespace gc {
         uint8_t *addr; /**< Puntero host al inicio del GcHeader del objeto.
                         *   nullptr si el slot esta libre (live == false). */
         bool     live; /**< true si el handle referencia un objeto valido. */
+    };
+
+    /**
+     * @brief Tabla de handles propia (POD), reemplaza @c std::vector<HandleEntry>.
+     *
+     * Motivacion (Phase D.7, principio "JIT inline > runtime"): el JIT necesita
+     * leer @c data_ y @c count_ con offsets ESTABLES y controlados para inline-ar
+     * @c deref (handle -> host_ptr) sin un CALL al runtime.  Con @c std::vector
+     * habria que leer sus internals (@c _M_start/@c _M_finish), fragiles al
+     * layout de libstdc++.  Esta estructura es POD con layout fijo:
+     *   - offset 0:  @c data_  (HandleEntry*, 8 bytes)
+     *   - offset 8:  @c count_ (uint32, 4 bytes)
+     *   - offset 12: @c cap_   (uint32, 4 bytes)
+     * y una sola fuente de verdad (sin campos cacheados que desincronizar).
+     *
+     * API drop-in compatible con @c std::vector (operator[], size, push_back,
+     * reserve, empty, pop_back, back, data, begin, end) para minimizar el
+     * impacto en los call sites.  @c push_back duplica @c cap_ via @c realloc;
+     * los @c HandleEntry son POD (movibles con memcpy), igual que en un vector.
+     * Como @c std::vector, un @c push_back que realloca INVALIDA punteros/refs
+     * a entradas previas (el codigo accede siempre via @c handles_[h], nunca
+     * guarda @c &handles_[h] a traves de un push).
+     */
+    struct HandleTable {
+        HandleEntry *data_  = nullptr;  ///< offset 0
+        uint32_t     count_ = 0;        ///< offset 8
+        uint32_t     cap_   = 0;        ///< offset 12
+
+        HandleTable() = default;
+        ~HandleTable() { std::free(data_); }
+        HandleTable(const HandleTable &) = delete;
+        HandleTable &operator=(const HandleTable &) = delete;
+        HandleTable(HandleTable &&o) noexcept
+            : data_(o.data_), count_(o.count_), cap_(o.cap_) {
+            o.data_ = nullptr; o.count_ = o.cap_ = 0;
+        }
+        HandleTable &operator=(HandleTable &&o) noexcept {
+            if (this != &o) {
+                std::free(data_);
+                data_ = o.data_; count_ = o.count_; cap_ = o.cap_;
+                o.data_ = nullptr; o.count_ = o.cap_ = 0;
+            }
+            return *this;
+        }
+
+        void reserve(uint32_t n) {
+            if (n <= cap_) return;
+            auto *nd = static_cast<HandleEntry *>(
+                std::realloc(data_, static_cast<size_t>(n) * sizeof(HandleEntry)));
+            if (!nd) std::abort();  // OOM en la tabla de handles: fatal
+            data_ = nd; cap_ = n;
+        }
+        void push_back(const HandleEntry &e) {
+            if (count_ == cap_) reserve(cap_ ? cap_ * 2u : 16u);
+            data_[count_++] = e;
+        }
+        void pop_back()       { if (count_) --count_; }
+        HandleEntry       &back()       { return data_[count_ - 1]; }
+        const HandleEntry &back() const { return data_[count_ - 1]; }
+        HandleEntry       &operator[](size_t i)       { return data_[i]; }
+        const HandleEntry &operator[](size_t i) const { return data_[i]; }
+        size_t size()  const { return count_; }
+        bool   empty() const { return count_ == 0; }
+        HandleEntry       *data()        { return data_; }
+        const HandleEntry *data()  const { return data_; }
+        HandleEntry       *begin()       { return data_; }
+        HandleEntry       *end()         { return data_ + count_; }
+        const HandleEntry *begin() const { return data_; }
+        const HandleEntry *end()   const { return data_ + count_; }
     };
 
     /**
@@ -1121,7 +1192,7 @@ namespace gc {
         std::vector<LargeFree> large_free_list_;
 
         // --- HandleTable ---
-        std::vector<HandleEntry> handles_;
+        HandleTable              handles_;       ///< Tabla propia (POD) -- JIT inline-friendly.
         std::vector<GcHandle>    free_handles_; ///< Freelist LIFO de slots reciclables.
 
         /// Mapa inverso payload_ptr_host -> GcHandle.  Permite lookup O(1)

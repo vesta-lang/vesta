@@ -83,9 +83,11 @@ static ir::IrInstr conv(ir::IrOp op, ir::IrValueId d, ir::IrValueId s, ir::IrTyp
 
 /** @brief Compila @p fn en modo VM y la ejecuta con @p px (RBX = &px). */
 static bool jit_vm(const ir::IrFunction &fn, Proxy &px,
-                   const CallResolver &resolve = {}, uint64_t callvirt_addr = 0) {
+                   const CallResolver &resolve = {}, uint64_t callvirt_addr = 0,
+                   const CallResolver &resolve_native = {}) {
     MFunction mf;
-    if (!vreg_select(fn, mf, AbiKind::VM, resolve, callvirt_addr)) return false;
+    VregEntries ent; ent.callvirt = callvirt_addr;
+    if (!vreg_select(fn, mf, AbiKind::VM, resolve, ent, resolve_native)) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
@@ -451,6 +453,64 @@ static void test_vm_trunc() {
     }
 }
 
+/** @brief Funcion nativa de prueba (convencion C: args en arg_regs). */
+extern "C" uint64_t vm_native_add(uint64_t a, uint64_t b) { return a + b; }
+
+/* ---- Test 10 (commit 10): CALLN directo a funcion nativa --------------- *
+ * caller(a,b) = calln "add"(a,b).  CALL DIRECTO (no via runtime vrt_calln).
+ * a=10, b=32 -> 42. */
+static void test_vm_calln() {
+    std::printf("[vm] CALLN directo: add(10,32) -> 42 (sin runtime)\n");
+    ir::IrFunction fn;
+    fn.name = "cn"; fn.ret_type = ir::IrType::I64;
+    auto I64 = ir::IrType::I64;
+    ir::IrValueId a = fn.new_value(I64), b = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { a, b };
+    ir::IrBlockId bb = fn.new_block("e");
+    {
+        ir::IrInstr c; c.op = ir::IrOp::CALLN; c.type = I64; c.dst = r;
+        c.func_name = "add"; c.operands = { a, b };
+        fn.append(bb, c);
+    }
+    fn.append(bb, ret1(r));
+    CallResolver rn = [](const std::string &n) -> uint64_t {
+        return n == "add" ? reinterpret_cast<uint64_t>(
+            reinterpret_cast<void *>(&vm_native_add)) : 0;
+    };
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 10; px.regs[2] = 32;
+    CHECK(jit_vm(fn, px, {}, 0, rn), "jit_vm ok (calln)");
+    CHECK(px.regs[0] == 42, "calln add(10,32)==42 (CALL directo)");
+    if (px.regs[0] != 42) std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+}
+
+/* ---- Test 11 (commit 10): vmath_abs INLINE (sar/xor/sub, sin runtime) ---- */
+static void test_vm_abs() {
+    std::printf("[vm] vmath_abs INLINE: abs(-5)=5, abs(7)=7 (sin CALL)\n");
+    ir::IrFunction fn;
+    fn.name = "ab"; fn.ret_type = ir::IrType::I64;
+    auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x };
+    ir::IrBlockId bb = fn.new_block("e");
+    {
+        ir::IrInstr c; c.op = ir::IrOp::CALLN; c.type = I64; c.dst = r;
+        c.func_name = "stdlib/native/math/vesta_math:vmath_abs"; c.operands = { x };
+        fn.append(bb, c);
+    }
+    fn.append(bb, ret1(r));
+    /* Sin resolve_native: si NO se inline-ara, CALLN fallaria (resolver={}).
+     * Que compile y de el resultado correcto prueba que se inline. */
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = static_cast<uint64_t>(-5);
+    CHECK(jit_vm(fn, px), "jit_vm ok (abs inline, sin resolver native)");
+    CHECK(static_cast<int64_t>(px.regs[0]) == 5, "abs(-5)==5");
+    Proxy px2; std::memset(&px2, 0, sizeof(px2));
+    px2.regs[1] = 7;
+    jit_vm(fn, px2);
+    CHECK(px2.regs[0] == 7, "abs(7)==7");
+}
+
 int main() {
     std::setbuf(stdout, nullptr);
     std::printf("=== test_vreg_vm (Phase D.7 commit 5a, VM_ABI) ===\n");
@@ -463,6 +523,8 @@ int main() {
     test_vm_load_store();
     test_vm_alloca();
     test_vm_trunc();
+    test_vm_calln();
+    test_vm_abs();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

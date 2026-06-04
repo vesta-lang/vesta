@@ -122,6 +122,18 @@ namespace jit {
             g_runtime_entries->resolve();
             g_compiler        = new JitCompiler(*g_code_cache, *g_runtime_entries);
         }
+
+        /* Construye el VregEntries desde los runtime entries resueltos. */
+        VregEntries make_vreg_entries() {
+            VregEntries e;
+            if (g_runtime_entries) {
+                e.callvirt  = reinterpret_cast<uint64_t>(g_runtime_entries->callvirt);
+                e.gc_deref  = reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref);
+                e.gc_handle = reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr);
+                e.raw_alloc = reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc);
+            }
+            return e;
+        }
     }
 
     /* Sprint B.1: expose el CodeCache global al runtime (native_callback.cpp).
@@ -272,7 +284,7 @@ namespace jit {
          * vreg, la compila el register allocator; si no, cae al path de
          * slots de abajo (fallback transparente). */
         if (g_jit_use_vregs) {
-            uint8_t *vcode = vreg_compile(*ir_fn, *g_code_cache, {}, reinterpret_cast<uint64_t>(g_runtime_entries->callvirt), reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref), reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr), reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc));
+            uint8_t *vcode = vreg_compile(*ir_fn, *g_code_cache, {}, make_vreg_entries(), {});
             if (vcode != nullptr) {
                 method->jit_code = reinterpret_cast<void *>(vcode);
                 if (method->code_vaddr != 0) {
@@ -460,7 +472,7 @@ namespace jit {
                 /* Phase D.7 (opt-in): callee por el path de registros
                  * virtuales si esta soportada; si no, slots. */
                 if (g_jit_use_vregs) {
-                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {}, reinterpret_cast<uint64_t>(g_runtime_entries->callvirt), reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref), reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr), reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc));
+                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {}, make_vreg_entries(), native_resolver);
                     if (vc != nullptr) {
                         const uint64_t a = reinterpret_cast<uint64_t>(vc);
                         g_eager_cache[n] = a;
@@ -601,7 +613,7 @@ namespace jit {
          * que el de slots.  Solo funciones del subset soportado (aritmetica /
          * control de flujo / loops, sin GC ni calls); el resto cae a slots. */
         if (g_jit_use_vregs) {
-            uint8_t *vcode = vreg_compile(ir_fn, *g_code_cache, {}, reinterpret_cast<uint64_t>(g_runtime_entries->callvirt), reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref), reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr), reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc));
+            uint8_t *vcode = vreg_compile(ir_fn, *g_code_cache, {}, make_vreg_entries(), resolve_native_fn);
             if (vcode != nullptr) {
                 if (!ir_fn.name.empty())
                     g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
@@ -696,7 +708,7 @@ namespace jit {
                  * Pasamos el PROPIO resolver (recursivo) para que los CALLs
                  * del callee se resuelvan a sus direcciones. */
                 if (g_jit_use_vregs) {
-                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, *resolver_holder, reinterpret_cast<uint64_t>(g_runtime_entries->callvirt), reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref), reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr), reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc));
+                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, *resolver_holder, make_vreg_entries(), resolve_native_fn);
                     if (vc != nullptr) {
                         const uint64_t va = reinterpret_cast<uint64_t>(vc);
                         g_eager_cache[name] = va;
