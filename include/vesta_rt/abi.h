@@ -199,6 +199,15 @@ extern "C" {
 /// Offset de @c proc->registers.base_pointer (similar al anterior).
 #define VESTA_PROC_BASE_POINTER_OFFSET     72
 
+/// Offset del puntero @c jit_handle_table dentro de ProcessVM (Phase D.7).
+/// Es un campo POD (void*) colocado antes de los miembros no-POD (atomics,
+/// vectores, GcHeap), por lo que su offset es estable dentro de un mismo
+/// build del toolchain.  El JIT inline-a @c deref leyendo la HandleTable
+/// con @c mov base, [rbx + VESTA_PROC_JIT_HANDLE_TABLE_OFFSET].  Verificado
+/// en compile-time por @c abi_checks.cpp: si la struct cambia, el build
+/// aborta hasta actualizar este valor.
+#define VESTA_PROC_JIT_HANDLE_TABLE_OFFSET 1304
+
 /// El offset de @c exc_frame_stack dentro de @c ProcessVM NO es estable
 /// cross-build porque la struct tiene miembros no-POD antes (atomicos,
 /// vectores, GcHeap).  En lugar de un #define, se computa en runtime

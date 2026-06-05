@@ -76,6 +76,9 @@ namespace runtime {
         // escanear stack/regs durante major_gc.  Set una sola vez aqui;
         // el puntero permanece valido durante toda la vida del proceso.
         gc_heap.set_owner_process(this);
+        // Phase D.7: cachear la direccion estable de la HandleTable para que
+        // el JIT inline-e deref (handle -> host_ptr) sin CALL al runtime.
+        jit_handle_table = gc_heap.jit_handle_table_ptr();
     }
 
     /**

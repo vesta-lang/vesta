@@ -415,6 +415,39 @@ static void test_vm_alloca() {
     if (px.regs[0] != 105) std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
 }
 
+/* ---- Test: RAW_FREE sobre ALLOCA host-stack es NO-OP (no crash) ------- *
+ * Bug 59_arraylist: free() hacia que push() cayera al slot regalloc buggy.
+ * En vregs un RAW_FREE sobre un host-alloca debe ser no-op (lo libera el
+ * epilogue), sin llamar a vrt_raw_free (que crashearia). */
+static void test_vm_raw_free_host_alloca() {
+    std::printf("[vm] RAW_FREE sobre host-alloca = NO-OP (f(5)->105, sin crash)\n");
+    ir::IrFunction fn;
+    fn.name = "rf"; fn.ret_type = ir::IrType::I64;
+    auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64);
+    ir::IrValueId p = fn.new_value(ir::IrType::PTR);
+    ir::IrValueId v = fn.new_value(I64), c = fn.new_value(I64), r = fn.new_value(I64);
+    fn.values[p].is_host_ptr = true;
+    fn.params = { x };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr i; i.op = ir::IrOp::ALLOCA; i.type = ir::IrType::I8; i.dst = p;
+      i.imm = 8; i.host_alloca = true; fn.append(bb, i); }
+    { ir::IrInstr i; i.op = ir::IrOp::STORE; i.type = I64;
+      i.operands = { x, p }; fn.append(bb, i); }            // [p] = x
+    { ir::IrInstr i; i.op = ir::IrOp::LOAD; i.type = I64; i.dst = v;
+      i.operands = { p }; fn.append(bb, i); }               // v = [p]
+    { ir::IrInstr i; i.op = ir::IrOp::RAW_FREE; i.type = ir::IrType::VOID;
+      i.operands = { p }; fn.append(bb, i); }               // free(p) -> no-op
+    fn.append(bb, konst(c, 100));
+    fn.append(bb, bin(ir::IrOp::ADD, r, v, c));
+    fn.append(bb, ret1(r));
+
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = 5;
+    /* ent.raw_free = 0: el host-alloca NO debe necesitar la entry (es no-op). */
+    CHECK(jit_vm(fn, px), "jit_vm ok (raw_free host-alloca, sin entry)");
+    CHECK(px.regs[0] == 105, "f(5)==105 (free no-op no corrompe)");
+}
+
 /* ---- Test 9 (commit 9): TRUNC i32 (sign-ext) y u32 (zero-ext) --------- */
 static void test_vm_trunc() {
     std::printf("[vm] trunc.i32(0xFFFFFFFF)=-1 (sign), u32(-1)=0xFFFFFFFF (zero)\n");
@@ -511,6 +544,225 @@ static void test_vm_abs() {
     CHECK(px2.regs[0] == 7, "abs(7)==7");
 }
 
+/* ---- Test: inline de GC_DEREF_HOST contra una HandleTable falsa ------- *
+ * Phase D.7 (principio "JIT inline > runtime"): verifica que el codegen
+ * inline de GC_DEREF_HOST computa EXACTAMENTE lo que @c GcHeap::deref:
+ *   - handle local vivo            -> data_[h].addr + sizeof(GcHeader)=8
+ *   - handle fuera de rango        -> 0
+ *   - handle con live=false        -> 0
+ * El path shared (bit31) usa el fallback CALL y requiere runtime; aqui
+ * todos los handles tienen bit31 limpio (local), asi que se ejercita el
+ * camino inline puro. */
+
+/* Mirror del layout que el inline asume.  El layout REAL esta fijado por
+ * static_assert en gc_heap.h; estos re-aseguran el del proxy del test. */
+struct FakeEntry { uint8_t *addr; bool live; };
+struct FakeTable { FakeEntry *data_; uint32_t count_; uint32_t cap_; };
+static_assert(sizeof(FakeEntry) == 16, "FakeEntry debe medir 16 (stride del inline)");
+static_assert(offsetof(FakeEntry, addr) == 0, "addr@0");
+static_assert(offsetof(FakeEntry, live) == 8, "live@8");
+static_assert(offsetof(FakeTable, data_) == 0, "data_@0");
+static_assert(offsetof(FakeTable, count_) == 8, "count_@8");
+
+/* Proxy con @c jit_handle_table en su offset ABI (1304), ademas de
+ * safepoint_flag@0 y regs@96. */
+struct ProcGc {
+    uint8_t  safepoint_flag;
+    uint8_t  _pad1[VESTA_PROC_REGISTERS_OFFSET - 1];
+    uint64_t regs[VESTA_PROC_REGISTER_COUNT];
+    uint8_t  _pad2[VESTA_PROC_JIT_HANDLE_TABLE_OFFSET
+                   - VESTA_PROC_REGISTERS_OFFSET
+                   - sizeof(uint64_t) * VESTA_PROC_REGISTER_COUNT];
+    void    *jit_handle_table;
+};
+static_assert(offsetof(ProcGc, regs) == VESTA_PROC_REGISTERS_OFFSET, "regs@96");
+static_assert(offsetof(ProcGc, jit_handle_table)
+              == VESTA_PROC_JIT_HANDLE_TABLE_OFFSET,
+              "jit_handle_table en su offset ABI");
+
+/** @brief Compila @c deref_test(h) por vregs y la ejecuta con RBX=&px. */
+static uint64_t run_gc_deref(ProcGc &px, uint32_t handle) {
+    ir::IrFunction fn;
+    fn.name = "deref_test"; fn.ret_type = ir::IrType::I64;
+    ir::IrValueId h = fn.new_value(ir::IrType::I64);
+    ir::IrValueId r = fn.new_value(ir::IrType::I64);
+    fn.values[r].is_host_ptr  = true;   // resultado: host_ptr a objeto GC
+    fn.values[r].is_gc_object = true;   // -> spill+stackmap si cruza el call
+    fn.params = { h };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr i; i.op = ir::IrOp::GC_DEREF_HOST; i.type = ir::IrType::I64;
+      i.dst = r; i.operands = { h }; fn.append(bb, i); }
+    fn.append(bb, ret1(r));
+
+    MFunction mf;
+    VregEntries ent;
+    ent.gc_deref = 0x1000;  // !=0 (path shared nunca se ejecuta aqui)
+    if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {})) return UINT64_MAX;
+    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    X86Encoder enc; std::vector<uint8_t> bytes;
+    if (enc.encode(pf, bytes) == 0 || bytes.empty()) return UINT64_MAX;
+    CodeCache cc;
+    uint8_t *code = cc.alloc(bytes.size(), 16);
+    if (!code) return UINT64_MAX;
+    std::memcpy(code, bytes.data(), bytes.size());
+    cc.commit(code, bytes.size());
+    px.regs[1] = handle;
+    px.regs[0] = 0xDEAD;   // centinela: detecta que el codigo escribe regs[0]
+    reinterpret_cast<void (*)(void *)>(code)(&px);
+    asm volatile("" : : "r"(&cc) : "memory");
+    return px.regs[0];
+}
+
+static void test_vm_gc_deref_inline() {
+    std::printf("[vm] GC_DEREF_HOST INLINE: lookup directo en HandleTable\n");
+    static uint8_t obj_buf[64];          // GcHeader + payload del objeto idx2
+    FakeEntry entries[4];
+    std::memset(entries, 0, sizeof(entries));
+    entries[2].addr = obj_buf; entries[2].live = true;   // vivo
+    entries[1].addr = nullptr; entries[1].live = false;  // muerto
+    FakeTable table; table.data_ = entries; table.count_ = 4; table.cap_ = 4;
+
+    ProcGc px; std::memset(&px, 0, sizeof(px));
+    px.jit_handle_table = &table;
+
+    const uint64_t expect = reinterpret_cast<uint64_t>(obj_buf) + 8;  // + sizeof(GcHeader)
+    CHECK(run_gc_deref(px, 2) == expect, "deref(2 vivo) == addr + 8");
+    CHECK(run_gc_deref(px, 1) == 0, "deref(1 muerto, live=false) == 0");
+    CHECK(run_gc_deref(px, 5) == 0, "deref(5 fuera de rango) == 0");
+    CHECK(run_gc_deref(px, 0) == 0, "deref(0 slot vacio) == 0");
+}
+
+/* ---- Test: inline de math intrinsics (vmath_*) en vregs --------------- *
+ * Sin resolve_native: si NO se inline-aran, el CALLN fallaria (resolver={})
+ * -> jit_vm devuelve false.  Que compile y de el resultado correcto prueba
+ * que se inline sin tocar el runtime. */
+static uint64_t run_calln1(const std::string &func, uint64_t a0) {
+    ir::IrFunction fn; fn.name = "m1"; fn.ret_type = ir::IrType::I64;
+    const auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::CALLN; c.type = I64; c.dst = r;
+      c.func_name = func; c.operands = { x }; fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = a0;
+    if (!jit_vm(fn, px)) return UINT64_MAX;
+    return px.regs[0];
+}
+static uint64_t run_calln2(const std::string &func, uint64_t a0, uint64_t a1) {
+    ir::IrFunction fn; fn.name = "m2"; fn.ret_type = ir::IrType::I64;
+    const auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), y = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x, y };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::CALLN; c.type = I64; c.dst = r;
+      c.func_name = func; c.operands = { x, y }; fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = a0; px.regs[2] = a1;
+    if (!jit_vm(fn, px)) return UINT64_MAX;
+    return px.regs[0];
+}
+/* rotl/rotr con count CONSTANTE: el count es un CONST del IR (v_is_const). */
+static uint64_t run_rot_const(const std::string &func, uint64_t v, int64_t n) {
+    ir::IrFunction fn; fn.name = "mr"; fn.ret_type = ir::IrType::I64;
+    const auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), k = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x };
+    ir::IrBlockId bb = fn.new_block("e");
+    fn.append(bb, konst(k, n));
+    { ir::IrInstr c; c.op = ir::IrOp::CALLN; c.type = I64; c.dst = r;
+      c.func_name = func; c.operands = { x, k }; fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = v;
+    if (!jit_vm(fn, px)) return UINT64_MAX;
+    return px.regs[0];
+}
+
+/* Variantes que construyen el IrOp DEDICADO (el frontend baja imin/imax/
+ * ilog2/clz/... a estos, no a CALLN). */
+static uint64_t run_irop1(ir::IrOp op, uint64_t a0) {
+    ir::IrFunction fn; fn.name = "o1"; fn.ret_type = ir::IrType::I64;
+    const auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = op; c.type = I64; c.dst = r; c.operands = { x };
+      fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = a0;
+    if (!jit_vm(fn, px)) return UINT64_MAX;
+    return px.regs[0];
+}
+static uint64_t run_irop2(ir::IrOp op, uint64_t a0, uint64_t a1) {
+    ir::IrFunction fn; fn.name = "o2"; fn.ret_type = ir::IrType::I64;
+    const auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), y = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x, y };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = op; c.type = I64; c.dst = r; c.operands = { x, y };
+      fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = a0; px.regs[2] = a1;
+    if (!jit_vm(fn, px)) return UINT64_MAX;
+    return px.regs[0];
+}
+static uint64_t run_irop_rot(ir::IrOp op, uint64_t v, int64_t n) {
+    ir::IrFunction fn; fn.name = "or"; fn.ret_type = ir::IrType::I64;
+    const auto I64 = ir::IrType::I64;
+    ir::IrValueId x = fn.new_value(I64), k = fn.new_value(I64), r = fn.new_value(I64);
+    fn.params = { x };
+    ir::IrBlockId bb = fn.new_block("e");
+    fn.append(bb, konst(k, n));
+    { ir::IrInstr c; c.op = op; c.type = I64; c.dst = r; c.operands = { x, k };
+      fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px)); px.regs[1] = v;
+    if (!jit_vm(fn, px)) return UINT64_MAX;
+    return px.regs[0];
+}
+
+static void test_vm_math_irops() {
+    std::printf("[vm] math IrOps INLINE: IABS/IMIN/IMAX/ILOG2/CLZ/CTZ/POPCNT/BSWAP/ROT\n");
+    using O = ir::IrOp;
+    CHECK(static_cast<int64_t>(run_irop1(O::IABS, static_cast<uint64_t>(-5))) == 5, "iabs(-5)==5");
+    CHECK(run_irop1(O::IABS, 7) == 7, "iabs(7)==7");
+    CHECK(static_cast<int64_t>(run_irop2(O::IMIN, static_cast<uint64_t>(-3), 5)) == -3, "imin(-3,5)==-3");
+    CHECK(static_cast<int64_t>(run_irop2(O::IMAX, static_cast<uint64_t>(-3), 5)) == 5, "imax(-3,5)==5");
+    CHECK(run_irop2(O::IMINU, 10, 0xFFFFFFFFFFFFFFFFull) == 10, "iminu(10,UMAX)==10");
+    CHECK(run_irop2(O::IMAXU, 10, 0xFFFFFFFFFFFFFFFFull) == 0xFFFFFFFFFFFFFFFFull, "imaxu(10,UMAX)==UMAX");
+    CHECK(run_irop1(O::ILOG2, 256) == 8, "ilog2(256)==8");
+    CHECK(run_irop1(O::CLZ, 1) == 63, "clz(1)==63");
+    CHECK(run_irop1(O::CTZ, 8) == 3, "ctz(8)==3");
+    CHECK(run_irop1(O::POPCNT, 7) == 3, "popcnt(7)==3");
+    CHECK(run_irop1(O::BYTESWAP, 0x0102030405060708ull) == 0x0807060504030201ull, "bswap==reversed");
+    CHECK(run_irop_rot(O::ROTL, 1, 4) == 16, "rotl(1,4)==16");
+    CHECK(run_irop_rot(O::ROTR, 16, 4) == 1, "rotr(16,4)==1");
+}
+
+static void test_vm_math_inline() {
+    std::printf("[vm] math intrinsics INLINE: ilog2/min/max/minu/maxu/rotl/rotr\n");
+    const std::string P = "stdlib/native/math/vesta_math:";
+    /* ilog2(n) = 63 - lzcnt(n). */
+    CHECK(run_calln1(P + "vmath_ilog2", 256) == 8, "ilog2(256)==8");
+    CHECK(run_calln1(P + "vmath_ilog2", 1) == 0, "ilog2(1)==0");
+    CHECK(run_calln1(P + "vmath_ilog2", 0xFFFFFFFFFFFFFFFFull) == 63, "ilog2(UMAX)==63");
+    /* min/max SIGNED. */
+    CHECK(static_cast<int64_t>(run_calln2(P + "vmath_min",
+        static_cast<uint64_t>(-3), 5)) == -3, "min(-3,5)==-3");
+    CHECK(static_cast<int64_t>(run_calln2(P + "vmath_max",
+        static_cast<uint64_t>(-3), 5)) == 5, "max(-3,5)==5");
+    /* minu/maxu UNSIGNED. */
+    CHECK(run_calln2(P + "vmath_minu", 10, 0xFFFFFFFFFFFFFFFFull) == 10,
+          "minu(10,UMAX)==10");
+    CHECK(run_calln2(P + "vmath_maxu", 10, 0xFFFFFFFFFFFFFFFFull)
+          == 0xFFFFFFFFFFFFFFFFull, "maxu(10,UMAX)==UMAX");
+    /* rotl/rotr con count constante. */
+    CHECK(run_rot_const(P + "vmath_rotl", 1, 4) == 16, "rotl(1,4)==16");
+    CHECK(run_rot_const(P + "vmath_rotr", 16, 4) == 1, "rotr(16,4)==1");
+}
+
 int main() {
     std::setbuf(stdout, nullptr);
     std::printf("=== test_vreg_vm (Phase D.7 commit 5a, VM_ABI) ===\n");
@@ -522,9 +774,13 @@ int main() {
     test_vm_gc_stackmap();
     test_vm_load_store();
     test_vm_alloca();
+    test_vm_raw_free_host_alloca();
     test_vm_trunc();
     test_vm_calln();
     test_vm_abs();
+    test_vm_gc_deref_inline();
+    test_vm_math_inline();
+    test_vm_math_irops();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

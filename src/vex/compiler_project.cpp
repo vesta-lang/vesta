@@ -1040,10 +1040,24 @@ CompileResult compile_vex_project(const std::string &root_path,
     // solapan: el barrier garantiza que los deps esten finalizados antes
     // de que un consumer empiece.
     int parallel_threads = 0;
+    bool env_present = false;
     if (const char *p = std::getenv("VEX_PARALLEL_COMPILE")) {
+        env_present = true;
         try { parallel_threads = std::stoi(p); }
         catch (...) { parallel_threads = 0; }
         if (parallel_threads < 0) parallel_threads = 0;
+    }
+    // Phase M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
+    // hardware_concurrency() limitado a max 8 threads (cap para evitar
+    // oversubscription: >8 da diminishing returns por contention en cache
+    // writes + mutex verbose).  VEX_PARALLEL_COMPILE=1 fuerza SECUENCIAL
+    // (diagnostico / output determinista); >=2 fija N exacto.  Proyectos
+    // triviales (1 modulo por nivel) NO pagan overhead: el dispatch
+    // paralelo solo crea threads cuando un nivel tiene >=2 modulos.
+    if (!env_present || parallel_threads == 0) {
+        unsigned hc = std::thread::hardware_concurrency();
+        if (hc < 1) hc = 1;
+        parallel_threads = (hc > 8u) ? 8 : static_cast<int>(hc);
     }
     if (parallel_threads <= 1) {
         // Path secuencial: identico al comportamiento pre-M8.

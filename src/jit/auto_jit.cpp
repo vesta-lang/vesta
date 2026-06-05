@@ -131,6 +131,8 @@ namespace jit {
                 e.gc_deref  = reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref);
                 e.gc_handle = reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr);
                 e.raw_alloc = reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc);
+                e.raw_free  = reinterpret_cast<uint64_t>(g_runtime_entries->raw_free);
+                e.gc_allocp = reinterpret_cast<uint64_t>(g_runtime_entries->gc_alloc_payload);
             }
             return e;
         }
@@ -1134,7 +1136,7 @@ namespace jit {
          * todo.  Si exito, el pc-map captura este PC y todos sus
          * callees transitivamente. */
         try {
-            (void) eager_compile_function(
+            CompileResult __cr = eager_compile_function(
                 *ir_fn,
                 &owning_exe->ir_lookup,
                 &owning_exe->ir_functions,
@@ -1144,6 +1146,19 @@ namespace jit {
                 exc_off,
                 exc_free_off,
                 jit_counter_addr);
+            /* BugFix 171 native-callback (2026-06-05): la rama VREG de
+             * eager_compile_function registra el codigo SOLO por nombre
+             * (g_eager_cache), NO por PC.  El path slot si registra por PC
+             * via la registracion top-level, pero el vreg retornaba antes.
+             * Sin la entrada pc-map, `lookup_jit_code_at_pc(target_pc)`
+             * devuelve null y `as_native_callback` (que busca por PC) genera
+             * un thunk=0 -> qsort recibe comparator NULL -> no ordena.
+             * Registramos aqui el resultado top-level por PC para cubrir
+             * ambos paths (idempotente: register sobrescribe con el mismo fn). */
+            if (__cr.fn != nullptr) {
+                register_jit_code_at_pc(target_pc,
+                                        reinterpret_cast<void *>(__cr.fn));
+            }
             /* Independiente del resultado: si exito, register_jit_code_at_pc
              * ya se llamo desde dentro de eager_compile_function via la
              * registracion top-level.  Si fallo, queda como cached failure

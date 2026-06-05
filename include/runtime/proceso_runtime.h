@@ -409,6 +409,23 @@ namespace runtime {
          */
         void *jit_entry_fn = nullptr;
 
+        /**
+         * @brief Puntero cacheado a la @c HandleTable del @c gc_heap, para el JIT.
+         *
+         * Phase D.7 (principio "JIT inline > runtime"): el codigo JIT-eado
+         * inline-a @c GcHeap::deref leyendo @c data_/@c count_ de esta tabla
+         * (offsets 0/8) en vez de hacer un CALL a @c vrt_gc_deref (~6x: 30ns
+         * -> 5ns).  Se inicializa UNA sola vez en el constructor a
+         * @c gc_heap.jit_handle_table_ptr(); la direccion es estable durante
+         * toda la vida del proceso (el GcHeap no se mueve).
+         *
+         * El offset de este campo dentro de ProcessVM esta fijado por
+         * @c VESTA_PROC_JIT_HANDLE_TABLE_OFFSET (abi.h) + static_assert en
+         * @c abi_checks.cpp; el JIT lo usa como displacement: el inline hace
+         * @c mov base, [rbx + JIT_HANDLE_TABLE_OFFSET].
+         */
+        void *jit_handle_table = nullptr;
+
         uint64_t tsc{}; ///< Contador de instrucciones ejecutadas (Time Stamp Counter virtual)
 
         /**
@@ -567,6 +584,19 @@ namespace runtime {
          * loadmodule anidado (counter > 1) sin esfuerzo extra.
          */
         uint32_t loadmod_call_depth = 0;
+
+        /**
+         * @brief Pila de valores de retorno de @c loadmodule (BugFix M.dyn
+         *        2026-06-05).  El opcode @c loadmod pone @c init_pc en R0
+         *        como indicador de exito ANTES de saltar al @c __module_init
+         *        del plugin, pero el @c __module_init clobbea R0 (su ultimo
+         *        op deja un valor arbitrario).  Para que @c loadmodule
+         *        devuelva un valor FIABLE (init_pc != 0 = exito) restauramos
+         *        R0 desde esta pila cuando el HLT del plugin se intercepta
+         *        como RET (ver @c exec_instr_hlt + @c loadmod_call_depth).
+         *        Es una pila para soportar loadmodule anidado.
+         */
+        std::vector<uint64_t> loadmod_r0_stack;
 
         uint64_t current_exception = 0; ///< Handle de la excepcion activa durante el unwinding (0 = sin excepcion)
 

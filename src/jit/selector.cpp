@@ -6351,9 +6351,15 @@ namespace jit {
                                 {MOp::INT3, 0, 0, 0, {}, {}, {}});
                             break;
                         }
-                        const uint64_t fn_addr = (ins.op == ir::IrOp::GC_ALLOC)
-                            ? (opts_.runtime ? reinterpret_cast<uint64_t>(opts_.runtime->gc_alloc) : 0)
-                            : (opts_.runtime ? reinterpret_cast<uint64_t>(opts_.runtime->gc_alloc_payload) : 0);
+                        /* BUG FIX (2026-06-05): GC_ALLOC y GC_ALLOCP bajan AMBOS
+                         * a `gcallocp` en el ir_emitter -> host_ptr al PAYLOAD.
+                         * El mapeo previo GC_ALLOC->gc_alloc devolvia un HANDLE
+                         * (uint32) que el IR usaba como host_ptr -> store a un
+                         * valor pequeno (1,2,..) = segfault (64_curry/102/167).
+                         * Ambos deben usar gc_alloc_payload. */
+                        const uint64_t fn_addr = opts_.runtime
+                            ? reinterpret_cast<uint64_t>(opts_.runtime->gc_alloc_payload)
+                            : 0;
                         if (fn_addr == 0) {
                             warn_unsupported(ins.op, ins.source_line,
                                 "runtime->gc_alloc[/_payload] no resuelto");

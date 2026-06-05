@@ -66,6 +66,15 @@ namespace runtime {
             vm->registers.stack_pointer.qword(cur_rsp + 8);
             vm->registers.rip.qword(ret_addr);
             vm->decoded_ptr->flags_info.did_jump = true;
+            // BugFix M.dyn (2026-06-05): restaurar R0 = init_pc del load
+            // correspondiente, para que `loadmodule` devuelva un indicador
+            // de exito FIABLE (el __module_init del plugin clobbea R0 con
+            // el resultado de su ultimo op, que en un reload con defclass
+            // idempotente puede ser 0).
+            if (!vm->loadmod_r0_stack.empty()) {
+                vm->registers.regs[0].qword(vm->loadmod_r0_stack.back());
+                vm->loadmod_r0_stack.pop_back();
+            }
             return;
         }
         // bloquear la instruccion ANTES de notificar al scheduler para evitar re-entradas

@@ -382,8 +382,11 @@ namespace jit {
                     return;
                 }
 
-                if (op == MOp::SHL || op == MOp::SHR || op == MOp::SAR) {
-                    /* dst = src1 << src2(imm).  MOV dst, src1; SHL dst, imm. */
+                if (op == MOp::SHL || op == MOp::SHR || op == MOp::SAR
+                 || op == MOp::ROL || op == MOp::ROR) {
+                    /* dst = src1 (sh/rot) src2(imm).  MOV dst, src1; SHL dst, imm.
+                     * Solo cantidad INMEDIATA (el selector emite ROL/ROR aqui solo
+                     * con count constante; variable -> fallback, requiere CL). */
                     const bool dst_spilled =
                         in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
                     const MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
@@ -396,6 +399,63 @@ namespace jit {
                     if (dst_spilled)
                         out.push_back(MInstr::make_unary(MOp::MOV,
                             slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+                    return;
+                }
+
+                if (op == MOp::LZCNT || op == MOp::TZCNT || op == MOp::POPCNT) {
+                    /* dst = op(src).  dst debe ser REG (si spilled -> scratch
+                     * + store).  src puede ser MEM (op r64, r/m64). */
+                    const MOperand rs = resolve(in.src1);
+                    const bool dst_spilled =
+                        in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+                    const MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
+                    out.push_back(MInstr::make_unary(op, pdst, rs));
+                    if (dst_spilled)
+                        out.push_back(MInstr::make_unary(MOp::MOV,
+                            slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+                    return;
+                }
+
+                if (op == MOp::BSWAP) {
+                    /* bswap r64: in-place, dst debe ser REG.  Si dst spilled,
+                     * cargar a scratch, bswap, store.  src1 == dst (mismo vreg). */
+                    const bool dst_spilled =
+                        in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+                    if (dst_spilled) {
+                        const MOperand sl = slot_mem(ra.slot_of(in.dst.vreg_id()));
+                        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sl));
+                        out.push_back(MInstr::make_unary(MOp::BSWAP,
+                            reg(scr0), reg(scr0)));
+                        out.push_back(MInstr::make_unary(MOp::MOV, sl, reg(scr0)));
+                    } else {
+                        const MOperand pdst = resolve(in.dst);
+                        out.push_back(MInstr::make_unary(MOp::BSWAP, pdst, pdst));
+                    }
+                    return;
+                }
+
+                if (op == MOp::CMOVCC) {
+                    /* dst = (cc) ? src : dst  (read-modify).  dst debe ser REG.
+                     * Preserva variant (codigo de condicion).  src spilled -> scr1;
+                     * dst spilled -> carga a scr0, cmov, store. */
+                    MOperand rsrc = resolve(in.src1);
+                    if (rsrc.kind == MOperandKind::MEM) {
+                        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), rsrc));
+                        rsrc = reg(scr1);
+                    }
+                    const bool dst_spilled =
+                        in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+                    MInstr c; c.op = MOp::CMOVCC; c.variant = in.variant;
+                    if (dst_spilled) {
+                        const MOperand sl = slot_mem(ra.slot_of(in.dst.vreg_id()));
+                        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sl));
+                        c.dst = reg(scr0); c.src1 = rsrc;
+                        out.push_back(c);
+                        out.push_back(MInstr::make_unary(MOp::MOV, sl, reg(scr0)));
+                    } else {
+                        c.dst = resolve(in.dst); c.src1 = rsrc;
+                        out.push_back(c);
+                    }
                     return;
                 }
 

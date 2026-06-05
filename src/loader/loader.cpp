@@ -1075,6 +1075,22 @@ namespace loader {
                 if (conflict) break;
             }
 
+            // Phase M.dyn fix (2026-06-05): ademas del overlap contra las
+            // secciones de modulos ya cargados, forzar rebase si el orig_base
+            // cae en la region RESERVADA [0, next_dyn_base).  Esa region baja
+            // contiene el codigo (VA 0), el stack (stack_base = 0x10000000 +
+            // local_pid*...) y el heap del programa principal y sus procesos.
+            // Los modulos dinamicos SIEMPRE deben vivir en la region dinamica
+            // alta [next_dyn_base=0x80000000, ...).  Sin esto, un plugin
+            // compilado con `--vex-base 0x10000000` (== stack_base del main)
+            // se copiaba ENCIMA del stack de main y lo corrompia -> el segundo
+            // loadmodule del hot-reload devolvia basura (M.dyn -> -4).  La
+            // deteccion por secciones no lo cubre porque el code section de
+            // main esta en VA 0, no en su stack_base.
+            if (!conflict && orig_base < next_dyn_base) {
+                conflict = true;
+            }
+
             if (conflict) {
                 // solapamiento detectado.  Si el .velb tiene tabla de
                 // relocations (formato VERSION_VELB >= 2), podemos hacer
