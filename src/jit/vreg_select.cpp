@@ -42,6 +42,17 @@ namespace jit {
         if (on) std::fprintf(stderr, "[vreg-sel] '%s' no soportada: op %s\n", fn, op);
     }
 
+    /** @brief Diagnostico/A-B: VESTA_JIT_NO_INLINE_DEREF=1 enruta GC_DEREF_HOST
+     *  al CALL @c vrt_gc_deref en vez del inline (para medir el inline vs el
+     *  runtime, o aislar un posible bug del codegen inline). */
+    static bool jit_no_inline_deref() {
+        static const bool off = []{
+            const char *v = std::getenv("VESTA_JIT_NO_INLINE_DEREF");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        return off;
+    }
+
     namespace {
 
         /** @brief Operando VREG (clase GP) para un IrValueId. */
@@ -165,6 +176,17 @@ namespace jit {
          * para emitir SHL/SHR/SAR dst, imm en vez de via CL. */
         std::vector<uint8_t>  v_is_const(fn.values.size(), 0);
         std::vector<int64_t>  v_const(fn.values.size(), 0);
+
+        /* Vids que son ALLOCA host-stack (viven en el frame, liberados por el
+         * epilogue).  Un RAW_FREE sobre uno de estos es NO-OP (no se llama a
+         * vrt_raw_free, que crashearia sobre un ptr de host stack). */
+        std::vector<uint8_t>  v_is_host_alloca(fn.values.size(), 0);
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins2 : blk.instrs)
+                if (ins2.op == ir::IrOp::ALLOCA && ins2.host_alloca
+                 && ins2.dst != ir::IR_NO_VALUE
+                 && ins2.dst < v_is_host_alloca.size())
+                    v_is_host_alloca[ins2.dst] = 1u;
 
         /* Crea un vreg temporal nuevo (GP, no-GC) para secuencias inline
          * (p.ej. el inline de vmath_abs). */
@@ -290,6 +312,97 @@ namespace jit {
                         const MOp mop = (in.op == ir::IrOp::SHL) ? MOp::SHL
                                       : (in.op == ir::IrOp::SHR) ? MOp::SHR : MOp::SAR;
                         O.push_back(MInstr::make_binary(mop, vr(in.dst),
+                            vr(in.operands[0]), MOperand::make_imm32(amt)));
+                        break;
+                    }
+
+                    /* Math intrinsics como IrOps dedicados (el frontend baja
+                     * imin/imax/ilog2/clz/... a estos, NO a CALLN vmath_*).
+                     * Inline directo (principio "JIT inline > runtime"); misma
+                     * secuencia que el slot selector. */
+                    case ir::IrOp::IABS: {  /* |a| = (a^(a>>63)) - (a>>63) */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
+                            return false;
+                        const ir::IrValueId t = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_binary(MOp::SAR, vr(t), vr(t),
+                            MOperand::make_imm32(63)));
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_binary(MOp::XOR, vr(in.dst),
+                            vr(in.dst), vr(t)));
+                        O.push_back(MInstr::make_binary(MOp::SUB, vr(in.dst),
+                            vr(in.dst), vr(t)));
+                        break;
+                    }
+                    case ir::IrOp::IMIN: case ir::IrOp::IMAX:
+                    case ir::IrOp::IMINU: case ir::IrOp::IMAXU: {
+                        /* dst = a; cmp a,b; cmov<cc> dst, b.  cc: IMIN->G,
+                         * IMAX->L, IMINU->A, IMAXU->B (signed vs unsigned). */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
+                            return false;
+                        const ir::IrValueId a = in.operands[0], b = in.operands[1];
+                        const MCond cc =
+                            (in.op == ir::IrOp::IMIN)  ? MCond::G :
+                            (in.op == ir::IrOp::IMAX)  ? MCond::L :
+                            (in.op == ir::IrOp::IMINU) ? MCond::A : MCond::B;
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), vr(a)));
+                        O.push_back(mk_cmp(a, b));
+                        MInstr cm; cm.op = MOp::CMOVCC;
+                        cm.variant = static_cast<uint8_t>(cc);
+                        cm.dst = vr(in.dst); cm.src1 = vr(b);
+                        O.push_back(cm);
+                        break;
+                    }
+                    case ir::IrOp::ILOG2: {  /* 63 - lzcnt(a); a==0 es UB (igual que slot) */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
+                            return false;
+                        O.push_back(MInstr::make_unary(MOp::LZCNT, vr(in.dst),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_unary(MOp::NEG, vr(in.dst),
+                            vr(in.dst)));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(in.dst),
+                            vr(in.dst), MOperand::make_imm32(63)));
+                        break;
+                    }
+                    case ir::IrOp::CLZ: case ir::IrOp::CTZ: case ir::IrOp::POPCNT: {
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
+                            return false;
+                        const MOp mop = (in.op == ir::IrOp::CLZ)    ? MOp::LZCNT :
+                                        (in.op == ir::IrOp::CTZ)    ? MOp::TZCNT :
+                                                                       MOp::POPCNT;
+                        O.push_back(MInstr::make_unary(mop, vr(in.dst),
+                            vr(in.operands[0])));
+                        break;
+                    }
+                    case ir::IrOp::BYTESWAP: {  /* mov dst, src; bswap dst */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 1)
+                            return false;
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_unary(MOp::BSWAP, vr(in.dst),
+                            vr(in.dst)));
+                        break;
+                    }
+                    case ir::IrOp::ROTL: case ir::IrOp::ROTR: {
+                        /* count CONSTANTE -> rol/ror dst, imm.  Variable -> CL
+                         * (no soportado en vregs) -> fallback. */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.size() != 2)
+                            return false;
+                        const ir::IrValueId cnt = in.operands[1];
+                        if (cnt >= v_is_const.size() || !v_is_const[cnt]) {
+                            vreg_dbg(fn.name.c_str(), "rot-var"); return false;
+                        }
+                        const int32_t amt = static_cast<int32_t>(v_const[cnt] & 63);
+                        const MOp rop = (in.op == ir::IrOp::ROTL) ? MOp::ROL : MOp::ROR;
+                        O.push_back(MInstr::make_binary(rop, vr(in.dst),
                             vr(in.operands[0]), MOperand::make_imm32(amt)));
                         break;
                     }
@@ -458,18 +571,180 @@ namespace jit {
                         break;
                     }
 
-                    /* GC_DEREF_HOST: dst = vrt_gc_deref(proc, handle).
-                     * GC_HANDLE_FOR_PTR: dst = vrt_gc_handle_for_ptr(proc, ptr).
-                     * Ambos son lookups (NO disparan GC).  Convencion host:
+                    /* GC_DEREF_HOST: dst = deref(handle).  INLINE del lookup
+                     * (principio "JIT inline > runtime"): replica
+                     * @c GcHeap::deref leyendo la HandleTable directamente, en
+                     * vez de un CALL a @c vrt_gc_deref (~6x: 30ns -> 5ns).
+                     * Es el op de field-access GC mas caliente.
+                     *
+                     * Semantica replicada (ver gc_heap.cpp::deref):
+                     *   if (h & SHARED_HANDLE_BIT) return shared_lookup(h);  // bit31
+                     *   if (h >= count_ || !data_[h].live) return nullptr;
+                     *   return data_[h].addr + sizeof(GcHeader);             // +8
+                     * con HandleEntry{ addr@0, live@8, stride 16 } (static_assert
+                     * en gc_heap.h) y HandleTable{ data_@0, count_@8 }.
+                     *
+                     * SEGURIDAD GC: dst es un host_ptr GC.  Si su intervalo
+                     * cruza el CALL del path shared, el commit 6 lo spillea a
+                     * slot + emite stackmap.  Por eso lo INICIALIZAMOS a 0
+                     * (null) al principio: si el GC corre durante ese CALL, el
+                     * slot contiene null (root ignorado), nunca basura. */
+                    case ir::IrOp::GC_DEREF_HOST: {
+                        flush_pending();
+                        if (!vm || ent.gc_deref == 0) {
+                            vreg_dbg(fn.name.c_str(), "gc_deref(no-vm/no-addr)");
+                            return false;
+                        }
+                        if (in.operands.size() != 1) return false;
+                        if (in.dst == ir::IR_NO_VALUE) break;  // lookup sin uso: no-op
+
+                        /* A-B / diagnostico: enrutar al CALL vrt_gc_deref. */
+                        if (jit_no_inline_deref()) {
+#if defined(_WIN32)
+                            const MReg ca0 = MReg::RCX, ca1 = MReg::RDX;
+#else
+                            const MReg ca0 = MReg::RDI, ca1 = MReg::RSI;
+#endif
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ca1, 8), vr(in.operands[0])));
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(ca0, 8),
+                                MOperand::make_reg(MReg::RBX, 8)));
+                            O.push_back(MInstr::make_call_abs(
+                                out.intern_imm64(ent.gc_deref)));
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                MOperand::make_reg(MReg::RAX, 8)));
+                            break;
+                        }
+
+                        const ir::IrValueId h    = in.operands[0];
+                        const MLabelId      Lsh   = out.new_label();  // path shared
+                        const MLabelId      Ldone = out.new_label();  // salida comun
+
+                        /* ORDEN: path local (comun) como FALLTHROUGH para que el
+                         * hot path no pague un branch tomado; el path shared
+                         * (raro) al final.  dst se INICIALIZA a 0 al principio:
+                         * (a) es el resultado de los early-exits (fuera de rango
+                         * / !live); (b) como su intervalo cruza el CALL del path
+                         * shared, el commit 6 lo spillea a slot + stackmap -- con
+                         * dst=0 ese slot es null (GC root ignorado), nunca basura.
+                         * El spill (2 ops L1 por deref) resulto mas barato que el
+                         * branch tomado del orden inverso en workloads memory-bound. */
+
+                        /* dst = 0 (null). */
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            MOperand::make_imm32(0)));
+
+                        /* h32 = handle normalizado a 32 bits (zero-extend).  El
+                         * handle es u32; un productor podria dejar bits altos
+                         * sucios en el reg de 64 -> shl 32 / shr 32 los limpia. */
+                        const ir::IrValueId h32 = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(h32), vr(h)));
+                        O.push_back(MInstr::make_binary(MOp::SHL, vr(h32), vr(h32),
+                            MOperand::make_imm32(32)));
+                        O.push_back(MInstr::make_binary(MOp::SHR, vr(h32), vr(h32),
+                            MOperand::make_imm32(32)));
+
+                        /* if (h & SHARED_HANDLE_BIT) goto Lsh.  bit31 = h32 >> 31. */
+                        const ir::IrValueId t_sh = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_sh), vr(h32)));
+                        O.push_back(MInstr::make_binary(MOp::SHR, vr(t_sh), vr(t_sh),
+                            MOperand::make_imm32(31)));
+                        O.push_back(mk_test(t_sh, t_sh));
+                        O.push_back(MInstr::make_jcc(MCond::NE, Lsh));
+
+                        /* --- path local (fallthrough) --- */
+                        /* base = proc->jit_handle_table  (HandleTable*). */
+                        const ir::IrValueId t_base = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_base),
+                            MOperand::make_mem(MReg::RBX,
+                                VESTA_PROC_JIT_HANDLE_TABLE_OFFSET)));
+                        /* data_ = [base + 0]  (HandleEntry*). */
+                        const ir::IrValueId t_data = new_tmp();
+                        O.push_back(MInstr::make_load(vr(t_data), vr(t_base), 8, false));
+                        /* count_ = low32 de [base + 8].  Cargamos 8 bytes
+                         * ((cap_<<32)|count_) y aislamos los 32 bajos con
+                         * shl 32 / shr 32 (un LOAD width-4 unsigned seria un
+                         * MOVZX r/m32 invalido). */
+                        const ir::IrValueId t_b8 = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_b8), vr(t_base)));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(t_b8), vr(t_b8),
+                            MOperand::make_imm32(8)));
+                        const ir::IrValueId t_cnt = new_tmp();
+                        O.push_back(MInstr::make_load(vr(t_cnt), vr(t_b8), 8, false));
+                        O.push_back(MInstr::make_binary(MOp::SHL, vr(t_cnt), vr(t_cnt),
+                            MOperand::make_imm32(32)));
+                        O.push_back(MInstr::make_binary(MOp::SHR, vr(t_cnt), vr(t_cnt),
+                            MOperand::make_imm32(32)));
+                        /* if (h32 >= count_) goto Ldone  (dst sigue 0).  Unsigned. */
+                        O.push_back(mk_cmp(h32, t_cnt));
+                        O.push_back(MInstr::make_jcc(MCond::AE, Ldone));
+                        /* entry = data_ + h32 * 16. */
+                        const ir::IrValueId t_idx = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_idx), vr(h32)));
+                        O.push_back(MInstr::make_binary(MOp::SHL, vr(t_idx), vr(t_idx),
+                            MOperand::make_imm32(4)));
+                        const ir::IrValueId t_entry = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_entry), vr(t_data)));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(t_entry), vr(t_entry),
+                            vr(t_idx)));
+                        /* live = [entry + 8]  (byte).  if (!live) goto Ldone. */
+                        const ir::IrValueId t_la = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_la), vr(t_entry)));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(t_la), vr(t_la),
+                            MOperand::make_imm32(8)));
+                        const ir::IrValueId t_live = new_tmp();
+                        O.push_back(MInstr::make_load(vr(t_live), vr(t_la), 1, false));
+                        O.push_back(mk_test(t_live, t_live));
+                        O.push_back(MInstr::make_jcc(MCond::E, Ldone));
+                        /* dst = [entry + 0] (addr) + sizeof(GcHeader)=8. */
+                        O.push_back(MInstr::make_load(vr(in.dst), vr(t_entry), 8, false));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(in.dst), vr(in.dst),
+                            MOperand::make_imm32(8)));
+                        O.push_back(MInstr::make_jmp(Ldone));
+
+                        /* --- path shared (raro): fallback CALL vrt_gc_deref(proc, h) --- */
+                        O.push_back(MInstr::make_label_def(Lsh));
+#if defined(_WIN32)
+                        const MReg sa0 = MReg::RCX, sa1 = MReg::RDX;
+#else
+                        const MReg sa0 = MReg::RDI, sa1 = MReg::RSI;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sa1, 8), vr(h)));    // arg1 = handle
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sa0, 8),
+                            MOperand::make_reg(MReg::RBX, 8)));     // arg0 = proc
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.gc_deref)));
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            MOperand::make_reg(MReg::RAX, 8)));     // dst = resultado
+                        /* cae a Ldone */
+
+                        O.push_back(MInstr::make_label_def(Ldone));
+                        break;
+                    }
+
+                    /* GC_HANDLE_FOR_PTR: dst = vrt_gc_handle_for_ptr(proc, ptr).
+                     * Lookup en ptr_to_handle_ (unordered_map): mas dificil de
+                     * inline-ar que deref -> sigue via CALL.  Convencion host:
                      * proc=arg0, valor=arg1, resultado en RAX. */
-                    case ir::IrOp::GC_DEREF_HOST:
                     case ir::IrOp::GC_HANDLE_FOR_PTR:
+                    case ir::IrOp::GC_ALLOC:
+                    case ir::IrOp::GC_ALLOCP:
                     case ir::IrOp::RAW_ALLOC: {
                         flush_pending();
+                        /* GC_ALLOC y GC_ALLOCP bajan ambos a `gcallocp` en el
+                         * ir_emitter -> host_ptr al payload (NO un handle).  Por
+                         * eso usan gc_alloc_payload, no gc_alloc (que devuelve
+                         * handle).  El slot selector mapea GC_ALLOC->gc_alloc
+                         * (handle) por error -> store al handle como host_ptr =
+                         * crash (era el bug de 64_curry/102/167).  gc_alloc
+                         * DISPARA GC (safepoint); los GC roots vivos a traves
+                         * del call los spillea el commit 6 (call_position). */
                         const uint64_t addr =
-                            (in.op == ir::IrOp::GC_DEREF_HOST)     ? ent.gc_deref  :
                             (in.op == ir::IrOp::GC_HANDLE_FOR_PTR) ? ent.gc_handle :
-                                                                     ent.raw_alloc;
+                            (in.op == ir::IrOp::RAW_ALLOC)         ? ent.raw_alloc :
+                                                                     ent.gc_allocp;
                         if (!vm || addr == 0) {
                             vreg_dbg(fn.name.c_str(), "gc_runtime"); return false;
                         }
@@ -487,6 +762,38 @@ namespace jit {
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                 MOperand::make_reg(MReg::RAX, 8)));
+                        break;
+                    }
+
+                    /* RAW_FREE(ptr) -> void.  free(ptr) del runtime.
+                     *  - ptr de ALLOCA host-stack  -> NO-OP (lo libera el
+                     *    epilogue; vrt_raw_free sobre un host-stack ptr crashea).
+                     *    Es el caso mas inline posible (cero runtime).
+                     *  - ptr de heap (RAW_ALLOC)   -> CALL vrt_raw_free.  El
+                     *    free del slab allocator (free lists + size class) es
+                     *    demasiado complejo para inline-arlo limpiamente (igual
+                     *    que gc_handle_for_ptr); se queda como CALL. */
+                    case ir::IrOp::RAW_FREE: {
+                        flush_pending();
+                        if (in.operands.size() != 1) return false;
+                        const ir::IrValueId p = in.operands[0];
+                        if (p < v_is_host_alloca.size() && v_is_host_alloca[p])
+                            break;  // host-stack: no-op
+                        if (!vm || ent.raw_free == 0) {
+                            vreg_dbg(fn.name.c_str(), "raw_free(no-vm/no-addr)");
+                            return false;
+                        }
+#if defined(_WIN32)
+                        const MReg fa0 = MReg::RCX, fa1 = MReg::RDX;
+#else
+                        const MReg fa0 = MReg::RDI, fa1 = MReg::RSI;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(fa1, 8), vr(p)));            // arg1 = ptr
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(fa0, 8),
+                            MOperand::make_reg(MReg::RBX, 8)));             // arg0 = proc
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.raw_free)));
                         break;
                     }
 
@@ -592,6 +899,63 @@ namespace jit {
                                 vr(in.dst), vr(tmp)));
                             O.push_back(MInstr::make_binary(MOp::SUB, vr(in.dst),
                                 vr(in.dst), vr(tmp)));
+                            break;
+                        }
+                        /* vmath_ilog2(n) = 63 - lzcnt(n).  Paridad EXACTA con el
+                         * slot selector, incluido el edge n==0 (lzcnt(0)=64 ->
+                         * -1), que diverge del builtin C (0) pero mantiene
+                         * slots==vregs (el frontend no genera ilog2(0)). */
+                        if (in.func_name.find("vmath_ilog2") != std::string::npos
+                         && in.dst != ir::IR_NO_VALUE && in.operands.size() == 1) {
+                            O.push_back(MInstr::make_unary(MOp::LZCNT, vr(in.dst),
+                                vr(in.operands[0])));
+                            O.push_back(MInstr::make_unary(MOp::NEG, vr(in.dst),
+                                vr(in.dst)));
+                            O.push_back(MInstr::make_binary(MOp::ADD, vr(in.dst),
+                                vr(in.dst), MOperand::make_imm32(63)));
+                            break;
+                        }
+                        /* vmath_rotl/rotr con count CONSTANTE -> ROL/ROR dst, imm.
+                         * Count variable necesita CL -> fallback al CALL. */
+                        if ((in.func_name.find("vmath_rotl") != std::string::npos
+                          || in.func_name.find("vmath_rotr") != std::string::npos)
+                         && in.dst != ir::IR_NO_VALUE && in.operands.size() == 2) {
+                            const ir::IrValueId cnt = in.operands[1];
+                            if (cnt < v_is_const.size() && v_is_const[cnt]) {
+                                const int32_t amt =
+                                    static_cast<int32_t>(v_const[cnt] & 63);
+                                const MOp rop =
+                                    (in.func_name.find("vmath_rotl") != std::string::npos)
+                                    ? MOp::ROL : MOp::ROR;
+                                O.push_back(MInstr::make_binary(rop, vr(in.dst),
+                                    vr(in.operands[0]), MOperand::make_imm32(amt)));
+                                break;
+                            }
+                            /* count variable -> cae al CALL de abajo. */
+                        }
+                        /* vmath_min/max/minu/maxu -> CMP + CMOVcc (dst=a; si
+                         * cc(a,b) dst=b).  Paridad EXACTA con el slot: minu->A,
+                         * maxu->B, min->G (signed), max->L (signed). */
+                        if ((in.func_name.find("vmath_min") != std::string::npos
+                          || in.func_name.find("vmath_max") != std::string::npos)
+                         && in.dst != ir::IR_NO_VALUE && in.operands.size() == 2) {
+                            const ir::IrValueId a = in.operands[0];
+                            const ir::IrValueId b = in.operands[1];
+                            MCond cc;
+                            if (in.func_name.find("vmath_minu") != std::string::npos)
+                                cc = MCond::A;
+                            else if (in.func_name.find("vmath_maxu") != std::string::npos)
+                                cc = MCond::B;
+                            else if (in.func_name.find("vmath_min") != std::string::npos)
+                                cc = MCond::G;
+                            else
+                                cc = MCond::L;   // vmath_max
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst), vr(a)));
+                            O.push_back(mk_cmp(a, b));
+                            MInstr cm; cm.op = MOp::CMOVCC;
+                            cm.variant = static_cast<uint8_t>(cc);
+                            cm.dst = vr(in.dst); cm.src1 = vr(b);
+                            O.push_back(cm);
                             break;
                         }
                         if (!resolve_native) {

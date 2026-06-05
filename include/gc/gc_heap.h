@@ -342,6 +342,18 @@ namespace gc {
         bool     live; /**< true si el handle referencia un objeto valido. */
     };
 
+    /* El JIT (Phase D.7) inline-a @c deref leyendo @c HandleEntry con offsets
+     * LITERALES (addr en 0, live en 8, stride 16).  Si el layout cambiase,
+     * el codegen leeria basura -> corrupcion del heap.  Estos static_assert
+     * fijan el contrato: cualquier cambio rompe el build en vez de corromper.
+     * Ver doc en @c vreg_select.cpp (case GC_DEREF_HOST). */
+    static_assert(sizeof(HandleEntry) == 16,
+                  "HandleEntry debe medir 16 bytes (el JIT inline asume stride 16)");
+    static_assert(offsetof(HandleEntry, addr) == 0,
+                  "HandleEntry.addr debe estar en offset 0 (inline gc_deref)");
+    static_assert(offsetof(HandleEntry, live) == 8,
+                  "HandleEntry.live debe estar en offset 8 (inline gc_deref)");
+
     /**
      * @brief Tabla de handles propia (POD), reemplaza @c std::vector<HandleEntry>.
      *
@@ -410,6 +422,14 @@ namespace gc {
         const HandleEntry *begin() const { return data_; }
         const HandleEntry *end()   const { return data_ + count_; }
     };
+
+    /* El JIT inline-a @c deref leyendo @c HandleTable::data_ (offset 0) y
+     * @c count_ (offset 8) con LITERALES.  Fijar el contrato igual que con
+     * @c HandleEntry: cualquier reordenacion rompe el build. */
+    static_assert(offsetof(HandleTable, data_)  == 0,
+                  "HandleTable.data_ debe estar en offset 0 (inline gc_deref)");
+    static_assert(offsetof(HandleTable, count_) == 8,
+                  "HandleTable.count_ debe estar en offset 8 (inline gc_deref)");
 
     /**
      * @brief Entrada en la tabla de referencias debiles del GcHeap.
@@ -756,6 +776,22 @@ namespace gc {
         bool is_handle_live(GcHandle handle) const noexcept {
             return handle < handles_.size() && handles_[handle].live;
         }
+
+        /**
+         * @brief Direccion estable de la @c HandleTable interna, para el JIT.
+         *
+         * Phase D.7 (principio "JIT inline > runtime"): el codigo JIT-eado
+         * inline-a @c deref leyendo @c data_/@c count_ de esta tabla en vez
+         * de hacer un CALL a @c vrt_gc_deref.  La struct @c HandleTable vive
+         * embebida en el GcHeap (no se mueve durante la vida del proceso),
+         * por lo que su direccion es estable; lo que cambia (via realloc) es
+         * el puntero @c data_ que ALMACENA, leido en cada deref.
+         *
+         * Se cachea una sola vez en @c ProcessVM::jit_handle_table (ctor).
+         *
+         * @return Puntero a la @c HandleTable (nunca nullptr).
+         */
+        HandleTable *jit_handle_table_ptr() noexcept { return &handles_; }
 
         /**
          * @brief Tamano del payload del objeto referenciado por handle.

@@ -184,6 +184,14 @@ static_assert(offsetof(runtime::ProcessVM, registers)
               == VESTA_PROC_BASE_POINTER_OFFSET,
               "ABI drift: base_pointer no esta en VESTA_PROC_BASE_POINTER_OFFSET");
 
+/* Validacion del puntero cacheado a la HandleTable (Phase D.7).  El JIT
+ * inline-a @c deref con @c mov base, [rbx + VESTA_PROC_JIT_HANDLE_TABLE_OFFSET].
+ * Si el layout de ProcessVM cambia, leer el nuevo offset con @c offsetof y
+ * actualizar la constante en @c abi.h. */
+static_assert(offsetof(runtime::ProcessVM, jit_handle_table)
+              == VESTA_PROC_JIT_HANDLE_TABLE_OFFSET,
+              "ABI drift: jit_handle_table no esta en VESTA_PROC_JIT_HANDLE_TABLE_OFFSET");
+
 /* ========================================================================= */
 /* ClassInfo + MethodInfo offsets (inline CALLVIRT dispatch)    */
 /* ========================================================================= */

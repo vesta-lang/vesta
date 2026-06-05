@@ -10932,6 +10932,11 @@ namespace vex {
                     add.source_line = src_line;
                     fn_->append(current_block_, std::move(add));
                 }
+                // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf al LOAD
+                // side (igual que el STORE side abajo).  Sin esto el LOAD del
+                // Err a copiar usaba `mov` (VM) en vez de `movh` (host) y leia
+                // basura -> error(r) != el valor real (path de error de `?`).
+                fn_->values[v_src_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
                 const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::I64); {
                     ir::IrInstr ld{};
                     ld.op          = ir::IrOp::LOAD;
@@ -10994,6 +10999,12 @@ namespace vex {
             add.source_line = src_line;
             fn_->append(current_block_, std::move(add));
         }
+        // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf a v_at8.  El
+        // buffer del Result temporal del operando es un host_ptr; sin esta
+        // marca, el LOAD de V emitia `mov` (VM mem) en vez de `movh` (host) y
+        // leia 0/basura.  La rama err ya lo propagaba (de ahi que err funcione
+        // y ok no).  Aplica al value extraction de la rama ok.
+        fn_->values[v_at8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
         const ir::IrValueId v_dst = fn_->new_value(payload_t); {
             ir::IrInstr ld{};
             ld.op          = ir::IrOp::LOAD;

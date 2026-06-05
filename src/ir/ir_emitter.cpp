@@ -3586,6 +3586,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // unicas via contador estatico thread-local.  Reusa el espacio
             // de labels global @c __sp_skip_<N> que el viejo RAW_ASM usaba.
             if (ins.operands.empty()) break;
+            // BugFix unique 107/110 (2026-06-05): el cleanup invoca el deleter
+            // via callvm/calln/callvmr -- una CALL que clobbea caller-saved
+            // regs.  Sin salvar los regs vivos A TRAVES de esta call, los
+            // valores que el caller usa DESPUES (p.ej. los params de
+            // findclass+getstatic del `return T.field`) se corrompen y el
+            // findclass devuelve null -> return basura.  Salvamos/restauramos
+            // como cualquier otra call (GC_ALLOC, CALL, etc.).  El JIT (vregs)
+            // ya lo manejaba; esto cierra el gap del path de slots.
+            const uint32_t sp_call_pos = lin_pos_of(ctx, bb.id, idx);
+            std::vector<int> sp_save =
+                live_regs_through_call(ctx, sp_call_pos, IR_NO_VALUE);
+            emit_save_live_regs(ctx, sp_call_pos, sp_save);
             static thread_local uint64_t sp_label_seq = 0;
             const uint64_t lbl = ++sp_label_seq;
             std::string r_ptr = ctx.reg_of(ins.operands[0]);
@@ -3621,6 +3633,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 }
                 ctx.out << skip_lbl << ":\n";
             }
+            emit_restore_live_regs(ctx, sp_call_pos, sp_save);
             break;
         }
 

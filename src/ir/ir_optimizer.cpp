@@ -296,6 +296,13 @@ static bool strmake_reads_immutable(const IrFunction &fn, IrValueId vm_addr) {
 /** @brief True si el nombre identifica un allocator puro (sin efectos
  *  observables salvo presion GC). */
 static bool is_pure_allocator_name(const std::string &name) {
+    /* Allocs SHARED (@c __new_<X>_shared) NO son puros: registran el objeto en
+     * la @c SharedHandleTable, un efecto OBSERVABLE via @c shared_heap_live_count().
+     * Eliminar un @c new shared X() no usado cambiaria el conteo de objetos
+     * shared vivos (regresion del bug de 167_z_gc_sweep: con DCE, crear 6 shared
+     * sin usar 4 dejaba before=2 en vez de 6).  Debe ir ANTES del check __new_. */
+    if (name.size() >= 7
+     && name.compare(name.size() - 7, 7, "_shared") == 0) return false;
     /* Frontend Vex emite @c __new_<ClassName> para cada @c new X(). */
     if (name.size() > 6 && name.compare(0, 6, "__new_") == 0) return true;
     /* Runtime entries de alloc puros. */
