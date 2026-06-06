@@ -156,6 +156,40 @@ namespace jit {
             }
             return e;
         }
+
+        /* C2-cimiento (2026-06-07): IC slots DIRECCIONABLES por call site.
+         *
+         * g_ic_slots:    clave (fn_pc<<8 | ordinal) -> addr del slot PIC
+         *                (64 bytes: 4 entradas [class_ptr][jit_code]).
+         * g_fn_ic_keys:  fn_pc -> lista de claves de sus IC sites (CALLVIRT),
+         *                para que el futuro pase C2 itere los slots de una fn
+         *                caliente y lea las clases observadas (especular).
+         *
+         * Ambos se tocan SOLO en compile time (bajo g_compile_mtx).  El runtime
+         * (vrt_callvirt_ic) escribe DENTRO de los slots, no en estos mapas.
+         *
+         * @c get_ic_slot(key): si key!=0 reusa el slot existente del call site
+         * (estable entre recompilaciones) o lo crea; si key==0 aloca un slot
+         * fresco no-direccionable (NATIVE_ABI / ICs no-PIC). */
+        std::unordered_map<uint64_t, uint64_t>              g_ic_slots;
+        std::unordered_map<uint64_t, std::vector<uint64_t>> g_fn_ic_keys;
+
+        uint64_t get_ic_slot(uint64_t key) {
+            if (g_code_cache == nullptr) return 0;
+            if (key != 0) {
+                auto it = g_ic_slots.find(key);
+                if (it != g_ic_slots.end()) return it->second;
+            }
+            uint8_t *slot = g_code_cache->alloc(64, 64);
+            if (slot == nullptr) return 0;
+            std::memset(slot, 0, 64);
+            const uint64_t addr = reinterpret_cast<uint64_t>(slot);
+            if (key != 0) {
+                g_ic_slots[key] = addr;
+                g_fn_ic_keys[key >> 8].push_back(key);
+            }
+            return addr;
+        }
     }
 
     /* Sprint B.1: expose el CodeCache global al runtime (native_callback.cpp).
@@ -355,20 +389,12 @@ namespace jit {
         /* IC slot reservation: aloca 16 bytes en el code cache (mismo
          * pool RWX) y los zero-init.  El JIT-eated codigo lee/escribe
          * estos bytes pero no los ejecuta. */
-        CodeCache *cc_ptr = g_code_cache;
-        mc_opts.reserve_ic_slot = [cc_ptr]() -> uint64_t {
-            /* PIC: 4 entries x 16 bytes (class + jit_code) = 64 bytes.
-             * Layout:
-             *   +0..+15  entry 0: [class_ptr][jit_code]
-             *   +16..+31 entry 1: [class_ptr][jit_code]
-             *   +32..+47 entry 2: [class_ptr][jit_code]
-             *   +48..+63 entry 3: [class_ptr][jit_code]
-             * Cache-line aligned (64 bytes). */
-            uint8_t *slot = cc_ptr->alloc(64, 64);
-            if (slot) {
-                for (int i = 0; i < 64; ++i) slot[i] = 0;
-            }
-            return reinterpret_cast<uint64_t>(slot);
+        /* IC slots direccionables por call site (C2-cimiento).  PIC de 4
+         * entradas x 16 bytes = 64 bytes, cache-line aligned, zero-init.
+         * @c get_ic_slot reusa el slot del call site (clave != 0) o aloca uno
+         * fresco (clave 0). */
+        mc_opts.reserve_ic_slot = [](uint64_t key) -> uint64_t {
+            return get_ic_slot(key);
         };
         ffi::FFI *ffi_ptr = &owning_vm.loader_public.ffi_loader;
         auto native_resolver = [ffi_ptr](const std::string &name) -> uint64_t {
@@ -690,11 +716,8 @@ namespace jit {
              * la recursion pueda referenciar el mismo callback en cada
              * nivel.  Esto permite resolucion arbitrariamente profunda
              * sin perder el callback. */
-            CodeCache *cc_for_ic = g_code_cache;
-            auto ic_reserver = [cc_for_ic]() -> uint64_t {
-                uint8_t *slot = cc_for_ic->alloc(16, 16);
-                if (slot) std::memset(slot, 0, 16);
-                return reinterpret_cast<uint64_t>(slot);
+            auto ic_reserver = [](uint64_t key) -> uint64_t {
+                return get_ic_slot(key);
             };
             *resolver_holder = [lookup_ptr, funcs_ptr, resolver_holder, sym_resolver, resolve_native_fn, ic_reserver, read_vmem_u64, exc_frame_stack_offset, exc_free_list_offset, jit_instr_counter_addr]
                                (const std::string &name) -> uint64_t {
@@ -795,11 +818,8 @@ namespace jit {
         top_opts.exc_free_list_offset = exc_free_list_offset;
         top_opts.jit_instr_counter_addr = jit_instr_counter_addr;
         {
-            CodeCache *cc_top = g_code_cache;
-            top_opts.reserve_ic_slot = [cc_top]() -> uint64_t {
-                uint8_t *slot = cc_top->alloc(16, 16);
-                if (slot) std::memset(slot, 0, 16);
-                return reinterpret_cast<uint64_t>(slot);
+            top_opts.reserve_ic_slot = [](uint64_t key) -> uint64_t {
+                return get_ic_slot(key);
             };
         }
 

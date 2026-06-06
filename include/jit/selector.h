@@ -117,12 +117,20 @@ namespace jit {
         /// @c resolve_native_symbol.
         std::function<uint64_t(const std::string &)> resolve_native_fn{};
 
-        /// Callback para reservar un slot de Inline Cache (16 bytes:
-        /// cached_class_ptr + cached_jit_code, inicial 0).  Retorna la
-        /// addr HOST del slot.  El selector embebe esa addr en el codigo
-        /// emitido para CALLVIRT IC pattern.  Si es null, el selector
-        /// emite el inline dispatch tradicional (sin IC).
-        std::function<uint64_t()> reserve_ic_slot{};
+        /// Callback para reservar un slot de Inline Cache (PIC de 4 entradas
+        /// x 16 bytes = 64 bytes: [class_ptr][jit_code] por entrada, inicial
+        /// 0).  Retorna la addr HOST del slot.  El selector embebe esa addr
+        /// en el codigo emitido para el CALLVIRT IC pattern.  Si es null, el
+        /// selector emite el inline dispatch tradicional (sin IC).
+        ///
+        /// C2-cimiento (2026-06-07): el parametro @p callsite_key identifica
+        /// el call site (clave = (fn_pc << 8) | ordinal-de-IC-en-la-fn) para
+        /// que el slot sea DIRECCIONABLE: el mismo call site reusa el mismo
+        /// slot entre recompilaciones, y el pase C2 puede encontrarlo y leer
+        /// su estado (clases observadas) para especular.  @p callsite_key==0
+        /// significa "sin clave" (e.g. NATIVE_ABI / tests): se aloca un slot
+        /// fresco no-direccionable, como antes.
+        std::function<uint64_t(uint64_t /*callsite_key*/)> reserve_ic_slot{};
 
         /// Callback para leer un qword (u64) de @c vm_mem en compile-time.
         /// Usado por el peephole de inlining: cuando el JIT ve

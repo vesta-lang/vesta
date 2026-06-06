@@ -432,6 +432,24 @@ namespace jit {
             }
         }
 
+        /* C2-cimiento (2026-06-07): clave de call site para IC slots
+         * DIRECCIONABLES.  fn_pc se resuelve una vez (via el symbol_table del
+         * .velb); el ordinal incrementa por cada IC reservado en la funcion,
+         * en el orden deterministico en que el selector recorre las instrs.
+         * Asi el mismo call site obtiene la misma clave entre recompilaciones
+         * -> el pase C2 puede encontrar el slot y leer las clases observadas.
+         * Si no hay symbol_table (NATIVE_ABI/tests) -> clave 0 = slot fresco
+         * no-direccionable (comportamiento previo). */
+        const uint64_t ic_fn_pc =
+            (opts_.resolve_symbol && !ir_fn.name.empty())
+                ? opts_.resolve_symbol("code." + ir_fn.name)
+                : 0;
+        uint32_t ic_ordinal = 0;
+        auto next_ic_key = [&]() -> uint64_t {
+            const uint32_t o = ic_ordinal++;
+            return ic_fn_pc ? ((ic_fn_pc << 8) | (o & 0xFFu)) : 0;
+        };
+
         /* regalloc del JIT.
          *
          * Computa una asignacion estatica de los VIDs mas usados a
@@ -3361,7 +3379,7 @@ namespace jit {
                          */
                         uint64_t ic_slot_addr = 0;
                         if (opts_.reserve_ic_slot) {
-                            ic_slot_addr = opts_.reserve_ic_slot();
+                            ic_slot_addr = opts_.reserve_ic_slot(next_ic_key());
                         }
                         if (ic_slot_addr != 0 && opts_.runtime
                          && opts_.runtime->callvirt_ic) {
@@ -5512,7 +5530,7 @@ namespace jit {
                                                             /* Inline cache: reservar 8 bytes en
                                                              * code cache, init a 0.  Primera vez
                                                              * popula via vm_read_u64; despues hot path. */
-                                                            const uint64_t ic = opts_.reserve_ic_slot();
+                                                            const uint64_t ic = opts_.reserve_ic_slot(0);
                                                             if (ic) {
                                                                 /* mov r10, ic_slot_addr */
                                                                 staged.push_back(MInstr::make_unary(MOp::MOV,
@@ -6893,7 +6911,7 @@ namespace jit {
                         uint64_t str_ic_slot = 0;
                         MLabelId ic_hit_label = 0, ic_miss_label = 0, ic_done_label = 0;
                         if (use_ic) {
-                            str_ic_slot = opts_.reserve_ic_slot();
+                            str_ic_slot = opts_.reserve_ic_slot(0);
                             use_ic = (str_ic_slot != 0);
                         }
                         if (use_ic) {
