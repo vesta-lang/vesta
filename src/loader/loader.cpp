@@ -734,7 +734,13 @@ namespace loader {
         // Si el JIT main compila exitosamente, se ejecuta nativo via
         // enter_jit en el scheduler.  Si falla parcialmente (algun raw_asm
         // complejo no soportado), unsupported=true y caemos a interp.
-        if (jit::g_jit_threshold != UINT32_MAX && !executables.empty()) {
+        // SEGURIDAD (sandbox bajo JIT): no eager-compile main si hay un sandbox
+        // activo -- el JIT-eated main emitiria CALLN/spawn/etc. sin el check de
+        // capabilities (check_cap_at_pc).  El interp enforcea el sandbox.  Cero
+        // overhead default (sandbox_active = false).  Mismo guard que
+        // maybe_compile_method.
+        if (jit::g_jit_threshold != UINT32_MAX && !executables.empty()
+         && !sandbox_active) {
             auto &last_exe = executables.back();
             /* AOP fix 2026-05-16: si el programa tiene CUALQUIER metodo con
              * advice_chain != null (i.e. usa @Before/@After/@Around), no

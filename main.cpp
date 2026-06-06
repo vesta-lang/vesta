@@ -2190,6 +2190,20 @@ int main(int argc, char *argv[]) {
                             result.count("dist-node-id")     > 0;
             if (has_dist) apply_dist_config(vm, result);
 
+            // Phase M.sandbox (orden critico): pre-activar `sandbox_active`
+            // ANTES de load_executable si las caps seran restringidas.
+            // load_executable hace el eager-compile de main, cuyo guard de
+            // seguridad consulta sandbox_active; si el flag se seteara solo
+            // DESPUES (al aplicar exe.caps mas abajo), el eager-compile veria
+            // sandbox_active=false -> JIT-compilaria main saltandose el check
+            // de capabilities -> bypass del sandbox bajo JIT.
+            if (result.count("vex-caps")) {
+                const std::string cs = result["vex-caps"].as<std::string>();
+                if (!cs.empty() && !::loader::parse_caps(cs).unrestricted()) {
+                    mgr.loader.sandbox_active = true;
+                }
+            }
+
             Timer t_load;
             runtime::ProcessVM *proc = mgr.loader.load_executable(*vm, velb_path);
             if (!proc) {
