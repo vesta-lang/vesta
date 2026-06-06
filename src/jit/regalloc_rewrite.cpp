@@ -258,6 +258,32 @@ namespace jit {
                     return;
                 }
 
+                if (op == MOp::DIVMOD_V) {
+                    /* dst = src1 / src2 (variant 0) o src1 % src2 (variant 1),
+                     * signed.  Secuencia x86 con RAX:RDX fijos.  El divisor va a
+                     * R11 (scr1, reservado -> nunca es un operando, sin aliasing)
+                     * ANTES de tocar RAX/RDX, asi cualquier asignacion fisica de
+                     * los operandos (incluida RAX/RDX) es segura:
+                     *   mov  r11, divisor      ; divisor leido antes de clobbers
+                     *   mov  rax, dividendo    ; (no-op si ya en RAX)
+                     *   cqo                    ; sign-extend RAX -> RDX:RAX
+                     *   idiv r11               ; RAX=cociente, RDX=resto
+                     *   mov  dst, rax|rdx
+                     * DIVMOD_V es call-position -> ningun vreg vivo a traves esta
+                     * en RAX/RDX (van a callee-saved), asi el clobber es seguro. */
+                    const MOperand a = resolve(in.src1);   // dividendo
+                    const MOperand b = resolve(in.src2);   // divisor
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), b));
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RAX), a));
+                    { MInstr c; c.op = MOp::CQO; out.push_back(c); }
+                    out.push_back(MInstr::make_unary(MOp::IDIV, MOperand{},
+                                                     reg(scr1)));
+                    const MReg res = (in.variant == 1u) ? MReg::RDX : MReg::RAX;
+                    out.push_back(MInstr::make_unary(MOp::MOV,
+                                                     resolve(in.dst), reg(res)));
+                    return;
+                }
+
                 if (op == MOp::LOAD) {
                     /* dst = [addr].  addr y dst pueden estar spilled. */
                     const uint8_t width = static_cast<uint8_t>(in.flags >> 1);

@@ -57,6 +57,10 @@ namespace vesta_rt {
     /// Offset de @c cached_page_host dentro de @c vm::VirtualMemory.
     extern const int32_t kVmMemCachedPageHostOffset =
         static_cast<int32_t>(offsetof(vm::VirtualMemory, cached_page_host));
+
+    /* Phase D.7 perf inline-alloc: offset de @c raw_alloc en @c ProcessVM. */
+    extern const int32_t kProcRawAllocOffset =
+        static_cast<int32_t>(offsetof(runtime::ProcessVM, raw_alloc));
 }
 
 /* ========================================================================= */

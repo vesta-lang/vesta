@@ -1274,6 +1274,48 @@ namespace loader {
         return false;
     }
 
+    bool Loader::check_cap_at_pc(uint64_t pc, uint32_t required) const noexcept {
+        // Fast path zero-overhead: si ningun modulo tiene sandbox activo
+        // (caso default), permitir sin iterar.  1 branch predicho not-taken.
+        if (__builtin_expect(!sandbox_active, 1)) return true;
+        // Recorrer los modulos cargados.  Solo los que tienen un sandbox
+        // activo (caps restringidas) pueden denegar; el resto se saltan con
+        // un branch predicho (unrestricted() == true en el caso default).
+        for (const auto &exe : executables) {
+            if (!exe) continue;
+            if (exe->caps.unrestricted()) continue;  // sin sandbox -> permitir
+            // Localizar la seccion cuyo rango VA contiene @c pc.  Mismo
+            // razonamiento de tamano efectivo que load_module_dynamic
+            // (size_real puede ser 0 con el formato actual; derivar del
+            // bytecode hasta la primera tabla reloc/imports).
+            uint64_t bc_end = exe->bytecode.size();
+            if (exe->header.offset_reloc_table != 0
+             && exe->header.offset_reloc_table < bc_end) {
+                bc_end = exe->header.offset_reloc_table;
+            }
+            if (exe->header.offset_import_table != 0
+             && exe->header.size_import_table > 0
+             && exe->header.offset_import_table < bc_end) {
+                bc_end = exe->header.offset_import_table;
+            }
+            for (const auto *sec : exe->sections) {
+                if (!sec) continue;
+                const uint64_t start = sec->memory.address_init;
+                const uint64_t size_eff = sec->size_real
+                    ? sec->size_real
+                    : (sec->file_offset < bc_end ? (bc_end - sec->file_offset) : 0);
+                if (size_eff == 0) continue;
+                if (pc >= start && pc < start + size_eff) {
+                    // @c pc pertenece a este modulo sandboxed: decidir por
+                    // sus caps.
+                    return exe->caps.has(required);
+                }
+            }
+        }
+        // @c pc no pertenece a ningun modulo sandboxed -> permitir.
+        return true;
+    }
+
     void Loader::copy_executables_to(runtime::ProcessVM &dest,
                                       runtime::ProcessVM *parent) {
         // Replica la copia que hace load_executable() pero apuntando al

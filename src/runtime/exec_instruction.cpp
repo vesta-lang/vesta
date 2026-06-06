@@ -24,6 +24,7 @@
 #include <cstdio>
 #include "runtime/host_alloca_tracker.h"  // Sprint MMM-ext leak-fix
 #include "loader/oop_types.h"
+#include "loader/loader.h"            // Phase M.sandbox: check_cap_at_pc + Caps
 #include "jit/auto_jit.h"             // D.5-callvm-hook: lookup_jit_code_at_pc
 #include "jit/interp_jit_bridge.h"    // D.5-callvm-hook: enter_jit
 #include "vesta_rt/public.h"          // D.5-callvm-hook: vrt_proc
@@ -226,6 +227,18 @@ namespace runtime {
      * exception catching (no captura segfault crudo).
      */
     void exec_instr_calln(ProcessVM *vm, const DecodedInstr &instr) {
+        // Phase M.sandbox: comprobar la capability FFI_CALL del modulo
+        // propietario del PC actual.  En modo default (sin --vex-caps) el
+        // check es un fast path (todos los modulos unrestricted) y permite
+        // siempre.  Si el sandbox del modulo NO concede ffi:call, abortar
+        // con FatalError (el proceso queda DEAD salvo que un try/catch lo
+        // capture) en lugar de invocar la funcion nativa.
+        if (!vm->scheduler.vm_reference.loader_public.check_cap_at_pc(
+                vm->registers.rip.raw(), ::loader::Caps::FFI_CALL)) {
+            runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+                "CALLN denegado por sandbox: falta la capability 'ffi:call'");
+            return;
+        }
         void *   fn   = reinterpret_cast<void *>(instr.data_instruction.inmmed_data.inmmed);
         uint64_t argc = instr.data_instruction.inmmed_data.reg;
         uint64_t r    = 0;

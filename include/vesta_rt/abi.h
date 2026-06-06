@@ -222,6 +222,13 @@ namespace vesta_rt {
     extern const int32_t kProcVmMemOffset;
     extern const int32_t kVmMemCachedPageVaddrOffset;
     extern const int32_t kVmMemCachedPageHostOffset;
+
+    /* Phase D.7 perf inline-alloc (2026-06-06): offset del miembro
+     * @c raw_alloc (gc::RawAllocator) dentro de @c runtime::ProcessVM.
+     * El JIT inline-a el fast-path del slab leyendo @c raw_alloc.slab_free_list_
+     * y @c total_bytes_ (sus offsets internos via gc::RawAllocator::jit_*).
+     * Resuelto en runtime (member non-POD impide #define). */
+    extern const int32_t kProcRawAllocOffset;
 }
 #endif
 

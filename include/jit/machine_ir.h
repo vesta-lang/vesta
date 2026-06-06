@@ -419,6 +419,14 @@ namespace jit {
         CVTSS2SD    = 77,   ///< CVTSS2SD xmm, xmm (F3 0F 5A /r) -- f32 -> f64 (widen)
         CVTSD2SS    = 78,   ///< CVTSD2SS xmm, xmm (F2 0F 5A /r) -- f64 -> f32 (narrow)
 
+        /* Pseudo D.7 perf (2026-06-06): division/modulo entero en vregs.
+         * dst = src1 / src2 (variant 0 = DIV, 1 = MOD).  El rewrite lo
+         * expande a la secuencia x86 RAX:RDX-fija usando R11 (scratch
+         * reservado) para el divisor, evitando el aliasing operando<->RAX/RDX
+         * sin necesitar fixed intervals en el regalloc.  Se marca como
+         * call-position (clobber RAX/RDX -> live-across van a callee-saved). */
+        DIVMOD_V    = 79,
+
         COUNT       = 80
     };
 

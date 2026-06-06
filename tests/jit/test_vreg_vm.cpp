@@ -763,9 +763,116 @@ static void test_vm_math_inline() {
     CHECK(run_rot_const(P + "vmath_rotr", 16, 4) == 1, "rotr(16,4)==1");
 }
 
+/* ---- Test DIVMOD: div + mod enteros via pseudo DIVMOD_V (gate ON) ----- */
+static void test_vm_divmod() {
+    std::printf("[vm] divmod: regs[1]=17, regs[2]=5 -> div=3, mod=2\n");
+    /* DIV: q = a / b */
+    {
+        ir::IrFunction fn; fn.name = "dv"; fn.ret_type = ir::IrType::I64;
+        auto a = fn.new_value(ir::IrType::I64);
+        auto b = fn.new_value(ir::IrType::I64);
+        auto q = fn.new_value(ir::IrType::I64);
+        fn.params = { a, b };
+        auto bb = fn.new_block("e");
+        fn.append(bb, bin(ir::IrOp::DIV, q, a, b));
+        fn.append(bb, ret1(q));
+        Proxy px; std::memset(&px, 0, sizeof(px));
+        px.regs[1] = 17; px.regs[2] = 5;
+        CHECK(jit_vm(fn, px), "jit_vm ok (div)");
+        CHECK(px.regs[0] == 3, "17/5==3");
+        if (px.regs[0] != 3) std::printf("    div regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+    }
+    /* MOD: r = a % b */
+    {
+        ir::IrFunction fn; fn.name = "md"; fn.ret_type = ir::IrType::I64;
+        auto a = fn.new_value(ir::IrType::I64);
+        auto b = fn.new_value(ir::IrType::I64);
+        auto r = fn.new_value(ir::IrType::I64);
+        fn.params = { a, b };
+        auto bb = fn.new_block("e");
+        fn.append(bb, bin(ir::IrOp::MOD, r, a, b));
+        fn.append(bb, ret1(r));
+        Proxy px; std::memset(&px, 0, sizeof(px));
+        px.regs[1] = 17; px.regs[2] = 5;
+        CHECK(jit_vm(fn, px), "jit_vm ok (mod)");
+        CHECK(px.regs[0] == 2, "17%5==2");
+        if (px.regs[0] != 2) std::printf("    mod regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+    }
+    /* COMBINADO: f(a,b) = (a/b) + (a%b).  Dos DIVMOD_V; a,b vivos a traves
+     * de ambos (call-positions), q vivo a traves del 2o.  Reproduce el patron
+     * de la funcion divmod del bench que crasheaba. */
+    {
+        ir::IrFunction fn; fn.name = "dm2"; fn.ret_type = ir::IrType::I64;
+        auto a = fn.new_value(ir::IrType::I64);
+        auto b = fn.new_value(ir::IrType::I64);
+        auto q = fn.new_value(ir::IrType::I64);
+        auto r = fn.new_value(ir::IrType::I64);
+        auto s = fn.new_value(ir::IrType::I64);
+        fn.params = { a, b };
+        auto bb = fn.new_block("e");
+        fn.append(bb, bin(ir::IrOp::DIV, q, a, b));
+        fn.append(bb, bin(ir::IrOp::MOD, r, a, b));
+        fn.append(bb, bin(ir::IrOp::ADD, s, q, r));
+        fn.append(bb, ret1(s));
+        Proxy px; std::memset(&px, 0, sizeof(px));
+        px.regs[1] = 17; px.regs[2] = 5;   // 17/5=3, 17%5=2, +=5
+        CHECK(jit_vm(fn, px), "jit_vm ok (div+mod combinado)");
+        CHECK(px.regs[0] == 5, "(17/5)+(17%5)==5");
+        if (px.regs[0] != 5) std::printf("    dm2 regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+    }
+    /* COMBINADO i32: replica EXACTA del IR real del frontend que crasheaba:
+     *   f(a:i32,b:i32) = (a/b) + (a%b).  Mismo patron pero tipo i32. */
+    {
+        ir::IrFunction fn; fn.name = "dm2i32"; fn.ret_type = ir::IrType::I32;
+        auto a = fn.new_value(ir::IrType::I32);
+        auto b = fn.new_value(ir::IrType::I32);
+        auto q = fn.new_value(ir::IrType::I32);
+        auto r = fn.new_value(ir::IrType::I32);
+        auto s = fn.new_value(ir::IrType::I32);
+        fn.params = { a, b };
+        auto bb = fn.new_block("e");
+        ir::IrInstr di; di.op = ir::IrOp::DIV; di.type = ir::IrType::I32;
+        di.dst = q; di.operands = { a, b }; fn.append(bb, di);
+        ir::IrInstr mi; mi.op = ir::IrOp::MOD; mi.type = ir::IrType::I32;
+        mi.dst = r; mi.operands = { a, b }; fn.append(bb, mi);
+        ir::IrInstr ai; ai.op = ir::IrOp::ADD; ai.type = ir::IrType::I32;
+        ai.dst = s; ai.operands = { q, r }; fn.append(bb, ai);
+        ir::IrInstr ri; ri.op = ir::IrOp::RET; ri.type = ir::IrType::I32;
+        ri.operands = { s }; fn.append(bb, ri);
+        Proxy px; std::memset(&px, 0, sizeof(px));
+        px.regs[1] = 17; px.regs[2] = 5;
+        CHECK(jit_vm(fn, px), "jit_vm ok (i32 div+mod)");
+        CHECK((px.regs[0] & 0xFFFFFFFFu) == 5, "i32 (17/5)+(17%5)==5");
+        if ((px.regs[0] & 0xFFFFFFFFu) != 5) std::printf("    dm2i32 regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+    }
+    /* DIV con dividendo negativo: -17 / 5 == -3 (trunc hacia cero). */
+    {
+        ir::IrFunction fn; fn.name = "dvn"; fn.ret_type = ir::IrType::I64;
+        auto a = fn.new_value(ir::IrType::I64);
+        auto b = fn.new_value(ir::IrType::I64);
+        auto q = fn.new_value(ir::IrType::I64);
+        fn.params = { a, b };
+        auto bb = fn.new_block("e");
+        fn.append(bb, bin(ir::IrOp::DIV, q, a, b));
+        fn.append(bb, ret1(q));
+        Proxy px; std::memset(&px, 0, sizeof(px));
+        px.regs[1] = static_cast<uint64_t>(-17); px.regs[2] = 5;
+        CHECK(jit_vm(fn, px), "jit_vm ok (div neg)");
+        CHECK(static_cast<int64_t>(px.regs[0]) == -3, "-17/5==-3");
+        if (static_cast<int64_t>(px.regs[0]) != -3) std::printf("    divneg regs[0]=%lld\n", (long long)px.regs[0]);
+    }
+}
+
 int main() {
     std::setbuf(stdout, nullptr);
+    /* Forzar el gate de DIV/MOD en vregs para este test (default OFF). */
+#if defined(_WIN32)
+    _putenv("VESTA_JIT_VREG_IDIV=1");
+#else
+    setenv("VESTA_JIT_VREG_IDIV", "1", 1);
+#endif
     std::printf("=== test_vreg_vm (Phase D.7 commit 5a, VM_ABI) ===\n");
+    test_vm_divmod();
     test_vm_add();
     test_vm_loop();
     test_vm_sext_loop();
