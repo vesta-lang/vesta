@@ -1727,11 +1727,14 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
          * `add.ptr obj, Kconst` (direccion de campo) o `load obj` (offset 0).
          * Cada field-addr solo puede usarse en LOADs.  Si algo no encaja ->
          * abortar este sitio (no transformar). --- */
-        struct LoadRef { size_t bi; size_t ii; uint32_t off; };
+        struct LoadRef  { size_t bi; size_t ii; uint32_t off; };
+        struct StoreRef { size_t ii; uint32_t off; };
         std::vector<LoadRef>  loads;       /* loads a reescribir */
         std::vector<std::pair<size_t,size_t>> dead_addr;  /* add.ptr a NOPear */
         std::unordered_map<IrValueId, uint32_t> fieldaddr_off;  /* addr_vid -> off */
         bool ok = true;
+        bool single_block = true;          /* todos los usos en el bloque del call */
+        bool has_writes   = false;         /* algun STORE a un campo del objeto */
         const char *use_reason = "uso no soportado de obj";
 
         /* Helper: lee el offset const de un `add.ptr obj, K`. */
@@ -1745,11 +1748,24 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
             return false;
         };
 
-        /* Pasada A: localizar field-addrs derivadas de obj + loads directos. */
+        /* Pasada A: localizar field-addrs derivadas de obj + loads/stores
+         * directos (offset 0).  Trackea single_block + has_writes. */
         for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
             const auto &b = fn.blocks[bi];
             for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
                 const auto &in = b.instrs[ii];
+                /* obj usado en phi_args o func_ptr -> uso no modelable como
+                 * field-access (p.ej. `x = phi(a, b)`).  El escape analysis lo
+                 * considera no-escapante pero el transform no sabe materializar
+                 * el campo a traves de un merge -> abortar (necesitaria SROA con
+                 * PHI de los valores de campo). */
+                bool bad_use = false;
+                for (const auto &pa : in.phi_args) if (pa.value == obj) { bad_use = true; break; }
+                if (in.func_ptr == obj) bad_use = true;
+                if (bad_use) {
+                    ok = false; use_reason = "obj usado en PHI/func_ptr (necesita SROA con PHI)";
+                    break;
+                }
                 bool uses_obj = false;
                 for (auto v : in.operands) if (v == obj) { uses_obj = true; break; }
                 if (!uses_obj) continue;
@@ -1757,98 +1773,209 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                 if (in.op == IrOp::ADD && in.operands.size() == 2
                  && in.dst != IR_NO_VALUE) {
                     /* `add obj, Kconst` o `add Kconst, obj`. */
-                    IrValueId other = (in.operands[0] == obj) ? in.operands[1]
-                                                              : in.operands[0];
-                    /* Ambos operandos obj? raro -> abortar. */
                     if (in.operands[0] == obj && in.operands[1] == obj) {
                         ok = false; use_reason = "obj en ambos operandos de add"; break;
                     }
+                    IrValueId other = (in.operands[0] == obj) ? in.operands[1]
+                                                              : in.operands[0];
                     uint64_t k;
                     if (!const_value_of(other, k)) {
                         ok = false; use_reason = "field-addr con offset no-const"; break;
                     }
                     fieldaddr_off[in.dst] = static_cast<uint32_t>(k);
                     dead_addr.push_back({bi, ii});
+                    if (bi != site.block_idx) single_block = false;
                 } else if (in.op == IrOp::LOAD && !in.operands.empty()
                         && in.operands[0] == obj) {
-                    /* load directo de obj -> offset 0. */
-                    loads.push_back({bi, ii, 0});
+                    loads.push_back({bi, ii, 0});  /* load directo -> offset 0 */
+                    if (bi != site.block_idx) single_block = false;
+                } else if (in.op == IrOp::STORE && in.operands.size() >= 2
+                        && in.operands[1] == obj && in.operands[0] != obj) {
+                    has_writes = true;             /* store directo -> offset 0 */
+                    if (bi != site.block_idx) single_block = false;
                 } else {
-                    /* obj usado de forma no soportada -> abortar el sitio. */
                     ok = false;
-                    use_reason = "obj usado fuera de field-read (CMP/callvirt/store-val/GEP/...)";
+                    use_reason = "obj usado fuera de field-access (CMP/callvirt/store-val/GEP/...)";
                     break;
                 }
             }
         }
         if (!ok) { diag(site, use_reason); continue; }
 
-        /* Pasada B: cada field-addr solo puede usarse en LOADs. */
+        /* Pasada B: cada field-addr solo puede usarse en LOAD o STORE-addr.
+         * Recolecta loads + marca has_writes; trackea single_block. */
         for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
             const auto &b = fn.blocks[bi];
             for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
                 const auto &in = b.instrs[ii];
+                /* field-addr usada en phi_args/func_ptr -> no soportado. */
+                for (const auto &pa : in.phi_args)
+                    if (fieldaddr_off.count(pa.value)) { ok = false; break; }
+                if (in.func_ptr != IR_NO_VALUE && fieldaddr_off.count(in.func_ptr)) ok = false;
+                if (!ok) { use_reason = "field-addr usada en PHI/func_ptr"; break; }
+                /* Es field-addr operando de esta instr? */
+                bool touches_fa = false; IrValueId fav = IR_NO_VALUE; uint32_t foff = 0;
                 for (auto v : in.operands) {
                     auto it = fieldaddr_off.find(v);
-                    if (it == fieldaddr_off.end()) continue;
-                    /* Esta instr usa una field-addr. */
-                    if (in.op == IrOp::LOAD && !in.operands.empty()
-                     && in.operands[0] == v) {
-                        loads.push_back({bi, ii, it->second});
-                    } else {
-                        /* STORE u otra op sobre la field-addr -> abortar. */
-                        ok = false;
-                        use_reason = (in.op == IrOp::STORE)
-                            ? "field-write tras ctor (necesita versioning)"
-                            : "field-addr usado por op no-LOAD";
-                    }
+                    if (it != fieldaddr_off.end()) { touches_fa = true; fav = v; foff = it->second; break; }
+                }
+                if (!touches_fa) continue;
+
+                if (in.op == IrOp::LOAD && !in.operands.empty()
+                 && in.operands[0] == fav) {
+                    loads.push_back({bi, ii, foff});
+                    if (bi != site.block_idx) single_block = false;
+                } else if (in.op == IrOp::STORE && in.operands.size() >= 2
+                        && in.operands[1] == fav && in.operands[0] != fav) {
+                    /* field-write: la field-addr es la DIRECCION (operand 1),
+                     * no el valor.  Si la field-addr fuera el VALOR -> escape. */
+                    has_writes = true;
+                    if (bi != site.block_idx) single_block = false;
+                } else {
+                    ok = false;
+                    use_reason = "field-addr usado por op no-LOAD/STORE (o como valor)";
+                }
+            }
+        }
+        if (!ok) { diag(site, use_reason); continue; }
+
+        /* ====================================================================
+         * Caso A: SIN escrituras -> path read-only (cross-block OK).
+         * Reemplaza cada load por el valor de construccion del campo. */
+        if (!has_writes) {
+            struct PendingRewrite { size_t bi; size_t ii; const SrFieldInit *fi; };
+            std::vector<PendingRewrite> pending;
+            for (const auto &lr : loads) {
+                const SrFieldInit *fi = model->find(lr.off);
+                if (!fi) {
+                    ok = false;
+                    use_reason = "load de campo no inicializado por el ctor (default-0)";
                     break;
                 }
-                if (!ok) break;
+                IrInstr &probe = fn.blocks[lr.bi].instrs[lr.ii];
+                if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
+                    ok = false;
+                    use_reason = "tipo de campo no soportado (float/ptr/handle/widening)";
+                    break;
+                }
+                pending.push_back({lr.bi, lr.ii, fi});
             }
-        }
-        if (!ok) { diag(site, use_reason); continue; }
+            if (!ok) { diag(site, use_reason); continue; }
 
-        /* Resolver cada load contra el modelo + validar que la reescritura
-         * es posible ANTES de mutar nada (transaccional). */
-        struct PendingRewrite { size_t bi; size_t ii; const SrFieldInit *fi; };
-        std::vector<PendingRewrite> pending;
-        for (const auto &lr : loads) {
-            const SrFieldInit *fi = model->find(lr.off);
-            if (!fi) {
-                ok = false;
-                use_reason = "load de campo no inicializado por el ctor (default-0)";
-                break;
+            for (const auto &pr : pending) {
+                IrInstr &ld = fn.blocks[pr.bi].instrs[pr.ii];
+                sr_rewrite_load(ld, *pr.fi, args, fn, /*apply=*/true);
             }
-            /* Validar la reescritura SIN mutar (apply=false). */
-            IrInstr &probe = fn.blocks[lr.bi].instrs[lr.ii];
-            if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
-                ok = false;
-                use_reason = "tipo de campo no soportado (float/ptr/handle/widening)";
-                break;
+            for (const auto &da : dead_addr) {
+                IrInstr &ai = fn.blocks[da.first].instrs[da.second];
+                ai.op = IrOp::NOP; ai.operands.clear();
+                ai.dst = IR_NO_VALUE; ai.func_name.clear();
             }
-            pending.push_back({lr.bi, lr.ii, fi});
+            call_ins.op = IrOp::NOP; call_ins.operands.clear();
+            call_ins.dst = IR_NO_VALUE; call_ins.func_name.clear();
+            changed = true;
+            continue;
         }
-        if (!ok) { diag(site, use_reason); continue; }
 
-        /* --- Aplicar (todas las precondiciones cumplidas). --- */
-        for (const auto &pr : pending) {
-            IrInstr &ld = fn.blocks[pr.bi].instrs[pr.ii];
-            sr_rewrite_load(ld, *pr.fi, args, fn, /*apply=*/true);
+        /* ====================================================================
+         * Caso B: CON escrituras -> field versioning LINEAL (single-block).
+         * El objeto vive entero en un bloque; un walk lineal hace store-to-
+         * load forwarding (los loads leen el ultimo valor escrito, o el de
+         * construccion), elimina los stores (dead: el objeto no escapa y los
+         * loads ya no leen memoria) y borra el alloc.  Cross-block con
+         * escrituras necesitaria mem2reg (PHI) -> bail. */
+        if (!single_block) {
+            diag(site, "field-write cross-block (necesita mem2reg/PHI)");
+            continue;
         }
-        /* NOPear las field-addr muertas. */
-        for (const auto &da : dead_addr) {
-            IrInstr &ai = fn.blocks[da.first].instrs[da.second];
-            ai.op = IrOp::NOP; ai.operands.clear();
-            ai.dst = IR_NO_VALUE; ai.func_name.clear();
-        }
-        /* NOPear el CALL del alloc (elimina el newobj/ctor: seguro porque el
-         * objeto no escapa y el ctor es un inicializador trivial sin efectos
-         * observables mas alla de los campos). */
-        call_ins.op = IrOp::NOP; call_ins.operands.clear();
-        call_ins.dst = IR_NO_VALUE; call_ins.func_name.clear();
 
-        changed = true;
+        {
+            auto &blkv = fn.blocks[site.block_idx].instrs;
+            /* DRY-RUN: simular current[offset] en orden de bloque + validar. */
+            struct LdPlan { size_t ii; bool from_store; IrValueId stored; const SrFieldInit *fi; };
+            std::vector<LdPlan> ld_plan;
+            std::vector<size_t> store_iis;
+            std::unordered_map<uint32_t, IrValueId> sim;  /* offset -> ultimo valor escrito */
+            const char *vreason = "versioning";
+            bool vok = true;
+
+            for (size_t ii = 0; ii < blkv.size() && vok; ++ii) {
+                const auto &in = blkv[ii];
+                uint32_t off = 0; bool is_ld = false, is_st = false; IrValueId sval = IR_NO_VALUE;
+                if (in.op == IrOp::LOAD && !in.operands.empty()) {
+                    IrValueId addr = in.operands[0];
+                    if (addr == obj) { off = 0; is_ld = true; }
+                    else { auto it = fieldaddr_off.find(addr);
+                           if (it != fieldaddr_off.end()) { off = it->second; is_ld = true; } }
+                } else if (in.op == IrOp::STORE && in.operands.size() >= 2) {
+                    IrValueId addr = in.operands[1];
+                    if (addr == obj) { off = 0; is_st = true; sval = in.operands[0]; }
+                    else { auto it = fieldaddr_off.find(addr);
+                           if (it != fieldaddr_off.end()) { off = it->second; is_st = true; sval = in.operands[0]; } }
+                }
+                if (is_ld) {
+                    /* Solo enteros: el forwarding via MOV de un valor float/
+                     * ptr/handle podria mezclar bancos GP/ZMM en codegen.
+                     * Consistente con el path read-only (int-only). */
+                    if (!sr_type_is_int(in.type)) {
+                        vok = false; vreason = "campo no-entero con field-write (float/ptr/handle)"; break;
+                    }
+                    auto sit = sim.find(off);
+                    if (sit != sim.end()) {
+                        /* forward del ultimo store: el tipo del valor debe
+                         * coincidir con el tipo leido. */
+                        IrValueId v = sit->second;
+                        if (v == IR_NO_VALUE || v >= fn.values.size()
+                         || fn.values[v].type != in.type) {
+                            vok = false; vreason = "tipo store/load no coincide"; break;
+                        }
+                        ld_plan.push_back({ii, true, v, nullptr});
+                    } else {
+                        /* primer load del campo: valor de construccion. */
+                        const SrFieldInit *fi = model->find(off);
+                        if (!fi) { vok = false; vreason = "load de campo no inicializado (default-0)"; break; }
+                        IrInstr probe = blkv[ii];   /* copia: apply=false no muta */
+                        if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
+                            vok = false; vreason = "tipo de campo no soportado (float/ptr/handle/widening)"; break;
+                        }
+                        ld_plan.push_back({ii, false, IR_NO_VALUE, fi});
+                    }
+                } else if (is_st) {
+                    sim[off] = sval;
+                    store_iis.push_back(ii);
+                }
+            }
+            if (!vok) { diag(site, vreason); continue; }
+
+            /* APLICAR: reescribir loads, NOPear stores + field-addrs + call. */
+            for (const auto &lp : ld_plan) {
+                IrInstr &ld = blkv[lp.ii];
+                if (lp.from_store) {
+                    ld.op = IrOp::MOV; ld.operands.clear();
+                    ld.operands.push_back(lp.stored);
+                    ld.func_name.clear();
+                    if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
+                        fn.values[ld.dst].is_const = false;
+                        fn.values[ld.dst].is_host_ptr = false;
+                    }
+                } else {
+                    sr_rewrite_load(ld, *lp.fi, args, fn, /*apply=*/true);
+                }
+            }
+            for (size_t sii : store_iis) {
+                IrInstr &st = blkv[sii];
+                st.op = IrOp::NOP; st.operands.clear();
+                st.dst = IR_NO_VALUE; st.func_name.clear();
+            }
+            for (const auto &da : dead_addr) {
+                IrInstr &ai = fn.blocks[da.first].instrs[da.second];
+                ai.op = IrOp::NOP; ai.operands.clear();
+                ai.dst = IR_NO_VALUE; ai.func_name.clear();
+            }
+            call_ins.op = IrOp::NOP; call_ins.operands.clear();
+            call_ins.dst = IR_NO_VALUE; call_ins.func_name.clear();
+            changed = true;
+        }
     }
 
     /* Compactar NOPs introducidos (mismo patron que promote_local_raw_alloc). */
