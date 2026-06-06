@@ -171,6 +171,26 @@ namespace jit {
         /// Si es 0, el JIT cae al runtime call @c vrt_tryleave (correcto pero ~5x mas lento).
         int32_t exc_frame_stack_offset = 0;
 
+        /// callback-ABI (2026-06-06): cuando @c mode==VM_ABI y este flag es
+        /// true, la funcion se compila con ENTRY de ABI C nativo (callable
+        /// directamente por qsort/Win32) en vez del entry VM_ABI estandar.
+        /// El cuerpo se lowerea identico a VM_ABI (RBX=proc), pero el prologo
+        /// lee @c ProcessVM* via @c LOAD_PROC (no de un arg), mueve los args
+        /// nativos a los slots de los params, y -- solo si el cuerpo puede
+        /// ensuciar @c proc->registers (tiene CALL/raw_asm/etc.) -- salva y
+        /// restaura el banco de registros VM para la re-entrancia del
+        /// callback.  Funciones hoja puras NO salvan nada (save-set vacio).
+        /// Reemplaza el thunk hand-emitted de @c native_callback.cpp.
+        bool callback_entry = false;
+        /// Direccion de @c runtime::get_current_executing_process (fallback
+        /// del @c LOAD_PROC cuando no hay TLS-direct).  Solo usado si
+        /// @c callback_entry.
+        uint64_t callback_get_proc_addr = 0;
+        /// Desplazamiento @c gs:[disp] para leer @c ProcessVM* en TLS-direct
+        /// (Win64).  -1 = usar el fallback por call.  Solo usado si
+        /// @c callback_entry.
+        int32_t callback_tls_gs_disp = -1;
+
         /// Direccion absoluta de @c proc->scheduler.profiler_jit_instr_counter.
         /// Si != 0, el JIT emite al inicio de cada metodo:
         ///   @c mov rax, imm64  (counter_addr)

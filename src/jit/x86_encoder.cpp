@@ -588,6 +588,39 @@ namespace jit {
                 put8(out, modrm(3, 2, 0));  /* /2 reg=rax */
                 return true;
             }
+            case MOp::LOAD_PROC: {
+                /* Carga ProcessVM* en dst (RBX por convencion del callback).
+                 *
+                 * TLS-direct (src1.value != -1, Win64):
+                 *   65 48 8B <modrm> 25 <disp32>   mov dst, gs:[disp32]
+                 *   modrm = mod=00, reg=dst, r/m=100 (SIB);  SIB=0x25 (disp32 abs).
+                 *
+                 * Fallback (src1.value == -1):
+                 *   48 B8 <imm64>   mov rax, get_current_executing_process
+                 *   FF D0           call rax
+                 *   48 89 C0|dst    mov dst, rax
+                 */
+                const uint8_t dst = mi.dst.reg;  /* reg id completo (RBX=3) */
+                if (mi.src1.value != -1) {
+                    put8(out, 0x65);                            /* gs: prefix */
+                    put8(out, rex_byte(true, dst, 0, 0));       /* REX.W (+R si dst>=8) */
+                    put8(out, 0x8B);                            /* mov r64, r/m64 */
+                    put8(out, modrm(0, dst, 4));                /* mod=00 reg=dst rm=SIB */
+                    put8(out, 0x25);                            /* SIB: disp32 absoluto */
+                    put32(out, static_cast<uint32_t>(mi.src1.value));
+                } else {
+                    const uint32_t pool_idx = static_cast<uint32_t>(mi.src2.value);
+                    const uint64_t getproc  = (pool_idx < fn.imm64_pool.size())
+                        ? fn.imm64_pool[pool_idx] : 0ULL;
+                    put8(out, 0x48); put8(out, 0xB8); put64(out, getproc); /* mov rax, imm64 */
+                    put8(out, 0xFF); put8(out, modrm(3, 2, 0));            /* call rax */
+                    /* mov dst, rax: REX.W (+B si dst>=8) + 0x89 + modrm(3, rax, dst) */
+                    put8(out, rex_byte(true, 0, dst, 0));
+                    put8(out, 0x89);
+                    put8(out, modrm(3, 0, dst));
+                }
+                return true;
+            }
             default:
                 /* Opcode no implementado en este encoder. */
                 return false;

@@ -27,6 +27,7 @@
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
+#include "runtime/exception_runtime.h"  // callback-ABI: get_current_executing_process + jit_proc_tls_index
 #include "ir/ssa_ir.h"
 #include <cstring>
 
@@ -37,6 +38,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 namespace jit {
 
@@ -612,7 +614,10 @@ namespace jit {
         std::function<uint64_t(uint64_t)> read_vmem_u64,
         int32_t exc_frame_stack_offset,
         int32_t exc_free_list_offset,
-        uint64_t jit_instr_counter_addr) {
+        uint64_t jit_instr_counter_addr,
+        bool callback_entry,
+        uint64_t callback_get_proc_addr,
+        int32_t callback_tls_gs_disp) {
         /* Init lazy de threshold desde env (1 vez por proceso). */
         std::call_once(g_env_init_flag, init_threshold_from_env);
 
@@ -628,8 +633,11 @@ namespace jit {
          * JitRegistry necesita acceso exclusivo). */
         std::lock_guard<std::mutex> lk(g_compile_mtx);
 
-        /* Si ya esta cacheado, retornar el ptr (excepto sentinelas). */
-        if (!ir_fn.name.empty()) {
+        /* Si ya esta cacheado, retornar el ptr (excepto sentinelas).
+         * En modo callback NO usamos g_eager_cache para el top-level: su
+         * ABI (entry nativo) difiere del VM_ABI que la cache by-name asume;
+         * confundirlos daria un caller VM_ABI saltando a un entry nativo. */
+        if (!callback_entry && !ir_fn.name.empty()) {
             auto it = g_eager_cache.find(ir_fn.name);
             if (it != g_eager_cache.end()
              && it->second != 0 && it->second != EAGER_IN_PROGRESS) {
@@ -795,8 +803,18 @@ namespace jit {
             };
         }
 
-        /* Marcar IN_PROGRESS antes de compilar para detectar self-recursion. */
-        if (!ir_fn.name.empty()) {
+        /* callback-ABI: el top-level se compila con entry nativo.  El cuerpo
+         * sigue siendo VM_ABI (RBX=proc) -> los callees usan el resolver
+         * normal (VM_ABI), solo cambia el entry de esta funcion. */
+        if (callback_entry) {
+            top_opts.callback_entry = true;
+            top_opts.callback_get_proc_addr = callback_get_proc_addr;
+            top_opts.callback_tls_gs_disp = callback_tls_gs_disp;
+        }
+
+        /* Marcar IN_PROGRESS antes de compilar para detectar self-recursion.
+         * En callback NO tocamos g_eager_cache (su ABI difiere del VM_ABI). */
+        if (!callback_entry && !ir_fn.name.empty()) {
             g_eager_cache[ir_fn.name] = EAGER_IN_PROGRESS;
         }
 
@@ -805,8 +823,12 @@ namespace jit {
          * cualquier funcion con `IrOp::CALL` a otra funcion Vex) compila por
          * el path de registros virtuales en vez de bailar a slots al primer
          * call.  El resolver compila recursivamente las callees y devuelve su
-         * direccion; los CALLs del vreg emiten `CALL addr` directo. */
-        if (g_jit_use_vregs) {
+         * direccion; los CALLs del vreg emiten `CALL addr` directo.
+         *
+         * El path vreg NO conoce el modo callback (entry nativo); en callback
+         * forzamos el path del Selector (slots + regalloc rewrite) que SI lo
+         * implementa. */
+        if (g_jit_use_vregs && !callback_entry) {
             uint8_t *vcode = vreg_compile(ir_fn, *g_code_cache, resolver,
                                           make_vreg_entries(), resolve_native_fn);
             if (vcode != nullptr) {
@@ -832,11 +854,14 @@ namespace jit {
         const CompileResult res = g_compiler->compile_with_opts(ir_fn, top_opts);
         if (res.fn != nullptr) {
             ++g_jit_compiled_count;
-            if (!ir_fn.name.empty()) {
+            /* callback-ABI: NO cachear by-name ni registrar en el pc-map (su
+             * entry es nativo, no VM_ABI).  El caller cachea por fn_pc en su
+             * propia tabla.  Los callees (VM_ABI) ya se registraron normal. */
+            if (!callback_entry && !ir_fn.name.empty()) {
                 g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(res.fn);
             }
             /* D.5-callvm-hook: registrar pc -> jit en el mapa global. */
-            if (sym_resolver && !ir_fn.name.empty()) {
+            if (!callback_entry && sym_resolver && !ir_fn.name.empty()) {
                 const uint64_t pc = sym_resolver("code." + ir_fn.name);
                 if (pc != 0) {
                     register_jit_code_at_pc(pc, reinterpret_cast<void *>(res.fn));
@@ -848,7 +873,7 @@ namespace jit {
             }
         } else {
             ++g_jit_unsupported_count;
-            if (!ir_fn.name.empty()) {
+            if (!callback_entry && !ir_fn.name.empty()) {
                 g_eager_cache[ir_fn.name] = 0;  /* cachear failure */
             }
         }
@@ -1226,6 +1251,160 @@ namespace jit {
             /* Cualquier excepcion del compile se ignora; quedamos en
              * cached failure y futuras invocaciones fallback a interp. */
         }
+    }
+
+    /* ===================================================================== */
+    /* compile_native_callback: entry de ABI C nativo para callbacks Vex      */
+    /* ===================================================================== */
+
+    uint64_t compile_native_callback(runtime::ProcessVM *vm,
+                                     uint64_t vex_fn_pc) noexcept {
+        if (vm == nullptr) return 0;
+
+        /* Cache propia por PC: la misma fn puede tener version VM_ABI (pc-map)
+         * y version callback-ABI (esta tabla).  Sentinela 0 = aun no/ fallo. */
+        static std::mutex g_cb_mtx;
+        static std::unordered_map<uint64_t, uint64_t> g_cb_cache;
+        {
+            std::lock_guard<std::mutex> lk(g_cb_mtx);
+            auto it = g_cb_cache.find(vex_fn_pc);
+            if (it != g_cb_cache.end()) return it->second;
+        }
+
+        /* Buscar el IrFunction + executable propietario para este PC.
+         * Mismo procedimiento que @c maybe_compile_callvm_target. */
+        runtime::VM &owning_vm = vm->scheduler.vm_reference;
+        const ir::IrFunction *ir_fn = nullptr;
+        const loader::Executable *owning_exe = nullptr;
+        {
+            /* g_exec_pc_to_name esta protegido por g_callvm_mtx (mismo que
+             * maybe_compile_callvm_target).  NO usar g_compile_mtx aqui: lo
+             * tomara eager_compile_function despues -> deadlock. */
+            std::lock_guard<std::mutex> cmlk(g_callvm_mtx);
+            for (auto &exe_ptr : owning_vm.loader_public.executables) {
+                const loader::Executable *exe = exe_ptr.get();
+                auto &pc_to_name = g_exec_pc_to_name[exe];
+                if (pc_to_name.empty() && !exe->symbol_table.empty()) {
+                    for (const auto &kv : exe->symbol_table) {
+                        if (kv.first.rfind("code.", 0) == 0) {
+                            pc_to_name[kv.second] = kv.first.substr(5);
+                        }
+                    }
+                }
+                auto pn_it = pc_to_name.find(vex_fn_pc);
+                if (pn_it == pc_to_name.end()) continue;
+                std::string candidate_name = pn_it->second;
+                /* Strip sufijo `_entry_<N>` igual que maybe_compile_callvm_target. */
+                {
+                    const std::string suffix = "_entry_";
+                    auto pos = candidate_name.rfind(suffix);
+                    if (pos != std::string::npos) {
+                        bool only_digits = true;
+                        for (size_t k = pos + suffix.size(); k < candidate_name.size(); ++k) {
+                            if (candidate_name[k] < '0' || candidate_name[k] > '9') {
+                                only_digits = false; break;
+                            }
+                        }
+                        if (only_digits) candidate_name = candidate_name.substr(0, pos);
+                    }
+                }
+                auto lit = exe->ir_lookup.find(candidate_name);
+                if (lit == exe->ir_lookup.end()) continue;
+                if (lit->second >= exe->ir_functions.size()) continue;
+                ir_fn = &exe->ir_functions[lit->second];
+                owning_exe = exe;
+                break;
+            }
+        }
+        if (ir_fn == nullptr || owning_exe == nullptr) {
+            std::lock_guard<std::mutex> lk(g_cb_mtx);
+            g_cb_cache[vex_fn_pc] = 0;
+            return 0;
+        }
+
+        /* Callbacks de resolucion identicos a maybe_compile_callvm_target. */
+        ffi::FFI *ffi_ptr = &owning_vm.loader_public.ffi_loader;
+        auto resolve_native = [ffi_ptr](const std::string &name) -> uint64_t {
+            size_t colon = name.find(':');
+            if (colon == std::string::npos) return 0;
+            std::string lib  = name.substr(0, colon);
+            std::string func = name.substr(colon + 1);
+            void *vfn = ffi::lookup_virtual_fn(lib, func);
+            if (vfn != nullptr) return reinterpret_cast<uint64_t>(vfn);
+            try {
+                void *mod = ffi_ptr->load_native_module(lib);
+                if (!mod) return 0;
+                void *fn = ffi_ptr->resolve_native_symbol(mod, func);
+                return reinterpret_cast<uint64_t>(fn);
+            } catch (...) { return 0; }
+        };
+        runtime::ProcessVM *proc_for_read = vm;
+        auto read_vmem_cb = [proc_for_read](uint64_t vaddr) -> uint64_t {
+            try { return proc_for_read->vm_mem.read_u64(vaddr); }
+            catch (...) { return 0; }
+        };
+        int32_t exc_off = 0, exc_free_off = 0;
+        {
+            const int64_t off64 =
+                reinterpret_cast<int64_t>(&vm->exc_frame_stack) - reinterpret_cast<int64_t>(vm);
+            const int64_t free64 =
+                reinterpret_cast<int64_t>(&vm->exc_free_list) - reinterpret_cast<int64_t>(vm);
+            if (off64  >= INT32_MIN && off64  <= INT32_MAX) exc_off      = static_cast<int32_t>(off64);
+            if (free64 >= INT32_MIN && free64 <= INT32_MAX) exc_free_off = static_cast<int32_t>(free64);
+        }
+        const uint64_t jit_counter_addr = g_jit_emit_instr_counter
+            ? reinterpret_cast<uint64_t>(&vm->scheduler.profiler_jit_instr_counter)
+            : 0;
+
+        /* Resolver TLS-direct (Win64) o fallback por call para LOAD_PROC. */
+        const uint64_t getproc_addr =
+            reinterpret_cast<uint64_t>(&runtime::get_current_executing_process);
+        int32_t tls_gs_disp = -1;
+#if defined(_WIN32)
+        {
+            const unsigned long idx = runtime::jit_proc_tls_index();
+            if (idx != 0xFFFFFFFFu && idx < 64) {
+                tls_gs_disp = static_cast<int32_t>(0x1480u + idx * 8u);
+            }
+        }
+#endif
+
+        /* El callback REQUIERE codigo nativo AHORA (su direccion va a Win32/
+         * qsort).  Forzar el compile aunque el JIT este desactivado por flag
+         * (-m vm): salvar/forzar/restaurar el threshold global, como hacia el
+         * wrapper del thunk previo. */
+        uint64_t result = 0;
+        try {
+            const uint32_t saved_thr = g_jit_threshold;
+            if (saved_thr == UINT32_MAX) set_jit_threshold(1);
+            CompileResult cr = eager_compile_function(
+                *ir_fn,
+                &owning_exe->ir_lookup,
+                &owning_exe->ir_functions,
+                &owning_exe->symbol_table,
+                resolve_native,
+                read_vmem_cb,
+                exc_off,
+                exc_free_off,
+                jit_counter_addr,
+                /*callback_entry=*/true,
+                getproc_addr,
+                tls_gs_disp);
+            if (saved_thr == UINT32_MAX) set_jit_threshold(saved_thr);
+            result = cr.fn ? reinterpret_cast<uint64_t>(cr.fn) : 0;
+            if (g_jit_warn_unsupported) {
+                std::fprintf(stderr,
+                    "[jit] native-callback pc=0x%llx -> %s\n",
+                    static_cast<unsigned long long>(vex_fn_pc),
+                    result ? "compiled" : "unsupported");
+            }
+        } catch (...) {
+            result = 0;
+        }
+
+        std::lock_guard<std::mutex> lk(g_cb_mtx);
+        g_cb_cache[vex_fn_pc] = result;
+        return result;
     }
 
 } // namespace jit
