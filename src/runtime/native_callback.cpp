@@ -481,10 +481,20 @@ extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t argc) {
     if (jit::lookup_jit_code_at_pc(fn_pc) == nullptr) {
         runtime::ProcessVM *proc = runtime::get_current_executing_process();
         if (proc != nullptr) {
+            /* El thunk REQUIERE la fn JIT-eada AHORA: su address se entrega a
+             * Win32 / la API nativa, y el dispatch del callback salta directo
+             * al codigo JIT.  Forzar el compile inmediato con threshold=1 SEA
+             * CUAL SEA el threshold global -- antes solo se forzaba si era
+             * UINT32_MAX, asi que a un threshold moderado (p.ej. 1500) la fn
+             * recien registrada (0 calls acumuladas) no llegaba al threshold y
+             * `maybe_compile_callvm_target` bailaba -> thunk sin codigo ->
+             * callback roto -> hang.  Bug destapado al validar JIT-por-defecto:
+             * test 173 (wndproc) colgaba en T=[500,5000] pero pasaba en T=1
+             * (compila ya) y T=UINT32_MAX (este path forzaba a 1). */
             uint32_t saved = jit::g_jit_threshold;
-            if (saved == UINT32_MAX) jit::set_jit_threshold(1);
+            if (saved != 1) jit::set_jit_threshold(1);
             jit::maybe_compile_callvm_target(proc, fn_pc);
-            if (saved == UINT32_MAX) jit::set_jit_threshold(saved);
+            if (saved != 1) jit::set_jit_threshold(saved);
         }
     }
     return runtime::get_or_generate_native_thunk(fn_pc,

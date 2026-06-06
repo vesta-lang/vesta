@@ -45,10 +45,28 @@ namespace jit {
     /* ===================================================================== */
 
     /**
-     * @brief Default: UINT32_MAX (JIT off).  Override via @c set_jit_threshold
-     *        o env var @c VESTA_JIT_THRESHOLD.
+     * @brief Default: 1500 (JIT por defecto, tier C1-like estilo HotSpot).
+     *
+     * Un metodo/funcion se JIT-compila tras 1500 invocaciones.  Valor por
+     * estudio empirico: el threshold NO es sensible en [100,20000] (mismo
+     * resultado), 1500 esta sobre el break-even de metodos pesados (~1k) y bajo
+     * los call-counts de codigo hot (millones); los metodos triviales (break-
+     * even alto ~20k) se inlinean antes de compilar -> sin compile-waste.
+     * Coincide con el tier C1 de HotSpot.
+     *
+     * Seguridad: el sandbox bajo JIT esta cerrado (maybe_compile_method /
+     * maybe_compile_callvm_target / eager-compile de main bailan si
+     * sandbox_active -> el interp enforcea las caps).
+     *
+     * Validado: e2e 263/0 forzando T=1500.  Un bug previo del path
+     * native-callback (el thunk no forzaba el compile a threshold moderado ->
+     * test 173 colgaba) se arreglo en native_callback.cpp (vex_get_native_thunk
+     * fuerza el compile inmediato sea cual sea el threshold).
+     *
+     * Override: @c set_jit_threshold / env var @c VESTA_JIT_THRESHOLD;
+     * `-m jit` = 1 (agresivo), `-m vm`/`-m interp` = UINT32_MAX (interp puro).
      */
-    uint32_t g_jit_threshold = UINT32_MAX;
+    uint32_t g_jit_threshold = 1500;
 
     /**
      * @brief Warning toggleable + counters de auditoria.
@@ -1015,6 +1033,12 @@ namespace jit {
         }
         /* Si ya esta compilado (otro hilo gano la carrera), salir. */
         if (lookup_jit_code_at_pc(target_pc) != nullptr) return;
+
+        /* SEGURIDAD (sandbox bajo JIT): mismo guard que maybe_compile_method.
+         * El codigo CALLVM JIT-eated emite CALLN/CALLNI/spawn/etc. sin el check
+         * de capabilities (check_cap_at_pc); dejar la funcion en interp garantiza
+         * el enforcement.  Coste cero sin sandbox (branch predicho not-taken). */
+        if (vm->scheduler.vm_reference.loader_public.sandbox_active) return;
 
         /* Acquire mutex para counter + tabla de executables.  Necesario
          * porque maybe_compile_method tambien usa g_compile_mtx; la
