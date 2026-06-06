@@ -65,6 +65,8 @@ deepseck*
 tests/vex/test_vex_e2e.sh
 
 # temporales
+*.vexi
+*.vexir
 
 doc/exhaustive_tests*
 __pycache__

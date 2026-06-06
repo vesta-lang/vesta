@@ -252,6 +252,41 @@ namespace jit {
                     return;
                 }
 
+                if (op == MOp::CALL) {
+                    /* CALL INDIRECTO (call reg/mem): el target es un vreg (p.ej.
+                     * el jit_code resuelto en el inline dispatch de CALLVIRT).
+                     * No hay ARG marshalling (los args ya estan en
+                     * proc->registers).  Igual que CALL_ABS, emite el stackmap
+                     * de los GC roots vivos a traves de este call para que el GC
+                     * los escanee desde el stack (el commit 6 los forzo a slot). */
+                    MOperand tgt = resolve(in.src1);
+                    if (tgt.kind == MOperandKind::MEM) {
+                        /* target spilled -> cargar a scratch antes del call. */
+                        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
+                        tgt = reg(scr0);
+                    }
+                    MInstr call; call.op = MOp::CALL; call.src1 = tgt;
+                    if (ivs != nullptr) {
+                        Stackmap sm;
+                        const uint32_t NVI =
+                            static_cast<uint32_t>(ivs->intervals.size());
+                        for (uint32_t v = 0; v < NVI; ++v) {
+                            const LiveInterval &lv = ivs->intervals[v];
+                            if (!lv.is_gc() || !lv.covers(cur_call_pos)) continue;
+                            if (!ra.spilled(v)) continue;
+                            StackmapSlot s;
+                            s.rbp_offset = static_cast<int16_t>(slot_off(ra.slot_of(v)));
+                            s.gc_kind = static_cast<StackmapGcKind>(
+                                static_cast<uint8_t>(lv.gc_kind - 1u));
+                            sm.slots.push_back(s);
+                        }
+                        call.flags = static_cast<uint16_t>(stackmaps.size());
+                        stackmaps.push_back(std::move(sm));
+                    }
+                    out.push_back(call);
+                    return;
+                }
+
                 if (op == MOp::RET) {
                     emit_epilogue(out);
                     out.push_back(MInstr::make_ret());
@@ -494,10 +529,27 @@ namespace jit {
                     const bool anti = (rs2.kind == MOperandKind::REG &&
                                        pdst.kind == MOperandKind::REG &&
                                        rs2.reg == pdst.reg);
+                    /* IMUL (emit_imul) SOLO soporta reg,reg y reg,reg,imm -- NO
+                     * acepta un operando fuente en memoria (a diferencia de
+                     * ADD/SUB/AND/OR/XOR, cuyo emit_alu si maneja r/m).  Si el
+                     * operando fuente del imul de 2 operandos esta spilled
+                     * (MEM), cargarlo a scr1 primero.  Sin esto, un imul con un
+                     * src spilled (p.ej. una constante loop-invariante que el
+                     * regalloc spilleo bajo presion) caia al fallback 0xCC del
+                     * encoder -> SIGTRAP en runtime. */
+                    auto imul_fix = [&](MOperand src) -> MOperand {
+                        if (op == MOp::IMUL && src.kind == MOperandKind::MEM) {
+                            out.push_back(MInstr::make_unary(MOp::MOV,
+                                                             reg(scr1), src));
+                            return reg(scr1);
+                        }
+                        return src;
+                    };
                     if (anti) {
                         if (is_commutative(op)) {
                             /* pdst ya contiene src2 -> OP pdst, src1 (conmutativo). */
-                            out.push_back(MInstr::make_unary(op, pdst, rs1));
+                            out.push_back(MInstr::make_unary(op, pdst,
+                                                             imul_fix(rs1)));
                         } else {
                             /* SUB y pdst==src2reg: usar scratch1 para src2. */
                             out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), rs2));
@@ -506,7 +558,8 @@ namespace jit {
                         }
                     } else {
                         out.push_back(MInstr::make_unary(MOp::MOV, pdst, rs1)); // pdst = src1
-                        out.push_back(MInstr::make_unary(op, pdst, rs2));       // pdst OP= src2
+                        out.push_back(MInstr::make_unary(op, pdst,
+                                                         imul_fix(rs2)));       // pdst OP= src2
                     }
                     if (dst_spilled) {
                         out.push_back(MInstr::make_unary(MOp::MOV,

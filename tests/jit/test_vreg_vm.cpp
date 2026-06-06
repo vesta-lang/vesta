@@ -863,6 +863,73 @@ static void test_vm_divmod() {
     }
 }
 
+/* ---- Regresion IMUL+spill: 3 div/mod en el body de un loop ------------
+ * acc=0; for(i=1;i<N;i++){ a=i*7; b=(i%9)+1; acc += (a/b)+(a%b); }  ret acc.
+ * Los 3 DIVMOD_V (call-positions) suben la presion -> el regalloc spillea
+ * la constante 7 del `i*7` -> el rewrite generaba IMUL reg,[mem] -> el
+ * encoder caia al 0xCC (INT3) -> SIGTRAP.  Este test lo reproduce y guarda
+ * contra la regresion (el fix carga el operando spilled a R11 antes del
+ * imul).  Debe completar y dar la suma correcta. */
+static void test_vm_divmod_loop() {
+    std::printf("[vm] divmod-loop (regresion IMUL+spill): 3 div/mod en loop\n");
+    auto I64 = ir::IrType::I64;
+    ir::IrFunction fn; fn.name = "dml"; fn.ret_type = I64;
+    ir::IrValueId nparam = fn.new_value(I64);
+    fn.params = { nparam };
+    ir::IrValueId acc0 = fn.new_value(I64), i0 = fn.new_value(I64);
+    ir::IrValueId k7 = fn.new_value(I64), k9 = fn.new_value(I64), k1 = fn.new_value(I64);
+    ir::IrValueId i_phi = fn.new_value(I64), acc_phi = fn.new_value(I64);
+    ir::IrValueId cond = fn.new_value(ir::IrType::BOOL);
+    ir::IrValueId a = fn.new_value(I64), m9 = fn.new_value(I64), b = fn.new_value(I64);
+    ir::IrValueId q = fn.new_value(I64), r = fn.new_value(I64), fr = fn.new_value(I64);
+    ir::IrValueId acc_n = fn.new_value(I64), i_n = fn.new_value(I64);
+
+    ir::IrBlockId b0 = fn.new_block("entry");
+    ir::IrBlockId b1 = fn.new_block("header");
+    ir::IrBlockId b2 = fn.new_block("body");
+    ir::IrBlockId b3 = fn.new_block("exit");
+
+    fn.append(b0, konst(acc0, 0));
+    fn.append(b0, konst(i0, 1));
+    fn.append(b0, konst(k7, 7));
+    fn.append(b0, konst(k9, 9));
+    fn.append(b0, konst(k1, 1));
+    fn.append(b0, br(b1));
+
+    fn.append(b1, phi2(i_phi, i0, b0, i_n, b2));
+    fn.append(b1, phi2(acc_phi, acc0, b0, acc_n, b2));
+    fn.append(b1, cmp(ir::IrOp::CMP_LT, cond, i_phi, nparam));
+    fn.append(b1, brc(cond, b2, b3));
+
+    auto dm = [&](ir::IrOp op, ir::IrValueId d, ir::IrValueId x, ir::IrValueId y) {
+        ir::IrInstr i; i.op = op; i.type = I64; i.dst = d; i.operands = { x, y };
+        return i;
+    };
+    fn.append(b2, bin(ir::IrOp::MUL, a, i_phi, k7));   // a = i*7  (imul + spill)
+    fn.append(b2, dm(ir::IrOp::MOD, m9, i_phi, k9));   // m9 = i%9
+    fn.append(b2, bin(ir::IrOp::ADD, b, m9, k1));      // b = m9+1
+    fn.append(b2, dm(ir::IrOp::DIV, q, a, b));         // q = a/b
+    fn.append(b2, dm(ir::IrOp::MOD, r, a, b));         // r = a%b
+    fn.append(b2, bin(ir::IrOp::ADD, fr, q, r));       // fr = q+r
+    fn.append(b2, bin(ir::IrOp::ADD, acc_n, acc_phi, fr));
+    fn.append(b2, bin(ir::IrOp::ADD, i_n, i_phi, k1));
+    fn.append(b2, br(b1));
+    fn.append(b3, ret1(acc_phi));
+
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 1000;
+    int64_t expect = 0;
+    for (int64_t i = 1; i < 1000; ++i) {
+        int64_t aa = i * 7, bb = (i % 9) + 1;
+        expect += (aa / bb) + (aa % bb);
+    }
+    CHECK(jit_vm(fn, px), "jit_vm ok (divmod-loop)");
+    CHECK((int64_t)px.regs[0] == expect, "divmod-loop suma correcta (sin INT3)");
+    if ((int64_t)px.regs[0] != expect)
+        std::printf("    dml regs[0]=%lld (esperado %lld)\n",
+                    (long long)px.regs[0], (long long)expect);
+}
+
 int main() {
     std::setbuf(stdout, nullptr);
     /* Forzar el gate de DIV/MOD en vregs para este test (default OFF). */
@@ -873,6 +940,7 @@ int main() {
 #endif
     std::printf("=== test_vreg_vm (Phase D.7 commit 5a, VM_ABI) ===\n");
     test_vm_divmod();
+    test_vm_divmod_loop();
     test_vm_add();
     test_vm_loop();
     test_vm_sext_loop();
