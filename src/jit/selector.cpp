@@ -450,6 +450,34 @@ namespace jit {
             return ic_fn_pc ? ((ic_fn_pc << 8) | (o & 0xFFu)) : 0;
         };
 
+        /* C2 tier-up (2026-06-07): decidir si esta funcion lleva contador
+         * on-entry de tier-up.  Condiciones:
+         *   - C2 activo (tier_up_handler_addr + threshold + reserve_tier_counter),
+         *   - VM_ABI sin entry de callback (el conteo + recompile asume VM_ABI),
+         *   - fn_pc resoluble (clave estable para el contador y el recompile),
+         *   - y (tier_up_all_fns || la funcion tiene >=1 CALLVIRT).  Por defecto
+         *     solo se instrumentan las funciones con CALLVIRT (candidato real a
+         *     especulacion); las hojas/aritmetica no pagan nada.
+         * El contador (8 bytes, keyed por fn_pc) se reserva aqui; su direccion
+         * se embebe en el prologo mas abajo. */
+        uint64_t tier_counter_addr = 0;
+        if (opts_.tier_up_handler_addr != 0 && opts_.tier_up_threshold != 0
+         && opts_.reserve_tier_counter && ic_fn_pc != 0
+         && opts_.mode == SelectorMode::VM_ABI && !opts_.callback_entry) {
+            bool has_callvirt = opts_.tier_up_all_fns;
+            if (!has_callvirt) {
+                for (const auto &blk : ir_fn.blocks) {
+                    for (const auto &ins : blk.instrs) {
+                        if (ins.op == ir::IrOp::CALLVIRT) { has_callvirt = true; break; }
+                    }
+                    if (has_callvirt) break;
+                }
+            }
+            if (has_callvirt) {
+                tier_counter_addr = opts_.reserve_tier_counter(ic_fn_pc);
+            }
+        }
+
         /* regalloc del JIT.
          *
          * Computa una asignacion estatica de los VIDs mas usados a
@@ -1022,6 +1050,79 @@ namespace jit {
                 MInstr::make_unary(MOp::SUB,
                     MOperand::make_reg(MReg::RSP),
                     MOperand::make_imm32(static_cast<int32_t>(frame_size))));
+        }
+
+        /* ===== C2 tier-up: contador on-entry + check (HotSpot-style) =====
+         *
+         * Emitido aqui, justo tras montar el frame (rsp 16-alineado + shadow
+         * space dentro de frame_size) y antes de cualquier ALLOCA (que moveria
+         * rsp).  RBX = ProcessVM* ya esta cargado (VM_ABI, !cb_entry).  Patron:
+         *
+         *     mov rax, &counter
+         *     add qword [rax], 1
+         *     cmp qword [rax], threshold
+         *     jne tier_skip                 ; != threshold -> seguir normal
+         *     mov arg0, rbx                  ; proc
+         *     mov arg1, imm64(fn_pc)
+         *     mov rax, &handler
+         *     call rax                       ; c2_tier_up(proc, fn_pc): recompila+swap
+         *   tier_skip:
+         *
+         * El `jne` (==) hace que dispare EXACTAMENTE una vez: tras cruzar el
+         * umbral el contador sigue creciendo y nunca vuelve a igualarlo.  El
+         * codigo C2 resultante NO lleva contador (terminal).  El frame C1 en
+         * curso termina en C1; las entradas futuras van al C2 via el swap.
+         * Los regs caller-saved que clobbea el call son seguros: el cuerpo aun
+         * no cargo ningun valor VM (vienen de proc->regs en memoria). */
+        if (tier_counter_addr != 0) {
+#if defined(_WIN32)
+            const MReg TU_ARG0 = MReg::RCX;
+            const MReg TU_ARG1 = MReg::RDX;
+#else
+            const MReg TU_ARG0 = MReg::RDI;
+            const MReg TU_ARG1 = MReg::RSI;
+#endif
+            const MLabelId tier_skip = mf.new_label();
+            const uint32_t cnt_idx = mf.intern_imm64(tier_counter_addr);
+            /* mov rax, &counter */
+            mf.blocks[prologue].instrs.push_back(MInstr::make_unary(MOp::MOV,
+                MOperand::make_reg(MReg::RAX),
+                MOperand::make_imm64_idx(cnt_idx)));
+            /* add qword [rax], 1 */
+            mf.blocks[prologue].instrs.push_back(MInstr::make_unary(MOp::ADD,
+                MOperand::make_mem(MReg::RAX, 0),
+                MOperand::make_imm32(1)));
+            /* cmp qword [rax], threshold */
+            mf.blocks[prologue].instrs.push_back(MInstr::make_unary(MOp::CMP,
+                MOperand::make_mem(MReg::RAX, 0),
+                MOperand::make_imm32(static_cast<int32_t>(opts_.tier_up_threshold))));
+            /* jne tier_skip */
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_jcc(MCond::NE, tier_skip));
+            /* mov arg0, rbx (proc) */
+            mf.blocks[prologue].instrs.push_back(MInstr::make_unary(MOp::MOV,
+                MOperand::make_reg(TU_ARG0),
+                MOperand::make_reg(MReg::RBX)));
+            /* mov arg1, imm64(fn_pc) */
+            const uint32_t pc_idx = mf.intern_imm64(ic_fn_pc);
+            mf.blocks[prologue].instrs.push_back(MInstr::make_unary(MOp::MOV,
+                MOperand::make_reg(TU_ARG1),
+                MOperand::make_imm64_idx(pc_idx)));
+            /* mov rax, &handler */
+            const uint32_t h_idx = mf.intern_imm64(opts_.tier_up_handler_addr);
+            mf.blocks[prologue].instrs.push_back(MInstr::make_unary(MOp::MOV,
+                MOperand::make_reg(MReg::RAX),
+                MOperand::make_imm64_idx(h_idx)));
+            /* call rax */
+            {
+                MInstr tu_call;
+                tu_call.op = MOp::CALL;
+                tu_call.src1 = MOperand::make_reg(MReg::RAX);
+                mf.blocks[prologue].instrs.push_back(tu_call);
+            }
+            /* tier_skip: */
+            mf.blocks[prologue].instrs.push_back(
+                MInstr::make_label_def(tier_skip));
         }
 
         /* ===== callback-ABI: cargar ProcessVM* en RBX ===== */
