@@ -1660,6 +1660,460 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
     return true;
 }
 
+//==============================================================================
+//  Dominancia: idom + dominance frontier + dom-tree (para SROA/mem2reg).
+//==============================================================================
+
+struct SrDom {
+    size_t                              N = 0;
+    IrBlockId                           UNDEF = 0;
+    std::vector<std::vector<IrBlockId>> preds, succs;
+    std::vector<IrBlockId>              idom;          ///< inmediato dominador
+    std::vector<std::vector<IrBlockId>> df;            ///< dominance frontier
+    std::vector<std::vector<IrBlockId>> dom_children;  ///< hijos en el dom-tree
+    std::vector<uint8_t>                reachable;     ///< alcanzable desde entry
+
+    bool dominates(IrBlockId T, IrBlockId B) const {
+        if (T == B) return true;
+        if (T >= N || B >= N || idom[B] == UNDEF) return false;
+        IrBlockId cur = B;
+        while (idom[cur] != cur) { cur = idom[cur]; if (cur == T) return true; }
+        return false;
+    }
+};
+
+/**
+ * @brief Computa CFG + dominadores (Cooper-Harvey-Kennedy) + dominance frontier
+ *        (Cytron) + dom-tree para @p fn.  Convencion: bloque 0 = entry.
+ */
+SrDom sr_compute_dom(const IrFunction &fn) {
+    SrDom d;
+    const size_t N = fn.blocks.size();
+    d.N = N;
+    d.UNDEF = static_cast<IrBlockId>(N);
+    d.preds.assign(N, {});
+    d.succs.assign(N, {});
+    d.idom.assign(N, d.UNDEF);
+    d.df.assign(N, {});
+    d.dom_children.assign(N, {});
+    d.reachable.assign(N, 0);
+    if (N == 0) return d;
+
+    /* CFG desde los terminadores. */
+    for (size_t b = 0; b < N; ++b) {
+        const auto &bb = fn.blocks[b];
+        if (bb.instrs.empty()) continue;
+        const auto &last = bb.instrs.back();
+        IrBlockId t1 = IR_NO_BLOCK, t2 = IR_NO_BLOCK;
+        if (last.op == IrOp::BR) { t1 = last.target_block; }
+        else if (last.op == IrOp::BR_COND) { t1 = last.target_block; t2 = last.false_block; }
+        if (t1 != IR_NO_BLOCK && t1 < N) { d.preds[t1].push_back((IrBlockId)b); d.succs[b].push_back(t1); }
+        if (t2 != IR_NO_BLOCK && t2 < N) { d.preds[t2].push_back((IrBlockId)b); d.succs[b].push_back(t2); }
+    }
+
+    const IrBlockId entry = 0;
+    /* Reverse postorder via DFS iterativo (evita stack overflow en CFGs grandes). */
+    std::vector<IrBlockId> rpo;
+    {
+        std::vector<uint8_t> vis(N, 0);
+        std::vector<std::pair<IrBlockId,size_t>> st;  /* (bloque, idx_succ) */
+        st.push_back({entry, 0});
+        vis[entry] = 1; d.reachable[entry] = 1;
+        std::vector<IrBlockId> post;
+        while (!st.empty()) {
+            auto &top = st.back();
+            if (top.second < d.succs[top.first].size()) {
+                IrBlockId s = d.succs[top.first][top.second++];
+                if (s < N && !vis[s]) { vis[s] = 1; d.reachable[s] = 1; st.push_back({s, 0}); }
+            } else {
+                post.push_back(top.first);
+                st.pop_back();
+            }
+        }
+        rpo.assign(post.rbegin(), post.rend());
+    }
+    std::vector<uint32_t> rpo_pos(N, UINT32_MAX);
+    for (size_t i = 0; i < rpo.size(); ++i) rpo_pos[rpo[i]] = (uint32_t)i;
+
+    d.idom[entry] = entry;
+    auto intersect = [&](IrBlockId b1, IrBlockId b2) -> IrBlockId {
+        while (b1 != b2) {
+            while (b1 != d.UNDEF && rpo_pos[b1] > rpo_pos[b2]) b1 = d.idom[b1];
+            while (b2 != d.UNDEF && rpo_pos[b2] > rpo_pos[b1]) b2 = d.idom[b2];
+            if (b1 == d.UNDEF || b2 == d.UNDEF) return d.UNDEF;
+        }
+        return b1;
+    };
+    bool ch = true;
+    while (ch) {
+        ch = false;
+        for (IrBlockId b : rpo) {
+            if (b == entry) continue;
+            IrBlockId nd = d.UNDEF;
+            for (IrBlockId p : d.preds[b]) {
+                if (d.idom[p] != d.UNDEF) {
+                    nd = (nd == d.UNDEF) ? p : intersect(nd, p);
+                    if (nd == d.UNDEF) break;
+                }
+            }
+            if (nd != d.UNDEF && nd != d.idom[b]) { d.idom[b] = nd; ch = true; }
+        }
+    }
+
+    /* Dom-tree children. */
+    for (IrBlockId b = 0; b < N; ++b) {
+        if (b != entry && d.idom[b] != d.UNDEF) d.dom_children[d.idom[b]].push_back(b);
+    }
+
+    /* Dominance frontier (Cytron): por cada bloque b con >=2 preds, por cada
+     * pred p, sube en el dom-tree desde p hasta idom[b] anyadiendo b al DF. */
+    for (IrBlockId b = 0; b < N; ++b) {
+        if (d.preds[b].size() < 2) continue;
+        for (IrBlockId p : d.preds[b]) {
+            IrBlockId runner = p;
+            while (runner != d.UNDEF && runner != d.idom[b]) {
+                d.df[runner].push_back(b);
+                if (d.idom[runner] == runner) break;  /* entry */
+                runner = d.idom[runner];
+            }
+        }
+    }
+    return d;
+}
+
+//==============================================================================
+//  SROA/mem2reg de los campos de un objeto GC no-escapante.
+//
+//  Promueve cada campo (offset) del objeto a forma SSA a traves del control de
+//  flujo (incluyendo loops): inserta PHIs en el dominance frontier de las
+//  definiciones (ctor-init + stores) y renombra (Cytron) reemplazando cada load
+//  por la definicion que lo alcanza.  Tras esto el objeto no toca memoria -> el
+//  alloc + los stores se borran.
+//
+//  Precondiciones (el caller las garantiza salvo lo que se revalida aqui):
+//    - El objeto NO escapa y TODOS sus usos son field-access (load/store de
+//      `obj` o de `add obj, Kconst`), nunca en phi_args/func_ptr/CALL/RET.
+//    - El ctor es un inicializador trivial (modelo @p model).
+//    - CFG reducible (el frontend Vex lo garantiza).
+//
+//  Conservador: si cualquier campo accedido no esta en el modelo, no es entero,
+//  o los tipos no son consistentes -> bail (no muta nada).
+//==============================================================================
+
+bool sr_mem2reg_object(IrFunction &fn,
+                       const SrCtorModel &model,
+                       size_t call_bi, size_t call_ii, IrValueId obj,
+                       const std::vector<IrValueId> &args,
+                       const std::unordered_map<IrValueId, uint32_t> &fieldaddr_off,
+                       std::string &reason) {
+    const size_t N = fn.blocks.size();
+    if (N == 0) { reason = "fn vacia"; return false; }
+
+    /* Helper: la instr es un load/store de un campo del objeto?  Devuelve
+     * offset + si es store + el valor almacenado. */
+    auto classify = [&](const IrInstr &in, uint32_t &off, bool &is_ld,
+                        bool &is_st, IrValueId &sval) -> bool {
+        is_ld = is_st = false;
+        if (in.op == IrOp::LOAD && !in.operands.empty()) {
+            IrValueId a = in.operands[0];
+            if (a == obj) { off = 0; is_ld = true; return true; }
+            auto it = fieldaddr_off.find(a);
+            if (it != fieldaddr_off.end()) { off = it->second; is_ld = true; return true; }
+        } else if (in.op == IrOp::STORE && in.operands.size() >= 2) {
+            IrValueId a = in.operands[1];
+            if (a == obj)        { off = 0; is_st = true; sval = in.operands[0]; return true; }
+            auto it = fieldaddr_off.find(a);
+            if (it != fieldaddr_off.end()) { off = it->second; is_st = true; sval = in.operands[0]; return true; }
+        }
+        return false;
+    };
+
+    /* 1) Recolectar offsets accedidos + tipo por offset + bloques con store. */
+    std::unordered_map<uint32_t, IrType> field_type;   /* offset -> tipo */
+    std::unordered_map<uint32_t, std::vector<IrBlockId>> store_blocks;
+    std::vector<uint32_t> offsets;
+    for (size_t bi = 0; bi < N; ++bi) {
+        for (const auto &in : fn.blocks[bi].instrs) {
+            uint32_t off; bool ld, st; IrValueId sv;
+            if (!classify(in, off, ld, st, sv)) continue;
+            /* Tipo del campo: para load = in.type; para store = tipo del valor. */
+            IrType t = ld ? in.type
+                          : (sv < fn.values.size() ? fn.values[sv].type : IrType::I64);
+            if (!sr_type_is_int(t)) { reason = "campo no-entero en mem2reg"; return false; }
+            auto fit = field_type.find(off);
+            if (fit == field_type.end()) { field_type[off] = t; offsets.push_back(off); }
+            else if (fit->second != t)   { reason = "tipo inconsistente del campo"; return false; }
+            if (st) store_blocks[off].push_back((IrBlockId)bi);
+        }
+    }
+    if (offsets.empty()) { reason = "sin accesos a campos"; return false; }
+
+    /* Todo offset accedido debe estar en el modelo (ctor-init disponible) y su
+     * tipo coincidir con el del ctor (default-0 no soportado en mem2reg v1). */
+    for (uint32_t off : offsets) {
+        const SrFieldInit *fi = model.find(off);
+        if (!fi) { reason = "campo no inicializado por el ctor (default-0)"; return false; }
+        if (fi->field_type != field_type[off]) { reason = "tipo ctor/acceso difiere"; return false; }
+    }
+
+    SrDom dom = sr_compute_dom(fn);
+    /* El bloque del alloc debe ser alcanzable (lo es: contiene el call). */
+    if (call_bi >= N || !dom.reachable[call_bi]) { reason = "call_bi inalcanzable"; return false; }
+    /* Todos los bloques con acceso a campos deben ser alcanzables + dominados
+     * por el alloc (garantizado por SSA, pero revalidamos defensivamente). */
+
+    /* 2) Materializar el valor de construccion (init) de cada campo como un
+     * SSA value disponible en el sitio del alloc.  Si requiere conversion
+     * (trunc) o es const, se insertara una instruccion JUSTO antes del call. */
+    std::unordered_map<uint32_t, IrValueId> init_val;     /* offset -> SSA value */
+    std::vector<IrInstr> init_instrs;                      /* a insertar antes del call */
+    for (uint32_t off : offsets) {
+        const SrFieldInit *fi = model.find(off);
+        const IrType T = field_type[off];
+        if (fi->kind == SrFieldInit::CONST) {
+            uint64_t v = fi->const_val;
+            int sz = sr_type_size(T);
+            if (sz < 8) v &= ((uint64_t{1} << (sz * 8)) - 1);
+            IrInstr ci; ci.op = IrOp::CONST; ci.type = T; ci.imm = v;
+            IrValue nv; nv.id = (IrValueId)fn.values.size(); nv.type = T;
+            nv.is_const = true; nv.const_val = v;
+            nv.name = "%m2ri" + std::to_string(nv.id);
+            ci.dst = nv.id;
+            fn.values.push_back(nv);
+            init_val[off] = nv.id;     /* antes del move de ci */
+            init_instrs.push_back(std::move(ci));
+        } else {
+            /* PARAM. */
+            if (fi->new_arg_index < 0 || (size_t)fi->new_arg_index >= args.size()) {
+                reason = "arg index fuera de rango"; return false;
+            }
+            IrValueId arg = args[fi->new_arg_index];
+            if (arg == IR_NO_VALUE || arg >= fn.values.size()) { reason = "arg invalido"; return false; }
+            IrType Ta = fn.values[arg].type;
+            if (!sr_type_is_int(Ta)) { reason = "arg no entero"; return false; }
+            int szA = sr_type_size(Ta), szT = sr_type_size(T);
+            if (szA == szT) {
+                init_val[off] = arg;           /* sin conversion */
+            } else if (szA > szT) {
+                IrInstr ti; ti.op = IrOp::TRUNC; ti.type = T; ti.operands.push_back(arg);
+                IrValue nv; nv.id = (IrValueId)fn.values.size(); nv.type = T;
+                nv.name = "%m2ri" + std::to_string(nv.id);
+                ti.dst = nv.id; fn.values.push_back(nv);
+                init_val[off] = nv.id;     /* antes del move de ti */
+                init_instrs.push_back(std::move(ti));
+            } else {
+                reason = "widening arg->campo no soportado"; return false;  /* szA < szT */
+            }
+        }
+    }
+
+    /* 3) Insercion de PHIs: por cada offset, iterated dominance frontier de los
+     * def-blocks (= {call_bi} U store_blocks).  Crea SSA values para los phis. */
+    /* phi_value[offset][block] = SSA value del phi (IR_NO_VALUE = no hay). */
+    std::unordered_map<uint64_t, IrValueId> phi_value;  /* key = (off<<32)|block */
+    std::unordered_map<IrValueId, uint32_t> phi_dst_off; /* phi dst -> offset */
+    auto pkey = [](uint32_t off, IrBlockId b) -> uint64_t {
+        return ((uint64_t)off << 32) | (uint64_t)b;
+    };
+    for (uint32_t off : offsets) {
+        std::vector<IrBlockId> worklist;
+        std::unordered_set<IrBlockId> on_work, has_phi;
+        worklist.push_back((IrBlockId)call_bi); on_work.insert((IrBlockId)call_bi);
+        for (IrBlockId b : store_blocks[off]) {
+            if (!on_work.count(b)) { worklist.push_back(b); on_work.insert(b); }
+        }
+        size_t wp = 0;
+        while (wp < worklist.size()) {
+            IrBlockId b = worklist[wp++];
+            if (b >= N) continue;
+            for (IrBlockId f : dom.df[b]) {
+                if (has_phi.count(f)) continue;
+                if (!dom.reachable[f]) continue;
+                /* Solo PHIs en bloques DOMINADOS por el alloc: ahi todos los
+                 * preds estan dominados por el call -> el objeto existe en cada
+                 * pred -> el operando del phi siempre tiene def alcanzante.  Un
+                 * merge no-dominado no puede leer el campo (violaria SSA), asi
+                 * que su phi seria muerto; lo omitimos. */
+                if (!dom.dominates((IrBlockId)call_bi, f)) continue;
+                has_phi.insert(f);
+                /* Crear el SSA value del phi. */
+                IrValue nv; nv.id = (IrValueId)fn.values.size(); nv.type = field_type[off];
+                nv.name = "%m2rphi" + std::to_string(nv.id);
+                fn.values.push_back(nv);
+                phi_value[pkey(off, f)] = nv.id;
+                phi_dst_off[nv.id] = off;
+                if (!on_work.count(f)) { worklist.push_back(f); on_work.insert(f); }
+            }
+        }
+    }
+
+    /* 4) Renaming (Cytron) DFS sobre el dom-tree.  current[off] = def alcanzante.
+     * Se construyen: load_repl (load dst -> valor), store_remove (posiciones),
+     * y los phi_args de cada phi insertado.  NO se muta el IR todavia. */
+    /* Plan de mutacion: */
+    std::unordered_map<IrValueId, IrValueId> load_repl;  /* load.dst -> valor reemplazo */
+    /* phi_args[phi_dst] = lista de (pred_block, value). */
+    std::unordered_map<IrValueId, std::vector<IrPhiArg>> phi_args_plan;
+
+    std::unordered_map<uint32_t, std::vector<IrValueId>> stack;  /* off -> pila de defs */
+    auto cur = [&](uint32_t off) -> IrValueId {
+        auto it = stack.find(off);
+        return (it != stack.end() && !it->second.empty()) ? it->second.back() : IR_NO_VALUE;
+    };
+
+    bool rename_ok = true;
+    const char *rfail = nullptr;
+    std::function<void(IrBlockId, int)> rename = [&](IrBlockId b, int depth) {
+        if (!rename_ok) return;
+        if (depth > 4096) { rename_ok = false; rfail = "dom-tree demasiado profundo"; return; }
+        std::vector<uint32_t> pushed;  /* offsets con un push en este bloque (para pop) */
+
+        /* (a) PHIs planeados para este bloque (aun NO insertados como
+         * instrucciones): definen current[off].  Se consultan via phi_value, no
+         * escaneando instrucciones (que no existen todavia en esta fase). */
+        for (uint32_t off : offsets) {
+            auto it = phi_value.find(pkey(off, b));
+            if (it == phi_value.end()) continue;
+            stack[off].push_back(it->second); pushed.push_back(off);
+        }
+
+        /* (b) instrucciones en orden. */
+        for (size_t ii = 0; ii < fn.blocks[b].instrs.size(); ++ii) {
+            const IrInstr &in = fn.blocks[b].instrs[ii];
+            /* El alloc: define todos los campos = init_val. */
+            if (b == call_bi && ii == call_ii) {
+                for (uint32_t off : offsets) {
+                    stack[off].push_back(init_val[off]); pushed.push_back(off);
+                }
+                continue;
+            }
+            uint32_t off; bool ld, st; IrValueId sv;
+            if (!classify(in, off, ld, st, sv)) continue;
+            if (ld) {
+                IrValueId rv = cur(off);
+                if (rv == IR_NO_VALUE) { rename_ok = false; rfail = "load sin def alcanzante"; return; }
+                if (in.dst != IR_NO_VALUE) load_repl[in.dst] = rv;
+            } else if (st) {
+                stack[off].push_back(sv); pushed.push_back(off);
+            }
+        }
+
+        /* (c) rellenar operandos de los phis planeados de los sucesores. */
+        for (IrBlockId s : dom.succs[b]) {
+            for (uint32_t off : offsets) {
+                auto it = phi_value.find(pkey(off, s));
+                if (it == phi_value.end()) continue;
+                IrValueId rv = cur(off);
+                if (rv == IR_NO_VALUE) { rename_ok = false; rfail = "phi operand sin def"; return; }
+                phi_args_plan[it->second].push_back(IrPhiArg{rv, b});
+            }
+        }
+
+        /* (d) recursion en hijos del dom-tree. */
+        for (IrBlockId c : dom.dom_children[b]) rename(c, depth + 1);
+
+        /* (e) pop. */
+        for (auto it = pushed.rbegin(); it != pushed.rend(); ++it) stack[*it].pop_back();
+    };
+    rename(0, 0);
+    if (!rename_ok) { reason = rfail ? rfail : "rename fallo"; return false; }
+
+    /* ====================================================================
+     * 5) APLICAR el plan (todas las precondiciones validadas).
+     * ==================================================================== */
+    /* (a) Reescribir loads -> MOV del valor reemplazo (copy_prop lo limpia). */
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            if ((in.op == IrOp::LOAD) && in.dst != IR_NO_VALUE) {
+                auto it = load_repl.find(in.dst);
+                if (it == load_repl.end()) continue;
+                /* Confirmar que es un load de un campo del objeto. */
+                uint32_t off; bool ld, st; IrValueId sv;
+                if (!classify(in, off, ld, st, sv) || !ld) continue;
+                in.op = IrOp::MOV; in.operands.clear();
+                in.operands.push_back(it->second);
+                in.func_name.clear();
+                if (in.dst < fn.values.size()) {
+                    fn.values[in.dst].is_const = false;
+                    fn.values[in.dst].is_host_ptr = false;
+                }
+            }
+        }
+    }
+
+    /* (b) Insertar los PHIs al frente de sus bloques con sus operandos. */
+    for (const auto &kv : phi_dst_off) {
+        IrValueId phidst = kv.first;
+        uint32_t  off    = kv.second;
+        /* Localizar el bloque (clave inversa: buscar en phi_value). */
+        IrBlockId blk = dom.UNDEF;
+        for (IrBlockId b = 0; b < N; ++b) {
+            auto it = phi_value.find(pkey(off, b));
+            if (it != phi_value.end() && it->second == phidst) { blk = b; break; }
+        }
+        if (blk >= N) continue;
+        IrInstr phi; phi.op = IrOp::PHI; phi.type = field_type[off]; phi.dst = phidst;
+        auto pit = phi_args_plan.find(phidst);
+        if (pit != phi_args_plan.end()) phi.phi_args = pit->second;
+        fn.blocks[blk].instrs.insert(fn.blocks[blk].instrs.begin(), std::move(phi));
+    }
+
+    /* (c) Eliminar TODOS los stores a campos del objeto (NOP).  Tras mem2reg
+     * ningun store es necesario (el valor fluye por SSA).  Se re-localizan por
+     * contenido (no por indice) porque (b) inserto phis al frente. */
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            uint32_t off; bool ld, st; IrValueId sv;
+            if (in.op == IrOp::STORE && classify(in, off, ld, st, sv) && st) {
+                in.op = IrOp::NOP; in.operands.clear();
+                in.dst = IR_NO_VALUE; in.func_name.clear();
+            }
+        }
+    }
+
+    /* (d) Insertar las init_instrs antes del call + NOPear el call + field-addrs.
+     * El call sigue identificable por dst==obj. */
+    for (auto &bb : fn.blocks) {
+        for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
+            IrInstr &in = bb.instrs[ii];
+            if (in.op == IrOp::CALL && in.dst == obj
+             && is_new_helper_name(in.func_name, nullptr)) {
+                /* Insertar init_instrs justo antes. */
+                if (!init_instrs.empty()) {
+                    bb.instrs.insert(bb.instrs.begin() + ii,
+                                     init_instrs.begin(), init_instrs.end());
+                    ii += init_instrs.size();
+                }
+                IrInstr &call = bb.instrs[ii];
+                call.op = IrOp::NOP; call.operands.clear();
+                call.dst = IR_NO_VALUE; call.func_name.clear();
+                goto done_call;
+            }
+        }
+    }
+    done_call:;
+
+    /* (e) NOPear las field-addr (add obj, K) -- ahora muertas. */
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            if (in.op == IrOp::ADD && in.dst != IR_NO_VALUE
+             && fieldaddr_off.count(in.dst)) {
+                in.op = IrOp::NOP; in.operands.clear();
+                in.dst = IR_NO_VALUE; in.func_name.clear();
+            }
+        }
+    }
+
+    /* (f) compactar NOPs sin dst/operandos. */
+    for (auto &bb : fn.blocks) {
+        auto &is = bb.instrs;
+        is.erase(std::remove_if(is.begin(), is.end(), [](const IrInstr &i) {
+            return i.op == IrOp::NOP && i.operands.empty() && i.dst == IR_NO_VALUE;
+        }), is.end());
+    }
+    return true;
+}
+
 }  // namespace
 
 /**
@@ -1878,14 +2332,27 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         }
 
         /* ====================================================================
-         * Caso B: CON escrituras -> field versioning LINEAL (single-block).
-         * El objeto vive entero en un bloque; un walk lineal hace store-to-
-         * load forwarding (los loads leen el ultimo valor escrito, o el de
-         * construccion), elimina los stores (dead: el objeto no escapa y los
-         * loads ya no leen memoria) y borra el alloc.  Cross-block con
-         * escrituras necesitaria mem2reg (PHI) -> bail. */
+         * Caso B: CON escrituras.
+         *
+         * B.1 single-block -> field versioning LINEAL: un walk lineal hace
+         *     store-to-load forwarding, elimina los stores y borra el alloc.
+         *
+         * B.2 cross-block / loop -> SROA/mem2reg: promueve los campos a SSA con
+         *     insercion de PHI (Cytron) + renaming.  Activo por defecto;
+         *     VESTA_NO_ESCAPE_MEM2REG=1 lo desactiva (A/B testing). */
         if (!single_block) {
-            diag(site, "field-write cross-block (necesita mem2reg/PHI)");
+            static const bool mem2reg_off = env_flag_on("VESTA_NO_ESCAPE_MEM2REG");
+            if (!mem2reg_off) {
+                std::string mr;
+                if (sr_mem2reg_object(fn, *model, site.block_idx, site.ins_idx,
+                                      obj, args, fieldaddr_off, mr)) {
+                    changed = true;
+                    continue;
+                }
+                diag(site, "mem2reg: " + mr);
+            } else {
+                diag(site, "field-write cross-block (mem2reg off)");
+            }
             continue;
         }
 

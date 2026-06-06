@@ -18,6 +18,7 @@
 #include "ir/ssa_ir.h"
 #include "ir/ir_optimizer.h"
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 using namespace ir;
@@ -152,7 +153,57 @@ static IrFunction make_escaping_caller() {
     return fn;
 }
 
+/**
+ * @brief crossb(cond, p): objeto con escritura del campo en AMBAS ramas y
+ *        lectura tras el merge.  Cross-block -> requiere SROA/mem2reg con un
+ *        PHI para el campo en el bloque merge.
+ *
+ *   f = new Foo(p);
+ *   if (cond == 0) f.x = f.x + 10; else f.x = f.x * 2;
+ *   return f.x;
+ */
+static IrFunction make_crossblock_caller() {
+    IrFunction fn; fn.name = "crossb"; fn.ret_type = IrType::I32;
+    IrBuilder b(fn);
+    IrValueId cond = b.param(IrType::I32, "cond");
+    IrValueId p    = b.param(IrType::I32, "p");
+    IrBlockId entry = b.new_block("entry");
+    IrBlockId bt    = b.new_block("then");
+    IrBlockId be    = b.new_block("else");
+    IrBlockId merge = b.new_block("merge");
+    b.set_insert_point(entry);
+    IrValueId o    = b.call("__new_Foo", {p}, IrType::PTR);
+    IrValueId off  = b.const_i64(24);
+    IrValueId addr = b.add(o, off, IrType::PTR);   /* field-addr cross-block */
+    IrValueId zero = b.const_i32(0);
+    IrValueId cmp  = b.cmp_eq(cond, zero);
+    b.br_cond(cmp, bt, be);
+    b.set_insert_point(bt);
+    IrValueId la  = b.load(addr, IrType::I32);
+    IrValueId ten = b.const_i32(10);
+    IrValueId a1  = b.add(la, ten, IrType::I32);
+    b.store(a1, addr, IrType::I32);
+    b.br(merge);
+    b.set_insert_point(be);
+    IrValueId lb  = b.load(addr, IrType::I32);
+    IrValueId two = b.const_i32(2);
+    IrValueId a2  = b.mul(lb, two, IrType::I32);
+    b.store(a2, addr, IrType::I32);
+    b.br(merge);
+    b.set_insert_point(merge);
+    IrValueId v   = b.load(addr, IrType::I32);
+    b.ret(v);
+    return fn;
+}
+
 int main() {
+    /* SROA/mem2reg esta activo por defecto; asegurar que el entorno no lo
+     * tenga desactivado para el caso cross-block. */
+#if defined(_WIN32)
+    _putenv("VESTA_NO_ESCAPE_MEM2REG=0");
+#else
+    setenv("VESTA_NO_ESCAPE_MEM2REG", "0", 1);
+#endif
     std::printf("=== test_escape_analysis (Phase C2.13) ===\n");
 
     /* (1) read-only -> se transforma. */
@@ -195,6 +246,24 @@ int main() {
         ir_pass_scalar_replace_gc(caller, mod);
         check(count_new_calls(caller) == 1,
               "escaping: el alloc se preserva (objeto retornado)");
+    }
+
+    /* (5) cross-block con escrituras -> SROA/mem2reg lo transforma (inserta un
+     * PHI para el campo en el merge). */
+    {
+        IrModule mod = make_module_with_foo();
+        IrFunction caller = make_crossblock_caller();
+        check(count_new_calls(caller) == 1, "crossb: 1 call __new_Foo antes");
+        bool changed = ir_pass_scalar_replace_gc(caller, mod);
+        check(changed, "crossb: el pase reporta cambio");
+        check(count_new_calls(caller) == 0,
+              "crossb: el alloc se elimino (mem2reg cross-block)");
+        /* Debe existir un PHI para el campo en el bloque merge. */
+        int n_phi = 0;
+        for (const auto &b : caller.blocks)
+            for (const auto &in : b.instrs)
+                if (in.op == ir::IrOp::PHI) ++n_phi;
+        check(n_phi >= 1, "crossb: se inserto un PHI para el campo");
     }
 
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
