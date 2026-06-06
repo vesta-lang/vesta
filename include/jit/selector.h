@@ -229,6 +229,33 @@ namespace jit {
         /// de 176 bytes/try -> 0.  El siguiente tryenter (runtime call)
         /// pop-ea del free list en lugar de hacer new.
         int32_t exc_free_list_offset = 0;
+
+        /* ================= C2 tier-up (recompile-and-swap) ================= */
+        /// C2 (2026-06-07): si != 0, el Selector emite en el prologo un
+        /// contador on-entry + check; cuando el contador cruza
+        /// @c tier_up_threshold (exactamente), llama a esta direccion con
+        /// ABI C nativo: @c void handler(ProcessVM* proc, uint64_t fn_pc).
+        /// El handler recompila la funcion con el pipeline C2 y hace swap
+        /// atomico de su codigo (pc-map + method->jit_code).  0 = no emitir
+        /// contador (cero overhead; comportamiento C1 puro).
+        ///
+        /// Modelo HotSpot: el contador cuenta INVOCACIONES (entradas a la
+        /// funcion), no iteraciones de loop.  Captura las llamadas JIT->JIT
+        /// e interp->JIT (a diferencia de los contadores del interprete, que
+        /// se congelan tras C1).  Una funcion con su hotness en un loop de
+        /// entrada-unica (e.g. main) no sube de tier con esto -> requiere
+        /// backedge-counter + OSR (futuro).
+        uint64_t tier_up_handler_addr = 0;
+        /// Umbral de invocaciones (post-C1) que dispara el recompile C2.
+        uint32_t tier_up_threshold = 0;
+        /// Si true, emite el contador en TODA funcion compilada; si false
+        /// (default), solo en funciones con >=1 CALLVIRT (candidato real a
+        /// especulacion).  Configurable para A/B (VESTA_C2_TIER_ALL).
+        bool tier_up_all_fns = false;
+        /// Callback para reservar el contador de 8 bytes (zero-init) keyed
+        /// por @c fn_pc (mismo contador entre recompilaciones del call site).
+        /// Retorna la addr HOST del contador, 0 si no disponible.
+        std::function<uint64_t(uint64_t /*fn_pc*/)> reserve_tier_counter{};
     };
 
     /**
