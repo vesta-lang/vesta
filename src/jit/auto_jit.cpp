@@ -611,27 +611,15 @@ namespace jit {
             }
         }
 
-        /* Phase D.7 (opt-in): intentar el path de registros virtuales antes
-         * que el de slots.  Solo funciones del subset soportado (aritmetica /
-         * control de flujo / loops, sin GC ni calls); el resto cae a slots. */
-        if (g_jit_use_vregs) {
-            uint8_t *vcode = vreg_compile(ir_fn, *g_code_cache, {}, make_vreg_entries(), resolve_native_fn);
-            if (vcode != nullptr) {
-                if (!ir_fn.name.empty())
-                    g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
-                CompileResult r{};
-                r.fn = reinterpret_cast<JitFn>(vcode);
-                r.code_start = vcode;
-                if (g_jit_warn_unsupported)
-                    std::fprintf(stderr, "[jit-vreg] eager compilado '%s'\n",
-                                 ir_fn.name.c_str());
-                return r;
-            }
-            if (g_jit_warn_unsupported)
-                std::fprintf(stderr,
-                    "[jit-vreg] '%s' no soportada (eager) -> slots\n",
-                    ir_fn.name.c_str());
-        }
+        /* Phase D.7 perf-gaps (2026-06-06): el intento vreg top-level se
+         * MOVIO mas abajo (tras construir el resolver recursivo de user-fns),
+         * para que `main` y cualquier funcion que llame a otras funciones Vex
+         * compile por el path de registros virtuales en vez de caer a slots.
+         * Antes este bloque corria aqui con resolve_call = {} (vacio): el
+         * primer `IrOp::CALL` a una user-fn hacia bailar el vreg a slots
+         * (codegen inferior).  Medido: mem_struct/mem_class/pic_real/callvirt
+         * tenian su hot loop en main -> corrian por slots.  Ver el bloque
+         * reubicado tras `resolver = *resolver_holder;`. */
 
         /* Recursive resolver: cuando el Selector encuentra CALL a una
          * funcion user, llama a este callback que (1) chequea cache,
@@ -782,6 +770,35 @@ namespace jit {
         /* Marcar IN_PROGRESS antes de compilar para detectar self-recursion. */
         if (!ir_fn.name.empty()) {
             g_eager_cache[ir_fn.name] = EAGER_IN_PROGRESS;
+        }
+
+        /* Phase D.7 perf-gaps (2026-06-06): intento vreg top-level CON el
+         * resolver recursivo de user-fns ya construido.  Ahora `main` (y
+         * cualquier funcion con `IrOp::CALL` a otra funcion Vex) compila por
+         * el path de registros virtuales en vez de bailar a slots al primer
+         * call.  El resolver compila recursivamente las callees y devuelve su
+         * direccion; los CALLs del vreg emiten `CALL addr` directo. */
+        if (g_jit_use_vregs) {
+            uint8_t *vcode = vreg_compile(ir_fn, *g_code_cache, resolver,
+                                          make_vreg_entries(), resolve_native_fn);
+            if (vcode != nullptr) {
+                if (!ir_fn.name.empty())
+                    g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
+                /* NOTA: el registro pc->jit lo hace el caller
+                 * (maybe_compile_callvm_target) desde el CompileResult; no lo
+                 * duplicamos aqui para no registrar compiles degenerados. */
+                CompileResult r{};
+                r.fn = reinterpret_cast<JitFn>(vcode);
+                r.code_start = vcode;
+                if (g_jit_warn_unsupported)
+                    std::fprintf(stderr, "[jit-vreg] eager compilado '%s'\n",
+                                 ir_fn.name.c_str());
+                return r;
+            }
+            if (g_jit_warn_unsupported)
+                std::fprintf(stderr,
+                    "[jit-vreg] '%s' no soportada (eager) -> slots\n",
+                    ir_fn.name.c_str());
         }
 
         const CompileResult res = g_compiler->compile_with_opts(ir_fn, top_opts);

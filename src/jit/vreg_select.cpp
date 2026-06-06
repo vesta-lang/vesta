@@ -26,6 +26,15 @@
 
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
+#include "gc/raw_allocator.h"   // Phase D.7 perf: inline slab fast-path
+/* arena -> windows.h (Win32) define macros que chocan con nombres del enum
+ * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST. */
+#ifdef CONST
+#  undef CONST
+#endif
+#ifdef VOID
+#  undef VOID
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +60,29 @@ namespace jit {
             return v && v[0] != '\0' && v[0] != '0';
         }();
         return off;
+    }
+
+    /** @brief Diagnostico/A-B: VESTA_JIT_NO_INLINE_ALLOC=1 enruta RAW_ALLOC al
+     *  CALL @c vrt_raw_alloc en vez de inline-ar el fast-path del slab (para
+     *  medir el inline vs el runtime, o aislar un bug del codegen inline). */
+    static bool jit_no_inline_alloc() {
+        static const bool off = []{
+            const char *v = std::getenv("VESTA_JIT_NO_INLINE_ALLOC");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        return off;
+    }
+
+    /** @brief Opt-in (default OFF mientras se valida): VESTA_JIT_VREG_IDIV=1
+     *  habilita DIV/MOD enteros en el path de vregs via el pseudo DIVMOD_V
+     *  (expandido a idiv en el rewrite usando R11 scratch para el divisor).
+     *  Default OFF -> DIV/MOD siguen cayendo a slots (codegen probado). */
+    static bool jit_vreg_idiv() {
+        static const bool on = []{
+            const char *v = std::getenv("VESTA_JIT_VREG_IDIV");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        return on;
     }
 
     namespace {
@@ -281,6 +313,29 @@ namespace jit {
                         (void)bin_mop(in.op, mop);
                         O.push_back(MInstr::make_binary(mop, vr(in.dst),
                             vr(in.operands[0]), vr(in.operands[1])));
+                        break;
+                    }
+                    /* DIV/MOD enteros (signed) via pseudo DIVMOD_V (opt-in
+                     * VESTA_JIT_VREG_IDIV mientras se valida).  El rewrite lo
+                     * expande a idiv usando R11 para el divisor (sin aliasing).
+                     * variant: 0 = cociente (DIV), 1 = resto (MOD). */
+                    case ir::IrOp::DIV:
+                    case ir::IrOp::MOD: {
+                        flush_pending();
+                        if (!jit_vreg_idiv()) {
+                            vreg_dbg(fn.name.c_str(),
+                                in.op == ir::IrOp::DIV ? "div" : "mod");
+                            return false;   // gated off -> slots
+                        }
+                        if (in.operands.size() != 2
+                         || in.dst == ir::IR_NO_VALUE) return false;
+                        MInstr dm{};
+                        dm.op = MOp::DIVMOD_V;
+                        dm.dst  = vr(in.dst);
+                        dm.src1 = vr(in.operands[0]);   // dividendo
+                        dm.src2 = vr(in.operands[1]);   // divisor
+                        dm.variant = (in.op == ir::IrOp::MOD) ? 1u : 0u;
+                        O.push_back(dm);
                         break;
                     }
                     case ir::IrOp::NEG: {
@@ -733,6 +788,124 @@ namespace jit {
                     case ir::IrOp::GC_ALLOCP:
                     case ir::IrOp::RAW_ALLOC: {
                         flush_pending();
+                        /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
+                         * Para RAW_ALLOC con size CONSTANTE que cae en una size
+                         * class pequena del slab, inline-amos el pop del free
+                         * list (sin CALL al runtime), con fallback CALL @c alloc
+                         * cuando el free list de esa clase esta vacio (grow) o
+                         * el slab esta deshabilitado (VESTA_NO_SLAB -> free list
+                         * siempre null -> siempre slow path, correcto).
+                         * Replica EXACTA de RawAllocator::alloc (slab branch):
+                         *   node = slab_free_list_[cls];
+                         *   if (!node) goto slow;            // grow
+                         *   slab_free_list_[cls] = node->next;
+                         *   memset(node, 0, SLAB_SIZES[cls]);
+                         *   total_bytes_ += SLAB_SIZES[cls];
+                         *   return node;
+                         * (alloc_count/peak son introspeccion -> se omiten.) */
+                        if (in.op == ir::IrOp::RAW_ALLOC && vm
+                         && ent.raw_alloc != 0 && in.dst != ir::IR_NO_VALUE
+                         && in.operands.size() == 1 && !jit_no_inline_alloc()) {
+                            const ir::IrValueId szv = in.operands[0];
+                            if (szv < v_is_const.size() && v_is_const[szv]) {
+                                const uint64_t size =
+                                    static_cast<uint64_t>(v_const[szv]);
+                                const size_t cls =
+                                    gc::RawAllocator::jit_slab_class_for(size);
+                                const uint64_t slab_size =
+                                    (cls == SIZE_MAX) ? 0
+                                    : gc::RawAllocator::jit_slab_size(cls);
+                                /* Solo clases pequenas: zero-init unrolled barato
+                                 * (<=64B = <=8 stores).  Mayores -> CALL (16+
+                                 * stores no compensan el ahorro del CALL; medido
+                                 * 0% en mem_malloc_free, cuyo cuello es el free).
+                                 * mem_struct (Punto 8B -> clase 16) gana 6.14x. */
+                                if (cls != SIZE_MAX && slab_size <= 64
+                                 && slab_size >= 8) {
+                                    const int32_t ra =
+                                        vesta_rt::kProcRawAllocOffset;
+                                    const int32_t fl_off = ra
+                                      + static_cast<int32_t>(
+                                          gc::RawAllocator::jit_slab_free_list_offset())
+                                      + static_cast<int32_t>(cls * 8);
+                                    const int32_t tb_off = ra
+                                      + static_cast<int32_t>(
+                                          gc::RawAllocator::jit_total_bytes_offset());
+                                    const MLabelId Lslow  = out.new_label();
+                                    const MLabelId Ldone2 = out.new_label();
+                                    /* fl = [RBX + fl_off]  (slab_free_list_[cls]) */
+                                    const ir::IrValueId t_fl = new_tmp();
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(t_fl),
+                                        MOperand::make_mem(MReg::RBX, fl_off)));
+                                    /* if (fl == 0) goto slow (free list vacio). */
+                                    O.push_back(mk_test(t_fl, t_fl));
+                                    O.push_back(MInstr::make_jcc(MCond::E, Lslow));
+                                    /* next = [fl] ; slab_free_list_[cls] = next */
+                                    const ir::IrValueId t_next = new_tmp();
+                                    O.push_back(MInstr::make_load(vr(t_next),
+                                        vr(t_fl), 8, false));
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_mem(MReg::RBX, fl_off),
+                                        vr(t_next)));
+                                    /* zero-init slot: [fl + k] = 0, k=0..slab_size */
+                                    const ir::IrValueId t_zero = new_tmp();
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(t_zero), MOperand::make_imm32(0)));
+                                    for (uint64_t k = 0; k < slab_size; k += 8) {
+                                        if (k == 0) {
+                                            O.push_back(MInstr::make_store(
+                                                vr(t_fl), vr(t_zero), 8));
+                                        } else {
+                                            const ir::IrValueId t_a = new_tmp();
+                                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                                vr(t_a), vr(t_fl)));
+                                            O.push_back(MInstr::make_binary(MOp::ADD,
+                                                vr(t_a), vr(t_a),
+                                                MOperand::make_imm32(
+                                                    static_cast<int32_t>(k))));
+                                            O.push_back(MInstr::make_store(
+                                                vr(t_a), vr(t_zero), 8));
+                                        }
+                                    }
+                                    /* total_bytes_ += slab_size */
+                                    const ir::IrValueId t_tb = new_tmp();
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(t_tb),
+                                        MOperand::make_mem(MReg::RBX, tb_off)));
+                                    O.push_back(MInstr::make_binary(MOp::ADD,
+                                        vr(t_tb), vr(t_tb),
+                                        MOperand::make_imm32(
+                                            static_cast<int32_t>(slab_size))));
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_mem(MReg::RBX, tb_off),
+                                        vr(t_tb)));
+                                    /* dst = fl ; jmp done */
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(in.dst), vr(t_fl)));
+                                    O.push_back(MInstr::make_jmp(Ldone2));
+                                    /* slow: dst = vrt_raw_alloc(proc, size) */
+                                    O.push_back(MInstr::make_label_def(Lslow));
+#if defined(_WIN32)
+                                    const MReg za0 = MReg::RCX, za1 = MReg::RDX;
+#else
+                                    const MReg za0 = MReg::RDI, za1 = MReg::RSI;
+#endif
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(za1, 8), vr(szv)));
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(za0, 8),
+                                        MOperand::make_reg(MReg::RBX, 8)));
+                                    O.push_back(MInstr::make_call_abs(
+                                        out.intern_imm64(ent.raw_alloc)));
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(in.dst),
+                                        MOperand::make_reg(MReg::RAX, 8)));
+                                    O.push_back(MInstr::make_label_def(Ldone2));
+                                    break;
+                                }
+                            }
+                        }
                         /* GC_ALLOC y GC_ALLOCP bajan ambos a `gcallocp` en el
                          * ir_emitter -> host_ptr al payload (NO un handle).  Por
                          * eso usan gc_alloc_payload, no gc_alloc (que devuelve

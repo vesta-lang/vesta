@@ -2203,6 +2203,12 @@ int main(int argc, char *argv[]) {
                 if (!caps_str.empty()) {
                     auto &exe = *mgr.loader.executables.front();
                     exe.caps = ::loader::parse_caps(caps_str);
+                    // Activar el sandbox solo si las caps son restringidas;
+                    // asi check_cap_at_pc paga overhead unicamente cuando hay
+                    // un sandbox real en juego.
+                    if (!exe.caps.unrestricted()) {
+                        mgr.loader.sandbox_active = true;
+                    }
                     std::cerr << "[sandbox] modulo principal con caps: "
                               << ::loader::caps_to_string(exe.caps) << "\n";
                 }

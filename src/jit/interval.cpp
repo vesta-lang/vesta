@@ -35,6 +35,7 @@ namespace jit {
             case MOp::AND: case MOp::OR:  case MOp::XOR:
             case MOp::SHL: case MOp::SHR: case MOp::SAR:
             case MOp::ROL: case MOp::ROR:
+            case MOp::DIVMOD_V:   /* dst = src1 / src2 (variant: 0 DIV, 1 MOD) */
                 r.dst = R::DEF; r.src1 = R::USE; r.src2 = R::USE; break;
 
             /* Unarios: dst def, src1 use. */
@@ -269,7 +270,10 @@ namespace jit {
         for (size_t b = 0; b < NB; ++b) {
             uint32_t gi = first_gi[b];
             for (const MInstr &in : mf.blocks[b].instrs) {
-                if (in.op == MOp::CALL || in.op == MOp::CALL_ABS)
+                /* DIVMOD_V clobbea RAX/RDX (idiv) -> tratarlo como call-position
+                 * para que los vregs vivos a traves vayan a callee-saved. */
+                if (in.op == MOp::CALL || in.op == MOp::CALL_ABS
+                 || in.op == MOp::DIVMOD_V)
                     out.call_positions.push_back(2u * gi);
                 ++gi;
             }

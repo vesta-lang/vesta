@@ -6293,48 +6293,26 @@ namespace jit {
                         break;
                     }
 
-                    /* PANIC: lanza FatalError(USER_ABORT, msg).  CALL
-                     * vrt_panic_str(proc, msg_vaddr, msg_len).  Mismo path
-                     * que el opcode bytecode panic. */
+                    /* PANIC: lanza FatalError(USER_ABORT, msg).
+                     *
+                     * BugFix JIT-exc (2026-06-06): se BAILA a interp.  El path
+                     * JIT de panic (CALL vrt_panic_str -> throw_fatal) requiere
+                     * desenrollar el frame JIT-eado durante el unwind hacia el
+                     * catch del caller; cuando el caller es interp (o cruza la
+                     * frontera JIT<->interp) ese unwind tiene un crash flaky
+                     * (~20% de runs, no determinista) por limpieza incorrecta
+                     * del frame.  panic() es un error path (NUNCA hot), asi que
+                     * forzar la funcion a interp -- donde el unwind via
+                     * setjmp/longjmp es robusto -- no cuesta performance y
+                     * elimina el crash.  El unwind nativo de frames JIT-eados
+                     * es trabajo de Phase G (.pdata/.eh_frame); hasta entonces
+                     * las funciones que lanzan se quedan en interp. */
                     case ir::IrOp::PANIC: {
-                        if (ins.operands.size() < 2) {
-                            warn_unsupported(ins.op, ins.source_line,
-                                "PANIC: requiere 2 operandos (msg_addr, msg_len)");
-                            unsupported = true;
-                            mf.blocks.back().instrs.push_back(
-                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
-                            break;
-                        }
-                        const uint64_t fn_addr = opts_.runtime
-                            ? reinterpret_cast<uint64_t>(opts_.runtime->panic_str) : 0;
-                        if (fn_addr == 0) {
-                            warn_unsupported(ins.op, ins.source_line,
-                                "runtime->panic_str no resuelto");
-                            unsupported = true;
-                            mf.blocks.back().instrs.push_back(
-                                {MOp::INT3, 0, 0, 0, {}, {}, {}});
-                            break;
-                        }
-                    #if defined(_WIN32)
-                        const MReg arg0 = MReg::RCX, arg1 = MReg::RDX, arg2 = MReg::R8;
-                    #else
-                        const MReg arg0 = MReg::RDI, arg1 = MReg::RSI, arg2 = MReg::RDX;
-                    #endif
-                        load_op_rematerializable(mf, ir_fn, ins.operands[0], arg1);  /* msg_vaddr */
-                        load_op_rematerializable(mf, ir_fn, ins.operands[1], arg2);  /* msg_len */
-                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
-                            MOperand::make_reg(arg0), MOperand::make_reg(MReg::RBX)));
-                        const uint32_t fn_idx = mf.intern_imm64(fn_addr);
-                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
-                            MOperand::make_reg(MReg::RAX),
-                            MOperand::make_imm64_idx(fn_idx)));
-                        {
-                            MInstr ic;
-                            ic.op = MOp::CALL;
-                            ic.src1 = MOperand::make_reg(MReg::RAX);
-                            emit_stackmap_for_safepoint(ic);
-                            mf.blocks.back().instrs.push_back(ic);
-                        }
+                        warn_unsupported(ins.op, ins.source_line,
+                            "PANIC: bail a interp (unwind JIT->catch no robusto)");
+                        unsupported = true;
+                        mf.blocks.back().instrs.push_back(
+                            {MOp::INT3, 0, 0, 0, {}, {}, {}});
                         break;
                     }
 
