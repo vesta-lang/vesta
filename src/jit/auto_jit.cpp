@@ -192,6 +192,16 @@ namespace jit {
         if (method->jit_code != nullptr)   return;
         if (method->invocation_count < g_jit_threshold) return;
 
+        /* SEGURIDAD (sandbox bajo JIT): si hay un sandbox activo (algun modulo
+         * con caps restringidas, M.sandbox Sprint A), NO JIT-compilar.  El
+         * codigo JIT-eated emite CALLN/CALLNI/dlopen/spawn/etc. SIN el check de
+         * capabilities que el interprete SI hace (check_cap_at_pc) -> dejar la
+         * funcion en interp garantiza el enforcement del sandbox.  Coste cero
+         * cuando no hay sandbox (1 branch predicho not-taken; sandbox_active es
+         * false en el caso default).  Prerrequisito para habilitar JIT por
+         * defecto sin abrir un hueco de seguridad. */
+        if (vm->scheduler.vm_reference.loader_public.sandbox_active) return;
+
         /* Slow path: el counter cruzo el threshold y el metodo NO
          * tiene jit_code aun.  Intentar compilar. */
 
