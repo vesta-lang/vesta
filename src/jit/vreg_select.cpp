@@ -73,16 +73,32 @@ namespace jit {
         return off;
     }
 
-    /** @brief Opt-in (default OFF mientras se valida): VESTA_JIT_VREG_IDIV=1
-     *  habilita DIV/MOD enteros en el path de vregs via el pseudo DIVMOD_V
+    /** @brief DIV/MOD enteros en el path de vregs via el pseudo DIVMOD_V
      *  (expandido a idiv en el rewrite usando R11 scratch para el divisor).
-     *  Default OFF -> DIV/MOD siguen cayendo a slots (codegen probado). */
+     *  Default ON tras validar (codegen verificado en test_vreg_vm + e2e
+     *  400/2 bajo JIT; el bug de IMUL+spill que lo bloqueaba se arreglo en
+     *  regalloc_rewrite).  Se puede DESACTIVAR con VESTA_JIT_VREG_IDIV=0
+     *  para volver al fallback de slots (A/B). */
     static bool jit_vreg_idiv() {
         static const bool on = []{
             const char *v = std::getenv("VESTA_JIT_VREG_IDIV");
-            return v && v[0] != '\0' && v[0] != '0';
+            return !(v && v[0] == '0');   // default ON; solo OFF si =0
         }();
         return on;
+    }
+
+    /** @brief Inline dispatch de CALLVIRT en el path de vregs (default ON;
+     *  VESTA_JIT_NO_INLINE_CALLVIRT=1 vuelve al CALL a vrt_callvirt para A/B).
+     *  Carga class_ptr -> vtable -> method -> jit_code y hace un call directo
+     *  (indirecto) si el metodo esta JIT-compilado y sin advices, evitando el
+     *  overhead del helper runtime; fallback a vrt_callvirt en cualquier otro
+     *  caso (null, abstracto, no compilado, con aspectos AOP). */
+    static bool jit_no_inline_callvirt() {
+        static const bool off = []{
+            const char *v = std::getenv("VESTA_JIT_NO_INLINE_CALLVIRT");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        return off;
     }
 
     namespace {
@@ -1026,22 +1042,90 @@ namespace jit {
                             O.push_back(MInstr::make_unary(MOp::MOV,
                                 vm_reg_mem(static_cast<int>(i) + 1),
                                 vr(in.operands[i])));
-                        /* 2. Marshalling host: arg0=proc, arg1=obj, arg2=vtbl_idx.
-                         *    obj PRIMERO (mientras vive en su reg). */
+                        /* 2. arg regs host (arg0=proc, arg1=obj, arg2=vtbl_idx). */
 #if defined(_WIN32)
                         const MReg pr_reg = MReg::RCX, obj_reg = MReg::RDX, idx_reg = MReg::R8;
 #else
                         const MReg pr_reg = MReg::RDI, obj_reg = MReg::RSI, idx_reg = MReg::RDX;
 #endif
-                        O.push_back(MInstr::make_unary(MOp::MOV,
-                            MOperand::make_reg(obj_reg, 8), vr(obj)));
-                        O.push_back(MInstr::make_unary(MOp::MOV,
-                            MOperand::make_reg(pr_reg, 8), MOperand::make_reg(MReg::RBX, 8)));
-                        O.push_back(MInstr::make_unary(MOp::MOV,
-                            MOperand::make_reg(idx_reg, 8),
-                            MOperand::make_imm32(static_cast<int32_t>(vtbl_idx))));
-                        /* 3. CALL vrt_callvirt. */
-                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callvirt)));
+                        auto emit_callvirt_slow = [&]() {
+                            /* vrt_callvirt(proc, obj, vtbl_idx).  obj PRIMERO. */
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(obj_reg, 8), vr(obj)));
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(pr_reg, 8),
+                                MOperand::make_reg(MReg::RBX, 8)));
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(idx_reg, 8),
+                                MOperand::make_imm32(static_cast<int32_t>(vtbl_idx))));
+                            O.push_back(MInstr::make_call_abs(
+                                out.intern_imm64(ent.callvirt)));
+                        };
+                        if (!jit_no_inline_callvirt()) {
+                            /* 3a. INLINE DISPATCH: class_ptr -> vtable -> method
+                             *     -> jit_code y call directo (indirecto) si el
+                             *     metodo esta compilado y sin advices.  Fallback
+                             *     a vrt_callvirt en cualquier otro caso. */
+                            const MLabelId Lfb   = out.new_label();
+                            const MLabelId Ldone = out.new_label();
+                            auto load_field =
+                                [&](ir::IrValueId base, int32_t off) -> ir::IrValueId {
+                                const ir::IrValueId d = new_tmp();
+                                if (off == 0) {
+                                    O.push_back(MInstr::make_load(vr(d), vr(base),
+                                                                  8, false));
+                                } else {
+                                    const ir::IrValueId addr = new_tmp();
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(addr), vr(base)));
+                                    O.push_back(MInstr::make_binary(MOp::ADD,
+                                        vr(addr), vr(addr),
+                                        MOperand::make_imm32(off)));
+                                    O.push_back(MInstr::make_load(vr(d), vr(addr),
+                                                                  8, false));
+                                }
+                                return d;
+                            };
+                            /* cls = [obj]  (class_ptr offset 0). */
+                            const ir::IrValueId cls = load_field(obj, 0);
+                            O.push_back(mk_test(cls, cls));
+                            O.push_back(MInstr::make_jcc(MCond::E, Lfb));
+                            /* vtbl = [cls + VTABLE_OFFSET]. */
+                            const ir::IrValueId vtbl =
+                                load_field(cls, VESTA_CLASSINFO_VTABLE_OFFSET);
+                            O.push_back(mk_test(vtbl, vtbl));
+                            O.push_back(MInstr::make_jcc(MCond::E, Lfb));
+                            /* method = [vtbl + vtbl_idx*8]. */
+                            const ir::IrValueId method = load_field(vtbl,
+                                static_cast<int32_t>(vtbl_idx * 8u));
+                            O.push_back(mk_test(method, method));
+                            O.push_back(MInstr::make_jcc(MCond::E, Lfb));
+                            /* advice = [method + ADVICE_CHAIN_OFFSET]; si != 0
+                             * (tiene aspectos AOP) -> slow path. */
+                            const ir::IrValueId adv = load_field(method,
+                                VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
+                            O.push_back(mk_test(adv, adv));
+                            O.push_back(MInstr::make_jcc(MCond::NE, Lfb));
+                            /* code = [method + JIT_CODE_OFFSET]; si 0 -> slow. */
+                            const ir::IrValueId code = load_field(method,
+                                VESTA_METHODINFO_JIT_CODE_OFFSET);
+                            O.push_back(mk_test(code, code));
+                            O.push_back(MInstr::make_jcc(MCond::E, Lfb));
+                            /* FAST: proc en arg0; call directo a code (los args
+                             * ya estan en proc->registers). */
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(pr_reg, 8),
+                                MOperand::make_reg(MReg::RBX, 8)));
+                            { MInstr ic; ic.op = MOp::CALL; ic.src1 = vr(code);
+                              O.push_back(ic); }
+                            O.push_back(MInstr::make_jmp(Ldone));
+                            /* FALLBACK. */
+                            O.push_back(MInstr::make_label_def(Lfb));
+                            emit_callvirt_slow();
+                            O.push_back(MInstr::make_label_def(Ldone));
+                        } else {
+                            emit_callvirt_slow();
+                        }
                         /* 4. Resultado en regs[0]. */
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
