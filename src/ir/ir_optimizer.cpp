@@ -17,6 +17,8 @@
 #include <queue>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <functional>
@@ -1058,6 +1060,804 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
             auto &is = blk.instrs;
             is.erase(std::remove_if(is.begin(), is.end(), [](const IrInstr &i) {
                 return i.op == IrOp::NOP && i.operands.empty() && i.dst == IR_NO_VALUE;
+            }), is.end());
+        }
+    }
+
+    return changed;
+}
+
+//==============================================================================
+//  Phase C2.13: Escape Analysis + Scalar Replacement de objetos GC
+//
+//  Detecta objetos `new X(...)` (emitidos como `call @__new_X(args)`) que NO
+//  ESCAPAN del frame en el que se crean: su host_ptr solo se usa para leer/
+//  escribir campos locales, nunca se retorna, almacena en memoria heap, ni
+//  pasa a otra funcion.  Un objeto asi puede materializarse SIN tocar el GC
+//  heap (scalar replacement): el alloc se elimina y los `load (obj+off)` se
+//  reemplazan por el valor con el que el ctor inicializo ese campo.
+//
+//  ADVERTENCIA DE SEGURIDAD: marcar como no-escapante un objeto que SI escapa
+//  produce use-after-free / corrupcion de heap silenciosa.  El analisis es
+//  CONSERVADOR por diseno: asume que el objeto escapa salvo prueba explicita.
+//  La clasificacion de usos reusa exactamente el patron validado de
+//  @c ir_pass_promote_local_allocas (whitelist de safe-ops; cualquier op no
+//  reconocida marca escape).
+//
+//  Esta primera parte implementa SOLO la DETECCION (log-only via la env var
+//  VESTA_ESCAPE_DEBUG).  La transformacion (scalar replacement) se construye
+//  encima del mismo analisis una vez validada la deteccion.
+//==============================================================================
+
+namespace {
+
+/** @brief Un sitio `call @__new_X(...)` candidato a scalar replacement. */
+struct GcAllocSite {
+    size_t      block_idx = 0;   ///< indice del bloque del CALL
+    size_t      ins_idx   = 0;   ///< indice de la instr dentro del bloque
+    IrValueId   dst       = IR_NO_VALUE; ///< SSA value del objeto (host_ptr)
+    std::string class_name;      ///< "Foo" extraido de "__new_Foo"
+    bool        escapes   = true;///< veredicto del analisis (conservador: true)
+};
+
+/**
+ * @brief Devuelve true si @p name tiene la forma "__new_<ClassName>".
+ *        Si lo es, escribe el ClassName en @p out_class.
+ */
+bool is_new_helper_name(const std::string &name, std::string *out_class) {
+    if (name.size() <= 6) return false;
+    if (name.compare(0, 6, "__new_") != 0) return false;
+    /* Excluir variantes shared (`__new_X_shared`) que registran el objeto en
+     * la SharedHandleTable -- eliminar ese alloc cambia shared_heap_live_count
+     * (efecto observable), igual que en is_pure_allocator_name. */
+    if (name.size() >= 7
+     && name.compare(name.size() - 7, 7, "_shared") == 0) return false;
+    if (out_class) *out_class = name.substr(6);
+    return true;
+}
+
+/**
+ * @brief Analisis de escape para los objetos `new X()` de una funcion.
+ *
+ * Para cada `call @__new_X` con dst valido, calcula si el host_ptr del objeto
+ * escapa.  Algoritmo identico al de @c ir_pass_promote_local_allocas pero
+ * seedeado en los dsts de los CALL `__new_*` en lugar de los dsts de ALLOCA:
+ *
+ *   1. Forward-flow del conjunto "derivado" desde cada candidato a traves de
+ *      ADD/SUB/BITCAST/MOV/CAST/*EXT/TRUNC/PHI/GEP.  Un dst derivado de >1
+ *      candidato distinto se marca @c ambiguous (escapan todos).
+ *   2. Clasificacion de usos:
+ *        - SEED (el propio `call __new_X`): no escapa su dst.  Sus OPERANDS
+ *          (los args del ctor) SI pueden escapar otros candidatos (p.ej.
+ *          `new Outer(inner)` -> inner escapa).
+ *        - LOAD/GETFIELD addr=derivado: SAFE (lee campo; el valor leido NO
+ *          es derivado).
+ *        - STORE/SETFIELD addr=derivado, val=NO-derivado: SAFE (escribe campo).
+ *          val=derivado -> ESCAPA (el ptr se guarda en memoria).
+ *        - ADD/SUB/CAST/.../PHI sobre derivados: tracked, no escapa.
+ *        - CMP/BR: read-only, no escapa.
+ *        - Cualquier OTRA op con un operand derivado: ESCAPA (conservador).
+ *
+ * @return vector de @c GcAllocSite con el campo @c escapes resuelto.
+ */
+std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
+    std::vector<GcAllocSite> sites;
+    if (fn.is_native || fn.values.empty()) return sites;
+
+    /* Step 1: recolectar candidatos `call __new_X`. */
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const auto &blk = fn.blocks[bi];
+        for (size_t ii = 0; ii < blk.instrs.size(); ++ii) {
+            const auto &ins = blk.instrs[ii];
+            if (ins.op != IrOp::CALL) continue;
+            if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size()) continue;
+            std::string cls;
+            if (!is_new_helper_name(ins.func_name, &cls)) continue;
+            GcAllocSite s;
+            s.block_idx  = bi;
+            s.ins_idx    = ii;
+            s.dst        = ins.dst;
+            s.class_name = std::move(cls);
+            s.escapes    = true;  /* default conservador */
+            sites.push_back(std::move(s));
+        }
+    }
+    if (sites.empty()) return sites;
+
+    /* Cota dura de candidatos por funcion (indice cabe en int8 del map). */
+    if (sites.size() > 127) sites.resize(127);
+
+    /* Step 2: forward-flow del set derivado.  derived_from[v] = idx del
+     * candidato del que v deriva (-1 = ninguno); ambiguous[v] si >1. */
+    std::vector<int8_t> derived_from(fn.values.size(), -1);
+    std::vector<bool>   ambiguous(fn.values.size(), false);
+
+    auto set_derived = [&](IrValueId v, int8_t origin) -> bool {
+        if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
+        if (derived_from[v] == -1) { derived_from[v] = origin; return true; }
+        if (derived_from[v] != origin) ambiguous[v] = true;
+        return false;
+    };
+    for (size_t i = 0; i < sites.size(); ++i) {
+        set_derived(sites[i].dst, static_cast<int8_t>(i & 0x7F));
+    }
+
+    bool changed = true;
+    int  it = 16;
+    while (changed && it-- > 0) {
+        changed = false;
+        for (const auto &blk : fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size()) continue;
+                if (derived_from[ins.dst] >= 0) continue;  /* ya marcado */
+                auto from_op = [&](IrValueId v) -> int {
+                    if (v == IR_NO_VALUE || v >= fn.values.size()) return -1;
+                    return derived_from[v];
+                };
+                switch (ins.op) {
+                    case IrOp::ADD: case IrOp::SUB:
+                    case IrOp::BITCAST: case IrOp::MOV:
+                    case IrOp::CAST: case IrOp::SEXT:
+                    case IrOp::ZEXT: case IrOp::TRUNC:
+                    case IrOp::GEP:
+                        for (auto opv : ins.operands) {
+                            int from = from_op(opv);
+                            if (from >= 0) {
+                                if (set_derived(ins.dst, static_cast<int8_t>(from)))
+                                    changed = true;
+                                break;
+                            }
+                        }
+                        break;
+                    case IrOp::PHI:
+                        for (const auto &pa : ins.phi_args) {
+                            int from = from_op(pa.value);
+                            if (from >= 0) {
+                                if (set_derived(ins.dst, static_cast<int8_t>(from)))
+                                    changed = true;
+                                break;
+                            }
+                        }
+                        break;
+                    default: break;
+                }
+            }
+        }
+    }
+
+    /* Step 3: clasificar usos.  escapes[i]=1 si algun uso de un derivado del
+     * candidato i es UNSAFE. */
+    std::vector<uint8_t> escapes(sites.size(), 0u);
+
+    auto mark_escape = [&](IrValueId v) {
+        if (v == IR_NO_VALUE || v >= derived_from.size()) return;
+        if (derived_from[v] < 0) return;
+        if (ambiguous[v]) {
+            for (size_t k = 0; k < escapes.size(); ++k) escapes[k] = 1u;
+            return;
+        }
+        int idx = derived_from[v];
+        if (idx >= 0 && static_cast<size_t>(idx) < escapes.size()) escapes[idx] = 1u;
+    };
+    auto is_derived = [&](IrValueId v) -> bool {
+        return v != IR_NO_VALUE && v < derived_from.size() && derived_from[v] >= 0;
+    };
+
+    /* Whitelist de SAFE ops (identica a promote_local_allocas).  Cualquier op
+     * fuera de esta lista (RAW_ASM, CALL*, GC_*, FINDCLASS, RET, THROW, ...)
+     * con un operand derivado marca escape. */
+    auto is_safe_op = [](IrOp op) -> bool {
+        switch (op) {
+            case IrOp::ADD: case IrOp::SUB: case IrOp::MUL:
+            case IrOp::DIV: case IrOp::MOD: case IrOp::NEG:
+            case IrOp::AND: case IrOp::OR:  case IrOp::XOR: case IrOp::NOT:
+            case IrOp::SHL: case IrOp::SHR: case IrOp::SAR:
+            case IrOp::BITCAST: case IrOp::MOV:
+            case IrOp::CAST: case IrOp::SEXT:
+            case IrOp::ZEXT: case IrOp::TRUNC:
+            case IrOp::GEP:
+            case IrOp::CMP_EQ: case IrOp::CMP_NE:
+            case IrOp::CMP_LT: case IrOp::CMP_GT:
+            case IrOp::CMP_LE: case IrOp::CMP_GE:
+            case IrOp::CMP_ULT: case IrOp::CMP_UGT:
+            case IrOp::CMP_ULE: case IrOp::CMP_UGE:
+            case IrOp::BR: case IrOp::BR_COND:
+            case IrOp::NOP: case IrOp::CONST:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const auto &blk = fn.blocks[bi];
+        for (size_t ii = 0; ii < blk.instrs.size(); ++ii) {
+            const auto &ins = blk.instrs[ii];
+
+            /* El propio CALL seed NO escapa su dst (es el alloc); pero sus
+             * operands (args del ctor) PUEDEN escapar OTROS candidatos. */
+            if (ins.op == IrOp::CALL) {
+                std::string cls;
+                if (ins.dst != IR_NO_VALUE && is_new_helper_name(ins.func_name, &cls)) {
+                    for (auto opv : ins.operands) mark_escape(opv);
+                    continue;
+                }
+            }
+
+            if (ins.op == IrOp::LOAD || ins.op == IrOp::GETFIELD) {
+                /* addr=operands[0] derivado -> lee campo, SAFE.  El dst (valor
+                 * leido) NO se considera derivado del objeto. */
+                continue;
+            }
+            if (ins.op == IrOp::STORE) {
+                /* STORE val=operands[0], addr=operands[1].
+                 * val derivado -> el ptr se escribe en memoria -> ESCAPA. */
+                if (ins.operands.size() >= 2 && is_derived(ins.operands[0])) {
+                    mark_escape(ins.operands[0]);
+                }
+                continue;
+            }
+            if (ins.op == IrOp::SETFIELD) {
+                /* SETFIELD obj=operands[0], val=operands[1].
+                 * val derivado -> ESCAPA. obj derivado -> SAFE (escribe campo).*/
+                if (ins.operands.size() >= 2 && is_derived(ins.operands[1])) {
+                    mark_escape(ins.operands[1]);
+                }
+                continue;
+            }
+            if (ins.op == IrOp::PHI) {
+                /* Si el dst NO es derivado pero algun phi_arg SI -> escapa. */
+                if (ins.dst < derived_from.size() && derived_from[ins.dst] < 0) {
+                    for (const auto &pa : ins.phi_args) mark_escape(pa.value);
+                }
+                continue;
+            }
+            if (is_safe_op(ins.op)) continue;
+
+            /* UNSAFE op: cualquier operand derivado escapa. */
+            for (auto opv : ins.operands) mark_escape(opv);
+            for (const auto &pa : ins.phi_args) mark_escape(pa.value);
+            if (ins.func_ptr != IR_NO_VALUE) mark_escape(ins.func_ptr);
+        }
+    }
+
+    for (size_t i = 0; i < sites.size(); ++i) sites[i].escapes = (escapes[i] != 0u);
+    return sites;
+}
+
+/** @brief true si la env var @p name esta activa (presente y != "0"/""). */
+bool env_flag_on(const char *name) {
+    const char *v = std::getenv(name);
+    return v && v[0] != '\0' && v[0] != '0';
+}
+
+}  // namespace
+
+/**
+ * @brief Pase de DETECCION de objetos GC no-escapantes (log-only).
+ *
+ * Ejecuta @c analyze_gc_escape y, si VESTA_ESCAPE_DEBUG esta activo, loguea
+ * cada sitio `new X()` con su veredicto (ESCAPA / NO-ESCAPA).  NO transforma
+ * el IR: siempre devuelve false.  Sirve para validar el analisis con cero
+ * riesgo antes de habilitar la transformacion (scalar replacement).
+ */
+bool ir_pass_escape_detect_gc(IrFunction &fn) {
+    if (!env_flag_on("VESTA_ESCAPE_DEBUG")) return false;
+    auto sites = analyze_gc_escape(fn);
+    if (sites.empty()) return false;
+    for (const auto &s : sites) {
+        std::fprintf(stderr,
+            "[escape] fn '%s': new %s() (dst %%%u) -> %s\n",
+            fn.name.c_str(), s.class_name.c_str(),
+            static_cast<unsigned>(s.dst),
+            s.escapes ? "ESCAPA" : "NO-ESCAPA (candidato scalar-replace)");
+    }
+    return false;
+}
+
+//==============================================================================
+//  Phase C2.13: Scalar Replacement (transformacion)
+//
+//  Para un `%obj = call @__new_X(args)` NO-ESCAPANTE cuyo constructor es un
+//  "inicializador trivial de campos", elimina el alloc GC y reemplaza cada
+//  `load.T (obj + off)` por el valor con el que el ctor inicializo ese campo
+//  (un arg del `new` o una constante), convertido al tipo del campo.
+//==============================================================================
+
+namespace {
+
+/** @brief Tamano en bytes de un IrType (para elegir trunc/widen). */
+int sr_type_size(IrType t) {
+    switch (t) {
+        case IrType::I8:  case IrType::U8:  case IrType::BOOL: return 1;
+        case IrType::I16: case IrType::U16: return 2;
+        case IrType::I32: case IrType::U32: case IrType::F32: return 4;
+        default: return 8;  /* I64/U64/F64/PTR/HANDLE */
+    }
+}
+/** @brief true si @p t es un entero (no float, no ptr, no handle). */
+bool sr_type_is_int(IrType t) {
+    switch (t) {
+        case IrType::I8:  case IrType::I16: case IrType::I32: case IrType::I64:
+        case IrType::U8:  case IrType::U16: case IrType::U32: case IrType::U64:
+        case IrType::BOOL:
+            return true;
+        default:
+            return false;
+    }
+}
+/** @brief true si @p t es un entero con signo. */
+bool sr_type_is_signed(IrType t) {
+    return t == IrType::I8 || t == IrType::I16
+        || t == IrType::I32 || t == IrType::I64;
+}
+
+/** @brief Inicializacion de un campo por parte del ctor. */
+struct SrFieldInit {
+    enum Kind { PARAM, CONST } kind = PARAM;
+    uint32_t  offset    = 0;          ///< offset del campo desde la base del objeto
+    IrType    field_type = IrType::I64; ///< tipo con el que el ctor escribio el campo
+    int       new_arg_index = -1;     ///< (PARAM) indice en los args de __new_X
+    uint64_t  const_val = 0;          ///< (CONST) valor literal
+};
+
+/** @brief Modelo de un ctor "inicializador trivial de campos". */
+struct SrCtorModel {
+    bool                     valid = false;
+    uint32_t                 num_new_args = 0; ///< params del ctor sin contar `this`
+    std::vector<SrFieldInit> inits;            ///< una entrada por campo inicializado
+
+    const SrFieldInit *find(uint32_t off) const {
+        for (const auto &i : inits) if (i.offset == off) return &i;
+        return nullptr;
+    }
+};
+
+/** @brief Busca una IrFunction por nombre exacto. */
+const IrFunction *sr_find_fn(const IrModule &mod, const std::string &name) {
+    for (const auto &f : mod.functions) if (f.name == name) return &f;
+    return nullptr;
+}
+
+/**
+ * @brief Construye el modelo del ctor de la clase @p class_name.
+ *
+ * Solo tiene exito si:
+ *   - La clase existe en @p mod.classes, NO tiene destructor ni campos
+ *     destructibles, y NO es un aspecto (AOP).
+ *   - Tiene EXACTAMENTE un metodo @c is_constructor (sin sobrecargas).
+ *   - El cuerpo del ctor es un unico bloque cuyas unicas ops son:
+ *     CONST, ADD(this, const_offset) para direcciones de campo, STORE de un
+ *     param/const a una de esas direcciones, y RET.  @c this solo puede
+ *     usarse como base de esas direcciones.  Cualquier otra op -> invalido.
+ */
+bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
+                         SrCtorModel &out, std::string *reason = nullptr) {
+    out = SrCtorModel{};
+    auto bail = [&](const char *r) -> bool { if (reason) *reason = r; return false; };
+
+    /* 1) Localizar la clase + checks de seguridad. */
+    const IrClass *cls = nullptr;
+    for (const auto &c : mod.classes) {
+        if (c.name == class_name) { cls = &c; break; }
+    }
+    if (!cls) return bail("clase no encontrada en mod.classes");
+    if (cls->has_destructor)         return bail("clase con destructor");
+    if (cls->has_destructible_field) return bail("clase con campo destructible");
+    if (cls->is_aspect)              return bail("clase es @Aspect");
+
+    /* El modulo entero usa AOP -> los CALLVIRT (incluido el del ctor) pueden
+     * disparar advice chains; eliminar el ctor las saltaria. */
+    for (const auto &c : mod.classes) {
+        if (c.is_aspect) return bail("modulo usa AOP");
+    }
+
+    /* 2) Un unico constructor DEFINIDO en esta clase (los heredados tienen
+     * defining_class distinto -> no cuentan; las sobrecargas reales si). */
+    const IrMethod *ctor_m = nullptr;
+    int ctor_count = 0;
+    for (const auto &m : cls->methods) {
+        if (!m.is_constructor) continue;
+        /* Filtrar constructores heredados: solo el de esta clase.  Si
+         * defining_class esta vacio (metadata incompleta), usar el match por
+         * nombre ir_fn_name == "<clase>__ctor". */
+        const bool own = m.defining_class.empty()
+            ? (m.ir_fn_name == class_name + "__ctor")
+            : (m.defining_class == class_name);
+        if (!own) continue;
+        ctor_m = &m; ++ctor_count;
+    }
+    if (ctor_count != 1)               return bail("0 o >1 constructores propios");
+    if (!ctor_m || ctor_m->ir_fn_name.empty()) return bail("ctor sin ir_fn_name");
+
+    const IrFunction *ctor = sr_find_fn(mod, ctor_m->ir_fn_name);
+    if (!ctor || ctor->is_native) return bail("ctor IrFunction no hallada/native");
+    if (ctor->blocks.size() != 1) return bail("ctor con control de flujo (>1 bloque)");
+    if (ctor->params.empty())     return bail("ctor sin param this");
+
+    const IrValueId this_vid = ctor->params[0];
+    out.num_new_args = static_cast<uint32_t>(ctor->params.size() - 1);
+
+    /* indice de param (en ctor->params) -> ; -1 si no es param. */
+    auto param_index_of = [&](IrValueId v) -> int {
+        for (size_t i = 0; i < ctor->params.size(); ++i) {
+            if (ctor->params[i] == v) return static_cast<int>(i);
+        }
+        return -1;
+    };
+
+    /* Mapa fieldaddr_vid -> offset (direcciones `this + const`). */
+    std::unordered_map<IrValueId, uint32_t> field_addr;
+    /* CONST values definidos en el ctor (para resolver offsets y store-vals). */
+    std::unordered_map<IrValueId, uint64_t> const_vals;
+
+    const auto &blk = ctor->blocks[0];
+
+    /* Pasada 1: recolectar consts. */
+    for (const auto &ins : blk.instrs) {
+        if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
+            const_vals[ins.dst] = ins.imm;
+        }
+    }
+
+    /* Pasada 2: validar cada instr + recolectar field addrs + stores. */
+    for (const auto &ins : blk.instrs) {
+        switch (ins.op) {
+            case IrOp::CONST:
+            case IrOp::NOP:
+                break;  /* inocuos */
+
+            case IrOp::RET:
+                /* ret.void: no debe retornar `this` ni un derivado. */
+                for (auto v : ins.operands) {
+                    if (v == this_vid || field_addr.count(v))
+                        return bail("ctor retorna this/field-addr");
+                }
+                break;
+
+            case IrOp::ADD: {
+                /* Solo permitido como `add this, const` -> direccion de campo.
+                 * Cualquier otro ADD que toque `this` invalida el modelo. */
+                if (ins.operands.size() != 2) {
+                    /* ADD que no toca this es inocuo; si toca this, invalido. */
+                    for (auto v : ins.operands)
+                        if (v == this_vid) return bail("ADD raro sobre this");
+                    break;
+                }
+                const IrValueId a = ins.operands[0];
+                const IrValueId b = ins.operands[1];
+                IrValueId base = IR_NO_VALUE, offv = IR_NO_VALUE;
+                if (a == this_vid)      { base = a; offv = b; }
+                else if (b == this_vid) { base = b; offv = a; }
+                if (base == this_vid) {
+                    auto it = const_vals.find(offv);
+                    if (it == const_vals.end()) return bail("offset de campo no const");
+                    if (ins.dst == IR_NO_VALUE) return bail("field-addr sin dst");
+                    field_addr[ins.dst] = static_cast<uint32_t>(it->second);
+                } else {
+                    /* ADD sin this; pero si algun operando es una field-addr
+                     * derivada, no lo soportamos. */
+                    if (field_addr.count(a) || field_addr.count(b))
+                        return bail("aritmetica sobre field-addr");
+                }
+                break;
+            }
+
+            case IrOp::STORE: {
+                /* store val=operands[0], addr=operands[1]. */
+                if (ins.operands.size() < 2) return bail("STORE mal formado");
+                const IrValueId val  = ins.operands[0];
+                const IrValueId addr = ins.operands[1];
+                uint32_t off;
+                if (addr == this_vid) {
+                    off = 0;
+                } else {
+                    auto it = field_addr.find(addr);
+                    if (it == field_addr.end()) return bail("STORE a addr no-campo");
+                    off = it->second;
+                }
+                /* val debe ser un param (>=1) o un const. */
+                SrFieldInit fi;
+                fi.offset = off;
+                int pidx = param_index_of(val);
+                if (pidx == 0) {
+                    return bail("ctor guarda this en un campo (self-ref)");
+                } else if (pidx >= 1) {
+                    fi.kind          = SrFieldInit::PARAM;
+                    fi.new_arg_index = pidx - 1;
+                    if (val >= ctor->values.size()) return bail("param fuera de rango");
+                    fi.field_type    = ctor->values[val].type;
+                } else {
+                    auto cit = const_vals.find(val);
+                    if (cit == const_vals.end())
+                        return bail("store-val no es param ni const (cast/expr)");
+                    fi.kind       = SrFieldInit::CONST;
+                    fi.const_val  = cit->second;
+                    fi.field_type = (val < ctor->values.size())
+                                  ? ctor->values[val].type : IrType::I64;
+                }
+                /* No permitir dos stores al mismo offset (ambiguo). */
+                if (out.find(off)) return bail("dos stores al mismo campo");
+                out.inits.push_back(fi);
+                break;
+            }
+
+            default:
+                /* Cualquier otra op (CALL, LOAD, NEWOBJ, GC*, RAW_ASM, MOV,
+                 * casts, super-ctor, ...) invalida el modelo trivial. */
+                return bail("ctor con op no-trivial (CALL/LOAD/cast/super/...)");
+        }
+    }
+
+    out.valid = true;
+    return true;
+}
+
+/**
+ * @brief Reescribe (o solo valida) la instr @p ld (un LOAD) para producir el
+ *        valor del campo a partir del arg/const con el que el ctor lo inicializo.
+ *
+ * Con @p apply == false NO muta nada (ni @p ld ni @c fn.values): solo
+ * comprueba si la reescritura es posible.  Con @p apply == true aplica la
+ * reescritura (asume que la validacion previa devolvio true).  Esto permite
+ * un transform transaccional: validar TODOS los loads antes de tocar nada.
+ *
+ * @return true si la reescritura es posible / se aplico; false -> abortar.
+ */
+bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
+                     const std::vector<IrValueId> &args, IrFunction &fn,
+                     bool apply) {
+    const IrType T = ld.type;  /* tipo leido del campo */
+    /* Solo enteros por ahora (float/ptr/handle -> abortar, conservador). */
+    if (!sr_type_is_int(T)) return false;
+    /* El ctor escribio el campo con field_type; debe coincidir con el read. */
+    if (fi.field_type != T) return false;
+
+    if (fi.kind == SrFieldInit::CONST) {
+        uint64_t v = fi.const_val;
+        int sz = sr_type_size(T);
+        if (sz < 8) v &= ((uint64_t{1} << (sz * 8)) - 1);
+        if (apply) {
+            /* Reescribir el LOAD como CONST T value (truncado al ancho de T). */
+            ld.op = IrOp::CONST;
+            ld.imm = v;
+            ld.operands.clear();
+            ld.func_name.clear();
+            if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
+                fn.values[ld.dst].is_const    = true;
+                fn.values[ld.dst].const_val   = v;
+                fn.values[ld.dst].is_host_ptr = false;
+            }
+        }
+        return true;
+    }
+
+    /* PARAM: el valor del campo = convert(args[new_arg_index], T). */
+    if (fi.new_arg_index < 0
+     || static_cast<size_t>(fi.new_arg_index) >= args.size()) return false;
+    const IrValueId arg = args[fi.new_arg_index];
+    if (arg == IR_NO_VALUE || arg >= fn.values.size()) return false;
+    const IrType Ta = fn.values[arg].type;
+    if (!sr_type_is_int(Ta)) return false;  /* arg no entero -> abortar */
+
+    const int szA = sr_type_size(Ta);
+    const int szT = sr_type_size(T);
+    /* arg mas estrecho que el campo: widening (raro al pasar literales).
+     * v1 no lo modela con seguridad -> abortar. */
+    if (szA < szT) return false;
+
+    if (apply) {
+        ld.operands.clear();
+        ld.operands.push_back(arg);
+        ld.func_name.clear();
+        if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
+            fn.values[ld.dst].is_const    = false;
+            fn.values[ld.dst].is_host_ptr = false;
+        }
+        /* szA > szT -> truncar; szA == szT -> copia directa. */
+        ld.op = (szA > szT) ? IrOp::TRUNC : IrOp::MOV;
+    }
+    return true;
+}
+
+}  // namespace
+
+/**
+ * @brief Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+ *
+ * Elimina los `new X()` que no escapan y cuyo ctor es un inicializador
+ * trivial de campos, reemplazando los field-reads por los valores de
+ * construccion.  Resultado: el alloc GC desaparece por completo (tanto en
+ * interp como en JIT, porque ambos consumen el mismo IR optimizado).
+ *
+ * Conservador por diseno: cada sitio se transforma SOLO si todas las
+ * precondiciones de seguridad se cumplen; en caso de duda, no se toca.
+ *
+ * @return true si se transformo algun sitio.
+ */
+bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
+    if (fn.is_native || fn.values.empty()) return false;
+
+    auto sites = analyze_gc_escape(fn);
+    if (sites.empty()) return false;
+
+    const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
+    auto diag = [&](const GcAllocSite &s, const std::string &why) {
+        if (dbg) std::fprintf(stderr,
+            "[escape] fn '%s': new %s() (dst %%%u) NO transformado: %s\n",
+            fn.name.c_str(), s.class_name.c_str(),
+            static_cast<unsigned>(s.dst), why.c_str());
+    };
+
+    /* Cache de modelos de ctor por clase (validos e invalidos) + razon. */
+    struct CachedModel { SrCtorModel m; std::string reason; };
+    std::unordered_map<std::string, CachedModel> model_cache;
+    auto get_model = [&](const std::string &cls, std::string &out_reason)
+            -> const SrCtorModel * {
+        auto it = model_cache.find(cls);
+        if (it == model_cache.end()) {
+            CachedModel cm;
+            sr_build_ctor_model(mod, cls, cm.m, &cm.reason);
+            it = model_cache.emplace(cls, std::move(cm)).first;
+        }
+        out_reason = it->second.reason;
+        return it->second.m.valid ? &it->second.m : nullptr;
+    };
+
+    bool changed = false;
+
+    for (const auto &site : sites) {
+        if (site.escapes) continue;
+        const IrValueId obj = site.dst;
+
+        std::string mreason;
+        const SrCtorModel *model = get_model(site.class_name, mreason);
+        if (!model) { diag(site, "ctor: " + mreason); continue; }
+
+        /* La instr del CALL seed (para leer sus args + NOPearla luego). */
+        if (site.block_idx >= fn.blocks.size()) continue;
+        auto &seed_blk = fn.blocks[site.block_idx];
+        if (site.ins_idx >= seed_blk.instrs.size()) continue;
+        IrInstr &call_ins = seed_blk.instrs[site.ins_idx];
+        if (call_ins.op != IrOp::CALL || call_ins.dst != obj) continue;
+        const std::vector<IrValueId> args = call_ins.operands;  /* copia */
+        if (args.size() != model->num_new_args) continue;       /* arity mismatch */
+
+        /* --- Recolectar TODOS los usos de obj.  Deben ser solo
+         * `add.ptr obj, Kconst` (direccion de campo) o `load obj` (offset 0).
+         * Cada field-addr solo puede usarse en LOADs.  Si algo no encaja ->
+         * abortar este sitio (no transformar). --- */
+        struct LoadRef { size_t bi; size_t ii; uint32_t off; };
+        std::vector<LoadRef>  loads;       /* loads a reescribir */
+        std::vector<std::pair<size_t,size_t>> dead_addr;  /* add.ptr a NOPear */
+        std::unordered_map<IrValueId, uint32_t> fieldaddr_off;  /* addr_vid -> off */
+        bool ok = true;
+        const char *use_reason = "uso no soportado de obj";
+
+        /* Helper: lee el offset const de un `add.ptr obj, K`. */
+        auto const_value_of = [&](IrValueId v, uint64_t &out_k) -> bool {
+            if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
+            if (fn.values[v].is_const) { out_k = fn.values[v].const_val; return true; }
+            /* Buscar la CONST que produjo v. */
+            for (const auto &b : fn.blocks)
+                for (const auto &in : b.instrs)
+                    if (in.dst == v && in.op == IrOp::CONST) { out_k = in.imm; return true; }
+            return false;
+        };
+
+        /* Pasada A: localizar field-addrs derivadas de obj + loads directos. */
+        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
+            const auto &b = fn.blocks[bi];
+            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
+                const auto &in = b.instrs[ii];
+                bool uses_obj = false;
+                for (auto v : in.operands) if (v == obj) { uses_obj = true; break; }
+                if (!uses_obj) continue;
+
+                if (in.op == IrOp::ADD && in.operands.size() == 2
+                 && in.dst != IR_NO_VALUE) {
+                    /* `add obj, Kconst` o `add Kconst, obj`. */
+                    IrValueId other = (in.operands[0] == obj) ? in.operands[1]
+                                                              : in.operands[0];
+                    /* Ambos operandos obj? raro -> abortar. */
+                    if (in.operands[0] == obj && in.operands[1] == obj) {
+                        ok = false; use_reason = "obj en ambos operandos de add"; break;
+                    }
+                    uint64_t k;
+                    if (!const_value_of(other, k)) {
+                        ok = false; use_reason = "field-addr con offset no-const"; break;
+                    }
+                    fieldaddr_off[in.dst] = static_cast<uint32_t>(k);
+                    dead_addr.push_back({bi, ii});
+                } else if (in.op == IrOp::LOAD && !in.operands.empty()
+                        && in.operands[0] == obj) {
+                    /* load directo de obj -> offset 0. */
+                    loads.push_back({bi, ii, 0});
+                } else {
+                    /* obj usado de forma no soportada -> abortar el sitio. */
+                    ok = false;
+                    use_reason = "obj usado fuera de field-read (CMP/callvirt/store-val/GEP/...)";
+                    break;
+                }
+            }
+        }
+        if (!ok) { diag(site, use_reason); continue; }
+
+        /* Pasada B: cada field-addr solo puede usarse en LOADs. */
+        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
+            const auto &b = fn.blocks[bi];
+            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
+                const auto &in = b.instrs[ii];
+                for (auto v : in.operands) {
+                    auto it = fieldaddr_off.find(v);
+                    if (it == fieldaddr_off.end()) continue;
+                    /* Esta instr usa una field-addr. */
+                    if (in.op == IrOp::LOAD && !in.operands.empty()
+                     && in.operands[0] == v) {
+                        loads.push_back({bi, ii, it->second});
+                    } else {
+                        /* STORE u otra op sobre la field-addr -> abortar. */
+                        ok = false;
+                        use_reason = (in.op == IrOp::STORE)
+                            ? "field-write tras ctor (necesita versioning)"
+                            : "field-addr usado por op no-LOAD";
+                    }
+                    break;
+                }
+                if (!ok) break;
+            }
+        }
+        if (!ok) { diag(site, use_reason); continue; }
+
+        /* Resolver cada load contra el modelo + validar que la reescritura
+         * es posible ANTES de mutar nada (transaccional). */
+        struct PendingRewrite { size_t bi; size_t ii; const SrFieldInit *fi; };
+        std::vector<PendingRewrite> pending;
+        for (const auto &lr : loads) {
+            const SrFieldInit *fi = model->find(lr.off);
+            if (!fi) {
+                ok = false;
+                use_reason = "load de campo no inicializado por el ctor (default-0)";
+                break;
+            }
+            /* Validar la reescritura SIN mutar (apply=false). */
+            IrInstr &probe = fn.blocks[lr.bi].instrs[lr.ii];
+            if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
+                ok = false;
+                use_reason = "tipo de campo no soportado (float/ptr/handle/widening)";
+                break;
+            }
+            pending.push_back({lr.bi, lr.ii, fi});
+        }
+        if (!ok) { diag(site, use_reason); continue; }
+
+        /* --- Aplicar (todas las precondiciones cumplidas). --- */
+        for (const auto &pr : pending) {
+            IrInstr &ld = fn.blocks[pr.bi].instrs[pr.ii];
+            sr_rewrite_load(ld, *pr.fi, args, fn, /*apply=*/true);
+        }
+        /* NOPear las field-addr muertas. */
+        for (const auto &da : dead_addr) {
+            IrInstr &ai = fn.blocks[da.first].instrs[da.second];
+            ai.op = IrOp::NOP; ai.operands.clear();
+            ai.dst = IR_NO_VALUE; ai.func_name.clear();
+        }
+        /* NOPear el CALL del alloc (elimina el newobj/ctor: seguro porque el
+         * objeto no escapa y el ctor es un inicializador trivial sin efectos
+         * observables mas alla de los campos). */
+        call_ins.op = IrOp::NOP; call_ins.operands.clear();
+        call_ins.dst = IR_NO_VALUE; call_ins.func_name.clear();
+
+        changed = true;
+    }
+
+    /* Compactar NOPs introducidos (mismo patron que promote_local_raw_alloc). */
+    if (changed) {
+        for (auto &blk : fn.blocks) {
+            auto &is = blk.instrs;
+            is.erase(std::remove_if(is.begin(), is.end(), [](const IrInstr &i) {
+                return i.op == IrOp::NOP && i.operands.empty()
+                    && i.dst == IR_NO_VALUE;
             }), is.end());
         }
     }
@@ -4640,9 +5440,37 @@ void ir_optimize(IrModule &mod, OptLevel level) {
         if (level >= OptLevel::O2) {
             if (ir_pass_devirt_monomorphic(mod)) any = true;
             if (ir_pass_inline(mod))             any = true;
+
+            /* Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+             * Corre DESPUES del inline (que junta el alloc + los field-access
+             * en la misma fn).  Sus reescrituras (loads -> trunc/mov/const)
+             * las limpia el const_fold/dce de la siguiente iteracion del
+             * fix-point; el alloc GC desaparece por completo.
+             * Skippable via VESTA_NO_ESCAPE_SCALAR=1 para A/B testing. */
+            {
+                const char *skip = std::getenv("VESTA_NO_ESCAPE_SCALAR");
+                const bool do_sr = !(skip && skip[0] != '\0' && skip[0] != '0');
+                if (do_sr) {
+                    for (auto &fn : mod.functions) {
+                        if (fn.is_native) continue;
+                        if (ir_pass_scalar_replace_gc(fn, mod)) any = true;
+                    }
+                }
+            }
         }
 
         if (!any) break; // punto fijo alcanzado
+    }
+
+    /* Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.  Corre
+     * tras el fix-point (con el IR ya inlineado + optimizado, que es donde el
+     * escape es visible: el alloc + los field-access estan en la misma fn).
+     * No transforma el IR; solo loguea bajo VESTA_ESCAPE_DEBUG. */
+    if (level >= OptLevel::O2) {
+        for (auto &fn : mod.functions) {
+            if (fn.is_native) continue;
+            ir_pass_escape_detect_gc(fn);
+        }
     }
 
     /* Final pass: list scheduling para ILP.  Una sola pasada despues del

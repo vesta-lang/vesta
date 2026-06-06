@@ -194,6 +194,33 @@ bool ir_pass_promote_local_allocas(IrFunction &fn);
 bool ir_pass_promote_local_raw_alloc(IrFunction &fn);
 
 /**
+ * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
+ *
+ * Analiza los `call @__new_X(...)` de @p fn y determina cuales NO escapan
+ * del frame (su host_ptr solo se usa para leer/escribir campos locales).
+ * Si la env var VESTA_ESCAPE_DEBUG esta activa, loguea cada sitio con su
+ * veredicto.  NO transforma el IR (siempre devuelve false); existe para
+ * validar el analisis de escape con cero riesgo antes de habilitar el
+ * scalar replacement.
+ *
+ * @return siempre false (no modifica el IR).
+ */
+bool ir_pass_escape_detect_gc(IrFunction &fn);
+
+/**
+ * @brief Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
+ *
+ * Para cada `new X()` (call @__new_X) que no escapa del frame y cuyo ctor es
+ * un inicializador trivial de campos, elimina el alloc GC y reemplaza los
+ * field-reads por los valores de construccion (args del new o constantes).
+ * Conservador: solo transforma sitios donde TODAS las precondiciones de
+ * seguridad se cumplen.  Necesita el @p mod para resolver los ctores.
+ *
+ * @return true si se transformo algun sitio.
+ */
+bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
+
+/**
  * @brief Pase de simplificacion algebraica + folding de cast constantes
  *        + simplificacion de phis triviales.
  *
