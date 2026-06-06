@@ -1907,6 +1907,29 @@ bool sr_mem2reg_object(IrFunction &fn,
         }
     }
 
+    /* 2.5) Deteccion de loops (headers + bloques in-loop) desde back-edges.
+     * Necesario para el COST-MODEL: un PHI in-loop que NO esta en un loop
+     * header (= escritura condicional de campo dentro de un loop) anyade copies
+     * en el path no-tomado por iteracion.  Medido: regresiona el interp (16
+     * registros VM -> presion + copies).  Los PHIs de loop-header (acumuladores
+     * incondicionales) y los if-merge FUERA de loops (coste unico) SI son win. */
+    std::vector<uint8_t> is_loop_header(N, 0), in_loop(N, 0);
+    for (IrBlockId b = 0; b < N; ++b) {
+        for (IrBlockId h : dom.succs[b]) {
+            if (!dom.dominates(h, b)) continue;   /* back-edge b->h */
+            is_loop_header[h] = 1; in_loop[h] = 1;
+            std::vector<IrBlockId> stk;
+            if (!in_loop[b]) { in_loop[b] = 1; stk.push_back(b); }
+            while (!stk.empty()) {
+                IrBlockId x = stk.back(); stk.pop_back();
+                if (x == h) continue;
+                for (IrBlockId p : dom.preds[x]) {
+                    if (!in_loop[p]) { in_loop[p] = 1; if (p != h) stk.push_back(p); }
+                }
+            }
+        }
+    }
+
     /* 3) Insercion de PHIs: por cada offset, iterated dominance frontier de los
      * def-blocks (= {call_bi} U store_blocks).  Crea SSA values para los phis. */
     /* phi_value[offset][block] = SSA value del phi (IR_NO_VALUE = no hay). */
@@ -1915,6 +1938,9 @@ bool sr_mem2reg_object(IrFunction &fn,
     auto pkey = [](uint32_t off, IrBlockId b) -> uint64_t {
         return ((uint64_t)off << 32) | (uint64_t)b;
     };
+    /* COST-MODEL (default-on): permitir VESTA_ESCAPE_MEM2REG_FORCE para saltarlo
+     * y promover siempre (util para medir / casos JIT-only). */
+    const bool force = env_flag_on("VESTA_ESCAPE_MEM2REG_FORCE");
     for (uint32_t off : offsets) {
         std::vector<IrBlockId> worklist;
         std::unordered_set<IrBlockId> on_work, has_phi;
@@ -1935,6 +1961,12 @@ bool sr_mem2reg_object(IrFunction &fn,
                  * merge no-dominado no puede leer el campo (violaria SSA), asi
                  * que su phi seria muerto; lo omitimos. */
                 if (!dom.dominates((IrBlockId)call_bi, f)) continue;
+                /* COST-MODEL: if-merge DENTRO de un loop = escritura condicional
+                 * en el loop -> pessimiza el interp.  Bail (a menos que FORCE). */
+                if (!force && in_loop[f] && !is_loop_header[f]) {
+                    reason = "escritura condicional de campo en loop (cost-model)";
+                    return false;
+                }
                 has_phi.insert(f);
                 /* Crear el SSA value del phi. */
                 IrValue nv; nv.id = (IrValueId)fn.values.size(); nv.type = field_type[off];
@@ -2338,8 +2370,16 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
          *     store-to-load forwarding, elimina los stores y borra el alloc.
          *
          * B.2 cross-block / loop -> SROA/mem2reg: promueve los campos a SSA con
-         *     insercion de PHI (Cytron) + renaming.  Activo por defecto;
-         *     VESTA_NO_ESCAPE_MEM2REG=1 lo desactiva (A/B testing). */
+         *     insercion de PHI (Cytron) + renaming.
+         *
+         *     Default-on con COST-MODEL: el propio @c sr_mem2reg_object baila si
+         *     promover anyadiria un if-merge PHI DENTRO de un loop (= escritura
+         *     condicional de campo en el loop), que pessimiza el interp (16
+         *     registros VM -> copies + presion).  Los casos que SI promueve son
+         *     win (acumuladores incondicionales en loop: +14..41% interp; cross-
+         *     block fuera de loops: coste unico + elimina el alloc).
+         *     VESTA_NO_ESCAPE_MEM2REG=1 lo desactiva entero;
+         *     VESTA_ESCAPE_MEM2REG_FORCE=1 ignora el cost-model. */
         if (!single_block) {
             static const bool mem2reg_off = env_flag_on("VESTA_NO_ESCAPE_MEM2REG");
             if (!mem2reg_off) {
