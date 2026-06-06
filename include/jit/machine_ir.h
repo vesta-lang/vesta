@@ -427,7 +427,21 @@ namespace jit {
          * call-position (clobber RAX/RDX -> live-across van a callee-saved). */
         DIVMOD_V    = 79,
 
-        COUNT       = 80
+        /* Pseudo (callback-ABI 2026-06-06): carga el @c ProcessVM* del
+         * proceso actual en @c dst.reg (siempre RBX).  Encapsula la
+         * decision TLS-direct-vs-call que el thunk hacia a mano:
+         *   - src1.value != -1: @c mov dst, gs:[src1.value]  (TLS-direct
+         *     Win64; src1.value = 0x1480 + tls_idx*8).
+         *   - src1.value == -1: @c mov rax, imm64(get_proc) ; call rax ;
+         *     mov dst, rax  (fallback portable; la direccion de
+         *     @c get_current_executing_process vive en
+         *     @c imm64_pool[src2.value]).
+         * El selector resuelve TLS/addr (puede llamar al runtime) y los
+         * hornea aqui; el encoder solo emite bytes -> sin dependencia
+         * del runtime en el encoder. */
+        LOAD_PROC   = 80,
+
+        COUNT       = 81
     };
 
     /* ===================================================================== */
@@ -498,6 +512,24 @@ namespace jit {
         static MInstr make_call_abs(uint32_t imm64_idx) noexcept {
             MInstr i; i.op = MOp::CALL_ABS;
             i.src1 = MOperand::make_imm64_idx(imm64_idx);
+            return i;
+        }
+
+        /**
+         * @brief Pseudo LOAD_PROC: carga @c ProcessVM* en @p dst (RBX).
+         * @param dst            Registro destino (RBX por convencion).
+         * @param tls_gs_disp    Desplazamiento @c gs:[disp] para TLS-direct
+         *                       (Win64), o -1 para usar el fallback por call.
+         * @param getproc_pool_idx  Indice en @c imm64_pool de la direccion de
+         *                       @c get_current_executing_process (usado solo
+         *                       en el fallback).
+         */
+        static MInstr make_load_proc(MReg dst, int32_t tls_gs_disp,
+                                     uint32_t getproc_pool_idx) noexcept {
+            MInstr i; i.op = MOp::LOAD_PROC;
+            i.dst  = MOperand::make_reg(dst);
+            i.src1 = MOperand::make_imm32(tls_gs_disp);
+            i.src2 = MOperand::make_imm64_idx(getproc_pool_idx);
             return i;
         }
 
