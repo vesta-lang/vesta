@@ -317,6 +317,44 @@ namespace jit {
         }
 
         /**
+         * @brief Magic-number para division signed por constante de 32 bits.
+         *
+         * Algoritmo de Hacker's Delight (figura 10-1): dado el divisor @p d,
+         * calcula el multiplicador @p M (int32) y el shift @p s tales que
+         *   q = mulhs(M, n) [+ correccion] >> s [+ sign-bit]
+         * equivale a @c n/d (signed) para todo n de 32 bits.  El @c mod se
+         * deriva como @c n - q*d.  Solo valido para @c |d| >= 2 no potencia
+         * de 2 (esos casos los maneja IDIV / un shift).
+         */
+        struct DivMagicS32 { int32_t M; int s; };
+        inline DivMagicS32 compute_magic_s32(int32_t d) noexcept {
+            const uint32_t two31 = 0x80000000u;
+            uint32_t ad  = (d < 0) ? static_cast<uint32_t>(-static_cast<int64_t>(d))
+                                   : static_cast<uint32_t>(d);
+            uint32_t t   = two31 + (static_cast<uint32_t>(d) >> 31);
+            uint32_t anc = t - 1 - t % ad;       // |nc| (nc = ...)
+            int      p   = 31;
+            uint32_t q1  = two31 / anc;
+            uint32_t r1  = two31 - q1 * anc;
+            uint32_t q2  = two31 / ad;
+            uint32_t r2  = two31 - q2 * ad;
+            uint32_t delta;
+            do {
+                ++p;
+                q1 = 2 * q1; r1 = 2 * r1;
+                if (r1 >= anc) { ++q1; r1 -= anc; }
+                q2 = 2 * q2; r2 = 2 * r2;
+                if (r2 >= ad) { ++q2; r2 -= ad; }
+                delta = ad - r2;
+            } while (q1 < delta || (q1 == delta && r1 == 0));
+            DivMagicS32 m;
+            m.M = static_cast<int32_t>(q2 + 1);
+            if (d < 0) m.M = -m.M;
+            m.s = p - 32;
+            return m;
+        }
+
+        /**
          * @brief callback-ABI: true si @p op es "hoja-segura", es decir,
          *        NO escribe @c proc->registers.regs[0..15] ni reentra a la
          *        ejecucion de la VM.
@@ -1718,6 +1756,92 @@ namespace jit {
                     case IrOp::DIV:
                     case IrOp::MOD: {
                         if (ins.operands.size() < 2) break;
+
+                        /* E (strength-reduction): div/mod SIGNED i32 por una
+                         * CONSTANTE |d|>=2 no potencia-de-2 -> magic-number
+                         * mul-shift (Hacker's Delight) en vez de IDIV (~20-30
+                         * cyc).  JIT-only (el interp mantiene su mods/divs).
+                         * Todo en regs de 64 bits con sign-extension via shl/sar
+                         * (la i32 cabe sin overflow en el producto de 64b), asi
+                         * que solo usa imul de 2/3 operandos (ya en el encoder).
+                         * Potencia-de-2 y |d|<2 / unsigned / i64 caen al IDIV. */
+                        static const bool sr_off = (std::getenv("VESTA_NO_SR") != nullptr);
+                        if (!sr_off
+                         && ir_type_size_bytes(ins.type) == 4
+                         && ir_type_is_signed_int(ins.type)
+                         && ins.operands[1] < ir_fn.values.size()
+                         && ir_fn.values[ins.operands[1]].is_const) {
+                            const int32_t d = static_cast<int32_t>(
+                                ir_fn.values[ins.operands[1]].const_val);
+                            const uint32_t ad = (d < 0)
+                                ? static_cast<uint32_t>(-static_cast<int64_t>(d))
+                                : static_cast<uint32_t>(d);
+                            const bool is_pow2 = ad != 0 && (ad & (ad - 1)) == 0;
+                            if (ad >= 2 && !is_pow2) {
+                                const DivMagicS32 mg = compute_magic_s32(d);
+                                /* n -> RAX, sign-extend a 64b (shl/sar 32). */
+                                load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::RAX);
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SHL,
+                                    MOperand::make_reg(MReg::RAX), MOperand::make_imm32(32)));
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SAR,
+                                    MOperand::make_reg(MReg::RAX), MOperand::make_imm32(32)));
+                                /* RCX = n (para correccion + el mod). */
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RCX), MOperand::make_reg(MReg::RAX)));
+                                /* RAX = n * M  (imul reg,reg,imm32 sign-extiende M
+                                 * a 64b; el producto |n*M| < 2^62 cabe en 64b). */
+                                {
+                                    MInstr im;
+                                    im.op   = MOp::IMUL;
+                                    im.dst  = MOperand::make_reg(MReg::RAX);
+                                    im.src1 = MOperand::make_reg(MReg::RAX);
+                                    im.src2 = MOperand::make_imm32(mg.M);
+                                    mf.blocks.back().instrs.push_back(im);
+                                }
+                                /* RAX = mulhs(M,n) = high32(n*M)  (sar 32). */
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SAR,
+                                    MOperand::make_reg(MReg::RAX), MOperand::make_imm32(32)));
+                                /* Correccion HD: si M<0 (d>0) o M>0 (d<0). */
+                                if (d > 0 && mg.M < 0) {
+                                    mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::ADD,
+                                        MOperand::make_reg(MReg::RAX), MOperand::make_reg(MReg::RCX)));
+                                } else if (d < 0 && mg.M > 0) {
+                                    mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SUB,
+                                        MOperand::make_reg(MReg::RAX), MOperand::make_reg(MReg::RCX)));
+                                }
+                                /* q >>= s (arithmetic). */
+                                if (mg.s > 0) {
+                                    mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SAR,
+                                        MOperand::make_reg(MReg::RAX), MOperand::make_imm32(mg.s)));
+                                }
+                                /* q += sign-bit: RDX = (uint64)RAX >> 63 (RAX esta
+                                 * sign-extendido tras el sar, asi bit63==bit31 del
+                                 * resultado i32); add RAX, RDX. */
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_reg(MReg::RDX), MOperand::make_reg(MReg::RAX)));
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SHR,
+                                    MOperand::make_reg(MReg::RDX), MOperand::make_imm32(63)));
+                                mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::ADD,
+                                    MOperand::make_reg(MReg::RAX), MOperand::make_reg(MReg::RDX)));
+                                /* RAX = q (cociente i32 en low 32, sign-ext). */
+                                if (ins.op == IrOp::DIV) {
+                                    store_op(mf, ins.dst, MReg::RAX);
+                                } else {
+                                    /* r = n - q*d:  imul RAX, RAX, d; sub RCX, RAX. */
+                                    MInstr im2;
+                                    im2.op   = MOp::IMUL;
+                                    im2.dst  = MOperand::make_reg(MReg::RAX);
+                                    im2.src1 = MOperand::make_reg(MReg::RAX);
+                                    im2.src2 = MOperand::make_imm32(d);
+                                    mf.blocks.back().instrs.push_back(im2);
+                                    mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::SUB,
+                                        MOperand::make_reg(MReg::RCX), MOperand::make_reg(MReg::RAX)));
+                                    store_op(mf, ins.dst, MReg::RCX);
+                                }
+                                break;
+                            }
+                        }
+
                         /* x86 IDIV usa RDX:RAX dividendo / src -> RAX cociente, RDX resto.
                          * Setup:
                          *   load_op(arg0, RAX)
