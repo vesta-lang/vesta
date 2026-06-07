@@ -13,9 +13,25 @@
 
 #include "jit/regalloc_rewrite.h"
 
+#include <cstdlib>
+
 namespace jit {
 
     namespace {
+
+        /** @brief Diagnostico/A-B: VESTA_JIT_NO_FRAMELESS=1 fuerza el frame
+         *  completo (push rbp / mov rbp,rsp / pop rbp) incluso en hojas que
+         *  calificarian para frameless.  Sirve para medir el efecto del
+         *  frameless o aislar un posible bug del codegen del prologo/epilogo
+         *  (el codegen mas safety-critical: un fallo aqui corrompe el heap via
+         *  el precise stack-scan de la GC). */
+        bool jit_no_frameless() noexcept {
+            static const bool off = []{
+                const char *v = std::getenv("VESTA_JIT_NO_FRAMELESS");
+                return v && v[0] != '\0' && v[0] != '0';
+            }();
+            return off;
+        }
 
         /** @brief True si la ALU binaria @p op es conmutativa. */
         bool is_commutative(MOp op) noexcept {
@@ -44,6 +60,7 @@ namespace jit {
             const RegAlloc      &ra;
             const TargetRegInfo &tri;
             bool     vm_abi = false;  ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
+            bool     no_frame = false;///< hoja frameless: sin push/mov rbp ni sub rsp
             uint32_t k = 0;          ///< numero de callee-saved asignados
             uint32_t total_saved = 0;///< callee-saved + (vm_abi ? 1 (rbx) : 0)
             int32_t  spill_bytes = 0;///< tamano del area de spills (alineado)
@@ -59,22 +76,40 @@ namespace jit {
                 : ra(r), tri(t), vm_abi(abi == AbiKind::VM) {
                 k = static_cast<uint32_t>(ra.callee_saved_used.size());
                 total_saved = k + (vm_abi ? 1u : 0u);  // +1 por el push rbx
+                /* Hoja frameless: una funcion sin CALLs que no spillea ni
+                 * reserva allocas no necesita frame pointer.  RBP solo
+                 * direcciona spill slots y el area de allocas; sin ellos se
+                 * omite todo el frame (push rbp / mov rbp,rsp / sub rsp / lea /
+                 * pop rbp).  Es SEGURO respecto a la GC: el precise stack-scan
+                 * camina la cadena RBP, pero solo en un SAFEPOINT, y una hoja
+                 * no tiene safepoint (no llama a nada) -> ningun frame de hoja
+                 * esta vivo cuando corre la GC.  Aun en VM_ABI se conserva el
+                 * push/pop de RBX (callee-saved del host que trae ProcessVM*) y
+                 * los callee-saved usados; lo unico que desaparece es RBP. */
+                no_frame = !has_calls && ra.num_spill_slots == 0u &&
+                           alloca_total == 0u && !jit_no_frameless();
                 /* Las allocas viven debajo de los spill slots. */
                 alloca_base = 8u * total_saved + 8u * ra.num_spill_slots;
                 spill_bytes = static_cast<int32_t>(
                     8u * ra.num_spill_slots + alloca_total);
+                if (!no_frame) {
 #if defined(_WIN32)
-                /* Win64: si hay CALLs, reservar 32 bytes de shadow/home space
-                 * en el FONDO del frame (debajo de los spill slots) para que
-                 * el callee no pise nuestros datos. */
-                if (has_calls) spill_bytes += 32;
+                    /* Win64: si hay CALLs, reservar 32 bytes de shadow/home
+                     * space en el FONDO del frame (debajo de los spill slots)
+                     * para que el callee no pise nuestros datos. */
+                    if (has_calls) spill_bytes += 32;
 #else
-                (void)has_calls;
+                    (void)has_calls;
 #endif
-                /* Alinear (8*total_saved + spill_bytes) a 16 para mantener el
-                 * stack 16-aligned en CALLs internos. */
-                if (((8u * total_saved) + static_cast<uint32_t>(spill_bytes)) % 16u != 0u)
-                    spill_bytes += 8;
+                    /* Alinear (8*total_saved + spill_bytes) a 16 para mantener
+                     * el stack 16-aligned en CALLs internos. */
+                    if (((8u * total_saved) +
+                         static_cast<uint32_t>(spill_bytes)) % 16u != 0u)
+                        spill_bytes += 8;
+                }
+                /* Frameless: spill_bytes queda en 0 (no hay spills ni allocas) y
+                 * no se alinea a 16 ni se reserva shadow space porque no hay
+                 * CALLs internos. */
                 const auto &sc = tri.scratch[static_cast<size_t>(RegClass::GP)];
                 if (sc.size() >= 1) scr0 = static_cast<MReg>(sc[0]);
                 if (sc.size() >= 2) scr1 = static_cast<MReg>(sc[1]);
@@ -171,8 +206,11 @@ namespace jit {
             }
 
             void emit_prologue(std::vector<MInstr> &out) const {
-                out.push_back(push(MReg::RBP));
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RBP), reg(MReg::RSP)));
+                if (!no_frame) {
+                    out.push_back(push(MReg::RBP));
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(MReg::RBP),
+                                                     reg(MReg::RSP)));
+                }
                 if (vm_abi) {
                     /* Salvar RBX (callee-saved del host) y cargarlo con el
                      * ProcessVM* que llega en el primer arg. */
@@ -188,6 +226,16 @@ namespace jit {
             }
 
             void emit_epilogue(std::vector<MInstr> &out) const {
+                if (no_frame) {
+                    /* Frameless: rsp ya apunta justo encima de los registros
+                     * salvados (no hubo push rbp ni sub rsp).  Solo se deshacen
+                     * los push de callee-saved y RBX en orden inverso; el ret
+                     * encuentra la return address exactamente. */
+                    for (size_t i = ra.callee_saved_used.size(); i-- > 0;)
+                        out.push_back(pop(static_cast<MReg>(ra.callee_saved_used[i])));
+                    if (vm_abi) out.push_back(pop(MReg::RBX));
+                    return;
+                }
                 /* lea rsp, [rbp - 8*total_saved] -> deshace el sub del frame y
                  * apunta rsp al ultimo registro salvado. */
                 out.push_back(MInstr::make_unary(
