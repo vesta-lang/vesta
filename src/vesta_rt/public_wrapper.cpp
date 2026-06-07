@@ -650,6 +650,81 @@ uint64_t vrt_callm(vrt_proc *proc, uint8_t *obj_payload, void *method) {
     return vrt_run_method_in_interp(p, mi);
 }
 
+uint64_t vrt_callitf(vrt_proc *proc, uint8_t *obj_payload, uint64_t params_addr,
+                     uint64_t ic_slot_addr) {
+    if (!proc || !obj_payload) {
+        if (proc) {
+            runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
+                "callitf: proc u objeto nulo");
+        }
+        return 0;
+    }
+    runtime::ProcessVM *p = as_proc(proc);
+
+    /* Leer el ItfCallParams (32 bytes) de vm_mem.  Mismo layout que
+     * @c ItfCallParamsLayout en exec_instruction_oop.cpp / el frontend. */
+    struct ItfP {
+        uint64_t iface_name_addr; uint32_t iface_name_len; uint32_t method_index;
+        uint64_t method_name_addr; uint32_t method_name_len; uint32_t count;
+    } pr;
+    p->vm_mem.read_bytes(params_addr, &pr, sizeof(pr));
+
+    auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
+
+    /* Resolver la interfaz por nombre. */
+    char ibuf[256];
+    uint32_t ilen = pr.iface_name_len < 255 ? pr.iface_name_len : 255;
+    if (ilen > 0) p->vm_mem.read_bytes(pr.iface_name_addr, ibuf, ilen);
+    loader::ClassInfo *iface = reg.find_class(std::string(ibuf, ilen));
+    if (!iface) {
+        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+            "callitf: interfaz no encontrada en el registry");
+        return 0;
+    }
+    /* F3b: poblar el IC slot del call site con el iface_ptr resuelto, para que
+     * los dispatch siguientes tomen el scan inline (saltando este wrapper). */
+    if (ic_slot_addr != 0) {
+        *reinterpret_cast<uint64_t *>(ic_slot_addr) = reinterpret_cast<uint64_t>(iface);
+    }
+
+    auto *hdr = reinterpret_cast<loader::ObjectHeader *>(obj_payload);
+    loader::ClassInfo *cls = hdr->class_ptr;
+    if (!cls) {
+        runtime::throw_fatal(p, VESTA_FATAL_NULL_POINTER,
+            "callitf: objeto sin class_ptr");
+        return 0;
+    }
+
+    /* Resolver el metodo concreto via la itable (cold: por nombre). */
+    char mbuf[256];
+    uint32_t mlen = pr.method_name_len < 255 ? pr.method_name_len : 255;
+    if (mlen > 0) p->vm_mem.read_bytes(pr.method_name_addr, mbuf, mlen);
+    loader::MethodInfo *mi = reg.resolve_itable_method(cls, iface, pr.count,
+                                                       pr.method_index, mbuf, mlen);
+    if (!mi || mi->code_vaddr == 0) {
+        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+            "callitf: metodo de interfaz sin implementacion");
+        return 0;
+    }
+
+    /* Dispatch identico a vrt_callm: si el metodo no esta JIT-compilado,
+     * intentar on-demand; luego enter_jit o mini-interp sincronico.
+     * (AOP: igual que vrt_callm, el advice_chain se maneja en el path interp;
+     * los metodos con advices no se inline-an en el JIT -- ver F3b.) */
+    if (mi->jit_code == nullptr) {
+        const uint32_t saved = mi->invocation_count;
+        mi->invocation_count = jit::g_jit_threshold;
+        jit::maybe_compile_method(p, mi);
+        if (mi->jit_code == nullptr) mi->invocation_count = saved;
+    }
+    p->registers.regs[1].qword(reinterpret_cast<uint64_t>(obj_payload));
+    if (mi->jit_code != nullptr) {
+        jit::JitFn fn = reinterpret_cast<jit::JitFn>(mi->jit_code);
+        return jit::enter_jit(fn, proc);
+    }
+    return vrt_run_method_in_interp(p, mi);
+}
+
 uint64_t vrt_callclosure(vrt_proc *proc, uint64_t fn_addr, uint64_t env_addr) {
     if (!proc || fn_addr == 0) {
         if (proc) {

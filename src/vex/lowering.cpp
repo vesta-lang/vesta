@@ -19324,105 +19324,132 @@ namespace vex {
             // Marcar obj como host_ptr (instancia GC-derivada).
             fn_->values[obj].is_host_ptr = true;
 
-            // 1. Cargar ClassInfo* del objeto: load *(obj + 0).
-            const ir::IrValueId v_cls = fn_->new_value(ir::IrType::I64); {
-                ir::IrInstr ld{};
-                ld.op          = ir::IrOp::LOAD;
-                ld.type        = ir::IrType::I64;
-                ld.dst         = v_cls;
-                ld.operands    = {obj};
-                ld.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ld));
-            }
+            // Dispatch de interfaz via ITABLE (en vez de findmethod+callm):
+            // construimos un @c ItfCallParams (32 bytes) en stack con el
+            // nombre de la interfaz, el nombre del metodo, el indice del metodo
+            // (posicion en la declaracion de la interfaz = vtable_index) y el
+            // numero de metodos de la interfaz, y emitimos un solo CALLITF.
+            //   +0  iface_name_addr (8)
+            //   +8  iface_name_len (lo32) | method_index (hi32)
+            //   +16 method_name_addr (8)
+            //   +24 method_name_len (lo32) | count (hi32)
+            // El interp despacha via la itable lazy de la clase concreta
+            // (indice O(1) tras el warmup); el JIT inlinea el scan de itables.
+            const std::string &iface_name = bt.struct_name; // == lay.name
+            const std::string &method_name = mtd->name;
+            const uint64_t iface_idx  = intern_class_name(*out_mod_, iface_name);
+            const uint32_t iface_len  = static_cast<uint32_t>(iface_name.size());
+            const uint64_t method_idx_str = intern_class_name(*out_mod_, method_name);
+            const uint32_t method_len = static_cast<uint32_t>(method_name.size());
+            const uint32_t method_index = mtd->vtable_index;
+            const uint32_t mcount       = static_cast<uint32_t>(lay.methods.size());
 
-            // 2. Construir FindMethodParams (24 bytes) en stack.
-            const uint64_t name_idx = intern_class_name(*out_mod_, mtd->name);
-            const uint32_t name_len = static_cast<uint32_t>(mtd->name.size());
-
-            const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR); {
-                ir::IrInstr al{};
-                al.op          = ir::IrOp::ALLOCA;
-                al.type        = ir::IrType::I8;
-                al.imm         = 24;
-                al.dst         = v_buf;
-                al.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(al));
-            }
-            // [+0] class_ptr.
+            // Buffer de ItfCallParams (32 bytes) construido UNA VEZ en el entry
+            // block (block 0) de la funcion -- su contenido es 100%
+            // loop-invariante (nombres + indices constantes).  El @c callitf en
+            // el loop solo LEE el buffer.  Critico para correctness:
+            //   (1) un ALLOCA por dispatch creceria el VM stack en loops
+            //       calientes (pic_real 3M iter desbordaba el stack);
+            //   (2) construir el struct DENTRO del loop hacia que el LICM/
+            //       regalloc hoisteara un CONST a un reg de arg (r1) que el
+            //       marshalling del call clobbeaba -> v_buf corrupto en iter 2+.
+            // Construir en el entry (dominador de todo) evita ambos.  Cada call
+            // site tiene su propio buffer (params distintos); como el call site
+            // se baja UNA vez, son pocos buffers (1 por dispatch textual).
+            //
+            // Insertamos las instrucciones de construccion en block 0 ANTES de
+            // su terminador (o al final si aun no esta terminado).
+            std::vector<ir::IrInstr> setup;
+            const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
             {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8; al.imm = 32;
+                al.dst = v_buf; al.source_line = e->loc.line;
+                setup.push_back(std::move(al));
+            }
+            // Helper local: STORE i64 @c val a @c v_buf + @c off (instrs -> setup).
+            auto setup_store_at = [&](uint64_t off, ir::IrValueId val) {
+                ir::IrValueId base = v_buf;
+                if (off != 0) {
+                    const ir::IrValueId v_off = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr c{};
+                    c.op = ir::IrOp::CONST; c.type = ir::IrType::I64; c.imm = off;
+                    c.dst = v_off; c.source_line = e->loc.line;
+                    setup.push_back(std::move(c));
+                    base = fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr add{};
+                    add.op = ir::IrOp::ADD; add.type = ir::IrType::I64; add.dst = base;
+                    add.operands = {v_buf, v_off}; add.source_line = e->loc.line;
+                    setup.push_back(std::move(add));
+                }
                 ir::IrInstr st{};
-                st.op          = ir::IrOp::STORE;
-                st.type        = ir::IrType::I64;
-                st.dst         = ir::IR_NO_VALUE;
-                st.operands    = {v_cls, v_buf};
+                st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
+                st.dst = ir::IR_NO_VALUE; st.operands = {val, base};
                 st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
-            }
-            // [+8] name_addr.
-            const ir::IrValueId v_eight = emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_buf8  = fn_->new_value(ir::IrType::PTR); {
-                ir::IrInstr add_8{};
-                add_8.op          = ir::IrOp::ADD;
-                add_8.type        = ir::IrType::I64;
-                add_8.dst         = v_buf8;
-                add_8.operands    = {v_buf, v_eight};
-                add_8.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add_8));
-            }
-            const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR); {
+                setup.push_back(std::move(st));
+            };
+            auto setup_const = [&](uint64_t k) -> ir::IrValueId {
+                const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CONST; c.type = ir::IrType::I64; c.imm = k;
+                c.dst = v; c.source_line = e->loc.line;
+                setup.push_back(std::move(c));
+                return v;
+            };
+            auto setup_str_lit = [&](uint64_t idx) -> ir::IrValueId {
+                const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
                 ir::IrInstr ns{};
-                ns.op          = ir::IrOp::STR_LIT_ADDR;
-                ns.type        = ir::IrType::PTR;
-                ns.dst         = v_name;
-                ns.imm         = name_idx;
-                ns.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ns));
-            } {
-                ir::IrInstr st{};
-                st.op          = ir::IrOp::STORE;
-                st.type        = ir::IrType::I64;
-                st.dst         = ir::IR_NO_VALUE;
-                st.operands    = {v_name, v_buf8};
-                st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
+                ns.op = ir::IrOp::STR_LIT_ADDR; ns.type = ir::IrType::PTR;
+                ns.dst = v; ns.imm = idx; ns.source_line = e->loc.line;
+                setup.push_back(std::move(ns));
+                return v;
+            };
+            // [+0] iface_name_addr ; [+8] iface_len|method_index<<32 ;
+            // [+16] method_name_addr ; [+24] method_len|count<<32.
+            setup_store_at(0, setup_str_lit(iface_idx));
+            setup_store_at(8, setup_const(static_cast<uint64_t>(iface_len)
+                               | (static_cast<uint64_t>(method_index) << 32)));
+            setup_store_at(16, setup_str_lit(method_idx_str));
+            setup_store_at(24, setup_const(static_cast<uint64_t>(method_len)
+                               | (static_cast<uint64_t>(mcount) << 32)));
+            // Splice de las instrucciones de construccion en block 0 antes de
+            // su terminador (op de control de flujo final).  Si block 0 no esta
+            // terminado (dispatch en el propio entry), se anexan al final.
+            {
+                auto &e0 = fn_->blocks[0].instrs;
+                size_t pos = e0.size();
+                if (pos > 0) {
+                    const ir::IrOp last = e0.back().op;
+                    if (last == ir::IrOp::BR || last == ir::IrOp::BR_COND
+                        || last == ir::IrOp::RET || last == ir::IrOp::UNREACHABLE
+                        || last == ir::IrOp::TAILCALL || last == ir::IrOp::RETHROW
+                        || last == ir::IrOp::THROW) {
+                        pos = e0.size() - 1;
+                    }
+                }
+                e0.insert(e0.begin() + pos,
+                          std::make_move_iterator(setup.begin()),
+                          std::make_move_iterator(setup.end()));
             }
-            // [+16] name_len.
-            const ir::IrValueId v_sixteen = emit_const(ir::IrType::I64, 16, e->loc.line);
-            const ir::IrValueId v_buf16   = fn_->new_value(ir::IrType::PTR); {
-                ir::IrInstr add_16{};
-                add_16.op          = ir::IrOp::ADD;
-                add_16.type        = ir::IrType::I64;
-                add_16.dst         = v_buf16;
-                add_16.operands    = {v_buf, v_sixteen};
-                add_16.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(add_16));
-            }
-            const ir::IrValueId v_len = emit_const(ir::IrType::I64,
-                                                   static_cast<uint64_t>(name_len),
-                                                   e->loc.line); {
-                ir::IrInstr st{};
-                st.op          = ir::IrOp::STORE;
-                st.type        = ir::IrType::I64;
-                st.dst         = ir::IR_NO_VALUE;
-                st.operands    = {v_len, v_buf16};
-                st.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(st));
-            }
-            // 3. findmethod via IR op: dst = MethodInfo*.
-            const ir::IrValueId v_method = emit_findmethod(v_buf, e->loc.line);
-            // 4. CALLM: operands[0]=obj, operands[1]=method, [2..]=args.
-            ir::IrInstr cm{};
-            cm.op   = ir::IrOp::CALLM;
-            cm.type = ret_ir;
-            cm.dst  = dst;
-            cm.operands.push_back(obj);
-            cm.operands.push_back(v_method);
-            // SRET: retbuf entre method y args.
+
+            // CALLITF: operands[0]=obj, [1]=params_ptr, [2..]=args (retbuf SRET
+            // como [2] si aplica).  func_name = "iface\x1fmethod", imm packed.
+            ir::IrInstr ci{};
+            ci.op   = ir::IrOp::CALLITF;
+            ci.type = ret_ir;
+            ci.dst  = dst;
+            ci.func_name = iface_name;
+            ci.func_name.push_back('\x1f');
+            ci.func_name += method_name;
+            ci.imm  = (static_cast<uint64_t>(mcount) << 32)
+                    | static_cast<uint64_t>(method_index);
+            ci.operands.push_back(obj);
+            ci.operands.push_back(v_buf);
             if (method_call_sret)
-                cm.operands.push_back(v_method_call_retbuf);
-            for (auto av: arg_vals) cm.operands.push_back(av);
-            cm.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(cm));
+                ci.operands.push_back(v_method_call_retbuf);
+            for (auto av: arg_vals) ci.operands.push_back(av);
+            ci.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ci));
             return visible_dst;
         }
 

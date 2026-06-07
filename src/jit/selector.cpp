@@ -3882,6 +3882,202 @@ namespace jit {
                         break;
                     }
 
+                    /* --------- CALLITF (dispatch de interfaz via itable) --------- */
+                    /* Layout IR: operands[0]=obj, operands[1]=params_ptr (ItfCallParams
+                     * en vm_mem), operands[2..]=args.  F3a: stage args + CALL al
+                     * runtime entry vrt_callitf(proc, obj, params_addr) que resuelve
+                     * la itable + despacha (enter_jit del metodo, o mini-interp).  El
+                     * inline del scan de itables (F3b) eliminara este CALL en el hot
+                     * path. */
+                    case IrOp::CALLITF: {
+                        if (ins.operands.size() < 2) break;
+                        if (opts_.runtime == nullptr || opts_.runtime->callitf == nullptr) {
+                            warn_unsupported(ins.op, ins.source_line, "runtime->callitf null");
+                            unsupported = true;
+                            mf.blocks.back().instrs.push_back({MOp::INT3, 0, 0, 0, {}, {}, {}});
+                            break;
+                        }
+                        const size_t   nargs     = ins.operands.size() > 2
+                                                 ? std::min(ins.operands.size() - 2, size_t(11))
+                                                 : 0;
+                        const int32_t  regs_base = static_cast<int32_t>(VESTA_PROC_REGISTERS_OFFSET);
+
+                        /* Stage args: regs[1]=obj (operands[0]), regs[2..N+1]=args
+                         * (operands[2..]); operands[1] (params_ptr) NO se marshalla
+                         * como arg -- va como arg2 del CALL. */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RBX, regs_base + 8),
+                                MOperand::make_reg(SCRATCH_A)));
+                        for (size_t a = 0; a < nargs; ++a) {
+                            load_op_rematerializable(mf, ir_fn, ins.operands[a + 2], SCRATCH_A);
+                            mf.blocks.back().instrs.push_back(
+                                MInstr::make_unary(MOp::MOV,
+                                    MOperand::make_mem(MReg::RBX,
+                                        regs_base + static_cast<int32_t>((a + 2) * 8)),
+                                    MOperand::make_reg(SCRATCH_A)));
+                        }
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_unary(MOp::MOV,
+                                MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
+                                MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
+
+                        const MLabelId ci_fallback = mf.new_label();
+                        const MLabelId ci_continue = mf.new_label();
+
+                        /* F3b INLINE itable dispatch via IC slot.  El loader
+                         * eager-compila main+callees ANTES de __module_init -> la
+                         * interfaz NO se puede resolver en compile-time.  Un IC
+                         * slot (8B, por call site, init 0) cachea el ClassInfo*
+                         * de la interfaz, poblado por vrt_callitf en el primer
+                         * dispatch (con module_init ya corrido).  Inline: leer
+                         * iface del slot; si 0 -> fallback (resuelve+puebla+
+                         * despacha); si !=0 -> scan de cls->itables + call directo
+                         * a method->jit_code.  method_index = imm & 0xFFFFFFFF. */
+                        uint64_t ic_slot_addr = 0;
+                        if (opts_.reserve_ic_slot) {
+                            ic_slot_addr = opts_.reserve_ic_slot(next_ic_key());
+                        }
+                        const uint32_t method_index =
+                            static_cast<uint32_t>(ins.imm & 0xFFFFFFFFULL);
+                        if (ic_slot_addr != 0) {
+                            const MLabelId ci_scan  = mf.new_label();
+                            const MLabelId ci_found = mf.new_label();
+                            /* R11 = [ic_slot] (iface_ptr cacheado); 0 -> fallback. */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R11),
+                                MOperand::make_imm64_idx(mf.intern_imm64(ic_slot_addr))));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R11),
+                                MOperand::make_mem(MReg::R11, 0)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::R11), MOperand::make_reg(MReg::R11)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            /* obj -> R10; si null -> fallback (throw correcto alli). */
+                            load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::R10);
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::R10), MOperand::make_reg(MReg::R10)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            /* cls = [obj + 0] (class_ptr) */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_mem(MReg::R10, VESTA_OBJ_HDR_CLASS_PTR_OFFSET)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::RCX), MOperand::make_reg(MReg::RCX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            /* RAX = cls->itables (NULL-terminado).  null -> fallback
+                             * (1a vez: la itable aun no esta construida). */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::RCX, VESTA_CLASSINFO_ITABLES_OFFSET)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::RAX), MOperand::make_reg(MReg::RAX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            /* scan: por cada entry (24B): R10 = entry.iface;
+                             * iface==0 -> fallback; iface==R11 -> found; else avanzar. */
+                            mf.blocks.back().instrs.push_back(MInstr::make_label_def(ci_scan));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R10),
+                                MOperand::make_mem(MReg::RAX, VESTA_ITABLE_IFACE_OFFSET)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::R10), MOperand::make_reg(MReg::R10)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::CMP,
+                                MOperand::make_reg(MReg::R10), MOperand::make_reg(MReg::R11)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_found));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::ADD,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_imm32(VESTA_ITABLE_ENTRY_SIZE)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jmp(ci_scan));
+                            /* found: RAX = entry.methods; RCX = methods[idx];
+                             * null -> fallback (rellena); advice_chain -> fallback (AOP);
+                             * jit_code==0 -> fallback (compila); else call directo. */
+                            mf.blocks.back().instrs.push_back(MInstr::make_label_def(ci_found));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::RAX, VESTA_ITABLE_METHODS_OFFSET)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RCX),
+                                MOperand::make_mem(MReg::RAX,
+                                    static_cast<int32_t>(method_index) * 8)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::RCX), MOperand::make_reg(MReg::RCX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::RCX, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::RAX), MOperand::make_reg(MReg::RAX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::NE, ci_fallback));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RAX),
+                                MOperand::make_mem(MReg::RCX, VESTA_METHODINFO_JIT_CODE_OFFSET)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                                MOperand::make_reg(MReg::RAX), MOperand::make_reg(MReg::RAX)));
+                            mf.blocks.back().instrs.push_back(MInstr::make_jcc(MCond::E, ci_fallback));
+                            /* FAST: mov rcx, rbx (proc VM_ABI); call rax (jit_code). */
+                            mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::RCX), MOperand::make_reg(MReg::RBX)));
+                            {
+                                MInstr fast_call;
+                                fast_call.op = MOp::CALL;
+                                fast_call.src1 = MOperand::make_reg(MReg::RAX);
+                                emit_stackmap_for_safepoint(fast_call);
+                                mf.blocks.back().instrs.push_back(fast_call);
+                            }
+                            mf.blocks.back().instrs.push_back(MInstr::make_jmp(ci_continue));
+                        }
+
+                        /* FALLBACK: vrt_callitf(proc, obj_payload, params_addr, ic_slot_addr).
+                         * Alcanzado por fall-through (sin inline) o jmp ci_fallback.
+                         * R10/R11 temporales (caller-saved, no arg regs). */
+                        mf.blocks.back().instrs.push_back(MInstr::make_label_def(ci_fallback));
+                        load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::R10); /* obj */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], MReg::R11); /* params_ptr */
+#if defined(_WIN32)
+                        const MReg ci_arg0 = MReg::RCX;
+                        const MReg ci_arg1 = MReg::RDX;
+                        const MReg ci_arg2 = MReg::R8;
+                        const MReg ci_arg3 = MReg::R9;
+#else
+                        const MReg ci_arg0 = MReg::RDI;
+                        const MReg ci_arg1 = MReg::RSI;
+                        const MReg ci_arg2 = MReg::RDX;
+                        const MReg ci_arg3 = MReg::RCX;
+#endif
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(ci_arg1), MOperand::make_reg(MReg::R10)));
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(ci_arg2), MOperand::make_reg(MReg::R11)));
+                        /* arg3 = ic_slot_addr (imm64, 0 si no hay slot). */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(ci_arg3),
+                            MOperand::make_imm64_idx(mf.intern_imm64(ic_slot_addr))));
+                        /* arg0 = proc (RBX) al final (en Win64 arg0=RCX, evitar
+                         * pisarlo antes de usarlo como fuente). */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(ci_arg0), MOperand::make_reg(MReg::RBX)));
+
+                        const uint64_t ci_fn = reinterpret_cast<uint64_t>(opts_.runtime->callitf);
+                        const uint32_t ci_pool = mf.intern_imm64(ci_fn);
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_imm64_idx(ci_pool)));
+                        MInstr ci_call;
+                        ci_call.op = MOp::CALL;
+                        ci_call.src1 = MOperand::make_reg(MReg::RAX);
+                        emit_stackmap_for_safepoint(ci_call);
+                        mf.blocks.back().instrs.push_back(ci_call);
+
+                        /* continue: ambos paths convergen con resultado en RAX. */
+                        mf.blocks.back().instrs.push_back(MInstr::make_label_def(ci_continue));
+                        if (ins.dst != ir::IR_NO_VALUE) {
+                            store_op(mf, ins.dst, MReg::RAX);
+                        }
+                        break;
+                    }
+
                     /* --------- CALLCLOSURE --------- */
                     /* Layout IR: func_ptr (en ins.func_ptr SSA), operands[0]=env,
                      * operands[1..]=args.  Reusa vrt_callclosure runtime entry. */

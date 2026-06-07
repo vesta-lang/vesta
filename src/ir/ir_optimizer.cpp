@@ -55,6 +55,7 @@ static bool is_side_effecting(IrOp op) {
         // llamadas (pueden lanzar excepciones o modificar estado)
         case IrOp::CALL:    case IrOp::CALLIND: case IrOp::CALLVIRT:
         case IrOp::CALLN:   case IrOp::TAILCALL: case IrOp::CALLM:
+        case IrOp::CALLITF:
         case IrOp::CALLCLOSURE:
         // para C2 (escape analysis + case-splitting);
         // NUNCA eliminar aunque dst sea IR_NO_VALUE.  Sin efecto en codegen
@@ -983,6 +984,7 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
                     case IrOp::CALL:
                     case IrOp::CALLVIRT:
                     case IrOp::CALLM:
+                    case IrOp::CALLITF:
                     case IrOp::CALLIND:
                     case IrOp::CALLCLOSURE:
                     case IrOp::CALLN: {
@@ -3920,7 +3922,8 @@ bool ir_pass_dse(IrFunction &fn) {
                     break;
                 // Side-effects/calls: limpiar (memoria puede cambiar dentro).
                 case IrOp::CALL: case IrOp::CALLN: case IrOp::CALLVIRT:
-                case IrOp::CALLIND: case IrOp::CALLM: case IrOp::CALLCLOSURE:
+                case IrOp::CALLIND: case IrOp::CALLM: case IrOp::CALLITF:
+                case IrOp::CALLCLOSURE:
                 case IrOp::TAILCALL:
                 case IrOp::RAW_ASM:
                 case IrOp::MEMCPY: case IrOp::SETFIELD: case IrOp::ARRAY_STORE:
@@ -5085,7 +5088,8 @@ bool ir_pass_licm(IrFunction &fn) {
                     case IrOp::ARRAY_STORE: case IrOp::STRFINALIZE:
                     case IrOp::RAW_ASM:
                     case IrOp::CALL: case IrOp::CALLN: case IrOp::CALLVIRT:
-                    case IrOp::CALLIND: case IrOp::CALLM: case IrOp::CALLCLOSURE:
+                    case IrOp::CALLIND: case IrOp::CALLM: case IrOp::CALLITF:
+                    case IrOp::CALLCLOSURE:
                     case IrOp::TAILCALL:
                         loop_has_memory_writes = true;
                         break;
@@ -5631,7 +5635,8 @@ bool ir_pass_load_narrow(IrFunction &fn) {
 static bool is_sched_barrier(IrOp op) {
     switch (op) {
         case IrOp::CALL: case IrOp::CALLN: case IrOp::CALLVIRT:
-        case IrOp::CALLIND: case IrOp::CALLM: case IrOp::CALLCLOSURE:
+        case IrOp::CALLIND: case IrOp::CALLM: case IrOp::CALLITF:
+        case IrOp::CALLCLOSURE:
         case IrOp::TAILCALL: case IrOp::CALLSUPER:
         case IrOp::RAW_ASM:
         case IrOp::NEWOBJ: case IrOp::GC_ALLOC: case IrOp::GC_ALLOCP:

@@ -2392,6 +2392,61 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
+        case IrOp::CALLITF: {
+            // Dispatch de interfaz via itable.  Estructura identica a CALLM
+            // pero el segundo operando es el ItfCallParams (no un MethodInfo*)
+            // y emitimos `callitf r1, r13`.  El interp resuelve la itable de la
+            // clase concreta (indice O(1) tras warmup) leyendo los params.
+            //
+            // Layout de operands:
+            //   operands[0] = obj (host_ptr a ObjectHeader)
+            //   operands[1] = params_ptr (ItfCallParams en stack)
+            //   operands[2..] = args declarados (retbuf SRET como [2] si aplica)
+            if (ins.operands.size() < 2) break;
+            const uint32_t   call_pos     = lin_pos_of(ctx, bb.id, idx);
+            std::vector<int> regs_to_save = live_regs_through_call(ctx, call_pos, ins.dst);
+
+            emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
+            std::string r_obj        = ctx.load_src(ins.operands[0], 0);
+            std::string r_params_src = ctx.load_src(ins.operands[1], 1);
+
+            // Mover el ItfCallParams* a r13 (SCRATCH2), que sobrevive el
+            // marshalling de args (mismo patron que CALLM con el MethodInfo*).
+            ctx.out << "    mov r13, " << r_params_src << "\n";
+
+            // Calling convention identica a CALLVIRT/CALLM: r1 = this, args en
+            // r2..  (retbuf SRET en r2 si aplica, tratado como primer arg).
+            const size_t nargs = ins.operands.size() > 2
+                                  ? std::min(ins.operands.size() - 2, (size_t)11) : 0;
+            std::vector<std::pair<int, std::string>> moves;
+            std::vector<std::pair<int, ir::IrValueId>> spilled_args;
+            moves.reserve(nargs + 1);
+            moves.emplace_back(1, r_obj);
+            for (size_t ai = 0; ai < nargs; ++ai) {
+                ir::IrValueId v = ins.operands[ai + 2];
+                int target_reg  = static_cast<int>(ai + 2);
+                if (v != IR_NO_VALUE && ctx.alloc.spill_map.count(v)) {
+                    spilled_args.emplace_back(target_reg, v);
+                } else {
+                    moves.emplace_back(target_reg, ctx.load_src(v, 0));
+                }
+            }
+            emit_parallel_arg_moves(ctx, std::move(moves));
+            for (auto &pa : spilled_args) {
+                emit_load_spilled_arg(ctx, pa.first, pa.second);
+            }
+
+            ctx.out << "    mov r15, " << (nargs + 1) << "\n";
+            ctx.out << "    callitf r1, r13\n";
+            if (ins.dst != IR_NO_VALUE) {
+                std::string rd = ctx.dst_of(ins.dst);
+                emit_mov_if_needed(ctx, rd, "r0");
+                ctx.store_spilled(ins.dst);
+            }
+            emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
+            break;
+        }
+
         case IrOp::CALLN: {
             const uint32_t   call_pos     = lin_pos_of(ctx, bb.id, idx);
             std::vector<int> regs_to_save = live_regs_through_call(ctx, call_pos, ins.dst);

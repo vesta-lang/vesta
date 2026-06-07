@@ -263,6 +263,21 @@ namespace ir {
                          ///< MethodInfo* directo; usado para invocacion polimorfica sobre
                          ///< tipo interfaz y para reflexion runtime donde la vtable_idx no
                          ///< es conocida en compile time)
+        CALLITF  = 0x8A, ///< %dst = callitf.T %obj, %params(%a, ...)  (dispatch de
+                         ///< interfaz via itable).  Reemplaza el findmethod+callm para
+                         ///< llamadas polimorficas sobre un tipo INTERFAZ estatico.
+                         ///< El receptor (operands[0]) es el objeto; operands[1] es un
+                         ///< puntero a un @c ItfCallParams (32 bytes, construido por el
+                         ///< frontend) usado SOLO por el interp (el JIT lo ignora y usa
+                         ///< los campos del IR op directamente).  operands[2..] = args
+                         ///< (retbuf SRET como operands[2] si aplica).  Campos del IR:
+                         ///<   @c func_name = "InterfazNombre\x1fmetodoNombre"
+                         ///<   @c imm = (count << 32) | method_index
+                         ///< donde method_index es la posicion del metodo en la
+                         ///< declaracion de la interfaz y count su numero de metodos.
+                         ///< El interp ejecuta el bytecode @c callitf (dispatch via la
+                         ///< itable lazy de la clase concreta); el JIT inlinea el scan
+                         ///< de itables + call directo a method->jit_code.
         CALLCLOSURE = 0x86, ///< %dst = callclosure.T %fn_ptr, %env(%a, ...)
                             ///< Llamada a closure inline.  Identico a CALLIND pero ademas
                             ///< coloca @c env en R14 antes del @c callvm fn_ptr.  Si la
@@ -644,6 +659,8 @@ namespace ir {
      *   CALL/TAILCALL: dst, func_name, operands[]
      *   CALLIND:       dst, func_ptr, operands[]
      *   CALLVIRT:      dst, operands[0]=obj, imm=vtbl_idx, operands[1..]=args
+     *   CALLITF:       dst, operands[0]=obj, operands[1]=params_ptr, operands[2..]=args,
+     *                  func_name="Iface\x1fmetodo", imm=(count<<32)|method_index
      *   CALLN:         dst, func_name (formato "lib:func"), operands[]
      *   ALLOCA:        dst, type, imm=count
      *   LOAD:          dst, type, operands[0]=ptr
