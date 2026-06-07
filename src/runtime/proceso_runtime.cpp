@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>      // getenv (gate VESTA_OSR_COUNT del osr_buffer)
 #include <functional>
 #include <queue>
 #include <thread>
@@ -28,6 +29,7 @@
 
 #include "arena/arena.h"
 #include "arena/VirtualMemory.h"
+#include "vesta_rt/abi.h"   // VESTA_OSR_BUFFER_N (tamano del osr_buffer)
 #include "cli/sync_io.h"
 #include "jit/jit_call.h"
 #include "profiler/timer.h"
@@ -79,6 +81,21 @@ namespace runtime {
         // Phase D.7: cachear la direccion estable de la HandleTable para que
         // el JIT inline-e deref (handle -> host_ptr) sin CALL al runtime.
         jit_handle_table = gc_heap.jit_handle_table_ptr();
+        // OSR (Phase D.8): alocar el buffer del state-transfer SOLO cuando
+        // VESTA_OSR_COUNT esta activo (off por defecto -> osr_buffer = nullptr,
+        // cero coste).  El check del env se cachea (1 getenv por proceso solo
+        // cuando se construye el primero).  El JIT lee este buffer via RBX al
+        // disparar/reanudar un OSR; debe ser no-nulo antes de ejecutar codigo
+        // JIT con OSR instrumentado, garantizado aqui.
+        {
+            static const bool osr_on = []{
+                const char *v = std::getenv("VESTA_OSR_COUNT");
+                return v && v[0] != '\0' && v[0] != '0';
+            }();
+            if (osr_on) {
+                osr_buffer = new uint64_t[VESTA_OSR_BUFFER_N]();  // zero-init
+            }
+        }
     }
 
     /**
@@ -90,6 +107,8 @@ namespace runtime {
      */
     ProcessVM::~ProcessVM() {
         state = DEAD;                // marcar estado terminal
+        delete[] osr_buffer;         // OSR: liberar el buffer del state-transfer (nullptr-safe)
+        osr_buffer = nullptr;
         manager_mem_priv.free_all(); // liberar toda la memoria privada del proceso
         // Liberar @c ExceptionFrames del free list (reciclados por
         // @c tryleave).  El @c exc_frame_stack activo solo deberia tener

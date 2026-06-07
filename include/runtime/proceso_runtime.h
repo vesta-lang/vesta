@@ -426,6 +426,24 @@ namespace runtime {
          */
         void *jit_handle_table = nullptr;
 
+        /**
+         * @brief Buffer del state-transfer del OSR (Phase D.8), indexado por IR VID.
+         *
+         * Cuando un loop caliente en codigo C1 cruza el umbral de iteraciones
+         * (contador por back-edge), el trigger escribe los valores vivos del loop
+         * header en @c osr_buffer[vid] (1 celda uint64 por IR value id); el
+         * OSR-entry del C2 recompilado los lee para reanudar el loop sin repetir
+         * el preheader.  El buffer-por-VID es regalloc-independiente: C1 y C2
+         * comparten el namespace de IR VIDs (el clon C2 los preserva), asi cada
+         * lado usa SU propia asignacion fisica sobre la misma celda.
+         *
+         * Alocado en el ctor SOLO cuando @c VESTA_OSR_COUNT esta activo
+         * (@c nullptr por defecto -> cero coste).  Su offset esta fijado por
+         * @c VESTA_PROC_OSR_BUFFER_OFFSET (abi.h) + static_assert; el JIT lo lee
+         * con @c mov rax, [rbx + OSR_BUFFER_OFFSET].
+         */
+        uint64_t *osr_buffer = nullptr;
+
         uint64_t tsc{}; ///< Contador de instrucciones ejecutadas (Time Stamp Counter virtual)
 
         /**

@@ -738,6 +738,15 @@ namespace jit {
         /// Solo se usa en el path VREG (flag @c VESTA_JIT_VREGS); el path de
         /// slots lo deja en 0.
         uint32_t                   vreg_count = 0;
+        /// OSR (Phase D.8): numero de valores IR originales (== fn.values.size()
+        /// al compilar).  Los vregs [0, ir_value_count) corresponden 1:1 a IR
+        /// value ids (mapeo identidad en @c vr()); los vregs >= ir_value_count
+        /// son temporales internos del selector (intra-instruccion, nunca vivos
+        /// a traves de un bloque).  El state-transfer del OSR (buffer-por-VID)
+        /// SOLO captura vregs < ir_value_count: esos ids son ESTABLES entre C1 y
+        /// C2 (el clon C2 preserva los IR VIDs), garantizando que C1 escribe y
+        /// C2 lee la misma celda del buffer para el mismo valor logico.
+        uint32_t                   ir_value_count = 0;
         /// Phase D.7: clase (GP/FP) de cada registro virtual, indexado por
         /// vreg id.  @c vreg_class.size() == @c vreg_count.  El register
         /// allocator la consulta para asignar del pool fisico correcto.

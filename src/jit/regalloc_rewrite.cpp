@@ -15,6 +15,10 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
+
+#include "vesta_rt/abi.h"  // VESTA_PROC_OSR_BUFFER_OFFSET / VESTA_OSR_BUFFER_N
 
 namespace jit {
 
@@ -65,15 +69,57 @@ namespace jit {
         /* Cuantas veces se disparo el trigger (diagnostico). */
         uint64_t g_osr_trigger_hits = 0;
 
-        /** @brief Handler del trigger OSR (1b).  Se invoca UNA vez por
-         *  back-edge cuando el contador iguala el umbral.  En 1b solo registra
-         *  el evento; el OSR real (recompile C2 + state-transfer + salto a mitad
-         *  del loop) llega en el paso 2.  Convencion C: (proc, loop_id). */
-        void osr_trigger_stub(void * /*proc*/, uint64_t loop_id) {
+        /* ---- OSR paso 2a: descriptor del estado capturado por loop ---- */
+
+        /** @brief Una celda del state-transfer: el IR VID y si es raiz GC.
+         *  El valor vive en @c osr_buffer[vid] tras la captura del trigger. */
+        struct OsrCaptureSlot {
+            uint32_t vid;    ///< IR value id (== indice en osr_buffer)
+            uint8_t  is_gc;  ///< 1 si es host_ptr/handle a objeto GC
+        };
+        /** @brief Descriptor de un loop OSR-instrumentado, indexado por loop_id.
+         *  Construido en compile-time (rewrite_to_physical); lo consume el
+         *  handler para loguear (2a) y, en 2b/2c, dirigir el salto C1->C2. */
+        struct OsrLoopDesc {
+            std::string                 fn_name;       ///< nombre de la funcion
+            uint32_t                    header_block;  ///< MBlock id del loop header
+            std::vector<OsrCaptureSlot> captures;      ///< live-in del header
+            bool                        aborted;       ///< true si no se capturo estado
+        };
+        /* Indexado por loop_id (== el contador g_osr_be_sites del sitio). */
+        std::vector<OsrLoopDesc> g_osr_loops;
+
+        /** @brief Handler del trigger OSR.  Se invoca UNA vez por back-edge
+         *  cuando el contador iguala el umbral.  Paso 2a: ya recibe el buffer
+         *  con el estado del loop capturado por el C1 y lo loguea (validacion
+         *  del state-transfer sin salto todavia).  El OSR real (recompile C2 +
+         *  salto a mitad del loop) llega en 2b/2c.  Convencion C:
+         *  (proc, loop_id, buffer). */
+        void osr_trigger_stub(void * /*proc*/, uint64_t loop_id,
+                              uint64_t *buffer) {
             ++g_osr_trigger_hits;
-            std::fprintf(stderr,
-                "[osr] TRIGGER loop_id=%llu (umbral %u cruzado)\n",
-                static_cast<unsigned long long>(loop_id), jit_osr_threshold());
+            if (loop_id < g_osr_loops.size()) {
+                const OsrLoopDesc &d =
+                    g_osr_loops[static_cast<size_t>(loop_id)];
+                std::fprintf(stderr,
+                    "[osr] TRIGGER loop_id=%llu fn=%s header_bb=%u capturas=%zu%s\n",
+                    static_cast<unsigned long long>(loop_id), d.fn_name.c_str(),
+                    d.header_block, d.captures.size(),
+                    d.aborted ? " (ABORTADO: estado no capturable)" : "");
+                if (buffer && !d.aborted) {
+                    for (const OsrCaptureSlot &c : d.captures) {
+                        const uint64_t val = buffer[c.vid];
+                        std::fprintf(stderr,
+                            "[osr]   v%u%s = %lld (0x%llx)\n", c.vid,
+                            c.is_gc ? " gc" : "",
+                            static_cast<long long>(val),
+                            static_cast<unsigned long long>(val));
+                    }
+                }
+            } else {
+                std::fprintf(stderr, "[osr] TRIGGER loop_id=%llu (umbral %u)\n",
+                    static_cast<unsigned long long>(loop_id), jit_osr_threshold());
+            }
         }
         /** @brief Registra (una vez) el dump atexit del contador de back-edges. */
         void osr_install_dump_once() {
@@ -759,6 +805,20 @@ namespace jit {
             }
         }
 
+        /* OSR 2a: indice global de la primera instr de cada bloque (MISMA
+         * numeracion que build_intervals).  @c block_start[h] = 2*first_gi[h]
+         * es la posicion del header; @c covers(block_start[h]) == el live-in
+         * del header (los valores que C2 debe reanudar).  Solo bajo el gate. */
+        std::vector<uint32_t> first_gi;
+        if (jit_osr_count() && NB > 0) {
+            first_gi.assign(NB, 0);
+            uint32_t g = 0;
+            for (size_t bb = 0; bb < NB; ++bb) {
+                first_gi[bb] = g;
+                g += static_cast<uint32_t>(vf.blocks[bb].instrs.size());
+            }
+        }
+
         /* gi = indice lineal global de la instr vreg (MISMO orden que
          * build_intervals).  cur_call_pos = 2*gi se pasa a lower() para que
          * el CALL_ABS sepa que GC roots estan vivos en ese punto. */
@@ -785,6 +845,48 @@ namespace jit {
                 osr_install_dump_once();
                 const uint64_t loop_id = g_osr_be_sites;
                 ++g_osr_be_sites;
+
+                /* --- OSR 2a: descriptor del estado vivo del loop header ---
+                 * Capturamos el live-in del header = covers(2*first_gi[header])
+                 * = phi_dst (loop-carried) + invariantes usados en el loop
+                 * (excluye phi_args y temporales del header).  Cada valor se
+                 * escribira en osr_buffer[vid].  Restringido a IR values reales
+                 * (vid < ir_value_count): esos ids son ESTABLES entre C1 y C2
+                 * (el clon C2 los preserva), garantizando que C1 escribe y C2
+                 * lee la MISMA celda.  Si algun valor no es capturable (temp del
+                 * selector, fuera del buffer, o sin ubicacion fisica), ABORTA la
+                 * captura de este loop (el trigger sigue logueando "ABORTADO"). */
+                const MBlockId header = vf.blocks[b].succ_a;
+                OsrLoopDesc desc;
+                desc.fn_name      = vf.name;
+                desc.header_block = header;
+                desc.aborted      = false;
+                if (ivs != nullptr && header != MBLOCK_INVALID
+                 && static_cast<size_t>(header) < NB && !first_gi.empty()) {
+                    const uint32_t header_pos = 2u * first_gi[header];
+                    const uint32_t NVI =
+                        static_cast<uint32_t>(ivs->intervals.size());
+                    const uint32_t ir_n = vf.ir_value_count;
+                    for (uint32_t v = 0; v < NVI; ++v) {
+                        const LiveInterval &lv = ivs->intervals[v];
+                        if (!lv.covers(header_pos)) continue;
+                        if (v >= ir_n || v >= VESTA_OSR_BUFFER_N
+                         || (!ra.in_reg(v) && !ra.spilled(v))) {
+                            desc.aborted = true; desc.captures.clear(); break;
+                        }
+                        desc.captures.push_back(
+                            { v, static_cast<uint8_t>(lv.is_gc() ? 1u : 0u) });
+                    }
+                } else {
+                    desc.aborted = true;
+                }
+                const bool do_capture = !desc.aborted;
+                /* Copia para el codegen (el descriptor se mueve al registro). */
+                const std::vector<OsrCaptureSlot> caps = desc.captures;
+                if (g_osr_loops.size() <= static_cast<size_t>(loop_id))
+                    g_osr_loops.resize(static_cast<size_t>(loop_id) + 1u);
+                g_osr_loops[static_cast<size_t>(loop_id)] = std::move(desc);
+
                 /* Indices del pool: contador, loop_id, handler. */
                 const uint32_t idx_cnt = static_cast<uint32_t>(pf.imm64_pool.size());
                 pf.imm64_pool.push_back(reinterpret_cast<uint64_t>(&g_osr_be_total));
@@ -814,12 +916,65 @@ namespace jit {
                 for (uint8_t r : cs)
                     seq.push_back(MInstr::make_unary(MOp::PUSH, {}, R(static_cast<MReg>(r))));
 #if defined(_WIN32)
-                const MReg A0 = MReg::RCX, A1 = MReg::RDX;
+                const MReg A0 = MReg::RCX, A1 = MReg::RDX, A2 = MReg::R8;
                 const uint32_t SHADOW = 32;
 #else
-                const MReg A0 = MReg::RDI, A1 = MReg::RSI;
+                const MReg A0 = MReg::RDI, A1 = MReg::RSI, A2 = MReg::RDX;
                 const uint32_t SHADOW = 0;
 #endif
+                /* --- OSR 2a captura: escribir cada vid vivo en osr_buffer[vid].
+                 * RAX = base del buffer (proc->osr_buffer leido via RBX); RCX =
+                 * temp.  Ambos son caller-saved (ya salvados en la pila arriba)
+                 * y se restauran en el pop final.  Las fuentes caller-saved se
+                 * leen de su COPIA en la pila (offset = 8*(n-1-idx), nunca del
+                 * reg vivo, que podemos haber clobreado); las callee-saved del
+                 * reg directo (intactas); las derramadas del slot [rbp+off]. */
+                if (do_capture) {
+                    const size_t n = cs.size();
+                    seq.push_back(MInstr::make_unary(MOp::MOV, R(MReg::RAX),
+                        MOperand::make_mem(MReg::RBX,
+                            VESTA_PROC_OSR_BUFFER_OFFSET)));
+                    for (const OsrCaptureSlot &c : caps) {
+                        const MOperand dstmem = MOperand::make_mem(
+                            MReg::RAX, static_cast<int32_t>(c.vid * 8u));
+                        if (ra.in_reg(c.vid)) {
+                            const uint8_t rid = ra.reg_of(c.vid);
+                            int idx = -1;
+                            for (size_t i = 0; i < n; ++i)
+                                if (cs[i] == rid) {
+                                    idx = static_cast<int>(i); break;
+                                }
+                            if (idx >= 0) {
+                                /* caller-saved: leer de la copia en la pila. */
+                                const int32_t off = static_cast<int32_t>(
+                                    8u * (n - 1u - static_cast<size_t>(idx)));
+                                seq.push_back(MInstr::make_unary(MOp::MOV,
+                                    R(MReg::RCX),
+                                    MOperand::make_mem(MReg::RSP, off)));
+                                seq.push_back(MInstr::make_unary(MOp::MOV,
+                                    dstmem, R(MReg::RCX)));
+                            } else {
+                                /* callee-saved: valor vivo en el reg directo. */
+                                seq.push_back(MInstr::make_unary(MOp::MOV,
+                                    dstmem, R(static_cast<MReg>(rid))));
+                            }
+                        } else {  /* spilled: leer del slot rbp-relativo. */
+                            seq.push_back(MInstr::make_unary(MOp::MOV,
+                                R(MReg::RCX),
+                                MOperand::make_mem(MReg::RBP,
+                                    lw.slot_off(ra.slot_of(c.vid)))));
+                            seq.push_back(MInstr::make_unary(MOp::MOV,
+                                dstmem, R(MReg::RCX)));
+                        }
+                    }
+                    /* arg2 = base del buffer (sigue en RAX tras la captura). */
+                    seq.push_back(MInstr::make_unary(MOp::MOV, R(A2),
+                        R(MReg::RAX)));
+                } else {
+                    /* sin captura: arg2 = 0 (el handler no lee el buffer). */
+                    seq.push_back(MInstr::make_unary(MOp::MOV, R(A2),
+                        MOperand::make_imm32(0)));
+                }
                 seq.push_back(MInstr::make_unary(MOp::MOV, R(A0), R(MReg::RBX)));  // arg0=proc
                 seq.push_back(MInstr::make_unary(MOp::MOV, R(A1),
                     MOperand::make_imm64_idx(idx_lid)));                           // arg1=loop_id

@@ -208,6 +208,22 @@ extern "C" {
 /// aborta hasta actualizar este valor.
 #define VESTA_PROC_JIT_HANDLE_TABLE_OFFSET 1304
 
+/// Offset del puntero @c osr_buffer dentro de ProcessVM (OSR, Phase D.8).
+/// Buffer-por-VID del state-transfer C1->C2: un array de uint64 (1 celda por
+/// IR VID) en el que el codigo C1, al disparar el tier-up por back-edge,
+/// escribe los valores vivos del loop header (buffer[vid]); el OSR-entry de C2
+/// los lee.  Alocado lazy en el ctor de ProcessVM SOLO cuando VESTA_OSR_COUNT
+/// esta activo (nullptr por defecto -> cero coste).  El JIT lo lee con
+/// @c mov rax, [rbx + VESTA_PROC_OSR_BUFFER_OFFSET] (rbx = ProcessVM*).
+/// Verificado en compile-time por @c abi_checks.cpp.
+#define VESTA_PROC_OSR_BUFFER_OFFSET       1312
+
+/// Numero de celdas (uint64) del @c osr_buffer.  Cota superior del numero de
+/// IR values de una funcion OSR-able; si una funcion excede esto, el JIT
+/// ABORTA el OSR de ese loop (sin capturar).  64 KB por proceso cuando OSR
+/// activo (off por defecto).
+#define VESTA_OSR_BUFFER_N                 8192
+
 /// El offset de @c exc_frame_stack dentro de @c ProcessVM NO es estable
 /// cross-build porque la struct tiene miembros no-POD antes (atomicos,
 /// vectores, GcHeap).  En lugar de un #define, se computa en runtime
