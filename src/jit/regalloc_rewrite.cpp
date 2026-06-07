@@ -746,7 +746,8 @@ namespace jit {
                                   const RegAlloc &ra,
                                   const TargetRegInfo &tri,
                                   AbiKind abi,
-                                  const IntervalResult *ivs) {
+                                  const IntervalResult *ivs,
+                                  OsrEmit *osr) {
         /* Detectar si la funcion tiene CALLs (para reservar shadow space). */
         bool has_calls = false;
         uint32_t alloca_total = 0;  // commit 8: bytes de allocas en el frame
@@ -810,7 +811,7 @@ namespace jit {
          * es la posicion del header; @c covers(block_start[h]) == el live-in
          * del header (los valores que C2 debe reanudar).  Solo bajo el gate. */
         std::vector<uint32_t> first_gi;
-        if (jit_osr_count() && NB > 0) {
+        if ((jit_osr_count() || osr != nullptr) && NB > 0) {
             first_gi.assign(NB, 0);
             uint32_t g = 0;
             for (size_t bb = 0; bb < NB; ++bb) {
@@ -840,7 +841,7 @@ namespace jit {
              * flags pero el JMP no las lee.  push/pop rax preserva el estado.
              * Emitido aqui (post-lower) para no pasar por la legalizacion
              * 2-address que mangla ADD [mem],imm. */
-            if (jit_osr_count() && be_block[b]
+            if (osr == nullptr && jit_osr_count() && be_block[b]
              && !outv.empty() && outv.back().op == MOp::JMP) {
                 osr_install_dump_once();
                 const uint64_t loop_id = g_osr_be_sites;
@@ -999,6 +1000,65 @@ namespace jit {
             }
             pf.blocks[b].instrs = std::move(outv);
         }
+
+        /* --- OSR 2b: APPEND del bloque OSR-entry (C2, el 2o punto de entrada
+         * a mitad del loop).  Monta el frame normal, carga el live-in del
+         * header desde proc->osr_buffer[vid] a la ubicacion fisica de cada vid,
+         * y salta al MBlock del header.  R10/R11 (scratch, no asignables) como
+         * base/temp -> nunca colisionan con la ubicacion fisica de un vid. */
+        if (osr != nullptr && ivs != nullptr && !first_gi.empty()
+         && osr->header_block != MBLOCK_INVALID
+         && static_cast<size_t>(osr->header_block) < NB) {
+            const MBlockId header   = osr->header_block;
+            const uint32_t header_pos = 2u * first_gi[header];
+            const MLabelId lbl      = pf.new_label();
+            auto R = [](MReg r) { return MOperand::make_reg(r, 8); };
+            const MReg base = lw.scr0;  // R10 (no asignable)
+            const MReg tmp  = lw.scr1;  // R11 (no asignable)
+
+            MBlock entryb;
+            entryb.label_id = lbl;
+            entryb.succ_a   = header;          // metadata (el jmp usa el label)
+            entryb.succ_b   = MBLOCK_INVALID;
+            std::vector<MInstr> ob;
+            /* (a) Prologue IDENTICO al de la entry 0 (mismo frame -> el RET de
+             * la funcion lo deshace con el mismo epilogue). */
+            lw.emit_prologue(ob);
+            /* (b) base = proc->osr_buffer (via RBX = ProcessVM*). */
+            ob.push_back(MInstr::make_unary(MOp::MOV, R(base),
+                MOperand::make_mem(MReg::RBX, VESTA_PROC_OSR_BUFFER_OFFSET)));
+            /* (c) cargar cada live-in vid del buffer a su reg/slot.  El set es
+             * covers(header_pos) sobre la liveness de ESTA funcion (C2); para el
+             * recompile plano coincide con el que C1 capturo, para el C2
+             * optimizado es un subconjunto (todos escritos por C1). */
+            const uint32_t NVI = static_cast<uint32_t>(ivs->intervals.size());
+            const uint32_t ir_n = vf.ir_value_count;
+            for (uint32_t v = 0; v < NVI; ++v) {
+                const LiveInterval &lv = ivs->intervals[v];
+                if (!lv.covers(header_pos)) continue;
+                if (v >= ir_n || v >= VESTA_OSR_BUFFER_N) continue;
+                const MOperand srcmem = MOperand::make_mem(
+                    base, static_cast<int32_t>(v * 8u));
+                if (ra.in_reg(v)) {
+                    ob.push_back(MInstr::make_unary(MOp::MOV,
+                        MOperand::make_reg(static_cast<MReg>(ra.reg_of(v)), 8),
+                        srcmem));
+                } else if (ra.spilled(v)) {
+                    ob.push_back(MInstr::make_unary(MOp::MOV, R(tmp), srcmem));
+                    ob.push_back(MInstr::make_unary(MOp::MOV,
+                        MOperand::make_mem(MReg::RBP,
+                            lw.slot_off(ra.slot_of(v))), R(tmp)));
+                }
+                /* else: sin ubicacion (no deberia pasar para un live-in). */
+            }
+            /* (d) saltar al header (reanuda el loop a mitad). */
+            ob.push_back(MInstr::make_jmp(pf.blocks[header].label_id));
+            entryb.instrs = std::move(ob);
+            pf.blocks.push_back(std::move(entryb));
+            osr->osr_entry_label = lbl;
+            osr->osr_entry_valid = true;
+        }
+
         pf.stackmaps = std::move(lw.stackmaps);  // commit 6
         return pf;
     }
