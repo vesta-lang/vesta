@@ -113,6 +113,7 @@ namespace jit {
     uint32_t g_c2_threshold = 0;
     bool     g_c2_log       = false;
     bool     g_c2_tier_all  = false;
+    bool     g_c2_vreg      = false;  /* experimento: recompilar C2 por path vreg */
     uint64_t g_c2_tierup_count = 0;
 
     /* C2 reclaim: true cuando el C2 esta activo -> enter_jit instrumenta la
@@ -169,6 +170,8 @@ namespace jit {
             if (c2l && c2l[0] != '\0' && c2l[0] != '0') g_c2_log = true;
             const char *c2a = std::getenv("VESTA_C2_TIER_ALL");
             if (c2a && c2a[0] != '\0' && c2a[0] != '0') g_c2_tier_all = true;
+            const char *c2v = std::getenv("VESTA_C2_VREG");
+            if (c2v && c2v[0] != '\0' && c2v[0] != '0') g_c2_vreg = true;
             /* Activar la quiescencia de enter_jit SOLO si el C2 esta on.
              * Se setea aqui (init unica, antes de cualquier enter_jit) para
              * que los pares enter/exit esten siempre balanceados. */
@@ -1873,14 +1876,53 @@ namespace jit {
                 }
             }
 
-            const CompileResult res = g_compiler->compile_with_opts(*compile_target, c2);
-            if (res.fn == nullptr) {
+            /* Compilar el IR especulado.  Por defecto via el Selector (slots);
+             * con VESTA_C2_VREG via el path de registros virtuales (regalloc
+             * real) -- experimento para medir si el inline rinde cuando los
+             * valores viven en registros y no en slots. */
+            JitFn    c2_fn         = nullptr;
+            size_t   c2_size       = 0;
+            const uint8_t *c2_code = nullptr;
+            bool     c2_unsupported = false;
+            if (g_c2_vreg) {
+                ffi::FFI *ffi2 = &owning_vm.loader_public.ffi_loader;
+                auto nat_res = [ffi2](const std::string &name) -> uint64_t {
+                    size_t colon = name.find(':');
+                    if (colon == std::string::npos) return 0;
+                    std::string lib  = name.substr(0, colon);
+                    std::string func = name.substr(colon + 1);
+                    void *vfn = ffi::lookup_virtual_fn(lib, func);
+                    if (vfn) return reinterpret_cast<uint64_t>(vfn);
+                    try {
+                        void *m = ffi2->load_native_module(lib);
+                        if (!m) return 0;
+                        return reinterpret_cast<uint64_t>(ffi2->resolve_native_symbol(m, func));
+                    } catch (...) { return 0; }
+                };
+                auto user_res = [](const std::string &n) -> uint64_t {
+                    auto it = g_eager_cache.find(n);
+                    if (it != g_eager_cache.end()
+                     && it->second != 0 && it->second != EAGER_IN_PROGRESS)
+                        return it->second;
+                    return 0;
+                };
+                uint8_t *vc = vreg_compile(*compile_target, *g_code_cache, user_res,
+                                           make_vreg_entries(), nat_res);
+                if (vc != nullptr) { c2_fn = reinterpret_cast<JitFn>(vc); c2_code = vc; }
+            }
+            CompileResult res{};
+            if (c2_fn == nullptr) {
+                res = g_compiler->compile_with_opts(*compile_target, c2);
+                c2_fn = res.fn; c2_size = res.code_size; c2_code = res.code_start;
+                c2_unsupported = res.unsupported;
+            }
+            if (c2_fn == nullptr) {
                 /* No se pudo recompilar (alguna op sin contexto recursivo).
                  * Queda C1; g_tiered_pcs evita reintentos. */
                 if (g_c2_log)
                     std::fprintf(stderr,
                         "[c2] recompile '%s' fallo (unsupported=%d) -- queda C1\n",
-                        fn_name.c_str(), res.unsupported ? 1 : 0);
+                        fn_name.c_str(), c2_unsupported ? 1 : 0);
                 return;
             }
 
@@ -1908,8 +1950,8 @@ namespace jit {
                 ? reinterpret_cast<uint64_t>(method->jit_code)
                 : reinterpret_cast<uint64_t>(lookup_jit_code_at_pc(fn_pc));
 
-            register_jit_code_at_pc(fn_pc, reinterpret_cast<void *>(res.fn));
-            if (method) method->jit_code = reinterpret_cast<void *>(res.fn);
+            register_jit_code_at_pc(fn_pc, reinterpret_cast<void *>(c2_fn));
+            if (method) method->jit_code = reinterpret_cast<void *>(c2_fn);
 
             /* (c) invalidar entradas de PIC == old_code (class_ptr -> 0). */
             if (old_code != 0) {
@@ -1936,12 +1978,12 @@ namespace jit {
             ++g_c2_tierup_count;
             if (g_c2_log) {
                 std::fprintf(stderr,
-                    "[c2] tier-up '%s' (pc=0x%llx) -> C2 (%zu bytes); C1 a free-list pendiente\n",
-                    fn_name.c_str(),
-                    static_cast<unsigned long long>(fn_pc), res.code_size);
+                    "[c2] tier-up '%s' (pc=0x%llx) -> C2 (%zu bytes, %s); C1 a free-list pendiente\n",
+                    fn_name.c_str(), static_cast<unsigned long long>(fn_pc),
+                    c2_size, g_c2_vreg ? "vreg" : "slots");
             }
-            if (g_jit_disasm) {
-                debug_dump_jit_code(fn_name + " [C2]", res.code_start, res.code_size);
+            if (g_jit_disasm && c2_code != nullptr && c2_size != 0) {
+                debug_dump_jit_code(fn_name + " [C2]", c2_code, c2_size);
             }
         } catch (...) {
             /* Cualquier fallo deja la funcion en C1 (correcto). */
