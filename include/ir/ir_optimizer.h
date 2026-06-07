@@ -347,6 +347,40 @@ bool ir_pass_licm(IrFunction &fn);
 bool ir_pass_devirt_monomorphic(IrModule &mod);
 
 /**
+ * @brief Devirtualizacion ESPECULATIVA guiada por perfil/IC (C2).
+ *
+ * A diferencia de @c ir_pass_devirt_monomorphic (estatico, closed-world, sin
+ * guard), este pase toma la clase OBSERVADA en runtime en cada call site (de
+ * los IC slots del PIC durante el tier-up C1->C2) y emite un dispatch GUARDADO:
+ *
+ *     cls = load [obj]              ; class_ptr (offset 0, obj es host_ptr)
+ *     if (cls == T_const) {         ; T = clase observada (ClassInfo* como CONST)
+ *         r_fast = call @callee     ; CALL directo -> ir_pass_inline lo inlinea
+ *     } else {
+ *         r_slow = callvirt obj ... ; dispatch dinamico original (fallback)
+ *     }
+ *     r = phi [r_fast, r_slow]
+ *
+ * CORRECTO POR CONSTRUCCION: si la clase observada deja de cumplirse, el guard
+ * cae al CALLVIRT original -> mismo resultado.  No necesita deopt (esa es la
+ * capa agresiva posterior, C2.7).
+ *
+ * Cada site identifica su CALLVIRT por @c callvirt_dst (el dst SSA, unico) para
+ * poder localizarlo de forma estable aunque se transformen varios sites.
+ *
+ * @param fn    Funcion (clonada) a transformar.
+ * @param sites Lista de sites monomorficos a especular.
+ * @return true si transformo al menos un site.
+ */
+struct SpecDevirtSite {
+    IrValueId   callvirt_dst;    ///< dst SSA del CALLVIRT objetivo (unico)
+    uint64_t    class_ptr;        ///< ClassInfo* observado (embebido como CONST)
+    std::string callee_ir_name;   ///< ir_fn_name del metodo resuelto (a inlinar)
+};
+bool ir_pass_speculative_devirt(IrFunction &fn,
+                                const std::vector<SpecDevirtSite> &sites);
+
+/**
  * @brief Pase de propagacion de copias.
  *
  * Para cada %b = mov.T %a, sustituye todos los usos de %b por %a y
