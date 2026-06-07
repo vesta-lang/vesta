@@ -46,6 +46,36 @@
 namespace jit {
 
     /**
+     * @brief Peticion de emision del OSR-entry para @c rewrite_to_physical
+     *        (on-stack replacement, Phase D.8).
+     *
+     * El path por defecto (osr == nullptr en rewrite) conserva el
+     * comportamiento actual: si @c VESTA_OSR_COUNT esta activo, instrumenta los
+     * back-edges con el contador + la captura del trigger -- esto es el C1, la
+     * funcion FUENTE del OSR.
+     *
+     * Con un @c OsrEmit (mode C2_ENTRY), en cambio, NO se emite el trigger; se
+     * APPENDEA un bloque OSR-entry al final de la funcion (el 2o punto de
+     * entrada del C2 recompilado) que:
+     *   (a) monta el frame normal (mismo prologue que la entry 0),
+     *   (b) carga el live-in del loop @c header_block desde
+     *       @c proc->osr_buffer[vid] a la ubicacion fisica de cada vid
+     *       (R10=base, R11=temp; ninguno es asignable, asi nunca colisionan con
+     *       un vid), y
+     *   (c) salta al MBlock del header (reanuda el loop a mitad).
+     * El offset del bloque se expone via @c osr_entry_label para que el caller
+     * lo resuelva post-encode (@c code + label_offsets[osr_entry_label]).
+     */
+    struct OsrEmit {
+        enum Mode { C2_ENTRY };
+        Mode     mode         = C2_ENTRY;
+        MBlockId header_block = MBLOCK_INVALID; ///< loop header a reanudar
+        /* --- salida (rellenada por rewrite_to_physical) --- */
+        MLabelId osr_entry_label = 0;           ///< label del bloque OSR-entry
+        bool     osr_entry_valid = false;       ///< true si se emitio el entry
+    };
+
+    /**
      * @brief Reescribe @p vf (forma vreg) a una MFunction fisica.
      *
      * @param vf   Funcion en MachineIR vreg (3-operandos).
@@ -58,13 +88,18 @@ namespace jit {
      *             roots vivos a traves (Phase D.7 commit 6).  El resultado va
      *             en @c MFunction::stackmaps y se asocia al CALL via su
      *             @c flags (idx); el encoder rellena el @c pc_offset.
+     * @param osr  Peticion de OSR-entry (Phase D.8, opcional).  Si != nullptr,
+     *             SUPRIME el trigger C1 y APPENDEA el bloque OSR-entry para el
+     *             @c header_block indicado (necesita @c ivs != nullptr para el
+     *             live-in).  Rellena @c osr->osr_entry_label / @c osr_entry_valid.
      * @return     Nueva MFunction fisica lista para el encoder.
      */
     MFunction rewrite_to_physical(const MFunction &vf,
                                   const RegAlloc &ra,
                                   const TargetRegInfo &tri,
                                   AbiKind abi = AbiKind::HOST_LEAF,
-                                  const IntervalResult *ivs = nullptr);
+                                  const IntervalResult *ivs = nullptr,
+                                  OsrEmit *osr = nullptr);
 
 } // namespace jit
 
