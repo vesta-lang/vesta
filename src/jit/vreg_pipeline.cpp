@@ -103,4 +103,73 @@ namespace jit {
         return code;
     }
 
+    uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
+                              const CallResolver &resolve_call,
+                              const VregEntries &ent,
+                              const CallResolver &resolve_native,
+                              uint32_t header_block,
+                              uint8_t **osr_entry_out) {
+        if (osr_entry_out) *osr_entry_out = nullptr;
+
+        /* 1-3: identico a vreg_compile (selector + intervals + regalloc +
+         * verificador adversarial de GC roots). */
+        MFunction mf;
+        if (!vreg_select(fn, mf, AbiKind::VM, resolve_call, ent, resolve_native))
+            return nullptr;
+        const TargetRegInfo &tri = target_x86_64_vm_abi();
+        IntervalResult ivs = build_intervals(mf, tri);
+        RegAlloc ra = linear_scan(ivs, tri);
+        if (!ivs.call_positions.empty()) {
+            for (uint32_t vv = 0; vv < mf.vreg_count; ++vv) {
+                const LiveInterval &lv = ivs.intervals[vv];
+                if (!lv.is_gc()) continue;
+                for (uint32_t cp : ivs.call_positions) {
+                    if (lv.covers(cp) && !ra.spilled(vv)) return nullptr;
+                }
+            }
+        }
+
+        /* 4. Rewrite a fisico en modo OSR-ENTRY (suprime el trigger C1 y
+         *    appendea el bloque OSR-entry para @p header_block). */
+        OsrEmit osr;
+        osr.mode = OsrEmit::C2_ENTRY;
+        osr.header_block = static_cast<MBlockId>(header_block);
+        MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
+        if (!osr.osr_entry_valid) return nullptr;  // no se pudo emitir el entry
+
+        /* 5. Encode. */
+        X86Encoder enc;
+        std::vector<uint8_t> bytes;
+        if (enc.encode(pf, bytes) == 0 || bytes.empty()) return nullptr;
+
+        /* 6. Alojar + commit. */
+        uint8_t *code = cc.alloc(bytes.size(), 16);
+        if (!code) return nullptr;
+        std::memcpy(code, bytes.data(), bytes.size());
+        cc.commit(code, bytes.size());
+
+        /* 7. Resolver la direccion absoluta del OSR-entry via el offset que el
+         *    encoder dejo en label_offsets. */
+        if (osr.osr_entry_label < pf.label_offsets.size()
+         && pf.label_offsets[osr.osr_entry_label] != UINT32_MAX) {
+            if (osr_entry_out)
+                *osr_entry_out = code + pf.label_offsets[osr.osr_entry_label];
+        } else {
+            return nullptr;  // offset no resuelto
+        }
+
+        static const bool dis = []{
+            const char *v = std::getenv("VESTA_JIT_DISASM");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        if (dis) debug_dump_jit_code(fn.name + " [vreg-osr]", code, bytes.size());
+
+        /* 8. Registrar el blob C2 en el JitRegistry (stackmaps de sus CALLs). */
+        JitRegistry::instance().register_function(
+            code, code + bytes.size(), pf.stackmaps,
+            static_cast<uint32_t>(8u * ra.num_spill_slots), "vreg-osr");
+
+        return code;
+    }
+
 } // namespace jit

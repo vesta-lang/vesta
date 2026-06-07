@@ -1024,7 +1024,27 @@ namespace jit {
             });
             return;
         }
-        /* JMP reg/mem absoluto no soportado en v1. */
+        /* JMP reg INDIRECTO: FF /4 (mod=11).  Usado por el frame-swap del OSR
+         * (salto C1->C2 a una direccion absoluta en un registro).  Mismo patron
+         * que CALL reg (FF /2) pero con el campo reg del ModRM = 4. */
+        if (mi.src1.kind == MOperandKind::REG) {
+            const uint8_t rex = rex_byte(false, 0, mi.src1.reg);
+            if (rex) put8(out, rex);
+            put8(out, 0xFF);
+            put8(out, modrm(3, 4, mi.src1.reg & 7));
+            return;
+        }
+        /* JMP mem INDIRECTO: FF /4 con un operando de memoria. */
+        if (mi.src1.kind == MOperandKind::MEM) {
+            const uint8_t base  = mi.src1.reg;
+            const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
+            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+            const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0xFF);
+            emit_modrm_mem(mi.src1, 4, out);
+            return;
+        }
         put8(out, 0xCC);
     }
 
