@@ -192,6 +192,7 @@ namespace jit {
         out = MFunction{};
         out.name = fn.name;
         out.vreg_count = static_cast<uint32_t>(fn.values.size());
+        out.ir_value_count = static_cast<uint32_t>(fn.values.size());  // OSR: limite IR/temps
         out.vreg_class.assign(fn.values.size(), RegClass::GP);
         const bool vm = (abi == AbiKind::VM);
 
