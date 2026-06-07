@@ -44,6 +44,34 @@ namespace jit {
                           const VregEntries &ent = {},
                           const CallResolver &resolve_native = {});
 
+    /**
+     * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo
+     *        header es @p header_block (on-stack replacement, Phase D.8, 2c).
+     *
+     * Identico a @c vreg_compile pero (a) NO emite el contador/trigger C1
+     * (suprimido en modo OSR) y (b) APPENDEA un bloque OSR-entry que carga el
+     * estado del header desde @c proc->osr_buffer y salta al header.  El blob
+     * resultante tiene DOS entradas: la normal (offset 0, no usada por el OSR)
+     * y la OSR-entry, cuya direccion absoluta se devuelve en @p osr_entry_out.
+     *
+     * @param fn             Funcion IR (la misma que el C1; recompile plano).
+     * @param cc             Code cache.
+     * @param resolve_call   Resolver de CALLs a user-fns (igual que el C1).
+     * @param ent            Entradas runtime del selector vreg.
+     * @param resolve_native Resolver de CALLN nativas.
+     * @param header_block   MBlock del loop header a reanudar (== IR block id).
+     * @param osr_entry_out  [out] direccion absoluta del OSR-entry (o nullptr).
+     * @return               Codigo del blob C2 (entrada normal), o nullptr si
+     *                       la funcion no es del subset vreg o no se emitio el
+     *                       OSR-entry.
+     */
+    uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
+                              const CallResolver &resolve_call,
+                              const VregEntries &ent,
+                              const CallResolver &resolve_native,
+                              uint32_t header_block,
+                              uint8_t **osr_entry_out);
+
 } // namespace jit
 
 #endif // VESTA_JIT_VREG_PIPELINE_H

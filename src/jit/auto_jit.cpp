@@ -20,6 +20,7 @@
 #include "jit/code_cache.h"
 #include "jit/runtime_entries.h"
 #include "jit/vreg_pipeline.h"
+#include "jit/regalloc_rewrite.h"       // OSR glue (set_osr_handler / osr_loop_*)
 #include "vesta_rt/public.h"
 #include "ffi/virtual_lib_registry.h"  // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
@@ -185,11 +186,30 @@ namespace jit {
         JitCompiler       *g_compiler      = nullptr;
         std::mutex         g_compile_mtx;
 
+        /* OSR (Phase D.8, 2c): tabla loop_id -> direccion del OSR-entry del C2
+         * precompilado.  Se rellena en eager_compile_function tras compilar el
+         * C1 de cada funcion (un C2-con-OSR-entry por loop detectado).  El
+         * handler instalado en regalloc_rewrite la consulta cuando un loop
+         * cruza el umbral; devolver la direccion dispara el frame-swap C1->C2.
+         * Lookup-puro en runtime (sin compilar -> sin GC) => el state-transfer
+         * por buffer es GC-safe (host_ptr capturados siguen frescos). */
+        std::unordered_map<uint64_t, uint64_t> g_osr_entry_map;
+
+        /** @brief Handler de OSR instalado via set_osr_handler.  Lookup del
+         *  OSR-entry precompilado para @p loop_id (0 si no hay variante). */
+        uint64_t osr_lookup_handler(uint64_t loop_id) {
+            auto it = g_osr_entry_map.find(loop_id);
+            return (it != g_osr_entry_map.end()) ? it->second : 0;
+        }
+
         void init_jit_subsystem() {
             g_code_cache      = new CodeCache();
             g_runtime_entries = new RuntimeEntries();
             g_runtime_entries->resolve();
             g_compiler        = new JitCompiler(*g_code_cache, *g_runtime_entries);
+            /* OSR: instalar el handler de lookup (antes de cualquier compile,
+             * por tanto antes de cualquier trigger en runtime). */
+            set_osr_handler(&osr_lookup_handler);
         }
 
         /* Construye el VregEntries desde los runtime entries resueltos. */
@@ -983,6 +1003,44 @@ namespace jit {
                 /* NOTA: el registro pc->jit lo hace el caller
                  * (maybe_compile_callvm_target) desde el CompileResult; no lo
                  * duplicamos aqui para no registrar compiles degenerados. */
+                /* --- OSR 2c: precompilar una variante C2-con-OSR-entry por cada
+                 * loop que el C1 acaba de detectar para esta funcion.  El C1
+                 * (vreg_compile arriba) registro sus back-edges en
+                 * regalloc_rewrite (loop_ids + header_block).  Aqui, con los
+                 * MISMOS resolvers, compilamos el C2 con OSR-entry y guardamos
+                 * su direccion en g_osr_entry_map[loop_id].  El handler de
+                 * runtime hace lookup -> dispara el frame-swap.  No-op si OSR
+                 * esta off (osr_loop_count()==0).  Plano (sin opt) en 2c; la
+                 * optimizacion del C2 es el paso siguiente. */
+                if (!ir_fn.name.empty()) {
+                    const uint32_t nloops = osr_loop_count();
+                    for (uint64_t lid = 0; lid < nloops; ++lid) {
+                        if (g_osr_entry_map.count(lid)) continue;  // ya precompilado
+                        std::string fnm; uint32_t hdr = 0;
+                        if (!osr_loop_info(lid, fnm, hdr)) continue;  // abortado/oob
+                        if (fnm != ir_fn.name) continue;             // otra funcion
+                        uint8_t *osr_entry = nullptr;
+                        uint8_t *c2 = vreg_compile_osr(
+                            ir_fn, *g_code_cache, resolver, make_vreg_entries(),
+                            resolve_native_fn, hdr, &osr_entry);
+                        if (c2 != nullptr && osr_entry != nullptr) {
+                            g_osr_entry_map[lid] =
+                                reinterpret_cast<uint64_t>(osr_entry);
+                            if (g_jit_warn_unsupported)
+                                std::fprintf(stderr,
+                                    "[jit-osr] C2-entry para loop %llu (fn '%s', "
+                                    "header bb%u) @ %p\n",
+                                    static_cast<unsigned long long>(lid),
+                                    ir_fn.name.c_str(), hdr,
+                                    static_cast<void *>(osr_entry));
+                        } else if (g_jit_warn_unsupported) {
+                            std::fprintf(stderr,
+                                "[jit-osr] loop %llu (fn '%s') no precompilo C2\n",
+                                static_cast<unsigned long long>(lid),
+                                ir_fn.name.c_str());
+                        }
+                    }
+                }
                 CompileResult r{};
                 r.fn = reinterpret_cast<JitFn>(vcode);
                 r.code_start = vcode;

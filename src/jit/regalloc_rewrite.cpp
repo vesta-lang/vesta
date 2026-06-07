@@ -89,37 +89,60 @@ namespace jit {
         /* Indexado por loop_id (== el contador g_osr_be_sites del sitio). */
         std::vector<OsrLoopDesc> g_osr_loops;
 
-        /** @brief Handler del trigger OSR.  Se invoca UNA vez por back-edge
-         *  cuando el contador iguala el umbral.  Paso 2a: ya recibe el buffer
-         *  con el estado del loop capturado por el C1 y lo loguea (validacion
-         *  del state-transfer sin salto todavia).  El OSR real (recompile C2 +
-         *  salto a mitad del loop) llega en 2b/2c.  Convencion C:
-         *  (proc, loop_id, buffer). */
-        void osr_trigger_stub(void * /*proc*/, uint64_t loop_id,
-                              uint64_t *buffer) {
+        /** @brief Handler de OSR instalado por auto_jit (2c).  Dado un loop_id,
+         *  devuelve la direccion del OSR-entry del C2 precompilado (o 0 si no
+         *  hay variante).  nullptr por defecto -> el trigger solo loguea y el
+         *  C1 NO hace swap (comportamiento 2a/2b). */
+        uint64_t (*g_osr_handler)(uint64_t) = nullptr;
+
+        /** @brief Diagnostico opt-in del trigger (VESTA_OSR_LOG=1): loguea el
+         *  estado capturado en cada disparo.  Off por defecto para no spamear
+         *  cuando el OSR real (swap) ya esta activo. */
+        bool jit_osr_log() noexcept {
+            static const bool on = []{
+                const char *v = std::getenv("VESTA_OSR_LOG");
+                return v && v[0] != '\0' && v[0] != '0';
+            }();
+            return on;
+        }
+
+        /** @brief Stub del trigger OSR.  Se invoca UNA vez por back-edge cuando
+         *  el contador iguala el umbral.  Recibe el buffer con el estado del loop
+         *  capturado por el C1 (puede loguearlo con VESTA_OSR_LOG=1).  Devuelve
+         *  la direccion del OSR-entry del C2 (via @c g_osr_handler) para que el
+         *  C1 haga el frame-swap; 0 = no swap (el C1 continua su loop).
+         *  Convencion C: (proc, loop_id, buffer) -> uint64_t en RAX. */
+        uint64_t osr_trigger_stub(void * /*proc*/, uint64_t loop_id,
+                                  uint64_t *buffer) {
             ++g_osr_trigger_hits;
-            if (loop_id < g_osr_loops.size()) {
-                const OsrLoopDesc &d =
-                    g_osr_loops[static_cast<size_t>(loop_id)];
-                std::fprintf(stderr,
-                    "[osr] TRIGGER loop_id=%llu fn=%s header_bb=%u capturas=%zu%s\n",
-                    static_cast<unsigned long long>(loop_id), d.fn_name.c_str(),
-                    d.header_block, d.captures.size(),
-                    d.aborted ? " (ABORTADO: estado no capturable)" : "");
-                if (buffer && !d.aborted) {
-                    for (const OsrCaptureSlot &c : d.captures) {
-                        const uint64_t val = buffer[c.vid];
-                        std::fprintf(stderr,
-                            "[osr]   v%u%s = %lld (0x%llx)\n", c.vid,
-                            c.is_gc ? " gc" : "",
-                            static_cast<long long>(val),
-                            static_cast<unsigned long long>(val));
+            if (jit_osr_log()) {
+                if (loop_id < g_osr_loops.size()) {
+                    const OsrLoopDesc &d =
+                        g_osr_loops[static_cast<size_t>(loop_id)];
+                    std::fprintf(stderr,
+                        "[osr] TRIGGER loop_id=%llu fn=%s header_bb=%u capturas=%zu%s\n",
+                        static_cast<unsigned long long>(loop_id),
+                        d.fn_name.c_str(), d.header_block, d.captures.size(),
+                        d.aborted ? " (ABORTADO: estado no capturable)" : "");
+                    if (buffer && !d.aborted) {
+                        for (const OsrCaptureSlot &c : d.captures) {
+                            const uint64_t val = buffer[c.vid];
+                            std::fprintf(stderr,
+                                "[osr]   v%u%s = %lld (0x%llx)\n", c.vid,
+                                c.is_gc ? " gc" : "",
+                                static_cast<long long>(val),
+                                static_cast<unsigned long long>(val));
+                        }
                     }
+                } else {
+                    std::fprintf(stderr,
+                        "[osr] TRIGGER loop_id=%llu (umbral %u)\n",
+                        static_cast<unsigned long long>(loop_id),
+                        jit_osr_threshold());
                 }
-            } else {
-                std::fprintf(stderr, "[osr] TRIGGER loop_id=%llu (umbral %u)\n",
-                    static_cast<unsigned long long>(loop_id), jit_osr_threshold());
             }
+            /* 2c: delegar en el handler para obtener el OSR-entry del C2. */
+            return g_osr_handler ? g_osr_handler(loop_id) : 0;
         }
         /** @brief Registra (una vez) el dump atexit del contador de back-edges. */
         void osr_install_dump_once() {
@@ -989,6 +1012,32 @@ namespace jit {
                 seq.push_back(MInstr::make_unary(MOp::MOV, R(MReg::RAX),
                     MOperand::make_imm64_idx(idx_h)));
                 { MInstr c; c.op = MOp::CALL; c.src1 = R(MReg::RAX); seq.push_back(c); }
+                /* --- 2c FRAME-SWAP: el handler devolvio en RAX la direccion del
+                 * OSR-entry del C2 (o 0).  Si != 0, ABANDONAMOS el frame C1 y
+                 * saltamos al C2: emit_epilogue restaura el frame con
+                 * `lea rsp,[rbp-8*total_saved]` (ABSOLUTO desde rbp -> no hay que
+                 * deshacer los push del trigger) + pops, dejando rsp en la
+                 * direccion de retorno del CALLER de C1.  RAX (osr_entry) NO se
+                 * popea en el epilogue -> sobrevive.  `jmp rax` entra al C2 con
+                 * rsp en ret_addr: el RET del C2 retorna al caller de C1, como si
+                 * el C2 hubiera sido la funcion llamada.  El buffer-por-VID ya
+                 * tiene el estado (capturado arriba, antes del handler) y el
+                 * handler es lookup-puro (sin GC) -> host_ptr GC siguen frescos. */
+                const MLabelId lcont = pf.new_label();
+                seq.push_back(MInstr::make_unary(MOp::TEST, R(MReg::RAX),
+                                                 R(MReg::RAX)));
+                seq.push_back(MInstr::make_jcc(MCond::E, lcont));  // RAX==0 -> no swap
+                /* El OSR-entry del C2 es VM_ABI: su prologue hace
+                 * `mov rbx, <arg0>` esperando ProcessVM* en el registro del 1er
+                 * argumento (A0 = RCX win / RDI sysv).  El epilogue del C1
+                 * restaura RBX al valor del caller (pop rbx) -> hay que pasar
+                 * proc por A0 ANTES del epilogue.  A0 es caller-saved y NO esta
+                 * en callee_saved -> sobrevive el epilogue (igual que RAX). */
+                seq.push_back(MInstr::make_unary(MOp::MOV, R(A0), R(MReg::RBX)));
+                lw.emit_epilogue(seq);                            // rsp -> ret_addr; RAX + A0 intactos
+                { MInstr j; j.op = MOp::JMP; j.src1 = R(MReg::RAX); seq.push_back(j); }
+                seq.push_back(MInstr::make_label_def(lcont));
+                /* --- ruta sin swap (RAX==0): continuar el loop C1 normal. --- */
                 if (adjust)
                     seq.push_back(MInstr::make_unary(MOp::ADD, R(MReg::RSP),
                         MOperand::make_imm32(static_cast<int32_t>(adjust))));
@@ -1061,6 +1110,28 @@ namespace jit {
 
         pf.stackmaps = std::move(lw.stackmaps);  // commit 6
         return pf;
+    }
+
+    /* ===================================================================== */
+    /* OSR runtime glue (Phase D.8, 2c) -- definiciones publicas              */
+    /* ===================================================================== */
+
+    void set_osr_handler(uint64_t (*handler)(uint64_t)) {
+        g_osr_handler = handler;
+    }
+
+    uint32_t osr_loop_count() {
+        return g_osr_be_sites;
+    }
+
+    bool osr_loop_info(uint64_t loop_id, std::string &fn_name_out,
+                       uint32_t &header_block_out) {
+        if (loop_id >= g_osr_loops.size()) return false;
+        const OsrLoopDesc &d = g_osr_loops[static_cast<size_t>(loop_id)];
+        if (d.aborted) return false;
+        fn_name_out      = d.fn_name;
+        header_block_out = d.header_block;
+        return true;
     }
 
 } // namespace jit
