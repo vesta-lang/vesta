@@ -3779,15 +3779,65 @@ namespace jit {
                                 MOperand::make_mem(MReg::RBX, regs_base + 15 * 8),
                                 MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
 
+                        /* INLINE CALLM DISPATCH (Phase D.8): el metodo ya esta
+                         * RESUELTO en operands[1] (por un FINDMETHOD previo) ->
+                         * no hay vtable walk como en CALLVIRT.  En vez de llamar
+                         * a vrt_callm (que re-setea regs[1] + on-demand-compile +
+                         * enter_jit por iteracion -- ~150ns en pic_real, 115x vs
+                         * C++), inline: cargar method->jit_code; si != null y sin
+                         * advice -> CALL DIRECTO (los args ya estan en
+                         * proc->registers, staged arriba); si no -> fallback a
+                         * vrt_callm.  Mismo patron que el inline de CALLVIRT. */
+                        const MLabelId cm_fallback = mf.new_label();
+                        const MLabelId cm_continue = mf.new_label();
+                        /* mov rcx, method (operands[1]) */
+                        load_op_rematerializable(mf, ir_fn, ins.operands[1], MReg::RCX);
+                        /* test rcx; jz fallback (method null) */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                            MOperand::make_reg(MReg::RCX),
+                            MOperand::make_reg(MReg::RCX)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jcc(MCond::E, cm_fallback));
+                        /* mov rax, [rcx + ADVICE_CHAIN_OFFSET]; test rax; jnz fallback
+                         * (AOP: si el metodo tiene advices, el fast path inline no
+                         * los aplica -> caer al slow path vrt_callm). */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_mem(MReg::RCX, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET)));
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_reg(MReg::RAX)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jcc(MCond::NE, cm_fallback));
+                        /* mov rax, [rcx + JIT_CODE_OFFSET]; test rax; jz fallback */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_mem(MReg::RCX, VESTA_METHODINFO_JIT_CODE_OFFSET)));
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::TEST,
+                            MOperand::make_reg(MReg::RAX),
+                            MOperand::make_reg(MReg::RAX)));
+                        mf.blocks.back().instrs.push_back(
+                            MInstr::make_jcc(MCond::E, cm_fallback));
+                        /* FAST PATH: mov rcx, rbx (proc); call rax (jit_code).
+                         * Los args ya estan en proc->registers (staged arriba);
+                         * el metodo VM_ABI los lee. */
+                        mf.blocks.back().instrs.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::RCX),
+                            MOperand::make_reg(MReg::RBX)));
+                        {
+                            MInstr fast_call;
+                            fast_call.op = MOp::CALL;
+                            fast_call.src1 = MOperand::make_reg(MReg::RAX);
+                            emit_stackmap_for_safepoint(fast_call);
+                            mf.blocks.back().instrs.push_back(fast_call);
+                        }
+                        mf.blocks.back().instrs.push_back(MInstr::make_jmp(cm_continue));
+
+                        /* fallback: vrt_callm(proc, obj, method). */
+                        mf.blocks.back().instrs.push_back(MInstr::make_label_def(cm_fallback));
                         /* Native ABI: arg0=proc(rbx), arg1=obj_payload, arg2=method_ptr.
-                         *
-                         * BUG FIX 2026-05-16: usar R10/R11 (caller-saved, no
-                         * arg regs) como temporales para evitar clobber.  El
-                         * codigo anterior usaba SCRATCH_C=RDX que ES cm_arg1
-                         * (Win64) o cm_arg2 (SysV) -- al mov-ear arg1 desde
-                         * RAX, sobrescribia RDX (method) antes de pasarlo
-                         * como arg2.  Resultado: vrt_callm(proc, obj, obj)
-                         * en vez de (proc, obj, method) -> retornaba 0. */
+                         * R10/R11 (caller-saved, no arg regs) como temporales para
+                         * evitar clobber (RDX es cm_arg1 Win64 / cm_arg2 SysV). */
                         load_op_rematerializable(mf, ir_fn, ins.operands[0], MReg::R10);  /* obj host_ptr */
                         load_op_rematerializable(mf, ir_fn, ins.operands[1], MReg::R11);  /* method ptr */
 #if defined(_WIN32)
@@ -3823,6 +3873,9 @@ namespace jit {
                         cm_call.src1 = MOperand::make_reg(MReg::RAX);
                         emit_stackmap_for_safepoint(cm_call);
                         mf.blocks.back().instrs.push_back(cm_call);
+
+                        /* continue: ambos paths convergen con resultado en RAX. */
+                        mf.blocks.back().instrs.push_back(MInstr::make_label_def(cm_continue));
                         if (ins.dst != ir::IR_NO_VALUE) {
                             store_op(mf, ins.dst, MReg::RAX);
                         }
