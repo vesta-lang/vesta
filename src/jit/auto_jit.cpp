@@ -195,6 +195,17 @@ namespace jit {
          * por buffer es GC-safe (host_ptr capturados siguen frescos). */
         std::unordered_map<uint64_t, uint64_t> g_osr_entry_map;
 
+        /** @brief Gate del C2 OPTIMIZADO del OSR (default ON).  VESTA_OSR_OPT=0
+         *  -> el C2 es un recompile plano (== C1) para A/B del beneficio del
+         *  inline agresivo.  Cacheado (1 getenv). */
+        bool osr_opt_enabled() {
+            static const bool on = []{
+                const char *v = std::getenv("VESTA_OSR_OPT");
+                return !(v && v[0] == '0');  // default ON; solo "0" lo apaga
+            }();
+            return on;
+        }
+
         /** @brief Handler de OSR instalado via set_osr_handler.  Lookup del
          *  OSR-entry precompilado para @p loop_id (0 si no hay variante). */
         uint64_t osr_lookup_handler(uint64_t loop_id) {
@@ -1019,10 +1030,69 @@ namespace jit {
                         std::string fnm; uint32_t hdr = 0;
                         if (!osr_loop_info(lid, fnm, hdr)) continue;  // abortado/oob
                         if (fnm != ir_fn.name) continue;             // otra funcion
+                        /* Red de seguridad: los vids que el C1 capturo al buffer.
+                         * El OSR-entry del C2 solo puede leer estos (si su live-in
+                         * pide otro, vreg_compile_osr aborta -> no swap). */
+                        std::vector<uint32_t> captured;
+                        osr_loop_captures(lid, captured);
+
+                        /* --- PASO 4: C2 OPTIMIZADO ---
+                         * Inline AGRESIVO de las CALLs del loop caliente (el
+                         * code-size no importa: el loop domina el tiempo).  O2
+                         * dejo helpers como CALL por su threshold conservador
+                         * (12); aqui subimos a 256 -> elimina el CALL + el
+                         * marshalling VM_ABI de args por memoria.  Block ids
+                         * preservados (el inline esplicea single-block en sitio)
+                         * -> el header_block del C1 sigue valido.  Gate
+                         * VESTA_OSR_OPT=0 -> recompile plano (para A/B). */
+                        const ir::IrFunction *compile_ir = &ir_fn;
+                        ir::IrFunction opt_clone;
+                        if (osr_opt_enabled() && ir_lookup != nullptr
+                         && ir_functions != nullptr) {
+                            opt_clone = ir_fn;  /* clon mutable */
+                            ir::IrModule tmp;
+                            tmp.functions.push_back(opt_clone);
+                            /* Anadir las user-fns que el loop llama (para inline). */
+                            std::unordered_set<std::string> added;
+                            for (const auto &blk : opt_clone.blocks)
+                                for (const auto &in2 : blk.instrs)
+                                    if (in2.op == ir::IrOp::CALL
+                                     && !in2.func_name.empty()
+                                     && !added.count(in2.func_name)) {
+                                        auto cl = ir_lookup->find(in2.func_name);
+                                        if (cl != ir_lookup->end()
+                                         && cl->second < ir_functions->size()) {
+                                            tmp.functions.push_back(
+                                                (*ir_functions)[cl->second]);
+                                            added.insert(in2.func_name);
+                                        }
+                                    }
+                            /* Inline agresivo + limpieza a fixpoint. */
+                            bool any_opt = false;
+                            for (int it = 0; it < 5; ++it) {
+                                bool any = ir::ir_pass_inline(tmp, 256);
+                                any = ir::ir_pass_const_fold(tmp.functions[0]) || any;
+                                any = ir::ir_pass_copy_prop(tmp.functions[0])  || any;
+                                any = ir::ir_pass_simplify(tmp.functions[0])   || any;
+                                any = ir::ir_pass_dce(tmp.functions[0])        || any;
+                                any_opt = any_opt || any;
+                                if (!any) break;
+                            }
+                            opt_clone = std::move(tmp.functions[0]);
+                            compile_ir = &opt_clone;
+                            if (g_jit_warn_unsupported && any_opt)
+                                std::fprintf(stderr,
+                                    "[jit-osr] C2 optimizado (inline agresivo) "
+                                    "para loop %llu (fn '%s')\n",
+                                    static_cast<unsigned long long>(lid),
+                                    ir_fn.name.c_str());
+                        }
+
                         uint8_t *osr_entry = nullptr;
                         uint8_t *c2 = vreg_compile_osr(
-                            ir_fn, *g_code_cache, resolver, make_vreg_entries(),
-                            resolve_native_fn, hdr, &osr_entry);
+                            *compile_ir, *g_code_cache, resolver,
+                            make_vreg_entries(), resolve_native_fn, hdr,
+                            &osr_entry, &captured);
                         if (c2 != nullptr && osr_entry != nullptr) {
                             g_osr_entry_map[lid] =
                                 reinterpret_cast<uint64_t>(osr_entry);
@@ -1035,7 +1105,8 @@ namespace jit {
                                     static_cast<void *>(osr_entry));
                         } else if (g_jit_warn_unsupported) {
                             std::fprintf(stderr,
-                                "[jit-osr] loop %llu (fn '%s') no precompilo C2\n",
+                                "[jit-osr] loop %llu (fn '%s') no precompilo C2 "
+                                "(unsupported o live-in mismatch)\n",
                                 static_cast<unsigned long long>(lid),
                                 ir_fn.name.c_str());
                         }

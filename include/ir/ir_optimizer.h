@@ -302,9 +302,15 @@ bool ir_pass_reassoc(IrFunction &fn);
  *   - port-C: codigo destino mas legible (menos funciones helper).
  *
  * @param mod Modulo a optimizar (mutado).
+ * @param threshold Tamano maximo (en instrs del body) del callee inlineable.
+ *        Default 12 (balance code-size en O2).  El C2/OSR sube este valor para
+ *        inlinear agresivamente las CALLs de un loop CALIENTE (donde el code-size
+ *        no importa porque el loop domina el tiempo): elimina el CALL + el
+ *        marshalling VM_ABI de args por memoria, que O2 dejo por su heuristica
+ *        conservadora.
  * @return true si inline al menos una CALL.
  */
-bool ir_pass_inline(IrModule &mod);
+bool ir_pass_inline(IrModule &mod, size_t threshold = 12);
 
 /**
  * @brief Loop-Invariant Code Motion.

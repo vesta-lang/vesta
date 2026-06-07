@@ -1060,52 +1060,92 @@ namespace jit {
          && static_cast<size_t>(osr->header_block) < NB) {
             const MBlockId header   = osr->header_block;
             const uint32_t header_pos = 2u * first_gi[header];
-            const MLabelId lbl      = pf.new_label();
-            auto R = [](MReg r) { return MOperand::make_reg(r, 8); };
-            const MReg base = lw.scr0;  // R10 (no asignable)
-            const MReg tmp  = lw.scr1;  // R11 (no asignable)
-
-            MBlock entryb;
-            entryb.label_id = lbl;
-            entryb.succ_a   = header;          // metadata (el jmp usa el label)
-            entryb.succ_b   = MBLOCK_INVALID;
-            std::vector<MInstr> ob;
-            /* (a) Prologue IDENTICO al de la entry 0 (mismo frame -> el RET de
-             * la funcion lo deshace con el mismo epilogue). */
-            lw.emit_prologue(ob);
-            /* (b) base = proc->osr_buffer (via RBX = ProcessVM*). */
-            ob.push_back(MInstr::make_unary(MOp::MOV, R(base),
-                MOperand::make_mem(MReg::RBX, VESTA_PROC_OSR_BUFFER_OFFSET)));
-            /* (c) cargar cada live-in vid del buffer a su reg/slot.  El set es
-             * covers(header_pos) sobre la liveness de ESTA funcion (C2); para el
-             * recompile plano coincide con el que C1 capturo, para el C2
-             * optimizado es un subconjunto (todos escritos por C1). */
             const uint32_t NVI = static_cast<uint32_t>(ivs->intervals.size());
             const uint32_t ir_n = vf.ir_value_count;
+
+            /* (0) Recolectar el live-in del header (covers(header_pos)) y, si hay
+             * red de seguridad (required_captures), VERIFICAR que todo vid este
+             * en el conjunto capturado por el C1.  Si alguno NO esta -> ABORTAR
+             * (no emitir el OSR-entry) -> el C2 no se registra -> sin swap -> el
+             * C1 continua.  Asi un C2 optimizado que necesite un valor no
+             * capturado por el C1 degrada a "sin speedup", nunca a corrupcion. */
+            std::vector<uint32_t> live_in;
+            bool mismatch = false;
             for (uint32_t v = 0; v < NVI; ++v) {
                 const LiveInterval &lv = ivs->intervals[v];
                 if (!lv.covers(header_pos)) continue;
                 if (v >= ir_n || v >= VESTA_OSR_BUFFER_N) continue;
-                const MOperand srcmem = MOperand::make_mem(
-                    base, static_cast<int32_t>(v * 8u));
-                if (ra.in_reg(v)) {
-                    ob.push_back(MInstr::make_unary(MOp::MOV,
-                        MOperand::make_reg(static_cast<MReg>(ra.reg_of(v)), 8),
-                        srcmem));
-                } else if (ra.spilled(v)) {
-                    ob.push_back(MInstr::make_unary(MOp::MOV, R(tmp), srcmem));
-                    ob.push_back(MInstr::make_unary(MOp::MOV,
-                        MOperand::make_mem(MReg::RBP,
-                            lw.slot_off(ra.slot_of(v))), R(tmp)));
+                if (!ra.in_reg(v) && !ra.spilled(v)) continue;  // sin ubicacion
+                if (osr->required_captures != nullptr) {
+                    const auto &req = *osr->required_captures;
+                    bool found = false;
+                    for (uint32_t cv : req) if (cv == v) { found = true; break; }
+                    if (!found) { mismatch = true; break; }
                 }
-                /* else: sin ubicacion (no deberia pasar para un live-in). */
+                live_in.push_back(v);
             }
-            /* (d) saltar al header (reanuda el loop a mitad). */
-            ob.push_back(MInstr::make_jmp(pf.blocks[header].label_id));
-            entryb.instrs = std::move(ob);
-            pf.blocks.push_back(std::move(entryb));
-            osr->osr_entry_label = lbl;
-            osr->osr_entry_valid = true;
+            if (mismatch) {
+                osr->osr_entry_valid = false;  // fallback seguro: no swap
+            } else {
+                const MLabelId lbl = pf.new_label();
+                auto R = [](MReg r) { return MOperand::make_reg(r, 8); };
+                const MReg base = lw.scr0;  // R10 (no asignable)
+                const MReg tmp  = lw.scr1;  // R11 (no asignable)
+                MBlock entryb;
+                entryb.label_id = lbl;
+                entryb.succ_a   = header;       // metadata (el jmp usa el label)
+                entryb.succ_b   = MBLOCK_INVALID;
+                std::vector<MInstr> ob;
+                /* (a) Prologue IDENTICO al de la entry 0 (mismo frame). */
+                lw.emit_prologue(ob);
+                /* (b) base = proc->osr_buffer (via RBX = ProcessVM*). */
+                ob.push_back(MInstr::make_unary(MOp::MOV, R(base),
+                    MOperand::make_mem(MReg::RBX, VESTA_PROC_OSR_BUFFER_OFFSET)));
+                /* (c) cargar cada live-in vid del buffer a su reg/slot. */
+                for (uint32_t v : live_in) {
+                    const MOperand srcmem = MOperand::make_mem(
+                        base, static_cast<int32_t>(v * 8u));
+                    if (ra.in_reg(v)) {
+                        ob.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(static_cast<MReg>(ra.reg_of(v)), 8),
+                            srcmem));
+                    } else {  /* spilled (garantizado por el filtro de arriba). */
+                        ob.push_back(MInstr::make_unary(MOp::MOV, R(tmp), srcmem));
+                        ob.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_mem(MReg::RBP,
+                                lw.slot_off(ra.slot_of(v))), R(tmp)));
+                    }
+                }
+                /* (d) saltar al header (reanuda el loop a mitad). */
+                ob.push_back(MInstr::make_jmp(pf.blocks[header].label_id));
+                entryb.instrs = std::move(ob);
+                pf.blocks.push_back(std::move(entryb));
+                osr->osr_entry_label = lbl;
+                osr->osr_entry_valid = true;
+            }
+        }
+
+        /* --- Peephole final: eliminar `mov r64, r64` con el MISMO registro
+         * (no-ops puros del two-address legalization: `mov pdst, rs1` cuando
+         * pdst==rs1).  En un loop apretado (p.ej. un C2 con inline agresivo)
+         * estos consumen ancho de banda de DECODE aunque el renamer los elimine.
+         * SOLO width 8: un `mov e_x, e_x` de 32 bits zero-extiende los 64 bits
+         * (NO es no-op) y se conserva.  Cero riesgo: un self-mov de 64 bits es
+         * semanticamente identico a su ausencia. */
+        for (auto &blk : pf.blocks) {
+            std::vector<MInstr> cleaned;
+            cleaned.reserve(blk.instrs.size());
+            for (MInstr &mi : blk.instrs) {
+                if (mi.op == MOp::MOV
+                 && mi.dst.kind == MOperandKind::REG
+                 && mi.src1.kind == MOperandKind::REG
+                 && mi.dst.reg == mi.src1.reg
+                 && mi.dst.width == 8 && mi.src1.width == 8) {
+                    continue;  // self-mov de 64 bits -> descartar
+                }
+                cleaned.push_back(std::move(mi));
+            }
+            blk.instrs = std::move(cleaned);
         }
 
         pf.stackmaps = std::move(lw.stackmaps);  // commit 6
@@ -1131,6 +1171,16 @@ namespace jit {
         if (d.aborted) return false;
         fn_name_out      = d.fn_name;
         header_block_out = d.header_block;
+        return true;
+    }
+
+    bool osr_loop_captures(uint64_t loop_id, std::vector<uint32_t> &out_vids) {
+        if (loop_id >= g_osr_loops.size()) return false;
+        const OsrLoopDesc &d = g_osr_loops[static_cast<size_t>(loop_id)];
+        if (d.aborted) return false;
+        out_vids.clear();
+        out_vids.reserve(d.captures.size());
+        for (const OsrCaptureSlot &c : d.captures) out_vids.push_back(c.vid);
         return true;
     }
 

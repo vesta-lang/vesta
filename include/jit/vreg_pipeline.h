@@ -22,6 +22,7 @@
 #include "jit/vreg_select.h"  // CallResolver
 
 #include <cstdint>
+#include <vector>
 
 namespace ir { struct IrFunction; }
 
@@ -61,16 +62,22 @@ namespace jit {
      * @param resolve_native Resolver de CALLN nativas.
      * @param header_block   MBlock del loop header a reanudar (== IR block id).
      * @param osr_entry_out  [out] direccion absoluta del OSR-entry (o nullptr).
+     * @param required_captures  Red de seguridad: VIDs que el C1 capturo.  Si
+     *                       != nullptr, el OSR-entry verifica que su live-in sea
+     *                       subconjunto; si no, no emite el entry (osr_entry_out
+     *                       queda nullptr -> sin swap).  Critico para el C2
+     *                       OPTIMIZADO (cuyo live-in puede diferir del C1).
      * @return               Codigo del blob C2 (entrada normal), o nullptr si
      *                       la funcion no es del subset vreg o no se emitio el
-     *                       OSR-entry.
+     *                       OSR-entry (incl. mismatch del live-in).
      */
     uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
                               const CallResolver &resolve_call,
                               const VregEntries &ent,
                               const CallResolver &resolve_native,
                               uint32_t header_block,
-                              uint8_t **osr_entry_out);
+                              uint8_t **osr_entry_out,
+                              const std::vector<uint32_t> *required_captures = nullptr);
 
 } // namespace jit
 
