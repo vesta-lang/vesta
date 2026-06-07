@@ -13,6 +13,7 @@
 
 #include "jit/regalloc_rewrite.h"
 
+#include <cstdio>
 #include <cstdlib>
 
 namespace jit {
@@ -31,6 +32,61 @@ namespace jit {
                 return v && v[0] != '\0' && v[0] != '0';
             }();
             return off;
+        }
+
+        /** @brief OSR 1a (diagnostico, VESTA_OSR_COUNT=1): instrumenta cada
+         *  back-edge con un contador de iteraciones.  Emitido POST-regalloc
+         *  (aqui, no en vreg_select) para no pasar por la legalizacion 2-address
+         *  de @c lower() -- que mangla @c ADD [mem],imm al ser ADD un bin_alu.
+         *  El encoder procesa la secuencia verbatim (igual que el contador
+         *  on-entry del Selector).  Prerrequisito del tier-up por back-edge (1b)
+         *  y del OSR real (2). */
+        bool jit_osr_count() noexcept {
+            static const bool on = []{
+                const char *v = std::getenv("VESTA_OSR_COUNT");
+                return v && v[0] != '\0' && v[0] != '0';
+            }();
+            return on;
+        }
+        /* Contador unico global de iteraciones de back-edge (diagnostico 1a). */
+        uint64_t g_osr_be_total = 0;
+        uint32_t g_osr_be_sites = 0;
+
+        /** @brief Umbral de iteraciones para disparar el tier-up por back-edge
+         *  (1b).  Default 100k; override VESTA_OSR_THRESHOLD. */
+        uint32_t jit_osr_threshold() noexcept {
+            static const uint32_t t = []{
+                const char *v = std::getenv("VESTA_OSR_THRESHOLD");
+                return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10))
+                         : 100000u;
+            }();
+            return t;
+        }
+        /* Cuantas veces se disparo el trigger (diagnostico). */
+        uint64_t g_osr_trigger_hits = 0;
+
+        /** @brief Handler del trigger OSR (1b).  Se invoca UNA vez por
+         *  back-edge cuando el contador iguala el umbral.  En 1b solo registra
+         *  el evento; el OSR real (recompile C2 + state-transfer + salto a mitad
+         *  del loop) llega en el paso 2.  Convencion C: (proc, loop_id). */
+        void osr_trigger_stub(void * /*proc*/, uint64_t loop_id) {
+            ++g_osr_trigger_hits;
+            std::fprintf(stderr,
+                "[osr] TRIGGER loop_id=%llu (umbral %u cruzado)\n",
+                static_cast<unsigned long long>(loop_id), jit_osr_threshold());
+        }
+        /** @brief Registra (una vez) el dump atexit del contador de back-edges. */
+        void osr_install_dump_once() {
+            static bool installed = false;
+            if (installed) return;
+            installed = true;
+            std::atexit([]{
+                std::fprintf(stderr,
+                    "[osr] back-edges=%u  iteraciones_totales=%llu  triggers=%llu\n",
+                    g_osr_be_sites,
+                    static_cast<unsigned long long>(g_osr_be_total),
+                    static_cast<unsigned long long>(g_osr_trigger_hits));
+            });
         }
 
         /** @brief True si la ALU binaria @p op es conmutativa. */
@@ -87,7 +143,9 @@ namespace jit {
                  * push/pop de RBX (callee-saved del host que trae ProcessVM*) y
                  * los callee-saved usados; lo unico que desaparece es RBP. */
                 no_frame = !has_calls && ra.num_spill_slots == 0u &&
-                           alloca_total == 0u && !jit_no_frameless();
+                           alloca_total == 0u && !jit_no_frameless()
+                           && !jit_osr_count();  /* el trigger (1b) anyade un
+                              call -> necesita frame con rsp 16-alineado. */
                 /* Las allocas viven debajo de los spill slots. */
                 alloca_base = 8u * total_saved + 8u * ra.num_spill_slots;
                 spill_bytes = static_cast<int32_t>(
@@ -664,6 +722,43 @@ namespace jit {
         pf.imm64_pool     = vf.imm64_pool;
         pf.blocks.resize(vf.blocks.size());
 
+        /* OSR 1a: deteccion PRECISA de loop back-edges via DFS (clasico:
+         * arista u->v es back-edge sii v esta "gris" = en la pila del DFS).
+         * Distingue ciclos reales de saltos a un indice menor que NO son loops
+         * (e.g. el merge de un if/else anidado).  @c be_block[u]=1 si el bloque
+         * u termina en un BR INCONDICIONAL (succ_b invalido) que es back-edge.
+         * Iterativo para no desbordar la pila en funciones con muchos bloques. */
+        const size_t NB = vf.blocks.size();
+        std::vector<uint8_t> be_block;  // vacio salvo con el gate (cero overhead)
+        if (jit_osr_count() && NB > 0) {
+            be_block.assign(NB, 0);
+            std::vector<uint8_t> color(NB, 0);  // 0=white 1=gray 2=black
+            std::vector<std::pair<MBlockId, int>> stk;  // (bloque, prox succ)
+            stk.push_back({0, 0});
+            color[0] = 1;
+            while (!stk.empty()) {
+                MBlockId u = stk.back().first;
+                int &si = stk.back().second;
+                const MBlockId succ[2] = { vf.blocks[u].succ_a, vf.blocks[u].succ_b };
+                if (si < 2) {
+                    const MBlockId v = succ[si];
+                    ++si;
+                    if (v == MBLOCK_INVALID || v >= NB) continue;
+                    if (color[v] == 0) { color[v] = 1; stk.push_back({v, 0}); }
+                    else if (color[v] == 1) {
+                        /* back-edge u->v; instrumentable solo si u es BR
+                         * incondicional (sin succ_b) y v es ese succ_a. */
+                        if (vf.blocks[u].succ_b == MBLOCK_INVALID
+                         && vf.blocks[u].succ_a == v)
+                            be_block[u] = 1;
+                    }
+                } else {
+                    color[u] = 2;
+                    stk.pop_back();
+                }
+            }
+        }
+
         /* gi = indice lineal global de la instr vreg (MISMO orden que
          * build_intervals).  cur_call_pos = 2*gi se pasa a lower() para que
          * el CALL_ABS sepa que GC roots estan vivos en ese punto. */
@@ -679,6 +774,73 @@ namespace jit {
                 lw.cur_call_pos = 2u * gi;
                 lw.lower(in, outv);
                 ++gi;
+            }
+            /* OSR 1a: instrumentar el back-edge (BR incondicional a un bloque
+             * anterior).  El counter va ANTES del JMP terminal; el `add` toca
+             * flags pero el JMP no las lee.  push/pop rax preserva el estado.
+             * Emitido aqui (post-lower) para no pasar por la legalizacion
+             * 2-address que mangla ADD [mem],imm. */
+            if (jit_osr_count() && be_block[b]
+             && !outv.empty() && outv.back().op == MOp::JMP) {
+                osr_install_dump_once();
+                const uint64_t loop_id = g_osr_be_sites;
+                ++g_osr_be_sites;
+                /* Indices del pool: contador, loop_id, handler. */
+                const uint32_t idx_cnt = static_cast<uint32_t>(pf.imm64_pool.size());
+                pf.imm64_pool.push_back(reinterpret_cast<uint64_t>(&g_osr_be_total));
+                const uint32_t idx_lid = static_cast<uint32_t>(pf.imm64_pool.size());
+                pf.imm64_pool.push_back(loop_id);
+                const uint32_t idx_h = static_cast<uint32_t>(pf.imm64_pool.size());
+                pf.imm64_pool.push_back(
+                    reinterpret_cast<uint64_t>(&osr_trigger_stub));
+                const MLabelId lskip = pf.new_label();
+                auto R = [](MReg r) { return MOperand::make_reg(r, 8); };
+                std::vector<MInstr> seq;
+                /* --- contador + check (cada iteracion; jne bien predicho) --- */
+                seq.push_back(MInstr::make_unary(MOp::PUSH, {}, R(MReg::RAX)));
+                seq.push_back(MInstr::make_unary(MOp::MOV, R(MReg::RAX),
+                    MOperand::make_imm64_idx(idx_cnt)));
+                seq.push_back(MInstr::make_unary(MOp::ADD,
+                    MOperand::make_mem(MReg::RAX, 0), MOperand::make_imm32(1)));
+                seq.push_back(MInstr::make_unary(MOp::CMP,
+                    MOperand::make_mem(MReg::RAX, 0),
+                    MOperand::make_imm32(static_cast<int32_t>(jit_osr_threshold()))));
+                seq.push_back(MInstr::make_unary(MOp::POP, R(MReg::RAX), {}));
+                seq.push_back(MInstr::make_jcc(MCond::NE, lskip));  // cmp no toca rsp; pop no toca flags
+                /* --- trigger one-shot (cnt == umbral): preservar TODO el estado
+                 * vivo (caller-saved), llamar al handler, restaurar.  RBX
+                 * (=ProcessVM*) es callee-saved -> sobrevive el call. --- */
+                const auto &cs = tri.caller_saved[static_cast<size_t>(RegClass::GP)];
+                for (uint8_t r : cs)
+                    seq.push_back(MInstr::make_unary(MOp::PUSH, {}, R(static_cast<MReg>(r))));
+#if defined(_WIN32)
+                const MReg A0 = MReg::RCX, A1 = MReg::RDX;
+                const uint32_t SHADOW = 32;
+#else
+                const MReg A0 = MReg::RDI, A1 = MReg::RSI;
+                const uint32_t SHADOW = 0;
+#endif
+                seq.push_back(MInstr::make_unary(MOp::MOV, R(A0), R(MReg::RBX)));  // arg0=proc
+                seq.push_back(MInstr::make_unary(MOp::MOV, R(A1),
+                    MOperand::make_imm64_idx(idx_lid)));                           // arg1=loop_id
+                /* Alinear rsp a 16 + shadow space (Win64).  Tras el frame rsp
+                 * esta 16-alineado; push de C caller-saved lo desalinea 8 si C
+                 * es impar. */
+                const uint32_t adjust = ((cs.size() & 1u) ? 8u : 0u) + SHADOW;
+                if (adjust)
+                    seq.push_back(MInstr::make_unary(MOp::SUB, R(MReg::RSP),
+                        MOperand::make_imm32(static_cast<int32_t>(adjust))));
+                seq.push_back(MInstr::make_unary(MOp::MOV, R(MReg::RAX),
+                    MOperand::make_imm64_idx(idx_h)));
+                { MInstr c; c.op = MOp::CALL; c.src1 = R(MReg::RAX); seq.push_back(c); }
+                if (adjust)
+                    seq.push_back(MInstr::make_unary(MOp::ADD, R(MReg::RSP),
+                        MOperand::make_imm32(static_cast<int32_t>(adjust))));
+                for (size_t i = cs.size(); i-- > 0;)
+                    seq.push_back(MInstr::make_unary(MOp::POP,
+                        R(static_cast<MReg>(cs[i])), {}));
+                seq.push_back(MInstr::make_label_def(lskip));
+                outv.insert(outv.end() - 1, seq.begin(), seq.end());
             }
             pf.blocks[b].instrs = std::move(outv);
         }
