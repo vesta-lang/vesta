@@ -108,7 +108,8 @@ namespace jit {
                               const VregEntries &ent,
                               const CallResolver &resolve_native,
                               uint32_t header_block,
-                              uint8_t **osr_entry_out) {
+                              uint8_t **osr_entry_out,
+                              const std::vector<uint32_t> *required_captures) {
         if (osr_entry_out) *osr_entry_out = nullptr;
 
         /* 1-3: identico a vreg_compile (selector + intervals + regalloc +
@@ -134,6 +135,7 @@ namespace jit {
         OsrEmit osr;
         osr.mode = OsrEmit::C2_ENTRY;
         osr.header_block = static_cast<MBlockId>(header_block);
+        osr.required_captures = required_captures;  // red de seguridad live-in
         MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM, &ivs, &osr);
         if (!osr.osr_entry_valid) return nullptr;  // no se pudo emitir el entry
 

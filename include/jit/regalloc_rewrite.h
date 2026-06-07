@@ -41,6 +41,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "jit/linear_scan.h"
 #include "jit/machine_ir.h"
@@ -73,6 +74,18 @@ namespace jit {
         enum Mode { C2_ENTRY };
         Mode     mode         = C2_ENTRY;
         MBlockId header_block = MBLOCK_INVALID; ///< loop header a reanudar
+        /**
+         * @brief RED DE SEGURIDAD (Phase D.8, paso 4): conjunto de IR VIDs que
+         * el C1 capturo al buffer (ordenado).  Si != nullptr, el OSR-entry
+         * VERIFICA que cada vid de su live-in (covers(header)) este en este
+         * conjunto; si alguno NO esta (el C2 optimizado necesita un valor que el
+         * C1 no escribio en el buffer), ABORTA la emision del OSR-entry
+         * (@c osr_entry_valid=false) -> el handler no registra la variante ->
+         * no hay swap -> el C1 continua su loop (CORRECTO).  Convierte cualquier
+         * fallo del invariante "live-in(C2) subset captura(C1)" en una perdida
+         * de speedup, NUNCA en corrupcion.  nullptr -> sin verificacion (el
+         * recompile plano del 2c, donde C2==C1 trivialmente cumple). */
+        const std::vector<uint32_t> *required_captures = nullptr;
         /* --- salida (rellenada por rewrite_to_physical) --- */
         MLabelId osr_entry_label = 0;           ///< label del bloque OSR-entry
         bool     osr_entry_valid = false;       ///< true si se emitio el entry
@@ -132,6 +145,14 @@ namespace jit {
      */
     bool osr_loop_info(uint64_t loop_id, std::string &fn_name_out,
                        uint32_t &header_block_out);
+
+    /**
+     * @brief Rellena @p out_vids con los IR VIDs que el C1 capturo al buffer
+     *        para @p loop_id (la red de seguridad del C2: el OSR-entry del C2
+     *        solo puede leer vids que esten aqui).  Devuelve false si el id esta
+     *        fuera de rango o el loop se aborto.
+     */
+    bool osr_loop_captures(uint64_t loop_id, std::vector<uint32_t> &out_vids);
 
 } // namespace jit
 

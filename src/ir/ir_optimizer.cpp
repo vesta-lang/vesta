@@ -4655,20 +4655,18 @@ bool ir_pass_inline_loop_header(IrFunction &fn) {
 // port-C: codigo destino mas legible, sin auxiliary functions ni
 // goto-style returns.
 
-bool ir_pass_inline(IrModule &mod) {
+bool ir_pass_inline(IrModule &mod, size_t threshold) {
     /* Threshold de tamano del body del callee para inlinar.
      *
-     * Por que 12 (en lugar de 8 o 16): el overhead del CALLVM (push regs vivos,
-     * mov r1..rN args, callvm, pop regs, mov dst r0) en el peor caso son ~24
-     * instrucciones VM.  Cualquier callee cuyo cuerpo cabe en menos de eso es
-     * candidato directo a inline ya que ahorramos mas de lo que crece el
+     * Por que 12 por defecto (en lugar de 8 o 16): el overhead del CALLVM (push
+     * regs vivos, mov r1..rN args, callvm, pop regs, mov dst r0) en el peor caso
+     * son ~24 instrucciones VM.  Cualquier callee cuyo cuerpo cabe en menos de
+     * eso es candidato directo a inline ya que ahorramos mas de lo que crece el
      * caller.  12 es el balance que captura getters, setters y helpers
-     * aritmeticos pequenos (ej. computos como ladominos lados, 2 LOADs + MUL
-     * + DIV + RET) sin causar bloat material en el .velb de programas
-     * tipicos.  Subir el limite por encima de ~16 empieza a inflar el binario
-     * sin ganancia neta porque los callees grandes ya son rentables como
-     * subrutina compartida. */
-    constexpr size_t INLINE_THRESHOLD = 12;
+     * aritmeticos pequenos sin causar bloat material en el .velb de programas
+     * tipicos.  El C2/OSR pasa un threshold mayor para inlinear las CALLs de un
+     * loop CALIENTE (el code-size no importa cuando el loop domina el tiempo). */
+    const size_t INLINE_THRESHOLD = threshold;
     bool changed = false;
 
     /* Build name -> index map. */
