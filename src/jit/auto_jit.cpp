@@ -24,6 +24,7 @@
 #include "ffi/virtual_lib_registry.h"  // Sprint JIT-cross-fn: virtual fn lookup
 #include "loader/loader.h"
 #include "loader/oop_types.h"
+#include "ir/ir_optimizer.h"            // C2.4: devirt especulativa + inline
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/scheduler.h"
@@ -1784,7 +1785,95 @@ namespace jit {
                 : 0;
             /* NO tier_up_* -> el codigo C2 es terminal (no se re-instrumenta). */
 
-            const CompileResult res = g_compiler->compile_with_opts(*ir_fn, c2);
+            /* --- C2.4: devirt especulativa de los IC sites monomorficos. ---
+             * Para cada CALLVIRT cuyo PIC observo EXACTAMENTE 1 clase, emite
+             * un guard (clase == T) ? CALL directo : CALLVIRT, e inlinea el
+             * CALL (si el callee es 1-bloque-RET) + plega.  Correcto por
+             * construccion: el callee se resuelve de C->vtable[vtbl_idx] con
+             * la MISMA C del guard, asi que si el guard pasa el target es
+             * exacto; si no, cae al CALLVIRT original. */
+            const ir::IrFunction *compile_target = ir_fn;
+            ir::IrFunction spec_clone;
+            {
+                /* ordinal -> (dst, vtbl_idx) recorriendo los CALLVIRT en el
+                 * mismo orden en que el Selector asigno las claves de IC. */
+                std::vector<std::pair<ir::IrValueId, uint64_t>> cv_by_ord;
+                for (const auto &bb : ir_fn->blocks)
+                    for (const auto &ins : bb.instrs)
+                        if (ins.op == ir::IrOp::CALLVIRT)
+                            cv_by_ord.push_back({ins.dst, ins.imm});
+
+                std::vector<ir::SpecDevirtSite> sites;
+                std::unordered_set<std::string> callee_names;
+                auto kit2 = g_fn_ic_keys.find(fn_pc);
+                if (kit2 != g_fn_ic_keys.end()) {
+                    for (uint64_t key : kit2->second) {
+                        const uint32_t ord = static_cast<uint32_t>(key & 0xFFu);
+                        if (ord >= cv_by_ord.size()) continue;
+                        auto sit = g_ic_slots.find(key);
+                        if (sit == g_ic_slots.end() || sit->second == 0) continue;
+                        const uint64_t *slot =
+                            reinterpret_cast<const uint64_t *>(sit->second);
+                        int distinct = 0; uint64_t cptr = 0;
+                        for (int e = 0; e < 4; ++e)
+                            if (slot[e * 2] != 0) { ++distinct; if (distinct == 1) cptr = slot[e * 2]; }
+                        if (distinct != 1 || cptr == 0) continue;   /* solo monomorfico */
+                        const ir::IrValueId cv_dst = cv_by_ord[ord].first;
+                        const uint64_t vtbl_idx    = cv_by_ord[ord].second;
+                        if (cv_dst == ir::IR_NO_VALUE) continue;     /* void: sin PHI */
+                        loader::ClassInfo *cls = reinterpret_cast<loader::ClassInfo *>(cptr);
+                        if (!cls->vtable || vtbl_idx >= cls->vtable_size) continue;
+                        loader::MethodInfo *m = cls->vtable[vtbl_idx];
+                        if (!m || !m->name.data || m->name.size == 0) continue;
+                        std::string cn = (cls->name.data && cls->name.size)
+                            ? std::string(reinterpret_cast<const char *>(cls->name.data), cls->name.size)
+                            : std::string();
+                        std::string mn(reinterpret_cast<const char *>(m->name.data), m->name.size);
+                        std::string callee = cn + "__" + mn;
+                        /* callee debe existir y ser inlineable (1 bloque, RET):
+                         * si no, el CALL del fast-path quedaria sin resolver. */
+                        auto cl = owning_exe->ir_lookup.find(callee);
+                        if (cl == owning_exe->ir_lookup.end()
+                         || cl->second >= owning_exe->ir_functions.size()) continue;
+                        const ir::IrFunction &cf = owning_exe->ir_functions[cl->second];
+                        if (cf.blocks.size() != 1 || cf.blocks[0].instrs.empty()
+                         || cf.blocks[0].instrs.back().op != ir::IrOp::RET) continue;
+                        sites.push_back(ir::SpecDevirtSite{cv_dst, cptr, callee});
+                        callee_names.insert(callee);
+                    }
+                }
+
+                if (!sites.empty()) {
+                    spec_clone = *ir_fn;  /* clon mutable */
+                    if (ir::ir_pass_speculative_devirt(spec_clone, sites)) {
+                        ir::IrModule tmp;
+                        tmp.functions.push_back(spec_clone);
+                        for (const auto &cn : callee_names) {
+                            auto cl = owning_exe->ir_lookup.find(cn);
+                            if (cl != owning_exe->ir_lookup.end()
+                             && cl->second < owning_exe->ir_functions.size())
+                                tmp.functions.push_back(owning_exe->ir_functions[cl->second]);
+                        }
+                        /* inline del CALL fast-path + limpieza a fixpoint. */
+                        for (int it = 0; it < 5; ++it) {
+                            bool any = ir::ir_pass_inline(tmp);
+                            any = ir::ir_pass_const_fold(tmp.functions[0]) || any;
+                            any = ir::ir_pass_copy_prop(tmp.functions[0])  || any;
+                            any = ir::ir_pass_simplify(tmp.functions[0])   || any;
+                            any = ir::ir_pass_dce(tmp.functions[0])        || any;
+                            if (!any) break;
+                        }
+                        spec_clone = std::move(tmp.functions[0]);
+                        compile_target = &spec_clone;
+                        if (g_c2_log)
+                            std::fprintf(stderr,
+                                "[c2] devirt especulativa: %zu site(s) monomorfico(s) en '%s'\n",
+                                sites.size(), fn_name.c_str());
+                    }
+                }
+            }
+
+            const CompileResult res = g_compiler->compile_with_opts(*compile_target, c2);
             if (res.fn == nullptr) {
                 /* No se pudo recompilar (alguna op sin contexto recursivo).
                  * Queda C1; g_tiered_pcs evita reintentos. */
@@ -1850,6 +1939,9 @@ namespace jit {
                     "[c2] tier-up '%s' (pc=0x%llx) -> C2 (%zu bytes); C1 a free-list pendiente\n",
                     fn_name.c_str(),
                     static_cast<unsigned long long>(fn_pc), res.code_size);
+            }
+            if (g_jit_disasm) {
+                debug_dump_jit_code(fn_name + " [C2]", res.code_start, res.code_size);
             }
         } catch (...) {
             /* Cualquier fallo deja la funcion en C1 (correcto). */
