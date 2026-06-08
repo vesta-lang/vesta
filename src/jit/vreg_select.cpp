@@ -854,6 +854,7 @@ namespace jit {
                     case ir::IrOp::GC_HANDLE_FOR_PTR:
                     case ir::IrOp::GC_ALLOC:
                     case ir::IrOp::GC_ALLOCP:
+                    case ir::IrOp::NEWOBJ:
                     case ir::IrOp::RAW_ALLOC: {
                         flush_pending();
                         /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
@@ -982,9 +983,16 @@ namespace jit {
                          * crash (era el bug de 64_curry/102/167).  gc_alloc
                          * DISPARA GC (safepoint); los GC roots vivos a traves
                          * del call los spillea el commit 6 (call_position). */
+                        /* NEWOBJ: vrt_newobj_handle(proc, cls) -> GcHandle.
+                         * cls = operands[0] (ClassInfo* nativo, no GC).  El
+                         * alloc puede disparar GC; al ser CALL_ABS cuenta como
+                         * call-position (interval.cpp) -> los roots vivos a
+                         * traves se spillean (commit 6).  Mismo marshalling
+                         * 1-arg (proc, valor) que gc_handle/raw_alloc. */
                         const uint64_t addr =
                             (in.op == ir::IrOp::GC_HANDLE_FOR_PTR) ? ent.gc_handle :
                             (in.op == ir::IrOp::RAW_ALLOC)         ? ent.raw_alloc :
+                            (in.op == ir::IrOp::NEWOBJ)            ? ent.newobj    :
                                                                      ent.gc_allocp;
                         if (!vm || addr == 0) {
                             vreg_dbg(fn.name.c_str(), "gc_runtime"); return false;
@@ -1163,12 +1171,28 @@ namespace jit {
                                 VESTA_METHODINFO_JIT_CODE_OFFSET);
                             O.push_back(mk_test(code, code));
                             O.push_back(MInstr::make_jcc(MCond::E, Lfb));
-                            /* FAST: proc en arg0; call directo a code (los args
-                             * ya estan en proc->registers). */
+                            /* FAST: proc en arg0; call directo (indirecto) a
+                             * code (los args ya estan en proc->registers).
+                             *
+                             * BUG FIX (loop+callvirt+objeto-GC): el regalloc
+                             * puede asignar `code` a pr_reg (RCX en Win64 /
+                             * RDI en SysV = arg0).  El `mov pr_reg, rbx`
+                             * (proc) lo machacaria ANTES del call -> se
+                             * llamaria a `proc` (ProcessVM*) en vez de a code
+                             * -> SIGSEGV.  El regalloc NO modela el `mov
+                             * pr_reg, rbx` (write a fisico) como interferencia
+                             * con el vreg `code`.  Solucion: mover code a R10
+                             * (SCRATCH reservado, NUNCA asignable a un vreg ->
+                             * sin colision posible) antes de escribir pr_reg,
+                             * y hacer el call indirecto via R10.  El `mov
+                             * pr_reg, rbx` (reg-reg directo) no toca R10. */
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(MReg::R10, 8), vr(code)));
                             O.push_back(MInstr::make_unary(MOp::MOV,
                                 MOperand::make_reg(pr_reg, 8),
                                 MOperand::make_reg(MReg::RBX, 8)));
-                            { MInstr ic; ic.op = MOp::CALL; ic.src1 = vr(code);
+                            { MInstr ic; ic.op = MOp::CALL;
+                              ic.src1 = MOperand::make_reg(MReg::R10, 8);
                               O.push_back(ic); }
                             O.push_back(MInstr::make_jmp(Ldone));
                             /* FALLBACK. */

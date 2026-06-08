@@ -233,6 +233,7 @@ namespace jit {
                 e.raw_alloc = reinterpret_cast<uint64_t>(g_runtime_entries->raw_alloc);
                 e.raw_free  = reinterpret_cast<uint64_t>(g_runtime_entries->raw_free);
                 e.gc_allocp = reinterpret_cast<uint64_t>(g_runtime_entries->gc_alloc_payload);
+                e.newobj    = reinterpret_cast<uint64_t>(g_runtime_entries->newobj_handle);
                 /* Fallback de LOAD_VM/STORE_VM (page-miss del vm_mem). */
                 e.vm_read_u8   = reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u8);
                 e.vm_read_u16  = reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u16);
