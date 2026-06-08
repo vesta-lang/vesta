@@ -19412,6 +19412,99 @@ namespace vex {
             setup_store_at(16, setup_str_lit(method_idx_str));
             setup_store_at(24, setup_const(static_cast<uint64_t>(method_len)
                                | (static_cast<uint64_t>(mcount) << 32)));
+            // ----------------------------------------------------------------
+            // (C2): preparar devirt especulativa estatica del CALLITF.
+            // Si la interfaz tiene pocos (<=K) implementors concretos NO-aspecto
+            // con el metodo inlineable, resolvemos el ClassInfo* de cada uno
+            // (findclass en el entry, loop-invariante) y registramos los
+            // candidatos; el pase ir_pass_spec_devirt reescribe el CALLITF en
+            // un guard-chain por tipo + fallback al dispatch via itable.
+            //  - Solo metodos que devuelven valor (dst != IR_NO_VALUE) y
+            //    no-SRET (v1).
+            //  - Conservador con AOP: si el modulo declara cualquier @Aspect,
+            //    NO especulamos (un advice podria targetear el metodo y el CALL
+            //    directo del fast path lo saltaria); el dispatch via itable
+            //    recorre la advice_chain correctamente.
+            // Resolucion v1 (2a): findclass directo en el entry, 1x/invocacion
+            // (despreciable para dispatch-en-loop).  2b lo cambiara a slot-cache
+            // eager en __module_init (1x total).
+            std::vector<ir::DevirtCandidate> spec_cands;
+            if (dst != ir::IR_NO_VALUE && !method_call_sret) {
+                bool module_has_aspect = false;
+                for (const auto &kv : tc_.class_layouts()) {
+                    if (kv.second.is_aspect) { module_has_aspect = true; break; }
+                }
+                if (!module_has_aspect) {
+                    constexpr size_t K_MAX = 4;
+                    // (cls_name, callee_ir_name) por implementor concreto.
+                    std::vector<std::pair<std::string, std::string>> impls;
+                    bool too_many = false;
+                    for (const auto &kv : tc_.class_layouts()) {
+                        const auto &cl = kv.second;
+                        if (cl.is_interface || cl.is_aspect) continue;
+                        bool implements = false;
+                        for (const auto &in : cl.interface_names)
+                            if (in == iface_name) { implements = true; break; }
+                        if (!implements) continue;
+                        // Localizar el metodo de la interfaz en la clase.
+                        const std::string *owner = nullptr;
+                        for (const auto &mm : cl.methods) {
+                            if (mm.name == method_name && !mm.is_constructor) {
+                                owner = mm.defining_class.empty()
+                                            ? &cl.name : &mm.defining_class;
+                                break;
+                            }
+                        }
+                        if (!owner) continue;  // no deberia pasar si implements
+                        impls.emplace_back(cl.name, *owner + "__" + method_name);
+                        if (impls.size() > K_MAX) { too_many = true; break; }
+                    }
+                    if (!too_many && !impls.empty() && impls.size() <= K_MAX) {
+                        const int ln = e->loc.line;
+                        // Resolver cada ClassInfo* via findclass construido en el
+                        // vector `setup` (que se splice en block 0, el entry).
+                        auto setup_findclass = [&](const std::string &cls_name)
+                                                   -> ir::IrValueId {
+                            const uint64_t nidx = intern_class_name(*out_mod_, cls_name);
+                            const uint32_t nlen = static_cast<uint32_t>(cls_name.size());
+                            const ir::IrValueId vp = fn_->new_value(ir::IrType::PTR);
+                            { ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA;
+                              al.type = ir::IrType::I8; al.dst = vp; al.imm = 16;
+                              al.source_line = ln; setup.push_back(std::move(al)); }
+                            const ir::IrValueId vna = fn_->new_value(ir::IrType::PTR);
+                            { ir::IrInstr la{}; la.op = ir::IrOp::LABEL_ADDR;
+                              la.type = ir::IrType::PTR; la.dst = vna;
+                              la.func_name = "s_" + std::to_string(nidx);
+                              la.source_line = ln; setup.push_back(std::move(la)); }
+                            { ir::IrInstr st{}; st.op = ir::IrOp::STORE;
+                              st.type = ir::IrType::I64; st.operands = {vna, vp};
+                              st.source_line = ln; setup.push_back(std::move(st)); }
+                            const ir::IrValueId vlen = setup_const(static_cast<uint64_t>(nlen));
+                            const ir::IrValueId voff = setup_const(8);
+                            const ir::IrValueId vp8  = fn_->new_value(ir::IrType::PTR);
+                            { ir::IrInstr add{}; add.op = ir::IrOp::ADD;
+                              add.type = ir::IrType::I64; add.dst = vp8;
+                              add.operands = {vp, voff}; add.source_line = ln;
+                              setup.push_back(std::move(add)); }
+                            { ir::IrInstr st{}; st.op = ir::IrOp::STORE;
+                              st.type = ir::IrType::I64; st.operands = {vlen, vp8};
+                              st.source_line = ln; setup.push_back(std::move(st)); }
+                            const ir::IrValueId vc = fn_->new_value(ir::IrType::PTR);
+                            fn_->values[vc].is_host_ptr = true;
+                            { ir::IrInstr fc{}; fc.op = ir::IrOp::FINDCLASS;
+                              fc.type = ir::IrType::PTR; fc.dst = vc; fc.operands = {vp};
+                              fc.is_call_site = true; fc.source_line = ln;
+                              setup.push_back(std::move(fc)); }
+                            return vc;
+                        };
+                        for (const auto &pr : impls) {
+                            const ir::IrValueId v_cls = setup_findclass(pr.first);
+                            spec_cands.push_back(ir::DevirtCandidate{ v_cls, pr.second });
+                        }
+                    }
+                }
+            }
+
             // Splice de las instrucciones de construccion en block 0 antes de
             // su terminador (op de control de flujo final).  Si block 0 no esta
             // terminado (dispatch en el propio entry), se anexan al final.
@@ -19450,6 +19543,10 @@ namespace vex {
             for (auto av: arg_vals) ci.operands.push_back(av);
             ci.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ci));
+            // registrar el site especulativo (keyed por el dst del
+            // CALLITF).  El pase ir_pass_spec_devirt lo consume @O2.
+            if (!spec_cands.empty())
+                fn_->spec_devirt_sites[dst] = std::move(spec_cands);
             return visible_dst;
         }
 

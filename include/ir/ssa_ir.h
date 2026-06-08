@@ -795,6 +795,31 @@ namespace ir {
     // =========================================================================
 
     /**
+     * @brief Candidato de devirtualizacion especulativa (TAREA 2 / C2).
+     *
+     * Describe uno de los <=K tipos concretos que el pase
+     * @c ir_pass_spec_devirt convierte en una rama del guard-chain que
+     * reemplaza un dispatch dinamico (CALLITF/CALLVIRT/CALLM):
+     *
+     *     cls = load[obj]
+     *     if (cls == cls_value) r = call callee_ir_name(obj, args...)  // fast
+     *     ... (mas candidatos) ...
+     *     else                  r = <dispatch original>                // fallback
+     *
+     * El lowering (que conoce los implementors via el type checker) crea
+     * un candidato por implementor inlineable y lo registra en
+     * @c IrFunction::spec_devirt_sites, keyed por el @c dst del call.  El
+     * @c cls_value es un SSA value loop-invariante definido en el entry
+     * (resuelto via slot-cache lazy con @c findclass); el guard compara el
+     * class_ptr del objeto contra el.
+     */
+    struct DevirtCandidate {
+        IrValueId   cls_value;       ///< SSA value con el ClassInfo* del tipo.
+        std::string callee_ir_name;   ///< nombre IR del metodo concreto a llamar
+                                      ///< directo en el fast path (e.g. "Circle__area").
+    };
+
+    /**
      * @brief Funcion completa en forma SSA.
      *
      * Contiene el grafo de bloques basicos y el pool de valores.
@@ -860,6 +885,25 @@ namespace ir {
          * @c false para todas las IrFunctions regulares.
          */
         bool                     is_macro_compiled = false;
+
+        /**
+         * @brief TAREA 2 (C2): sitios de devirtualizacion especulativa.
+         *
+         * Mapa keyed por el @c dst (SSA, unico y estable) de un call
+         * dinamico (CALLITF/CALLVIRT/CALLM) -> lista de candidatos de tipo
+         * a especular (<=K).  Lo rellena el lowering (que conoce los
+         * implementors via el type checker) y lo CONSUME el pase
+         * @c ir_pass_spec_devirt durante @c ir_optimize (@O2), que
+         * reescribe el call en un guard-chain + fallback.
+         *
+         * Es metadata EFIMERA del pase: se consume antes de serializar la
+         * seccion @c @ir del .velb, por lo que NO se serializa.  Mapa
+         * lateral (en vez de un campo en cada @c IrInstr) para no engordar
+         * la estructura caliente: solo los pocos call sites especulables
+         * tienen entrada.
+         */
+        std::unordered_map<IrValueId, std::vector<DevirtCandidate>>
+            spec_devirt_sites;
 
         /**
          * @brief Crea un nuevo valor SSA en el pool.
