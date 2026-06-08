@@ -441,7 +441,24 @@ namespace jit {
          * del runtime en el encoder. */
         LOAD_PROC   = 80,
 
-        COUNT       = 81
+        /* Pseudo (cobertura vreg vm_mem, 2026-06-09): acceso a memoria del VM
+         * (vaddr, is_host_ptr=false).  La memoria del VM NO es contigua (TLB
+         * 3-niveles + arenas dispersas) -> no hay traduccion base+offset.  El
+         * rewrite los expande POST-regalloc al patron page-cache INLINE del
+         * selector (cmp contra la pagina cacheada + load/store directo en hit;
+         * CALL a vrt_vm_read/write_u<w> en miss).  Marcados call-position (el
+         * miss clobbea caller-saved).  La direccion de la funcion de fallback
+         * se hornea en imm64_pool y su indice viaja en un operando libre del
+         * MInstr (src2 para LOAD_VM, dst para STORE_VM). */
+        LOAD_VM     = 82,   ///< dst = vm_mem[addr] (page-cache inline + fallback).
+                            ///< dst = dst_vreg, src1 = addr_vreg,
+                            ///< src2 = imm64_idx(&vm_read_u<w>);
+                            ///< flags = (width<<1)|signed.
+        STORE_VM    = 83,   ///< vm_mem[addr] = val (page-cache inline + fallback).
+                            ///< src1 = addr_vreg, src2 = val_vreg,
+                            ///< dst = imm64_idx(&vm_write_u<w>); flags = width.
+
+        COUNT       = 84
     };
 
     /* ===================================================================== */
@@ -545,6 +562,27 @@ namespace jit {
         static MInstr make_store(MOperand addr, MOperand val,
                                  uint8_t width) noexcept {
             MInstr i; i.op = MOp::STORE; i.src1 = addr; i.src2 = val;
+            i.flags = width;
+            return i;
+        }
+        /** @brief LOAD_VM: @p dst = vm_mem[@p addr] (memoria del VM, vaddr).
+         *  @p width = 1/2/4/8; @p sgn = sign-extend.  @p fn_idx = indice en
+         *  @c imm64_pool de la direccion de @c vrt_vm_read_u<width> (usada en
+         *  el fallback page-miss).  El rewrite lo expande al page-cache inline. */
+        static MInstr make_load_vm(MOperand dst, MOperand addr, uint8_t width,
+                                   bool sgn, uint32_t fn_idx) noexcept {
+            MInstr i; i.op = MOp::LOAD_VM; i.dst = dst; i.src1 = addr;
+            i.src2 = MOperand::make_imm64_idx(fn_idx);
+            i.flags = static_cast<uint16_t>((width << 1) | (sgn ? 1u : 0u));
+            return i;
+        }
+        /** @brief STORE_VM: vm_mem[@p addr] = @p val (memoria del VM, vaddr).
+         *  @p width = 1/2/4/8.  @p fn_idx = indice en @c imm64_pool de la
+         *  direccion de @c vrt_vm_write_u<width> (usada en el fallback). */
+        static MInstr make_store_vm(MOperand addr, MOperand val, uint8_t width,
+                                    uint32_t fn_idx) noexcept {
+            MInstr i; i.op = MOp::STORE_VM; i.src1 = addr; i.src2 = val;
+            i.dst = MOperand::make_imm64_idx(fn_idx);
             i.flags = width;
             return i;
         }

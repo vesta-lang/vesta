@@ -630,18 +630,36 @@ namespace jit {
                         if (ir_type_is_float(in.type)) {
                             vreg_dbg(fn.name.c_str(), "load-float"); return false;
                         }
+                        const int  w   = ir_type_bytes(in.type);
+                        const bool sgn = ir_type_signed(in.type);
                         if (!fn.values[in.operands[0]].is_host_ptr) {
-                            vreg_dbg(fn.name.c_str(), "load-vm"); return false;
+                            /* vm_mem (vaddr): page-cache inline + fallback al
+                             * runtime vrt_vm_read_u<w> (la direccion se hornea
+                             * en imm64_pool; el rewrite expande POST-regalloc). */
+                            uint64_t fn_addr = 0;
+                            switch (w) {
+                                case 1:  fn_addr = ent.vm_read_u8;  break;
+                                case 2:  fn_addr = ent.vm_read_u16; break;
+                                case 4:  fn_addr = ent.vm_read_u32; break;
+                                default: fn_addr = ent.vm_read_u64; break;
+                            }
+                            if (fn_addr == 0) {
+                                vreg_dbg(fn.name.c_str(), "load-vm(no-rt)");
+                                return false;
+                            }
+                            const uint32_t fidx = out.intern_imm64(fn_addr);
+                            O.push_back(MInstr::make_load_vm(vr(in.dst),
+                                vr(in.operands[0]), static_cast<uint8_t>(w),
+                                sgn, fidx));
+                            break;
                         }
-                        const int w = ir_type_bytes(in.type);
-                        /* u32 (4 bytes unsigned) necesita mov de 32 bits zero-ext;
-                         * no soportado aun -> fallback. */
-                        if (w == 4 && !ir_type_signed(in.type)) {
+                        /* host_ptr: LOAD directo (commit 7).  u32-unsigned aun
+                         * cae a fallback en el path host. */
+                        if (w == 4 && !sgn) {
                             vreg_dbg(fn.name.c_str(), "load-u32"); return false;
                         }
                         O.push_back(MInstr::make_load(vr(in.dst),
-                            vr(in.operands[0]), static_cast<uint8_t>(w),
-                            ir_type_signed(in.type)));
+                            vr(in.operands[0]), static_cast<uint8_t>(w), sgn));
                         break;
                     }
                     case ir::IrOp::STORE: {
@@ -650,10 +668,27 @@ namespace jit {
                         if (ir_type_is_float(in.type)) {
                             vreg_dbg(fn.name.c_str(), "store-float"); return false;
                         }
-                        if (!fn.values[in.operands[1]].is_host_ptr) {
-                            vreg_dbg(fn.name.c_str(), "store-vm"); return false;
-                        }
                         const int w = ir_type_bytes(in.type);
+                        if (!fn.values[in.operands[1]].is_host_ptr) {
+                            /* vm_mem (vaddr): page-cache inline + fallback al
+                             * runtime vrt_vm_write_u<w>. */
+                            uint64_t fn_addr = 0;
+                            switch (w) {
+                                case 1:  fn_addr = ent.vm_write_u8;  break;
+                                case 2:  fn_addr = ent.vm_write_u16; break;
+                                case 4:  fn_addr = ent.vm_write_u32; break;
+                                default: fn_addr = ent.vm_write_u64; break;
+                            }
+                            if (fn_addr == 0) {
+                                vreg_dbg(fn.name.c_str(), "store-vm(no-rt)");
+                                return false;
+                            }
+                            const uint32_t fidx = out.intern_imm64(fn_addr);
+                            O.push_back(MInstr::make_store_vm(vr(in.operands[1]),
+                                vr(in.operands[0]), static_cast<uint8_t>(w),
+                                fidx));
+                            break;
+                        }
                         O.push_back(MInstr::make_store(vr(in.operands[1]),
                             vr(in.operands[0]), static_cast<uint8_t>(w)));
                         break;

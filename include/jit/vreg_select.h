@@ -57,6 +57,16 @@ namespace jit {
         uint64_t raw_free   = 0;  ///< vrt_raw_free(proc, host_ptr)
         uint64_t gc_allocp  = 0;  ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
         uint64_t calln      = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
+        /* Fallback page-miss de LOAD_VM/STORE_VM (acceso a vm_mem).  0 = no
+         * disponible -> esos ops caen a fallback. */
+        uint64_t vm_read_u8   = 0; ///< vrt_vm_read_u8(proc, vaddr)  -> u8
+        uint64_t vm_read_u16  = 0; ///< vrt_vm_read_u16(proc, vaddr) -> u16
+        uint64_t vm_read_u32  = 0; ///< vrt_vm_read_u32(proc, vaddr) -> u32
+        uint64_t vm_read_u64  = 0; ///< vrt_vm_read_u64(proc, vaddr) -> u64
+        uint64_t vm_write_u8  = 0; ///< vrt_vm_write_u8(proc, vaddr, val)
+        uint64_t vm_write_u16 = 0; ///< vrt_vm_write_u16(proc, vaddr, val)
+        uint64_t vm_write_u32 = 0; ///< vrt_vm_write_u32(proc, vaddr, val)
+        uint64_t vm_write_u64 = 0; ///< vrt_vm_write_u64(proc, vaddr, val)
     };
 
     /**
