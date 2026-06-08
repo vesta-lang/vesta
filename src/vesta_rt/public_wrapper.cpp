@@ -565,6 +565,17 @@ static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
     frame->return_pc       = VRT_BYTECODE_RET_SENTINEL;
     frame->frame_base      = saved_rsp;
     frame->proceed_target  = nullptr;
+    /* CRITICO: inicializar los campos AOP/save-regs del frame.  El
+     * frame_pool reusa frames y NO los limpia; sin esta inicializacion,
+     * el frame hereda basura del uso anterior y @c exec_instr_ret puede
+     * hacer @c delete[] de un @c around_chain corrupto (heap corruption)
+     * o restaurar r1..r12 desde un snapshot basura.  Mismo conjunto de
+     * campos que inicializa el push_step normal (exec_instruction_oop.cpp). */
+    frame->around_chain      = nullptr;
+    frame->around_chain_len  = 0;
+    frame->around_chain_owns = 0;
+    frame->has_saved_regs    = 0;
+    frame->inject_r0_to_reg  = 0;
     p->frame_stack         = frame;
 
     /* Saltar al code del metodo. */
