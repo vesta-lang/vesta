@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 using namespace jit;
 
@@ -300,6 +301,145 @@ static void test_vm_callvirt() {
 extern "C" void g_stub(void *proc) {
     Proxy *p = static_cast<Proxy *>(proc);
     p->regs[0] = 50;
+}
+
+/* ===================================================================== *
+ * LOAD_VM / STORE_VM (cobertura vm_mem, 2026-06-09): acceso a memoria del
+ * VM (vaddr, is_host_ptr=false) via page-cache INLINE + fallback al runtime.
+ *
+ * Estrategia de validacion (path JIT REAL, no interp enmascarado):
+ *   - Proxy = buffer crudo dimensionado con kProcVmMemOffset (runtime const,
+ *     resuelto al enlazar abi_checks.cpp).  cached_page_vaddr/host escritos
+ *     por offset; regs@96.
+ *   - vm_read/write_u64 = STUBS propios (no el runtime real, que necesitaria
+ *     un VirtualMemory mapeado) -> el page-miss es determinista.
+ *   - HIT: cached_page = page(vaddr) -> lee/escribe el host buffer SIN llamar
+ *     al stub.  MISS: cache mismatch -> llama al stub con (vaddr[,val]).
+ * ===================================================================== */
+
+/* Stubs del fallback page-miss. */
+static int      g_vmstub_rd_calls = 0;
+static uint64_t g_vmstub_rd_vaddr = 0;
+static uint64_t stub_vm_read_u64(void * /*proc*/, uint64_t vaddr) {
+    ++g_vmstub_rd_calls; g_vmstub_rd_vaddr = vaddr; return 0xCAFEULL;
+}
+static int      g_vmstub_wr_calls = 0;
+static uint64_t g_vmstub_wr_vaddr = 0, g_vmstub_wr_val = 0;
+static void stub_vm_write_u64(void * /*proc*/, uint64_t vaddr, uint64_t val) {
+    ++g_vmstub_wr_calls; g_vmstub_wr_vaddr = vaddr; g_vmstub_wr_val = val;
+}
+
+/** @brief Compila @p fn en VM_ABI con @p ent custom y la ejecuta con RBX=@p proc. */
+static bool jit_vm_mem(const ir::IrFunction &fn, void *proc, VregEntries &ent) {
+    MFunction mf;
+    if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {})) return false;
+    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    X86Encoder enc; std::vector<uint8_t> bytes;
+    if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
+    CodeCache cc;
+    uint8_t *code = cc.alloc(bytes.size(), 16);
+    if (!code) return false;
+    std::memcpy(code, bytes.data(), bytes.size());
+    cc.commit(code, bytes.size());
+    reinterpret_cast<void (*)(void *)>(code)(proc);
+    asm volatile("" : : "r"(&cc) : "memory");
+    return true;
+}
+
+static void test_vm_load_vm() {
+    std::printf("[vm] LOAD_VM: page-cache hit (sin runtime) + miss (fallback)\n");
+    /* IR: ldvm(ptr) { v = vm_mem[ptr]; return v; }  ptr.is_host_ptr=false. */
+    ir::IrFunction fn; fn.name = "ldvm"; fn.ret_type = ir::IrType::I64;
+    ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);  // vm-addr (no host)
+    ir::IrValueId v   = fn.new_value(ir::IrType::I64);
+    fn.params = { ptr };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr i; i.op = ir::IrOp::LOAD; i.type = ir::IrType::I64;
+      i.dst = v; i.operands = { ptr }; fn.append(bb, i); }
+    fn.append(bb, ret1(v));
+
+    const size_t PROC_SZ = static_cast<size_t>(vesta_rt::kProcVmMemOffset) + 512;
+    std::vector<uint8_t> proc(PROC_SZ, 0);
+    auto regs = reinterpret_cast<uint64_t *>(proc.data() + VESTA_PROC_REGISTERS_OFFSET);
+    auto pcv  = reinterpret_cast<uint64_t *>(proc.data() + vesta_rt::kProcVmMemOffset
+                                           + vesta_rt::kVmMemCachedPageVaddrOffset);
+    auto pch  = reinterpret_cast<uint8_t **>(proc.data() + vesta_rt::kProcVmMemOffset
+                                           + vesta_rt::kVmMemCachedPageHostOffset);
+    std::vector<uint8_t> page(4096, 0);
+    const uint64_t vaddr = 0x20040ULL;
+    *reinterpret_cast<uint64_t *>(page.data() + (vaddr & 0xFFF)) = 0x1234567890ULL;
+
+    VregEntries ent; ent.vm_read_u64 = reinterpret_cast<uint64_t>(&stub_vm_read_u64);
+
+    /* HIT: pagina cacheada == page(vaddr). */
+    *pcv = vaddr & ~0xFFFULL;
+    *pch = page.data();
+    regs[1] = vaddr;
+    g_vmstub_rd_calls = 0;
+    CHECK(jit_vm_mem(fn, proc.data(), ent), "LOAD_VM compila/ejecuta (hit)");
+    CHECK(regs[0] == 0x1234567890ULL, "LOAD_VM hit lee del host buffer");
+    CHECK(g_vmstub_rd_calls == 0, "LOAD_VM hit NO llama al runtime");
+    if (regs[0] != 0x1234567890ULL)
+        std::printf("    regs[0]=0x%llx\n", (unsigned long long)regs[0]);
+
+    /* MISS: pagina cacheada != page(vaddr) -> fallback al stub. */
+    *pcv = 0x99000ULL;
+    regs[1] = vaddr; regs[0] = 0;
+    g_vmstub_rd_calls = 0; g_vmstub_rd_vaddr = 0;
+    CHECK(jit_vm_mem(fn, proc.data(), ent), "LOAD_VM compila/ejecuta (miss)");
+    CHECK(g_vmstub_rd_calls == 1, "LOAD_VM miss llama al runtime 1 vez");
+    CHECK(g_vmstub_rd_vaddr == vaddr, "LOAD_VM miss pasa vaddr correcto");
+    CHECK(regs[0] == 0xCAFEULL, "LOAD_VM miss propaga el resultado");
+}
+
+static void test_vm_store_vm() {
+    std::printf("[vm] STORE_VM: page-cache hit (sin runtime) + miss (fallback)\n");
+    /* IR: stvm(ptr, val) { vm_mem[ptr] = val; }  ptr.is_host_ptr=false. */
+    ir::IrFunction fn; fn.name = "stvm"; fn.ret_type = ir::IrType::VOID;
+    ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);
+    ir::IrValueId val = fn.new_value(ir::IrType::I64);
+    fn.params = { ptr, val };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr i; i.op = ir::IrOp::STORE; i.type = ir::IrType::I64;
+      i.operands = { val, ptr }; fn.append(bb, i); }   // [0]=val, [1]=ptr
+    { ir::IrInstr i; i.op = ir::IrOp::RET; i.type = ir::IrType::VOID;
+      fn.append(bb, i); }
+
+    const size_t PROC_SZ = static_cast<size_t>(vesta_rt::kProcVmMemOffset) + 512;
+    std::vector<uint8_t> proc(PROC_SZ, 0);
+    auto regs = reinterpret_cast<uint64_t *>(proc.data() + VESTA_PROC_REGISTERS_OFFSET);
+    auto pcv  = reinterpret_cast<uint64_t *>(proc.data() + vesta_rt::kProcVmMemOffset
+                                           + vesta_rt::kVmMemCachedPageVaddrOffset);
+    auto pch  = reinterpret_cast<uint8_t **>(proc.data() + vesta_rt::kProcVmMemOffset
+                                           + vesta_rt::kVmMemCachedPageHostOffset);
+    std::vector<uint8_t> page(4096, 0);
+    const uint64_t vaddr = 0x30080ULL;
+
+    VregEntries ent; ent.vm_write_u64 = reinterpret_cast<uint64_t>(&stub_vm_write_u64);
+
+    /* HIT: escribe directo al host buffer, sin runtime. */
+    *pcv = vaddr & ~0xFFFULL;
+    *pch = page.data();
+    regs[1] = vaddr; regs[2] = 0xDEADBEEFULL;
+    g_vmstub_wr_calls = 0;
+    CHECK(jit_vm_mem(fn, proc.data(), ent), "STORE_VM compila/ejecuta (hit)");
+    const uint64_t stored =
+        *reinterpret_cast<uint64_t *>(page.data() + (vaddr & 0xFFF));
+    CHECK(stored == 0xDEADBEEFULL, "STORE_VM hit escribe al host buffer");
+    CHECK(g_vmstub_wr_calls == 0, "STORE_VM hit NO llama al runtime");
+    if (stored != 0xDEADBEEFULL)
+        std::printf("    stored=0x%llx\n", (unsigned long long)stored);
+
+    /* MISS: fallback al stub con (vaddr, val). */
+    *pcv = 0x99000ULL;
+    regs[1] = vaddr; regs[2] = 0xBEEFULL;
+    g_vmstub_wr_calls = 0; g_vmstub_wr_vaddr = 0; g_vmstub_wr_val = 0;
+    CHECK(jit_vm_mem(fn, proc.data(), ent), "STORE_VM compila/ejecuta (miss)");
+    CHECK(g_vmstub_wr_calls == 1, "STORE_VM miss llama al runtime 1 vez");
+    CHECK(g_vmstub_wr_vaddr == vaddr, "STORE_VM miss pasa vaddr correcto");
+    CHECK(g_vmstub_wr_val == 0xBEEFULL, "STORE_VM miss pasa val correcto");
 }
 
 /* ---- Test 6 (commit 6): GC root vivo a traves de un call --------------- *
@@ -1074,6 +1214,8 @@ int main() {
     test_vm_label_addr();
     test_vm_getproc();
     test_vm_ret_void();
+    test_vm_load_vm();   /* antes del crash pre-existente de gc_stackmap */
+    test_vm_store_vm();
     test_vm_sext_loop();
     test_vm_call();
     test_vm_callvirt();
