@@ -17848,6 +17848,80 @@ namespace vex {
 
             const ir::IrBlockId entry = fn.new_block("entry");
 
+            // raw_asm-elim Fase 1 (__new_X a IR): la variante LOCAL de un
+            // helper SIN constructor efectivo (ctor ausente o zero-init
+            // trivial saltado) se construye con IR ops estructurados en vez
+            // de RAW_ASM textual, para que el path vreg y el optimizer lo
+            // compilen sin el mini-parser de raw_asm.  Patron equivalente al
+            // RAW_ASM que generaba el bloque `else` de abajo:
+            //   v_slot = STR_LIT_ADDR(cache_idx)   (@Absolute("code.s_N"))
+            //   v_cls  = LOAD(v_slot)              (ClassInfo* cacheado, vm_mem)
+            //   v_h    = NEWOBJ(v_cls)             (GcHandle, r0)
+            //   v_host = GC_DEREF_HOST(v_h)        (host_ptr al ObjectHeader)
+            //   RET v_host
+            // Los casos con ctor / nargs>0 / shared siguen en RAW_ASM
+            // (incrementos posteriores de esta fase).
+            const bool emit_structured =
+                (!is_shared_variant && nargs == 0 && effective_ctor == nullptr);
+            if (emit_structured) {
+                // v_slot = direccion del slot ClassInfo* cacheado (static_data).
+                const ir::IrValueId v_slot = fn.new_value(ir::IrType::PTR);
+                {
+                    ir::IrInstr sa{};
+                    sa.op          = ir::IrOp::STR_LIT_ADDR;
+                    sa.type        = ir::IrType::PTR;
+                    sa.dst         = v_slot;
+                    sa.imm         = cache_idx;
+                    sa.source_line = cd->loc.line;
+                    fn.append(entry, std::move(sa));
+                }
+                // v_cls = LOAD(v_slot): ClassInfo* leido del slot (vm_mem).
+                const ir::IrValueId v_cls = fn.new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr ld{};
+                    ld.op          = ir::IrOp::LOAD;
+                    ld.type        = ir::IrType::I64;
+                    ld.dst         = v_cls;
+                    ld.operands    = {v_slot};
+                    ld.source_line = cd->loc.line;
+                    fn.append(entry, std::move(ld));
+                }
+                // v_h = NEWOBJ(v_cls): aloca el objeto -> GcHandle.
+                const ir::IrValueId v_h = fn.new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr no{};
+                    no.op          = ir::IrOp::NEWOBJ;
+                    no.type        = ir::IrType::I64;
+                    no.dst         = v_h;
+                    no.operands    = {v_cls};
+                    no.source_line = cd->loc.line;
+                    fn.append(entry, std::move(no));
+                }
+                // v_host = GC_DEREF_HOST(v_h): host_ptr al ObjectHeader (los
+                // campos ya estan a 0 por el memset de gc_heap.alloc; sin ctor
+                // que ejecutar).  Mismo patron que lower(newInstance).
+                const ir::IrValueId v_host = fn.new_value(ir::IrType::PTR);
+                fn.values[v_host].is_host_ptr  = true;
+                fn.values[v_host].is_gc_object = true;
+                {
+                    ir::IrInstr ra{};
+                    ra.op          = ir::IrOp::GC_DEREF_HOST;
+                    ra.type        = ir::IrType::PTR;
+                    ra.dst         = v_host;
+                    ra.operands    = {v_h};
+                    ra.source_line = cd->loc.line;
+                    fn.append(entry, std::move(ra));
+                }
+                // RET v_host (ret_type del helper = PTR).
+                {
+                    ir::IrInstr ret{};
+                    ret.op          = ir::IrOp::RET;
+                    ret.type        = ir::IrType::PTR;
+                    ret.operands    = {v_host};
+                    ret.source_line = cd->loc.line;
+                    fn.append(entry, std::move(ret));
+                }
+            } else {
             // Construir RAW_ASM body.
             std::ostringstream asm_;
 
@@ -17945,6 +18019,7 @@ namespace vex {
             ret.type        = ir::IrType::VOID;
             ret.source_line = cd->loc.line;
             fn.append(entry, std::move(ret));
+            } // fin else (path RAW_ASM legacy: ctor / nargs>0 / shared)
 
             propagate_is_gc_object_through_phis(fn);
 
