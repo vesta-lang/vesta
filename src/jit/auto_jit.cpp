@@ -469,12 +469,24 @@ namespace jit {
          * compilado mientras nosotros esperabamos). */
         if (method->jit_code != nullptr) return;
 
+        /* Resolver de simbolos del linker (STR_LIT_ADDR / LABEL_ADDR, Phase
+         * D.3-H) desde el symbol_table del executable propietario.  Se reusa
+         * tanto en el intento vreg como en el SelectorOptions de slots. */
+        CallResolver mc_sym_res;
+        if (owning_symtab != nullptr) {
+            const auto *st_ptr = owning_symtab;
+            mc_sym_res = [st_ptr](const std::string &n) -> uint64_t {
+                auto it = st_ptr->find(n);
+                return it == st_ptr->end() ? 0 : it->second;
+            };
+        }
+
         /* Phase D.7 (opt-in): intentar primero el path de registros
          * virtuales.  Si la funcion es del subset soportado por el selector
          * vreg, la compila el register allocator; si no, cae al path de
          * slots de abajo (fallback transparente). */
         if (g_jit_use_vregs) {
-            uint8_t *vcode = vreg_compile(*ir_fn, *g_code_cache, {}, make_vreg_entries(), {});
+            uint8_t *vcode = vreg_compile(*ir_fn, *g_code_cache, {}, make_vreg_entries(), {}, mc_sym_res);
             if (vcode != nullptr) {
                 method->jit_code = reinterpret_cast<void *>(vcode);
                 if (method->code_vaddr != 0) {
@@ -501,13 +513,7 @@ namespace jit {
         mc_opts.runtime = g_runtime_entries;
         mc_opts.safepoint_handler_addr = reinterpret_cast<uint64_t>(
             g_runtime_entries->safepoint_handler);
-        if (owning_symtab != nullptr) {
-            const auto *st_ptr = owning_symtab;
-            mc_opts.resolve_symbol = [st_ptr](const std::string &n) -> uint64_t {
-                auto it = st_ptr->find(n);
-                return it == st_ptr->end() ? 0 : it->second;
-            };
-        }
+        mc_opts.resolve_symbol = mc_sym_res;  /* reusa el resolver de arriba */
         /* Resolver native fn (CALLN): obtener acceso al FFI via el
          * Loader del VM owning. */
         /* IC slot reservation: aloca 16 bytes en el code cache (mismo
@@ -665,7 +671,7 @@ namespace jit {
                 /* Phase D.7 (opt-in): callee por el path de registros
                  * virtuales si esta soportada; si no, slots. */
                 if (g_jit_use_vregs) {
-                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {}, make_vreg_entries(), native_resolver);
+                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {}, make_vreg_entries(), native_resolver, child_opts.resolve_symbol);
                     if (vc != nullptr) {
                         const uint64_t a = reinterpret_cast<uint64_t>(vc);
                         g_eager_cache[n] = a;
@@ -906,7 +912,7 @@ namespace jit {
                  * Pasamos el PROPIO resolver (recursivo) para que los CALLs
                  * del callee se resuelvan a sus direcciones. */
                 if (g_jit_use_vregs) {
-                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, *resolver_holder, make_vreg_entries(), resolve_native_fn);
+                    uint8_t *vc = vreg_compile(child_ir, *g_code_cache, *resolver_holder, make_vreg_entries(), resolve_native_fn, sym_resolver);
                     if (vc != nullptr) {
                         const uint64_t va = reinterpret_cast<uint64_t>(vc);
                         g_eager_cache[name] = va;
@@ -1007,7 +1013,8 @@ namespace jit {
          * implementa. */
         if (g_jit_use_vregs && !callback_entry) {
             uint8_t *vcode = vreg_compile(ir_fn, *g_code_cache, resolver,
-                                          make_vreg_entries(), resolve_native_fn);
+                                          make_vreg_entries(), resolve_native_fn,
+                                          sym_resolver);
             if (vcode != nullptr) {
                 if (!ir_fn.name.empty())
                     g_eager_cache[ir_fn.name] = reinterpret_cast<uint64_t>(vcode);
@@ -1091,8 +1098,8 @@ namespace jit {
                         uint8_t *osr_entry = nullptr;
                         uint8_t *c2 = vreg_compile_osr(
                             *compile_ir, *g_code_cache, resolver,
-                            make_vreg_entries(), resolve_native_fn, hdr,
-                            &osr_entry, &captured);
+                            make_vreg_entries(), resolve_native_fn, sym_resolver,
+                            hdr, &osr_entry, &captured);
                         if (c2 != nullptr && osr_entry != nullptr) {
                             g_osr_entry_map[lid] =
                                 reinterpret_cast<uint64_t>(osr_entry);
@@ -2036,7 +2043,8 @@ namespace jit {
                     return 0;
                 };
                 uint8_t *vc = vreg_compile(*compile_target, *g_code_cache, user_res,
-                                           make_vreg_entries(), nat_res);
+                                           make_vreg_entries(), nat_res,
+                                           c2.resolve_symbol);
                 if (vc != nullptr) { c2_fn = reinterpret_cast<JitFn>(vc); c2_code = vc; }
             }
             CompileResult res{};

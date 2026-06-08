@@ -65,6 +65,11 @@ namespace jit {
      * @param fn   Funcion IR (subset soportado: ver arriba).
      * @param out  MFunction destino (se sobrescribe).
      * @param ent  Direcciones de runtime entries (callvirt/gc/raw_alloc/calln).
+     * @param resolve_symbol  Resolver de simbolos del linker (Phase D.3-H):
+     *             dado @c "code.s_<N>" / @c "code.<fn>" devuelve la direccion
+     *             VM absoluta.  Lo usan @c STR_LIT_ADDR / @c LABEL_ADDR.  Si es
+     *             nullptr o retorna 0, esos ops caen a fallback (igual que el
+     *             selector de slots).
      * @return     @c true si TODOS los ops estan soportados y @p out es
      *             valido; @c false si encuentra un op fuera del subset (en
      *             ese caso @p out queda indefinido y el caller hace fallback).
@@ -73,7 +78,8 @@ namespace jit {
                      AbiKind abi = AbiKind::HOST_LEAF,
                      const CallResolver &resolve_call = {},
                      const VregEntries &ent = {},
-                     const CallResolver &resolve_native = {});
+                     const CallResolver &resolve_native = {},
+                     const CallResolver &resolve_symbol = {});
 
 } // namespace jit
 
