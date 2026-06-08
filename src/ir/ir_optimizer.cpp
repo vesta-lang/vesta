@@ -5471,6 +5471,189 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
 }
 
 // =========================================================================
+//  Pase ir_pass_spec_devirt (TAREA 2 / C2): devirt especulativa ESTATICA
+//  via guard-chain de K candidatos + fallback al dispatch original.
+// =========================================================================
+
+bool ir_pass_spec_devirt(IrFunction &fn) {
+    if (fn.blocks.empty() || fn.spec_devirt_sites.empty()) return false;
+    bool changed = false;
+
+    /* Reservar de antemano espacio para los bloques nuevos (2K+1 por site:
+     * K fast + K-1 guard + 1 fallback + 1 merge) para evitar realocaciones de
+     * fn.blocks durante la cirugia.  Accedemos por INDICE igualmente. */
+    size_t extra = 4;
+    for (const auto &kv : fn.spec_devirt_sites)
+        extra += kv.second.size() * 2 + 1;
+    fn.blocks.reserve(fn.blocks.size() + extra);
+
+    for (const auto &kv : fn.spec_devirt_sites) {
+        const IrValueId site_dst = kv.first;
+        const std::vector<DevirtCandidate> &cands = kv.second;
+        if (site_dst == IR_NO_VALUE || cands.empty()) continue;  /* void: skip */
+
+        /* Localizar el call dinamico objetivo por su dst (unico + estable). */
+        IrBlockId bidx   = IR_NO_BLOCK;
+        size_t    i      = 0;
+        IrOp      callop = IrOp::NOP;
+        for (size_t b = 0; b < fn.blocks.size() && bidx == IR_NO_BLOCK; ++b) {
+            auto &bb = fn.blocks[b];
+            for (size_t k = 0; k < bb.instrs.size(); ++k) {
+                const IrOp o = bb.instrs[k].op;
+                if ((o == IrOp::CALLITF || o == IrOp::CALLVIRT || o == IrOp::CALLM)
+                 && bb.instrs[k].dst == site_dst) {
+                    bidx = static_cast<IrBlockId>(b);
+                    i = k; callop = o;
+                    break;
+                }
+            }
+        }
+        if (bidx == IR_NO_BLOCK) continue;  /* no encontrado: skip */
+
+        /* Capturar datos del call (copia) antes de la cirugia. */
+        const IrInstr   callins  = fn.blocks[bidx].instrs[i];
+        const IrType    rtype    = callins.type;
+        const IrValueId orig_dst = callins.dst;
+        const std::vector<IrValueId> ops = callins.operands;  /* [obj, (meta), args...] */
+        const uint32_t  srcline  = callins.source_line;
+        if (ops.empty()) continue;  /* sin receptor: no especulable */
+
+        /* Operands del CALL directo del fast path: receptor + args, sin el
+         * operando de metadata del dispatch.  CALLITF lleva params_ptr en
+         * ops[1] y CALLM lleva el method_ptr en ops[1] -> se quitan; CALLVIRT
+         * no tiene metadata -> se mantienen todos.  El SRET retbuf (cuando
+         * aplica) va tras ops[1], asi que se conserva. */
+        std::vector<IrValueId> call_ops;
+        if (callop == IrOp::CALLVIRT) {
+            call_ops = ops;
+        } else {
+            call_ops.push_back(ops[0]);
+            for (size_t a = 2; a < ops.size(); ++a) call_ops.push_back(ops[a]);
+        }
+
+        /* Capturar los sucesores ORIGINALES de B antes de sobreescribirlos. */
+        const std::vector<IrBlockId> orig_succs = fn.blocks[bidx].succs;
+
+        const size_t K = cands.size();
+
+        /* Crear los bloques nuevos (append; los indices existentes no se
+         * mueven gracias al reserve previo). */
+        std::vector<IrBlockId> fastb(K);
+        std::vector<IrBlockId> gblk(K, IR_NO_BLOCK);  /* gblk[0]=B; gblk[n>=1] nuevos */
+        for (size_t n = 0; n < K; ++n) fastb[n] = fn.new_block("spec_fast");
+        for (size_t n = 1; n < K; ++n) gblk[n]  = fn.new_block("spec_guard");
+        const IrBlockId fbackb = fn.new_block("spec_fallback");
+        const IrBlockId mergeb = fn.new_block("spec_merge");
+        gblk[0] = bidx;  /* el primer guard va en B (in-place) */
+
+        /* Mover el tail [i+1 ..] al merge; truncar B a [0 .. i-1]. */
+        {
+            auto &Binstrs = fn.blocks[bidx].instrs;
+            std::vector<IrInstr> tail(Binstrs.begin() + static_cast<long>(i) + 1,
+                                      Binstrs.end());
+            fn.blocks[mergeb].instrs = std::move(tail);
+            Binstrs.resize(i);  /* descarta el call en i + el tail */
+        }
+
+        /* cls = load[obj], computado UNA vez en B (domina toda la cadena). */
+        const IrValueId vcls = fn.new_value(IrType::I64, "spec_cls");
+        {
+            IrInstr ld; ld.op = IrOp::LOAD; ld.type = IrType::I64;
+            ld.dst = vcls; ld.operands = {ops[0]}; ld.source_line = srcline;
+            fn.blocks[bidx].instrs.push_back(ld);
+        }
+
+        /* Cadena de guardas: por candidato n en gblk[n]:
+         *   g = (cls == cls_value_n);  br_cond fast_n / next
+         * donde next = gblk[n+1] (si lo hay) o el fallback. */
+        std::vector<IrValueId> rfast(K);
+        for (size_t n = 0; n < K; ++n) {
+            const IrBlockId gb   = gblk[n];
+            const IrBlockId next = (n + 1 < K) ? gblk[n + 1] : fbackb;
+
+            const IrValueId vg = fn.new_value(IrType::BOOL, "spec_g");
+            {
+                IrInstr cm; cm.op = IrOp::CMP_EQ; cm.type = IrType::BOOL;
+                cm.dst = vg; cm.operands = {vcls, cands[n].cls_value};
+                cm.source_line = srcline;
+                fn.blocks[gb].instrs.push_back(cm);
+            }
+            {
+                IrInstr br; br.op = IrOp::BR_COND; br.operands = {vg};
+                br.target_block = fastb[n]; br.false_block = next;
+                br.source_line = srcline;
+                fn.blocks[gb].instrs.push_back(br);
+            }
+            fn.blocks[gb].succs = {fastb[n], next};
+            if (n > 0) fn.blocks[gb].preds = {gblk[n - 1]};  /* gblk[0]=B: preds intactos */
+
+            /* fast_n: CALL directo al callee (ir_pass_inline lo inlinea) + br merge. */
+            rfast[n] = fn.new_value(rtype, "spec_rfast");
+            {
+                IrInstr call; call.op = IrOp::CALL; call.type = rtype;
+                call.dst = rfast[n]; call.func_name = cands[n].callee_ir_name;
+                call.operands = call_ops; call.source_line = srcline;
+                fn.blocks[fastb[n]].instrs.push_back(call);
+            }
+            {
+                IrInstr br; br.op = IrOp::BR; br.target_block = mergeb;
+                fn.blocks[fastb[n]].instrs.push_back(br);
+            }
+            fn.blocks[fastb[n]].preds = {gb};
+            fn.blocks[fastb[n]].succs = {mergeb};
+        }
+
+        /* Fallback: el call dinamico ORIGINAL (copia) -> r_slow + br merge. */
+        const IrValueId rslow = fn.new_value(rtype, "spec_rslow");
+        {
+            IrInstr cv2 = callins; cv2.dst = rslow;
+            fn.blocks[fbackb].instrs.push_back(cv2);
+        }
+        {
+            IrInstr br; br.op = IrOp::BR; br.target_block = mergeb;
+            fn.blocks[fbackb].instrs.push_back(br);
+        }
+        fn.blocks[fbackb].preds = {gblk[K - 1]};
+        fn.blocks[fbackb].succs = {mergeb};
+
+        /* Merge: PHI(orig_dst) = [rfast_n@fast_n..., rslow@fallback] + tail. */
+        {
+            IrInstr phi; phi.op = IrOp::PHI; phi.type = rtype; phi.dst = orig_dst;
+            phi.phi_args.reserve(K + 1);
+            for (size_t n = 0; n < K; ++n)
+                phi.phi_args.push_back(IrPhiArg{rfast[n], fastb[n]});
+            phi.phi_args.push_back(IrPhiArg{rslow, fbackb});
+            phi.source_line = srcline;
+            fn.blocks[mergeb].instrs.insert(fn.blocks[mergeb].instrs.begin(), phi);
+        }
+        {
+            std::vector<IrBlockId> mpreds;
+            mpreds.reserve(K + 1);
+            for (size_t n = 0; n < K; ++n) mpreds.push_back(fastb[n]);
+            mpreds.push_back(fbackb);
+            fn.blocks[mergeb].preds = std::move(mpreds);
+        }
+        fn.blocks[mergeb].succs = orig_succs;
+
+        /* Repuntar los sucesores originales de B: ahora su predecesor es merge
+         * (el terminador del tail vive ahi).  Tambien sus PHIs. */
+        for (IrBlockId s : orig_succs) {
+            if (s == IR_NO_BLOCK || s >= fn.blocks.size()) continue;
+            auto &sb = fn.blocks[s];
+            for (auto &p : sb.preds) if (p == bidx) p = mergeb;
+            for (auto &ins : sb.instrs) {
+                if (ins.op != IrOp::PHI) continue;
+                for (auto &pa : ins.phi_args) if (pa.block == bidx) pa.block = mergeb;
+            }
+        }
+
+        changed = true;
+    }
+
+    return changed;
+}
+
+// =========================================================================
 //  Pase Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
 // =========================================================================
 
@@ -6218,6 +6401,24 @@ void ir_optimize(IrModule &mod, OptLevel level) {
          * con 6 instrs en vez de 12), aprobando inline bajo el threshold. */
         if (level >= OptLevel::O2) {
             if (ir_pass_devirt_monomorphic(mod)) any = true;
+
+            /* (C2): devirt especulativa ESTATICA via guard-chain.
+             * Corre tras el devirt monomorfico (que ya resolvio los sites
+             * de clase concreta) y ANTES del inline, para que este ultimo
+             * procese los CALL directos del fast path.  Lee los candidatos
+             * que el lowering registro en fn.spec_devirt_sites.
+             * Skippable via VESTA_NO_SPEC_DEVIRT=1 para A/B testing. */
+            {
+                const char *skip = std::getenv("VESTA_NO_SPEC_DEVIRT");
+                const bool do_sd = !(skip && skip[0] != '\0' && skip[0] != '0');
+                if (do_sd) {
+                    for (auto &fn : mod.functions) {
+                        if (fn.is_native) continue;
+                        if (ir_pass_spec_devirt(fn)) any = true;
+                    }
+                }
+            }
+
             if (ir_pass_inline(mod))             any = true;
 
             /* Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
