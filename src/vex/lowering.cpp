@@ -17848,21 +17848,24 @@ namespace vex {
 
             const ir::IrBlockId entry = fn.new_block("entry");
 
-            // raw_asm-elim Fase 1 (__new_X a IR): la variante LOCAL de un
-            // helper SIN constructor efectivo (ctor ausente o zero-init
-            // trivial saltado) se construye con IR ops estructurados en vez
-            // de RAW_ASM textual, para que el path vreg y el optimizer lo
-            // compilen sin el mini-parser de raw_asm.  Patron equivalente al
-            // RAW_ASM que generaba el bloque `else` de abajo:
+            // raw_asm-elim Fase 1 (__new_X a IR): la variante LOCAL del helper
+            // se construye con IR ops estructurados en vez de RAW_ASM textual,
+            // para que el path vreg y el optimizer lo compilen sin el
+            // mini-parser de raw_asm.  Patron equivalente al RAW_ASM del
+            // bloque `else` de abajo:
             //   v_slot = STR_LIT_ADDR(cache_idx)   (@Absolute("code.s_N"))
             //   v_cls  = LOAD(v_slot)              (ClassInfo* cacheado, vm_mem)
             //   v_h    = NEWOBJ(v_cls)             (GcHandle, r0)
-            //   v_host = GC_DEREF_HOST(v_h)        (host_ptr al ObjectHeader)
-            //   RET v_host
-            // Los casos con ctor / nargs>0 / shared siguen en RAW_ASM
-            // (incrementos posteriores de esta fase).
-            const bool emit_structured =
-                (!is_shared_variant && nargs == 0 && effective_ctor == nullptr);
+            //   v_this = GC_DEREF_HOST(v_h)        (host_ptr al ObjectHeader)
+            //   --- si hay ctor efectivo: ---
+            //   CALLVIRT(this=v_this, args=params, vtable_idx=ctor)
+            //   v_ret  = GC_DEREF_HOST(v_h)        (RE-deref: el GC del ctor
+            //                                       puede haber movido el obj)
+            //   RET v_ret
+            //   --- sin ctor: RET v_this (campos ya a 0 por gc_heap.alloc) ---
+            // La variante SHARED (__new_<X>_shared, newobjs) sigue en RAW_ASM
+            // (no hay IrOp dedicado para newobjs todavia).
+            const bool emit_structured = !is_shared_variant;
             if (emit_structured) {
                 // v_slot = direccion del slot ClassInfo* cacheado (static_data).
                 const ir::IrValueId v_slot = fn.new_value(ir::IrType::PTR);
@@ -17897,27 +17900,54 @@ namespace vex {
                     no.source_line = cd->loc.line;
                     fn.append(entry, std::move(no));
                 }
-                // v_host = GC_DEREF_HOST(v_h): host_ptr al ObjectHeader (los
-                // campos ya estan a 0 por el memset de gc_heap.alloc; sin ctor
-                // que ejecutar).  Mismo patron que lower(newInstance).
-                const ir::IrValueId v_host = fn.new_value(ir::IrType::PTR);
-                fn.values[v_host].is_host_ptr  = true;
-                fn.values[v_host].is_gc_object = true;
+                // v_this = GC_DEREF_HOST(v_h): host_ptr al ObjectHeader.
+                const ir::IrValueId v_this = fn.new_value(ir::IrType::PTR);
+                fn.values[v_this].is_host_ptr  = true;
+                fn.values[v_this].is_gc_object = true;
                 {
                     ir::IrInstr ra{};
                     ra.op          = ir::IrOp::GC_DEREF_HOST;
                     ra.type        = ir::IrType::PTR;
-                    ra.dst         = v_host;
+                    ra.dst         = v_this;
                     ra.operands    = {v_h};
                     ra.source_line = cd->loc.line;
                     fn.append(entry, std::move(ra));
                 }
-                // RET v_host (ret_type del helper = PTR).
+
+                if (effective_ctor) {
+                    // CALLVIRT(this=v_this, args=params del helper).  El ctor
+                    // es void; argc = nargs + 1 (this + args).
+                    //
+                    // CLAVE: v_this (host_ptr GC) vive a traves del call (se usa
+                    // en el RET de abajo).  El mecanismo de preservacion de GC
+                    // roots lo convierte a handle ANTES del call y lo refresca a
+                    // host_ptr DESPUES (save_live_regs gchandle/push/pop/gcderef
+                    // en el interp; spill + stackmap del commit 6 en el vreg) --
+                    // exactamente lo que el RAW_ASM legacy hacia a mano.  Por
+                    // eso NO re-derefamos ni marcamos el handle: marcar v_h
+                    // (que YA es handle) como GC hacia que el interp le aplicara
+                    // gchandle (host_ptr->handle) sobre un handle -> basura.
+                    ir::IrInstr cv{};
+                    cv.op          = ir::IrOp::CALLVIRT;
+                    cv.type        = ir::IrType::VOID;
+                    cv.dst         = ir::IR_NO_VALUE;
+                    cv.operands.reserve(nargs + 1);
+                    cv.operands.push_back(v_this);
+                    for (size_t i = 0; i < nargs; ++i) {
+                        cv.operands.push_back(fn.params[i]);
+                    }
+                    cv.imm         = static_cast<uint64_t>(ctor_vtable_idx);
+                    cv.source_line = cd->loc.line;
+                    fn.append(entry, std::move(cv));
+                }
+
+                // RET v_this (host_ptr al objeto; preservado/refrescado a
+                // traves del callvirt si habia ctor).
                 {
                     ir::IrInstr ret{};
                     ret.op          = ir::IrOp::RET;
                     ret.type        = ir::IrType::PTR;
-                    ret.operands    = {v_host};
+                    ret.operands    = {v_this};
                     ret.source_line = cd->loc.line;
                     fn.append(entry, std::move(ret));
                 }
