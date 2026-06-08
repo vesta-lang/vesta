@@ -84,10 +84,12 @@ static ir::IrInstr conv(ir::IrOp op, ir::IrValueId d, ir::IrValueId s, ir::IrTyp
 /** @brief Compila @p fn en modo VM y la ejecuta con @p px (RBX = &px). */
 static bool jit_vm(const ir::IrFunction &fn, Proxy &px,
                    const CallResolver &resolve = {}, uint64_t callvirt_addr = 0,
-                   const CallResolver &resolve_native = {}) {
+                   const CallResolver &resolve_native = {},
+                   const CallResolver &resolve_symbol = {}) {
     MFunction mf;
     VregEntries ent; ent.callvirt = callvirt_addr;
-    if (!vreg_select(fn, mf, AbiKind::VM, resolve, ent, resolve_native)) return false;
+    if (!vreg_select(fn, mf, AbiKind::VM, resolve, ent, resolve_native,
+                     resolve_symbol)) return false;
     const TargetRegInfo &tri = target_x86_64_vm_abi();
     RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
     MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
@@ -930,6 +932,131 @@ static void test_vm_divmod_loop() {
                     (long long)px.regs[0], (long long)expect);
 }
 
+/* ---- Test: STR_LIT_ADDR resuelve la direccion via resolve_symbol --------
+ * Fn de 1 bloque: v0 = STR_LIT_ADDR(imm=5); ret v0.  El resolve_symbol mock
+ * mapea "code.s_5" -> una direccion conocida; verificamos que el codigo vreg
+ * pone ESA direccion en regs[0].  Valida (a) el plumbing del resolver al case
+ * nuevo, (b) el codegen `mov dst, imm64(addr)`, (c) que sin resolver el vreg
+ * RECHAZA (fallback), no compila basura. */
+static void test_vm_str_lit_addr() {
+    std::printf("[vm] str_lit_addr: code.s_5 -> direccion resuelta en regs[0]\n");
+    const uint64_t kAddr = 0xCAFEBABE12345678ULL;
+    ir::IrFunction fn;
+    fn.name = "get_str"; fn.ret_type = ir::IrType::PTR;
+    ir::IrValueId v = fn.new_value(ir::IrType::PTR);
+    auto bb = fn.new_block("e");
+    {
+        ir::IrInstr s; s.op = ir::IrOp::STR_LIT_ADDR; s.type = ir::IrType::PTR;
+        s.dst = v; s.imm = 5;
+        fn.append(bb, s);
+    }
+    fn.append(bb, ret1(v));
+
+    CallResolver sym = [&](const std::string &n) -> uint64_t {
+        return n == "code.s_5" ? kAddr : 0;
+    };
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    CHECK(jit_vm(fn, px, {}, 0, {}, sym), "jit_vm ok (str_lit_addr)");
+    CHECK(px.regs[0] == kAddr, "str_lit_addr devuelve la direccion resuelta");
+    if (px.regs[0] != kAddr)
+        std::printf("    regs[0]=0x%llx esperado 0x%llx\n",
+                    (unsigned long long)px.regs[0], (unsigned long long)kAddr);
+
+    /* Sin resolver -> vreg_select debe rechazar (fallback seguro a slots). */
+    Proxy px2; std::memset(&px2, 0, sizeof(px2));
+    CHECK(!jit_vm(fn, px2, {}, 0, {}, {}),
+          "str_lit_addr sin resolver -> fallback (vreg_select false)");
+}
+
+/* ---- Test: LABEL_ADDR resuelve la direccion del label via resolve_symbol --
+ * Analogo a str_lit_addr pero la clave es "code.<func_name>".  Valida (a) el
+ * codegen `mov dst, imm64(addr)`, (b) que func_name vacio -> fallback. */
+static void test_vm_label_addr() {
+    std::printf("[vm] label_addr: code.helper -> direccion resuelta en regs[0]\n");
+    const uint64_t kAddr = 0x00007FFE12340000ULL;
+    ir::IrFunction fn;
+    fn.name = "get_fn"; fn.ret_type = ir::IrType::PTR;
+    ir::IrValueId v = fn.new_value(ir::IrType::PTR);
+    auto bb = fn.new_block("e");
+    {
+        ir::IrInstr s; s.op = ir::IrOp::LABEL_ADDR; s.type = ir::IrType::PTR;
+        s.dst = v; s.func_name = "helper";
+        fn.append(bb, s);
+    }
+    fn.append(bb, ret1(v));
+
+    CallResolver sym = [&](const std::string &n) -> uint64_t {
+        return n == "code.helper" ? kAddr : 0;
+    };
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    CHECK(jit_vm(fn, px, {}, 0, {}, sym), "jit_vm ok (label_addr)");
+    CHECK(px.regs[0] == kAddr, "label_addr devuelve la direccion resuelta");
+    if (px.regs[0] != kAddr)
+        std::printf("    regs[0]=0x%llx esperado 0x%llx\n",
+                    (unsigned long long)px.regs[0], (unsigned long long)kAddr);
+
+    /* func_name vacio -> vreg_select debe rechazar (fallback). */
+    ir::IrFunction fn2;
+    fn2.name = "get_fn2"; fn2.ret_type = ir::IrType::PTR;
+    ir::IrValueId v2 = fn2.new_value(ir::IrType::PTR);
+    auto bb2 = fn2.new_block("e");
+    {
+        ir::IrInstr s; s.op = ir::IrOp::LABEL_ADDR; s.type = ir::IrType::PTR;
+        s.dst = v2;  /* func_name vacio */
+        fn2.append(bb2, s);
+    }
+    fn2.append(bb2, ret1(v2));
+    Proxy px2; std::memset(&px2, 0, sizeof(px2));
+    CHECK(!jit_vm(fn2, px2, {}, 0, {}, sym),
+          "label_addr sin func_name -> fallback (vreg_select false)");
+}
+
+/* ---- Test: GETPROC devuelve el ProcessVM* (RBX en VM_ABI) ---------------
+ * Fn de 1 bloque: v0 = GETPROC; ret v0.  En VM_ABI RBX = &px, asi que el
+ * resultado debe ser la direccion del proxy. */
+static void test_vm_getproc() {
+    std::printf("[vm] getproc: regs[0] == &proc (RBX)\n");
+    ir::IrFunction fn;
+    fn.name = "get_proc"; fn.ret_type = ir::IrType::PTR;
+    ir::IrValueId v = fn.new_value(ir::IrType::PTR);
+    auto bb = fn.new_block("e");
+    {
+        ir::IrInstr s; s.op = ir::IrOp::GETPROC; s.type = ir::IrType::PTR;
+        s.dst = v;
+        fn.append(bb, s);
+    }
+    fn.append(bb, ret1(v));
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    CHECK(jit_vm(fn, px), "jit_vm ok (getproc)");
+    CHECK(px.regs[0] == reinterpret_cast<uint64_t>(&px),
+          "getproc devuelve el ProcessVM* (RBX = &px)");
+    if (px.regs[0] != reinterpret_cast<uint64_t>(&px))
+        std::printf("    regs[0]=0x%llx esperado 0x%llx\n",
+                    (unsigned long long)px.regs[0],
+                    (unsigned long long)reinterpret_cast<uint64_t>(&px));
+}
+
+/* ---- Test: RET void en VM_ABI inicializa regs[0]=0 (exit code) -----------
+ * Una fn `void` con RET sin operando debe dejar regs[0]=0 (no la basura
+ * previa).  Cubre el caso `void main` cuyo R0 es el exit code observable;
+ * sin esto quedaria el ultimo CALL VM_ABI (regresion encontrada con GETPROC
+ * + test_print_formats). */
+static void test_vm_ret_void() {
+    std::printf("[vm] ret void: regs[0] se pone a 0\n");
+    ir::IrFunction fn;
+    fn.name = "voidfn"; fn.ret_type = ir::IrType::VOID;
+    auto bb = fn.new_block("e");
+    { ir::IrInstr r; r.op = ir::IrOp::RET; r.type = ir::IrType::VOID;
+      fn.append(bb, r); }  /* ret sin operando */
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[0] = 0xDEADBEEFCAFEULL;  /* basura previa */
+    CHECK(jit_vm(fn, px), "jit_vm ok (ret void)");
+    CHECK(px.regs[0] == 0, "ret void inicializa regs[0]=0");
+    if (px.regs[0] != 0)
+        std::printf("    regs[0]=0x%llx esperado 0\n",
+                    (unsigned long long)px.regs[0]);
+}
+
 int main() {
     std::setbuf(stdout, nullptr);
     /* Forzar el gate de DIV/MOD en vregs para este test (default OFF). */
@@ -943,6 +1070,10 @@ int main() {
     test_vm_divmod_loop();
     test_vm_add();
     test_vm_loop();
+    test_vm_str_lit_addr();  /* antes del crash pre-existente de gc_stackmap */
+    test_vm_label_addr();
+    test_vm_getproc();
+    test_vm_ret_void();
     test_vm_sext_loop();
     test_vm_call();
     test_vm_callvirt();

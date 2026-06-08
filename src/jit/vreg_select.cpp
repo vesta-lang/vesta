@@ -188,7 +188,8 @@ namespace jit {
 
     bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                      const CallResolver &resolve_call, const VregEntries &ent,
-                     const CallResolver &resolve_native) {
+                     const CallResolver &resolve_native,
+                     const CallResolver &resolve_symbol) {
         out = MFunction{};
         out.name = fn.name;
         out.vreg_count = static_cast<uint32_t>(fn.values.size());
@@ -582,6 +583,21 @@ namespace jit {
                                 : MOperand::make_reg(MReg::RAX, 8);
                             O.push_back(MInstr::make_unary(MOp::MOV, dst,
                                 vr(in.operands[0])));
+                        } else if (vm) {
+                            /* RET void en VM_ABI: regs[0] es el "exit code"
+                             * observable de main.  Sin esto quedaria con basura
+                             * del ultimo CALL VM_ABI (p.ej. __new_X deja el ptr
+                             * del objeto).  El interp/selector dan 0 aqui (el
+                             * ultimo CALLN deja 0 en R0/RAX); escribimos 0
+                             * explicito -> exit-code determinista + paridad con
+                             * el interp en `void main`.  Reusa el patron seguro
+                             * mem<-vreg del RET con operando (un vreg temporal
+                             * con 0; el rewrite ya sabe materializarlo). */
+                            const ir::IrValueId zero = new_tmp();
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(zero),
+                                MOperand::make_imm32(0)));
+                            O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(0),
+                                vr(zero)));
                         }
                         O.push_back(MInstr::make_ret());
                         break;
@@ -1239,6 +1255,83 @@ namespace jit {
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                 MOperand::make_reg(MReg::RAX, 8)));
+                        break;
+                    }
+
+                    case ir::IrOp::STR_LIT_ADDR: {
+                        /* %dst = direccion VM del literal de string indexado
+                         * por @c in.imm en el bloque "code.s_<imm>" del .velb.
+                         * Equivalente al `mov rDst, @Absolute("code.s_<imm>")`
+                         * que emite el frontend; lo resolvemos en compile-time
+                         * via @c resolve_symbol (Phase D.3-H, igual que el
+                         * selector de slots).
+                         *
+                         * IMPORTANTE: el resultado es un VM-addr (offset a
+                         * static_data en proc->vm_mem), NO un host_ptr.  El
+                         * value del IR queda con is_host_ptr=false, asi que un
+                         * LOAD/STORE posterior sobre el cae al fallback (el
+                         * vreg solo soporta LOAD/STORE host).  No marcamos
+                         * host-ness aqui: solo emitimos el inmediato. */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE) return false;
+                        uint64_t addr = 0;
+                        if (resolve_symbol)
+                            addr = resolve_symbol("code.s_" + std::to_string(in.imm));
+                        if (addr == 0) {
+                            vreg_dbg(fn.name.c_str(), "str_lit_addr(no-symbol)");
+                            return false;   // sin resolver -> fallback a slots
+                        }
+                        const uint32_t idx = out.intern_imm64(addr);
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            MOperand::make_imm64_idx(idx)));
+                        break;
+                    }
+
+                    case ir::IrOp::LABEL_ADDR: {
+                        /* %dst = direccion VM del label `code.<func_name>`
+                         * resuelta por el linker.  Equivalente al
+                         * `mov rDst, @Absolute("code.<func_name>")` que emite
+                         * el frontend (B.1 as_native_callback, paso de fn por
+                         * valor, trampolines, registro de handlers).  Lo
+                         * resolvemos via @c resolve_symbol igual que el
+                         * selector de slots (Phase D.3-H).
+                         *
+                         * Es un PC virtual (code addr), NO un host_ptr: mismo
+                         * tratamiento que STR_LIT_ADDR -- solo emitimos el
+                         * inmediato, sin marcar host-ness. */
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.func_name.empty()) {
+                            vreg_dbg(fn.name.c_str(), "label_addr(no-func_name)");
+                            return false;
+                        }
+                        uint64_t addr = 0;
+                        if (resolve_symbol)
+                            addr = resolve_symbol("code." + in.func_name);
+                        if (addr == 0) {
+                            vreg_dbg(fn.name.c_str(), "label_addr(no-symbol)");
+                            return false;   // sin resolver -> fallback a slots
+                        }
+                        const uint32_t idx = out.intern_imm64(addr);
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            MOperand::make_imm64_idx(idx)));
+                        break;
+                    }
+
+                    case ir::IrOp::GETPROC: {
+                        /* %dst = ProcessVM* del proceso actual.  En VM_ABI el
+                         * proc esta en RBX (reservado, preservado por el
+                         * prologue); GETPROC = `mov dst, rbx`, igual que el
+                         * selector de slots.  Fuera de VM_ABI no hay un proc
+                         * accesible -> fallback.  El resultado es un host_ptr
+                         * nativo (no objeto GC): vreg_is_gc[dst]=0 y un LOAD
+                         * posterior sobre el (proc->campo) es host (soportado). */
+                        flush_pending();
+                        if (!vm || in.dst == ir::IR_NO_VALUE) {
+                            vreg_dbg(fn.name.c_str(), "getproc(no-vm)");
+                            return false;
+                        }
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            MOperand::make_reg(MReg::RBX, 8)));
                         break;
                     }
 
