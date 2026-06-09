@@ -68,6 +68,14 @@ namespace jit {
         uint64_t deffield   = 0;  ///< vrt_deffield(proc, cls, params) -> i32
         uint64_t defmethod  = 0;  ///< vrt_defmethod(proc, cls, params) -> u32
         uint64_t addadvice  = 0;  ///< vrt_addadvice(proc, target, advice, kind) -> i32
+        /* String ops (cluster cobertura 2026-06-09).  Todas via CALL al
+         * runtime; STRMAKE/STRCAT devuelven GcHandle (root de tipo HANDLE). */
+        uint64_t str_make   = 0;  ///< vrt_str_make(proc, vm_addr, byte_len) -> handle
+        uint64_t str_len    = 0;  ///< vrt_str_len(proc, handle) -> i64 (code points)
+        uint64_t str_cat    = 0;  ///< vrt_str_cat(proc, a, b) -> handle (ROPE)
+        uint64_t str_cmp    = 0;  ///< vrt_str_cmp(proc, a, b) -> i64 (-1/0/1)
+        uint64_t str_raw    = 0;  ///< vrt_str_raw(proc, handle) -> host_ptr a data[]
+        uint64_t str_get_bytes = 0; ///< vrt_str_get_bytes(proc, handle) -> i64 byte_len
         /* Fallback page-miss de LOAD_VM/STORE_VM (acceso a vm_mem).  0 = no
          * disponible -> esos ops caen a fallback. */
         uint64_t vm_read_u8   = 0; ///< vrt_vm_read_u8(proc, vaddr)  -> u8

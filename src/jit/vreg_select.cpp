@@ -214,6 +214,25 @@ namespace jit {
             out.vreg_is_gc[i] = static_cast<uint8_t>(static_cast<uint8_t>(k) + 1u);
         }
 
+        /* String ops que devuelven un GcHandle (STRMAKE/STRCAT).  El IR NO los
+         * marca @c is_gc_object (el handle es indice estable que no se mueve;
+         * marcarlo romperia el save_live_regs del interp, que aplicaria
+         * gchandle sobre un valor que YA es handle -- ver lowering emit_strmake).
+         * PERO la StringObject referenciada DEBE sobrevivir un GC si el handle
+         * vive a traves de otra call que aloque (otra STRMAKE/STRCAT/NEWOBJ).
+         * Los strings pequenos se pinean via gc_addref (intern), pero los
+         * grandes NO -> marcar el dst como root de tipo HANDLE para que el
+         * regalloc lo spillee + stackmapee (commit 6) cuando cruza un call.
+         * Coste cero si no cruza ninguno (no hay spill). */
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins2 : blk.instrs)
+                if ((ins2.op == ir::IrOp::STRMAKE || ins2.op == ir::IrOp::STRCAT)
+                 && ins2.dst != ir::IR_NO_VALUE
+                 && ins2.dst < out.vreg_is_gc.size()
+                 && out.vreg_is_gc[ins2.dst] == 0)
+                    out.vreg_is_gc[ins2.dst] =
+                        static_cast<uint8_t>(StackmapGcKind::HANDLE) + 1u;
+
         const size_t NB = fn.blocks.size();
         if (NB == 0) return false;
 
@@ -305,6 +324,16 @@ namespace jit {
 
                 switch (in.op) {
                     case ir::IrOp::NOP: break;
+
+                    /* ADTs (markers semanticos puros, sin codegen): la
+                     * construccion/dispatch real lo emite la secuencia
+                     * ALLOCA + STORE tag + STOREs / LOAD + cmp + br que el
+                     * frontend genera ANTES/DESPUES del marker (ops ya
+                     * soportados por el vreg).  El ir_emitter los trata como
+                     * no-op (solo comentario); aqui igual.  No producen MInstr
+                     * -> el interval builder nunca los ve. */
+                    case ir::IrOp::MAKE_VARIANT: break;
+                    case ir::IrOp::MATCH_VARIANT: break;
 
                     case ir::IrOp::CONST: {
                         flush_pending();
@@ -911,6 +940,16 @@ namespace jit {
                     case ir::IrOp::FINDMETHOD:
                     case ir::IrOp::FINDFIELD:
                     case ir::IrOp::DEFCLASS:
+                    /* Cluster strings de 1 arg (proc, handle):
+                     *   STRLEN(handle)      -> i64 code-points
+                     *   STRGETBYTES(handle) -> i64 byte_len
+                     *   STRRAW(handle)      -> host_ptr a data[] (is_host_ptr;
+                     *                          el frontend ya lo marca).
+                     * Mismo marshalling 1-arg que gc_handle.  STRRAW puede
+                     * materializar (flatten) -> aloca -> CALL_ABS call-position. */
+                    case ir::IrOp::STRLEN:
+                    case ir::IrOp::STRGETBYTES:
+                    case ir::IrOp::STRRAW:
                     case ir::IrOp::RAW_ALLOC: {
                         flush_pending();
                         /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
@@ -1053,6 +1092,9 @@ namespace jit {
                             (in.op == ir::IrOp::FINDMETHOD)        ? ent.findmethod:
                             (in.op == ir::IrOp::FINDFIELD)         ? ent.findfield :
                             (in.op == ir::IrOp::DEFCLASS)          ? ent.defclass  :
+                            (in.op == ir::IrOp::STRLEN)            ? ent.str_len   :
+                            (in.op == ir::IrOp::STRGETBYTES)       ? ent.str_get_bytes :
+                            (in.op == ir::IrOp::STRRAW)            ? ent.str_raw   :
                                                                      ent.gc_allocp;
                         if (!vm || addr == 0) {
                             vreg_dbg(fn.name.c_str(), "gc_runtime"); return false;
@@ -1067,6 +1109,90 @@ namespace jit {
                             MOperand::make_reg(ga1, 8), vr(in.operands[0])));  // valor primero
                         O.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(ga0, 8), MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                        if (in.dst != ir::IR_NO_VALUE)
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                MOperand::make_reg(MReg::RAX, 8)));
+                        break;
+                    }
+
+                    /* === Cluster strings (cobertura 2026-06-09) ===
+                     * STRMAKE(buf, len) [enc=imm] -> GcHandle del StringObject.
+                     * vrt_str_make(proc, vm_addr, byte_len) lee de vm_mem y
+                     * auto-detecta ASCII/UTF-8 (el imm enc se ignora, igual que
+                     * el interp).  3 host args: proc=A0, vm_addr=A1, byte_len=A2.
+                     * El buf en memoria HOST (is_host_ptr) NO se soporta aun (no
+                     * hay vrt_str_make_h) -> fallback.  Marshalling robusto via
+                     * R10/R11 (scratch reservados) para evitar colisiones de
+                     * arg-reg (misma leccion que DEFFIELD/CALLVIRT).  El alloc
+                     * puede disparar GC: CALL_ABS = call-position (interval.cpp)
+                     * -> los roots vivos a traves se spillean (commit 6), y el
+                     * dst (HANDLE) tambien si vive a traves de otra call. */
+                    case ir::IrOp::STRMAKE: {
+                        flush_pending();
+                        if (!vm || ent.str_make == 0) {
+                            vreg_dbg(fn.name.c_str(), "strmake"); return false;
+                        }
+                        if (in.operands.size() != 2) return false;
+                        if (in.operands[0] < fn.values.size()
+                         && fn.values[in.operands[0]].is_host_ptr) {
+                            /* buf host -> sin runtime entry host todavia. */
+                            vreg_dbg(fn.name.c_str(), "strmake_h"); return false;
+                        }
+#if defined(_WIN32)
+                        const MReg sm0 = MReg::RCX, sm1 = MReg::RDX, sm2 = MReg::R8;
+#else
+                        const MReg sm0 = MReg::RDI, sm1 = MReg::RSI, sm2 = MReg::RDX;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R10, 8), vr(in.operands[0]))); // buf
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R11, 8), vr(in.operands[1]))); // len
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sm1, 8), MOperand::make_reg(MReg::R10, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sm2, 8), MOperand::make_reg(MReg::R11, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sm0, 8), MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.str_make)));
+                        if (in.dst != ir::IR_NO_VALUE)
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                MOperand::make_reg(MReg::RAX, 8)));
+                        break;
+                    }
+
+                    /* STRCAT(a, b) -> handle (ROPE); STRCMP(a, b) -> i64 (-1/0/1).
+                     * 3 host args: proc=A0, a=A1, b=A2; resultado en RAX.
+                     * Marshalling robusto via R10/R11 (igual que DEFFIELD): los
+                     * dos handles a R10/R11 ANTES de moverlos a los arg-regs ->
+                     * evita colisiones cuando el regalloc asigna un operando a un
+                     * arg-reg target.  STRCAT aloca (FLAT pequeno o ROPE) -> GC:
+                     * CALL_ABS = call-position; los handles operandos (si vienen
+                     * de STRMAKE/STRCAT) estan marcados HANDLE y se spillean. */
+                    case ir::IrOp::STRCAT:
+                    case ir::IrOp::STRCMP: {
+                        flush_pending();
+                        const uint64_t addr = (in.op == ir::IrOp::STRCAT)
+                                                  ? ent.str_cat : ent.str_cmp;
+                        if (!vm || addr == 0) {
+                            vreg_dbg(fn.name.c_str(), "strcat/strcmp"); return false;
+                        }
+                        if (in.operands.size() != 2) return false;
+#if defined(_WIN32)
+                        const MReg sc0 = MReg::RCX, sc1 = MReg::RDX, sc2 = MReg::R8;
+#else
+                        const MReg sc0 = MReg::RDI, sc1 = MReg::RSI, sc2 = MReg::RDX;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R10, 8), vr(in.operands[0]))); // a
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R11, 8), vr(in.operands[1]))); // b
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sc1, 8), MOperand::make_reg(MReg::R10, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sc2, 8), MOperand::make_reg(MReg::R11, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sc0, 8), MOperand::make_reg(MReg::RBX, 8)));
                         O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
