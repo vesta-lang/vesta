@@ -243,6 +243,13 @@ namespace jit {
                 e.deffield   = reinterpret_cast<uint64_t>(g_runtime_entries->deffield);
                 e.defmethod  = reinterpret_cast<uint64_t>(g_runtime_entries->defmethod);
                 e.addadvice  = reinterpret_cast<uint64_t>(g_runtime_entries->addadvice);
+                /* String ops (cluster cobertura 2026-06-09). */
+                e.str_make      = reinterpret_cast<uint64_t>(g_runtime_entries->str_make);
+                e.str_len       = reinterpret_cast<uint64_t>(g_runtime_entries->str_len);
+                e.str_cat       = reinterpret_cast<uint64_t>(g_runtime_entries->str_cat);
+                e.str_cmp       = reinterpret_cast<uint64_t>(g_runtime_entries->str_cmp);
+                e.str_raw       = reinterpret_cast<uint64_t>(g_runtime_entries->str_raw);
+                e.str_get_bytes = reinterpret_cast<uint64_t>(g_runtime_entries->str_get_bytes);
                 /* Fallback de LOAD_VM/STORE_VM (page-miss del vm_mem). */
                 e.vm_read_u8   = reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u8);
                 e.vm_read_u16  = reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u16);

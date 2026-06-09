@@ -107,6 +107,25 @@ static bool jit_vm(const ir::IrFunction &fn, Proxy &px,
     return true;
 }
 
+/** @brief Como jit_vm pero con un VregEntries completo (cluster strings). */
+static bool jit_vm_ent(const ir::IrFunction &fn, Proxy &px, const VregEntries &ent) {
+    MFunction mf;
+    if (!vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {})) return false;
+    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    X86Encoder enc; std::vector<uint8_t> bytes;
+    if (enc.encode(pf, bytes) == 0 || bytes.empty()) return false;
+    CodeCache cc;
+    uint8_t *code = cc.alloc(bytes.size(), 16);
+    if (!code) return false;
+    std::memcpy(code, bytes.data(), bytes.size());
+    cc.commit(code, bytes.size());
+    reinterpret_cast<void (*)(void *)>(code)(&px);
+    asm volatile("" : : "r"(&cc) : "memory");
+    return true;
+}
+
 /* ---- Test 1: add(a,b) con args desde proc->registers ------------------ */
 static void test_vm_add() {
     std::printf("[vm] add(a,b): regs[1]=40, regs[2]=2 -> regs[0]=42\n");
@@ -294,6 +313,139 @@ static void test_vm_callvirt() {
     CHECK(jit_vm(fn, px, {}, cv), "jit_vm ok (callvirt)");
     CHECK(px.regs[0] == 75, "caller(this,7)==75 (CALLVIRT)");
     if (px.regs[0] != 75) std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+}
+
+/* ---- Test STRMAKE (cluster strings) -------------------------------- *
+ * f() = strmake(0x100, 5) -> stub devuelve handle 0x7777 y registra los
+ * args (proc, vm_addr, byte_len).  Fuerza el path JIT REAL con ent.str_make
+ * apuntando al stub. */
+static uint64_t g_strmake_calls = 0;
+static uint64_t g_strmake_vaddr = 0, g_strmake_len = 0;
+extern "C" uint64_t vm_strmake_stub(void *proc, uint64_t vaddr, uint32_t len) {
+    (void)proc;
+    ++g_strmake_calls; g_strmake_vaddr = vaddr; g_strmake_len = len;
+    return 0x7777ULL;  // handle falso
+}
+static void test_vm_strmake() {
+    std::printf("[vm] strmake(0x100, 5) -> stub handle 0x7777\n");
+    ir::IrFunction fn;
+    fn.name = "smk"; fn.ret_type = ir::IrType::I64;
+    auto T = ir::IrType::I64;
+    ir::IrValueId buf = fn.new_value(T), len = fn.new_value(T), h = fn.new_value(T);
+    ir::IrBlockId bb = fn.new_block("e");
+    fn.append(bb, konst(buf, 0x100));
+    fn.append(bb, konst(len, 5));
+    {
+        ir::IrInstr c; c.op = ir::IrOp::STRMAKE; c.type = T; c.dst = h;
+        c.operands = { buf, len }; c.imm = 0; c.is_call_site = true;
+        fn.append(bb, c);
+    }
+    fn.append(bb, ret1(h));
+
+    MFunction mf;
+    VregEntries ent; ent.str_make =
+        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_strmake_stub));
+    bool ok = vreg_select(fn, mf, AbiKind::VM, {}, ent, {}, {});
+    CHECK(ok, "vreg_select strmake ok");
+    if (!ok) return;
+    const TargetRegInfo &tri = target_x86_64_vm_abi();
+    RegAlloc ra = linear_scan(build_intervals(mf, tri), tri);
+    MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::VM);
+    X86Encoder enc; std::vector<uint8_t> bytes;
+    CHECK(enc.encode(pf, bytes) != 0 && !bytes.empty(), "encode strmake");
+    if (bytes.empty()) return;
+    CodeCache cc; uint8_t *code = cc.alloc(bytes.size(), 16);
+    if (!code) { CHECK(false, "code cache strmake"); return; }
+    std::memcpy(code, bytes.data(), bytes.size()); cc.commit(code, bytes.size());
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    g_strmake_calls = 0; g_strmake_vaddr = 0; g_strmake_len = 0;
+    reinterpret_cast<void (*)(void *)>(code)(&px);
+    asm volatile("" : : "r"(&cc) : "memory");
+    CHECK(g_strmake_calls == 1, "strmake llama al runtime 1 vez");
+    CHECK(g_strmake_vaddr == 0x100, "strmake pasa vm_addr correcto");
+    CHECK(g_strmake_len == 5, "strmake pasa byte_len correcto");
+    CHECK(px.regs[0] == 0x7777, "strmake result handle en regs[0]");
+    if (px.regs[0] != 0x7777)
+        std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+}
+
+/* ---- Test STRLEN (cluster strings, 1-arg) -------------------------- *
+ * f(s) = strlen(s).  s en regs[1].  Stub registra el handle y devuelve 99. */
+static uint64_t g_strlen_h = 0;
+extern "C" uint64_t vm_strlen_stub(void *proc, uint64_t h) {
+    (void)proc; g_strlen_h = h; return 99;
+}
+static void test_vm_strlen() {
+    std::printf("[vm] strlen(s): regs[1]=0x55 -> stub -> regs[0]=99\n");
+    ir::IrFunction fn;
+    fn.name = "sln"; fn.ret_type = ir::IrType::I64;
+    auto T = ir::IrType::I64;
+    ir::IrValueId s = fn.new_value(T), r = fn.new_value(T);
+    fn.params = { s };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::STRLEN; c.type = T; c.dst = r;
+      c.operands = { s }; fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    VregEntries ent; ent.str_len =
+        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_strlen_stub));
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 0x55; g_strlen_h = 0;
+    CHECK(jit_vm_ent(fn, px, ent), "jit_vm strlen ok");
+    CHECK(g_strlen_h == 0x55, "strlen pasa handle correcto");
+    CHECK(px.regs[0] == 99, "strlen result en regs[0]");
+}
+
+/* ---- Test STRCAT (cluster strings, 2-arg + GC handle) -------------- *
+ * f(s,t) = strcat(s,t).  s,t en regs[1],regs[2].  Stub registra a/b. */
+static uint64_t g_strcat_a = 0, g_strcat_b = 0;
+extern "C" uint64_t vm_strcat_stub(void *proc, uint64_t a, uint64_t b) {
+    (void)proc; g_strcat_a = a; g_strcat_b = b; return 0xC0FFEEULL;
+}
+static void test_vm_strcat() {
+    std::printf("[vm] strcat(s,t): regs[1]=0x11 regs[2]=0x22 -> 0xC0FFEE\n");
+    ir::IrFunction fn;
+    fn.name = "sct"; fn.ret_type = ir::IrType::I64;
+    auto T = ir::IrType::I64;
+    ir::IrValueId s = fn.new_value(T), t = fn.new_value(T), r = fn.new_value(T);
+    fn.params = { s, t };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::STRCAT; c.type = T; c.dst = r;
+      c.operands = { s, t }; c.is_call_site = true; fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    VregEntries ent; ent.str_cat =
+        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_strcat_stub));
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 0x11; px.regs[2] = 0x22; g_strcat_a = 0; g_strcat_b = 0;
+    CHECK(jit_vm_ent(fn, px, ent), "jit_vm strcat ok");
+    CHECK(g_strcat_a == 0x11, "strcat pasa arg a correcto");
+    CHECK(g_strcat_b == 0x22, "strcat pasa arg b correcto");
+    CHECK(px.regs[0] == 0xC0FFEEULL, "strcat result handle en regs[0]");
+}
+
+/* ---- Test ADT markers (MAKE_VARIANT/MATCH_VARIANT son no-op) -------- *
+ * f(a,b) = make_variant(); add; match_variant(); -> a+b.  Los markers no
+ * deben perturbar el codegen circundante. */
+static void test_vm_variant_markers() {
+    std::printf("[vm] variant markers: f(40,2) -> regs[0]=42 (markers no-op)\n");
+    ir::IrFunction fn;
+    fn.name = "varm"; fn.ret_type = ir::IrType::I64;
+    auto T = ir::IrType::I64;
+    ir::IrValueId a = fn.new_value(T), b = fn.new_value(T), r = fn.new_value(T);
+    fn.params = { a, b };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr mk; mk.op = ir::IrOp::MAKE_VARIANT; mk.type = ir::IrType::VOID;
+      mk.dst = ir::IR_NO_VALUE; mk.func_name = "E.V"; mk.imm = 0;
+      mk.operands = { a }; fn.append(bb, mk); }
+    fn.append(bb, bin(ir::IrOp::ADD, r, a, b));
+    { ir::IrInstr mt; mt.op = ir::IrOp::MATCH_VARIANT; mt.type = ir::IrType::VOID;
+      mt.dst = ir::IR_NO_VALUE; mt.func_name = "E"; mt.imm = 1;
+      mt.operands = { a }; fn.append(bb, mt); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 40; px.regs[2] = 2;
+    VregEntries ent;
+    CHECK(jit_vm_ent(fn, px, ent), "jit_vm variant markers ok");
+    CHECK(px.regs[0] == 42, "markers no-op: f(40,2)==42");
 }
 
 /** @brief Callee de prueba: pone regs[0]=50 (simula trabajo + clobbea
@@ -1216,6 +1368,10 @@ int main() {
     test_vm_ret_void();
     test_vm_load_vm();   /* antes del crash pre-existente de gc_stackmap */
     test_vm_store_vm();
+    test_vm_strmake();   /* antes del crash pre-existente de gc_stackmap */
+    test_vm_strlen();
+    test_vm_strcat();
+    test_vm_variant_markers();
     test_vm_sext_loop();
     test_vm_call();
     test_vm_callvirt();
