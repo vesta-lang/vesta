@@ -448,6 +448,99 @@ static void test_vm_variant_markers() {
     CHECK(px.regs[0] == 42, "markers no-op: f(40,2)==42");
 }
 
+/* ---- Test SMARTPTR_FREE kind 1 (EXTERN_CALLN) ---------------------- *
+ * f(ptr) { smartptr_free.kind=1(ptr) "lib:del" }.  Si ptr!=0 llama al
+ * deleter nativo con ptr en arg0; si ptr==0 NO lo llama (null-safe). */
+static uint64_t g_spnat_ptr = 0; static int g_spnat_calls = 0;
+extern "C" void vm_sp_native_del(uint64_t p) { g_spnat_ptr = p; ++g_spnat_calls; }
+static ir::IrInstr ret_void() {
+    ir::IrInstr i; i.op = ir::IrOp::RET; i.type = ir::IrType::VOID; return i;
+}
+static void test_vm_smartptr_free_extern() {
+    std::printf("[vm] smartptr_free kind=1 (extern): null-safe + arg0=ptr\n");
+    ir::IrFunction fn;
+    fn.name = "spf1"; fn.ret_type = ir::IrType::VOID;
+    ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);
+    fn.values[ptr].is_host_ptr = true;
+    fn.params = { ptr };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::SMARTPTR_FREE; c.type = ir::IrType::VOID;
+      c.dst = ir::IR_NO_VALUE; c.operands = { ptr }; c.imm = 1;
+      c.func_name = "lib:del"; c.is_call_site = true; fn.append(bb, c); }
+    fn.append(bb, ret_void());
+    CallResolver rn = [](const std::string &n) -> uint64_t {
+        return n == "lib:del"
+            ? reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_sp_native_del))
+            : 0;
+    };
+    /* ptr != 0 -> deleter llamado con ptr. */
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 0xDEAD; g_spnat_ptr = 0; g_spnat_calls = 0;
+    CHECK(jit_vm(fn, px, {}, 0, rn), "jit_vm smartptr_free k1 ok");
+    CHECK(g_spnat_calls == 1, "k1: deleter llamado 1 vez (ptr!=0)");
+    CHECK(g_spnat_ptr == 0xDEAD, "k1: deleter recibe ptr en arg0");
+    /* ptr == 0 -> deleter NO llamado. */
+    Proxy px0; std::memset(&px0, 0, sizeof(px0));
+    px0.regs[1] = 0; g_spnat_calls = 0;
+    CHECK(jit_vm(fn, px0, {}, 0, rn), "jit_vm smartptr_free k1 null ok");
+    CHECK(g_spnat_calls == 0, "k1: deleter NO llamado (ptr==0, null-safe)");
+}
+
+/* ---- Test SMARTPTR_FREE kind 2 (VESTA_CALLVM) --------------------- *
+ * f(ptr) { smartptr_free.kind=2(ptr) "del" }.  Si ptr!=0 stage ptr a
+ * regs[1] + call vesta(proc); el deleter lee regs[1]. */
+static uint64_t g_spves_ptr = 0; static int g_spves_calls = 0;
+extern "C" void vm_sp_vesta_del(void *proc) {
+    Proxy *p = static_cast<Proxy *>(proc);
+    g_spves_ptr = p->regs[1]; ++g_spves_calls;
+}
+static void test_vm_smartptr_free_vesta() {
+    std::printf("[vm] smartptr_free kind=2 (vesta): null-safe + regs[1]=ptr\n");
+    ir::IrFunction fn;
+    fn.name = "spf2"; fn.ret_type = ir::IrType::VOID;
+    ir::IrValueId ptr = fn.new_value(ir::IrType::PTR);
+    fn.values[ptr].is_host_ptr = true;
+    fn.params = { ptr };
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::SMARTPTR_FREE; c.type = ir::IrType::VOID;
+      c.dst = ir::IR_NO_VALUE; c.operands = { ptr }; c.imm = 2;
+      c.func_name = "del"; c.is_call_site = true; fn.append(bb, c); }
+    fn.append(bb, ret_void());
+    CallResolver rc = [](const std::string &n) -> uint64_t {
+        return n == "del"
+            ? reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_sp_vesta_del))
+            : 0;
+    };
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 0xBEEF; g_spves_ptr = 0; g_spves_calls = 0;
+    CHECK(jit_vm(fn, px, rc), "jit_vm smartptr_free k2 ok");
+    CHECK(g_spves_calls == 1, "k2: deleter llamado 1 vez (ptr!=0)");
+    CHECK(g_spves_ptr == 0xBEEF, "k2: deleter lee ptr de regs[1]");
+    Proxy px0; std::memset(&px0, 0, sizeof(px0));
+    px0.regs[1] = 0; g_spves_calls = 0;
+    CHECK(jit_vm(fn, px0, rc), "jit_vm smartptr_free k2 null ok");
+    CHECK(g_spves_calls == 0, "k2: deleter NO llamado (ptr==0, null-safe)");
+}
+
+/* ---- Test READ_VM_REG ---------------------------------------------- *
+ * f() = read_vm_reg(3).  regs[3]=0x1234 -> regs[0]=0x1234. */
+static void test_vm_read_vm_reg() {
+    std::printf("[vm] read_vm_reg(3): regs[3]=0x1234 -> regs[0]=0x1234\n");
+    ir::IrFunction fn;
+    fn.name = "rvr"; fn.ret_type = ir::IrType::I64;
+    auto T = ir::IrType::I64;
+    ir::IrValueId r = fn.new_value(T);
+    ir::IrBlockId bb = fn.new_block("e");
+    { ir::IrInstr c; c.op = ir::IrOp::READ_VM_REG; c.type = T; c.dst = r;
+      c.imm = 3; fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[3] = 0x1234;
+    VregEntries ent;
+    CHECK(jit_vm_ent(fn, px, ent), "jit_vm read_vm_reg ok");
+    CHECK(px.regs[0] == 0x1234, "read_vm_reg(3) -> regs[0]==0x1234");
+}
+
 /** @brief Callee de prueba: pone regs[0]=50 (simula trabajo + clobbea
  *  caller-saved como cualquier funcion C). */
 extern "C" void g_stub(void *proc) {
@@ -1372,6 +1465,9 @@ int main() {
     test_vm_strlen();
     test_vm_strcat();
     test_vm_variant_markers();
+    test_vm_read_vm_reg();
+    test_vm_smartptr_free_extern();
+    test_vm_smartptr_free_vesta();
     test_vm_sext_loop();
     test_vm_call();
     test_vm_callvirt();
