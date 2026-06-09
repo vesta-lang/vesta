@@ -77,6 +77,7 @@ namespace jit {
         uint64_t str_raw    = 0;  ///< vrt_str_raw(proc, handle) -> host_ptr a data[]
         uint64_t str_get_bytes = 0; ///< vrt_str_get_bytes(proc, handle) -> i64 byte_len
         uint64_t call_bc_function = 0; ///< vrt_call_bc_function(proc, vm_addr) -- deleter dinamico
+        uint64_t callclosure = 0; ///< vrt_callclosure(proc, fn_addr, env_addr) -> result
         /* Fallback page-miss de LOAD_VM/STORE_VM (acceso a vm_mem).  0 = no
          * disponible -> esos ops caen a fallback. */
         uint64_t vm_read_u8   = 0; ///< vrt_vm_read_u8(proc, vaddr)  -> u8
