@@ -84,7 +84,7 @@ static bool is_side_effecting(IrOp op) {
         // memoria
         case IrOp::STORE:   case IrOp::MEMCPY:   case IrOp::SETFIELD:
         // OOP con efectos
-        case IrOp::NEWOBJ:  case IrOp::CHECKCAST: case IrOp::UNWRAP:
+        case IrOp::NEWOBJ:  case IrOp::NEWOBJS: case IrOp::CHECKCAST: case IrOp::UNWRAP:
         case IrOp::SPECIALIZE:
         // GC_ALLOC: consume memoria del heap GC + puede disparar minor/major
         // GC + el payload puede ser referenciado posteriormente.  Tratarlo
@@ -126,6 +126,7 @@ static bool is_side_effecting(IrOp op) {
         case IrOp::FINDCLASS: case IrOp::DEFCLASS:
         case IrOp::DEFFIELD:  case IrOp::DEFMETHOD:  case IrOp::ADDADVICE:
         case IrOp::FINDMETHOD: case IrOp::FINDFIELD:
+        case IrOp::SETMETHDBG:
         case IrOp::CALLSUPER:  case IrOp::PROCEED:
         case IrOp::FULFILL_HLT:
         case IrOp::STRGETBYTES:
@@ -3928,7 +3929,7 @@ bool ir_pass_dse(IrFunction &fn) {
                 case IrOp::RAW_ASM:
                 case IrOp::MEMCPY: case IrOp::SETFIELD: case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE: case IrOp::GCWB_IR:
-                case IrOp::NEWOBJ: case IrOp::GC_ALLOC:
+                case IrOp::NEWOBJ: case IrOp::NEWOBJS: case IrOp::GC_ALLOC:
                 case IrOp::RAW_ALLOC: case IrOp::RAW_FREE:
                 case IrOp::THROW: case IrOp::TRYENTER: case IrOp::TRYLEAVE:
                 // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE/STRCAT/
@@ -3960,6 +3961,21 @@ bool ir_pass_dse(IrFunction &fn) {
                 // FFI runtime puede mutar cualquier cosa.
                 case IrOp::DLOPEN: case IrOp::DLSYM:
                 case IrOp::MOD_LOAD:
+                // raw_asm-elim Fase 2 (__module_init -> IR): los ops de meta-OOP
+                // LEEN su struct de parametros desde vm_mem (params_vaddr) en
+                // runtime (defclass/deffield/defmethod leen el buffer; findclass/
+                // findmethod tambien).  Sin invalidar last_store_idx, DSE elimina
+                // los STORE que arman ese buffer creyendo que nadie los lee,
+                // PERO el op de meta-OOP los LEE en runtime.  Critico para el
+                // patron de buffer REUSADO entre defs: STORE(buf+0,A); deffield;
+                // STORE(buf+0,B) -- sin esto el primer STORE se marca dead.
+                // Mismo razonamiento que STRMAKE/STRCAT (que leen vm_mem).
+                case IrOp::DEFCLASS:  case IrOp::DEFFIELD:  case IrOp::DEFMETHOD:
+                case IrOp::FINDCLASS: case IrOp::FINDMETHOD: case IrOp::FINDFIELD:
+                case IrOp::ADDADVICE: case IrOp::SETMETHDBG:
+                // GETSTATIC/SETSTATIC consultan/mutan cls->static_data (estado
+                // global del runtime); conservativo: invalidar el mapa.
+                case IrOp::GETSTATIC: case IrOp::SETSTATIC:
                     last_store_idx.clear();
                     last_store_val.clear();
                     break;
@@ -5822,7 +5838,7 @@ static bool is_sched_barrier(IrOp op) {
         case IrOp::CALLCLOSURE:
         case IrOp::TAILCALL: case IrOp::CALLSUPER:
         case IrOp::RAW_ASM:
-        case IrOp::NEWOBJ: case IrOp::GC_ALLOC: case IrOp::GC_ALLOCP:
+        case IrOp::NEWOBJ: case IrOp::NEWOBJS: case IrOp::GC_ALLOC: case IrOp::GC_ALLOCP:
         case IrOp::RAW_ALLOC: case IrOp::RAW_FREE:
         case IrOp::THROW: case IrOp::TRYENTER: case IrOp::TRYLEAVE:
         case IrOp::SETFIELD: case IrOp::ARRAY_STORE:
@@ -5856,6 +5872,7 @@ static bool is_sched_barrier(IrOp op) {
         case IrOp::FINDCLASS: case IrOp::DEFCLASS:
         case IrOp::DEFFIELD:  case IrOp::DEFMETHOD:  case IrOp::ADDADVICE:
         case IrOp::FINDMETHOD: case IrOp::FINDFIELD:
+        case IrOp::SETMETHDBG:
         case IrOp::PROCEED:
         case IrOp::SPAWN_ON: case IrOp::HLT: case IrOp::PANIC:
         case IrOp::GETPID:  case IrOp::GETARGC: case IrOp::GETARG:

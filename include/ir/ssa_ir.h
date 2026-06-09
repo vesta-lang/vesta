@@ -491,6 +491,8 @@ namespace ir {
         FINDFIELD         = 0x7A, ///< %dst = findfield %params        (lookup FieldInfo* by name)
         CALLSUPER         = 0x7B, ///< %dst = callsuper %method, args  (invoca super.method())
         PROCEED           = 0x7C, ///< %dst = proceed                  (re-invoca target dentro de @Around)
+        SETMETHDBG        = 0x7D, ///< setmethdbg %method, %params     (registra debug info file:line de un MethodInfo*)
+        NEWOBJS           = 0x7E, ///< %dst = newobjs %class_ptr        (allojar objeto en SharedHeap, Phase Z.6)
 
         // ---- distribucion (0xD0-0xDF) ----
         MSGSEND   = 0xD0, ///< %dst = msgsend %pid, %buf_addr, %len -> bool (1=ok)
