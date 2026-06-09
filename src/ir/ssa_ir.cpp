@@ -298,6 +298,8 @@ namespace ir {
         {"addadvice",        IrOp::ADDADVICE},
         {"findmethod",       IrOp::FINDMETHOD},
         {"findfield",        IrOp::FINDFIELD},
+        {"setmethdbg",       IrOp::SETMETHDBG},
+        {"newobjs",          IrOp::NEWOBJS},
         {"callsuper",        IrOp::CALLSUPER},
         {"proceed",          IrOp::PROCEED},
         // ensamblador incrustado

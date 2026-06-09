@@ -1074,6 +1074,97 @@ namespace jit {
                         break;
                     }
 
+                    /* === Fase 2 (__module_init -> IR): meta-OOP de 2/3 args. ===
+                     * DEFFIELD/DEFMETHOD(proc, cls, params) -> 3 host args, sin
+                     *   dst en IR (el i32/u32 de retorno se descarta).
+                     * ADDADVICE(proc, target, advice, kind) -> 4 host args, sin dst.
+                     * SETMETHDBG(proc, params) -> 2 host args; operands[0]=method
+                     *   se IGNORA (vrt_setmethdbg lee method_ptr del propio params).
+                     * Marshalling robusto: los args-VALOR se materializan a R10/R11
+                     * (scratch reservados, NUNCA un vreg) ANTES de moverlos a los
+                     * arg-regs fijos.  Evita la colision cuando el regalloc asigna
+                     * un vreg a un arg-reg target (misma leccion que el fix del
+                     * dispatch CALLVIRT inline).  El CALL_ABS reusa R10 para la
+                     * direccion, pero R10/R11 ya estan muertos en el call (sus
+                     * valores se copiaron a los arg-regs). */
+                    case ir::IrOp::DEFFIELD:
+                    case ir::IrOp::DEFMETHOD: {
+                        flush_pending();
+                        const uint64_t addr = (in.op == ir::IrOp::DEFFIELD)
+                                                  ? ent.deffield : ent.defmethod;
+                        if (!vm || addr == 0) {
+                            vreg_dbg(fn.name.c_str(), "deffield/defmethod"); return false;
+                        }
+                        if (in.operands.size() != 2) return false;
+#if defined(_WIN32)
+                        const MReg da0 = MReg::RCX, da1 = MReg::RDX, da2 = MReg::R8;
+#else
+                        const MReg da0 = MReg::RDI, da1 = MReg::RSI, da2 = MReg::RDX;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R10, 8), vr(in.operands[0]))); // cls
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R11, 8), vr(in.operands[1]))); // params
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(da1, 8), MOperand::make_reg(MReg::R10, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(da2, 8), MOperand::make_reg(MReg::R11, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(da0, 8), MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                        break;
+                    }
+
+                    case ir::IrOp::ADDADVICE: {
+                        flush_pending();
+                        if (!vm || ent.addadvice == 0) {
+                            vreg_dbg(fn.name.c_str(), "addadvice"); return false;
+                        }
+                        if (in.operands.size() != 2) return false;
+#if defined(_WIN32)
+                        const MReg aa0 = MReg::RCX, aa1 = MReg::RDX,
+                                   aa2 = MReg::R8,  aa3 = MReg::R9;
+#else
+                        const MReg aa0 = MReg::RDI, aa1 = MReg::RSI,
+                                   aa2 = MReg::RDX, aa3 = MReg::RCX;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R10, 8), vr(in.operands[0]))); // target
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R11, 8), vr(in.operands[1]))); // advice
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(aa1, 8), MOperand::make_reg(MReg::R10, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(aa2, 8), MOperand::make_reg(MReg::R11, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(aa3, 8),
+                            MOperand::make_imm32(static_cast<int32_t>(in.imm & 0xFF))));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(aa0, 8), MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.addadvice)));
+                        break;
+                    }
+
+                    case ir::IrOp::SETMETHDBG: {
+                        flush_pending();
+                        if (!vm || ent.setmethdbg == 0) {
+                            vreg_dbg(fn.name.c_str(), "setmethdbg"); return false;
+                        }
+                        if (in.operands.size() != 2) return false;
+#if defined(_WIN32)
+                        const MReg sd0 = MReg::RCX, sd1 = MReg::RDX;
+#else
+                        const MReg sd0 = MReg::RDI, sd1 = MReg::RSI;
+#endif
+                        // operands[1]=params (operands[0]=method ignorado).
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sd1, 8), vr(in.operands[1])));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(sd0, 8), MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.setmethdbg)));
+                        break;
+                    }
+
                     /* RAW_FREE(ptr) -> void.  free(ptr) del runtime.
                      *  - ptr de ALLOCA host-stack  -> NO-OP (lo libera el
                      *    epilogue; vrt_raw_free sobre un host-stack ptr crashea).
