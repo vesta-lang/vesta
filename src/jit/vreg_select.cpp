@@ -335,6 +335,22 @@ namespace jit {
                     case ir::IrOp::MAKE_VARIANT: break;
                     case ir::IrOp::MATCH_VARIANT: break;
 
+                    /* READ_VM_REG: %dst = proc->registers.regs[imm].  En VM_ABI
+                     * RBX = ProcessVM* -> LOAD directo de [rbx + regs_off + 8*N]
+                     * (mismo patron que la carga de params).  El tipo/GC-ness
+                     * del dst ya lo marca el IR (vreg_is_gc loop).  Solo valido
+                     * en VM_ABI (en HOST_LEAF RBX no es proc). */
+                    case ir::IrOp::READ_VM_REG: {
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE) break;
+                        if (abi != AbiKind::VM || in.imm > 15) {
+                            vreg_dbg(fn.name.c_str(), "read_vm_reg"); return false;
+                        }
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                            vm_reg_mem(static_cast<int>(in.imm))));
+                        break;
+                    }
+
                     case ir::IrOp::CONST: {
                         flush_pending();
                         if (in.dst < v_is_const.size()) {  // recordar para shifts
@@ -1591,6 +1607,69 @@ namespace jit {
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                 MOperand::make_reg(MReg::RAX, 8)));
+                        break;
+                    }
+
+                    /* SMARTPTR_FREE: cleanup deterministico de unique<T> con
+                     * deleter custom (el deleter `free` por defecto baja a
+                     * RAW_FREE, ya soportado).  3 variantes (imm):
+                     *   1 = EXTERN_CALLN:  deleter FFI nativo.  if(ptr) calln(ptr).
+                     *   2 = VESTA_CALLVM:  deleter Vesta estatico.  if(ptr) callvm(ptr).
+                     *   0 = SRET_DISPATCH: deleter dinamico del slot+8 (caso SRET
+                     *       factory, raro) -> FALLBACK por ahora (call dinamico +
+                     *       free, mas delicado; sesion dedicada).
+                     * Estructura: null-check ptr; si !=0, invoca el deleter con
+                     * ptr como unico arg.  is_call_site -> el CALL_ABS es
+                     * call-position (GC roots vivos a traves se spillean).  El
+                     * ptr es RAW_ALLOC (no GC, no se marca root) -> el deleter
+                     * lo libera. */
+                    case ir::IrOp::SMARTPTR_FREE: {
+                        flush_pending();
+                        if (in.operands.empty()) break;  // idem ir_emitter (no-op)
+                        const ir::IrValueId ptr = in.operands[0];
+                        uint64_t addr = 0;
+                        if (in.imm == 1) {
+                            if (!resolve_native) {
+                                vreg_dbg(fn.name.c_str(), "smartptr_free(no-nat)");
+                                return false;
+                            }
+                            addr = resolve_native(in.func_name);
+                        } else if (in.imm == 2) {
+                            if (!vm || !resolve_call) {
+                                vreg_dbg(fn.name.c_str(), "smartptr_free(no-call)");
+                                return false;
+                            }
+                            addr = resolve_call(in.func_name);
+                        } else {
+                            /* kind 0 (SRET dynamic) -> fallback (call dinamico). */
+                            vreg_dbg(fn.name.c_str(), "smartptr_free(kind0)");
+                            return false;
+                        }
+                        if (addr == 0) {
+                            vreg_dbg(fn.name.c_str(), "smartptr_free-unresolved");
+                            return false;
+                        }
+                        const MLabelId L_done = out.new_label();
+                        O.push_back(mk_test(ptr, ptr));
+                        O.push_back(MInstr::make_jcc(MCond::E, L_done));
+                        if (in.imm == 1) {
+                            /* EXTERN_CALLN: deleter(ptr) -- arg0 host directo. */
+                            O.push_back(MInstr::make_arg(0, vr(ptr)));
+                            O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                        } else { /* imm == 2: VESTA_CALLVM (convencion VM) */
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                vm_reg_mem(1), vr(ptr)));  // ptr -> regs[1]
+#if defined(_WIN32)
+                            const MReg pr = MReg::RCX;
+#else
+                            const MReg pr = MReg::RDI;
+#endif
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                MOperand::make_reg(pr, 8),
+                                MOperand::make_reg(MReg::RBX, 8)));  // proc -> arg0
+                            O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                        }
+                        O.push_back(MInstr::make_label_def(L_done));
                         break;
                     }
 
