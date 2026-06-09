@@ -234,6 +234,15 @@ namespace jit {
                 e.raw_free  = reinterpret_cast<uint64_t>(g_runtime_entries->raw_free);
                 e.gc_allocp = reinterpret_cast<uint64_t>(g_runtime_entries->gc_alloc_payload);
                 e.newobj    = reinterpret_cast<uint64_t>(g_runtime_entries->newobj_handle);
+                /* Class registry (Fase 2). */
+                e.findclass  = reinterpret_cast<uint64_t>(g_runtime_entries->findclass);
+                e.findmethod = reinterpret_cast<uint64_t>(g_runtime_entries->findmethod);
+                e.findfield  = reinterpret_cast<uint64_t>(g_runtime_entries->findfield);
+                e.defclass   = reinterpret_cast<uint64_t>(g_runtime_entries->defclass);
+                e.setmethdbg = reinterpret_cast<uint64_t>(g_runtime_entries->setmethdbg);
+                e.deffield   = reinterpret_cast<uint64_t>(g_runtime_entries->deffield);
+                e.defmethod  = reinterpret_cast<uint64_t>(g_runtime_entries->defmethod);
+                e.addadvice  = reinterpret_cast<uint64_t>(g_runtime_entries->addadvice);
                 /* Fallback de LOAD_VM/STORE_VM (page-miss del vm_mem). */
                 e.vm_read_u8   = reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u8);
                 e.vm_read_u16  = reinterpret_cast<uint64_t>(g_runtime_entries->vm_read_u16);
