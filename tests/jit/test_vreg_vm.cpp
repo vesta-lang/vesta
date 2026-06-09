@@ -522,6 +522,44 @@ static void test_vm_smartptr_free_vesta() {
     CHECK(g_spves_calls == 0, "k2: deleter NO llamado (ptr==0, null-safe)");
 }
 
+/* ---- Test CALLCLOSURE ---------------------------------------------- *
+ * f(arg) = callclosure(fn=0xFACE, env=0xE0, arg).  El stub registra
+ * fn_addr, env, regs[1]=arg, regs[15]=nargs y devuelve 0xABBA. */
+static uint64_t g_clo_fn = 0, g_clo_env = 0, g_clo_arg = 0, g_clo_nargs = 0;
+extern "C" uint64_t vm_callclosure_stub(void *proc, uint64_t fn, uint64_t env) {
+    Proxy *p = static_cast<Proxy *>(proc);
+    g_clo_fn = fn; g_clo_env = env;
+    g_clo_arg = p->regs[1]; g_clo_nargs = p->regs[15];
+    return 0xABBAULL;
+}
+static void test_vm_callclosure() {
+    std::printf("[vm] callclosure(fn=0xFACE, env=0xE0, arg) -> 0xABBA\n");
+    ir::IrFunction fn;
+    fn.name = "clo"; fn.ret_type = ir::IrType::I64;
+    auto T = ir::IrType::I64;
+    ir::IrValueId arg = fn.new_value(T), fnp = fn.new_value(T);
+    ir::IrValueId env = fn.new_value(T), r = fn.new_value(T);
+    fn.params = { arg };
+    ir::IrBlockId bb = fn.new_block("e");
+    fn.append(bb, konst(fnp, 0xFACE));
+    fn.append(bb, konst(env, 0xE0));
+    { ir::IrInstr c; c.op = ir::IrOp::CALLCLOSURE; c.type = T; c.dst = r;
+      c.func_ptr = fnp; c.operands = { env, arg }; c.is_call_site = true;
+      fn.append(bb, c); }
+    fn.append(bb, ret1(r));
+    VregEntries ent; ent.callclosure =
+        reinterpret_cast<uint64_t>(reinterpret_cast<void *>(&vm_callclosure_stub));
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 0x123;
+    g_clo_fn = g_clo_env = g_clo_arg = g_clo_nargs = 0;
+    CHECK(jit_vm_ent(fn, px, ent), "jit_vm callclosure ok");
+    CHECK(g_clo_fn == 0xFACE, "callclosure pasa fn_addr");
+    CHECK(g_clo_env == 0xE0, "callclosure pasa env");
+    CHECK(g_clo_arg == 0x123, "callclosure stage arg en regs[1]");
+    CHECK(g_clo_nargs == 1, "callclosure stage nargs=1 en regs[15]");
+    CHECK(px.regs[0] == 0xABBAULL, "callclosure result en regs[0]");
+}
+
 /* ---- Test READ_VM_REG ---------------------------------------------- *
  * f() = read_vm_reg(3).  regs[3]=0x1234 -> regs[0]=0x1234. */
 static void test_vm_read_vm_reg() {
@@ -1468,6 +1506,7 @@ int main() {
     test_vm_read_vm_reg();
     test_vm_smartptr_free_extern();
     test_vm_smartptr_free_vesta();
+    test_vm_callclosure();
     test_vm_sext_loop();
     test_vm_call();
     test_vm_callvirt();

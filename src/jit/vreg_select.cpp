@@ -334,6 +334,11 @@ namespace jit {
                      * -> el interval builder nunca los ve. */
                     case ir::IrOp::MAKE_VARIANT: break;
                     case ir::IrOp::MATCH_VARIANT: break;
+                    /* MAKE_CLOSURE: marker semantico puro (idem MAKE_VARIANT).
+                     * La construccion real (ALLOCA env + STOREs + ALLOCA fv +
+                     * STORE fn/env) la emite el frontend ANTES/DESPUES; el
+                     * marker no produce codigo.  No genera MInstr. */
+                    case ir::IrOp::MAKE_CLOSURE: break;
 
                     /* READ_VM_REG: %dst = proc->registers.regs[imm].  En VM_ABI
                      * RBX = ProcessVM* -> LOAD directo de [rbx + regs_off + 8*N]
@@ -1499,6 +1504,65 @@ namespace jit {
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                 vm_reg_mem(0)));
+                        break;
+                    }
+
+                    /* CALLCLOSURE: %dst = vrt_callclosure(proc, fn_addr, env).
+                     * func_ptr = SSA con fn_addr (helper __lambda_N o jit_code);
+                     * operands[0] = env_ptr (0 si sin captures); operands[1..] =
+                     * args declarados.  El runtime entry coloca env en R14 y
+                     * dispatcha (VM bytecode via mini-interp si fn_addr<4GB, o
+                     * jit_code via enter_jit si >4GB).  Los args van a
+                     * proc->registers.regs[1..N] + regs[15]=nargs (convencion de
+                     * los helpers __lambda_N, igual que CALL/CALLVIRT).  El
+                     * CALL_ABS es call-position -> GC roots vivos se spillean;
+                     * env (si is_gc_object) tambien. */
+                    case ir::IrOp::CALLCLOSURE: {
+                        flush_pending();
+                        if (!vm || ent.callclosure == 0) {
+                            vreg_dbg(fn.name.c_str(), "callclosure(no-vm/no-addr)");
+                            return false;
+                        }
+                        if (in.func_ptr == ir::IR_NO_VALUE || in.operands.empty()) {
+                            vreg_dbg(fn.name.c_str(), "callclosure(shape)");
+                            return false;
+                        }
+                        const size_t nargs = in.operands.size() - 1;
+                        if (nargs > 12) {
+                            vreg_dbg(fn.name.c_str(), "callclosure-args");
+                            return false;
+                        }
+                        /* 1. Stores de args (operands[1..]) a regs[1..N]. */
+                        for (size_t i = 0; i < nargs; ++i)
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                vm_reg_mem(static_cast<int>(i) + 1),
+                                vr(in.operands[i + 1])));
+                        /* 2. regs[15] = nargs. */
+                        O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(15),
+                            MOperand::make_imm32(static_cast<int32_t>(nargs))));
+                        /* 3. vrt_callclosure(proc, fn_addr, env).  fn_addr/env a
+                         *    R10/R11 (scratch) antes de los arg-regs -> sin
+                         *    colision (idem STRCAT/DEFFIELD). */
+#if defined(_WIN32)
+                        const MReg cc0 = MReg::RCX, cc1 = MReg::RDX, cc2 = MReg::R8;
+#else
+                        const MReg cc0 = MReg::RDI, cc1 = MReg::RSI, cc2 = MReg::RDX;
+#endif
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R10, 8), vr(in.func_ptr)));   // fn_addr
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(MReg::R11, 8), vr(in.operands[0]))); // env
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(cc1, 8), MOperand::make_reg(MReg::R10, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(cc2, 8), MOperand::make_reg(MReg::R11, 8)));
+                        O.push_back(MInstr::make_unary(MOp::MOV,
+                            MOperand::make_reg(cc0, 8), MOperand::make_reg(MReg::RBX, 8)));
+                        O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callclosure)));
+                        /* 4. Resultado (RAX). */
+                        if (in.dst != ir::IR_NO_VALUE)
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                MOperand::make_reg(MReg::RAX, 8)));
                         break;
                     }
 
