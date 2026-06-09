@@ -84,6 +84,10 @@ namespace jit {
             case MOp::STORE_VM: r.src1 = R::USE; r.src2 = R::USE; break;
             /* ALLOCA: dst = host_ptr al frame (src1 = size imm, no es vreg). */
             case MOp::ALLOCA: r.dst = R::DEF; break;
+            /* ALLOCA_VM: dst = vaddr al VM stack (src1 = size imm).  Solo
+             * mueve proc->stack_pointer (mov/sub/mov), NO hace CALL -> NO es
+             * call-position. */
+            case MOp::ALLOCA_VM: r.dst = R::DEF; break;
 
             /* FP scalar (XMM).  En v1 los XMM son fisicos hardcodeados (no
              * vregs), pero clasificamos por correccion para la fase FP. */

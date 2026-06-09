@@ -604,16 +604,20 @@ namespace jit {
                     }
 
                     /* ALLOCA host (auto-promote, no escapa): reserva en el frame
-                     * JIT -> dst = host_ptr.  Las allocas que van al VM stack
-                     * (host_alloca=false) caen a fallback. */
+                     * JIT -> dst = host_ptr.  ALLOCA-vm (host_alloca=false): el
+                     * ptr escapa (necesita vaddr valido para el runtime) ->
+                     * reservar en el VM stack del proceso via ALLOCA_VM (el
+                     * prologue/epilogue salva/restaura el VM-RSP). */
                     case ir::IrOp::ALLOCA: {
                         flush_pending();
-                        if (!in.host_alloca) {
-                            vreg_dbg(fn.name.c_str(), "alloca-vm"); return false;
-                        }
                         const uint64_t size = in.imm;
                         if (size == 0 || size > 65536) {  // sanity (frame chico)
                             vreg_dbg(fn.name.c_str(), "alloca-size"); return false;
+                        }
+                        if (!in.host_alloca) {
+                            O.push_back(MInstr::make_alloca_vm(vr(in.dst),
+                                static_cast<uint32_t>(size)));
+                            break;
                         }
                         O.push_back(MInstr::make_alloca(vr(in.dst),
                             static_cast<uint32_t>(size)));

@@ -193,6 +193,14 @@ namespace jit {
             /// (justo debajo de los spill slots) + cursor de asignacion.
             uint32_t alloca_base = 0;
             uint32_t alloca_cursor = 0;
+            /// Fase 2 (ALLOCA_VM): la fn reserva en el VM stack del proceso.
+            /// Hay que salvar el VM-RSP (proc->stack_pointer) al entry y
+            /// restaurarlo en CADA RET, o el VM stack hace leak/overflow entre
+            /// llamadas.  @c vm_rsp_save_off es el offset (negativo desde RBP)
+            /// del slot que guarda el VM-RSP original (un qword debajo del area
+            /// de allocas host, por encima del shadow space Win64).
+            bool     has_vm_alloca = false;
+            int32_t  vm_rsp_save_off = 0;
             MReg     scr0 = MReg::R10;
             MReg     scr1 = MReg::R11;
             /// MFunction destino: necesario para crear labels intra-expansion
@@ -201,8 +209,9 @@ namespace jit {
             MFunction *pf = nullptr;
 
             Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
-                    bool has_calls, uint32_t alloca_total)
-                : ra(r), tri(t), vm_abi(abi == AbiKind::VM) {
+                    bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in)
+                : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
+                  has_vm_alloca(has_vm_alloca_in) {
                 k = static_cast<uint32_t>(ra.callee_saved_used.size());
                 total_saved = k + (vm_abi ? 1u : 0u);  // +1 por el push rbx
                 /* Hoja frameless: una funcion sin CALLs que no spillea ni
@@ -216,13 +225,24 @@ namespace jit {
                  * push/pop de RBX (callee-saved del host que trae ProcessVM*) y
                  * los callee-saved usados; lo unico que desaparece es RBP. */
                 no_frame = !has_calls && ra.num_spill_slots == 0u &&
-                           alloca_total == 0u && !jit_no_frameless()
+                           alloca_total == 0u && !has_vm_alloca
+                           && !jit_no_frameless()
                            && !jit_osr_count();  /* el trigger (1b) anyade un
                               call -> necesita frame con rsp 16-alineado. */
                 /* Las allocas viven debajo de los spill slots. */
                 alloca_base = 8u * total_saved + 8u * ra.num_spill_slots;
                 spill_bytes = static_cast<int32_t>(
                     8u * ra.num_spill_slots + alloca_total);
+                /* Fase 2: reservar un qword para el VM-RSP salvado, debajo del
+                 * area de allocas host y por encima del shadow space.  El
+                 * offset es fijo desde RBP (independiente del shadow/align que
+                 * se anyade despues, que solo crece el frame hacia abajo). */
+                if (has_vm_alloca) {
+                    vm_rsp_save_off = -static_cast<int32_t>(
+                        8u * total_saved + 8u * ra.num_spill_slots
+                        + alloca_total + 8u);
+                    spill_bytes += 8;
+                }
                 if (!no_frame) {
 #if defined(_WIN32)
                     /* Win64: si hay CALLs, reservar 32 bytes de shadow/home
@@ -354,6 +374,19 @@ namespace jit {
                 if (spill_bytes > 0)
                     out.push_back(MInstr::make_unary(MOp::SUB, reg(MReg::RSP),
                                                      MOperand::make_imm32(spill_bytes)));
+                /* Fase 2: salvar el VM-RSP original al slot del frame.  Los
+                 * ALLOCA_VM mas adelante decrementan proc->stack_pointer; el
+                 * epilogue lo restaura desde aqui (si no, el VM stack hace
+                 * leak/overflow entre llamadas).  scr0 (R10) es caller-saved y
+                 * esta libre aqui; RBX ya trae el ProcessVM* (vm_abi). */
+                if (has_vm_alloca) {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0),
+                        MOperand::make_mem(MReg::RBX,
+                            VESTA_PROC_STACK_POINTER_OFFSET)));
+                    out.push_back(MInstr::make_unary(MOp::MOV,
+                        MOperand::make_mem(MReg::RBP, vm_rsp_save_off),
+                        reg(scr0)));
+                }
             }
 
             void emit_epilogue(std::vector<MInstr> &out) const {
@@ -366,6 +399,18 @@ namespace jit {
                         out.push_back(pop(static_cast<MReg>(ra.callee_saved_used[i])));
                     if (vm_abi) out.push_back(pop(MReg::RBX));
                     return;
+                }
+                /* Fase 2: restaurar el VM-RSP original ANTES de desmontar el
+                 * frame (RBP/RBX aun validos).  Sin esto los ALLOCA_VM dejarian
+                 * proc->stack_pointer decrementado tras el RET -> leak/overflow
+                 * del VM stack global.  scr0 (R10) es caller-saved (libre). */
+                if (has_vm_alloca) {
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0),
+                        MOperand::make_mem(MReg::RBP, vm_rsp_save_off)));
+                    out.push_back(MInstr::make_unary(MOp::MOV,
+                        MOperand::make_mem(MReg::RBX,
+                            VESTA_PROC_STACK_POINTER_OFFSET),
+                        reg(scr0)));
                 }
                 /* lea rsp, [rbp - 8*total_saved] -> deshace el sub del frame y
                  * apunta rsp al ultimo registro salvado. */
@@ -717,6 +762,34 @@ namespace jit {
                     return;
                 }
 
+                if (op == MOp::ALLOCA_VM) {
+                    /* dst = vaddr a `size` bytes del VM stack del proceso:
+                     *   mov scr0, [rbx+SP]; sub scr0, aligned; mov [rbx+SP],scr0
+                     *   dst = scr0.
+                     * scr0 (R10) es scratch reservado; RBX trae el ProcessVM*.
+                     * El prologue ya salvo el VM-RSP original y el epilogue lo
+                     * restaura, asi que la resta es local al frame. */
+                    const uint32_t size =
+                        static_cast<uint32_t>(in.src1.value);
+                    const uint32_t aligned = (size + 15u) & ~15u;  // 16-align
+                    const MOperand sp_mem = MOperand::make_mem(
+                        MReg::RBX, VESTA_PROC_STACK_POINTER_OFFSET);
+                    out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sp_mem));
+                    if (aligned > 0)
+                        out.push_back(MInstr::make_unary(MOp::SUB, reg(scr0),
+                            MOperand::make_imm32(static_cast<int32_t>(aligned))));
+                    out.push_back(MInstr::make_unary(MOp::MOV, sp_mem, reg(scr0)));
+                    const bool dst_spilled =
+                        in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+                    if (dst_spilled)
+                        out.push_back(MInstr::make_unary(MOp::MOV,
+                            slot_mem(ra.slot_of(in.dst.vreg_id())), reg(scr0)));
+                    else
+                        out.push_back(MInstr::make_unary(MOp::MOV,
+                            resolve(in.dst), reg(scr0)));
+                    return;
+                }
+
                 if (op == MOp::MOV) {
                     const MOperand rs = resolve(in.src1);
                     if (in.dst.is_vreg() && ra.spilled(in.dst.vreg_id())) {
@@ -920,6 +993,7 @@ namespace jit {
         /* Detectar si la funcion tiene CALLs (para reservar shadow space). */
         bool has_calls = false;
         uint32_t alloca_total = 0;  // commit 8: bytes de allocas en el frame
+        bool has_vm_alloca = false; // Fase 2: reserva en el VM stack del proceso
         for (const auto &b : vf.blocks) {
             for (const auto &in : b.instrs) {
                 if (in.op == MOp::CALL || in.op == MOp::CALL_ABS) has_calls = true;
@@ -931,9 +1005,10 @@ namespace jit {
                     const uint32_t sz = static_cast<uint32_t>(in.src1.value);
                     alloca_total += (sz + 7u) & ~7u;
                 }
+                if (in.op == MOp::ALLOCA_VM) has_vm_alloca = true;
             }
         }
-        Lowerer lw(ra, tri, abi, has_calls, alloca_total);
+        Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca);
         lw.ivs = ivs;  // commit 6: para construir stackmaps en CALLs
         MFunction pf;
         lw.pf = &pf;   // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
