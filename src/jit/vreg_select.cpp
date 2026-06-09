@@ -603,6 +603,51 @@ namespace jit {
                         break;
                     }
 
+                    /* Fase 2: GETSTATIC/SETSTATIC = acceso directo (sin runtime
+                     * call) a `cls->static_data + offset`.  cls->static_data es
+                     * un host_ptr (offset 96 en ClassInfo); el valor vive en ese
+                     * bloque host.  Dos loads/un store encadenados (el MEM con
+                     * base-vreg no se soporta pre-regalloc -> ADD + LOAD disp0).
+                     * El frontend ya hace el truncate/sign-extend del valor. */
+                    case ir::IrOp::GETSTATIC: {
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE || in.operands.empty())
+                            return false;
+                        const int32_t off = static_cast<int32_t>(in.imm);
+                        const ir::IrValueId t_cls = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_cls),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(t_cls),
+                            vr(t_cls), MOperand::make_imm32(
+                                VESTA_CLASSINFO_STATIC_DATA_OFFSET)));
+                        const ir::IrValueId sd = new_tmp();
+                        O.push_back(MInstr::make_load(vr(sd), vr(t_cls), 8, false));
+                        if (off != 0)
+                            O.push_back(MInstr::make_binary(MOp::ADD, vr(sd),
+                                vr(sd), MOperand::make_imm32(off)));
+                        O.push_back(MInstr::make_load(vr(in.dst), vr(sd), 8, false));
+                        break;
+                    }
+                    case ir::IrOp::SETSTATIC: {
+                        flush_pending();
+                        if (in.operands.size() < 2) return false;
+                        const int32_t off = static_cast<int32_t>(in.imm);
+                        const ir::IrValueId t_cls = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(t_cls),
+                            vr(in.operands[0])));
+                        O.push_back(MInstr::make_binary(MOp::ADD, vr(t_cls),
+                            vr(t_cls), MOperand::make_imm32(
+                                VESTA_CLASSINFO_STATIC_DATA_OFFSET)));
+                        const ir::IrValueId sd = new_tmp();
+                        O.push_back(MInstr::make_load(vr(sd), vr(t_cls), 8, false));
+                        if (off != 0)
+                            O.push_back(MInstr::make_binary(MOp::ADD, vr(sd),
+                                vr(sd), MOperand::make_imm32(off)));
+                        O.push_back(MInstr::make_store(vr(sd),
+                            vr(in.operands[1]), 8));
+                        break;
+                    }
+
                     /* ALLOCA host (auto-promote, no escapa): reserva en el frame
                      * JIT -> dst = host_ptr.  ALLOCA-vm (host_alloca=false): el
                      * ptr escapa (necesita vaddr valido para el runtime) ->
@@ -859,6 +904,13 @@ namespace jit {
                     case ir::IrOp::GC_ALLOC:
                     case ir::IrOp::GC_ALLOCP:
                     case ir::IrOp::NEWOBJ:
+                    /* Fase 2: class registry de 1 arg (proc, params_vaddr).
+                     * Mismo marshalling que gc_handle/newobj.  FINDCLASS/
+                     * FINDMETHOD/FINDFIELD/DEFCLASS dejan el resultado en dst. */
+                    case ir::IrOp::FINDCLASS:
+                    case ir::IrOp::FINDMETHOD:
+                    case ir::IrOp::FINDFIELD:
+                    case ir::IrOp::DEFCLASS:
                     case ir::IrOp::RAW_ALLOC: {
                         flush_pending();
                         /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
@@ -997,6 +1049,10 @@ namespace jit {
                             (in.op == ir::IrOp::GC_HANDLE_FOR_PTR) ? ent.gc_handle :
                             (in.op == ir::IrOp::RAW_ALLOC)         ? ent.raw_alloc :
                             (in.op == ir::IrOp::NEWOBJ)            ? ent.newobj    :
+                            (in.op == ir::IrOp::FINDCLASS)         ? ent.findclass :
+                            (in.op == ir::IrOp::FINDMETHOD)        ? ent.findmethod:
+                            (in.op == ir::IrOp::FINDFIELD)         ? ent.findfield :
+                            (in.op == ir::IrOp::DEFCLASS)          ? ent.defclass  :
                                                                      ent.gc_allocp;
                         if (!vm || addr == 0) {
                             vreg_dbg(fn.name.c_str(), "gc_runtime"); return false;

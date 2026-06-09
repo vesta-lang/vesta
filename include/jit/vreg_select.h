@@ -58,6 +58,16 @@ namespace jit {
         uint64_t gc_allocp  = 0;  ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
         uint64_t newobj     = 0;  ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)
         uint64_t calln      = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
+        /* Class registry (Fase 2).  Todos 1-arg (proc, params_vaddr) salvo
+         * deffield/defmethod (2-arg: cls, params) y addadvice (3-arg). */
+        uint64_t findclass  = 0;  ///< vrt_findclass(proc, params) -> ClassInfo*
+        uint64_t findmethod = 0;  ///< vrt_findmethod(proc, params) -> MethodInfo*
+        uint64_t findfield  = 0;  ///< vrt_findfield(proc, params) -> FieldInfo*
+        uint64_t defclass   = 0;  ///< vrt_defclass(proc, params) -> ClassInfo*
+        uint64_t setmethdbg = 0;  ///< vrt_setmethdbg(proc, params) -> void
+        uint64_t deffield   = 0;  ///< vrt_deffield(proc, cls, params) -> i32
+        uint64_t defmethod  = 0;  ///< vrt_defmethod(proc, cls, params) -> u32
+        uint64_t addadvice  = 0;  ///< vrt_addadvice(proc, target, advice, kind) -> i32
         /* Fallback page-miss de LOAD_VM/STORE_VM (acceso a vm_mem).  0 = no
          * disponible -> esos ops caen a fallback. */
         uint64_t vm_read_u8   = 0; ///< vrt_vm_read_u8(proc, vaddr)  -> u8
