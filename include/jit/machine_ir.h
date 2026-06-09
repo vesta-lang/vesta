@@ -457,8 +457,15 @@ namespace jit {
         STORE_VM    = 83,   ///< vm_mem[addr] = val (page-cache inline + fallback).
                             ///< src1 = addr_vreg, src2 = val_vreg,
                             ///< dst = imm64_idx(&vm_write_u<w>); flags = width.
+        ALLOCA_VM   = 84,   ///< Fase 2: dst = vaddr a `size` bytes reservados en
+                            ///< el VM stack del proceso (proc->stack_pointer).
+                            ///< dst = dst_vreg, src1 = imm32(size).  El
+                            ///< prologue salva el VM-RSP y el epilogue lo
+                            ///< restaura (regalloc_rewrite).  El dst es un
+                            ///< vaddr (is_host_ptr=false) -> sus LOAD/STORE
+                            ///< van por LOAD_VM/STORE_VM (page-cache).
 
-        COUNT       = 84
+        COUNT       = 85
     };
 
     /* ===================================================================== */
@@ -589,6 +596,12 @@ namespace jit {
         /** @brief ALLOCA: @p dst = host_ptr a @p size bytes del frame JIT. */
         static MInstr make_alloca(MOperand dst, uint32_t size) noexcept {
             MInstr i; i.op = MOp::ALLOCA; i.dst = dst;
+            i.src1 = MOperand::make_imm32(static_cast<int32_t>(size));
+            return i;
+        }
+        /** @brief ALLOCA_VM: @p dst = vaddr a @p size bytes del VM stack. */
+        static MInstr make_alloca_vm(MOperand dst, uint32_t size) noexcept {
+            MInstr i; i.op = MOp::ALLOCA_VM; i.dst = dst;
             i.src1 = MOperand::make_imm32(static_cast<int32_t>(size));
             return i;
         }
