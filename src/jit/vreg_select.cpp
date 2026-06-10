@@ -1349,14 +1349,34 @@ namespace jit {
                      * proc en RCX/RDI, resultado en regs[0]. */
                     case ir::IrOp::CALL: {
                         flush_pending();
-                        if (!vm || !resolve_call) {
-                            vreg_dbg(fn.name.c_str(), "call(no-vm/no-resolver)");
+                        if (!vm) {
+                            vreg_dbg(fn.name.c_str(), "call(no-vm)");
                             return false;
                         }
-                        const uint64_t addr = resolve_call(in.func_name);
-                        if (addr == 0) {
-                            vreg_dbg(fn.name.c_str(), "call-unresolved");
-                            return false;
+                        /* Self-recursion: la propia funcion aun se esta
+                         * compilando (g_eager_cache marca EAGER_IN_PROGRESS)
+                         * -> resolve_call devuelve 0.  En vez de caer a slots,
+                         * emitimos un CALL rel32 a la PROPIA entrada (code+0 =
+                         * el prologue, que es el label del bloque 0).  El
+                         * prologue recarga los params de proc->registers (que
+                         * acabamos de escribir) y monta un frame fresco -> la
+                         * recursion corre en JIT de verdad (no trampolin a
+                         * interp).  Es codigo non-tail (factorial/fib/quicksort:
+                         * el resultado se consume tras la llamada) -> necesita
+                         * un frame por nivel, igual que C; la TCO genuina es
+                         * IrOp::TAILCALL (caso aparte). */
+                        const bool is_self = (in.func_name == fn.name);
+                        uint64_t addr = 0;
+                        if (!is_self) {
+                            if (!resolve_call) {
+                                vreg_dbg(fn.name.c_str(), "call(no-resolver)");
+                                return false;
+                            }
+                            addr = resolve_call(in.func_name);
+                            if (addr == 0) {
+                                vreg_dbg(fn.name.c_str(), "call-unresolved");
+                                return false;
+                            }
                         }
                         /* 1. Stores de args a proc->registers.regs[i+1]. */
                         for (size_t i = 0; i < in.operands.size(); ++i)
@@ -1372,12 +1392,59 @@ namespace jit {
                         O.push_back(MInstr::make_unary(MOp::MOV,
                             MOperand::make_reg(proc_reg, 8),
                             MOperand::make_reg(MReg::RBX, 8)));
-                        /* 3. CALL a la direccion resuelta. */
-                        O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                        /* 3. CALL: self -> rel32 a code+0 (label del bloque 0,
+                         *    resuelto por el encoder via fixup); externo -> abs. */
+                        if (is_self)
+                            O.push_back(MInstr::make_call_label(blbl[0]));
+                        else
+                            O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
                         /* 4. Resultado desde regs[0]. */
                         if (in.dst != ir::IR_NO_VALUE)
                             O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                 vm_reg_mem(0)));
+                        break;
+                    }
+
+                    /* TAILCALL: tail-call con REUSO de frame (TCO genuina).  El
+                     * frontend (ir_pass_tailcall) promueve CALL+RET a TAILCALL.
+                     * Stage de args a proc->registers + pseudo TAILCALL que el
+                     * rewrite expande a mov A0,rbx + epilogue + jmp al target
+                     * -> profundidad de pila O(1) (vs el CALL+RET del selector,
+                     * que NO reusa frame).  self -> jmp rel32 a code+0; cross-fn
+                     * -> jmp a la addr resuelta.  Sin lectura de resultado: el
+                     * RET del callee retorna directo al caller original. */
+                    case ir::IrOp::TAILCALL: {
+                        flush_pending();
+                        if (!vm) {
+                            vreg_dbg(fn.name.c_str(), "tailcall(no-vm)");
+                            return false;
+                        }
+                        const bool is_self = (in.func_name == fn.name);
+                        uint64_t addr = 0;
+                        if (!is_self) {
+                            if (!resolve_call) {
+                                vreg_dbg(fn.name.c_str(), "tailcall(no-resolver)");
+                                return false;
+                            }
+                            addr = resolve_call(in.func_name);
+                            if (addr == 0) {
+                                vreg_dbg(fn.name.c_str(), "tailcall-unresolved");
+                                return false;
+                            }
+                        }
+                        /* 1. Stores de args a proc->registers.regs[i+1] (igual
+                         *    que CALL; los args son vregs del frame actual). */
+                        for (size_t i = 0; i < in.operands.size(); ++i)
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                vm_reg_mem(static_cast<int>(i) + 1),
+                                vr(in.operands[i])));
+                        /* 2. Pseudo TAILCALL (el rewrite hace proc->A0 +
+                         *    epilogue + jmp).  Termina el bloque (terminador). */
+                        if (is_self)
+                            O.push_back(MInstr::make_tailcall_label(blbl[0]));
+                        else
+                            O.push_back(MInstr::make_tailcall_abs(
+                                out.intern_imm64(addr)));
                         break;
                     }
 

@@ -725,6 +725,92 @@ static void test_vm_store_vm() {
     CHECK(g_vmstub_wr_val == 0xBEEFULL, "STORE_VM miss pasa val correcto");
 }
 
+/* ---- Test self-recursion: CALL con func_name==fn.name -> rel32 a code+0 - *
+ * fact(n) = (n < 2) ? n : n * fact(n-1).  fact(5) = 120.  El self-call NO
+ * pasa por el resolver (is_self): emite CALL rel32 al prologue (label del
+ * bloque 0).  El prologue recarga el param de proc->registers (que el caller
+ * acaba de escribir) y monta un frame fresco -> recursion real en JIT. */
+static void test_vm_self_recursion() {
+    std::printf("[vm] fact(5) self-recursivo (CALL rel32 a code+0) -> regs[0]=120\n");
+    ir::IrFunction fn;
+    fn.name = "fact"; fn.ret_type = ir::IrType::I64;
+    auto I64 = ir::IrType::I64;
+    ir::IrValueId n   = fn.new_value(I64);              // param (regs[1])
+    ir::IrValueId c2  = fn.new_value(I64);
+    ir::IrValueId cnd = fn.new_value(ir::IrType::BOOL);
+    ir::IrValueId c1  = fn.new_value(I64);
+    ir::IrValueId nm1 = fn.new_value(I64);
+    ir::IrValueId r   = fn.new_value(I64);
+    ir::IrValueId res = fn.new_value(I64);
+    fn.params = { n };
+
+    ir::IrBlockId b0 = fn.new_block("entry");
+    ir::IrBlockId b1 = fn.new_block("base");
+    ir::IrBlockId b2 = fn.new_block("rec");
+
+    fn.append(b0, konst(c2, 2));
+    fn.append(b0, cmp(ir::IrOp::CMP_LT, cnd, n, c2));
+    fn.append(b0, brc(cnd, b1, b2));
+    fn.append(b1, ret1(n));                              // base: return n
+    fn.append(b2, konst(c1, 1));
+    fn.append(b2, bin(ir::IrOp::SUB, nm1, n, c1));       // n-1
+    {
+        ir::IrInstr c; c.op = ir::IrOp::CALL; c.type = I64; c.dst = r;
+        c.func_name = "fact"; c.operands = { nm1 };      // SELF-call (func_name==fn.name)
+        fn.append(b2, c);
+    }
+    fn.append(b2, bin(ir::IrOp::MUL, res, n, r));        // n * fact(n-1)
+    fn.append(b2, ret1(res));
+
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 5;
+    CHECK(jit_vm(fn, px), "jit_vm ok (self-recursion)");
+    CHECK(px.regs[0] == 120, "fact(5)==120 via self-call rel32");
+    if (px.regs[0] != 120) std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+}
+
+/* ---- Test self-tail-call (TCO): IrOp::TAILCALL -> reuso de frame -------- *
+ * sum_tc(acc, n) = (n==0) ? acc : sum_tc(acc+n, n-1).  Con acc=0, n=100 ->
+ * 5050.  El TAILCALL self emite (en el rewrite) epilogue + jmp a code+0 ->
+ * reusa el frame (O(1) stack).  El RET de la base retorna al caller original. */
+static void test_vm_tailcall_self() {
+    std::printf("[vm] sum_tc(0,100) self-tail-call (TCO frame-reuse) -> regs[0]=5050\n");
+    ir::IrFunction fn;
+    fn.name = "sum_tc"; fn.ret_type = ir::IrType::I64;
+    auto I64 = ir::IrType::I64;
+    ir::IrValueId acc  = fn.new_value(I64);            // param0 (regs[1])
+    ir::IrValueId n    = fn.new_value(I64);            // param1 (regs[2])
+    ir::IrValueId zero = fn.new_value(I64);
+    ir::IrValueId cnd  = fn.new_value(ir::IrType::BOOL);
+    ir::IrValueId one  = fn.new_value(I64);
+    ir::IrValueId acc2 = fn.new_value(I64);
+    ir::IrValueId n2   = fn.new_value(I64);
+    fn.params = { acc, n };
+
+    ir::IrBlockId b0 = fn.new_block("entry");
+    ir::IrBlockId b1 = fn.new_block("base");
+    ir::IrBlockId b2 = fn.new_block("rec");
+
+    fn.append(b0, konst(zero, 0));
+    fn.append(b0, cmp(ir::IrOp::CMP_EQ, cnd, n, zero));
+    fn.append(b0, brc(cnd, b1, b2));
+    fn.append(b1, ret1(acc));                           // base: return acc
+    fn.append(b2, konst(one, 1));
+    fn.append(b2, bin(ir::IrOp::ADD, acc2, acc, n));    // acc + n
+    fn.append(b2, bin(ir::IrOp::SUB, n2, n, one));      // n - 1
+    {
+        ir::IrInstr tc; tc.op = ir::IrOp::TAILCALL; tc.type = I64;
+        tc.func_name = "sum_tc"; tc.operands = { acc2, n2 };  // SELF tail-call
+        fn.append(b2, tc);
+    }
+
+    Proxy px; std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 0; px.regs[2] = 100;
+    CHECK(jit_vm(fn, px), "jit_vm ok (self-tail-call)");
+    CHECK(px.regs[0] == 5050, "sum_tc(0,100)==5050 via TAILCALL frame-reuse");
+    if (px.regs[0] != 5050) std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
+}
+
 /* ---- Test 6 (commit 6): GC root vivo a traves de un call --------------- *
  * gcf(this_gc, x) = g() + this.  `this` (GC, host_ptr) se usa DESPUES del
  * call -> vivo a traves -> el allocator lo SPILLEA a slot y emite un stackmap
@@ -1493,6 +1579,9 @@ int main() {
     test_vm_divmod_loop();
     test_vm_add();
     test_vm_loop();
+    test_vm_self_recursion();  /* self-call rel32; antes de tests que crashean (callvirt/gc_stackmap) */
+    test_vm_tailcall_self();   /* TCO self-tail-call (frame-reuse) */
+    std::fflush(stdout);
     test_vm_str_lit_addr();  /* antes del crash pre-existente de gc_stackmap */
     test_vm_label_addr();
     test_vm_getproc();
