@@ -465,7 +465,17 @@ namespace jit {
                             ///< vaddr (is_host_ptr=false) -> sus LOAD/STORE
                             ///< van por LOAD_VM/STORE_VM (page-cache).
 
-        COUNT       = 85
+        /* Pseudo TCO (2026-06-10): tail-call con REUSO de frame.  El rewrite
+         * lo expande POST-regalloc a: mov A0,rbx (proc -> arg0, sobrevive el
+         * teardown por ser caller-saved) + emit_epilogue (desmonta el frame
+         * actual; rsp queda apuntando a la return address del caller) + jmp al
+         * target (code+0 del callee).  El prologue del callee monta un frame
+         * fresco; su RET retorna al caller original -> profundidad de pila O(1)
+         * (igual que el bytecode tailcall 0x24).  src1 = LABEL(bloque 0) para
+         * self-tail-call; src1 = imm64_idx(addr) para tail-call cross-fn. */
+        TAILCALL    = 85,
+
+        COUNT       = 86
     };
 
     /* ===================================================================== */
@@ -535,6 +545,23 @@ namespace jit {
         /** @brief CALL a direccion absoluta (en @c imm64_pool[@p imm64_idx]). */
         static MInstr make_call_abs(uint32_t imm64_idx) noexcept {
             MInstr i; i.op = MOp::CALL_ABS;
+            i.src1 = MOperand::make_imm64_idx(imm64_idx);
+            return i;
+        }
+
+        /** @brief TAILCALL self: reuso de frame, salto rel32 a code+0 (label
+         *  del bloque 0).  El rewrite emite epilogue + jmp label. */
+        static MInstr make_tailcall_label(uint32_t label_id) noexcept {
+            MInstr i; i.op = MOp::TAILCALL;
+            i.src1 = MOperand::make_label(label_id);
+            return i;
+        }
+
+        /** @brief TAILCALL cross-fn: reuso de frame, salto a una direccion
+         *  absoluta (en @c imm64_pool[@p imm64_idx]).  El rewrite emite
+         *  epilogue + mov scratch,addr + jmp scratch. */
+        static MInstr make_tailcall_abs(uint32_t imm64_idx) noexcept {
+            MInstr i; i.op = MOp::TAILCALL;
             i.src1 = MOperand::make_imm64_idx(imm64_idx);
             return i;
         }

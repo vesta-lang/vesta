@@ -511,6 +511,35 @@ namespace jit {
                     return;
                 }
 
+                if (op == MOp::TAILCALL) {
+                    /* TCO con reuso de frame (mismo patron que el frame-swap del
+                     * OSR 2c): proc -> A0 (sobrevive el teardown por ser
+                     * caller-saved; el prologue del callee hace mov rbx,A0) +
+                     * emit_epilogue (desmonta el frame; rsp queda en la return
+                     * address del caller) + jmp al target.  El RET del callee
+                     * retorna al caller original -> pila O(1).  No hay GC entre
+                     * el teardown y la reentrada (sin safepoint/call) -> los args
+                     * en proc->registers (ya escritos) siguen como roots. */
+                    const auto &areg =
+                        tri.arg_regs[static_cast<size_t>(RegClass::GP)];
+                    if (vm_abi && !areg.empty())
+                        out.push_back(MInstr::make_unary(MOp::MOV,
+                            reg(static_cast<MReg>(areg[0])), reg(MReg::RBX)));
+                    emit_epilogue(out);
+                    if (in.src1.kind == MOperandKind::LABEL) {
+                        /* self-tail-call: jmp rel32 a code+0 (label bloque 0). */
+                        MInstr j; j.op = MOp::JMP; j.src1 = in.src1;
+                        out.push_back(j);
+                    } else {
+                        /* cross-fn: mov scr0, addr(imm64) + jmp scr0. */
+                        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0),
+                                                         in.src1));
+                        MInstr j; j.op = MOp::JMP; j.src1 = reg(scr0);
+                        out.push_back(j);
+                    }
+                    return;
+                }
+
                 if (op == MOp::RET) {
                     emit_epilogue(out);
                     out.push_back(MInstr::make_ret());
@@ -1001,6 +1030,10 @@ namespace jit {
                  * el hit no llama, debe reservarse el frame + shadow space Win64
                  * (no frameless). */
                 if (in.op == MOp::LOAD_VM || in.op == MOp::STORE_VM) has_calls = true;
+                /* TAILCALL: su expansion hace emit_epilogue (necesita el frame
+                 * montado: lea rsp,[rbp-...] + pops) -> forzar frame (no
+                 * frameless), igual que un call normal. */
+                if (in.op == MOp::TAILCALL) has_calls = true;
                 if (in.op == MOp::ALLOCA) {
                     const uint32_t sz = static_cast<uint32_t>(in.src1.value);
                     alloca_total += (sz + 7u) & ~7u;
