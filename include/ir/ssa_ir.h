@@ -828,6 +828,27 @@ namespace ir {
     };
 
     /**
+     * @brief Phase AS inc.3: variable Vex con storage-class register("reg").
+     *
+     * El lowering fuerza estas variables a un slot ALLOCA estable (para que
+     * sobrevivan al optimizer y tengan identidad) y registra aqui la
+     * asociacion @c alloca_value -> registro fisico.  El backend port-C
+     * (c_backend) las materializa como variables C locales con register-pin
+     * de GCC (@c "register T __asmreg_N asm(\"reg\")") y traduce los
+     * LOAD/STORE de ese ALLOCA a accesos directos a la variable (no puede
+     * tomar la direccion de un registro en C).  El JIT (inc.5) las usara para
+     * forzar el valor al registro fisico.
+     */
+    struct AsmRegBinding {
+        IrValueId   alloca_value;    ///< dst del ALLOCA del var register-bound
+        std::string reg;             ///< nombre del registro RAW (eax/rax/xmm0...)
+        IrType      type;            ///< tipo escalar del var (para el ctype en C)
+        bool        is_vector;       ///< true si reg es xmm/ymm/zmm (constraint "x")
+        std::string name;            ///< nombre Vex de la variable (para filtrar
+                                     ///< por scope activo en lower_asm)
+    };
+
+    /**
      * @brief Funcion completa en forma SSA.
      *
      * Contiene el grafo de bloques basicos y el pool de valores.
@@ -912,6 +933,36 @@ namespace ir {
          */
         std::unordered_map<IrValueId, std::vector<DevirtCandidate>>
             spec_devirt_sites;
+
+        /**
+         * @brief Phase AS inc.2: storage-class @c register("reg") de
+         *        var-decls dentro de esta funcion.
+         *
+         * Mapea el nombre de la variable Vex -> nombre del registro fisico
+         * solicitado (tal cual lo escribio el usuario: eax/rax/xmm0/...).  El
+         * backend port-C (inc.3) lo materializa como
+         * @c "register T x __asm__(\"rax\")"; el JIT (inc.5) lo usa para
+         * forzar el SSA value al registro fisico y excluirlo del pool.
+         *
+         * Tabla lateral por @c alloca_value (en vez de un campo en cada
+         * IrInstr) para no engordar la estructura caliente: solo las funciones
+         * con inline asm + register() tienen entradas.  Vacio en el resto.
+         */
+        std::vector<AsmRegBinding> asm_reg_bindings;
+
+        /**
+         * @brief Phase AS inc.3: listas de clobbers EXPLICITOS por bloque
+         *        @c INLINE_ASM de esta funcion.
+         *
+         * Indexadas por el "asm-id" que el @c INLINE_ASM lleva empaquetado en
+         * los bits altos de @c imm (bits 8..31; los bits 0..5 son los
+         * calificadores/efectos quals).  Cada entrada es la lista de registros
+         * que el usuario declaro en @c clobbers("...") (sin "memory"/"flags",
+         * que viajan en @c imm bits 4/5).  La inferencia automatica (inc.4) la
+         * AMPLIA; aqui solo van los explicitos.  El backend port-C los emite en
+         * la clobber-list de GCC.
+         */
+        std::vector<std::vector<std::string>> asm_clobber_lists;
 
         /**
          * @brief Crea un nuevo valor SSA en el pool.

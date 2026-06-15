@@ -3927,6 +3927,12 @@ bool ir_pass_dse(IrFunction &fn) {
                 case IrOp::CALLCLOSURE:
                 case IrOp::TAILCALL:
                 case IrOp::RAW_ASM:
+                // Phase AS inc.3: INLINE_ASM (host asm) es opaco y puede
+                // leer/escribir cualquier memoria + los registros que el
+                // usuario ligo con register().  Barrera total: ni store-to-load
+                // forwarding cruza el bloque ni se eliminan STOREs previos
+                // (el asm puede leerlos via los operandos register-bound).
+                case IrOp::INLINE_ASM:
                 case IrOp::MEMCPY: case IrOp::SETFIELD: case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE: case IrOp::GCWB_IR:
                 case IrOp::NEWOBJ: case IrOp::NEWOBJS: case IrOp::GC_ALLOC:
@@ -5838,6 +5844,11 @@ static bool is_sched_barrier(IrOp op) {
         case IrOp::CALLCLOSURE:
         case IrOp::TAILCALL: case IrOp::CALLSUPER:
         case IrOp::RAW_ASM:
+        // Phase AS inc.3: INLINE_ASM lee/escribe los registros register() y
+        // posiblemente memoria.  Barrera de scheduling para que el scheduler
+        // NO mueva LOADs/STOREs de las vars register-bound a traves del asm
+        // (un LOAD post-asm debe leer lo que el asm escribio, no el init).
+        case IrOp::INLINE_ASM:
         case IrOp::NEWOBJ: case IrOp::NEWOBJS: case IrOp::GC_ALLOC: case IrOp::GC_ALLOCP:
         case IrOp::RAW_ALLOC: case IrOp::RAW_FREE:
         case IrOp::THROW: case IrOp::TRYENTER: case IrOp::TRYLEAVE:

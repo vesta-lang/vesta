@@ -19,6 +19,8 @@ add_library(vex_lib STATIC
     lexer.cpp
     ast.cpp
     parser.cpp
+    asm_effects.cpp
+    asm_backend.cpp
     type_checker.cpp
     lombok.cpp
     lowering.cpp

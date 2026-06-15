@@ -16,6 +16,8 @@
  */
 
 #include "vex/lowering.h"
+#include "vex/asm_effects.h"   // inferencia de clobbers (Phase AS inc.4)
+#include "vex/asm_backend.h"   // validacion de sintaxis via Keystone (inc.4b)
 #include "vex/collection_intrinsics.h"  // tabla de tipos coleccion
 #include "vex/comptime_introspect.h"   // helpers compartidos rama A
 #include "vex/lexer.h"                  // parse de fragments para @Macro
@@ -1889,6 +1891,18 @@ namespace vex {
             shared_locals_.insert(vd->name);
         }
 
+        // Phase AS inc.3: si el var-decl tiene storage-class register("reg"),
+        // forzar el camino ALLOCA (slot estable) marcando el nombre como
+        // address-taken.  Sin esto, un primitivo register-bound se baja a un
+        // SSA value efimero que el optimizer pliega/elimina (el body asm es
+        // una string opaca que no referencia SSA values).  Con el ALLOCA + el
+        // INLINE_ASM listandolo como operando (op no-safe -> escapa), el slot
+        // sobrevive y el backend lo cablea al registro fisico.  El registro
+        // real en @c fn_->asm_reg_bindings se hace en la rama ALLOCA de abajo.
+        if (!vd->reg_binding.empty()) {
+            address_taken_locals_.insert(vd->name);
+        }
+
         // Tracking para fix #1 newInstance: si el tipo declarado es alias
         // `Class` y el init es `Class.forName("X")` con X literal, registrar
         // var_name -> "X" para que `cls.newInstance()` luego pueda emitir
@@ -2642,6 +2656,21 @@ namespace vex {
             ai.source_line = vd->loc.line;
             fn_->append(current_block_, std::move(ai));
             bind(vd->name, addr);
+
+            // Phase AS inc.3: registrar el binding register("reg") -> slot.
+            // El backend port-C materializa este ALLOCA como una variable C
+            // con register-pin de GCC y traduce sus LOAD/STORE a accesos
+            // directos a la variable.
+            if (!vd->reg_binding.empty()) {
+                const std::string &rb = vd->reg_binding;
+                const bool is_vec =
+                       rb.rfind("xmm", 0) == 0 || rb.rfind("ymm", 0) == 0
+                    || rb.rfind("zmm", 0) == 0
+                    || rb.rfind("XMM", 0) == 0 || rb.rfind("YMM", 0) == 0
+                    || rb.rfind("ZMM", 0) == 0;
+                fn_->asm_reg_bindings.push_back(
+                    ir::AsmRegBinding{addr, rb, vt, is_vec, vd->name});
+            }
 
             // Store del valor inicial (o 0 si no hay init).
             ir::IrValueId v0 = ir::IR_NO_VALUE;
@@ -7748,16 +7777,99 @@ namespace vex {
         ia.type        = ir::IrType::VOID;
         ia.dst         = ir::IR_NO_VALUE;
         ia.func_name   = s->body;          // cuerpo NASM Intel verbatim
+        ia.source_line = s->loc.line;
+
+        // Phase AS inc.4b: validacion de sintaxis en compile-time via el
+        // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
+        // body, emitimos un error con la linea Vex (mejor que esperar a que
+        // GCC falle al compilar el .c).  Si no hay backend (tests sin main),
+        // se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
+        // descartan (se usaran en inc.5 JIT).
+        if (vex::g_asm_backend && !s->body.empty()) {
+            vex::AsmAssembleResult ar =
+                vex::g_asm_backend->assemble(s->body, vex::AsmArch::X86_64);
+            if (!ar.ok) {
+                error_at(s->loc,
+                    "inline asm: sintaxis invalida: " + ar.error);
+                return;
+            }
+        }
+
+        // Phase AS inc.3: listar como operandos los slots ALLOCA de las
+        // variables register-bound EN SCOPE en este punto.  Esto (a) impide
+        // que el optimizer las elimine (INLINE_ASM es op no-safe -> sus
+        // operandos "escapan"), y (b) le dice al backend que vars poner en la
+        // lista de operandos GCC del bloque asm.  Filtro por scope: una
+        // binding esta activa si su nombre resuelve EXACTAMENTE a su alloca en
+        // la cadena de scopes actual (descarta vars de scopes hermanos ya
+        // cerrados y las sombreadas por una declaracion mas interna).  El
+        // type checker garantiza que dos register-bound vivas a la vez nunca
+        // comparten el mismo registro fisico, asi que no hay colision GCC.
+        // De paso recolectamos sus registros canonicos para EXCLUIRLOS de los
+        // clobbers inferidos (son operandos, no clobbers).
+        std::vector<std::string> bound_canon;
+        for (const auto &b : fn_->asm_reg_bindings) {
+            if (lookup(b.name) == b.alloca_value) {
+                ia.operands.push_back(b.alloca_value);
+                std::string c = asm_canonical_reg(b.reg);
+                if (!c.empty()) bound_canon.push_back(std::move(c));
+            }
+        }
+
+        // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
+        // `noinfer`, analizamos el cuerpo y unimos los clobbers inferidos con
+        // los explicitos.  `nomem`/`preserves_flags`/`pure` QUITAN memory/flags
+        // del set; `clobbers(...)` ANYADE.  Resultado final -> asm_clobber_lists
+        // + bits 4/5 de imm (memory/flags).
+        std::vector<std::string> final_clobbers = s->clobbers;  // explicitos primero
+        bool final_mem   = s->clobbers_memory;
+        bool final_flags = s->clobbers_flags;
+        if (!s->q_noinfer) {
+            vex::AsmInferResult inf =
+                vex::asm_infer_clobbers(s->body, bound_canon);
+            // Union de regs (dedup simple: skip si ya esta).
+            for (const auto &c : inf.clobber_regs) {
+                bool dup = false;
+                for (const auto &e : final_clobbers) if (e == c) { dup = true; break; }
+                if (!dup) final_clobbers.push_back(c);
+            }
+            final_mem   = final_mem   || inf.clobber_memory;
+            final_flags = final_flags || inf.clobber_flags;
+            // Warning si hubo mnemonicos desconocidos: la inferencia no pudo
+            // razonar sobre ellos (marco memory+flags conservador), pero el
+            // usuario deberia declarar clobbers explicitos para precision.
+            if (!inf.unknown_mnemonics.empty()) {
+                std::string list;
+                for (size_t i = 0; i < inf.unknown_mnemonics.size(); ++i) {
+                    if (i) list += ", ";
+                    list += inf.unknown_mnemonics[i];
+                }
+                diags_.warning(s->loc,
+                    "inline asm: mnemonico(s) no reconocido(s) por la inferencia "
+                    "de clobbers (" + list + "); declara clobbers(...) explicitos "
+                    "para precision o usa 'noinfer'");
+            }
+        }
+        // `nomem`/`preserves_flags`/`pure` afirman que NO se toca: override.
+        if (s->q_nomem || s->q_pure)           final_mem   = false;
+        if (s->q_preserves_flags || s->q_pure) final_flags = false;
+
         // Bitfield de calificadores/efectos en imm.
         uint64_t q = 0;
         if (s->q_volatile)        q |= 1ull << 0;
         if (s->q_nomem)           q |= 1ull << 1;
         if (s->q_preserves_flags) q |= 1ull << 2;
         if (s->q_pure)            q |= 1ull << 3;
-        if (s->clobbers_memory)   q |= 1ull << 4;
-        if (s->clobbers_flags)    q |= 1ull << 5;
+        if (final_mem)            q |= 1ull << 4;
+        if (final_flags)          q |= 1ull << 5;
+        // Phase AS inc.3/4: empaquetar el "asm-id" (indice en asm_clobber_lists)
+        // en los bits altos de imm (8..31).  El backend port-C lo lee para
+        // recuperar la lista de clobbers (explicitos + inferidos) de ESTE bloque.
+        const uint64_t asm_id = (uint64_t) fn_->asm_clobber_lists.size();
+        fn_->asm_clobber_lists.push_back(std::move(final_clobbers));
+        q |= (asm_id & 0xFFFFFFull) << 8;
         ia.imm         = q;
-        ia.source_line = s->loc.line;
+
         // volatile por defecto: el bloque nunca debe eliminarse ni
         // reordenarse por el optimizer del IR.
         ia.preserve    = true;

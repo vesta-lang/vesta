@@ -1378,6 +1378,29 @@ namespace vex {
         }
     }
 
+    bool Parser::looks_like_register_storage() const noexcept {
+        // Patron exacto: register ( "reg" ) <type-starter>.
+        //   current_     = IDENTIFIER "register"
+        //   peek_at(0)   = '('
+        //   peek_at(1)   = STRING_LIT (nombre del registro)
+        //   peek_at(2)   = ')'
+        //   peek_at(3)   = inicio de tipo (primitivo / IDENT / nonnull / fn)
+        if (current_.kind != TokenKind::IDENTIFIER || current_.lexeme != "register")
+            return false;
+        Lexer &mut_lex = const_cast<Lexer &>(lex_);
+        if (mut_lex.peek_at(0).kind != TokenKind::LPAREN)      return false;
+        if (mut_lex.peek_at(1).kind != TokenKind::STRING_LIT)  return false;
+        if (mut_lex.peek_at(2).kind != TokenKind::RPAREN)      return false;
+        const Token &t = mut_lex.peek_at(3);
+        // Type-starter a nivel de token (no podemos llamar starts_type aqui
+        // porque opera sobre current_, no sobre el lookahead).
+        if (primitive_kind_from_token(t.kind) != PrimitiveKind::COUNT) return true;
+        if (t.kind == TokenKind::KW_NONNULL) return true;
+        if (t.kind == TokenKind::KW_FN)      return true;
+        if (t.kind == TokenKind::IDENTIFIER) return true; // tipo nombrado / typedef
+        return false;
+    }
+
     bool Parser::starts_type() const noexcept {
         // Cualquier keyword que sea tipo primitivo, o un identificador
         // seguido de uno o mas '*' (cero permitidos) y luego otro
@@ -3153,6 +3176,11 @@ namespace vex {
                 return es;
             }
             default:
+                // Phase AS inc.2: `register("reg") T name;` es un var-decl con
+                // storage-class; se enruta a parse_var_decl_stmt aunque
+                // `register` sea un IDENTIFIER (no keyword) y starts_type() lo
+                // ignore.
+                if (looks_like_register_storage()) return parse_var_decl_stmt(false);
                 if (starts_type()) return parse_var_decl_stmt(false);
                 return parse_expr_stmt();
         }
@@ -3162,6 +3190,21 @@ namespace vex {
         auto vd = std::make_unique<ast::VarDeclStmt>();
         vd->loc      = current_.loc;
         vd->is_const = is_const;
+        /* Phase AS inc.2: storage-class `register("reg")` antes del tipo.
+         * El patron ya fue validado por looks_like_register_storage() en el
+         * router, pero KW_CONST / for-init tambien llaman aqui; reconsumimos
+         * de forma defensiva solo cuando el patron `register ( "reg" )`
+         * aparece literalmente, dejando intacto cualquier otro caso. */
+        if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "register"
+         && lex_.peek_at(0).kind == TokenKind::LPAREN
+         && lex_.peek_at(1).kind == TokenKind::STRING_LIT
+         && lex_.peek_at(2).kind == TokenKind::RPAREN) {
+            (void)consume();                 /* 'register' */
+            (void)consume();                 /* '(' */
+            vd->reg_binding = current_.str_val;  /* nombre del registro */
+            (void)consume();                 /* STRING_LIT */
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' tras register(\"reg\")");
+        }
         /* Z.6: modificador `shared` en var-decl marca el storage class.
          * Disambiguacion con el smart pointer `shared<T>`: si tras `shared`
          * viene `<`, NO es modificador (es el tipo smart pointer); si
@@ -3535,7 +3578,9 @@ namespace vex {
                 s->q_pure = true;
                 s->q_nomem = true;
                 s->q_preserves_flags = true;
-            } else {
+            }
+            else if (q == "noinfer")         { s->q_noinfer = true; }
+            else {
                 break; // identificador desconocido -> debe seguir el '{'
             }
             (void)consume();

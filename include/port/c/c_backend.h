@@ -230,6 +230,19 @@ namespace port {
                            const std::vector<ir::IrValueId> &operands,
                            ir::IrType t) override;
 
+        /// Phase AS inc.3: inline asm nativo (IrOp::INLINE_ASM) -> bloque
+        /// @c __asm__ __volatile__(".intel_syntax noprefix\n ...") con las
+        /// variables register() como operandos GCC y los clobbers.
+        void emit_inline_asm(EmitContext &ctx,
+                             const ir::IrInstr &instr) override;
+
+        /// Phase AS inc.3: devuelve el binding register("reg") asociado al
+        /// ALLOCA @p id en la funcion actual, o nullptr si @p id no es un
+        /// slot register-bound.  Consultado por emit_local_decl/alloca/
+        /// load/store para materializar la variable C con register-pin.
+        const ir::AsmRegBinding *reg_binding_for(const EmitContext &ctx,
+                                                 ir::IrValueId id) const;
+
         /**
          * @brief Emite una llamada nativa (CALLN @c "lib:sym").
          *

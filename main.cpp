@@ -29,6 +29,7 @@
 #include "cli/vsh.h"
 #include "ir/ir_emitter.h"
 #include "jit/auto_jit.h"
+#include "jit/keystone_asm_backend.h"  // Phase AS inc.4b: registrar backend asm
 #include "runtime/profile.h"          // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
@@ -184,6 +185,9 @@ int main(int argc, char *argv[]) {
     asm_multi_process::run_and_capture("chcp 65001");
 #endif
     runtime_ensure_vex_callback_registered();
+    // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
+    // frontend Vex valide la sintaxis del inline asm en compile-time.
+    jit::register_keystone_asm_backend();
 
     // ------------------------------------------------------------------
     // Subcomando especial: @c vm pkg <subcmd> ...

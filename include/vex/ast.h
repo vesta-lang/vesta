@@ -1016,6 +1016,12 @@ namespace vex::ast {
         /// resultante tiene bit 31 (SHARED_HANDLE_BIT) set.  Stdlib clases
         /// son agnosticas; solo el var-decl decide.
         bool                      is_shared = false;
+        /// Phase AS inc.2: storage-class `register("reg") T name;` -- la
+        /// variable vive en el registro fisico nombrado (NASM).  En el
+        /// cuerpo @c asm el programador usa el registro directamente, no el
+        /// nombre Vex.  Vacio = sin storage register (var-decl normal).  Lo
+        /// consumen el backend port-C (inc.3) y el JIT (inc.5).
+        std::string               reg_binding;
         VarDeclStmt() : Stmt(NodeKind::VarDeclStmt) {}
     };
 
@@ -1248,6 +1254,7 @@ namespace vex::ast {
         bool q_nomem          = false;       ///< @c nomem: el bloque no accede a memoria.
         bool q_preserves_flags = false;      ///< @c preserves_flags: RFLAGS se conserva.
         bool q_pure           = false;       ///< @c pure: implica nomem + preserves_flags.
+        bool q_noinfer        = false;       ///< @c noinfer: desactiva la inferencia de clobbers (inc.4); clobbers(...) pasa a ser la lista exacta.
         std::vector<std::string> clobbers;   ///< Registros explicitos destruidos (sin "memory"/"flags").
         bool clobbers_memory  = false;       ///< @c clobbers("memory"): barrera de loads/stores.
         bool clobbers_flags   = false;       ///< @c clobbers("flags"): RFLAGS no preservado.
