@@ -1,6 +1,12 @@
 # archivos ocultos y de configuración
 .*
 
+# ...pero sí trackear la config de formato del proyecto
+!.clang-format
+# ...y el CI de GitHub Actions
+!.github/
+!.github/**
+
 # archivos de memoria temporales
 memoria_*
 
@@ -119,3 +125,4 @@ tests/bugs/m_l789_test/prog.vel
 tests/bugs/m_reexport_plain/base.vel
 tests/bugs/m_reexport_plain/mid.vel
 tests/bugs/README.md
+diff_baseline.json
