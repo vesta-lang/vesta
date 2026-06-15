@@ -332,8 +332,7 @@ int main(int argc, char *argv[]) {
                 cxxopts::value<std::string>()->default_value(""))
             ("no-repl",         "Desactivar el REPL interactivo local en modo --server-mode (modo headless). Sin este flag, el operador local mantiene un prompt vesta> que comparte el mismo runtime con los clientes remotos; con el, el proceso solo escucha el socket TCP.")
             ("vex-debug",       "Emitir comentarios `// @line N` en el .vel intermedio del compilador Vex y, cuando se integre la pipeline completa de debug section (Phase 2), embeber la tabla bytecode_offset -> (file, line) en el .velb final.  Sin este flag, el .vel/.velb no contienen info de debug -> el ejecutable es mas pequeno y el frontend NO genera datos extra.  Con el flag, el cliente del debugger puede setear breakpoints por linea Vex (`b file.vex:42`) en lugar de solo por addr.")
-            ("vex-asm-jit",     "Phase AS: permite compilar inline-asm (asm{}) al .velb para ejecucion con JIT (-m jit / --jit-threshold).  El cuerpo bytecode de las funciones con asm es no-op y el loader las eager-compila a codigo nativo; ejecutar SIN JIT da resultado incorrecto.  Sin este flag, asm{} a bytecode se rechaza (AS.7, requiere --port c).")
-            ("port",            "Transpilar el IR a codigo fuente del lenguaje destino y escribir a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: 'java', 'js', 'rust'.  Con --port=c se genera codigo C99 portable listo para compilar con gcc/clang -O3 -std=c11 SIN dependencias de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se aplica al pipeline Vex post-optimizacion).",
+            ("port","Transpilar el IR a codigo fuente del lenguaje destino y escribir a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: 'java', 'js', 'rust'.  Con --port=c se genera codigo C99 portable listo para compilar con gcc/clang -O3 -std=c11 SIN dependencias de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se aplica al pipeline Vex post-optimizacion).",
                 cxxopts::value<std::string>())
             ("port-gc",         "Modelo de memoria del codigo portado: none|vesta|boehm.  none (default): malloc/free + sin GC.  Las IR ops de objetos GC (NEWOBJ/strings) emiten stub.  vesta: enlazar contra vesta_rt.lib.  boehm: enlazar contra libgc (placeholder).",
                 cxxopts::value<std::string>()->default_value("none"))
@@ -1167,8 +1166,6 @@ int main(int argc, char *argv[]) {
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
         copts.emit_debug  = (result.count("vex-debug") > 0);
-        // Phase AS inc.5: permitir inline-asm en el .velb (requiere -m jit al run).
-        copts.allow_inline_asm = (result.count("vex-asm-jit") > 0);
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.

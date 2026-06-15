@@ -309,6 +309,16 @@ namespace jit {
                   * el linear_scan les asigna su fixed_reg incondicionalmente. */
                  || in.op == MOp::INLINE_ASM_RAW)
                     out.call_positions.push_back(2u * gi);
+                /* Phase AS inc.5e: registrar los clobbers EXPLICITOS del asm
+                 * (callee-saved que el call-position no cubre) por posicion. */
+                if (in.op == MOp::INLINE_ASM_RAW) {
+                    const uint32_t idx = static_cast<uint32_t>(in.src1.value);
+                    if (idx < mf.asm_blobs.size()
+                     && !mf.asm_blobs[idx].clobbers.empty()) {
+                        out.asm_clobbers.push_back(
+                            {2u * gi, mf.asm_blobs[idx].clobbers});
+                    }
+                }
                 ++gi;
             }
         }

@@ -49,16 +49,6 @@ namespace vex {
         /// fixes (PHIs, SSA, CALLCLOSURE, etc.).
         bool        dump_ir = false;
 
-        /// Phase AS inc.5: permite que el backend bytecode (.velb) emita
-        /// funciones con inline-asm (IrOp::INLINE_ASM) en lugar de abortar
-        /// (AS.7).  El .velb resultante REQUIERE ejecucion con JIT (-m jit):
-        /// el loader eager-compila las funciones con inline-asm a codigo
-        /// nativo; el cuerpo bytecode de esas funciones es un no-op (si se
-        /// interpreta sin JIT, el resultado es incorrecto).  Por defecto false
-        /// (se mantiene el rechazo AS.7 + el contrato "asm requiere --port c o
-        /// -m jit").  Lo activa el CLI --vex-asm-jit.
-        bool        allow_inline_asm = false;
-
         /// Cuando true, llena @c CompileResult::mermaid_ast con un diagrama
         /// Mermaid del AST Vex post type-check.  Util para visualizar la
         /// estructura del codigo fuente: clases, herencia, anotaciones.

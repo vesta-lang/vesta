@@ -936,6 +936,24 @@ namespace jit {
                         }
                         blob.clobbers_mem   = ((in.imm >> 4) & 1u) != 0;
                         blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;
+                        // Phase AS inc.5e: registros fisicos clobbered (explicitos
+                        // del usuario + inferidos; asm_clobber_lists YA excluye los
+                        // regs ligados por register()).  El regalloc los excluye
+                        // para vregs NO-binding vivos a traves del asm -- cubre los
+                        // clobbers de callee-saved (r12-r15) que el call-position
+                        // (solo caller-saved) no protege.  asm_id en imm bits 8..31.
+                        {
+                            const uint64_t asm_id = (in.imm >> 8) & 0xFFFFFFull;
+                            if (asm_id < fn.asm_clobber_lists.size()) {
+                                for (const auto &cn : fn.asm_clobber_lists[asm_id]) {
+                                    const int phys =
+                                        canon_gp_to_mreg(vex::asm_canonical_reg(cn));
+                                    if (phys >= 0)
+                                        blob.clobbers.push_back(
+                                            static_cast<uint8_t>(phys));
+                                }
+                            }
+                        }
                         const uint32_t bidx = out.intern_asm_blob(std::move(blob));
                         O.push_back(MInstr::make_inline_asm_raw(bidx));
                         break;

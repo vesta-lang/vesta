@@ -152,6 +152,16 @@ namespace jit {
         std::vector<uint32_t> call_positions;
         /// Posicion lineal maxima + 1 (tamano del espacio de posiciones).
         uint32_t max_pos = 0;
+        /// Phase AS inc.5e: clobbers de registros fisicos por posicion de un
+        /// INLINE_ASM_RAW.  El @c linear_scan excluye estos fisicos para los
+        /// vregs NO-precoloreados cuyo intervalo cubre @c pos -- protege los
+        /// clobbers de callee-saved (r12-r15) que el call-position (que solo
+        /// fuerza a callee-saved a los caller-saved live-across) no cubre.
+        struct AsmClobberSite {
+            uint32_t             pos;   ///< use_pos del INLINE_ASM_RAW
+            std::vector<uint8_t> regs;  ///< MReg ids clobbered (no bindings)
+        };
+        std::vector<AsmClobberSite> asm_clobbers;
     };
 
     /**

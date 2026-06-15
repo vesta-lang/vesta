@@ -1,0 +1,24 @@
+// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//
+// Lee el Time-Stamp Counter del CPU con la instruccion x86 RDTSC, que
+// devuelve el contador de 64 bits en el par edx:eax.  Lo recombinamos en
+// rax con `shl rdx, 32; or rax, rdx`.  Ejemplo de un intrinseco de sistema
+// real (medicion de ciclos) imposible de expresar en el bytecode de la VM.
+//
+//     vm --vex 04_rdtsc.vex -o rdtsc
+//     vm --run rdtsc.velb
+//
+// El valor es NO determinista (depende del momento de ejecucion); este
+// ejemplo solo demuestra que el asm corre.  El clobber de rdx lo infiere el
+// compilador (rdtsc/shl lo escriben y no esta ligado por register()).
+//
+// @expect-run
+u64 main() {
+    register("rax") u64 tsc;             // recibe el TSC de 64 bits
+    asm volatile {
+        rdtsc                            // edx:eax = TSC
+        shl rdx, 32                      // rdx = parte alta << 32
+        or  rax, rdx                     // rax = (alta << 32) | baja
+    };                                   // clobber de rdx ("cc") inferidos
+    return tsc;
+}
