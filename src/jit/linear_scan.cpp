@@ -35,6 +35,20 @@ namespace jit {
             return false;
         };
 
+        /* Phase AS inc.5e: @p r esta CLOBBERED para @p iv si el intervalo cubre
+         * la posicion de algun INLINE_ASM_RAW cuya lista de clobbers incluye
+         * @p r.  Cubre los clobbers de callee-saved (r12-r15) que el
+         * call-position no protege (este solo empuja los caller-saved
+         * live-across a callee-saved).  Los precoloreados (bindings) NO pasan
+         * por aqui: toman su fixed_reg antes, incondicionalmente. */
+        auto clobbered_for = [&](const LiveInterval &iv, uint8_t r) -> bool {
+            for (const auto &site : ivs.asm_clobbers) {
+                if (!iv.covers(site.pos)) continue;
+                for (uint8_t cr : site.regs) if (cr == r) return true;
+            }
+            return false;
+        };
+
         /* Procesar cada clase de registro de forma independiente. */
         for (size_t ci = 0; ci < TargetRegInfo::NCLASS; ++ci) {
             const RegClass cls = static_cast<RegClass>(ci);
@@ -132,6 +146,7 @@ namespace jit {
                 for (uint8_t r : allocatable) {
                     if (occupied[r]) continue;
                     if (cc && !is_callee(r)) continue;  // cross-call: solo callee
+                    if (clobbered_for(iv, r)) continue;  // inc.5e: clobbered por un asm
                     chosen = static_cast<int>(r);
                     break;
                 }
@@ -158,6 +173,9 @@ namespace jit {
                     /* Para un vreg cross-call solo robamos regs callee-saved
                      * (los unicos que podria usar). */
                     if (cc && !is_callee(r)) continue;
+                    /* inc.5e: no robar un reg clobbered por un asm que iv cruza
+                     * (iv no podria vivir ahi). */
+                    if (clobbered_for(iv, r)) continue;
                     const uint32_t e = ivs.intervals[av].end();
                     if (victim_idx < 0 || e > victim_end) {
                         victim_idx = static_cast<int>(a);

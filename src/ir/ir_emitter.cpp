@@ -3930,13 +3930,18 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
 
         case IrOp::INLINE_ASM:
-            // Phase AS: inline asm de la CPU host.  El backend bytecode/interp
-            // NO lo soporta -- el driver (compile_vex_source) ya reporta un
-            // error claro cuando el target es bytecode, asi que en la practica
-            // este caso solo se alcanza en modo port-c (donde el .vel emitido
-            // NO se ejecuta).  Emitimos solo un comentario para no caer al
-            // default generico ("nop1").
-            ctx.comment("inline_asm host (Phase AS) omitido en backend bytecode");
+            // Phase AS inc.5: inline asm de la CPU host.  El backend bytecode
+            // NO puede materializarlo -> la funcion DEBE ejecutarse en nativo
+            // (el loader fuerza su eager-compile + registro por PC, y el interp
+            // la despacha via lookup_jit_code_at_pc en CUALQUIER modo).  Por eso
+            // este cuerpo bytecode NUNCA se ejecuta en la practica.  Como
+            // BACKSTOP de seguridad emitimos `hlt`: si por un caso patologico la
+            // funcion se interpretara (p.ej. main con AOP+asm), el proceso para
+            // de forma RUIDOSA en vez de devolver un resultado silenciosamente
+            // incorrecto (el asm seria un no-op).
+            ctx.comment("inline_asm host (Phase AS): cuerpo bytecode = trap "
+                        "(la fn corre en nativo via JIT; ver loader force-compile)");
+            ctx.out << "    hlt\n";
             break;
 
         default:
