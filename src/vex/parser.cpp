@@ -3136,6 +3136,7 @@ namespace vex {
             case TokenKind::KW_TRY:        return parse_try_stmt();
             case TokenKind::KW_THROW:      return parse_throw_stmt();
             case TokenKind::KW_SYNCHRONIZED: return parse_synchronized_stmt();
+            case TokenKind::KW_ASM:        return parse_asm_stmt();
             case TokenKind::KW_MATCH: {
                 // Match como statement (destructuring de ADT como
                 // sentencia de control de flujo).  El parser de
@@ -3499,6 +3500,109 @@ namespace vex {
         }
         s->body = parse_block();
         if (!s->body) return nullptr;
+        return s;
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase AS: inline asm nativo.
+    //
+    //   asm [volatile|nomem|preserves_flags|pure] {
+    //       <NASM Intel verbatim>
+    //   } [clobbers("rdx", "memory", "flags")] ;
+    //
+    // El cuerpo se captura por RAW-SLICING del source (no se tokeniza
+    // semanticamente): tras el '{' guardamos el offset del primer token y
+    // avanzamos consumiendo tokens contando profundidad de llaves hasta el
+    // '}' de cierre, capturando su offset.  Es el mismo patron que el
+    // parametro `expr` de macros (MC.25).  Asi un comentario NASM `;` o un
+    // operando `[rax]` no rompen la captura (solo se cuentan offsets).
+    // ---------------------------------------------------------------------
+    std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
+        auto s = std::make_unique<ast::AsmStmt>();
+        s->loc = current_.loc;
+        (void)consume(); // 'asm'
+
+        // Calificadores contextuales (IDENTIFIER, no keywords): se aceptan
+        // en cualquier orden antes del '{'.  `volatile` es el default; los
+        // demas refinan la semantica que vera el optimizador en backends
+        // nativos.  `pure` implica nomem + preserves_flags.
+        while (current_.kind == TokenKind::IDENTIFIER) {
+            const std::string &q = current_.lexeme;
+            if (q == "volatile")             { s->q_volatile = true; }
+            else if (q == "nomem")           { s->q_nomem = true; }
+            else if (q == "preserves_flags") { s->q_preserves_flags = true; }
+            else if (q == "pure") {
+                s->q_pure = true;
+                s->q_nomem = true;
+                s->q_preserves_flags = true;
+            } else {
+                break; // identificador desconocido -> debe seguir el '{'
+            }
+            (void)consume();
+        }
+
+        if (current_.kind != TokenKind::LBRACE) {
+            error_here("se esperaba '{' tras 'asm' (y calificadores opcionales)");
+            return nullptr;
+        }
+        (void)consume(); // '{'
+
+        // Raw-slice del cuerpo: desde el primer token tras '{' hasta el '}'
+        // de cierre a profundidad 0.
+        const std::string &src = lex_.source_buffer();
+        const uint32_t start_off = current_.loc.offset;
+        uint32_t end_off = start_off;
+        int brace_depth = 1; // ya consumimos el '{' de apertura
+        while (current_.kind != TokenKind::END_OF_FILE) {
+            if (current_.kind == TokenKind::RBRACE) {
+                --brace_depth;
+                if (brace_depth == 0) {
+                    end_off = current_.loc.offset; // offset del '}' de cierre
+                    (void)consume();                // consumir '}'
+                    break;
+                }
+            } else if (current_.kind == TokenKind::LBRACE) {
+                ++brace_depth;
+            }
+            (void)consume();
+        }
+        if (brace_depth != 0) {
+            error_here("se esperaba '}' al cerrar el bloque 'asm'");
+            return nullptr;
+        }
+        // Trim de whitespace final del span capturado.
+        while (end_off > start_off && end_off <= src.size()
+            && (src[end_off - 1] == ' '  || src[end_off - 1] == '\t'
+             || src[end_off - 1] == '\n' || src[end_off - 1] == '\r')) {
+            --end_off;
+        }
+        if (start_off <= src.size() && end_off >= start_off
+            && end_off <= src.size()) {
+            s->body = src.substr(start_off, end_off - start_off);
+        }
+
+        // Clausula opcional `clobbers("rdx", "memory", "flags")`.  `clobbers`
+        // es IDENTIFIER contextual (no keyword).  "memory" y "flags"/"cc"
+        // son efectos especiales; el resto son registros.
+        if (current_.kind == TokenKind::IDENTIFIER
+         && current_.lexeme == "clobbers") {
+            (void)consume(); // 'clobbers'
+            (void)expect(TokenKind::LPAREN, "se esperaba '(' tras 'clobbers'");
+            while (current_.kind == TokenKind::STRING_LIT
+                || current_.kind == TokenKind::RAW_STRING_LIT) {
+                const std::string c = current_.str_val;
+                (void)consume();
+                if (c == "memory")             s->clobbers_memory = true;
+                else if (c == "flags" || c == "cc") s->clobbers_flags = true;
+                else if (!c.empty())           s->clobbers.push_back(c);
+                if (current_.kind == TokenKind::COMMA) { (void)consume(); continue; }
+                break;
+            }
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' al cerrar 'clobbers(...)'");
+        }
+
+        // `;` opcional tras el bloque (igual que if/while/synchronized).
+        if (current_.kind == TokenKind::SEMICOLON) (void)consume();
         return s;
     }
 

@@ -99,6 +99,7 @@ namespace vex::ast {
         SynchronizedStmt,///< synchronized (obj) { ... }  (monenter/monexit con cleanup implicito en cada via de salida)
         ComptimeBlockStmt, ///< A.39: comptime { ... } scope para comptime const + for + asserts
         ComptimeForStmt,   ///< A.39: comptime for (i in lo..hi) { body } -- unrolled
+        AsmStmt,           ///< Phase AS: asm [quals] { ...NASM... } clobbers(...)  (inline asm nativo)
 
         // ----- Expressions -----
         IntLitExpr,
@@ -1221,6 +1222,36 @@ namespace vex::ast {
         std::unique_ptr<Expr>      target;  ///< Objeto cuyo monitor se adquiere.
         std::unique_ptr<BlockStmt> body;
         SynchronizedStmt() : Stmt(NodeKind::SynchronizedStmt) {}
+    };
+
+    /**
+     * @struct AsmStmt
+     * @brief @c asm [quals] @c { @c ...NASM... } @c clobbers(...) -- ensamblador
+     *        en linea nativo (Phase AS), distinto del @c @Asm whole-function
+     *        (que es bytecode .vel de la VM).
+     *
+     * El cuerpo es texto NASM Intel verbatim, capturado por raw-slicing del
+     * source (no se tokeniza).  Las variables Vex se enlazan a registros via
+     * la storage-class @c register("reg") en su declaracion (Incremento 2);
+     * en el Incremento 1 el cuerpo es opaco.  Los calificadores siguen la
+     * semantica C (@c volatile por defecto): @c nomem, @c preserves_flags,
+     * @c pure (= nomem + preserves_flags).  La clausula @c clobbers("rdx",
+     * "memory", "flags") lista registros/efectos que el bloque destruye.
+     *
+     * Lowering: baja a @c IrOp::INLINE_ASM (marker host, distinto de RAW_ASM
+     * que es asm de la VM).  Backends que lo materializan: port-C, JIT, AOT.
+     * El backend bytecode/interp NO lo soporta y reporta error claro.
+     */
+    struct AsmStmt : Stmt {
+        std::string body;                    ///< Cuerpo NASM Intel verbatim (raw-slice del source).
+        bool q_volatile       = true;        ///< @c volatile (default): no optimizar/reordenar/eliminar.
+        bool q_nomem          = false;       ///< @c nomem: el bloque no accede a memoria.
+        bool q_preserves_flags = false;      ///< @c preserves_flags: RFLAGS se conserva.
+        bool q_pure           = false;       ///< @c pure: implica nomem + preserves_flags.
+        std::vector<std::string> clobbers;   ///< Registros explicitos destruidos (sin "memory"/"flags").
+        bool clobbers_memory  = false;       ///< @c clobbers("memory"): barrera de loads/stores.
+        bool clobbers_flags   = false;       ///< @c clobbers("flags"): RFLAGS no preservado.
+        AsmStmt() : Stmt(NodeKind::AsmStmt) {}
     };
 
     // -------------------------------------------------------------------

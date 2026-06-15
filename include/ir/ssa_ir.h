@@ -526,7 +526,13 @@ namespace ir {
         SPAWN_ON  = 0xFC, ///< %dst = spawnon %fn_ptr, %hint  (spawn con scheduler hint)
         PANIC     = 0xFD, ///< panic %msg_addr, %msg_len      (FatalError USER_ABORT)
 
-        // ---- codigo ensamblador incrustado (0xFF) ----
+        // ---- codigo ensamblador incrustado ----
+        INLINE_ASM = 0xFE,///< inline_asm host (Phase AS): func_name=cuerpo NASM Intel,
+                          ///<   imm=bitfield de calificadores (bit0 volatile, bit1 nomem,
+                          ///<   bit2 preserves_flags, bit3 pure, bit4 clobbers_memory,
+                          ///<   bit5 clobbers_flags).  Distinto de RAW_ASM (asm de la VM):
+                          ///<   este es asm de la CPU host, lo materializan port-C / JIT /
+                          ///<   AOT.  El backend bytecode/interp NO lo soporta.
         RAW_ASM   = 0xFF, ///< raw_asm "texto"  (ensamblador .vel verbatim; nunca optimizado)
     };
 
