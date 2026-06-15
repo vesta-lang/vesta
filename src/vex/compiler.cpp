@@ -289,7 +289,11 @@ namespace vex {
         // IR contiene algun IrOp::INLINE_ASM, abortamos con un error claro
         // ANTES de emitir el .vel.  Los backends nativos (port-C hoy; JIT/AOT
         // en el futuro) interceptan INLINE_ASM antes de llegar aqui.
-        if (opts.port_target.empty()) {
+        // Phase AS inc.5: con --vex-asm-jit (opts.allow_inline_asm) se OMITE
+        // este rechazo: el .velb se emite con las funciones inline-asm (cuerpo
+        // bytecode no-op) y su IR viaja en la seccion @ir; el loader las
+        // eager-compila a nativo bajo JIT (el cuerpo bytecode NUNCA se ejecuta).
+        if (opts.port_target.empty() && !opts.allow_inline_asm) {
             for (const auto &fn : irmod.functions) {
                 for (const auto &bb : fn.blocks) {
                     for (const auto &ins : bb.instrs) {
@@ -297,8 +301,8 @@ namespace vex {
                             res.diagnostics.error(
                                 SourceLoc{filename, ins.source_line, 0},
                                 "inline asm (asm { ... }) requiere un backend "
-                                "nativo: compila con --port c (JIT/AOT en el "
-                                "futuro).  El backend bytecode/interp no soporta "
+                                "nativo: compila con --port c o --vex-asm-jit "
+                                "(JIT).  El backend bytecode/interp no soporta "
                                 "asm de la CPU host.");
                         }
                     }
