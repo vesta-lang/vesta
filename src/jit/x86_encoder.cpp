@@ -521,6 +521,21 @@ namespace jit {
             case MOp::COMMENT:
                 /* skip en release */
                 return true;
+            case MOp::INLINE_ASM_RAW: {
+                /* Phase AS inc.5: apendea los bytes del bloque inline-asm ya
+                 * ensamblado (via vex::g_asm_backend) verbatim al code cache.
+                 * El indice del blob viaja como IMM32 en src1.  Los inputs/
+                 * outputs register-bound ya estan en sus registros fisicos
+                 * (pineados por el regalloc); el asm opera sobre ellos. */
+                if (mi.src1.kind == MOperandKind::IMM32) {
+                    const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
+                    if (idx < fn.asm_blobs.size()) {
+                        const std::vector<uint8_t> &b = fn.asm_blobs[idx].bytes;
+                        out.insert(out.end(), b.begin(), b.end());
+                    }
+                }
+                return true;
+            }
             case MOp::ARG:
                 /* pseudo: el rewrite ya lo expandio a moves a arg_regs antes
                  * del CALL.  No deberia llegar aqui; si llega, no emite. */

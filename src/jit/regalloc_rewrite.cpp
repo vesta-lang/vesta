@@ -1049,6 +1049,11 @@ namespace jit {
         pf.next_label_id  = vf.next_label_id;
         pf.label_offsets  = vf.label_offsets;
         pf.imm64_pool     = vf.imm64_pool;
+        /* Phase AS inc.5: los bytes del inline-asm los consume el ENCODER, que
+         * corre sobre @c pf (la funcion reescrita) -> hay que arrastrarlos.
+         * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre
+         * sobre @c vf ANTES del rewrite.) */
+        pf.asm_blobs      = vf.asm_blobs;
         pf.blocks.resize(vf.blocks.size());
 
         /* OSR 1a: deteccion PRECISA de loop back-edges via DFS (clasico:

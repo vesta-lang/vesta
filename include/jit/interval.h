@@ -81,6 +81,12 @@ namespace jit {
         /// call, el allocator lo FUERZA a un slot (enfoque A) para que el GC
         /// lo describa via stackmap y lo escanee del stack.
         uint8_t  gc_kind = 0;
+        /// Phase AS inc.5: registro fisico FORZADO (precoloreo), o -1 si libre.
+        /// Lo poblea @c build_intervals desde @c MFunction::vreg_fixed.  El
+        /// @c linear_scan asigna este fisico exacto al intervalo de forma
+        /// INCONDICIONAL (override del cross-call: el pin puede ser caller-saved
+        /// porque el inline-asm lo necesita en ese registro concreto).
+        int      fixed_reg = -1;
 
         bool is_gc() const noexcept { return gc_kind != 0; }
         bool empty() const noexcept { return ranges.empty(); }

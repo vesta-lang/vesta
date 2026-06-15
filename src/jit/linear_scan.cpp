@@ -79,6 +79,40 @@ namespace jit {
                     active.resize(k);
                 }
 
+                /* ---- Phase AS inc.5: intervalo PRECOLOREADO (register-bound
+                 * de un inline-asm) ----
+                 * Toma su @c fixed_reg de forma INCONDICIONAL (override del
+                 * cross-call y del GC-spill: el inline-asm necesita el valor en
+                 * ESE registro fisico, aunque sea caller-saved).  Si el reg esta
+                 * ocupado por un activo, se desaloja a ese activo (spill).  El
+                 * selector (5d) garantiza que @c fixed_reg es un registro usable
+                 * (no rbx/rsp/rbp en VM_ABI) y que dos bindings que solapan no
+                 * comparten registro (validado en el type checker, inc.2). */
+                if (iv.fixed_reg >= 0) {
+                    const uint8_t fr = static_cast<uint8_t>(iv.fixed_reg);
+                    if (occupied[fr]) {
+                        for (size_t a = 0; a < active.size(); ++a) {
+                            if (out.assign[active[a]].reg == fr) {
+                                const uint32_t av = active[a];
+                                out.assign[av].loc  = RegAlloc::Loc::SPILL;
+                                out.assign[av].slot = out.num_spill_slots++;
+                                active.erase(active.begin() + a);
+                                break;
+                            }
+                        }
+                        occupied[fr] = false;
+                    }
+                    out.assign[vid].loc = RegAlloc::Loc::REG;
+                    out.assign[vid].reg = fr;
+                    occupied[fr] = true;
+                    active.push_back(vid);
+                    if (is_callee(fr) && !callee_used_flag[fr]) {
+                        callee_used_flag[fr] = true;
+                        out.callee_saved_used.push_back(fr);
+                    }
+                    continue;
+                }
+
                 const bool cc = crosses_call(iv);
 
                 /* ---- GC root vivo a traves de un call: SPILL forzado ----
