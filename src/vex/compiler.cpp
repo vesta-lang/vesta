@@ -283,6 +283,30 @@ namespace vex {
             }
         }
 
+        // Phase AS (AS.7): el backend bytecode/interp NO puede materializar
+        // inline asm de la CPU host (no existe opcode VM para rdtsc/cpuid/
+        // syscall/etc.).  Si el target es bytecode (port_target vacio) y el
+        // IR contiene algun IrOp::INLINE_ASM, abortamos con un error claro
+        // ANTES de emitir el .vel.  Los backends nativos (port-C hoy; JIT/AOT
+        // en el futuro) interceptan INLINE_ASM antes de llegar aqui.
+        if (opts.port_target.empty()) {
+            for (const auto &fn : irmod.functions) {
+                for (const auto &bb : fn.blocks) {
+                    for (const auto &ins : bb.instrs) {
+                        if (ins.op == ir::IrOp::INLINE_ASM) {
+                            res.diagnostics.error(
+                                SourceLoc{filename, ins.source_line, 0},
+                                "inline asm (asm { ... }) requiere un backend "
+                                "nativo: compila con --port c (JIT/AOT en el "
+                                "futuro).  El backend bytecode/interp no soporta "
+                                "asm de la CPU host.");
+                        }
+                    }
+                }
+            }
+            if (res.diagnostics.has_errors()) return res;
+        }
+
         // 4. Emitir IR -> texto .vel.  Aqui es donde el optimizador IR
         // hace DCE / copy prop / etc segun opt_level y el regalloc lineal
         // asigna r0..r15 a los IrValue.

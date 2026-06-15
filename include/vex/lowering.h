@@ -239,6 +239,7 @@ namespace vex {
         void           lower_throw(ast::ThrowStmt *s);
         void           lower_foreach(ast::ForEachStmt *s);
         void           lower_synchronized(ast::SynchronizedStmt *s);
+        void           lower_asm(ast::AsmStmt *s);   ///< Phase AS: baja a IrOp::INLINE_ASM (marker host).
 
         ir::IrValueId  lower_expr(ast::Expr *e);
         ir::IrValueId  lower_binary(ast::BinaryExpr *e);

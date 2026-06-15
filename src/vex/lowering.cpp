@@ -1847,6 +1847,9 @@ namespace vex {
             case ast::NodeKind::SynchronizedStmt:
                 lower_synchronized(static_cast<ast::SynchronizedStmt *>(s));
                 return;
+            case ast::NodeKind::AsmStmt:
+                lower_asm(static_cast<ast::AsmStmt *>(s));
+                return;
             default:
                 unsupported(s->loc, "statement no soportado por el lowering actual");
                 return;
@@ -7719,6 +7722,46 @@ namespace vex {
         // el emisor no intente continuar tras el throw.  El IR optimizer
         // reportara unreachable code si lo hay despues.
         block_terminated_ = true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase AS: inline asm nativo -> IrOp::INLINE_ASM (marker host).
+    //
+    // Incremento 1 (aditivo): el cuerpo NASM viaja verbatim en func_name y
+    // los calificadores + efectos (memory/flags) en un bitfield en imm.  El
+    // marker no produce valor SSA ni consume operandos (las variables Vex se
+    // enlazaran a registros via register() en el Incremento 2).
+    //
+    // Backends:
+    //   - port-C / JIT / AOT: materializan el asm en la CPU host.
+    //   - bytecode/interp: NO lo soporta.  El driver (compile_vex_source)
+    //     detecta INLINE_ASM cuando el target es bytecode y reporta un error
+    //     claro ANTES de emitir el .vel.
+    //
+    // Los clobbers de registros EXPLICITOS (vector) aun no se bajan al IR;
+    // los efectos memory/flags si (bits 4/5 de imm).  El Incremento 3
+    // (port-C) decidira el transporte de la lista de registros.
+    // ---------------------------------------------------------------------
+    void Lowering::lower_asm(ast::AsmStmt *s) {
+        ir::IrInstr ia{};
+        ia.op          = ir::IrOp::INLINE_ASM;
+        ia.type        = ir::IrType::VOID;
+        ia.dst         = ir::IR_NO_VALUE;
+        ia.func_name   = s->body;          // cuerpo NASM Intel verbatim
+        // Bitfield de calificadores/efectos en imm.
+        uint64_t q = 0;
+        if (s->q_volatile)        q |= 1ull << 0;
+        if (s->q_nomem)           q |= 1ull << 1;
+        if (s->q_preserves_flags) q |= 1ull << 2;
+        if (s->q_pure)            q |= 1ull << 3;
+        if (s->clobbers_memory)   q |= 1ull << 4;
+        if (s->clobbers_flags)    q |= 1ull << 5;
+        ia.imm         = q;
+        ia.source_line = s->loc.line;
+        // volatile por defecto: el bloque nunca debe eliminarse ni
+        // reordenarse por el optimizer del IR.
+        ia.preserve    = true;
+        fn_->append(current_block_, std::move(ia));
     }
 
     // ---------------------------------------------------------------------

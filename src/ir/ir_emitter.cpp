@@ -3929,6 +3929,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
+        case IrOp::INLINE_ASM:
+            // Phase AS: inline asm de la CPU host.  El backend bytecode/interp
+            // NO lo soporta -- el driver (compile_vex_source) ya reporta un
+            // error claro cuando el target es bytecode, asi que en la practica
+            // este caso solo se alcanza en modo port-c (donde el .vel emitido
+            // NO se ejecuta).  Emitimos solo un comentario para no caer al
+            // default generico ("nop1").
+            ctx.comment("inline_asm host (Phase AS) omitido en backend bytecode");
+            break;
+
         default:
             ctx.comment("instruccion no soportada: " +
                         std::string(ir_op_name(ins.op)));

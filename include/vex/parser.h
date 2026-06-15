@@ -260,6 +260,7 @@ namespace vex {
         std::unique_ptr<ast::Stmt>        parse_try_stmt();
         std::unique_ptr<ast::Stmt>        parse_throw_stmt();
         std::unique_ptr<ast::Stmt>        parse_synchronized_stmt();
+        std::unique_ptr<ast::Stmt>        parse_asm_stmt();   ///< Phase AS: asm [quals] { ... } clobbers(...)
         std::unique_ptr<ast::Stmt>        parse_expr_stmt();
 
         // -----------------------------------------------------------------

@@ -303,6 +303,7 @@ namespace ir {
         {"callsuper",        IrOp::CALLSUPER},
         {"proceed",          IrOp::PROCEED},
         // ensamblador incrustado
+        {"inline_asm", IrOp::INLINE_ASM},
         {"raw_asm",    IrOp::RAW_ASM},
         {nullptr,      IrOp::NOP},
     };
@@ -784,6 +785,20 @@ namespace ir {
                 // raw_asm "texto de ensamblador verbatim"
                 o << " \"" << ins.func_name << "\"";
                 break;
+
+            case IrOp::INLINE_ASM: {
+                // inline_asm imm=<quals> "<cuerpo NASM con \n escapados>".
+                // Formato solo para dumps legibles (--dump-ir); el round-trip
+                // real del IR es binario (write_instr serializa imm+func_name).
+                o << " imm=" << ins.imm << " \"";
+                for (char c : ins.func_name) {
+                    if (c == '\n')      o << "\\n";
+                    else if (c == '"')  o << "\\\"";
+                    else                o << c;
+                }
+                o << "\"";
+                break;
+            }
 
             case IrOp::GEP:
                 // gep.ptr %handle, byte_offset
