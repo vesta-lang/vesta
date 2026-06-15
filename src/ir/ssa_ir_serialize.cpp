@@ -370,6 +370,24 @@ namespace ir {
         write_u32(out, static_cast<uint32_t>(fn.generic_type_args.size()));
         for (const auto &s : fn.generic_type_args) write_str(out, s);
 
+        // Phase AS inc.5: bindings register() + clobber-lists del inline-asm.
+        // Necesarios para que el JIT (que compila desde el @ir del .velb)
+        // reconstruya el pin de registros del INLINE_ASM.  La mayoria de
+        // funciones tienen ambos vacios (8 bytes: dos counts a 0).
+        write_u32(out, static_cast<uint32_t>(fn.asm_reg_bindings.size()));
+        for (const auto &b : fn.asm_reg_bindings) {
+            write_u32(out, static_cast<uint32_t>(b.alloca_value));
+            write_str(out, b.reg);
+            write_u8(out, static_cast<uint8_t>(b.type));
+            write_u8(out, b.is_vector ? 1u : 0u);
+            write_str(out, b.name);
+        }
+        write_u32(out, static_cast<uint32_t>(fn.asm_clobber_lists.size()));
+        for (const auto &lst : fn.asm_clobber_lists) {
+            write_u32(out, static_cast<uint32_t>(lst.size()));
+            for (const auto &s : lst) write_str(out, s);
+        }
+
         return out.size() - start;
     }
 
@@ -431,6 +449,41 @@ namespace ir {
             std::string s;
             if (!read_str(in, off, s)) return false;
             out.generic_type_args.push_back(std::move(s));
+        }
+
+        /* Phase AS inc.5: bindings register() + clobber-lists del inline-asm. */
+        uint32_t n_bind = 0;
+        if (!read_u32(in, off, n_bind)) return false;
+        out.asm_reg_bindings.clear();
+        out.asm_reg_bindings.reserve(n_bind);
+        for (uint32_t k = 0; k < n_bind; ++k) {
+            AsmRegBinding b;
+            uint32_t av = 0; uint8_t ty = 0, vec = 0;
+            if (!read_u32(in, off, av)) return false;
+            b.alloca_value = static_cast<IrValueId>(av);
+            if (!read_str(in, off, b.reg)) return false;
+            if (!read_u8(in, off, ty)) return false;
+            b.type = static_cast<IrType>(ty);
+            if (!read_u8(in, off, vec)) return false;
+            b.is_vector = (vec != 0);
+            if (!read_str(in, off, b.name)) return false;
+            out.asm_reg_bindings.push_back(std::move(b));
+        }
+        uint32_t n_clob = 0;
+        if (!read_u32(in, off, n_clob)) return false;
+        out.asm_clobber_lists.clear();
+        out.asm_clobber_lists.reserve(n_clob);
+        for (uint32_t k = 0; k < n_clob; ++k) {
+            uint32_t n_s = 0;
+            if (!read_u32(in, off, n_s)) return false;
+            std::vector<std::string> lst;
+            lst.reserve(n_s);
+            for (uint32_t j = 0; j < n_s; ++j) {
+                std::string s;
+                if (!read_str(in, off, s)) return false;
+                lst.push_back(std::move(s));
+            }
+            out.asm_clobber_lists.push_back(std::move(lst));
         }
         return true;
     }

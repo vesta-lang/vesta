@@ -4739,9 +4739,15 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         }
         /* No inlinear funciones que tengan @c RAW_ASM en su body cuando
          * el RAW_ASM podria depender del calling convention especifico
-         * de la callee.  Conservadoramente: skip si hay raw_asm. */
+         * de la callee.  Conservadoramente: skip si hay raw_asm.
+         * Phase AS inc.5: idem INLINE_ASM -- sus @c asm_reg_bindings viven
+         * en @c IrFunction::asm_reg_bindings (per-funcion); el inliner copia
+         * el op pero NO los bindings, dejando el INLINE_ASM sin pin de
+         * registros en el caller -> el JIT no podria compilarlo.  Mantener la
+         * funcion separada (cada una conserva sus bindings + se eager-compila). */
         for (const auto &ins : fn.blocks[0].instrs) {
-            if (ins.op == IrOp::RAW_ASM) return false;
+            if (ins.op == IrOp::RAW_ASM || ins.op == IrOp::INLINE_ASM)
+                return false;
         }
         return true;
     };
