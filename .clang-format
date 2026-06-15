@@ -1,0 +1,15 @@
+# Estilo de CoffeeCode: respeta el codigo existente (4 espacios, llaves en
+# la misma linea). Aplicar con:  clang-format -i <archivo>
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 80
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortCaseLabelsOnASingleLine: true
+PointerAlignment: Right
+SpaceAfterCStyleCast: false
+AlignAfterOpenBracket: Align
+KeepEmptyLinesAtTheStartOfBlocks: false

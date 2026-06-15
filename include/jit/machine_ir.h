@@ -475,7 +475,18 @@ namespace jit {
          * self-tail-call; src1 = imm64_idx(addr) para tail-call cross-fn. */
         TAILCALL    = 85,
 
-        COUNT       = 86
+        /* Pseudo (Phase AS inc.5): bloque de inline-asm nativo.  src1 =
+         * IMM32(blob_idx) -> indice en @c MFunction::asm_blobs.  El encoder
+         * apendea los bytes ya ensamblados (via @c vex::g_asm_backend) verbatim
+         * al code cache.  No tiene operandos vreg propios: los inputs/outputs
+         * register-bound viven en sus registros fisicos ANTES/DESPUES (pineados
+         * por el regalloc via @c MFunction::vreg_fixed).  Para la liveness, el
+         * @c AsmBlob asociado lista los vregs leidos/escritos por el asm + los
+         * registros clobbered; @c build_intervals los trata como use/def en esta
+         * posicion (ver 5c). */
+        INLINE_ASM_RAW = 86,
+
+        COUNT       = 87
     };
 
     /* ===================================================================== */
@@ -653,6 +664,16 @@ namespace jit {
             i.src1 = MOperand::make_imm64_idx(handler_imm64_idx);
             return i;
         }
+
+        /** @brief INLINE_ASM_RAW: bloque de inline-asm nativo (Phase AS inc.5).
+         *  @p blob_idx = indice en @c MFunction::asm_blobs con los bytes ya
+         *  ensamblados + la info de liveness/clobbers.  El idx viaja como IMM32
+         *  en @c src1 (no es un vreg). */
+        static MInstr make_inline_asm_raw(uint32_t blob_idx) noexcept {
+            MInstr i; i.op = MOp::INLINE_ASM_RAW;
+            i.src1 = MOperand::make_imm32(static_cast<int32_t>(blob_idx));
+            return i;
+        }
     };
 
     static_assert(sizeof(MInstr) == 32, "MInstr debe ser 32 bytes para cache locality");
@@ -767,6 +788,36 @@ namespace jit {
     };
 
     /**
+     * @struct AsmBlob
+     * @brief Bloque de inline-asm nativo ya ensamblado (Phase AS inc.5).
+     *
+     * Lo referencia un @c MInstr de op @c INLINE_ASM_RAW via el indice en
+     * @c MFunction::asm_blobs.  @c bytes es la salida de @c vex::g_asm_backend
+     * (NASM Intel -> x86-64) que el encoder apendea verbatim.  El resto es
+     * metadata que el regalloc consume para tratar el asm como un punto de
+     * use/def + clobber sin descodificar los bytes:
+     *
+     *   - @c in_vregs / @c out_vregs : vregs (register-bound) leidos/escritos
+     *     por el asm.  @c build_intervals los marca use/def en la posicion del
+     *     INLINE_ASM_RAW para que sus intervalos cubran el asm y el regalloc no
+     *     reuse sus registros fisicos (que ademas estan PINEADOS via
+     *     @c MFunction::vreg_fixed).
+     *   - @c clobbers : ids de registros fisicos (MReg) que el asm destruye y
+     *     que NO son bindings.  El regalloc los excluye para los intervalos que
+     *     cruzan esta posicion (igual semantica que un CALL caller-saved).
+     *   - @c clobbers_flags / @c clobbers_mem : informativos (el JIT no modela
+     *     un banco de flags ni reordena memoria a traves del asm en v1).
+     */
+    struct AsmBlob {
+        std::vector<uint8_t>  bytes;                ///< x86-64 ya ensamblado
+        std::vector<uint32_t> in_vregs;             ///< vregs leidos por el asm
+        std::vector<uint32_t> out_vregs;            ///< vregs escritos por el asm
+        std::vector<uint8_t>  clobbers;             ///< MReg ids clobbered (no bindings)
+        bool                  clobbers_flags = false;
+        bool                  clobbers_mem   = false;
+    };
+
+    /**
      * @struct MFunction
      * @brief Funcion completa en MachineIR.
      *
@@ -836,6 +887,31 @@ namespace jit {
         /// de un call -> el GC no veria esa raiz si esta en un registro.
         /// @c vreg_is_gc.size() == @c vreg_count cuando esta poblado.
         std::vector<uint8_t>       vreg_is_gc;
+        /// Phase AS inc.5: registro fisico FORZADO (precoloreo) de un vreg, o
+        /// -1 si libre.  SPARSE: no se mantiene paralelo a @c vreg_count; el
+        /// selector solo lo redimensiona/poblea para los vregs register-bound de
+        /// un inline-asm.  @c build_intervals lo copia a @c LiveInterval::fixed_reg
+        /// (con bounds-check: @c vid < vreg_fixed.size() ? vreg_fixed[vid] : -1).
+        std::vector<int8_t>        vreg_fixed;
+        /// Phase AS inc.5: bloques de inline-asm.  Indexados por el IMM32 de la
+        /// MInstr @c INLINE_ASM_RAW (@c src1.value).
+        std::vector<AsmBlob>       asm_blobs;
+
+        /** @brief Marca el vreg @p vid como precoloreado al fisico @p phys
+         *  (Phase AS inc.5).  Redimensiona @c vreg_fixed perezosamente. */
+        void set_vreg_fixed(uint32_t vid, uint8_t phys) {
+            if (vreg_fixed.size() <= vid) vreg_fixed.resize(vid + 1, -1);
+            vreg_fixed[vid] = static_cast<int8_t>(phys);
+        }
+        /** @brief Registro fisico forzado de @p vid, o -1 si libre. */
+        int fixed_of(uint32_t vid) const noexcept {
+            return vid < vreg_fixed.size() ? vreg_fixed[vid] : -1;
+        }
+        /** @brief Anyade un @c AsmBlob al pool y devuelve su indice. */
+        uint32_t intern_asm_blob(AsmBlob b) {
+            asm_blobs.push_back(std::move(b));
+            return static_cast<uint32_t>(asm_blobs.size() - 1);
+        }
 
         /** @brief Reserva un nuevo label_id (zero overhead). */
         MLabelId new_label() {

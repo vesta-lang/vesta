@@ -224,6 +224,9 @@ namespace jit {
             /* Phase D.7 commit 6: propagar la categoria GC (kind+1). */
             out.intervals[v].gc_kind = (v < mf.vreg_is_gc.size())
                                         ? mf.vreg_is_gc[v] : 0;
+            /* Phase AS inc.5: propagar el precoloreo (register-bound de un
+             * inline-asm).  -1 si el vreg no esta pineado. */
+            out.intervals[v].fixed_reg = mf.fixed_of(v);
         }
         if (NV == 0 || NB == 0) return out;
 
@@ -245,7 +248,21 @@ namespace jit {
 
         /* Helper: invoca @p fn(vreg_id, role) por cada operando VREG de la
          * instr, segun los roles del opcode. */
-        auto each_vreg = [](const MInstr &in, auto &&fn) {
+        auto each_vreg = [&mf](const MInstr &in, auto &&fn) {
+            /* Phase AS inc.5: INLINE_ASM_RAW no usa los slots dst/src1/src2 para
+             * vregs (src1 es el IMM32 del indice del blob).  Sus inputs/outputs
+             * register-bound viven en el AsmBlob: in_vregs son USE, out_vregs
+             * son DEF en esta posicion (asi sus intervalos cubren el asm y el
+             * regalloc respeta el pin sin reusar sus registros fisicos). */
+            if (in.op == MOp::INLINE_ASM_RAW) {
+                const uint32_t idx = static_cast<uint32_t>(in.src1.value);
+                if (idx < mf.asm_blobs.size()) {
+                    const AsmBlob &b = mf.asm_blobs[idx];
+                    for (uint32_t v : b.in_vregs)  fn(v, OperandRole::USE);
+                    for (uint32_t v : b.out_vregs) fn(v, OperandRole::DEF);
+                }
+                return;
+            }
             const InstrRoles roles = operand_roles(in.op);
             if (in.dst.is_vreg()  && roles.dst  != OperandRole::NONE)
                 fn(in.dst.vreg_id(),  roles.dst);
@@ -285,7 +302,12 @@ namespace jit {
                  * -> clobbea caller-saved -> tambien call-position. */
                 if (in.op == MOp::CALL || in.op == MOp::CALL_ABS
                  || in.op == MOp::DIVMOD_V
-                 || in.op == MOp::LOAD_VM || in.op == MOp::STORE_VM)
+                 || in.op == MOp::LOAD_VM || in.op == MOp::STORE_VM
+                 /* Phase AS inc.5: el inline-asm clobbea caller-saved (en v1
+                  * conservador: cualquiera) -> los vregs vivos a traves van a
+                  * callee-saved/spill.  Los binding precoloreados son EXENTOS:
+                  * el linear_scan les asigna su fixed_reg incondicionalmente. */
+                 || in.op == MOp::INLINE_ASM_RAW)
                     out.call_positions.push_back(2u * gi);
                 ++gi;
             }

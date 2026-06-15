@@ -27,6 +27,8 @@
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
 #include "gc/raw_allocator.h"   // Phase D.7 perf: inline slab fast-path
+#include "vex/asm_backend.h"    // Phase AS inc.5: ensamblar inline-asm -> bytes
+#include "vex/asm_effects.h"    // Phase AS inc.5: asm_canonical_reg
 /* arena -> windows.h (Win32) define macros que chocan con nombres del enum
  * IrOp/IrType (CONST, VOID, etc.).  Deshacerlos para no romper ir::IrOp::CONST. */
 #ifdef CONST
@@ -184,6 +186,28 @@ namespace jit {
             return false;
         }
 
+        /**
+         * @brief Phase AS inc.5: mapea un nombre de registro CANONICO de 64
+         *        bits (de @c vex::asm_canonical_reg) al id de @c MReg GP (0..15),
+         *        o -1 si no es un GP usable como pin de inline-asm.
+         *
+         * RECHAZA explicitamente rsp/rbp (frame del JIT) y rbx (ProcessVM* en
+         * VM_ABI); pinear un binding a esos corromperia el frame/contexto.  Los
+         * registros vectoriales ("vN") devuelven -1 (el banco FP no es asignable
+         * en el regalloc v1).  El selector cae a fallback si recibe -1.
+         */
+        inline int canon_gp_to_mreg(const std::string &c) {
+            static const struct { const char *n; int r; } T[] = {
+                {"rax", 0}, {"rcx", 1}, {"rdx", 2},
+                {"rsi", 6}, {"rdi", 7},
+                {"r8",  8}, {"r9",  9}, {"r10", 10}, {"r11", 11},
+                {"r12", 12}, {"r13", 13}, {"r14", 14}, {"r15", 15},
+                /* rbx(3)/rsp(4)/rbp(5) RESERVADOS: no se exponen como pin. */
+            };
+            for (const auto &e : T) if (c == e.n) return e.r;
+            return -1;
+        }
+
     } // namespace
 
     bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
@@ -256,6 +280,61 @@ namespace jit {
                  && ins2.dst != ir::IR_NO_VALUE
                  && ins2.dst < v_is_host_alloca.size())
                     v_is_host_alloca[ins2.dst] = 1u;
+
+        /* ---- Phase AS inc.5: inline-asm (register-bound vars) ----
+         * Una funcion con @c asm_reg_bindings tiene >=1 bloque INLINE_ASM.  Las
+         * vars @c register("reg") viven en un ALLOCA estable (inc.3); aqui las
+         * COLAPSAMOS a un vreg PRECOLOREADO a su registro fisico:
+         *   - el ALLOCA del binding NO emite host-slot (se salta);
+         *   - un STORE a su alloca  -> MOV vbind <- val  (carga del input);
+         *   - un LOAD de su alloca  -> MOV dst <- vbind  (lectura del output);
+         *   - el INLINE_ASM se ensambla a bytes (g_asm_backend) y se emite como
+         *     INLINE_ASM_RAW; sus in/out vregs (clasificados aqui) marcan la
+         *     liveness para que el regalloc respete el pin.
+         * @c binding_phys[vid] = reg fisico (0..15) o -1.  Clasificacion in/out
+         * por uso real: input si hay STORE a su alloca, output si hay LOAD. */
+        std::vector<int>     binding_phys(fn.values.size(), -1);
+        std::vector<uint8_t> binding_is_in(fn.values.size(), 0);
+        std::vector<uint8_t> binding_is_out(fn.values.size(), 0);
+        const bool has_inline_asm = !fn.asm_reg_bindings.empty();
+        if (has_inline_asm) {
+            /* El ensamblado requiere un backend activo (lo registra main.cpp). */
+            if (vex::g_asm_backend == nullptr) {
+                vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
+                return false;
+            }
+            for (const ir::AsmRegBinding &b : fn.asm_reg_bindings) {
+                if (b.alloca_value >= fn.values.size()) {
+                    vreg_dbg(fn.name.c_str(), "inline-asm(binding-oob)");
+                    return false;
+                }
+                if (b.is_vector) {  /* banco FP no asignable en regalloc v1 */
+                    vreg_dbg(fn.name.c_str(), "inline-asm(vector-bind)");
+                    return false;
+                }
+                const std::string canon = vex::asm_canonical_reg(b.reg);
+                const int phys = canon_gp_to_mreg(canon);
+                if (phys < 0) {  /* reservado (rbx/rsp/rbp) o no GP -> fallback */
+                    vreg_dbg(fn.name.c_str(), "inline-asm(reg-no-usable)");
+                    return false;
+                }
+                binding_phys[b.alloca_value] = phys;
+                out.set_vreg_fixed(static_cast<uint32_t>(b.alloca_value),
+                                   static_cast<uint8_t>(phys));
+            }
+            /* Clasificar in/out por STORE/LOAD a cada alloca de binding. */
+            for (const auto &blk : fn.blocks)
+                for (const auto &ins2 : blk.instrs) {
+                    if (ins2.op == ir::IrOp::STORE && ins2.operands.size() == 2
+                     && ins2.operands[1] < binding_phys.size()
+                     && binding_phys[ins2.operands[1]] >= 0)
+                        binding_is_in[ins2.operands[1]] = 1u;
+                    if (ins2.op == ir::IrOp::LOAD && ins2.operands.size() == 1
+                     && ins2.operands[0] < binding_phys.size()
+                     && binding_phys[ins2.operands[0]] >= 0)
+                        binding_is_out[ins2.operands[0]] = 1u;
+                }
+        }
 
         /* Crea un vreg temporal nuevo (GP, no-GC) para secuencias inline
          * (p.ej. el inline de vmath_abs). */
@@ -705,6 +784,15 @@ namespace jit {
                      * prologue/epilogue salva/restaura el VM-RSP). */
                     case ir::IrOp::ALLOCA: {
                         flush_pending();
+                        /* Phase AS inc.5: ALLOCA de un binding register() ->
+                         * NO emite host-slot; el vreg ya esta precoloreado a su
+                         * registro fisico (set_vreg_fixed) y representa el VALOR
+                         * directamente.  Los STORE/LOAD a su alloca se colapsan a
+                         * MOVs (abajo). */
+                        if (in.dst != ir::IR_NO_VALUE
+                         && in.dst < binding_phys.size()
+                         && binding_phys[in.dst] >= 0)
+                            break;
                         const uint64_t size = in.imm;
                         if (size == 0 || size > 65536) {  // sanity (frame chico)
                             vreg_dbg(fn.name.c_str(), "alloca-size"); return false;
@@ -726,6 +814,15 @@ namespace jit {
                     case ir::IrOp::LOAD: {
                         flush_pending();
                         if (in.operands.size() != 1) return false;
+                        /* Phase AS inc.5: LOAD desde el alloca de un binding ->
+                         * leer el output del inline-asm: MOV dst <- vbind. */
+                        if (in.dst != ir::IR_NO_VALUE
+                         && in.operands[0] < binding_phys.size()
+                         && binding_phys[in.operands[0]] >= 0) {
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                vr(in.operands[0])));
+                            break;
+                        }
                         if (ir_type_is_float(in.type)) {
                             vreg_dbg(fn.name.c_str(), "load-float"); return false;
                         }
@@ -764,6 +861,14 @@ namespace jit {
                     case ir::IrOp::STORE: {
                         flush_pending();
                         if (in.operands.size() != 2) return false;  // [0]=val [1]=ptr
+                        /* Phase AS inc.5: STORE al alloca de un binding ->
+                         * cargar el input del inline-asm: MOV vbind <- val. */
+                        if (in.operands[1] < binding_phys.size()
+                         && binding_phys[in.operands[1]] >= 0) {
+                            O.push_back(MInstr::make_unary(MOp::MOV,
+                                vr(in.operands[1]), vr(in.operands[0])));
+                            break;
+                        }
                         if (ir_type_is_float(in.type)) {
                             vreg_dbg(fn.name.c_str(), "store-float"); return false;
                         }
@@ -790,6 +895,49 @@ namespace jit {
                         }
                         O.push_back(MInstr::make_store(vr(in.operands[1]),
                             vr(in.operands[0]), static_cast<uint8_t>(w)));
+                        break;
+                    }
+
+                    /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
+                     * (NASM Intel, ya con comptime-consts sustituidas por el
+                     * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite
+                     * como INLINE_ASM_RAW (el encoder lo apendea verbatim).  Los
+                     * operandos del IrInstr son los alloca de los register()
+                     * (ya colapsados a vregs precoloreados); su clasificacion
+                     * in/out alimenta la liveness del AsmBlob. */
+                    case ir::IrOp::INLINE_ASM: {
+                        flush_pending();
+                        if (!has_inline_asm || vex::g_asm_backend == nullptr) {
+                            vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
+                            return false;
+                        }
+                        vex::AsmAssembleResult ar = vex::g_asm_backend->assemble(
+                            in.func_name, vex::AsmArch::X86_64);
+                        if (!ar.ok || ar.bytes.empty()) {
+                            vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
+                            return false;
+                        }
+                        AsmBlob blob;
+                        blob.bytes = std::move(ar.bytes);
+                        for (ir::IrValueId opv : in.operands) {
+                            if (opv >= binding_phys.size()
+                             || binding_phys[opv] < 0) continue;
+                            if (binding_is_in[opv])
+                                blob.in_vregs.push_back(static_cast<uint32_t>(opv));
+                            if (binding_is_out[opv])
+                                blob.out_vregs.push_back(static_cast<uint32_t>(opv));
+                            /* binding sin STORE ni LOAD (raro): tratar como in+out
+                             * para que su intervalo cubra el asm y el pin se
+                             * respete (conservador). */
+                            if (!binding_is_in[opv] && !binding_is_out[opv]) {
+                                blob.in_vregs.push_back(static_cast<uint32_t>(opv));
+                                blob.out_vregs.push_back(static_cast<uint32_t>(opv));
+                            }
+                        }
+                        blob.clobbers_mem   = ((in.imm >> 4) & 1u) != 0;
+                        blob.clobbers_flags = ((in.imm >> 5) & 1u) != 0;
+                        const uint32_t bidx = out.intern_asm_blob(std::move(blob));
+                        O.push_back(MInstr::make_inline_asm_raw(bidx));
                         break;
                     }
 
