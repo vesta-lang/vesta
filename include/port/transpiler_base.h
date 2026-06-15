@@ -473,6 +473,18 @@ namespace port {
             ctx.out << "/* RAW_ASM no soportado en este backend */\n";
         }
 
+        /**
+         * @brief Phase AS inc.3: hook para inline asm nativo (IrOp::INLINE_ASM).
+         *
+         * El backend que soporte asm de la CPU host (port-C) lo materializa
+         * (e.g. @c __asm__ __volatile__).  Default: delega en
+         * @c emit_unsupported (otros backends no lo soportan todavia).
+         */
+        virtual void emit_inline_asm(EmitContext &ctx,
+                                     const ir::IrInstr &instr) {
+            emit_unsupported(ctx, instr);
+        }
+
         // -------- GENERICO PARA IR OPS NO IMPLEMENTADAS --------
 
         /**

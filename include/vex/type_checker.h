@@ -363,6 +363,11 @@ namespace vex {
         /// cuando @c kind == SymbolKind::Namespace.  Sin uso para los
         /// demas kinds.
         uint32_t   ns_index = 0;
+        /// Phase AS inc.2: registro fisico canonico (rax/r8/v0...) si la
+        /// variable se declaro con storage-class @c register("reg").  Vacio
+        /// para variables normales.  Usado para detectar conflicto same-reg
+        /// dentro del mismo scope.
+        std::string reg_binding;
     };
 
     /**

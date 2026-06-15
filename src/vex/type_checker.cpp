@@ -31,6 +31,7 @@
  */
 
 #include "vex/type_checker.h"
+#include "vex/asm_effects.h"            // asm_canonical_reg (Phase AS inc.4)
 #include "vex/collection_intrinsics.h"  // tabla de tipos coleccion
 #include "vex/comptime_introspect.h"    // comptime_field_type
 #include "vex/lexer.h"                  // parse de fragments en comptime_emit_expr
@@ -39,6 +40,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <cctype>       // tolower/isdigit para canonical_x86_reg (Phase AS)
 #include <cstdlib>      // getenv para VESTA_MC_VMONLY/PREBUILT
 #include <cstring>      // memcpy para bitcast f64 -> u64
 #include <fstream>      // cargar prebuilt .velb desde disco
@@ -54,6 +56,10 @@
 extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t argc);
 
 namespace vex {
+
+    // Phase AS inc.4: la canonicalizacion de registros x86-64 vive ahora en
+    // @c asm_effects.{h,cpp} (compartida con la inferencia de clobbers).  El
+    // type checker la usa via @c asm_canonical_reg.
 
     /* TypeChecker activo (thread_local) para los virtual
      * fns expuestos a macros via `extern "vesta_comptime"`.  Cuando un
@@ -614,10 +620,11 @@ namespace vex {
             case ast::NodeKind::VarDeclStmt: {
                 auto *src = static_cast<const ast::VarDeclStmt *>(s);
                 auto x = std::make_unique<ast::VarDeclStmt>();
-                x->loc      = src->loc;
-                x->name     = src->name;
-                x->is_const = src->is_const;
-                x->type     = clone_type_with_subst(src->type.get(), g);
+                x->loc         = src->loc;
+                x->name        = src->name;
+                x->is_const    = src->is_const;
+                x->reg_binding = src->reg_binding;  // Phase AS inc.2
+                x->type        = clone_type_with_subst(src->type.get(), g);
                 if (src->init) x->init = clone_expr(src->init.get(), g);
                 return x;
             }
@@ -4265,6 +4272,49 @@ namespace vex {
                     "' requiere un tamano fijo (T[N] con N > 0) o init con `new T[N]`");
             }
         }
+        // Phase AS inc.2: validacion del storage-class register("reg").
+        //  (a) el nombre debe ser un registro x86-64 reconocido;
+        //  (b) el tipo debe ser primitivo (int/float/bool/char/ptr);
+        //  (c) no puede haber otra variable viva en el MISMO scope ligada
+        //      al mismo registro fisico (canonico).  Liveness completo se
+        //      difiere a inc.5; aqui basta deteccion same-scope.
+        if (!vd->reg_binding.empty()) {
+            const std::string canon = asm_canonical_reg(vd->reg_binding);
+            if (canon.empty()) {
+                diags_.error(vd->loc,
+                    "register(\"" + vd->reg_binding + "\"): '" + vd->reg_binding
+                    + "' no es un registro x86-64 reconocido");
+            } else {
+                const PrimitiveKind k = s.type.kind;
+                const bool ok_prim = is_numeric(k) || k == PrimitiveKind::BOOL
+                                  || k == PrimitiveKind::CHAR || k == PrimitiveKind::PTR;
+                if (!ok_prim) {
+                    diags_.error(vd->loc,
+                        "register(\"" + vd->reg_binding + "\") solo admite tipos "
+                        "primitivos (entero/float/bool/char/ptr), no '" + vd->name + "'");
+                }
+                // Conflicto same-reg en CUALQUIER scope activo (no solo el
+                // mas interno): dos variables register-bound vivas a la vez
+                // ligadas al mismo registro fisico colisionarian al listarse
+                // ambas como operandos del mismo bloque asm.  Recorremos toda
+                // la cadena de scopes.
+                bool conflict_found = false;
+                for (auto it = scopes_.rbegin();
+                     it != scopes_.rend() && !conflict_found; ++it) {
+                    for (const auto &kv : *it) {
+                        if (kv.second.reg_binding == canon) {
+                            diags_.error(vd->loc,
+                                "conflicto de register: '" + vd->reg_binding
+                                + "' ya esta ligado a la variable '" + kv.first
+                                + "' viva en este ambito");
+                            conflict_found = true;
+                            break;
+                        }
+                    }
+                }
+                s.reg_binding = canon;  // canonico para el conflicto y el backend
+            }
+        }
         if (!declare(vd->name, s)) {
             diags_.error(vd->loc, "redefinicion de variable: '" + vd->name + "'");
         }
@@ -6361,6 +6411,21 @@ namespace vex {
                     diags_.error(e->loc,
                         "'&' requiere un lvalue (variable, campo, p[i] o *p)");
                     return Type{};
+                }
+                // Phase AS inc.3: no se puede tomar la direccion de una
+                // variable register("reg") -- vive en un registro fisico, no
+                // tiene direccion estable (en C es un error de compilacion
+                // `&register`).  Rechazar en compile-time con mensaje claro.
+                if (kind == ast::NodeKind::IdentExpr) {
+                    auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
+                    const Symbol *sym = lookup(id->name);
+                    if (sym && !sym->reg_binding.empty()) {
+                        diags_.error(e->loc,
+                            "no se puede tomar la direccion de '" + id->name
+                            + "': vive en el registro '" + sym->reg_binding
+                            + "' (storage-class register), no tiene direccion");
+                        return Type{};
+                    }
                 }
                 // `&x` siempre devuelve VirtualPtr<T>: la direccion es del
                 // stack VM (locales) o del payload de un objeto GC (que

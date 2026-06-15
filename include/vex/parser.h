@@ -313,6 +313,17 @@ namespace vex {
         [[nodiscard]] bool starts_type() const noexcept;
 
         /**
+         * @brief Phase AS inc.2: decide si el statement actual es un var-decl
+         *        con storage-class @c register("reg").
+         *
+         * Reconoce el patron EXACTO @c register @c ( @c "reg" @c ) seguido de
+         * un type-starter.  Solo asi se trata como var-decl; una llamada
+         * @c register("x"); (sin tipo despues) queda como expresion.  El
+         * lookahead es preciso para no robar sintaxis a expresiones legitimas.
+         */
+        [[nodiscard]] bool looks_like_register_storage() const noexcept;
+
+        /**
          * @brief Decide si el `(` actual inicia un cast C-style `(T) expr`.
          *
          * El parser reconoce el patron `(<type>) <unary>` solo cuando el

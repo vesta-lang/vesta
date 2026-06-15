@@ -2379,9 +2379,35 @@ namespace port {
         ctx.out << ")";
     }
 
+    const ir::AsmRegBinding *
+    CBackend::reg_binding_for(const EmitContext &ctx, ir::IrValueId id) const {
+        if (!ctx.fn) return nullptr;
+        for (const auto &b : ctx.fn->asm_reg_bindings) {
+            if (b.alloca_value == id) return &b;
+        }
+        return nullptr;
+    }
+
     void CBackend::emit_local_decl(EmitContext &ctx,
                                    ir::IrValueId id,
                                    const ir::IrValue &value) {
+        // Phase AS inc.3: si este value es el slot ALLOCA de una variable
+        // register("reg"), declararlo como variable C ESCALAR con el
+        // register-pin de GCC (no como void* a un slot de memoria).  Sus
+        // LOAD/STORE se traducen a accesos directos (emit_load/emit_store) y
+        // el bloque asm la lista como operando "+r"/"+x".  No se puede tomar
+        // su direccion en C (limitacion documentada: nada de &reg_var).
+        if (const ir::AsmRegBinding *rb = reg_binding_for(ctx, id)) {
+            ctx.indent();
+            ctx.out << "register " << type_for(rb->type, false)
+                    << " v" << id << " __asm__(\"" << rb->reg << "\")";
+            if (opts_.emit_comments && !value.name.empty()) {
+                ctx.out << ";  /* " << value.name << " @reg(" << rb->reg << ") */\n";
+            } else {
+                ctx.out << ";\n";
+            }
+            return;
+        }
         ctx.indent();
         // Si conocemos el tipo concreto del value (por SSA propagation),
         // emitir @c "ClassX *" en lugar de @c "void *".  Permite al
@@ -2652,6 +2678,11 @@ namespace port {
 
     void CBackend::emit_alloca(EmitContext &ctx,
                                ir::IrValueId dst, uint64_t size_bytes) {
+        // Phase AS inc.3: un ALLOCA register-bound NO reserva storage; su
+        // variable C ya se declaro con register-pin en emit_local_decl.
+        if (reg_binding_for(ctx, dst)) {
+            return;
+        }
         ctx.indent();
         ctx.out << "{\n";
         ctx.indent_level++;
@@ -2740,6 +2771,12 @@ namespace port {
                              ir::IrType t, bool is_host_ptr) {
         (void)is_host_ptr;
         emit_assign_lhs(ctx, dst);
+        // Phase AS inc.3: LOAD desde un slot register-bound = leer la variable
+        // C register directamente (no deref de un puntero).
+        if (reg_binding_for(ctx, addr)) {
+            ctx.out << "v" << addr << ";\n";
+            return;
+        }
         // Pattern-match field access: @c "ADD base + const_N" donde base
         // tiene tipo concreto -> emitir @c "base->fieldname" tipado.
         // Si el patron no aplica, emit el load generico con cast.
@@ -2757,6 +2794,13 @@ namespace port {
                               ir::IrType t, bool is_host_ptr) {
         (void)is_host_ptr;
         ctx.indent();
+        // Phase AS inc.3: STORE a un slot register-bound = asignar la variable
+        // C register directamente.
+        if (reg_binding_for(ctx, addr)) {
+            ctx.out << "v" << addr << " = " << cast_for(t, false)
+                    << value_expr(ctx, val) << ";\n";
+            return;
+        }
         std::string field_expr = try_match_field_access(ctx, addr, t);
         if (!field_expr.empty()) {
             ctx.out << field_expr << " = " << cast_for(t, false)
@@ -2765,6 +2809,85 @@ namespace port {
         }
         ctx.out << "*(" << type_for(t, false) << "*)" << value_expr(ctx, addr)
                 << " = " << cast_for(t, false) << value_expr(ctx, val) << ";\n";
+    }
+
+    void CBackend::emit_inline_asm(EmitContext &ctx, const ir::IrInstr &ins) {
+        // Phase AS inc.3: materializar IrOp::INLINE_ASM como GCC extended asm.
+        //   imm bits 0..5 = quals/efectos (volatile/nomem/preserves_flags/
+        //   pure/clobbers_memory/clobbers_flags); bits 8..31 = asm-id (indice
+        //   en fn->asm_clobber_lists).  func_name = cuerpo NASM Intel verbatim.
+        //   operands = slots ALLOCA de las vars register() (listadas como
+        //   inout "+r"/"+x"; el register-pin lo da la declaracion en C).
+        const uint64_t q         = ins.imm;
+        const bool     clob_mem  = (q >> 4) & 1u;
+        const bool     clob_flags = (q >> 5) & 1u;
+        const uint64_t asm_id    = (q >> 8) & 0xFFFFFFull;
+
+        ctx.indent();
+        // volatile SIEMPRE: el asm nunca debe ser movido/eliminado por GCC.
+        ctx.out << "__asm__ __volatile__(\n";
+        ctx.indent_level++;
+        // Cambiar a sintaxis Intel sin prefijo '%' (el cuerpo es NASM Intel).
+        ctx.indent();
+        ctx.out << "\".intel_syntax noprefix\\n\\t\"\n";
+        // Cuerpo: una linea fuente por string literal, trim + escape.
+        {
+            std::string line;
+            auto flush_line = [&]() {
+                size_t b = line.find_first_not_of(" \t\r");
+                if (b == std::string::npos) { line.clear(); return; }
+                size_t e = line.find_last_not_of(" \t\r");
+                std::string body = line.substr(b, e - b + 1);
+                std::string esc;
+                for (char c : body) {
+                    if (c == '\\' || c == '"') esc.push_back('\\');
+                    esc.push_back(c);
+                }
+                ctx.indent();
+                ctx.out << "\"" << esc << "\\n\\t\"\n";
+                line.clear();
+            };
+            for (char c : ins.func_name) {
+                if (c == '\n') flush_line();
+                else           line.push_back(c);
+            }
+            flush_line();
+        }
+        // Volver a AT&T (estado por defecto que GCC asume tras el bloque).
+        ctx.indent();
+        ctx.out << "\".att_syntax prefix\"\n";
+        // Operandos de salida (inout): las vars register() ligadas.  El pin
+        // al registro fisico lo da la declaracion `register T v asm("reg")`,
+        // por eso basta el constraint generico "+r" (GP) / "+x" (vector).
+        ctx.indent();
+        ctx.out << ": ";
+        bool first_op = true;
+        for (ir::IrValueId opv : ins.operands) {
+            const ir::AsmRegBinding *rb = reg_binding_for(ctx, opv);
+            if (!rb) continue;
+            if (!first_op) ctx.out << ", ";
+            first_op = false;
+            ctx.out << (rb->is_vector ? "\"+x\"(v" : "\"+r\"(v") << opv << ")";
+        }
+        ctx.out << "\n";
+        // Sin operandos de entrada puros (todo va por la lista inout).
+        ctx.indent();
+        ctx.out << ":\n";
+        // Clobbers: explicitos del usuario + memory/flags si se marcaron.
+        ctx.indent();
+        ctx.out << ": ";
+        bool first_cl = true;
+        if (ctx.fn && asm_id < ctx.fn->asm_clobber_lists.size()) {
+            for (const auto &c : ctx.fn->asm_clobber_lists[asm_id]) {
+                if (!first_cl) ctx.out << ", ";
+                first_cl = false;
+                ctx.out << "\"" << c << "\"";
+            }
+        }
+        if (clob_mem)   { if (!first_cl) ctx.out << ", "; first_cl = false; ctx.out << "\"memory\""; }
+        if (clob_flags) { if (!first_cl) ctx.out << ", "; first_cl = false; ctx.out << "\"cc\""; }
+        ctx.out << ");\n";
+        ctx.indent_level--;
     }
 
     void CBackend::emit_raw_alloc(EmitContext &ctx,
