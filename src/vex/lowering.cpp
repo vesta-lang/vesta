@@ -14937,8 +14937,24 @@ namespace vex {
             const uint64_t     msg_idx = intern_class_name(*out_mod_, slit->value);
             const uint32_t     msg_len = static_cast<uint32_t>(slit->value.size());
             // Sprint 6.D: panic via IR op puro (LABEL_ADDR + CONST + PANIC).
-            const ir::IrValueId v_addr = emit_label_addr(
-                "s_" + std::to_string(msg_idx), e->loc.line);
+            // AOT.2.d: en native, el mensaje se referencia con STR_LIT_ADDR
+            // (el msg vive en static_data, idx = msg_idx) -> el HOST_LEAF lo
+            // baja a una ref .rodata; LABEL_ADDR no esta soportado alli.
+            ir::IrValueId v_addr;
+            if (native_poo_) {
+                v_addr = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_addr].is_host_ptr = true;
+                ir::IrInstr sa{};
+                sa.op          = ir::IrOp::STR_LIT_ADDR;
+                sa.type        = ir::IrType::PTR;
+                sa.dst         = v_addr;
+                sa.imm         = msg_idx;
+                sa.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(sa));
+            } else {
+                v_addr = emit_label_addr(
+                    "s_" + std::to_string(msg_idx), e->loc.line);
+            }
             const ir::IrValueId v_len = emit_const(ir::IrType::I64,
                                                     static_cast<uint64_t>(msg_len),
                                                     e->loc.line);

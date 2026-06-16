@@ -56,6 +56,10 @@ namespace aot {
         std::string alloc_sym = "malloc";  ///< RAW_ALLOC -> call <alloc_sym>
         std::string free_sym  = "free";    ///< RAW_FREE  -> call <free_sym>
         std::string panic_sym = "abort";   ///< PANIC     -> call <panic_sym>
+        /// AOT.2.d: si true, @c PANIC pasa (msg_addr, len) al @c panic_sym
+        /// (un @c @PanicHandler con esa firma).  Si false (default, abort),
+        /// se descarta el mensaje (abort no toma argumentos).
+        bool        panic_takes_msg = false;
     };
 
     /**
