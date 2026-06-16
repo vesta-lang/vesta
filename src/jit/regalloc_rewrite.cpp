@@ -558,14 +558,28 @@ namespace jit {
                 }
 
                 if (op == MOp::CALL) {
-                    /* CALL INDIRECTO (call reg/mem): el target es un vreg (p.ej.
-                     * el jit_code resuelto en el inline dispatch de CALLVIRT).
-                     * No hay ARG marshalling (los args ya estan en
-                     * proc->registers).  Igual que CALL_ABS, emite el stackmap
-                     * de los GC roots vivos a traves de este call para que el GC
-                     * los escanee desde el stack (el commit 6 los forzo a slot). */
+                    /* CALL INDIRECTO (call reg/mem): el target es un vreg (el
+                     * jit_code del inline-dispatch VM_ABI, o el func_ptr de la
+                     * vtable en HOST_LEAF CALLIND -- AOT.2.c).  Emite el stackmap
+                     * de los GC roots vivos a traves del call. */
                     MOperand tgt = resolve(in.src1);
-                    if (tgt.kind == MOperandKind::MEM) {
+                    /* HOST_LEAF CALLIND: hay ARGs pendientes que marshalar a los
+                     * arg_regs del ABI host.  CRiTICO: mover el func_ptr a scr0
+                     * ANTES del parallel-move (puede caer en un arg_reg que el
+                     * move pisaria); luego call scr0. */
+                    if (!pending_args.empty()) {
+                        out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
+                        tgt = reg(scr0);
+                        const auto &areg =
+                            tri.arg_regs[static_cast<size_t>(RegClass::GP)];
+                        std::vector<std::pair<MReg, MOperand>> moves;
+                        for (const auto &pa : pending_args)
+                            if (pa.first < areg.size())
+                                moves.emplace_back(
+                                    static_cast<MReg>(areg[pa.first]), pa.second);
+                        emit_parallel_moves(std::move(moves), scr1, out);
+                        pending_args.clear();
+                    } else if (tgt.kind == MOperandKind::MEM) {
                         /* target spilled -> cargar a scratch antes del call. */
                         out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
                         tgt = reg(scr0);

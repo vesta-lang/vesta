@@ -18354,6 +18354,44 @@ namespace vex {
             // por @AllocatorOverride en 2.d).  free pareado via RAII (cleanup).
             // -------------------------------------------------------------
             if (native_poo_) {
+                // AOT.2.c: vtable estatica si la clase participa en una jerarquia
+                // (tiene super o es extendida) -> dispatch virtual nativo.  La
+                // vtable = blob en .rodata con sym_refs a <owner>__<metodo> por
+                // vtable_index (mismo mecanismo que `dq func` del bloque bytes).
+                bool needs_vtable = !lay.super_name.empty();
+                if (!needs_vtable)
+                    for (const auto &kv : tc_.class_layouts())
+                        if (kv.second.super_name == cd->name) { needs_vtable = true; break; }
+                uint64_t vtable_idx = UINT64_MAX;
+                if (needs_vtable) {
+                    uint32_t nslots = 0;
+                    for (const auto &mi : lay.methods)
+                        if (mi.vtable_index + 1u > nslots) nslots = mi.vtable_index + 1u;
+                    if (nslots == 0) { needs_vtable = false; }
+                    else {
+                        std::vector<uint8_t> vt(static_cast<size_t>(nslots) * 8u, 0);
+                        vtable_idx = out.static_data.push_back(std::move(vt));
+                        auto &vm = out.static_data.meta_at(vtable_idx);
+                        // .data.rel.ro: seccion de la vtable (punteros absolutos
+                        // a metodos -> relocs ABS64).  Es read-only TRAS la
+                        // relocacion (RELRO), como las vtables de C++.  Evita el
+                        // TEXTREL que daria .rodata con relocs.
+                        vm.section_name = ".data.rel.ro";
+                        vm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
+                                  | ir::IrModule::SD_FLAG_NON_DEDUP;
+                        for (const auto &mi : lay.methods) {
+                            const std::string owner = mi.defining_class.empty()
+                                                        ? cd->name : mi.defining_class;
+                            ir::IrModule::StaticDataMeta::SymRef sr;
+                            sr.offset = mi.vtable_index * 8u;
+                            sr.sym    = owner + "__"
+                                      + (mi.is_constructor ? std::string("ctor") : mi.name);
+                            sr.width  = 8; sr.is_rel = 0;
+                            vm.sym_refs.push_back(std::move(sr));
+                        }
+                    }
+                }
+
                 ir::IrFunction nf;
                 nf.name     = "__new_" + cd->name;
                 nf.ret_type = ir::IrType::PTR;
@@ -18377,6 +18415,18 @@ namespace vex {
                 { ir::IrInstr ca{}; ca.op=ir::IrOp::CALL; ca.type=ir::IrType::PTR;
                   ca.dst=v_obj; ca.func_name="calloc"; ca.operands={v_n, v_sz};
                   ca.source_line=cd->loc.line; nf.append(e, std::move(ca)); }
+                // AOT.2.c: si la clase tiene vtable, guardar su direccion en
+                // obj[0] (STORE &vtable, obj) -> el dispatch virtual la lee.
+                if (needs_vtable && vtable_idx != UINT64_MAX) {
+                    ir::IrValueId v_vt = nf.new_value(ir::IrType::PTR);
+                    nf.values[v_vt].is_host_ptr = true;
+                    { ir::IrInstr sa{}; sa.op=ir::IrOp::STR_LIT_ADDR; sa.type=ir::IrType::PTR;
+                      sa.dst=v_vt; sa.imm=vtable_idx; sa.source_line=cd->loc.line;
+                      nf.append(e, std::move(sa)); }
+                    { ir::IrInstr st{}; st.op=ir::IrOp::STORE; st.type=ir::IrType::I64;
+                      st.operands={v_vt, v_obj}; st.source_line=cd->loc.line;
+                      nf.append(e, std::move(st)); }
+                }
                 // [ctor] call <Class>__ctor(%obj, args...) -- CALL directo
                 if (effective_ctor) {
                     ir::IrInstr cc{}; cc.op=ir::IrOp::CALL; cc.type=ir::IrType::VOID;
@@ -20273,6 +20323,48 @@ namespace vex {
                 for (auto av: arg_vals) dc.operands.push_back(av);
                 dc.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(dc));
+                if (dst != ir::IR_NO_VALUE
+                    && mtd->return_type.kind == PrimitiveKind::CLASS) {
+                    fn_->values[dst].is_host_ptr  = true;
+                    fn_->values[dst].is_gc_object = true;
+                }
+                return visible_dst;
+            }
+            // No-hoja (clase base con subclases): DISPATCH VIRTUAL nativo via la
+            // vtable estatica guardada en obj[0] (la pone __new_<Class>).
+            //   %vt   = LOAD [obj+0]            (puntero a la vtable)
+            //   %slot = %vt + vtable_index*8
+            //   %fn   = LOAD [%slot]            (direccion del metodo)
+            //   CALLIND %fn (obj, retbuf?, args)
+            {
+                const uint32_t idx = mtd->vtable_index;
+                ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_vt].is_host_ptr = true;
+                { ir::IrInstr ld{}; ld.op=ir::IrOp::LOAD; ld.type=ir::IrType::I64;
+                  ld.dst=v_vt; ld.operands={obj}; ld.source_line=e->loc.line;
+                  fn_->append(current_block_, std::move(ld)); }
+                ir::IrValueId v_slot = v_vt;
+                if (idx != 0) {
+                    const ir::IrValueId v_off = emit_const(ir::IrType::I64,
+                        static_cast<uint64_t>(idx) * 8u, e->loc.line);
+                    v_slot = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_slot].is_host_ptr = true;
+                    { ir::IrInstr ad{}; ad.op=ir::IrOp::ADD; ad.type=ir::IrType::PTR;
+                      ad.dst=v_slot; ad.operands={v_vt, v_off}; ad.source_line=e->loc.line;
+                      fn_->append(current_block_, std::move(ad)); }
+                }
+                ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_fn].is_host_ptr = true;
+                { ir::IrInstr ld2{}; ld2.op=ir::IrOp::LOAD; ld2.type=ir::IrType::I64;
+                  ld2.dst=v_fn; ld2.operands={v_slot}; ld2.source_line=e->loc.line;
+                  fn_->append(current_block_, std::move(ld2)); }
+                ir::IrInstr ci{}; ci.op=ir::IrOp::CALLIND; ci.type=ret_ir; ci.dst=dst;
+                ci.func_ptr=v_fn;
+                ci.operands.push_back(obj);
+                if (method_call_sret) ci.operands.push_back(v_method_call_retbuf);
+                for (auto av: arg_vals) ci.operands.push_back(av);
+                ci.source_line=e->loc.line;
+                fn_->append(current_block_, std::move(ci));
                 if (dst != ir::IR_NO_VALUE
                     && mtd->return_type.kind == PrimitiveKind::CLASS) {
                     fn_->values[dst].is_host_ptr  = true;
