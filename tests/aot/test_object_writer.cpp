@@ -334,6 +334,45 @@ static void test_elf_obj() {
     CHECK(has_main);
 }
 
+// =========================================================================
+//  OBJECT relocatable COFF (.obj): main external + .text->.rodata reloc.
+//  (Phase AOT.4-ext)  Linkable con link.exe / gcc-mingw.
+// =========================================================================
+
+static void test_coff_obj() {
+    std::printf("test_coff_obj\n");
+    std::vector<uint8_t> text = {
+        0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,  // lea rax,[rip+0]  (reloc @3)
+        0x0F, 0xB6, 0x00,                          // movzx eax,[rax]
+        0xC3                                       // ret
+    };
+    std::vector<uint8_t> rodata = { 42 };
+
+    ObjectWriter w(ObjFormat::PE);
+    w.set_output_kind(OutputKind::OBJECT);
+    const int ts = w.add_section(WriterSection{".text",
+        SecFlag::CODE | SecFlag::EXEC | SecFlag::READ, text, 0, 0, 0});
+    const int rs = w.add_section(WriterSection{".rodata",
+        SecFlag::DATA | SecFlag::READ, rodata, 0, 0, 0});
+    w.add_reloc(ts, 3, RelocTarget::addr(rs, 0), RelocKind::REL32);
+    w.add_symbol("main", ts, 0, /*is_func=*/true);
+
+    std::string err;
+    const std::string path = "obj_main.obj";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+    std::vector<uint8_t> o = read_file(path);
+    CHECK(o.size() > 20);
+    CHECK(rd_u16(o, 0) == 0x8664);   // Machine AMD64
+    CHECK(rd_u16(o, 2) == 2);        // NumberOfSections (.text + .rodata)
+    // El nombre "main" debe aparecer en la symtab.
+    bool has_main = false;
+    for (size_t i = 0; i + 3 < o.size(); ++i)
+        if (o[i]=='m'&&o[i+1]=='a'&&o[i+2]=='i'&&o[i+3]=='n') { has_main = true; break; }
+    CHECK(has_main);
+}
+
 int main() {
     std::printf("=== test_object_writer (Phase AOT.4) ===\n");
     test_pe_exit42();
@@ -342,6 +381,7 @@ int main() {
     test_elf_rodata_reloc();
     test_pe_cross_section_call();
     test_elf_obj();
+    test_coff_obj();
     std::printf("\n%d checks, %d fallos\n", g_checks, g_fails);
     std::printf("Ficheros: exit42_pe.exe / exit42_elf.elf / rodata_pe.exe / "
                 "rodata_elf.elf (correr para validar la reloc -> exit 42)\n");

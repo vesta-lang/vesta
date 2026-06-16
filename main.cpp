@@ -301,7 +301,7 @@ int main(int argc, char *argv[]) {
             ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
                 cxxopts::value<std::string>())
             ("no-pie",            "AOT: refs a datos absolutas (mov reg,imm64; requiere base de imagen fija) en vez de RIP-relativas (default, position-independent), analogo a gcc/clang -no-pie.")
-            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable .o linkable con ld/gcc; solo ELF por ahora).",
+            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable linkable: ELF .o con ld/gcc, o COFF .obj con link.exe/gcc-mingw segun --format).",
                 cxxopts::value<std::string>())
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
@@ -1737,11 +1737,7 @@ int main(int argc, char *argv[]) {
                     return EXIT_FAILURE;
                 }
             }
-            if (emit_obj && fmt != aot::ObjFormat::ELF) {
-                std::cerr << "[aot] --emit obj solo soporta ELF (.o) por ahora; "
-                             "usa --format elf.\n";
-                return EXIT_FAILURE;
-            }
+            // --emit obj soporta ELF (.o) y PE (COFF .obj).
 
             // _start (arch+formato): llama a main (justo despues) y termina.
             // Solo para EXEC; OBJECT no lleva _start (lo aporta el crt del linker).
@@ -2019,8 +2015,12 @@ int main(int argc, char *argv[]) {
 
             const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
             if (emit_obj)
-                std::cout << "[aot] objeto relocatable " << fmt_name << " (.o) escrito en '"
-                          << out_prefix << "' (main GLOBAL; linkable con ld/gcc).\n";
+                std::cout << "[aot] objeto relocatable " << fmt_name
+                          << (fmt == aot::ObjFormat::PE ? " (.obj)" : " (.o)")
+                          << " escrito en '" << out_prefix
+                          << "' (main GLOBAL; linkable con "
+                          << (fmt == aot::ObjFormat::PE ? "link.exe/gcc-mingw" : "ld/gcc")
+                          << ").\n";
             else
                 std::cout << "[aot] ejecutable nativo " << fmt_name << " escrito en '"
                           << out_prefix << "' (entry _start -> main -> exit, return "

@@ -70,3 +70,17 @@ que aportan el crt (`_start` -> `main`) + libc + permiten linker scripts (dev OS
 Validado: 01_call.o (call), 06_call_rodata.o (data reloc -> .rodata),
 07_section_devos.o (.text + .boot cross-section) linkan con gcc y devuelven
 42/69/42.  COFF (.obj para link.exe) pendiente.
+
+## Objeto COFF .obj (Windows) -- linkable con link.exe / gcc-mingw
+
+`--emit obj --format pe` produce un COFF .obj (Machine AMD64): SIN _start, `main`
+como simbolo EXTERNAL, relocs COFF (IMAGE_REL_AMD64_REL32 / ADDR64) contra el
+simbolo de seccion del target.  COFF lleva el addend EN el campo (no en un record
+aparte), asi que el emisor pre-escribe target_off en el sitio.
+
+    vm --vex examples_codes_vex/aot/01_call.vex -m aot --format pe --emit obj -o 01_call.obj
+    gcc 01_call.obj -o prog.exe        # gcc-mingw aporta el crt -> main
+    ./prog.exe; echo $?                # 42
+
+Validado: 01_call.obj / 06_call_rodata.obj / 07_section_devos.obj linkan con
+gcc-mingw (TDM-GCC) y devuelven 42/69/42.  (Reusa la API de LibCOFFparse.)

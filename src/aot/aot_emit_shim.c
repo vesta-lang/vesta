@@ -26,6 +26,7 @@
 #include "CreatePe.h"
 #include "CreateELF.h"
 #include "LibELFparse.h"
+#include "LibCOFFparse.h"
 
 /* Copia segura del mensaje de error al buffer del llamador. */
 static void set_err(char *err, size_t cap, const char *msg) {
@@ -702,5 +703,145 @@ int aot_emit_elf_obj(const char *path,
     for (int i = 0; i < num_secs; ++i) free(rela[i]);
     free(rela); free(rela_n); free(shstr.p); free(sec_nameoff);
     free(rela_nameoff); free(sec_off); free(rela_off); free(shdr); free(out.p);
+    return ok;
+}
+
+/* =========================================================================
+ *  COFF RELOCATABLE (.obj Windows) -- via LibCOFFparse
+ * ========================================================================= */
+
+/* Storage classes / tipos COFF (PE/COFF spec). */
+#define AOT_COFF_SYM_EXTERNAL 2
+#define AOT_COFF_SYM_STATIC   3
+#define AOT_COFF_SYM_FUNC     0x20  /* DTYPE function << 4 */
+
+int aot_emit_coff_obj(const char *path,
+                      const AotSection *secs, int num_secs,
+                      const AotReloc *relocs, int num_relocs,
+                      const AotSym *syms, int num_syms,
+                      char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_coff_obj: sin secciones"); return 0; }
+    for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_size || relocs[r].target_is_end) {
+            set_err(err, err_cap, "aot_emit_coff_obj: SIZE/END no soportado en .obj (v1)");
+            return 0;
+        }
+        if (relocs[r].kind != AOT_RELOC_REL32 && relocs[r].kind != AOT_RELOC_ABS64) {
+            set_err(err, err_cap, "aot_emit_coff_obj: reloc kind no soportado en .obj");
+            return 0;
+        }
+        if (relocs[r].site_section < 0 || relocs[r].site_section >= num_secs ||
+            relocs[r].target_section < 0 || relocs[r].target_section >= num_secs) {
+            set_err(err, err_cap, "aot_emit_coff_obj: reloc con seccion fuera de rango");
+            return 0;
+        }
+    }
+
+    /* Copias mutables de los datos de cada seccion: COFF lleva el ADDEND en el
+     * campo (no en un record aparte), asi que pre-escribimos target_off en el
+     * sitio de cada reloc (4 bytes REL32 / 8 bytes ABS64). */
+    uint8_t **data = (uint8_t **)calloc((size_t)num_secs, sizeof(uint8_t *));
+    if (!data) { set_err(err, err_cap, "oom"); return 0; }
+    for (int i = 0; i < num_secs; ++i) {
+        data[i] = (uint8_t *)malloc(secs[i].size ? secs[i].size : 1);
+        if (secs[i].size) memcpy(data[i], secs[i].data, secs[i].size);
+    }
+    for (int r = 0; r < num_relocs; ++r) {
+        const AotReloc *rl = &relocs[r];
+        const uint32_t width = (rl->kind == AOT_RELOC_ABS64) ? 8u : 4u;
+        if (rl->site_off + width > secs[rl->site_section].size) {
+            for (int i = 0; i < num_secs; ++i) free(data[i]); free(data);
+            set_err(err, err_cap, "aot_emit_coff_obj: reloc fuera de la seccion del sitio");
+            return 0;
+        }
+        const uint64_t addend = (uint64_t)((int64_t)rl->target_off + rl->addend);
+        uint8_t *p = data[rl->site_section] + rl->site_off;
+        if (width == 8) wr64le(p, addend); else wr32le(p, (uint32_t)addend);
+    }
+
+    /* Secciones COFF (las relocs se anyaden con add_relocation). */
+    NewSection *ns = (NewSection *)calloc((size_t)num_secs, sizeof(NewSection));
+    for (int i = 0; i < num_secs; ++i) {
+        uint32_t chars = 0;
+        if (secs[i].flags & AOT_SEC_CODE)  chars |= IMAGE_SCN_CNT_CODE;
+        if (secs[i].flags & AOT_SEC_DATA)  chars |= IMAGE_SCN_CNT_INITIALIZED_DATA;
+        if (secs[i].flags & AOT_SEC_EXEC)  chars |= IMAGE_SCN_MEM_EXECUTE;
+        if (secs[i].flags & AOT_SEC_READ)  chars |= IMAGE_SCN_MEM_READ;
+        if (secs[i].flags & AOT_SEC_WRITE) chars |= IMAGE_SCN_MEM_WRITE;
+        ns[i] = create_section(secs[i].name, chars, data[i],
+                               secs[i].size ? secs[i].size : 0, NULL, 0);
+    }
+    /* Relocs -> registros COFF contra el simbolo de SECCION del target (los
+     * primeros num_secs simbolos son los de seccion, indices 0..num_secs-1). */
+    for (int r = 0; r < num_relocs; ++r) {
+        const AotReloc *rl = &relocs[r];
+        const uint16_t type = (rl->kind == AOT_RELOC_ABS64)
+            ? (uint16_t)IMAGE_REL_AMD64_ADDR64 : (uint16_t)IMAGE_REL_AMD64_REL32;
+        add_relocation(&ns[rl->site_section],
+            create_relocation((uint32_t)rl->site_off,
+                              (uint32_t)rl->target_section, type));
+    }
+
+    SECTION_HEADER *sh = (SECTION_HEADER *)calloc((size_t)num_secs, sizeof(SECTION_HEADER));
+    setup_sections(sh, ns, num_secs);
+    /* En un .obj la VirtualAddress de cada seccion es 0 (la fija el linker). */
+    for (int i = 0; i < num_secs; ++i) sh[i].VirtualAddress = 0;
+
+    /* Simbolos: [0..num_secs-1] seccion (STATIC, value 0), luego los globales. */
+    const int nsym = num_secs + num_syms;
+    COFF_SYMBOL *symtab = (COFF_SYMBOL *)calloc((size_t)nsym, sizeof(COFF_SYMBOL));
+    /* String table: 4 bytes de tamano + nombres > 8 chars. */
+    char *strtab = (char *)calloc(1, 4);
+    uint32_t strtab_size = 4;
+    /* Helper inline: setear nombre (inline si <=8, si no offset a string table). */
+    #define AOT_COFF_SET_NAME(SYM, NM) do {                                  \
+        const char *nm_ = (NM);                                              \
+        size_t ln_ = strlen(nm_);                                            \
+        if (ln_ <= 8) { memset((SYM).Name.ShortName, 0, 8);                  \
+                        memcpy((SYM).Name.ShortName, nm_, ln_); }            \
+        else { (SYM).Name.LongName.Zero = 0;                                 \
+               (SYM).Name.LongName.Offset = strtab_size;                     \
+               strtab = (char *)realloc(strtab, strtab_size + ln_ + 1);      \
+               memcpy(strtab + strtab_size, nm_, ln_ + 1);                   \
+               strtab_size += (uint32_t)(ln_ + 1); }                         \
+    } while (0)
+
+    for (int i = 0; i < num_secs; ++i) {
+        AOT_COFF_SET_NAME(symtab[i], secs[i].name);
+        symtab[i].Value = 0;
+        symtab[i].SectionNumber = (int16_t)(i + 1);
+        symtab[i].Type = 0;
+        symtab[i].StorageClass = AOT_COFF_SYM_STATIC;
+        symtab[i].NumberOfAuxSymbols = 0;
+    }
+    for (int g = 0; g < num_syms; ++g) {
+        COFF_SYMBOL *s = &symtab[num_secs + g];
+        AOT_COFF_SET_NAME(*s, syms[g].name);
+        s->Value = (uint32_t)syms[g].offset;
+        s->SectionNumber = (int16_t)(syms[g].section + 1);
+        s->Type = syms[g].is_func ? AOT_COFF_SYM_FUNC : 0;
+        s->StorageClass = AOT_COFF_SYM_EXTERNAL;
+        s->NumberOfAuxSymbols = 0;
+    }
+    #undef AOT_COFF_SET_NAME
+
+    COFF_HEADER header;
+    memset(&header, 0, sizeof(header));
+    header.Machine = 0x8664;                 /* IMAGE_FILE_MACHINE_AMD64 */
+    header.NumberOfSections = (uint16_t)num_secs;
+    header.NumberOfSymbols = (uint32_t)nsym;
+    header.SizeOfOptionalHeader = 0;
+    header.Characteristics = 0;
+    header.PointerToSymbolTable = calculate_symbol_table_offset(sh, num_secs);
+
+    int rc = create_coff_file(path, &header, sh, ns, num_secs,
+                              symtab, (uint32_t)nsym, strtab, strtab_size);
+    int ok = (rc == 0);
+    if (!ok) set_err(err, err_cap, "aot_emit_coff_obj: create_coff_file fallo");
+
+    cleanup_resources(ns, num_secs);  /* libera ns[i].data + relocations */
+    free(ns); free(sh); free(symtab); free(strtab);
+    for (int i = 0; i < num_secs; ++i) free(data[i]);
+    free(data);
     return ok;
 }

@@ -197,6 +197,24 @@ int aot_emit_elf_obj(const char *path,
                      const AotSym *syms, int num_syms,
                      char *err, size_t err_cap);
 
+/**
+ * @brief Emite un objeto RELOCATABLE COFF (.obj Windows) a disco.
+ *
+ * Analogo a @c aot_emit_elf_obj pero en formato COFF (Machine AMD64), linkable
+ * con @c link.exe / @c lld-link / @c gcc (MinGW).  Las @c AotReloc se emiten como
+ * registros de relocation COFF contra el simbolo de SECCION del @c target_section
+ * (REL32 -> IMAGE_REL_AMD64_REL32, ABS64 -> IMAGE_REL_AMD64_ADDR64).  COFF lleva
+ * el addend EN el campo (no en un record aparte): el emisor pre-escribe
+ * @c target_off en el sitio.  No soporta @c target_is_size/@c target_is_end (v1).
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_coff_obj(const char *path,
+                      const AotSection *secs, int num_secs,
+                      const AotReloc *relocs, int num_relocs,
+                      const AotSym *syms, int num_syms,
+                      char *err, size_t err_cap);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
