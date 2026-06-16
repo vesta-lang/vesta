@@ -3229,13 +3229,13 @@ namespace vex {
                         break;
                     }
                 }
-                // Phase AOT.2.b/c: POO nativa -> liberar la instancia HEAP
-                // (calloc, via `= new`) al exit del scope via RAW_FREE (RAII;
-                // sin GC, sin leak).  Una instancia STACK (`Rect r;` -> alloca)
-                // NO se libera (la pila se reclama sola; free de un ptr de pila
-                // seria un dangling/crash).  El dispatch del destructor via
-                // vtable es nativo en el siguiente slice; por ahora libera
-                // memoria (no invoca ~T()).
+                // Phase AOT.2.b/c/d: POO nativa -> al exit del scope, para una
+                // instancia HEAP (`= new`): invocar `~T()` (si existe) y luego
+                // liberar la memoria (RAW_FREE).  RAII determinista, sin GC, sin
+                // leak.  Una instancia STACK (`Rect r;` -> alloca) NO se libera
+                // (la pila se reclama sola).  El dtor se llama DIRECTO al tipo
+                // estatico (`<owner>__<dtor>`); el resto del cuerpo del dtor (que
+                // libera recursos propios, p.ej. free de un campo malloc) corre.
                 const bool is_heap_new =
                     vd->init && vd->init->kind == ast::NodeKind::NewExpr;
                 if (native_poo_ && is_heap_new) {
@@ -3244,6 +3244,14 @@ namespace vex {
                     act.operands      = {v};
                     act.source_line   = vd->loc.line;
                     act.refresh_name  = vd->name;
+                    if (dtor) {
+                        // AOT.2.d: nombre IR del dtor del tipo estatico ->
+                        // se invoca antes del free.
+                        const std::string owner = dtor->defining_class.empty()
+                                                    ? sem_type.struct_name
+                                                    : dtor->defining_class;
+                        act.func_name = owner + "__" + dtor->name;  // <Class>____dtor
+                    }
                     cleanup_stack_.push_back(std::move(act));
                 } else
                 if (dtor) {
@@ -5692,10 +5700,21 @@ namespace vex {
                     break;
                 }
                 case CleanupAction::Kind::NATIVE_FREE: {
-                    // Phase AOT.2.b: liberar la instancia de clase nativa
-                    // (host_ptr de calloc) con RAW_FREE -> aot_lower lo baja a
-                    // call<free>.  RAW_FREE(0)/free(NULL) es no-op -> seguro si
-                    // el owner fue movido.  Sin GC, sin dangling.
+                    // Phase AOT.2.d: invocar `~T()` (CALL directo al dtor del
+                    // tipo estatico) ANTES de liberar -> el dtor libera sus
+                    // recursos propios (RAII).  Luego RAW_FREE de la instancia
+                    // (host_ptr de calloc) -> aot_lower lo baja a call<free>.
+                    // RAW_FREE(0)/free(NULL) es no-op -> seguro si fue movido.
+                    if (!it->func_name.empty()) {
+                        ir::IrInstr dc{};
+                        dc.op          = ir::IrOp::CALL;
+                        dc.type        = ir::IrType::VOID;
+                        dc.dst         = ir::IR_NO_VALUE;
+                        dc.func_name   = it->func_name;
+                        dc.operands    = opnds;        // this
+                        dc.source_line = it->source_line;
+                        fn_->append(current_block_, std::move(dc));
+                    }
                     ir::IrInstr rf{};
                     rf.op          = ir::IrOp::RAW_FREE;
                     rf.type        = ir::IrType::VOID;
