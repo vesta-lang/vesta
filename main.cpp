@@ -1683,7 +1683,10 @@ int main(int argc, char *argv[]) {
             // AOT.2.d: nombres de simbolo segun @AllocatorOverride/@PanicHandler
             // (vacio = convencion C malloc/free/abort).
             aot::AotLowerConfig lcfg;
-            if (!cr.aot_alloc_sym.empty()) lcfg.alloc_sym = cr.aot_alloc_sym;
+            if (!cr.aot_alloc_sym.empty()) {
+                lcfg.alloc_sym          = cr.aot_alloc_sym;
+                lcfg.has_alloc_override = true;  // __new calloc -> alloc_sym(size)
+            }
             if (!cr.aot_free_sym.empty())  lcfg.free_sym  = cr.aot_free_sym;
             if (!cr.aot_panic_sym.empty()) {
                 lcfg.panic_sym       = cr.aot_panic_sym;

@@ -60,6 +60,12 @@ namespace aot {
         /// (un @c @PanicHandler con esa firma).  Si false (default, abort),
         /// se descarta el mensaje (abort no toma argumentos).
         bool        panic_takes_msg = false;
+        /// AOT.2.d: si true, hay un @c @AllocatorOverride.  El @c calloc(1,size)
+        /// que emite @c __new_<Class> se reescribe a @c alloc_sym(size) (1 arg)
+        /// -> en freestanding/dev-OS el `new` usa el allocator del usuario, no
+        /// la libc.  El override debe devolver memoria ZERIFICADA (convencion
+        /// @c kzalloc) para preservar el cero-init de los campos no escritos.
+        bool        has_alloc_override = false;
     };
 
     /**
