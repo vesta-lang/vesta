@@ -2185,26 +2185,25 @@ namespace vex {
                     for (unsigned char c : current_.str_val) out.push_back((uint8_t)c);
                     (void)consume();
                 } else if (current_.kind == TokenKind::IDENTIFIER) {
-                    // Referencia a simbolo (reloc): `dq main`, `dq tabla`, etc.
-                    // v1: solo absoluta de 64 bits (dq) -- cubre tablas de
-                    // saltos, vtables, punteros a funcion/dato.
+                    // Operando identificador.  El lowering decide su naturaleza:
+                    //   - comptime const entero  -> literal del ancho de la directiva.
+                    //   - comptime array         -> expande sus elementos (width c/u).
+                    //   - simbolo de funcion      -> reloc ABS64 (requiere dq).
+                    // El parser solo registra el nombre + el ancho de la directiva.
                     if (refs == nullptr) {
                         error_here("una referencia a simbolo no es valida dentro de 'times'");
-                        return false;
-                    }
-                    if (w != 8) {
-                        error_here("una referencia a simbolo requiere 'dq' (direccion de 64 bits)");
                         return false;
                     }
                     ast::BytesSymRef sr;
                     sr.offset = base_off + (uint32_t)out.size();
                     sr.sym    = current_.lexeme;
-                    sr.width  = 8;
-                    sr.is_rel = false;  // absoluta; rip-relativa = trabajo futuro
+                    sr.width  = (uint8_t)w;     // 1/2/4/8 segun db/dw/dd/dq
+                    sr.is_rel = false;
                     refs->push_back(std::move(sr));
                     (void)consume();
-                    // Placeholder: el emisor AOT escribe la direccion real.
-                    for (int i = 0; i < 8; ++i) out.push_back(0);
+                    // Placeholder del ancho de la directiva (el lowering/emisor
+                    // lo reemplaza por el valor o lo deja para reloc).
+                    for (int i = 0; i < w; ++i) out.push_back(0);
                 } else {
                     error_here("se esperaba un operando (entero, char, cadena o simbolo) en bytes");
                     return false;
