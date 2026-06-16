@@ -306,6 +306,8 @@ int main(int argc, char *argv[]) {
                 cxxopts::value<std::string>())
             ("bin-base",          "AOT --emit bin: base de carga del binario plano (hex, e.g. 0x7C00); afecta solo a refs absolutas (--no-pie). Default 0.",
                 cxxopts::value<std::string>())
+            ("aot-arch",          "AOT: arquitectura objetivo: x86-64 (default) | x86-32 (modo protegido, kernels: 8 GP eax-edi, regparm(3), subset entero de 32-bit).",
+                cxxopts::value<std::string>()->default_value("x86-64"))
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
             // Phase M.sandbox: restringe las capabilities del modulo
@@ -1730,6 +1732,23 @@ int main(int argc, char *argv[]) {
             // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
             const bool aot_pic = (result.count("no-pie") == 0);
 
+            // Arquitectura objetivo: x86-64 (default) o x86-32 (modo protegido).
+            // x86-32 (mode32): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3);
+            // subset entero de 32-bit (i32/u32/ptr32).  Hito v1: --emit bin
+            // (flat, sin stub/cabecera) -> kernels/protegido.  EXEC/obj/shared
+            // 32-bit (ELF32/PE32 + stub 32-bit) son follow-ups.
+            bool aot_mode32 = false;
+            {
+                const std::string a = result["aot-arch"].as<std::string>();
+                if      (a == "x86-32" || a == "x86_32" || a == "i386") aot_mode32 = true;
+                else if (a == "x86-64" || a == "x86_64" || a == "amd64") aot_mode32 = false;
+                else {
+                    std::cerr << "[aot] --arch desconocido: '" << a
+                              << "' (use x86-64 | x86-32).\n";
+                    return EXIT_FAILURE;
+                }
+            }
+
             // --emit exe|obj|shared.
             //   EXEC   : ejecutable standalone con _start (requiere main).
             //   OBJECT : .o/.obj relocatable (sin _start; main global; relocs como
@@ -1761,6 +1780,17 @@ int main(int argc, char *argv[]) {
             }
             // OBJECT/SHARED/BIN no llevan _start (lo aporta el crt/host/loader).
             const bool no_stub = emit_obj || emit_shared || emit_bin;
+
+            // x86-32 v1: solo --emit bin (codigo plano para modo protegido).  El
+            // _start de EXEC y los emisores .o/.so/.exe son ELFCLASS64/PE64; un
+            // ELF32/PE32 + stub 32-bit son follow-ups.  El .bin es bytes crudos
+            // (sin cabecera) -> sirve tal cual al codegen 32-bit.
+            if (aot_mode32 && !emit_bin) {
+                std::cerr << "[aot] --arch x86-32 v1 solo soporta --emit bin "
+                             "(binario plano para modo protegido/kernels); "
+                             "ELF32/PE32 + _start 32-bit llegan en un follow-up.\n";
+                return EXIT_FAILURE;
+            }
 
             // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED (libreria).
             const ir::IrFunction *main_fn = nullptr;
@@ -1841,7 +1871,8 @@ int main(int argc, char *argv[]) {
                 af.section_order = itf->second->section_order;
                 af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
                                                     &af.relocs, aot_pic,
-                                                    /*target_sysv=*/fmt == aot::ObjFormat::ELF);
+                                                    /*target_sysv=*/fmt == aot::ObjFormat::ELF,
+                                                    /*mode32=*/aot_mode32);
                 if (af.bytes.empty()) {
                     std::cerr << "[aot] el selector vreg no soporta la funcion '"
                               << nm << "' todavia (op fuera del subset nativo).\n";

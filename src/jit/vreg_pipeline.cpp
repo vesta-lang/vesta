@@ -111,22 +111,23 @@ namespace jit {
                                              const CallResolver &resolve_native,
                                              const CallResolver &resolve_symbol,
                                              std::vector<NativeReloc> *relocs_out,
-                                             bool pic, bool target_sysv) {
+                                             bool pic, bool target_sysv,
+                                             bool mode32) {
         if (relocs_out) relocs_out->clear();
         /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
          *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
          *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
         MFunction mf;
         if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
-                         resolve_native, resolve_symbol, pic, target_sysv))
+                         resolve_native, resolve_symbol, pic, target_sysv, mode32))
             return {};
 
-        /* Descriptor x86-64 del ABI del TARGET (no del host): SysV para ELF,
-         * Win64 para PE.  Asi el codigo emitido (arg_regs + caller/callee-saved)
-         * respeta la convencion de la plataforma de salida -> cross-target
-         * (ELF en Windows, PE en Linux) y .so/.dll/.o con boundary externo
-         * correcto.  RBX queda reservado (conservador; el codigo nunca lo toca). */
-        const TargetRegInfo &tri = target_x86_64_abi(target_sysv);
+        /* Descriptor del target.  x86-64: ABI del TARGET (no del host) -- SysV
+         * para ELF, Win64 para PE -> cross-target + boundary externo correcto;
+         * RBX reservado (conservador).  x86-32 (mode32): 8 GP eax-edi, regparm(3),
+         * pointer_size=4 -> el regalloc solo usa registros que existen en 32-bit. */
+        const TargetRegInfo &tri =
+            mode32 ? target_x86_32() : target_x86_64_abi(target_sysv);
 
         /* 2. Intervalos + 3. asignacion linear-scan. */
         IntervalResult ivs = build_intervals(mf, tri);
@@ -139,8 +140,9 @@ namespace jit {
          *    inocuo. */
         MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF, &ivs);
 
-        /* 5. Encode a bytes nativos. */
+        /* 5. Encode a bytes nativos.  mode32 -> x86-32 (sin REX, operando 32-bit). */
         X86Encoder enc;
+        enc.set_mode32(mode32);
         std::vector<uint8_t> bytes;
         if (enc.encode(pf, bytes) == 0 || bytes.empty()) return {};
 

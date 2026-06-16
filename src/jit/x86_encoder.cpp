@@ -312,7 +312,7 @@ namespace jit {
                 const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
                 const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
                 put8(out, 0xF2);
-                put8(out, rex_byte(true, xd, gp));
+                put_rex(out, true, xd, gp);
                 put8(out, 0x0F);
                 put8(out, 0x2A);
                 put8(out, modrm(3, xd & 7, gp & 7));
@@ -328,7 +328,7 @@ namespace jit {
                 const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
                 const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
                 put8(out, 0xF2);
-                put8(out, rex_byte(true, gp, xs));
+                put_rex(out, true, gp, xs);
                 put8(out, 0x0F);
                 put8(out, 0x2C);
                 put8(out, modrm(3, gp & 7, xs & 7));
@@ -449,7 +449,10 @@ namespace jit {
                     const uint8_t rex = rex_byte(true, mi.dst.reg, mi.src1.reg);
                     if (rex) put8(out, rex);
                     if (single_byte) {
-                        put8(out, 0x63);
+                        /* x86-32: MOVSXD (0x63) no existe (es ARPL); un 32->64
+                         * sign-extend no aplica sin reg de 64-bit -> mov r32 plano
+                         * (8B /r), el valor YA es de 32-bit. */
+                        put8(out, mode32_ ? 0x8B : 0x63);
                     } else {
                         put8(out, op_byte1);
                         put8(out, op_byte2);
@@ -463,7 +466,8 @@ namespace jit {
                                                   has_index ? index : 0);
                     if (rex) put8(out, rex);
                     if (single_byte) {
-                        put8(out, 0x63);
+                        /* x86-32: MOVSXD -> mov r32, r/m32 (8B /r); ver arriba. */
+                        put8(out, mode32_ ? 0x8B : 0x63);
                     } else {
                         put8(out, op_byte1);
                         put8(out, op_byte2);
@@ -536,7 +540,7 @@ namespace jit {
                  * = RIP) + disp32=0 (placeholder) + MReloc{DATA_REL32}.  El writer
                  * resuelve disp32 = target_VA - (site_VA + 4) tras el layout. */
                 if (mi.dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
-                put8(out, rex_byte(true, mi.dst.reg, 0));  /* REX.W + REX.R si dst>=R8 */
+                put_rex(out, true, mi.dst.reg, 0);  /* REX.W + REX.R si dst>=R8 */
                 put8(out, 0x8D);
                 put8(out, modrm(0, mi.dst.reg & 7, 5));    /* mod=00 rm=101 -> [rip+disp32] */
                 MReloc r;
@@ -553,7 +557,7 @@ namespace jit {
                  * (placeholder) + MReloc ABS64.  El driver escribe la VA
                  * absoluta del dato tras conocer el layout de .rodata. */
                 if (mi.dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
-                put8(out, rex_byte(true, 0, mi.dst.reg));
+                put_rex(out, true, 0, mi.dst.reg);
                 put8(out, 0xB8 + (mi.dst.reg & 7));
                 MReloc r;
                 r.kind     = MRelocKind::ABS64;
@@ -693,7 +697,7 @@ namespace jit {
                 const uint8_t dst = mi.dst.reg;  /* reg id completo (RBX=3) */
                 if (mi.src1.value != -1) {
                     put8(out, 0x65);                            /* gs: prefix */
-                    put8(out, rex_byte(true, dst, 0, 0));       /* REX.W (+R si dst>=8) */
+                    put_rex(out, true, dst, 0, 0);       /* REX.W (+R si dst>=8) */
                     put8(out, 0x8B);                            /* mov r64, r/m64 */
                     put8(out, modrm(0, dst, 4));                /* mod=00 reg=dst rm=SIB */
                     put8(out, 0x25);                            /* SIB: disp32 absoluto */
@@ -705,7 +709,7 @@ namespace jit {
                     put8(out, 0x48); put8(out, 0xB8); put64(out, getproc); /* mov rax, imm64 */
                     put8(out, 0xFF); put8(out, modrm(3, 2, 0));            /* call rax */
                     /* mov dst, rax: REX.W (+B si dst>=8) + 0x89 + modrm(3, rax, dst) */
-                    put8(out, rex_byte(true, 0, dst, 0));
+                    put_rex(out, true, 0, dst, 0);
                     put8(out, 0x89);
                     put8(out, modrm(3, 0, dst));
                 }
@@ -760,7 +764,7 @@ namespace jit {
             const uint32_t idx = static_cast<uint32_t>(src.value);
             const uint64_t v64 = (idx < fn.imm64_pool.size()) ? fn.imm64_pool[idx] : 0;
             /* MOV r64, imm64: REX.W + B8+r + imm64 */
-            put8(out, rex_byte(true, 0, dst.reg));
+            put_rex(out, true, 0, dst.reg);
             put8(out, 0xB8 + (dst.reg & 7));
             const size_t imm64_pos = out.size();
             put64(out, v64);

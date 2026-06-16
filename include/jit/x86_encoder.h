@@ -79,6 +79,15 @@ namespace jit {
     public:
         X86Encoder() = default;
 
+        /// AOT 32-bit (modo protegido, kernels): en x86-32 NO existe el prefijo
+        /// REX (los bytes 0x40-0x4F son INC/DEC) y el tamano de operando por
+        /// defecto ya es 32-bit.  Con mode32, @c rex_byte devuelve 0 siempre ->
+        /// se emite el opcode sin REX (operando 32-bit, regs eax..edi 0-7).  El
+        /// regalloc debe restringirse a 8 GP regs (no hay r8-r15).  Subset:
+        /// valores de 32-bit (i32/u32/ptr32); i64 NO cabe en un reg de 32-bit.
+        void set_mode32(bool m) noexcept { mode32_ = m; }
+        bool mode32() const noexcept { return mode32_; }
+
         /**
          * @brief Codifica @p fn en bytes y los anyade a @p out.
          * @return numero total de bytes emitidos para esta funcion, o 0
@@ -136,13 +145,24 @@ namespace jit {
         /// @p reg (reg field, 3 LSB) + @p rm (r/m field) + @p index.
         /// @return 0 si REX no es necesario (todos los bits altos = 0
         ///         y rex_w = false); sino REX = 0x40 | mask.
-        static uint8_t rex_byte(bool rex_w, uint8_t reg, uint8_t rm, uint8_t index = 0) {
+        uint8_t rex_byte(bool rex_w, uint8_t reg, uint8_t rm, uint8_t index = 0) const {
+            /* x86-32: no hay REX.  Operando 32-bit por defecto, regs 0-7. */
+            if (mode32_) return 0;
             uint8_t r = (rex_w ? 0x48 : 0x40);
             if (reg   & 0x8) r |= 0x4;    /* REX.R */
             if (index & 0x8) r |= 0x2;    /* REX.X */
             if (rm    & 0x8) r |= 0x1;    /* REX.B */
             /* Emit REX si W es seteado O si cualquier bit alto esta */
             return (r == 0x40) ? 0 : r;
+        }
+
+        /// Emite el byte REX solo si es necesario (en mode32 nunca).  Usar en
+        /// los sitios que antes hacian @c put8(out,rex_byte(...)) incondicional:
+        /// en x86-32 rex_byte devuelve 0 y NO se debe emitir un 0x00 espurio.
+        void put_rex(std::vector<uint8_t> &o, bool w, uint8_t reg, uint8_t rm,
+                     uint8_t index = 0) {
+            const uint8_t r = rex_byte(w, reg, rm, index);
+            if (r) o.push_back(r);
         }
 
         /// Construye un byte ModR/M con mod + reg + rm.
@@ -169,6 +189,7 @@ namespace jit {
         void resolve_fixups(MFunction &fn, std::vector<uint8_t> &out, size_t base);
 
         size_t instr_count_ = 0;
+        bool   mode32_ = false;  ///< x86-32 (sin REX); ver set_mode32().
     };
 
 } // namespace jit
