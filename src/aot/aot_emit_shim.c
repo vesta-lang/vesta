@@ -1037,3 +1037,78 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
     free(order); free(name_soff); free(strs.p); free(ed.p);
     return 1;
 }
+
+/* =========================================================================
+ *  Flat binary (.bin) -- sin cabecera, bytes crudos de las secciones.
+ * ========================================================================= */
+int aot_emit_flat_bin(const char *path, uint64_t base,
+                      const AotSection *secs, int num_secs,
+                      const AotReloc *relocs, int num_relocs,
+                      char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_flat_bin: sin secciones"); return 0; }
+
+    /* Offset en la imagen de cada seccion (tras el alineamiento). */
+    uint64_t *sec_off = (uint64_t *)calloc((size_t)num_secs, sizeof(uint64_t));
+    if (!sec_off) { set_err(err, err_cap, "aot_emit_flat_bin: OOM"); return 0; }
+
+    OBuf out; out.p = NULL; out.len = 0; out.cap = 0;
+
+    /* Layout denso: cada seccion alineada a max(align,1); BSS se materializa
+     * como ceros (imagen autocontenida).  El offset 0 = punto de entrada. */
+    for (int i = 0; i < num_secs; ++i) {
+        size_t a = secs[i].align ? (size_t)secs[i].align : 1u;
+        if (!ob_align(&out, a)) { set_err(err, err_cap, "aot_emit_flat_bin: OOM align"); goto fail; }
+        sec_off[i] = (uint64_t)out.len;
+        uint64_t sz = aot_sec_size(&secs[i]);
+        if (secs[i].flags & AOT_SEC_BSS) {
+            if (!ob_put(&out, NULL, (size_t)sz)) { set_err(err, err_cap, "aot_emit_flat_bin: OOM bss"); goto fail; }
+        } else if (sz) {
+            if (!ob_put(&out, secs[i].data, (size_t)sz)) { set_err(err, err_cap, "aot_emit_flat_bin: OOM data"); goto fail; }
+        }
+    }
+
+    /* Resolver relocs contra la base fija (REL32 es invariante a la base). */
+    for (int r = 0; r < num_relocs; ++r) {
+        const AotReloc *rl = &relocs[r];
+        if (rl->site_section < 0 || rl->site_section >= num_secs
+         || rl->target_section < 0 || rl->target_section >= num_secs) {
+            set_err(err, err_cap, "aot_emit_flat_bin: indice de seccion invalido en reloc");
+            goto fail;
+        }
+        uint64_t site_image_off = sec_off[rl->site_section] + rl->site_off;
+        uint64_t target_value;
+        if (rl->target_is_size) {
+            target_value = aot_sec_size(&secs[rl->target_section]);
+        } else if (rl->target_is_end) {
+            target_value = base + sec_off[rl->target_section]
+                         + aot_sec_size(&secs[rl->target_section]);
+        } else {
+            target_value = base + sec_off[rl->target_section] + rl->target_off;
+        }
+        target_value += (uint64_t)rl->addend;
+        uint32_t width = (rl->kind == AOT_RELOC_ABS64 || rl->kind == AOT_RELOC_IMM64) ? 8u : 4u;
+        if (site_image_off + width > out.len) {
+            set_err(err, err_cap, "aot_emit_flat_bin: reloc fuera de rango");
+            goto fail;
+        }
+        if (!apply_reloc(out.p + site_image_off, base + site_image_off, target_value, rl->kind)) {
+            set_err(err, err_cap, "aot_emit_flat_bin: kind de reloc no soportado");
+            goto fail;
+        }
+    }
+
+    {
+        FILE *f = fopen(path, "wb");
+        if (!f) { set_err(err, err_cap, "aot_emit_flat_bin: fopen fallo"); goto fail; }
+        size_t w = out.len ? fwrite(out.p, 1, out.len, f) : 0;
+        fclose(f);
+        if (w != out.len) { set_err(err, err_cap, "aot_emit_flat_bin: fwrite incompleto"); goto fail; }
+    }
+
+    free(sec_off); free(out.p);
+    return 1;
+
+fail:
+    free(sec_off); free(out.p);
+    return 0;
+}

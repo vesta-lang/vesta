@@ -57,6 +57,8 @@ namespace aot {
                      ///< registros + symtab -> linkable con ld/gcc/link).
         SHARED = 2,  ///< libreria compartida (.so/.dll): exporta simbolos
                      ///< (dynsym/export table); PIC, relocs internas aplicadas.
+        FLAT_BIN = 3,///< binario plano (.bin): sin cabecera, solo bytes de las
+                     ///< secciones; entry en offset 0; relocs contra base fija.
     };
 
     /**
@@ -198,6 +200,10 @@ namespace aot {
         /// Fija el tipo de artefacto (EXEC por defecto, OBJECT relocatable).
         void set_output_kind(OutputKind k) { kind_ = k; }
 
+        /// Fija la base de carga de un binario plano (.bin); solo afecta a las
+        /// relocs ABS64 (REL32 es invariante a la base).
+        void set_flat_base(uint64_t base) { flat_base_ = base; }
+
         /// Registra un simbolo exportado (solo OBJECT): nombre global en la
         /// tabla de simbolos del objeto, para que el linker externo lo resuelva.
         void add_symbol(const std::string &name, int section, uint64_t offset,
@@ -247,6 +253,7 @@ namespace aot {
         std::vector<AbsReloc>      relocs_;
         OutputKind                 kind_ = OutputKind::EXEC;
         std::vector<ExportSym>     symbols_;
+        uint64_t                   flat_base_ = 0;  ///< base de carga (.bin)
     };
 
 } // namespace aot

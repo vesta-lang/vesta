@@ -125,6 +125,18 @@ namespace aot {
             return true;
         }
 
+        // FLAT_BIN: binario plano sin cabecera (bootloader/ROM/firmware).
+        // Format-agnostico: solo concatena secciones + resuelve relocs contra
+        // la base fija.  No usa _start/imports/symtab.
+        if (kind_ == OutputKind::FLAT_BIN) {
+            ok = aot_emit_flat_bin(path.c_str(), flat_base_,
+                                   csecs.data(), static_cast<int>(csecs.size()),
+                                   crel_ptr, crel_n,
+                                   errbuf, sizeof(errbuf));
+            if (!ok) { err = errbuf[0] ? errbuf : "ObjectWriter: error flat bin"; return false; }
+            return true;
+        }
+
         // SHARED: libreria compartida (.so ELF / .dll PE).
         if (kind_ == OutputKind::SHARED) {
             std::vector<AotSym> csyms(symbols_.size());

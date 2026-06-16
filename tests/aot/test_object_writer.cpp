@@ -407,6 +407,61 @@ static void test_pe_dll() {
     CHECK(has);
 }
 
+// =========================================================================
+//  FLAT_BIN (.bin): binario plano sin cabecera; entry@0; relocs contra base.
+//  (Phase AOT Inc 2)
+// =========================================================================
+
+static void test_flat_bin() {
+    std::printf("test_flat_bin\n");
+    // .text:
+    //   E8 <rel32>          call data_ref       ; REL32 -> .rodata@4 (@1)
+    //   48 B8 <imm64>       mov rax, &.rodata@0 ; ABS64 (@7) contra base
+    //   C3                  ret
+    std::vector<uint8_t> text = {
+        0xE8, 0x00, 0x00, 0x00, 0x00,             // call rel32 (@1)
+        0x48, 0xB8, 0,0,0,0, 0,0,0,0,             // mov rax, imm64 (@7)
+        0xC3
+    };
+    // .rodata: "ABCD" (4 bytes).
+    std::vector<uint8_t> rod = { 'A', 'B', 'C', 'D' };
+
+    ObjectWriter w(ObjFormat::ELF);  // formato irrelevante para flat
+    WriterSection st; st.name = ".text";
+    st.flags = SecFlag::CODE | SecFlag::EXEC | SecFlag::READ; st.data = text;
+    const int ts = w.add_section(std::move(st));
+    WriterSection sr; sr.name = ".rodata";
+    sr.flags = SecFlag::DATA | SecFlag::READ; sr.data = rod;
+    const int rs = w.add_section(std::move(sr));
+    w.set_output_kind(OutputKind::FLAT_BIN);
+    const uint64_t base = 0x7C00;
+    w.set_flat_base(base);
+    // REL32 desde .text@1 a .rodata@4 (invariante a la base).
+    w.add_reloc(ts, 1, RelocTarget::addr(rs, 4), RelocKind::REL32);
+    // ABS64 desde .text@7 a .rodata@0 (= base + offset_en_imagen de .rodata).
+    w.add_reloc(ts, 7, RelocTarget::addr(rs, 0), RelocKind::ABS64);
+
+    std::string err;
+    const std::string path = "flat.bin";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+
+    std::vector<uint8_t> bin = read_file(path);
+    // Sin cabecera: el primer byte es el codigo (0xE8), no 'M'/0x7F.
+    CHECK(bin.size() == text.size() + rod.size());  // 16 + 4 = 20 (sin padding)
+    CHECK(!bin.empty() && bin[0] == 0xE8);
+    CHECK(bin[0] != 'M' && bin[0] != 0x7F);
+    // .rodata arranca justo tras .text (align 1): offset 16.
+    const size_t rod_off = text.size();
+    CHECK(bin.size() >= rod_off + 4 &&
+          bin[rod_off] == 'A' && bin[rod_off+3] == 'D');
+    // REL32 @1: rel = target_image_off(rod@4=20) - (site+4=5) = 15.
+    CHECK((int32_t)rd_u32(bin, 1) == (int32_t)((rod_off + 4) - 5));
+    // ABS64 @7: base + rod_off (= .rodata@0 en la imagen).
+    CHECK(rd_u64(bin, 7) == base + rod_off);
+}
+
 int main() {
     std::printf("=== test_object_writer (Phase AOT.4) ===\n");
     test_pe_exit42();
@@ -417,6 +472,7 @@ int main() {
     test_elf_obj();
     test_coff_obj();
     test_pe_dll();
+    test_flat_bin();
     std::printf("\n%d checks, %d fallos\n", g_checks, g_fails);
     std::printf("Ficheros: exit42_pe.exe / exit42_elf.elf / rodata_pe.exe / "
                 "rodata_elf.elf (correr para validar la reloc -> exit 42)\n");
