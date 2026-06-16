@@ -111,7 +111,14 @@ namespace jit {
                      const VregEntries &ent = {},
                      const CallResolver &resolve_native = {},
                      const CallResolver &resolve_symbol = {},
-                     bool pic = true);
+                     bool pic = true,
+                     bool target_sysv =
+#if defined(_WIN32)
+                         false
+#else
+                         true
+#endif
+                     );
 
 } // namespace jit
 

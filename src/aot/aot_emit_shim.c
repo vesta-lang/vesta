@@ -845,3 +845,50 @@ int aot_emit_coff_obj(const char *path,
     free(data);
     return ok;
 }
+
+/* =========================================================================
+ *  ELF .so (ET_DYN) -- via CreateELF::elf_create_shared64
+ * ========================================================================= */
+
+int aot_emit_elf_so(const char *path,
+                    const AotSection *secs, int num_secs,
+                    const AotReloc *relocs, int num_relocs,
+                    const AotSym *syms, int num_syms,
+                    char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_elf_so: sin secciones"); return 0; }
+
+    ElfSharedSection *es = (ElfSharedSection *)calloc((size_t)num_secs, sizeof(ElfSharedSection));
+    for (int i = 0; i < num_secs; ++i) {
+        uint64_t f = SHF_ALLOC;
+        if (secs[i].flags & AOT_SEC_EXEC)  f |= SHF_EXECINSTR;
+        if (secs[i].flags & AOT_SEC_WRITE) f |= SHF_WRITE;
+        es[i].name = secs[i].name; es[i].sh_flags = f;
+        es[i].data = secs[i].data; es[i].size = secs[i].size;
+    }
+    ElfSharedReloc *er = NULL;
+    if (num_relocs > 0) er = (ElfSharedReloc *)calloc((size_t)num_relocs, sizeof(ElfSharedReloc));
+    for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_size || relocs[r].target_is_end) {
+            free(es); free(er);
+            set_err(err, err_cap, "aot_emit_elf_so: SIZE/END no soportado en .so (v1)");
+            return 0;
+        }
+        er[r].site_sec   = relocs[r].site_section;
+        er[r].site_off   = relocs[r].site_off;
+        er[r].target_sec = relocs[r].target_section;
+        er[r].target_off = relocs[r].target_off + (uint64_t)relocs[r].addend;
+        er[r].is_abs64   = (relocs[r].kind == AOT_RELOC_ABS64
+                         || relocs[r].kind == AOT_RELOC_IMM64) ? 1 : 0;
+    }
+    ElfSharedExport *ex = NULL;
+    if (num_syms > 0) ex = (ElfSharedExport *)calloc((size_t)num_syms, sizeof(ElfSharedExport));
+    for (int g = 0; g < num_syms; ++g) {
+        ex[g].name = syms[g].name; ex[g].sec = syms[g].section;
+        ex[g].off = syms[g].offset; ex[g].is_func = syms[g].is_func;
+    }
+
+    int ok = elf_create_shared64(path, es, num_secs, er, num_relocs,
+                                 ex, num_syms, err, err_cap);
+    free(es); free(er); free(ex);
+    return ok;
+}

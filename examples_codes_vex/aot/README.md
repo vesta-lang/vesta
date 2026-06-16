@@ -84,3 +84,20 @@ aparte), asi que el emisor pre-escribe target_off en el sitio.
 
 Validado: 01_call.obj / 06_call_rodata.obj / 07_section_devos.obj linkan con
 gcc-mingw (TDM-GCC) y devuelven 42/69/42.  (Reusa la API de LibCOFFparse.)
+
+## Libreria compartida .so (ELF) -- dlopen/dlsym
+
+`--emit shared --format elf` produce un ELF ET_DYN (.so) PIC que EXPORTA todas
+sus funciones (sin main; sin _start).  Cargable con dlopen + dlsym:
+
+    vm --vex examples_codes_vex/aot/09_shared_lib.vex -m aot --format elf --emit shared -o libfoo.so
+    // host C: dlopen("./libfoo.so") + dlsym("add") -> add(40,2) == 42
+
+Validado: libfoo.so (add/triple) cargado via dlopen+dlsym en Linux -> 42/42.
+(.dll PE shared pendiente.)
+
+## Cross-target: el ABI lo decide el FORMATO, no el host
+
+El codegen usa el ABI del TARGET (SysV para `--format elf`, Win64 para
+`--format pe`), no el del host -> se puede generar ELF en Windows y PE en Linux.
+Validado: ELF generado en Windows corre en WSL Linux (01/03/06 = 42/120/69).

@@ -214,7 +214,13 @@ namespace jit {
     bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                      const CallResolver &resolve_call, const VregEntries &ent,
                      const CallResolver &resolve_native,
-                     const CallResolver &resolve_symbol, bool pic) {
+                     const CallResolver &resolve_symbol, bool pic,
+                     bool target_sysv) {
+        /* HOST_LEAF (AOT): arg_regs del ABI del TARGET (SysV para ELF, Win64 para
+         * PE), NO del host -> permite cross-target (ELF en Windows, PE en Linux).
+         * En VM_ABI (JIT en proceso) no se usa (el codigo VM usa el ABI host). */
+        const size_t host_leaf_nmax =
+            target_x86_64_abi(target_sysv).arg_regs[static_cast<size_t>(RegClass::GP)].size();
         out = MFunction{};
         out.name = fn.name;
         out.vreg_count = static_cast<uint32_t>(fn.values.size());
@@ -376,7 +382,7 @@ namespace jit {
              * arg_regs (en pila) no se soportan en v1. */
             if (!vm && b == 0 && !fn.params.empty()) {
                 const auto &areg =
-                    target_x86_64_vm_abi().arg_regs[static_cast<size_t>(RegClass::GP)];
+                    target_x86_64_abi(target_sysv).arg_regs[static_cast<size_t>(RegClass::GP)];
                 for (size_t i = 0; i < fn.params.size() && i < areg.size(); ++i)
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(fn.params[i]),
                         MOperand::make_reg(static_cast<MReg>(areg[i]), 8)));
@@ -1594,11 +1600,7 @@ namespace jit {
                          * a la propia funcion -> resuelta a su mismo offset). */
                         if (abi == AbiKind::HOST_LEAF) {
                             const size_t nargs = in.operands.size();
-#if defined(_WIN32)
-                            const size_t nmax = 4;
-#else
-                            const size_t nmax = 6;
-#endif
+                            const size_t nmax = host_leaf_nmax;
                             if (nargs > nmax) {  // args en pila: pendiente (v1)
                                 vreg_dbg(fn.name.c_str(), "call(host-leaf-args)");
                                 return false;
@@ -1689,11 +1691,7 @@ namespace jit {
                          * se conserva intacta en nativo. */
                         if (abi == AbiKind::HOST_LEAF) {
                             const size_t nargs = in.operands.size();
-#if defined(_WIN32)
-                            const size_t nmax = 4;
-#else
-                            const size_t nmax = 6;
-#endif
+                            const size_t nmax = host_leaf_nmax;
                             if (nargs > nmax) {
                                 vreg_dbg(fn.name.c_str(), "tailcall(host-leaf-args)");
                                 return false;

@@ -215,6 +215,24 @@ int aot_emit_coff_obj(const char *path,
                       const AotSym *syms, int num_syms,
                       char *err, size_t err_cap);
 
+/**
+ * @brief Emite una libreria compartida ELF64 (.so, ET_DYN) a disco.
+ *
+ * PIC: el codigo usa refs RIP-relativas (internas) -> las @c AotReloc se APLICAN
+ * al emitir (PC-relativo, invariante bajo la base de carga), sin relocs dinamicas.
+ * Exporta @p syms como simbolos GLOBALES en una @c .dynsym + @c .hash + @c
+ * .dynamic, de forma que @c dlopen + @c dlsym los resuelvan.  Mapeo vaddr=offset
+ * (identidad) + un PT_LOAD (R+W+X) + PT_DYNAMIC.  ABS64 (no-pie) NO se soporta en
+ * .so (requeriria relocs dinamicas R_X86_64_RELATIVE) -> error.
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf_so(const char *path,
+                    const AotSection *secs, int num_secs,
+                    const AotReloc *relocs, int num_relocs,
+                    const AotSym *syms, int num_syms,
+                    char *err, size_t err_cap);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

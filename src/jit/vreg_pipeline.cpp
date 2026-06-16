@@ -111,21 +111,22 @@ namespace jit {
                                              const CallResolver &resolve_native,
                                              const CallResolver &resolve_symbol,
                                              std::vector<NativeReloc> *relocs_out,
-                                             bool pic) {
+                                             bool pic, bool target_sysv) {
         if (relocs_out) relocs_out->clear();
         /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
          *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
          *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
         MFunction mf;
         if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
-                         resolve_native, resolve_symbol, pic))
+                         resolve_native, resolve_symbol, pic, target_sysv))
             return {};
 
-        /* Reusamos el descriptor x86-64 de la VM_ABI: para HOST_LEAF solo
-         * implica que RBX queda RESERVADO (no asignable) -- conservador pero
-         * correcto; el codigo nunca toca RBX, asi que respeta el callee-saved
-         * del host sin necesitar push/pop. */
-        const TargetRegInfo &tri = target_x86_64_vm_abi();
+        /* Descriptor x86-64 del ABI del TARGET (no del host): SysV para ELF,
+         * Win64 para PE.  Asi el codigo emitido (arg_regs + caller/callee-saved)
+         * respeta la convencion de la plataforma de salida -> cross-target
+         * (ELF en Windows, PE en Linux) y .so/.dll/.o con boundary externo
+         * correcto.  RBX queda reservado (conservador; el codigo nunca lo toca). */
+        const TargetRegInfo &tri = target_x86_64_abi(target_sysv);
 
         /* 2. Intervalos + 3. asignacion linear-scan. */
         IntervalResult ivs = build_intervals(mf, tri);
