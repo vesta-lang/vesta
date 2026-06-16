@@ -137,10 +137,11 @@ namespace aot {
      *        @c __start_/@c __stop_ del linker).
      */
     struct RelocTarget {
-        int      section = 0;       ///< seccion objetivo.
-        uint64_t offset  = 0;       ///< offset dentro de la seccion (modo ADDR).
-        bool     is_size = false;   ///< true => el valor es el TAMANO de la seccion.
-        bool     is_end  = false;   ///< true => el valor es VA(seccion)+tamano (fin).
+        int         section = 0;    ///< seccion objetivo.
+        uint64_t    offset  = 0;    ///< offset dentro de la seccion (modo ADDR).
+        bool        is_size = false;///< true => el valor es el TAMANO de la seccion.
+        bool        is_end  = false;///< true => el valor es VA(seccion)+tamano (fin).
+        std::string extern_name;    ///< no vacio => simbolo EXTERNO (libc); resuelve el linker.
 
         static RelocTarget addr(int sec, uint64_t off = 0) {
             RelocTarget t; t.section = sec; t.offset = off; return t;
@@ -151,6 +152,10 @@ namespace aot {
         /// Direccion del FINAL de la seccion (base + tamano) -- @c __stop_NAME.
         static RelocTarget end(int sec) {
             RelocTarget t; t.section = sec; t.is_end = true; return t;
+        }
+        /// Simbolo EXTERNO indefinido (malloc/free/abort...) -- solo .o/.obj.
+        static RelocTarget extern_sym(const std::string &name) {
+            RelocTarget t; t.extern_name = name; return t;
         }
     };
 

@@ -103,6 +103,10 @@ typedef struct {
     int      target_is_end;   /* 1 => target_value = VA(target_section)+tamano */
     int      kind;            /* AOT_RELOC_* */
     int64_t  addend;          /* desplazamiento adicional */
+    /* Reloc a un SIMBOLO EXTERNO (libc: malloc/free/abort...): si != NULL, el
+     * target NO es una seccion sino un simbolo indefinido que resuelve el
+     * linker del sistema.  target_section/off se ignoran.  Solo .o/.obj. */
+    const char *extern_name;
 } AotReloc;
 
 /**

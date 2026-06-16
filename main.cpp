@@ -30,6 +30,7 @@
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h"   // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h"       // Phase AOT.1: analisis de compatibilidad nativa
+#include "aot/aot_lower.h"         // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
 #include "aot/object_writer.h"     // Phase AOT.4: emisor PE/ELF (ObjectWriter)
 #include "aot/aot_native.h"        // Phase AOT.3 Paso 2: _start arch-portable
 #include "jit/vreg_pipeline.h"     // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
@@ -1668,6 +1669,13 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            // Phase AOT.2: re-bajar las ops sintetizadas (RAW_ALLOC/RAW_FREE/
+            // PANIC) a CALL a simbolos externos (convencion libc; los resuelve
+            // el linker -> el .o NO depende de libc).  Tras esto el selector ve
+            // solo CALL.  Se ejecuta DESPUES del gate de analyze para que el
+            // chequeo freestanding sobre RAW_ALLOC siga aplicando.
+            aot::aot_lower_runtime(aot_mod);
+
             // ------------------------------------------------------------------
             // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.
             //
@@ -1825,9 +1833,13 @@ int main(int argc, char *argv[]) {
                 compiled_idx[nm] = compiled.size();
                 compiled.push_back(std::move(af));
                 // Encolar los callees (relocs CALL_REL32 a nombres de funcion).
+                // Los simbolos que NO son funciones del modulo son EXTERNOS
+                // (libc/runtime, resueltos por el linker): no se encolan, se
+                // emiten como relocs externas en PASS 2.
                 for (const jit::NativeReloc &r : compiled.back().relocs) {
                     if (r.kind != jit::NativeReloc::Kind::CALL_REL32) continue;
                     if (queued.count(r.symbol)) continue;
+                    if (!fn_by_name.count(r.symbol)) continue;  // externo
                     queued[r.symbol] = true;
                     work.push_back(r.symbol);
                 }
@@ -2012,14 +2024,25 @@ int main(int argc, char *argv[]) {
                     if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
                         auto it = fn_loc.find(r.symbol);
                         if (it == fn_loc.end()) {
-                            std::cerr << "[aot] simbolo no resuelto en reloc: '"
-                                      << r.symbol << "'.\n";
-                            return EXIT_FAILURE;
+                            // Simbolo EXTERNO (libc/runtime: malloc/free/abort...).
+                            // Solo en OBJECT (.o/.obj): el linker del sistema lo
+                            // resuelve.  EXEC/SHARED/BIN necesitarian IAT/PLT-GOT
+                            // (AOT.2.exec, futuro).
+                            if (!emit_obj) {
+                                std::cerr << "[aot] llamada a simbolo externo '" << r.symbol
+                                          << "' requiere --emit obj (enlazar con gcc/ld); "
+                                             "EXEC/shared/bin con libc llegan en AOT.2.exec.\n";
+                                return EXIT_FAILURE;
+                            }
+                            w.add_reloc(fl.sec, site,
+                                        aot::RelocTarget::extern_sym(r.symbol),
+                                        aot::RelocKind::REL32);
+                        } else {
+                            w.add_reloc(fl.sec, site,
+                                        aot::RelocTarget::addr(it->second.sec,
+                                                               it->second.off),
+                                        aot::RelocKind::REL32);
                         }
-                        w.add_reloc(fl.sec, site,
-                                    aot::RelocTarget::addr(it->second.sec,
-                                                           it->second.off),
-                                    aot::RelocKind::REL32);
                     } else if (r.symbol.rfind("secsym:", 0) == 0) {
                         // Simbolo de seccion "secsym:<k>:<name>" (dev OS):
                         // s=start (base), e=end (base+size), z=size (tamano).
