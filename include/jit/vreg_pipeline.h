@@ -47,6 +47,37 @@ namespace jit {
                           const CallResolver &resolve_symbol = {});
 
     /**
+     * @brief Compila @p fn por el path vreg en ABI HOST_LEAF y devuelve los
+     *        BYTES nativos (Phase AOT.3 Paso 2).
+     *
+     * A diferencia de @c vreg_compile (VM_ABI: @c ProcessVM* en RBX + runtime
+     * entries + escritura del retorno en @c proc->registers.regs[0]), esta
+     * variante usa @c AbiKind::HOST_LEAF: argumentos en los @c arg_regs del ABI
+     * nativo del host, retorno en RAX, sin asumir un @c ProcessVM* ni runtime
+     * entries.  Es la base del codegen AOT: el blob resultante es una funcion C
+     * nativa autonoma, lista para escribirse en la seccion @c .text de un
+     * ejecutable PE/ELF.
+     *
+     * No registra nada en el @c JitRegistry ni aloja en un @c CodeCache: solo
+     * produce bytes (que el caller coloca donde quiera).  Para el hito minimo
+     * (funcion sin CALL ni datos) los bytes son position-independent y no
+     * necesitan relocations.
+     *
+     * @param fn             Funcion IR a compilar.
+     * @param resolve_call   Resolver de CALLs a user-fns (vacio en el hito 1).
+     * @param ent            Entradas runtime del selector (vacio en BARE puro).
+     * @param resolve_native Resolver de CALLN nativas (vacio en el hito 1).
+     * @param resolve_symbol Resolver de simbolos del linker (vacio en el hito 1).
+     * @return Bytes nativos del cuerpo de @p fn (ABI HOST_LEAF), o vector vacio
+     *         si la funcion no es del subset soportado por el selector vreg.
+     */
+    std::vector<uint8_t> vreg_compile_native(const ir::IrFunction &fn,
+                                             const CallResolver &resolve_call = {},
+                                             const VregEntries &ent = {},
+                                             const CallResolver &resolve_native = {},
+                                             const CallResolver &resolve_symbol = {});
+
+    /**
      * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo
      *        header es @p header_block (on-stack replacement, Phase D.8, 2c).
      *

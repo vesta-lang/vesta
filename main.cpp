@@ -30,6 +30,9 @@
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h"   // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h"       // Phase AOT.1: analisis de compatibilidad nativa
+#include "aot/object_writer.h"     // Phase AOT.4: emisor PE/ELF (ObjectWriter)
+#include "aot/aot_native.h"        // Phase AOT.3 Paso 2: _start arch-portable
+#include "jit/vreg_pipeline.h"     // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h"  // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
@@ -294,6 +297,8 @@ int main(int argc, char *argv[]) {
             ("target",            "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default bare).",
                 cxxopts::value<std::string>()->default_value("bare"))
             ("freestanding",      "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC requieren hooks @AllocatorOverride/@PanicHandler.")
+            ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
+                cxxopts::value<std::string>())
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
             // Phase M.sandbox: restringe las capabilities del modulo
@@ -1657,9 +1662,84 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
-            std::cout << "[aot] modulo COMPATIBLE con --target=" << tier_name
-                      << ".  (Paso 2: la emision del ejecutable nativo -- codegen"
-                         " HOST_LEAF + ObjectWriter -- llega en el siguiente sprint.)\n";
+            // ------------------------------------------------------------------
+            // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.
+            //
+            // Hito minimo: compila SOLO `main` (sin CALL ni datos -> bytes
+            // position-independent, sin relocations) y sintetiza un _start
+            // arch+formato-especifico que llama a main y termina el proceso con
+            // su codigo de retorno.  Todo el codegen pasa por el path vreg
+            // (TargetRegInfo + selector + encoder), portable a otras arch.
+            // ------------------------------------------------------------------
+
+            // Arquitectura objetivo.  Hoy solo x86-64; el enum AotArch reserva
+            // las demas (x86-32/16, ARM, RISC-V) como extensiones futuras.
+            const aot::AotArch arch = aot::AotArch::X86_64;
+
+            // Formato de salida: --format pe|elf, o default por host.
+            aot::ObjFormat fmt =
+#if defined(_WIN32)
+                aot::ObjFormat::PE;
+#else
+                aot::ObjFormat::ELF;
+#endif
+            if (result.count("format")) {
+                const std::string f = result["format"].as<std::string>();
+                if      (f == "pe"  || f == "PE")  fmt = aot::ObjFormat::PE;
+                else if (f == "elf" || f == "ELF") fmt = aot::ObjFormat::ELF;
+                else {
+                    std::cerr << "[aot] --format desconocido: '" << f
+                              << "' (use pe|elf).\n";
+                    return EXIT_FAILURE;
+                }
+            }
+
+            const ir::IrFunction *main_fn = nullptr;
+            for (const auto &fn : aot_mod.functions)
+                if (fn.name == "main") { main_fn = &fn; break; }
+            if (!main_fn) {
+                std::cerr << "[aot] no se encontro la funcion 'main' en el modulo.\n";
+                return EXIT_FAILURE;
+            }
+
+            // Cuerpo de main en ABI HOST_LEAF (retorno en RAX, sin ProcessVM*).
+            std::vector<uint8_t> main_bytes = jit::vreg_compile_native(*main_fn);
+            if (main_bytes.empty()) {
+                std::cerr << "[aot] el selector vreg no soporta 'main' todavia "
+                             "(op fuera del subset nativo).\n";
+                return EXIT_FAILURE;
+            }
+
+            // _start (arch+formato): llama a main (justo despues) y termina.
+            aot::StartStub stub = aot::aot_make_start_stub(arch, fmt);
+            if (!stub.ok) {
+                std::cerr << "[aot] " << stub.err << "\n";
+                return EXIT_FAILURE;
+            }
+
+            // .text = _start ++ main.  main va inmediatamente despues del stub;
+            // el call a main dentro del stub ya apunta a ese offset.
+            std::vector<uint8_t> text = stub.bytes;
+            text.insert(text.end(), main_bytes.begin(), main_bytes.end());
+
+            aot::ObjectWriter w(fmt);
+            const int tsec = w.add_text(std::move(text));  // crea .text + entry off 0
+            if (stub.has_import_call) {
+                w.add_import_call(aot::ImportCall{
+                    stub.import_dll, stub.import_func, tsec, stub.import_call_off});
+            }
+
+            std::string werr;
+            if (!w.write(out_prefix, werr)) {
+                std::cerr << "[aot] error al escribir '" << out_prefix << "': "
+                          << werr << "\n";
+                return EXIT_FAILURE;
+            }
+
+            const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
+            std::cout << "[aot] ejecutable nativo " << fmt_name << " escrito en '"
+                      << out_prefix << "' (entry _start -> main -> exit, return "
+                         "de main como exit-code).\n";
             return EXIT_SUCCESS;
         }
 
