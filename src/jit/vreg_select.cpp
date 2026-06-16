@@ -1578,6 +1578,35 @@ namespace jit {
                      * proc en RCX/RDI, resultado en regs[0]. */
                     case ir::IrOp::CALL: {
                         flush_pending();
+                        /* HOST_LEAF (AOT standalone): convencion del ABI nativo
+                         * del host -- args en arg_regs (via ARG), retorno en RAX,
+                         * sin ProcessVM* ni proc->registers.  El callee se
+                         * referencia por NOMBRE (CALL_SYM): el driver AOT resuelve
+                         * su offset en .text tras el layout (relocation), porque al
+                         * compilar la funcion aislada la direccion del callee aun
+                         * no se conoce.  Cubre tambien la auto-recursion (CALL_SYM
+                         * a la propia funcion -> resuelta a su mismo offset). */
+                        if (abi == AbiKind::HOST_LEAF) {
+                            const size_t nargs = in.operands.size();
+#if defined(_WIN32)
+                            const size_t nmax = 4;
+#else
+                            const size_t nmax = 6;
+#endif
+                            if (nargs > nmax) {  // args en pila: pendiente (v1)
+                                vreg_dbg(fn.name.c_str(), "call(host-leaf-args)");
+                                return false;
+                            }
+                            for (size_t a = 0; a < nargs; ++a)
+                                O.push_back(MInstr::make_arg(
+                                    static_cast<uint8_t>(a), vr(in.operands[a])));
+                            O.push_back(MInstr::make_call_sym(
+                                out.intern_reloc_symbol(in.func_name)));
+                            if (in.dst != ir::IR_NO_VALUE)
+                                O.push_back(MInstr::make_unary(MOp::MOV,
+                                    vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
+                            break;
+                        }
                         if (!vm) {
                             vreg_dbg(fn.name.c_str(), "call(no-vm)");
                             return false;
@@ -1644,6 +1673,32 @@ namespace jit {
                      * RET del callee retorna directo al caller original. */
                     case ir::IrOp::TAILCALL: {
                         flush_pending();
+                        /* HOST_LEAF (AOT): el ir_pass_tailcall promueve cada
+                         * `return f(args)` a TAILCALL.  TCO GENUINA: marshalling
+                         * de args a arg_regs (via ARG) + TAILCALL_SYM, que el
+                         * rewrite expande a parallel-move + epilogue + JMP al
+                         * callee por nombre (relocation rel32).  Reusa el frame
+                         * -> profundidad de pila O(1) (igual que el bytecode
+                         * tailcall y la TCO del path VM): la optimizacion del IR
+                         * se conserva intacta en nativo. */
+                        if (abi == AbiKind::HOST_LEAF) {
+                            const size_t nargs = in.operands.size();
+#if defined(_WIN32)
+                            const size_t nmax = 4;
+#else
+                            const size_t nmax = 6;
+#endif
+                            if (nargs > nmax) {
+                                vreg_dbg(fn.name.c_str(), "tailcall(host-leaf-args)");
+                                return false;
+                            }
+                            for (size_t a = 0; a < nargs; ++a)
+                                O.push_back(MInstr::make_arg(
+                                    static_cast<uint8_t>(a), vr(in.operands[a])));
+                            O.push_back(MInstr::make_tailcall_sym(
+                                out.intern_reloc_symbol(in.func_name)));
+                            break;
+                        }
                         if (!vm) {
                             vreg_dbg(fn.name.c_str(), "tailcall(no-vm)");
                             return false;

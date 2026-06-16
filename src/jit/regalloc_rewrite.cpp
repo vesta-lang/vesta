@@ -520,6 +520,44 @@ namespace jit {
                     return;
                 }
 
+                if (op == MOp::CALL_SYM) {
+                    /* AOT: CALL rel32 a una funcion del modulo por nombre.  Igual
+                     * marshalling que CALL_ABS (parallel-move de los args a los
+                     * arg_regs del ABI host), pero la llamada es un CALL DIRECTO
+                     * rel32 (no via scratch): el encoder deja un placeholder +
+                     * MReloc{CALL_REL32} con el sym_idx que viaja en src1.  En
+                     * HOST_LEAF/BARE no hay GC -> sin stackmap. */
+                    const auto &areg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
+                    std::vector<std::pair<MReg, MOperand>> moves;
+                    for (const auto &pa : pending_args) {
+                        if (pa.first < areg.size())
+                            moves.emplace_back(static_cast<MReg>(areg[pa.first]), pa.second);
+                    }
+                    emit_parallel_moves(std::move(moves), scr1, out);
+                    pending_args.clear();
+                    MInstr call; call.op = MOp::CALL_SYM; call.src1 = in.src1;
+                    out.push_back(call);
+                    return;
+                }
+
+                if (op == MOp::MOV_SYM) {
+                    /* AOT: dst = &simbolo (.rodata).  Resolver el dst vreg a su
+                     * registro fisico y emitir el MOV_SYM fisico; el encoder deja
+                     * un mov r64,imm64 placeholder + MReloc{ABS64}.  Si el dst
+                     * quedo spilled, materializar en scratch y guardarlo. */
+                    MOperand d = resolve(in.dst);
+                    if (d.is_reg()) {
+                        MInstr m; m.op = MOp::MOV_SYM; m.dst = d; m.src1 = in.src1;
+                        out.push_back(m);
+                    } else {
+                        MInstr m; m.op = MOp::MOV_SYM; m.dst = reg(scr0);
+                        m.src1 = in.src1;
+                        out.push_back(m);
+                        out.push_back(MInstr::make_unary(MOp::MOV, d, reg(scr0)));
+                    }
+                    return;
+                }
+
                 if (op == MOp::CALL) {
                     /* CALL INDIRECTO (call reg/mem): el target es un vreg (p.ej.
                      * el jit_code resuelto en el inline dispatch de CALLVIRT).
@@ -556,6 +594,28 @@ namespace jit {
                 }
 
                 if (op == MOp::TAILCALL) {
+                    /* AOT HOST_LEAF tail-call (TCO genuina, src2 = IMM32 sym_idx):
+                     * parallel-move de los args (ARG) a los arg_regs del ABI host
+                     * ANTES del teardown (lee las ubicaciones validas con el frame
+                     * aun montado; los arg_regs son caller-saved -> sobreviven el
+                     * epilogue) + emit_epilogue + JMP_SYM al callee.  El callee
+                     * monta su propio frame y su RET retorna al caller original ->
+                     * pila O(1).  Sin GC en BARE -> sin stackmap. */
+                    if (!vm_abi && in.src2.kind == MOperandKind::IMM32) {
+                        const auto &areg2 =
+                            tri.arg_regs[static_cast<size_t>(RegClass::GP)];
+                        std::vector<std::pair<MReg, MOperand>> moves;
+                        for (const auto &pa : pending_args)
+                            if (pa.first < areg2.size())
+                                moves.emplace_back(
+                                    static_cast<MReg>(areg2[pa.first]), pa.second);
+                        emit_parallel_moves(std::move(moves), scr1, out);
+                        pending_args.clear();
+                        emit_epilogue(out);
+                        MInstr j; j.op = MOp::JMP_SYM; j.src1 = in.src2;
+                        out.push_back(j);
+                        return;
+                    }
                     /* TCO con reuso de frame (mismo patron que el frame-swap del
                      * OSR 2c): proc -> A0 (sobrevive el teardown por ser
                      * caller-saved; el prologue del callee hace mov rbx,A0) +
@@ -1070,6 +1130,9 @@ namespace jit {
         for (const auto &b : vf.blocks) {
             for (const auto &in : b.instrs) {
                 if (in.op == MOp::CALL || in.op == MOp::CALL_ABS) has_calls = true;
+                /* CALL_SYM (AOT): CALL rel32 a una funcion del modulo -> frame
+                 * con shadow space (Win64) + rsp 16-alineado, igual que CALL. */
+                if (in.op == MOp::CALL_SYM) has_calls = true;
                 /* LOAD_VM/STORE_VM: el page-miss emite un CALL a vrt_vm_*; aunque
                  * el hit no llama, debe reservarse el frame + shadow space Win64
                  * (no frameless). */
@@ -1093,6 +1156,10 @@ namespace jit {
         pf.next_label_id  = vf.next_label_id;
         pf.label_offsets  = vf.label_offsets;
         pf.imm64_pool     = vf.imm64_pool;
+        /* AOT: la tabla de simbolos de las relocations viaja del MFunction
+         * vreg al fisico; el encoder (que corre sobre @c pf) appendea las
+         * @c MReloc referenciando estos indices. */
+        pf.reloc_symbols  = vf.reloc_symbols;
         /* Phase AS inc.5: los bytes del inline-asm los consume el ENCODER, que
          * corre sobre @c pf (la funcion reescrita) -> hay que arrastrarlos.
          * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre

@@ -64,6 +64,10 @@ namespace jit {
     size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
         instr_count_ = 0;
         const size_t base = out.size();
+        /* AOT: las MReloc que emitan los MOp CALL_SYM/MOV_SYM se registran con
+         * patch_at en offset absoluto de @c out; tras el emit las reubicamos a
+         * relativo-a-la-funcion (restando base).  Recordamos cuantas habia ya. */
+        const size_t reloc_base = fn.relocs.size();
 
         /* Reservar capacidad estimada: ~6 bytes promedio por instr. */
         size_t total_instrs = 0;
@@ -91,6 +95,13 @@ namespace jit {
         }
 
         resolve_fixups(fn, out, base);
+
+        /* AOT: reubicar las MReloc emitidas en esta pasada a offset relativo
+         * al inicio de la funcion (el driver les sumara la base de la funcion
+         * en .text al hacer el layout). */
+        for (size_t i = reloc_base; i < fn.relocs.size(); ++i)
+            fn.relocs[i].patch_at -= static_cast<uint32_t>(base);
+
         return out.size() - base;
     }
 
@@ -489,6 +500,52 @@ namespace jit {
             case MOp::CMOVCC:     emit_cmovcc(fn, mi, out); return true;
             case MOp::JMP:        emit_jmp(fn, mi, out); return true;
             case MOp::JCC:        emit_jcc(fn, mi, out); return true;
+            case MOp::CALL_SYM: {
+                /* AOT: CALL rel32 a una funcion del modulo por nombre.  Se
+                 * emite E8 + rel32=0 (placeholder) y se registra una MReloc
+                 * CALL_REL32 que el driver parchea tras el layout de .text.
+                 * patch_at se deja en offset ABSOLUTO de @c out; encode() le
+                 * resta @c base para dejarlo relativo a la funcion. */
+                put8(out, 0xE8);
+                MReloc r;
+                r.kind     = MRelocKind::CALL_REL32;
+                r.patch_at = static_cast<uint32_t>(out.size());
+                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
+                r.addend   = 0;
+                fn.relocs.push_back(r);
+                put32(out, 0);  /* placeholder rel32 */
+                return true;
+            }
+            case MOp::JMP_SYM: {
+                /* AOT: JMP rel32 a una funcion del modulo (cola del tail-call).
+                 * E9 + rel32=0 (placeholder) + MReloc CALL_REL32 (misma
+                 * matematica rel32 que el CALL E8). */
+                put8(out, 0xE9);
+                MReloc r;
+                r.kind     = MRelocKind::CALL_REL32;
+                r.patch_at = static_cast<uint32_t>(out.size());
+                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
+                r.addend   = 0;
+                fn.relocs.push_back(r);
+                put32(out, 0);  /* placeholder rel32 */
+                return true;
+            }
+            case MOp::MOV_SYM: {
+                /* AOT: mov r64, &simbolo (.rodata).  REX.W + B8+rd + imm64=0
+                 * (placeholder) + MReloc ABS64.  El driver escribe la VA
+                 * absoluta del dato tras conocer el layout de .rodata. */
+                if (mi.dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
+                put8(out, rex_byte(true, 0, mi.dst.reg));
+                put8(out, 0xB8 + (mi.dst.reg & 7));
+                MReloc r;
+                r.kind     = MRelocKind::ABS64;
+                r.patch_at = static_cast<uint32_t>(out.size());
+                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
+                r.addend   = 0;
+                fn.relocs.push_back(r);
+                put64(out, 0);  /* placeholder imm64 */
+                return true;
+            }
             case MOp::CALL: {
                 /* si el CALL tiene stackmap asociado (flags
                  * != UINT16_MAX), rellenar su pc_offset.  Esto permite

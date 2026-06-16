@@ -22,6 +22,7 @@
 #include "jit/vreg_select.h"  // CallResolver
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace ir { struct IrFunction; }
@@ -29,6 +30,29 @@ namespace ir { struct IrFunction; }
 namespace jit {
 
     class CodeCache;
+
+    /**
+     * @struct NativeReloc
+     * @brief Relocation sin resolver del codigo nativo de UNA funcion AOT
+     *        (Phase AOT.3 Paso 2b-ii).
+     *
+     * @c vreg_compile_native compila cada funcion de forma aislada; las
+     * referencias a otras funciones del modulo (CALL) o a datos de @c .rodata
+     * (direccion absoluta) no se pueden resolver hasta el layout final.  Cada
+     * @c NativeReloc dice "en el byte @c offset de esta funcion, parchear segun
+     * @c kind con la direccion del simbolo @c symbol".  El driver AOT, tras
+     * colocar las funciones en @c .text y los datos en @c .rodata, resuelve
+     * @c symbol a su direccion y aplica el parche.  Es arch-agnostica.
+     */
+    struct NativeReloc {
+        /** @brief Como parchear (espejo de @c MRelocKind, sin acoplar el header
+         *  del back-end al driver). */
+        enum class Kind : uint8_t { CALL_REL32 = 0, ABS64 = 1 };
+        Kind        kind   = Kind::CALL_REL32;
+        uint32_t    offset = 0;   ///< byte offset dentro de los bytes de la funcion
+        std::string symbol;       ///< nombre del simbolo referenciado
+        int64_t     addend = 0;   ///< desplazamiento adicional dentro del simbolo
+    };
 
     /**
      * @brief Compila @p fn por el path de registros virtuales (VM_ABI) y la
@@ -68,6 +92,10 @@ namespace jit {
      * @param ent            Entradas runtime del selector (vacio en BARE puro).
      * @param resolve_native Resolver de CALLN nativas (vacio en el hito 1).
      * @param resolve_symbol Resolver de simbolos del linker (vacio en el hito 1).
+     * @param relocs_out     [out, opcional] si != nullptr, se rellena con las
+     *                       relocations sin resolver de @p fn (CALL cross-funcion
+     *                       y refs a @c .rodata); el driver AOT las aplica tras el
+     *                       layout.  Se SOBRESCRIBE (clear + push).
      * @return Bytes nativos del cuerpo de @p fn (ABI HOST_LEAF), o vector vacio
      *         si la funcion no es del subset soportado por el selector vreg.
      */
@@ -75,7 +103,8 @@ namespace jit {
                                              const CallResolver &resolve_call = {},
                                              const VregEntries &ent = {},
                                              const CallResolver &resolve_native = {},
-                                             const CallResolver &resolve_symbol = {});
+                                             const CallResolver &resolve_symbol = {},
+                                             std::vector<NativeReloc> *relocs_out = nullptr);
 
     /**
      * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo
