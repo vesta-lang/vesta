@@ -892,3 +892,148 @@ int aot_emit_elf_so(const char *path,
     free(es); free(er); free(ex);
     return ok;
 }
+
+/* =========================================================================
+ *  PE DLL (.dll) -- via CreatePe + tabla de exports (.edata) hand-rolled
+ * ========================================================================= */
+
+int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
+                    const AotSection *secs, int num_secs,
+                    const AotReloc *relocs, int num_relocs,
+                    const AotSym *syms, int num_syms,
+                    char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_pe_dll: sin secciones"); return 0; }
+    if (num_syms <= 0) { set_err(err, err_cap, "aot_emit_pe_dll: sin simbolos a exportar"); return 0; }
+
+    PE64FILE_struct pe;
+    initializePE64File(&pe);
+    /* Base de carga: por defecto 0x10000000 (base clasica de DLL, libre); el
+     * usuario puede fijar otra.  Codigo PIC -> sin .reloc -> base fija. */
+    pe.ntHeaders.OptionalHeader.ImageBase = (cfg && cfg->image_base) ? cfg->image_base
+                                                                     : 0x10000000ull;
+    if (cfg) {
+        if (cfg->section_align) pe.ntHeaders.OptionalHeader.SectionAlignment = cfg->section_align;
+        if (cfg->file_align)    pe.ntHeaders.OptionalHeader.FileAlignment = cfg->file_align;
+    }
+
+    /* Secciones de usuario. */
+    for (int i = 0; i < num_secs; ++i) {
+        if (secs[i].flags & AOT_SEC_BSS) addBssSection(&pe, secs[i].name, secs[i].bss_size);
+        else addSection(&pe, secs[i].name, pe_section_chars(secs[i].flags),
+                        (_BYTE *)secs[i].data, secs[i].size);
+    }
+
+    /* Aplicar relocs (PIC: REL32 internas).  Mismo patron que aot_emit_pe. */
+    {
+        const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
+        for (int r = 0; r < num_relocs; ++r) {
+            const AotReloc *rl = &relocs[r];
+            if (rl->target_is_size || rl->target_is_end) {
+                set_err(err, err_cap, "aot_emit_pe_dll: SIZE/END no soportado");
+                freePE64File(&pe); return 0;
+            }
+            if (rl->site_section < 0 || rl->site_section >= num_secs ||
+                rl->target_section < 0 || rl->target_section >= num_secs) {
+                set_err(err, err_cap, "aot_emit_pe_dll: reloc con seccion fuera de rango");
+                freePE64File(&pe); return 0;
+            }
+            uint64_t target_value = image_base +
+                pe.sectionHeaders[rl->target_section].VirtualAddress + rl->target_off;
+            target_value = (uint64_t)((int64_t)target_value + rl->addend);
+            uint64_t site_va = image_base +
+                pe.sectionHeaders[rl->site_section].VirtualAddress + rl->site_off;
+            uint32_t width = (rl->kind == AOT_RELOC_ABS64 || rl->kind == AOT_RELOC_IMM64) ? 8u : 4u;
+            if (rl->site_off + width > secs[rl->site_section].size) {
+                set_err(err, err_cap, "aot_emit_pe_dll: reloc fuera de la seccion del sitio");
+                freePE64File(&pe); return 0;
+            }
+            apply_reloc(pe.sectionData[rl->site_section] + rl->site_off,
+                        site_va, target_value, rl->kind);
+        }
+    }
+
+    /* Tabla de exports (.edata).  Predecir su RVA (siguiente seccion). */
+    const ___IMAGE_SECTION_HEADER *last = &pe.sectionHeaders[pe.numberOfSections - 1];
+    _DWORD edataRVA = align(last->VirtualAddress + last->Misc.VirtualSize,
+                            pe.ntHeaders.OptionalHeader.SectionAlignment);
+
+    /* Orden de exports por nombre (GetProcAddress hace busqueda binaria: la
+     * name pointer table DEBE estar ordenada ascendente). */
+    int *order = (int *)malloc((size_t)num_syms * sizeof(int));
+    for (int i = 0; i < num_syms; ++i) order[i] = i;
+    for (int i = 0; i < num_syms; ++i)
+        for (int j = i + 1; j < num_syms; ++j)
+            if (strcmp(syms[order[j]].name, syms[order[i]].name) < 0) {
+                int t = order[i]; order[i] = order[j]; order[j] = t;
+            }
+
+    /* Layout del blob .edata: dir(40) + EAT + name_ptr + ordinals + strings. */
+    const uint32_t n = (uint32_t)num_syms;
+    const uint32_t off_eat   = 40;
+    const uint32_t off_names = off_eat + 4u * n;
+    const uint32_t off_ord   = off_names + 4u * n;
+    const uint32_t off_str   = off_ord + 2u * n;
+
+    OBuf ed; memset(&ed, 0, sizeof(ed));
+    /* strings (calculados aparte para conocer offsets), luego ensamblamos. */
+    const char *dllname = strrchr(path, '/');
+    const char *dllbk   = strrchr(path, '\\');
+    if (dllbk > dllname) dllname = dllbk;
+    dllname = dllname ? dllname + 1 : path;
+
+    /* Construir la tabla de strings y registrar offsets. */
+    OBuf strs; memset(&strs, 0, sizeof(strs));
+    uint32_t dllname_soff = (uint32_t)strs.len;
+    ob_put(&strs, dllname, strlen(dllname) + 1);
+    uint32_t *name_soff = (uint32_t *)malloc((size_t)num_syms * sizeof(uint32_t));
+    for (int i = 0; i < num_syms; ++i) {
+        name_soff[i] = (uint32_t)strs.len;
+        ob_put(&strs, syms[order[i]].name, strlen(syms[order[i]].name) + 1);
+    }
+
+    /* Export directory (40 bytes). */
+    uint8_t dir[40]; memset(dir, 0, sizeof(dir));
+    wr32le(dir + 12, edataRVA + off_str + dllname_soff);  /* Name */
+    wr32le(dir + 16, 1);                                  /* Base (ordinal) */
+    wr32le(dir + 20, n);                                  /* NumberOfFunctions */
+    wr32le(dir + 24, n);                                  /* NumberOfNames */
+    wr32le(dir + 28, edataRVA + off_eat);                 /* AddressOfFunctions */
+    wr32le(dir + 32, edataRVA + off_names);               /* AddressOfNames */
+    wr32le(dir + 36, edataRVA + off_ord);                 /* AddressOfNameOrdinals */
+    ob_put(&ed, dir, 40);
+
+    /* EAT: RVA de cada funcion (en orden ordenado -> ordinal i = i). */
+    for (int i = 0; i < num_syms; ++i) {
+        const AotSym *s = &syms[order[i]];
+        uint32_t rva = pe.sectionHeaders[s->section].VirtualAddress + (uint32_t)s->offset;
+        uint8_t b[4]; wr32le(b, rva); ob_put(&ed, b, 4);
+    }
+    /* Name pointer table (RVA de cada nombre, ordenado). */
+    for (int i = 0; i < num_syms; ++i) {
+        uint8_t b[4]; wr32le(b, edataRVA + off_str + name_soff[i]); ob_put(&ed, b, 4);
+    }
+    /* Ordinal table (u16): ordinal[i] = i (EAT en mismo orden). */
+    for (int i = 0; i < num_syms; ++i) {
+        uint8_t b[2]; b[0] = (uint8_t)i; b[1] = (uint8_t)(i >> 8); ob_put(&ed, b, 2);
+    }
+    /* Strings. */
+    ob_put(&ed, strs.p, strs.len);
+
+    addSection(&pe, ".edata", ___IMAGE_SCN_CNT_INITIALIZED_DATA | ___IMAGE_SCN_MEM_READ,
+               (_BYTE *)ed.p, (_DWORD)ed.len);
+    pe.ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress = edataRVA;
+    pe.ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_EXPORT].Size = (_DWORD)ed.len;
+
+    /* Marcar como DLL + base fija (sin .reloc, codigo PIC carga en ImageBase). */
+    pe.ntHeaders.FileHeader.Characteristics |= ___IMAGE_FILE_DLL;
+    pe.ntHeaders.OptionalHeader.DllCharacteristics &=
+        (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+
+    finalizePE64File(&pe);
+    pe.ntHeaders.OptionalHeader.AddressOfEntryPoint = 0;  /* sin DllMain */
+    writePE64File(&pe, path);
+    freePE64File(&pe);
+
+    free(order); free(name_soff); free(strs.p); free(ed.p);
+    return 1;
+}

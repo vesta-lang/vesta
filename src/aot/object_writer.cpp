@@ -125,12 +125,8 @@ namespace aot {
             return true;
         }
 
-        // SHARED: libreria compartida (.so/.dll).  v1: ELF .so (PE .dll pendiente).
+        // SHARED: libreria compartida (.so ELF / .dll PE).
         if (kind_ == OutputKind::SHARED) {
-            if (fmt_ != ObjFormat::ELF) {
-                err = "ObjectWriter: --emit shared solo soporta ELF (.so) por ahora";
-                return false;
-            }
             std::vector<AotSym> csyms(symbols_.size());
             std::vector<std::string> hold(symbols_.size());
             for (size_t i = 0; i < symbols_.size(); ++i) {
@@ -140,12 +136,18 @@ namespace aot {
                 csyms[i].offset  = symbols_[i].offset;
                 csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
             }
-            ok = aot_emit_elf_so(path.c_str(),
-                                 csecs.data(), static_cast<int>(csecs.size()),
-                                 crel_ptr, crel_n,
-                                 csyms.empty() ? nullptr : csyms.data(),
-                                 static_cast<int>(csyms.size()),
-                                 errbuf, sizeof(errbuf));
+            const AotSym *sym_ptr = csyms.empty() ? nullptr : csyms.data();
+            const int     sym_n   = static_cast<int>(csyms.size());
+            if (fmt_ == ObjFormat::ELF)
+                ok = aot_emit_elf_so(path.c_str(),
+                                     csecs.data(), static_cast<int>(csecs.size()),
+                                     crel_ptr, crel_n, sym_ptr, sym_n,
+                                     errbuf, sizeof(errbuf));
+            else  /* PE -> .dll */
+                ok = aot_emit_pe_dll(path.c_str(), &ccfg,
+                                     csecs.data(), static_cast<int>(csecs.size()),
+                                     crel_ptr, crel_n, sym_ptr, sym_n,
+                                     errbuf, sizeof(errbuf));
             if (!ok) { err = errbuf[0] ? errbuf : "ObjectWriter: error shared"; return false; }
             return true;
         }
