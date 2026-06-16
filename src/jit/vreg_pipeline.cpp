@@ -109,7 +109,9 @@ namespace jit {
                                              const CallResolver &resolve_call,
                                              const VregEntries &ent,
                                              const CallResolver &resolve_native,
-                                             const CallResolver &resolve_symbol) {
+                                             const CallResolver &resolve_symbol,
+                                             std::vector<NativeReloc> *relocs_out) {
+        if (relocs_out) relocs_out->clear();
         /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
          *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
          *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
@@ -139,6 +141,23 @@ namespace jit {
         X86Encoder enc;
         std::vector<uint8_t> bytes;
         if (enc.encode(pf, bytes) == 0 || bytes.empty()) return {};
+
+        /* AOT: traducir las MReloc del encoder (sym_idx -> reloc_symbols) a
+         * NativeReloc con el NOMBRE del simbolo resuelto, para que el driver
+         * las aplique sin depender de la tabla interna del MFunction. */
+        if (relocs_out) {
+            relocs_out->reserve(pf.relocs.size());
+            for (const MReloc &r : pf.relocs) {
+                NativeReloc nr;
+                nr.kind = (r.kind == MRelocKind::CALL_REL32)
+                    ? NativeReloc::Kind::CALL_REL32 : NativeReloc::Kind::ABS64;
+                nr.offset = r.patch_at;
+                nr.addend = r.addend;
+                nr.symbol = (r.sym_idx < pf.reloc_symbols.size())
+                    ? pf.reloc_symbols[r.sym_idx] : std::string();
+                relocs_out->push_back(std::move(nr));
+            }
+        }
 
         /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo AOT generado. */
         static const bool dis = []{

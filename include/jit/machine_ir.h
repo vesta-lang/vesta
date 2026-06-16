@@ -486,7 +486,24 @@ namespace jit {
          * posicion (ver 5c). */
         INLINE_ASM_RAW = 86,
 
-        COUNT       = 87
+        /* Pseudo AOT (Phase AOT.3 Paso 2b-ii): referencias a simbolos que el
+         * encoder emite con un placeholder + una @c MReloc, y que el driver
+         * parchea tras el layout de @c .text/.rodata.  Solo se generan en el
+         * codegen AOT (HOST_LEAF standalone); el JIT en proceso resuelve las
+         * direcciones en compile-time y usa CALL_ABS / MOV imm64 directos. */
+        CALL_SYM    = 87,   ///< CALL rel32 a una funcion del modulo por NOMBRE.
+                            ///< src1 = IMM32(sym_idx -> MFunction::reloc_symbols).
+                            ///< El encoder emite E8 + rel32=0 + MReloc{CALL_REL32}.
+        MOV_SYM     = 88,   ///< mov dst, &simbolo (direccion absoluta 64-bit de un
+                            ///< dato de .rodata).  dst = reg/vreg, src1 =
+                            ///< IMM32(sym_idx).  El encoder emite REX.W B8+rd +
+                            ///< imm64=0 + MReloc{ABS64}.
+        JMP_SYM     = 89,   ///< JMP rel32 a una funcion del modulo por NOMBRE
+                            ///< (tail-call TCO: epilogue + jmp al callee).  src1 =
+                            ///< IMM32(sym_idx).  El encoder emite E9 + rel32=0 +
+                            ///< MReloc{CALL_REL32} (misma matematica rel32).
+
+        COUNT       = 90
     };
 
     /* ===================================================================== */
@@ -674,6 +691,42 @@ namespace jit {
             i.src1 = MOperand::make_imm32(static_cast<int32_t>(blob_idx));
             return i;
         }
+
+        /** @brief CALL_SYM: CALL rel32 a la funcion del modulo @p sym_idx
+         *  (indice en @c MFunction::reloc_symbols).  El encoder deja un rel32
+         *  placeholder + una @c MReloc{CALL_REL32}. */
+        static MInstr make_call_sym(uint32_t sym_idx) noexcept {
+            MInstr i; i.op = MOp::CALL_SYM;
+            i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+            return i;
+        }
+
+        /** @brief MOV_SYM: @p dst = &simbolo @p sym_idx (direccion absoluta de
+         *  un dato de @c .rodata).  El encoder emite mov r64,imm64 placeholder +
+         *  una @c MReloc{ABS64}. */
+        static MInstr make_mov_sym(MOperand dst, uint32_t sym_idx) noexcept {
+            MInstr i; i.op = MOp::MOV_SYM; i.dst = dst;
+            i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+            return i;
+        }
+
+        /** @brief TAILCALL a una funcion del modulo por nombre (AOT HOST_LEAF):
+         *  marca el sym_idx en @c src2 (IMM32) -- @c src1 queda NONE para
+         *  distinguirla de las variantes label (self) / abs (cross-fn VM).  El
+         *  rewrite hace parallel-move de args + epilogue + JMP_SYM (TCO real). */
+        static MInstr make_tailcall_sym(uint32_t sym_idx) noexcept {
+            MInstr i; i.op = MOp::TAILCALL;
+            i.src2 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+            return i;
+        }
+
+        /** @brief JMP_SYM: jmp rel32 a la funcion del modulo @p sym_idx (cola del
+         *  tail-call AOT).  El encoder deja E9 + rel32 placeholder + MReloc. */
+        static MInstr make_jmp_sym(uint32_t sym_idx) noexcept {
+            MInstr i; i.op = MOp::JMP_SYM;
+            i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+            return i;
+        }
     };
 
     static_assert(sizeof(MInstr) == 32, "MInstr debe ser 32 bytes para cache locality");
@@ -730,6 +783,46 @@ namespace jit {
         uint32_t patch_at   = 0;   ///< byte offset donde escribir rel32
         uint32_t instr_end  = 0;   ///< byte offset del final del instr (base del rel)
         uint8_t  width      = 4;   ///< 1, 2, o 4 (siempre 4 en v1)
+    };
+
+    /* ===================================================================== */
+    /* Relocations AOT (resolucion CROSS-funcion / a datos)                   */
+    /* ===================================================================== */
+
+    /**
+     * @enum MRelocKind
+     * @brief Tipo de relocation que el codegen AOT deja sin resolver en una
+     *        funcion compilada de forma aislada (Phase AOT.3 Paso 2b-ii).
+     *
+     * A diferencia de @c MFixup (intra-funcion: el encoder lo resuelve solo,
+     * conoce el destino), una @c MReloc referencia un SIMBOLO cuya direccion
+     * NO se conoce hasta el layout final de @c .text/.rodata (que hace el
+     * driver tras colocar todas las funciones).  Es ARCH-AGNOSTICA: describe
+     * "que parchear" (kind + offset + simbolo + addend), no como; cada
+     * arquitectura interpreta @c kind a su modo (x86-64 rel32/abs64; ARM BL;
+     * RISC-V JAL; ...).
+     */
+    enum class MRelocKind : uint8_t {
+        CALL_REL32 = 0,  ///< x86-64 CALL E8 rel32: *(int32*)@ = sym - (site_base + patch_at + 4)
+        ABS64      = 1,  ///< direccion absoluta 64-bit (mov reg,imm64): *(u64*)@ = sym + addend
+    };
+
+    /**
+     * @struct MReloc
+     * @brief Sitio del codigo de UNA funcion que referencia un simbolo externo
+     *        a esa funcion (otra funcion del modulo, o un dato de @c .rodata) y
+     *        que el driver parchea tras conocer el layout.
+     *
+     * @c patch_at es el offset en bytes DENTRO del codigo de la funcion (0 =
+     * primer byte de la funcion); el driver le suma la base de la funcion en
+     * @c .text para obtener el offset absoluto a parchear.  @c sym_idx indexa
+     * @c MFunction::reloc_symbols.
+     */
+    struct MReloc {
+        MRelocKind kind     = MRelocKind::CALL_REL32;
+        uint32_t   patch_at = 0;   ///< byte offset dentro del codigo de la funcion
+        uint32_t   sym_idx  = 0;   ///< indice en @c MFunction::reloc_symbols
+        int64_t    addend   = 0;   ///< desplazamiento adicional dentro del simbolo
     };
 
     /* ===================================================================== */
@@ -832,6 +925,15 @@ namespace jit {
         std::vector<MBlock>        blocks;
         std::vector<uint64_t>      imm64_pool;
         std::vector<MFixup>        fixups;
+        /// Phase AOT.3 Paso 2b-ii: tabla de simbolos referenciados por las
+        /// @c MReloc de esta funcion (nombres de funciones del modulo y de
+        /// datos de .rodata).  Indexada por @c MReloc::sym_idx.
+        std::vector<std::string>   reloc_symbols;
+        /// Phase AOT.3 Paso 2b-ii: relocations sin resolver que el encoder
+        /// emite (CALL cross-funcion, refs a .rodata).  @c patch_at es relativo
+        /// al inicio del codigo de ESTA funcion; el driver lo reubica al
+        /// concatenar las funciones en @c .text.
+        std::vector<MReloc>        relocs;
         /// Offset de cada label en el code cache.  Indexado por label_id.
         /// Si el label no esta resuelto aun, contiene UINT32_MAX.
         std::vector<uint32_t>      label_offsets;
@@ -936,6 +1038,15 @@ namespace jit {
             b.label_id = lbl;
             blocks.push_back(std::move(b));
             return static_cast<MBlockId>(blocks.size() - 1);
+        }
+
+        /** @brief Internaliza el nombre de simbolo @p name en
+         *  @c reloc_symbols (deduplicado) y devuelve su indice (AOT). */
+        uint32_t intern_reloc_symbol(const std::string &name) {
+            for (uint32_t i = 0; i < reloc_symbols.size(); ++i)
+                if (reloc_symbols[i] == name) return i;
+            reloc_symbols.push_back(name);
+            return static_cast<uint32_t>(reloc_symbols.size() - 1);
         }
 
         /** @brief Anyade un imm64 al pool y devuelve su indice. */

@@ -100,7 +100,14 @@ namespace jit {
             case MOp::MOVQ_GP_XMM: case MOp::MOVQ_XMM_GP:
                 r.dst = R::DEF; r.src1 = R::USE; break;
 
-            /* Control de flujo / pseudo: sin operandos de registro vreg. */
+            /* AOT MOV_SYM: dst = &simbolo (def); src1 es el IMM32(sym_idx),
+             * no un vreg. */
+            case MOp::MOV_SYM:
+                r.dst = R::DEF; break;
+
+            /* Control de flujo / pseudo: sin operandos de registro vreg.
+             * CALL_SYM (AOT) cae aqui: sus args ya se marshalaron via ARG; su
+             * src1 es el IMM32(sym_idx). */
             default:
                 break;
         }
@@ -301,6 +308,7 @@ namespace jit {
                  * LOAD_VM/STORE_VM: su page-miss hace CALL a vrt_vm_read/write
                  * -> clobbea caller-saved -> tambien call-position. */
                 if (in.op == MOp::CALL || in.op == MOp::CALL_ABS
+                 || in.op == MOp::CALL_SYM   /* AOT: clobbea caller-saved */
                  || in.op == MOp::DIVMOD_V
                  || in.op == MOp::LOAD_VM || in.op == MOp::STORE_VM
                  /* Phase AS inc.5: el inline-asm clobbea caller-saved (en v1

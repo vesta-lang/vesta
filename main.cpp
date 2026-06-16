@@ -60,6 +60,7 @@
 
 #include <filesystem>
 #include <map>     // Phase MC.16: per-macro manifest map
+#include <unordered_map>  // Phase AOT.3 2b-ii: layout name->offset
 #include <set>     // Phase MC.16: manifest diff seen-set
 #include <cctype>  // Phase MC.16: isalnum en find_macro_ranges_with_names
 #include <openssl/rand.h>
@@ -1702,13 +1703,19 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
-            // Cuerpo de main en ABI HOST_LEAF (retorno en RAX, sin ProcessVM*).
-            std::vector<uint8_t> main_bytes = jit::vreg_compile_native(*main_fn);
-            if (main_bytes.empty()) {
-                std::cerr << "[aot] el selector vreg no soporta 'main' todavia "
-                             "(op fuera del subset nativo).\n";
-                return EXIT_FAILURE;
-            }
+            // ------------------------------------------------------------------
+            // Paso 2b-ii: layout multi-funcion con relocations intra-.text.
+            //
+            // Compilamos `main` y, por BFS sobre sus CALLs, cada funcion del
+            // modulo que alcanza (CALL_SYM deja una reloc por nombre).  Las
+            // concatenamos en .text tras el _start, registramos el offset de
+            // cada una y, al final, parcheamos las relocations:
+            //   CALL_REL32: rel32 = callee_off - (call_site_off + 4).
+            // (ABS64 a datos llega con .rodata en el hito siguiente.)
+            //
+            // `main` va PRIMERO (justo tras el stub): el `call main` del _start
+            // asume ese offset.  El resto va en orden de descubrimiento.
+            // ------------------------------------------------------------------
 
             // _start (arch+formato): llama a main (justo despues) y termina.
             aot::StartStub stub = aot::aot_make_start_stub(arch, fmt);
@@ -1717,10 +1724,106 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
-            // .text = _start ++ main.  main va inmediatamente despues del stub;
-            // el call a main dentro del stub ya apunta a ese offset.
+            // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
+            std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
+            for (const auto &f : aot_mod.functions) fn_by_name[f.name] = &f;
+
+            // Codigo compilado de cada funcion + sus relocations.
+            struct AotFn {
+                std::string              name;
+                std::vector<uint8_t>     bytes;
+                std::vector<jit::NativeReloc> relocs;
+                uint32_t                 text_off = 0;  // offset en .text (post-stub)
+            };
+            std::vector<AotFn> compiled;
+            std::unordered_map<std::string, size_t> compiled_idx;  // name -> compiled[]
+
+            // BFS desde main: compila cada funcion alcanzada por un CALL.
+            std::vector<std::string> work;
+            work.push_back("main");
+            std::unordered_map<std::string, bool> queued;
+            queued["main"] = true;
+            bool aot_codegen_ok = true;
+            while (!work.empty()) {
+                const std::string nm = work.back();
+                work.pop_back();
+                auto itf = fn_by_name.find(nm);
+                if (itf == fn_by_name.end()) {
+                    std::cerr << "[aot] simbolo no resuelto: la funcion '" << nm
+                              << "' (referenciada por un CALL) no existe en el "
+                                 "modulo.\n";
+                    aot_codegen_ok = false;
+                    break;
+                }
+                AotFn af;
+                af.name  = nm;
+                af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
+                                                    &af.relocs);
+                if (af.bytes.empty()) {
+                    std::cerr << "[aot] el selector vreg no soporta la funcion '"
+                              << nm << "' todavia (op fuera del subset nativo).\n";
+                    aot_codegen_ok = false;
+                    break;
+                }
+                compiled_idx[nm] = compiled.size();
+                compiled.push_back(std::move(af));
+                // Encolar los callees (relocs CALL_REL32 a nombres de funcion).
+                for (const jit::NativeReloc &r : compiled.back().relocs) {
+                    if (r.kind != jit::NativeReloc::Kind::CALL_REL32) continue;
+                    if (queued.count(r.symbol)) continue;
+                    queued[r.symbol] = true;
+                    work.push_back(r.symbol);
+                }
+            }
+            if (!aot_codegen_ok) return EXIT_FAILURE;
+
+            // Layout: .text = stub ++ main ++ (resto en orden de compilacion).
+            // main DEBE ir primero (el `call main` del stub asume bytes.size()).
             std::vector<uint8_t> text = stub.bytes;
-            text.insert(text.end(), main_bytes.begin(), main_bytes.end());
+            const uint32_t stub_len = static_cast<uint32_t>(text.size());
+            std::unordered_map<std::string, uint32_t> text_off;  // name -> offset
+
+            auto place_fn = [&](size_t ci) {
+                AotFn &af = compiled[ci];
+                af.text_off = static_cast<uint32_t>(text.size());
+                text_off[af.name] = af.text_off;
+                text.insert(text.end(), af.bytes.begin(), af.bytes.end());
+            };
+            // main primero.
+            place_fn(compiled_idx["main"]);
+            // resto.
+            for (size_t ci = 0; ci < compiled.size(); ++ci)
+                if (compiled[ci].name != "main") place_fn(ci);
+
+            // Parchear relocations.  CALL_REL32: rel = callee - (site + 4).
+            for (const AotFn &af : compiled) {
+                for (const jit::NativeReloc &r : af.relocs) {
+                    const uint32_t site = af.text_off + r.offset;
+                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
+                        auto it = text_off.find(r.symbol);
+                        if (it == text_off.end()) {
+                            std::cerr << "[aot] simbolo no resuelto en reloc: '"
+                                      << r.symbol << "'.\n";
+                            return EXIT_FAILURE;
+                        }
+                        const int32_t rel = static_cast<int32_t>(
+                            static_cast<int64_t>(it->second)
+                            - static_cast<int64_t>(site) - 4);
+                        const uint32_t u = static_cast<uint32_t>(rel);
+                        text[site + 0] = static_cast<uint8_t>(u & 0xFF);
+                        text[site + 1] = static_cast<uint8_t>((u >> 8) & 0xFF);
+                        text[site + 2] = static_cast<uint8_t>((u >> 16) & 0xFF);
+                        text[site + 3] = static_cast<uint8_t>((u >> 24) & 0xFF);
+                    } else {
+                        // ABS64 (refs a .rodata): hito siguiente.
+                        std::cerr << "[aot] reloc ABS64 a '" << r.symbol
+                                  << "' aun no soportada (datos en .rodata "
+                                     "pendiente).\n";
+                        return EXIT_FAILURE;
+                    }
+                }
+            }
+            (void)stub_len;
 
             aot::ObjectWriter w(fmt);
             const int tsec = w.add_text(std::move(text));  // crea .text + entry off 0

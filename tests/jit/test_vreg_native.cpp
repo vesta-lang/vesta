@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -220,6 +222,146 @@ namespace {
         }
     }
 
+    /* ===================================================================== */
+    /* Helper layout AOT: concatena funciones, mapea nombre->offset y parchea *
+     * las relocations CALL_REL32 (Phase AOT.3 Paso 2b-ii).                    */
+    /* ===================================================================== */
+    struct LaidOut {
+        std::vector<uint8_t> text;
+        std::unordered_map<std::string, uint32_t> off;
+    };
+    /** @brief Compila @p fns (la 1a es el entry en off 0), las concatena y
+     *  parchea sus relocs CALL_REL32.  Devuelve el .text combinado. */
+    LaidOut layout_aot(const std::vector<const ir::IrFunction *> &fns) {
+        struct C { std::string name; std::vector<uint8_t> bytes;
+                   std::vector<jit::NativeReloc> relocs; uint32_t off = 0; };
+        std::vector<C> cs;
+        LaidOut out;
+        for (const ir::IrFunction *f : fns) {
+            C c; c.name = f->name;
+            c.bytes = jit::vreg_compile_native(*f, {}, {}, {}, {}, &c.relocs);
+            cs.push_back(std::move(c));
+        }
+        for (C &c : cs) {
+            c.off = static_cast<uint32_t>(out.text.size());
+            out.off[c.name] = c.off;
+            out.text.insert(out.text.end(), c.bytes.begin(), c.bytes.end());
+        }
+        for (const C &c : cs) {
+            for (const jit::NativeReloc &r : c.relocs) {
+                if (r.kind != jit::NativeReloc::Kind::CALL_REL32) continue;
+                const uint32_t site = c.off + r.offset;
+                const uint32_t tgt  = out.off[r.symbol];
+                const int32_t rel = static_cast<int32_t>(
+                    static_cast<int64_t>(tgt) - static_cast<int64_t>(site) - 4);
+                const uint32_t u = static_cast<uint32_t>(rel);
+                out.text[site+0] = static_cast<uint8_t>(u & 0xFF);
+                out.text[site+1] = static_cast<uint8_t>((u >> 8) & 0xFF);
+                out.text[site+2] = static_cast<uint8_t>((u >> 16) & 0xFF);
+                out.text[site+3] = static_cast<uint8_t>((u >> 24) & 0xFF);
+            }
+        }
+        return out;
+    }
+
+    /* ===================================================================== */
+    /* Test 5: CALL intra-modulo (reloc CALL_REL32).                          *
+     *   i64 addee(a,b){ return a+b; }   i64 caller(){ return addee(40,2); }  */
+    /* ===================================================================== */
+    void test_call_reloc() {
+        std::printf("[aot-native] caller() -> addee(40,2) (CALL + reloc)\n");
+        // addee(a,b) = a + b
+        ir::IrFunction addee; addee.name = "addee"; addee.ret_type = ir::IrType::I64;
+        const ir::IrValueId aa = mk_value(addee, ir::IrType::I64);
+        const ir::IrValueId ab = mk_value(addee, ir::IrType::I64);
+        addee.params = {aa, ab};
+        const ir::IrValueId at = mk_value(addee, ir::IrType::I64);
+        {
+            ir::IrBlock e; e.id = 0; e.name = "entry";
+            ir::IrInstr s = mk_instr(ir::IrOp::ADD, ir::IrType::I64, at);
+            s.operands = {aa, ab}; e.instrs.push_back(s);
+            ir::IrInstr r = mk_instr(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+            r.operands.push_back(at); e.instrs.push_back(r);
+            addee.blocks.push_back(e);
+        }
+        // caller() = addee(40, 2)
+        ir::IrFunction caller; caller.name = "caller"; caller.ret_type = ir::IrType::I64;
+        const ir::IrValueId c40 = mk_value(caller, ir::IrType::I64);
+        const ir::IrValueId c2  = mk_value(caller, ir::IrType::I64);
+        const ir::IrValueId cr  = mk_value(caller, ir::IrType::I64);
+        {
+            ir::IrBlock e; e.id = 0; e.name = "entry";
+            ir::IrInstr k1 = mk_instr(ir::IrOp::CONST, ir::IrType::I64, c40);
+            k1.imm = 40; e.instrs.push_back(k1);
+            ir::IrInstr k2 = mk_instr(ir::IrOp::CONST, ir::IrType::I64, c2);
+            k2.imm = 2; e.instrs.push_back(k2);
+            ir::IrInstr cl = mk_instr(ir::IrOp::CALL, ir::IrType::I64, cr);
+            cl.func_name = "addee"; cl.operands = {c40, c2}; e.instrs.push_back(cl);
+            ir::IrInstr r = mk_instr(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+            r.operands.push_back(cr); e.instrs.push_back(r);
+            caller.blocks.push_back(e);
+        }
+        LaidOut lo = layout_aot({&caller, &addee});
+        CHECK(!lo.text.empty(), "layout produce .text");
+        CHECK(lo.off.count("addee") && lo.off["addee"] > 0,
+              "addee colocada tras caller");
+        jit::CodeCache cc;
+        uint8_t *code = make_runnable(cc, lo.text);
+        CHECK(code != nullptr, "alloc + commit OK (call-reloc)");
+        if (code) {
+            using F = int64_t(*)();
+            const int64_t got = reinterpret_cast<F>(code)();
+            CHECK(got == 42, "caller() == 42 (CALL resuelto por reloc)");
+            if (got != 42) std::printf("    obtuvo %lld\n", (long long)got);
+        }
+    }
+
+    /* ===================================================================== */
+    /* Test 6: TAILCALL intra-modulo (TCO genuina, reloc en JMP_SYM).         *
+     *   i64 addee(a,b){return a+b;}  i64 tcaller(){ return addee(40,2); }    */
+    /* ===================================================================== */
+    void test_tailcall_reloc() {
+        std::printf("[aot-native] tcaller() -> tailcall addee(40,2) (JMP_SYM TCO)\n");
+        ir::IrFunction addee; addee.name = "addee2"; addee.ret_type = ir::IrType::I64;
+        const ir::IrValueId aa = mk_value(addee, ir::IrType::I64);
+        const ir::IrValueId ab = mk_value(addee, ir::IrType::I64);
+        addee.params = {aa, ab};
+        const ir::IrValueId at = mk_value(addee, ir::IrType::I64);
+        {
+            ir::IrBlock e; e.id = 0; e.name = "entry";
+            ir::IrInstr s = mk_instr(ir::IrOp::ADD, ir::IrType::I64, at);
+            s.operands = {aa, ab}; e.instrs.push_back(s);
+            ir::IrInstr r = mk_instr(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+            r.operands.push_back(at); e.instrs.push_back(r);
+            addee.blocks.push_back(e);
+        }
+        ir::IrFunction tc; tc.name = "tcaller"; tc.ret_type = ir::IrType::I64;
+        const ir::IrValueId c40 = mk_value(tc, ir::IrType::I64);
+        const ir::IrValueId c2  = mk_value(tc, ir::IrType::I64);
+        {
+            ir::IrBlock e; e.id = 0; e.name = "entry";
+            ir::IrInstr k1 = mk_instr(ir::IrOp::CONST, ir::IrType::I64, c40);
+            k1.imm = 40; e.instrs.push_back(k1);
+            ir::IrInstr k2 = mk_instr(ir::IrOp::CONST, ir::IrType::I64, c2);
+            k2.imm = 2; e.instrs.push_back(k2);
+            // TAILCALL sin dst: el callee retorna directo al caller de tcaller.
+            ir::IrInstr cl = mk_instr(ir::IrOp::TAILCALL, ir::IrType::I64,
+                                      ir::IR_NO_VALUE);
+            cl.func_name = "addee2"; cl.operands = {c40, c2}; e.instrs.push_back(cl);
+            tc.blocks.push_back(e);
+        }
+        LaidOut lo = layout_aot({&tc, &addee});
+        jit::CodeCache cc;
+        uint8_t *code = make_runnable(cc, lo.text);
+        CHECK(code != nullptr, "alloc + commit OK (tailcall-reloc)");
+        if (code) {
+            using F = int64_t(*)();
+            const int64_t got = reinterpret_cast<F>(code)();
+            CHECK(got == 42, "tcaller() == 42 (TAILCALL via JMP_SYM)");
+            if (got != 42) std::printf("    obtuvo %lld\n", (long long)got);
+        }
+    }
+
 } // namespace
 
 int main() {
@@ -228,6 +370,8 @@ int main() {
     test_add();
     test_param_add2();
     test_param_combine4();
+    test_call_reloc();
+    test_tailcall_reloc();
     std::printf("\n%d checks OK, %d fallos\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;
 }
