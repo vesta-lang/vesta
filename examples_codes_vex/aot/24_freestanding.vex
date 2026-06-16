@@ -1,0 +1,25 @@
+// AOT.2.d: FREESTANDING (dev OS / kernel) -- sin libc.  El compilador re-baja
+// los builtins malloc/free/panic a los simbolos que el usuario aporta con
+// @AllocatorOverride / @PanicHandler (en --freestanding).  Asi el .o no depende
+// de libc: el unico simbolo externo de las clases es `calloc` (de __new), que
+// el runtime del usuario provee.  El programador controla TODA la memoria.
+//
+// Compilar + enlazar SIN libc (el runtime C aporta calloc + _start):
+//   vm -m aot --vex 24_freestanding.vex --emit obj --format elf --freestanding -o k.o
+//   // rt.c:  void* calloc(u64,u64){...heap propio...}  void _start(){...syscall exit...}
+//   gcc -nostdlib -static -ffreestanding rt.c k.o -o kbin && ./kbin   # exit 42
+
+// Hooks del runtime del usuario (sin libc).  En un kernel real, k_free
+// liberaria al allocador del kernel; aqui es un demo no-op.
+@AllocatorOverride void k_free(i64* p) { }
+
+class Box {
+    i32 v;
+    Box(i32 x) { this.v = x; }
+    i32 get() { return this.v; }
+}
+
+i32 main() {
+    Box b = new Box(42);   // calloc(obj) + ctor (calloc lo da el runtime)
+    return b.get();         // 42 ; al salir: k_free(obj) via RAII
+}

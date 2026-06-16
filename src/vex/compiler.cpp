@@ -162,6 +162,28 @@ namespace vex {
             return res;
         }
 
+        // AOT.2.d: detectar @AllocatorOverride / @PanicHandler.  El allocador
+        // que devuelve un puntero -> alloc_sym; el que devuelve void -> free_sym.
+        for (auto &decl : mod->decls) {
+            if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+            auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (fd->is_panic_handler) res.aot_panic_sym = fd->name;
+            if (fd->is_alloc_override) {
+                bool ret_ptr = false;
+                if (fd->return_type
+                 && fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                    const auto pk = static_cast<ast::PrimitiveTypeNode *>(
+                        fd->return_type.get())->prim;
+                    ret_ptr = (pk == PrimitiveKind::PTR);
+                } else if (fd->return_type
+                        && fd->return_type->kind == ast::NodeKind::PointerTypeNode) {
+                    ret_ptr = true;
+                }
+                if (ret_ptr) res.aot_alloc_sym = fd->name;
+                else         res.aot_free_sym  = fd->name;
+            }
+        }
+
         /* : set @c has_lowerable_macros si el lowering emitio
          * al menos una IrFunction marcada @c is_macro_compiled.  Esto
          * es un gate mas robusto que @c macro_expectations.empty() para
