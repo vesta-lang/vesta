@@ -483,11 +483,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     return ok;
 }
 
-/* =========================================================================
- *  ELF64 RELOCATABLE (.o, ET_REL) -- hand-rolled (sin _start ni phdrs)
- * ========================================================================= */
-
-/* Buffer de salida con append + alineacion. */
+/* Buffer de salida con append + alineacion (compartido por dynexec + .o). */
 typedef struct { uint8_t *p; size_t len, cap; } OBuf;
 static int ob_reserve(OBuf *o, size_t extra) {
     if (o->len + extra <= o->cap) return 1;
@@ -506,6 +502,283 @@ static int ob_align(OBuf *o, size_t a) {
     while (o->len % a) { uint8_t z = 0; if (!ob_put(o, &z, 1)) return 0; }
     return 1;
 }
+
+/* =========================================================================
+ *  ELF64 EJECUTABLE DINaMICO (PIE ET_DYN) con imports libc via eager-GOT
+ *  -- hand-rolled (sin tocar el submodulo).  AOT.2.exec slice 2.
+ *
+ *  Modelo (mas simple que PLT lazy): por cada simbolo externo una entrada
+ *  GOT (8B, .got writable) + reloc R_X86_64_GLOB_DAT contra un dynsym UND;
+ *  el thunk `FF 25 disp32` (jmp [rip+GOT]) que ya emitio el driver salta por
+ *  la GOT.  El linker dinamico (DT_NEEDED libc.so.6 + DF_BIND_NOW) resuelve
+ *  las GOT al cargar.  PT_INTERP -> ld.so.  vaddr == file offset (PIE base 0).
+ * ========================================================================= */
+
+#ifndef DT_NULL
+#define DT_NULL 0
+#endif
+#ifndef DT_FLAGS_1
+#define DT_FLAGS_1 0x6ffffffbULL
+#endif
+#ifndef DF_BIND_NOW
+#define DF_BIND_NOW 0x8
+#endif
+#ifndef DF_1_NOW
+#define DF_1_NOW 0x1
+#endif
+
+/* Hash SysV de ELF (para .hash / DT_HASH). */
+static unsigned long aot_elf_hash(const char *name) {
+    unsigned long h = 0, g;
+    while (*name) {
+        h = (h << 4) + (unsigned char)*name++;
+        g = h & 0xf0000000UL;
+        if (g) h ^= g >> 24;
+        h &= ~g;
+    }
+    return h;
+}
+
+#define AOT_DYN_ALIGN(x, a) (((x) + ((a) - 1)) & ~((uint64_t)(a) - 1))
+
+int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
+                         const AotSection *secs, int num_secs,
+                         int entry_sec, uint64_t entry_off,
+                         const AotReloc *relocs, int num_relocs,
+                         const AotImport *imps, int num_imps,
+                         char *err, size_t err_cap) {
+    (void)cfg;
+    if (num_secs <= 0) { set_err(err, err_cap, "elf_dynexec: sin secciones"); return 0; }
+    if (entry_sec < 0 || entry_sec >= num_secs) {
+        set_err(err, err_cap, "elf_dynexec: entry_sec fuera de rango"); return 0; }
+    if (num_imps <= 0) { set_err(err, err_cap, "elf_dynexec: sin imports"); return 0; }
+
+    const uint64_t PAGE = AOT_ELF_PAGE;
+    const int      NPH  = 6;            /* PHDR,INTERP,LOAD,LOAD,DYNAMIC,GNU_STACK */
+    const int      nsym = 1 + num_imps; /* [0]=null + 1 UND por import */
+    const char     interp[] = "/lib64/ld-linux-x86-64.so.2";
+    const size_t   interp_len = sizeof(interp); /* incluye el nul */
+
+    /* --- .dynstr: "\0" + nombres de import + "libc.so.6" --- */
+    OBuf dynstr; memset(&dynstr, 0, sizeof(dynstr));
+    { uint8_t z = 0; ob_put(&dynstr, &z, 1); }
+    uint32_t *name_off = (uint32_t *)calloc((size_t)num_imps, sizeof(uint32_t));
+    for (int i = 0; i < num_imps; ++i) {
+        name_off[i] = (uint32_t)dynstr.len;
+        ob_put(&dynstr, imps[i].func, strlen(imps[i].func) + 1);
+    }
+    uint32_t libc_off = (uint32_t)dynstr.len;
+    ob_put(&dynstr, "libc.so.6", 10);
+
+    /* --- .hash SysV: nbucket, nchain(=nsym), buckets[], chains[] --- */
+    uint32_t nbucket = (uint32_t)(nsym < 1 ? 1 : nsym);
+    uint32_t nchain  = (uint32_t)nsym;
+    uint32_t *bucket = (uint32_t *)calloc(nbucket, sizeof(uint32_t));
+    uint32_t *chain  = (uint32_t *)calloc(nchain, sizeof(uint32_t));
+    for (int i = 0; i < num_imps; ++i) {
+        uint32_t si = (uint32_t)(1 + i);
+        uint32_t b = (uint32_t)(aot_elf_hash(imps[i].func) % nbucket);
+        chain[si] = bucket[b];
+        bucket[b] = si;
+    }
+    size_t hash_size = (size_t)(2 + nbucket + nchain) * 4u;
+
+    /* ================= PASO 1: layout (vaddr == file offset) ================= */
+    uint64_t off = 0;
+    uint64_t ehdr_off = off;          off += sizeof(Elf64_Ehdr);
+    uint64_t phdr_off = off;          off += (uint64_t)NPH * sizeof(Elf64_Phdr);
+    uint64_t interp_off = off;        off += interp_len;
+    off = AOT_DYN_ALIGN(off, 8);
+    uint64_t dynsym_off = off;        off += (uint64_t)nsym * sizeof(Elf64_Sym);
+    uint64_t dynstr_off = off;        off += dynstr.len;
+    off = AOT_DYN_ALIGN(off, 4);
+    uint64_t hash_off = off;          off += hash_size;
+    off = AOT_DYN_ALIGN(off, 8);
+    uint64_t rela_off = off;          off += (uint64_t)num_imps * sizeof(Elf64_Rela);
+    off = AOT_DYN_ALIGN(off, 16);
+
+    /* Secciones de codigo/rodata (NO-WRITE) en el segmento R+X. */
+    uint64_t *sec_va = (uint64_t *)calloc((size_t)num_secs, sizeof(uint64_t));
+    uint8_t  *sec_seen = (uint8_t *)calloc((size_t)num_secs, sizeof(uint8_t));
+    for (int i = 0; i < num_secs; ++i) {
+        if ((secs[i].flags & AOT_SEC_WRITE) || (secs[i].flags & AOT_SEC_BSS)) continue;
+        if (secs[i].size == 0) continue;
+        uint64_t a = secs[i].align ? secs[i].align : 16;
+        off = AOT_DYN_ALIGN(off, a);
+        sec_va[i] = off; sec_seen[i] = 1; off += secs[i].size;
+    }
+    uint64_t region1_end = off;
+    off = AOT_DYN_ALIGN(off, PAGE);
+    uint64_t region2_start = off;
+
+    uint64_t got_off = off;           off += (uint64_t)num_imps * 8u;
+
+    /* Secciones WRITE (.data) en el segmento R+W. */
+    for (int i = 0; i < num_secs; ++i) {
+        if (!(secs[i].flags & AOT_SEC_WRITE)) continue;
+        if (secs[i].flags & AOT_SEC_BSS) continue;  /* bss v1: omitido */
+        if (secs[i].size == 0) continue;
+        uint64_t a = secs[i].align ? secs[i].align : 8;
+        off = AOT_DYN_ALIGN(off, a);
+        sec_va[i] = off; sec_seen[i] = 1; off += secs[i].size;
+    }
+    off = AOT_DYN_ALIGN(off, 8);
+    uint64_t dynamic_off = off;
+    const int ndyn = 12;
+    off += (uint64_t)ndyn * sizeof(Elf64_Dyn);
+    uint64_t region2_end = off;
+    uint64_t total = off;
+
+    uint64_t entry_vaddr = sec_va[entry_sec] + entry_off;
+
+    /* ================= PASO 2: emitir la imagen ================= */
+    uint8_t *img = (uint8_t *)calloc(1, (size_t)total);
+    if (!img) { set_err(err, err_cap, "elf_dynexec: OOM");
+        free(name_off); free(bucket); free(chain); free(dynstr.p);
+        free(sec_va); free(sec_seen); return 0; }
+
+    /* Ehdr. */
+    Elf64_Ehdr *eh = (Elf64_Ehdr *)(img + ehdr_off);
+    eh->e_ident[0] = 0x7f; eh->e_ident[1] = 'E'; eh->e_ident[2] = 'L'; eh->e_ident[3] = 'F';
+    eh->e_ident[4] = ELFCLASS64; eh->e_ident[5] = 1 /*LSB*/; eh->e_ident[6] = 1 /*EV_CURRENT*/;
+    eh->e_type = ET_DYN; eh->e_machine = EM_X86_64; eh->e_version = 1;
+    eh->e_entry = entry_vaddr;
+    eh->e_phoff = phdr_off; eh->e_shoff = 0; eh->e_flags = 0;
+    eh->e_ehsize = (uint16_t)sizeof(Elf64_Ehdr);
+    eh->e_phentsize = (uint16_t)sizeof(Elf64_Phdr); eh->e_phnum = (uint16_t)NPH;
+    eh->e_shentsize = 0; eh->e_shnum = 0; eh->e_shstrndx = 0;
+
+    /* Phdrs. */
+    Elf64_Phdr *ph = (Elf64_Phdr *)(img + phdr_off);
+    memset(ph, 0, (size_t)NPH * sizeof(Elf64_Phdr));
+    ph[0].p_type = PT_PHDR;   ph[0].p_flags = PF_R;
+    ph[0].p_offset = phdr_off; ph[0].p_vaddr = phdr_off; ph[0].p_paddr = phdr_off;
+    ph[0].p_filesz = (uint64_t)NPH * sizeof(Elf64_Phdr);
+    ph[0].p_memsz = ph[0].p_filesz; ph[0].p_align = 8;
+    ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
+    ph[1].p_offset = interp_off; ph[1].p_vaddr = interp_off; ph[1].p_paddr = interp_off;
+    ph[1].p_filesz = interp_len; ph[1].p_memsz = interp_len; ph[1].p_align = 1;
+    ph[2].p_type = PT_LOAD;    ph[2].p_flags = PF_R | PF_X;
+    ph[2].p_offset = 0; ph[2].p_vaddr = 0; ph[2].p_paddr = 0;
+    ph[2].p_filesz = region1_end; ph[2].p_memsz = region1_end; ph[2].p_align = PAGE;
+    ph[3].p_type = PT_LOAD;    ph[3].p_flags = PF_R | PF_W;
+    ph[3].p_offset = region2_start; ph[3].p_vaddr = region2_start; ph[3].p_paddr = region2_start;
+    ph[3].p_filesz = region2_end - region2_start;
+    ph[3].p_memsz = region2_end - region2_start; ph[3].p_align = PAGE;
+    ph[4].p_type = PT_DYNAMIC; ph[4].p_flags = PF_R | PF_W;
+    ph[4].p_offset = dynamic_off; ph[4].p_vaddr = dynamic_off; ph[4].p_paddr = dynamic_off;
+    ph[4].p_filesz = (uint64_t)ndyn * sizeof(Elf64_Dyn);
+    ph[4].p_memsz = ph[4].p_filesz; ph[4].p_align = 8;
+    ph[5].p_type = PT_GNU_STACK; ph[5].p_flags = PF_R | PF_W;
+    ph[5].p_align = 0x10;
+
+    /* .interp */
+    memcpy(img + interp_off, interp, interp_len);
+
+    /* .dynsym */
+    Elf64_Sym *dsym = (Elf64_Sym *)(img + dynsym_off);
+    memset(dsym, 0, (size_t)nsym * sizeof(Elf64_Sym));
+    for (int i = 0; i < num_imps; ++i) {
+        Elf64_Sym *s = &dsym[1 + i];
+        s->st_name = name_off[i];
+        s->st_info = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+        s->st_other = 0; s->st_shndx = SHN_UNDEF; s->st_value = 0; s->st_size = 0;
+    }
+    /* .dynstr */
+    memcpy(img + dynstr_off, dynstr.p, dynstr.len);
+    /* .hash */
+    { uint32_t *h = (uint32_t *)(img + hash_off);
+      h[0] = nbucket; h[1] = nchain;
+      for (uint32_t i = 0; i < nbucket; ++i) h[2 + i] = bucket[i];
+      for (uint32_t i = 0; i < nchain;  ++i) h[2 + nbucket + i] = chain[i]; }
+    /* .rela.dyn (R_X86_64_GLOB_DAT por entrada GOT) */
+    Elf64_Rela *rela = (Elf64_Rela *)(img + rela_off);
+    for (int i = 0; i < num_imps; ++i) {
+        rela[i].r_offset = got_off + (uint64_t)i * 8u;
+        rela[i].r_info   = ELF64_R_INFO((uint64_t)(1 + i), R_X86_64_GLOB_DAT);
+        rela[i].r_addend = 0;
+    }
+    /* Secciones de usuario (codigo/rodata + data). */
+    for (int i = 0; i < num_secs; ++i)
+        if (sec_seen[i]) memcpy(img + sec_va[i], secs[i].data, secs[i].size);
+
+    /* .dynamic */
+    { Elf64_Dyn *d = (Elf64_Dyn *)(img + dynamic_off); int k = 0;
+      d[k].d_tag = DT_NEEDED;  d[k++].d_un.d_val = libc_off;
+      d[k].d_tag = DT_HASH;    d[k++].d_un.d_ptr = hash_off;
+      d[k].d_tag = DT_STRTAB;  d[k++].d_un.d_ptr = dynstr_off;
+      d[k].d_tag = DT_SYMTAB;  d[k++].d_un.d_ptr = dynsym_off;
+      d[k].d_tag = DT_STRSZ;   d[k++].d_un.d_val = dynstr.len;
+      d[k].d_tag = DT_SYMENT;  d[k++].d_un.d_val = sizeof(Elf64_Sym);
+      d[k].d_tag = DT_RELA;    d[k++].d_un.d_ptr = rela_off;
+      d[k].d_tag = DT_RELASZ;  d[k++].d_un.d_val = (uint64_t)num_imps * sizeof(Elf64_Rela);
+      d[k].d_tag = DT_RELAENT; d[k++].d_un.d_val = sizeof(Elf64_Rela);
+      d[k].d_tag = DT_FLAGS;   d[k++].d_un.d_val = DF_BIND_NOW;
+      d[k].d_tag = (Elf64_Sxword)DT_FLAGS_1; d[k++].d_un.d_val = DF_1_NOW;
+      d[k].d_tag = DT_NULL;    d[k++].d_un.d_val = 0; }
+
+    /* --- Relocs cross-seccion del driver (data refs / section syms).  PIE: solo
+     *     PC-relativo (REL32) + inmediatos (IMM32/IMM64=size); ABS64 NO va en
+     *     PIE (necesitaria R_X86_64_RELATIVE) -> error claro. --- */
+    int ok = 1;
+    for (int r = 0; r < num_relocs && ok; ++r) {
+        const AotReloc *rl = &relocs[r];
+        if (rl->kind == AOT_RELOC_ABS64) {
+            set_err(err, err_cap, "elf_dynexec: ABS64 (--no-pie) no soportado en PIE; usa PIC");
+            ok = 0; break;
+        }
+        if (rl->site_section < 0 || rl->site_section >= num_secs ||
+            !sec_seen[rl->site_section] ||
+            (!rl->target_is_size &&
+             (rl->target_section < 0 || rl->target_section >= num_secs ||
+              !sec_seen[rl->target_section]))) {
+            set_err(err, err_cap, "elf_dynexec: reloc con seccion invalida"); ok = 0; break;
+        }
+        uint64_t tv;
+        if (rl->target_is_size) tv = aot_sec_size(&secs[rl->target_section]);
+        else {
+            tv = sec_va[rl->target_section];
+            tv += rl->target_is_end ? aot_sec_size(&secs[rl->target_section]) : rl->target_off;
+        }
+        tv = (uint64_t)((int64_t)tv + rl->addend);
+        uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+        if (!apply_reloc(img + site_va, site_va, tv, rl->kind)) {
+            set_err(err, err_cap, "elf_dynexec: reloc kind invalido"); ok = 0; break;
+        }
+    }
+
+    /* --- Parchear cada thunk (FF 25 disp32) -> su entrada GOT.  imps[i] <-> got[i].
+     *     disp32 = got_va - (thunk_va + 6); el FF 25 esta en call_section:call_off. --- */
+    for (int i = 0; i < num_imps && ok; ++i) {
+        int cs = imps[i].call_section;
+        if (cs < 0 || cs >= num_secs || !sec_seen[cs]) {
+            set_err(err, err_cap, "elf_dynexec: call_section del thunk invalido"); ok = 0; break;
+        }
+        uint64_t thunk_va = sec_va[cs] + imps[i].call_off;
+        uint64_t got_va   = got_off + (uint64_t)i * 8u;
+        int32_t  disp = (int32_t)((int64_t)got_va - (int64_t)(thunk_va + 6));
+        memcpy(img + thunk_va + 2, &disp, 4);
+    }
+
+    if (ok) {
+        FILE *f = fopen(path, "wb");
+        if (!f) { set_err(err, err_cap, "elf_dynexec: fopen fallo"); ok = 0; }
+        else {
+            size_t w = fwrite(img, 1, (size_t)total, f);
+            fclose(f);
+            if (w != total) { set_err(err, err_cap, "elf_dynexec: escritura incompleta"); ok = 0; }
+        }
+    }
+
+    free(img); free(name_off); free(bucket); free(chain); free(dynstr.p);
+    free(sec_va); free(sec_seen);
+    return ok;
+}
+
+/* =========================================================================
+ *  ELF64 RELOCATABLE (.o, ET_REL) -- hand-rolled (sin _start ni phdrs)
+ * ========================================================================= */
+
 
 int aot_emit_elf_obj(const char *path,
                      const AotSection *secs, int num_secs,
