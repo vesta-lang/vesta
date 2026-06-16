@@ -47,7 +47,11 @@ namespace jit {
     struct NativeReloc {
         /** @brief Como parchear (espejo de @c MRelocKind, sin acoplar el header
          *  del back-end al driver). */
-        enum class Kind : uint8_t { CALL_REL32 = 0, ABS64 = 1 };
+        enum class Kind : uint8_t {
+            CALL_REL32 = 0,  ///< rel32 a una FUNCION (call/jmp) -> el driver lo encola (BFS).
+            ABS64      = 1,  ///< direccion absoluta 64-bit a un DATO (--no-pie).
+            DATA_REL32 = 2,  ///< RIP-relativo a un DATO (.rodata), position-independent.
+        };
         Kind        kind   = Kind::CALL_REL32;
         uint32_t    offset = 0;   ///< byte offset dentro de los bytes de la funcion
         std::string symbol;       ///< nombre del simbolo referenciado
@@ -96,6 +100,9 @@ namespace jit {
      *                       relocations sin resolver de @p fn (CALL cross-funcion
      *                       y refs a @c .rodata); el driver AOT las aplica tras el
      *                       layout.  Se SOBRESCRIBE (clear + push).
+     * @param pic            true (default) = referencias a datos position-
+     *                       independent (lea [rip+disp32]); false (--no-pie) =
+     *                       absolutas (mov reg,imm64, dependen de base fija).
      * @return Bytes nativos del cuerpo de @p fn (ABI HOST_LEAF), o vector vacio
      *         si la funcion no es del subset soportado por el selector vreg.
      */
@@ -104,7 +111,8 @@ namespace jit {
                                              const VregEntries &ent = {},
                                              const CallResolver &resolve_native = {},
                                              const CallResolver &resolve_symbol = {},
-                                             std::vector<NativeReloc> *relocs_out = nullptr);
+                                             std::vector<NativeReloc> *relocs_out = nullptr,
+                                             bool pic = true);
 
     /**
      * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

@@ -97,6 +97,46 @@ namespace aot {
     };
 
     /**
+     * @brief Como escribir el valor resuelto de una relocation.
+     */
+    enum class RelocKind : uint8_t {
+        REL32 = 0,  ///< rel32 PC-relativo: *(int32*)site = target - (site_va+4).
+        ABS64 = 1,  ///< direccion absoluta 64-bit.
+        IMM32 = 2,  ///< inmediato 32-bit (p.ej. tamano de seccion).
+        IMM64 = 3,  ///< inmediato 64-bit.
+    };
+
+    /**
+     * @brief Objetivo de una relocation: la DIRECCION de una seccion+offset, o
+     *        el TAMANO de una seccion (para simbolos de seccion estilo
+     *        @c __start_/@c __stop_ del linker).
+     */
+    struct RelocTarget {
+        int      section = 0;       ///< seccion objetivo.
+        uint64_t offset  = 0;       ///< offset dentro de la seccion (si !is_size).
+        bool     is_size = false;   ///< true => el valor es el TAMANO de la seccion.
+
+        static RelocTarget addr(int sec, uint64_t off = 0) {
+            RelocTarget t; t.section = sec; t.offset = off; t.is_size = false; return t;
+        }
+        static RelocTarget size(int sec) {
+            RelocTarget t; t.section = sec; t.is_size = true; return t;
+        }
+    };
+
+    /**
+     * @brief Una relocation a resolver tras el layout (el writer conoce VA +
+     *        tamano de cada seccion).
+     */
+    struct AbsReloc {
+        int         site_section = 0;
+        uint64_t    site_off     = 0;
+        RelocTarget target;
+        RelocKind   kind         = RelocKind::REL32;
+        int64_t     addend       = 0;
+    };
+
+    /**
      * @class ObjectWriter
      * @brief Emisor configurable de ejecutables nativos (PE/ELF).
      */
@@ -136,6 +176,22 @@ namespace aot {
         void add_import_call(ImportCall ic) { imports_.push_back(std::move(ic)); }
 
         /**
+         * @brief Registra una relocation cross-seccion que el writer resuelve
+         *        tras el layout (refs a datos, simbolos de seccion start/end/size).
+         * @param site_section  seccion donde esta el campo a parchear.
+         * @param site_off      offset del campo dentro de esa seccion.
+         * @param target        objetivo (ADDR(sec,off) o SIZE(sec)).
+         * @param kind          como escribir el valor (REL32/ABS64/IMM32/IMM64).
+         * @param addend        desplazamiento adicional.
+         */
+        void add_reloc(int site_section, uint64_t site_off, RelocTarget target,
+                       RelocKind kind, int64_t addend = 0) {
+            AbsReloc r; r.site_section = site_section; r.site_off = site_off;
+            r.target = target; r.kind = kind; r.addend = addend;
+            relocs_.push_back(r);
+        }
+
+        /**
          * @brief Escribe el ejecutable a disco.
          * @param path Ruta de salida.
          * @param err  Recibe el mensaje de error si falla.
@@ -150,6 +206,7 @@ namespace aot {
         int                        entry_sec_ = 0;
         uint64_t                   entry_off_ = 0;
         std::vector<ImportCall>    imports_;
+        std::vector<AbsReloc>      relocs_;
     };
 
 } // namespace aot

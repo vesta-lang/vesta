@@ -540,18 +540,17 @@ namespace jit {
                     return;
                 }
 
-                if (op == MOp::MOV_SYM) {
-                    /* AOT: dst = &simbolo (.rodata).  Resolver el dst vreg a su
-                     * registro fisico y emitir el MOV_SYM fisico; el encoder deja
-                     * un mov r64,imm64 placeholder + MReloc{ABS64}.  Si el dst
-                     * quedo spilled, materializar en scratch y guardarlo. */
+                if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM) {
+                    /* AOT: dst = &simbolo (.rodata).  MOV_SYM = abs (mov imm64,
+                     * --no-pie); LEA_RIP_SYM = RIP-rel (lea, default PIC).  Resolver
+                     * el dst vreg a fisico y emitir la instr fisica; el encoder deja
+                     * el placeholder + MReloc.  dst spilled -> scratch + store. */
                     MOperand d = resolve(in.dst);
                     if (d.is_reg()) {
-                        MInstr m; m.op = MOp::MOV_SYM; m.dst = d; m.src1 = in.src1;
+                        MInstr m; m.op = op; m.dst = d; m.src1 = in.src1;
                         out.push_back(m);
                     } else {
-                        MInstr m; m.op = MOp::MOV_SYM; m.dst = reg(scr0);
-                        m.src1 = in.src1;
+                        MInstr m; m.op = op; m.dst = reg(scr0); m.src1 = in.src1;
                         out.push_back(m);
                         out.push_back(MInstr::make_unary(MOp::MOV, d, reg(scr0)));
                     }

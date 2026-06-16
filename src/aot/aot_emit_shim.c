@@ -36,6 +36,44 @@ static void set_err(char *err, size_t cap, const char *msg) {
     err[n] = '\0';
 }
 
+/* Escritura little-endian de 4/8 bytes en un buffer. */
+static void wr32le(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v);       p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void wr64le(uint8_t *p, uint64_t v) {
+    for (int i = 0; i < 8; ++i) p[i] = (uint8_t)(v >> (i * 8));
+}
+
+/* Aplica UNA relocation ya resuelta: @p target_value es la direccion (ADDR) o
+ * el tamano (SIZE) del objetivo + addend; @p site_va es la VA del sitio (para
+ * el rel32 PC-relativo); @p site escribe en el buffer de la seccion del sitio
+ * en su offset.  Devuelve 0 en error de tamano/kind. */
+static int apply_reloc(uint8_t *site, uint64_t site_va,
+                       uint64_t target_value, int kind) {
+    switch (kind) {
+        case AOT_RELOC_REL32: {
+            int64_t rel = (int64_t)target_value - (int64_t)(site_va + 4);
+            wr32le(site, (uint32_t)(int32_t)rel);
+            return 1;
+        }
+        case AOT_RELOC_IMM32:
+            wr32le(site, (uint32_t)target_value);
+            return 1;
+        case AOT_RELOC_ABS64:
+        case AOT_RELOC_IMM64:
+            wr64le(site, target_value);
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Tamano "logico" de una seccion (datos inicializados o BSS). */
+static uint64_t aot_sec_size(const AotSection *s) {
+    return (s->flags & AOT_SEC_BSS) ? s->bss_size : s->size;
+}
+
 /* =========================================================================
  *  PE32+
  * ========================================================================= */
@@ -56,6 +94,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs,
                 int entry_sec, uint64_t entry_off,
                 const AotImport *imps, int num_imps,
+                const AotReloc *relocs, int num_relocs,
                 char *err, size_t err_cap) {
     if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_pe: sin secciones"); return 0; }
     if (entry_sec < 0 || entry_sec >= num_secs) {
@@ -86,6 +125,54 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         } else {
             addSection(&pe, s->name, pe_section_chars(s->flags),
                        (_BYTE *)s->data, s->size);
+        }
+    }
+
+    /* Relocations cross-seccion: resolver AHORA que addSection ya asigno las
+     * VirtualAddress de todas las secciones del usuario (igual que el parcheo
+     * de imports, pero generico).  ImageBase + sectionHeaders[i].VirtualAddress
+     * es la VA de la seccion i; pe.sectionData[i] es su buffer mutable. */
+    if (relocs && num_relocs > 0) {
+        const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
+        /* Si hay refs ABSOLUTAS (ABS64/IMM64, p.ej. --no-pie), la imagen DEBE
+         * cargar en su ImageBase: sin tabla .reloc, el loader no puede reubicar.
+         * Limpiamos DYNAMIC_BASE (ASLR) -> base fija (semantica -no-pie).  Las
+         * refs RIP-relativas (DATA_REL32) no lo necesitan (position-independent). */
+        for (int r = 0; r < num_relocs; ++r) {
+            if (relocs[r].kind == AOT_RELOC_ABS64 || relocs[r].kind == AOT_RELOC_IMM64) {
+                pe.ntHeaders.OptionalHeader.DllCharacteristics &=
+                    (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+                break;
+            }
+        }
+        for (int r = 0; r < num_relocs; ++r) {
+            const AotReloc *rl = &relocs[r];
+            if (rl->site_section < 0 || rl->site_section >= num_secs ||
+                rl->target_section < 0 || rl->target_section >= num_secs) {
+                set_err(err, err_cap, "aot_emit_pe: reloc con seccion fuera de rango");
+                freePE64File(&pe); return 0;
+            }
+            uint64_t target_value;
+            if (rl->target_is_size)
+                target_value = aot_sec_size(&secs[rl->target_section]);
+            else
+                target_value = image_base +
+                    pe.sectionHeaders[rl->target_section].VirtualAddress +
+                    rl->target_off;
+            target_value = (uint64_t)((int64_t)target_value + rl->addend);
+            uint64_t site_va = image_base +
+                pe.sectionHeaders[rl->site_section].VirtualAddress + rl->site_off;
+            uint32_t width = (rl->kind == AOT_RELOC_ABS64 ||
+                              rl->kind == AOT_RELOC_IMM64) ? 8u : 4u;
+            if (rl->site_off + width > secs[rl->site_section].size) {
+                set_err(err, err_cap, "aot_emit_pe: reloc fuera de la seccion del sitio");
+                freePE64File(&pe); return 0;
+            }
+            if (!apply_reloc(pe.sectionData[rl->site_section] + rl->site_off,
+                             site_va, target_value, rl->kind)) {
+                set_err(err, err_cap, "aot_emit_pe: reloc kind invalido");
+                freePE64File(&pe); return 0;
+            }
         }
     }
 
@@ -223,6 +310,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
 int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                  const AotSection *secs, int num_secs,
                  int entry_sec, uint64_t entry_off,
+                 const AotReloc *relocs, int num_relocs,
                  char *err, size_t err_cap) {
     if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_elf: sin secciones"); return 0; }
     if (entry_sec < 0 || entry_sec >= num_secs) {
@@ -242,6 +330,17 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     Elf64_Phdr *phdr = (Elf64_Phdr *)b->phdr;
 
     uint64_t entry_vaddr = 0;
+
+    /* Para resolver relocations tras el layout: VA + offset-en-fichero de cada
+     * seccion (indexado por el indice de usuario).  Solo si hay relocs. */
+    uint64_t *sec_va   = NULL;
+    uint64_t *sec_foff = NULL;
+    uint8_t  *sec_seen = NULL;
+    if (relocs && num_relocs > 0) {
+        sec_va   = (uint64_t *)calloc((size_t)num_secs, sizeof(uint64_t));
+        sec_foff = (uint64_t *)calloc((size_t)num_secs, sizeof(uint64_t));
+        sec_seen = (uint8_t  *)calloc((size_t)num_secs, sizeof(uint8_t));
+    }
 
     /* Agregar las secciones con datos (todas en el unico segmento R+X). */
     for (int i = 0; i < num_secs; ++i) {
@@ -266,17 +365,61 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
             s->data, s->size, base + b->size, align_use,
             &off_out, &vaddr_out, 0, 0, 0);
         if (idx == 0) {
+            free(sec_va); free(sec_foff); free(sec_seen);
             elf_builder_free(b);
             set_err(err, err_cap, "aot_emit_elf: fallo anyadiendo seccion");
             return 0;
         }
+        if (sec_va) { sec_va[i] = vaddr_out; sec_foff[i] = off_out; sec_seen[i] = 1; }
         if (i == entry_sec) entry_vaddr = vaddr_out;
     }
     if (entry_vaddr == 0) {
+        free(sec_va); free(sec_foff); free(sec_seen);
         elf_builder_free(b);
         set_err(err, err_cap, "aot_emit_elf: la seccion de entrada no tiene datos");
         return 0;
     }
+
+    /* Resolver relocations cross-seccion (mismo modelo que PE): el layout ya
+     * fijo VA + offset-en-fichero de cada seccion -> parcheamos b->mem. */
+    if (relocs && num_relocs > 0) {
+        for (int r = 0; r < num_relocs; ++r) {
+            const AotReloc *rl = &relocs[r];
+            if (rl->site_section < 0 || rl->site_section >= num_secs ||
+                rl->target_section < 0 || rl->target_section >= num_secs ||
+                !sec_seen[rl->site_section] ||
+                (!rl->target_is_size && !sec_seen[rl->target_section])) {
+                free(sec_va); free(sec_foff); free(sec_seen);
+                elf_builder_free(b);
+                set_err(err, err_cap, "aot_emit_elf: reloc con seccion invalida");
+                return 0;
+            }
+            uint64_t target_value;
+            if (rl->target_is_size)
+                target_value = aot_sec_size(&secs[rl->target_section]);
+            else
+                target_value = sec_va[rl->target_section] + rl->target_off;
+            target_value = (uint64_t)((int64_t)target_value + rl->addend);
+            uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+            uint32_t width = (rl->kind == AOT_RELOC_ABS64 ||
+                              rl->kind == AOT_RELOC_IMM64) ? 8u : 4u;
+            if (rl->site_off + width > secs[rl->site_section].size) {
+                free(sec_va); free(sec_foff); free(sec_seen);
+                elf_builder_free(b);
+                set_err(err, err_cap, "aot_emit_elf: reloc fuera de la seccion del sitio");
+                return 0;
+            }
+            if (!apply_reloc(b->mem + sec_foff[rl->site_section] + rl->site_off,
+                             site_va, target_value, rl->kind)) {
+                free(sec_va); free(sec_foff); free(sec_seen);
+                elf_builder_free(b);
+                set_err(err, err_cap, "aot_emit_elf: reloc kind invalido");
+                return 0;
+            }
+        }
+    }
+    free(sec_va); free(sec_foff); free(sec_seen);
+    sec_va = NULL; sec_foff = NULL; sec_seen = NULL;
 
     /* .strtab + .symtab con _start. */
     const char strtab_data[] = "\0_start";

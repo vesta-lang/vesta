@@ -169,6 +169,21 @@ namespace vex {
          */
         std::vector<uint8_t> ir_section_bytes;
 
+        /**
+         * @brief Phase AOT: IR del modulo COMPLETO serializado (functions +
+         * static_data + globals) via @c ir::emit_ir_module_cache (magic VXMC).
+         *
+         * A diferencia de @c ir_section_bytes (solo functions, lo consume el
+         * JIT/loader), esto round-trippea tambien el @c static_data -- que el
+         * codegen AOT necesita para materializar los literales en @c .rodata
+         * (las refs @c STR_LIT_ADDR/@c LABEL_ADDR se resuelven contra el).  Lo
+         * consume el driver @c -m aot con @c ir::parse_ir_module_cache.  NO toca
+         * la seccion @c @ir del @c .velb (cero impacto en el path JIT).
+         *
+         * Vacio si la compilacion no produjo IR (caso de errores).
+         */
+        std::vector<uint8_t> ir_module_cache_bytes;
+
         /// Codigo fuente generado por el transpiler IR -> lenguaje destino.
         /// Lleno solo si @c CompileOptions::port_target != "".  El contenido
         /// es C/Java/JS/etc segun el target elegido, listo para escribir

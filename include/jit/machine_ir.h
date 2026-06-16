@@ -502,8 +502,12 @@ namespace jit {
                             ///< (tail-call TCO: epilogue + jmp al callee).  src1 =
                             ///< IMM32(sym_idx).  El encoder emite E9 + rel32=0 +
                             ///< MReloc{CALL_REL32} (misma matematica rel32).
+        LEA_RIP_SYM = 90,   ///< lea dst, [rip+disp32] -> direccion de un DATO de
+                            ///< .rodata por NOMBRE (ref position-independent, default
+                            ///< AOT).  dst = reg/vreg, src1 = IMM32(sym_idx).  El
+                            ///< encoder emite 48 8D 05 + disp32=0 + MReloc{DATA_REL32}.
 
-        COUNT       = 90
+        COUNT       = 91
     };
 
     /* ===================================================================== */
@@ -727,6 +731,15 @@ namespace jit {
             i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
             return i;
         }
+
+        /** @brief LEA_RIP_SYM: @p dst = &dato @p sym_idx (RIP-relativo,
+         *  position-independent).  El encoder emite lea reg,[rip+disp32=0] +
+         *  una @c MReloc{DATA_REL32}. */
+        static MInstr make_lea_rip_sym(MOperand dst, uint32_t sym_idx) noexcept {
+            MInstr i; i.op = MOp::LEA_RIP_SYM; i.dst = dst;
+            i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+            return i;
+        }
     };
 
     static_assert(sizeof(MInstr) == 32, "MInstr debe ser 32 bytes para cache locality");
@@ -803,8 +816,14 @@ namespace jit {
      * RISC-V JAL; ...).
      */
     enum class MRelocKind : uint8_t {
-        CALL_REL32 = 0,  ///< x86-64 CALL E8 rel32: *(int32*)@ = sym - (site_base + patch_at + 4)
-        ABS64      = 1,  ///< direccion absoluta 64-bit (mov reg,imm64): *(u64*)@ = sym + addend
+        CALL_REL32 = 0,  ///< x86-64 CALL/JMP E8/E9 rel32 a una FUNCION: *(int32*)@ =
+                         ///< sym - (site+4).  El driver lo trata como callee (BFS).
+        ABS64      = 1,  ///< direccion absoluta 64-bit (mov reg,imm64): *(u64*)@ = sym + addend.
+                         ///< Ref a DATO (.rodata) en modo --no-pie.
+        DATA_REL32 = 2,  ///< RIP-relativo a un DATO (lea reg,[rip+disp32]): *(int32*)@ =
+                         ///< sym - (site+4).  Misma matematica que CALL_REL32 pero el
+                         ///< target es un dato (.rodata), NO una funcion (el driver NO
+                         ///< lo encola como callee).  Default position-independent.
     };
 
     /**
