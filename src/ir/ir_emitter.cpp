@@ -40,6 +40,8 @@
 #include "ir/liveness.h"
 #include "ir/regalloc.h"
 #include "ir/ssa_ir.h"
+#include "vex/asm_effects.h"             // inc.6: asm_canonical_reg
+#include "jit/inline_asm_trampoline.h"   // inc.6: fnv1a64_asm (clave del trampoline)
 #include <sstream>
 #include <cstdio>
 #include <cstdlib>
@@ -278,6 +280,18 @@ static uint64_t ir_type_size(IrType t) {
 // =========================================================================
 //  Emision de instrucciones individuales
 // =========================================================================
+
+// Phase AS inc.6: id fisico GP host (0..15) de un registro canonico
+// (rax=0, rcx=1, rdx=2, rbx=3, rsp=4, rbp=5, rsi=6, rdi=7, r8=8 .. r15=15).
+// -1 si no es un GP (banco vectorial, o nombre no reconocido).
+static int gp_phys_of_canon(const std::string &canon) {
+    static const char *N[16] = {
+        "rax","rcx","rdx","rbx","rsp","rbp","rsi","rdi",
+        "r8","r9","r10","r11","r12","r13","r14","r15"};
+    for (int i = 0; i < 16; ++i)
+        if (canon == N[i]) return i;
+    return -1;
+}
 
 // Emite "mov r_dst, r_src" si son distintos (evita mov rx, rx)
 static void emit_mov_if_needed(EmitCtx &ctx, const std::string &dst,
@@ -3929,20 +3943,85 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
-        case IrOp::INLINE_ASM:
-            // Phase AS inc.5: inline asm de la CPU host.  El backend bytecode
-            // NO puede materializarlo -> la funcion DEBE ejecutarse en nativo
-            // (el loader fuerza su eager-compile + registro por PC, y el interp
-            // la despacha via lookup_jit_code_at_pc en CUALQUIER modo).  Por eso
-            // este cuerpo bytecode NUNCA se ejecuta en la practica.  Como
-            // BACKSTOP de seguridad emitimos `hlt`: si por un caso patologico la
-            // funcion se interpretara (p.ej. main con AOP+asm), el proceso para
-            // de forma RUIDOSA en vez de devolver un resultado silenciosamente
-            // incorrecto (el asm seria un no-op).
-            ctx.comment("inline_asm host (Phase AS): cuerpo bytecode = trap "
-                        "(la fn corre en nativo via JIT; ver loader force-compile)");
-            ctx.out << "    hlt\n";
+        case IrOp::INLINE_ASM: {
+            // Phase AS inc.6: inline-asm ejecutable en el INTERPRETE (modo
+            // -m vm, SIN compilador JIT).  El cuerpo NASM (ins.func_name) se
+            // ensambla a un trampoline nativo en el LOADER (via el ensamblador
+            // Keystone, no el JIT) y se registra por hash.  Aqui emitimos el
+            // marshalling: rellenar los slots VM de cada register() en el
+            // helper nativo vrt:inline_asm_exec, que copia VM-slot -> ctx[phys],
+            // llama al trampoline, y copia ctx[phys] -> VM-slot de vuelta.
+            //
+            // Convencion (argc SIEMPRE 12; slots no usados = 0):
+            //   r1=getproc (ProcessVM*), r2=hash(NASM), r3=desc(phys 4b/binding),
+            //   r4=n_bindings, r5..r12 = direcciones VM de los slots (allocas).
+            //
+            // El JIT (vreg_select) maneja INLINE_ASM por su cuenta (precolorea
+            // los bindings a regs fisicos), asi que esta emision SOLO la usa el
+            // backend bytecode/interp.
+            struct AsmBind { ir::IrValueId slot; int phys; };
+            std::vector<AsmBind> binds;
+            for (ir::IrValueId opv : ins.operands) {
+                if (opv == IR_NO_VALUE) continue;
+                for (const auto &b : ctx.fn.asm_reg_bindings) {
+                    if (b.alloca_value != opv) continue;
+                    if (b.is_vector) break;   // banco FP no soportado en interp v1
+                    const int phys =
+                        gp_phys_of_canon(vex::asm_canonical_reg(b.reg));
+                    if (phys >= 0) binds.push_back({opv, phys});
+                    break;
+                }
+            }
+            if (binds.size() > 8) {
+                // >8 bindings excede el limite de args (argc 12 = 4 fijos + 8
+                // slots).  Caso patologico: trap ruidoso en vez de truncar.
+                ctx.comment("inline_asm: >8 register bindings no soportado en "
+                            "interp -> trap");
+                ctx.out << "    hlt\n";
+                break;
+            }
+
+            const uint64_t hash = jit::fnv1a64_asm(ins.func_name);
+            uint64_t desc = 0;
+            for (size_t i = 0; i < binds.size(); ++i)
+                desc |= (uint64_t)(binds[i].phys & 0xF) << (i * 4);
+
+            // Salvar regs vivos a traves de la llamada (el helper es un calln).
+            const uint32_t call_pos = lin_pos_of(ctx, bb.id, idx);
+            std::vector<int> regs_to_save =
+                live_regs_through_call(ctx, call_pos, IR_NO_VALUE);
+            emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
+
+            // Slots -> r5..r(4+n) via parallel-move (resuelve dependencias entre
+            // args). Los slots son las direcciones VM de los allocas register().
+            std::vector<std::pair<int, std::string>> moves;
+            moves.reserve(binds.size());
+            for (size_t i = 0; i < binds.size(); ++i)
+                moves.emplace_back(static_cast<int>(5 + i),
+                                   ctx.load_src(binds[i].slot, 0));
+            emit_parallel_arg_moves(ctx, std::move(moves));
+
+            // Pad de slots no usados (r(5+n)..r12) = 0.
+            for (size_t i = binds.size(); i < 8; ++i)
+                ctx.out << "    mov r" << (5 + i) << ", 0\n";
+
+            // Args fijos: r1..r4 (escritos DESPUES del parallel-move; sus valores
+            // previos como fuentes de slots ya fueron consumidos).
+            ctx.out << "    getproc r1\n";
+            char hbuf[32];
+            std::snprintf(hbuf, sizeof(hbuf), "0x%016llx",
+                          static_cast<unsigned long long>(hash));
+            ctx.out << "    mov r2, " << hbuf << "\n";
+            std::snprintf(hbuf, sizeof(hbuf), "0x%llx",
+                          static_cast<unsigned long long>(desc));
+            ctx.out << "    mov r3, " << hbuf << "\n";
+            ctx.out << "    mov r4, " << binds.size() << "\n";
+            ctx.out << "    mov r15, 12\n";
+            ctx.out << "    calln @Method(\"vrt:inline_asm_exec\")\n";
+
+            emit_restore_all_gc_aware(ctx, call_pos, regs_to_save);
             break;
+        }
 
         default:
             ctx.comment("instruccion no soportada: " +

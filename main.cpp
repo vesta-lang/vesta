@@ -30,6 +30,7 @@
 #include "ir/ir_emitter.h"
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h"  // Phase AS inc.4b: registrar backend asm
+#include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
 #include "runtime/profile.h"          // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
@@ -188,6 +189,9 @@ int main(int argc, char *argv[]) {
     // Phase AS inc.4b: registrar el backend de ensamblado Keystone para que el
     // frontend Vex valide la sintaxis del inline asm en compile-time.
     jit::register_keystone_asm_backend();
+    // Phase AS inc.6: registrar el helper nativo vrt:inline_asm_exec que el
+    // interprete (modo -m vm, sin JIT) invoca por cada bloque inline-asm.
+    jit::register_inline_asm_runner();
 
     // ------------------------------------------------------------------
     // Subcomando especial: @c vm pkg <subcmd> ...
