@@ -4817,6 +4817,11 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
         if (is_blacklisted(fn.name)) return false;
+        /* AOT 2b (dev OS): una funcion con @section explicito debe permanecer
+         * como funcion REAL en esa seccion (el usuario la quiere fisicamente
+         * ahi: trampoline de boot, handler en .text.isr, etc.).  Inlinearla
+         * borraria su presencia en la seccion -> NO inlinear. */
+        if (!fn.section.empty()) return false;
         /* Phase C2.13 fix (2026-06-16): NO inlinear los helpers __new_X cuando
          * el scalar-replacement de objetos GC esta activo.  El pase siembra en
          * `call __new_X` (is_new_helper_name); si el inliner lo expande antes a

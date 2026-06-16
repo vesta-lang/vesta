@@ -1733,12 +1733,13 @@ int main(int argc, char *argv[]) {
             std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
             for (const auto &f : aot_mod.functions) fn_by_name[f.name] = &f;
 
-            // Codigo compilado de cada funcion + sus relocations.
+            // Codigo compilado de cada funcion + sus relocations + su seccion.
             struct AotFn {
                 std::string              name;
                 std::vector<uint8_t>     bytes;
                 std::vector<jit::NativeReloc> relocs;
-                uint32_t                 text_off = 0;  // offset en .text (post-stub)
+                std::string              section;        // @section ("" = .text)
+                std::string              section_perms;  // "rwx" explicito ("" = convencion)
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t> compiled_idx;  // name -> compiled[]
@@ -1761,7 +1762,9 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 AotFn af;
-                af.name  = nm;
+                af.name          = nm;
+                af.section       = itf->second->section;
+                af.section_perms = itf->second->section_perms;
                 af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
                                                     &af.relocs, aot_pic);
                 if (af.bytes.empty()) {
@@ -1782,99 +1785,160 @@ int main(int argc, char *argv[]) {
             }
             if (!aot_codegen_ok) return EXIT_FAILURE;
 
-            // Layout: .text = stub ++ main ++ (resto en orden de compilacion).
-            // main DEBE ir primero (el `call main` del stub asume bytes.size()).
-            std::vector<uint8_t> text = stub.bytes;
-            const uint32_t stub_len = static_cast<uint32_t>(text.size());
-            std::unordered_map<std::string, uint32_t> text_off;  // name -> offset
+            // ------------------------------------------------------------------
+            // Layout MULTI-SECCION (2b, dev OS): el usuario decide en que seccion
+            // vive cada funcion (@section) / dato.  Construimos un buffer por
+            // seccion; .text (indice 0) es la de entrada (el _start stub va en su
+            // offset 0).  TODAS las refs (stub->main, llamadas, datos) se declaran
+            // al ObjectWriter, que las resuelve tras el layout (unica entidad que
+            // conoce la VA de cada seccion) -> CALL/JMP cross-seccion "just work".
+            // ------------------------------------------------------------------
+            struct SecAccum {
+                std::string          name;
+                bool                 is_code = true;
+                std::string          perms;   // "" = por convencion del nombre
+                std::vector<uint8_t> bytes;
+            };
+            std::vector<SecAccum> secs;
+            std::unordered_map<std::string, int> sec_index;
+            auto get_sec = [&](const std::string &name, bool is_code,
+                               const std::string &perms) -> int {
+                auto it = sec_index.find(name);
+                if (it != sec_index.end()) {
+                    if (!perms.empty() && secs[it->second].perms.empty())
+                        secs[it->second].perms = perms;
+                    return it->second;
+                }
+                const int idx = static_cast<int>(secs.size());
+                SecAccum s; s.name = name; s.is_code = is_code; s.perms = perms;
+                secs.push_back(std::move(s));
+                sec_index[name] = idx;
+                return idx;
+            };
+            // .text es SIEMPRE la seccion 0 (entry); el stub arranca en su off 0.
+            const int text_sec = get_sec(".text", true, "");
+            secs[text_sec].bytes = stub.bytes;
 
+            // Colocar cada funcion en su seccion (default .text).  main primero
+            // dentro de su seccion (determinismo).
+            struct FnLoc { int sec; uint32_t off; };
+            std::unordered_map<std::string, FnLoc> fn_loc;
             auto place_fn = [&](size_t ci) {
                 AotFn &af = compiled[ci];
-                af.text_off = static_cast<uint32_t>(text.size());
-                text_off[af.name] = af.text_off;
-                text.insert(text.end(), af.bytes.begin(), af.bytes.end());
+                const std::string &fsec = af.section.empty() ? ".text" : af.section;
+                const int si = get_sec(fsec, /*is_code=*/true, af.section_perms);
+                const uint32_t off = static_cast<uint32_t>(secs[si].bytes.size());
+                fn_loc[af.name] = {si, off};
+                secs[si].bytes.insert(secs[si].bytes.end(),
+                                      af.bytes.begin(), af.bytes.end());
             };
-            // main primero.
             place_fn(compiled_idx["main"]);
-            // resto.
             for (size_t ci = 0; ci < compiled.size(); ++ci)
                 if (compiled[ci].name != "main") place_fn(ci);
 
-            // 1) CALL_REL32 (intra-.text, ambos extremos en .text): se parchean
-            //    INLINE en el buffer (offset-relativo, no necesita VA).  Las refs
-            //    a DATOS (.rodata) se difieren al writer (solo el writer conoce la
-            //    VA de .rodata tras el layout).  Recolectamos los sitios de datos.
-            struct DataRelocSite {
-                uint32_t site;        // offset absoluto en .text
-                uint32_t sd_index;    // indice de entry en static_data ("rodata.N")
-                jit::NativeReloc::Kind kind;
+            // PASADA 1: colocar (lazy, una vez por entry) los datos referenciados
+            // en su seccion (default .rodata) -> completa `secs` ANTES de crearlas
+            // en el writer.  Devuelve (sec, off) del entry N.
+            const auto &sd = aot_mod.static_data;
+            std::unordered_map<uint32_t, std::pair<int, uint64_t>> data_loc;
+            auto place_data = [&](uint32_t N) -> std::pair<int, uint64_t> {
+                auto it = data_loc.find(N);
+                if (it != data_loc.end()) return it->second;
+                const auto &e = sd.entries[N];
+                const std::string dsec = e.meta.section_name.empty()
+                    ? ".rodata" : e.meta.section_name;
+                const int si = get_sec(dsec, /*is_code=*/false, e.meta.section_perms);
+                const uint64_t off = secs[si].bytes.size();
+                const uint8_t *p = sd.bytes.data() + e.byte_offset;
+                secs[si].bytes.insert(secs[si].bytes.end(), p, p + e.byte_len);
+                std::pair<int, uint64_t> loc{si, off};
+                data_loc[N] = loc;
+                return loc;
             };
-            std::vector<DataRelocSite> data_sites;
             for (const AotFn &af : compiled) {
                 for (const jit::NativeReloc &r : af.relocs) {
-                    const uint32_t site = af.text_off + r.offset;
+                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) continue;
+                    if (r.symbol.rfind("rodata.", 0) != 0) {
+                        std::cerr << "[aot] reloc de dato con simbolo inesperado: '"
+                                  << r.symbol << "'.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint32_t N = static_cast<uint32_t>(
+                        std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
+                    if (N >= sd.size()) {
+                        std::cerr << "[aot] reloc a static_data fuera de rango: N="
+                                  << N << ".\n";
+                        return EXIT_FAILURE;
+                    }
+                    place_data(N);
+                }
+            }
+
+            // Crear el writer + TODAS las secciones (writer idx == secs idx, mismo
+            // orden; `secs` ya esta completa tras la pasada 1).
+            aot::ObjectWriter w(fmt);
+            for (const SecAccum &s : secs) {
+                // Permisos: explicitos (@section(".x","rwx")), o por convencion
+                // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).
+                std::string p = s.perms;
+                if (p.empty()) {
+                    if      (s.name.rfind(".text", 0) == 0)   p = "rx";
+                    else if (s.name.rfind(".rodata", 0) == 0) p = "r";
+                    else if (s.name.rfind(".data", 0) == 0)   p = "rw";
+                    else if (s.name.rfind(".bss", 0) == 0)    p = "rw";
+                    else p = s.is_code ? "rx" : "r";
+                }
+                uint32_t flags = 0;
+                if (p.find('r') != std::string::npos) flags |= aot::SecFlag::READ;
+                if (p.find('w') != std::string::npos) flags |= aot::SecFlag::WRITE;
+                const bool exec = (p.find('x') != std::string::npos);
+                if (exec) flags |= aot::SecFlag::EXEC | aot::SecFlag::CODE;
+                else      flags |= aot::SecFlag::DATA;
+                aot::WriterSection ws;
+                ws.name = s.name; ws.flags = flags; ws.data = s.bytes;
+                w.add_section(std::move(ws));
+            }
+            w.set_entry(text_sec, 0);  // _start en .text offset 0
+
+            // PASADA 2: declarar TODAS las relocs (el writer las resuelve tras el
+            // layout).  stub->main + llamadas (CALL/JMP cross-seccion) + datos.
+            {
+                const FnLoc &ml = fn_loc["main"];
+                w.add_reloc(text_sec, stub.main_call_off,
+                            aot::RelocTarget::addr(ml.sec, ml.off),
+                            aot::RelocKind::REL32);
+            }
+            for (const AotFn &af : compiled) {
+                const FnLoc &fl = fn_loc[af.name];
+                for (const jit::NativeReloc &r : af.relocs) {
+                    const uint64_t site = static_cast<uint64_t>(fl.off) + r.offset;
                     if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
-                        auto it = text_off.find(r.symbol);
-                        if (it == text_off.end()) {
+                        auto it = fn_loc.find(r.symbol);
+                        if (it == fn_loc.end()) {
                             std::cerr << "[aot] simbolo no resuelto en reloc: '"
                                       << r.symbol << "'.\n";
                             return EXIT_FAILURE;
                         }
-                        const int32_t rel = static_cast<int32_t>(
-                            static_cast<int64_t>(it->second)
-                            - static_cast<int64_t>(site) - 4);
-                        const uint32_t u = static_cast<uint32_t>(rel);
-                        text[site + 0] = static_cast<uint8_t>(u & 0xFF);
-                        text[site + 1] = static_cast<uint8_t>((u >> 8) & 0xFF);
-                        text[site + 2] = static_cast<uint8_t>((u >> 16) & 0xFF);
-                        text[site + 3] = static_cast<uint8_t>((u >> 24) & 0xFF);
+                        w.add_reloc(fl.sec, site,
+                                    aot::RelocTarget::addr(it->second.sec,
+                                                           it->second.off),
+                                    aot::RelocKind::REL32);
                     } else {
-                        // DATA_REL32 / ABS64: ref a .rodata "rodata.<N>".
-                        const std::string &s = r.symbol;
-                        const char *pfx = "rodata.";
-                        if (s.rfind(pfx, 0) != 0) {
-                            std::cerr << "[aot] reloc de dato con simbolo inesperado: '"
-                                      << s << "'.\n";
-                            return EXIT_FAILURE;
-                        }
-                        DataRelocSite d;
-                        d.site = site;
-                        d.sd_index = static_cast<uint32_t>(
-                            std::strtoul(s.c_str() + 7, nullptr, 10));
-                        d.kind = r.kind;
-                        data_sites.push_back(d);
+                        const uint32_t N = static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
+                        const std::pair<int, uint64_t> loc = place_data(N);
+                        const aot::RelocKind k =
+                            (r.kind == jit::NativeReloc::Kind::DATA_REL32)
+                            ? aot::RelocKind::REL32 : aot::RelocKind::ABS64;
+                        w.add_reloc(fl.sec, site,
+                                    aot::RelocTarget::addr(loc.first, loc.second), k);
                     }
-                }
-            }
-            (void)stub_len;
-
-            aot::ObjectWriter w(fmt);
-            const int tsec = w.add_text(std::move(text));  // crea .text + entry off 0
-
-            // .rodata = pool contiguo del static_data del modulo.  Cada entry N
-            // vive en static_data.entries[N].byte_offset.  Solo se anyade si hay
-            // refs a datos (ruteo por defecto: literales inmutables -> .rodata).
-            if (!data_sites.empty()) {
-                const auto &sd = aot_mod.static_data;
-                int rsec = w.add_rodata(std::vector<uint8_t>(
-                    sd.bytes.begin(), sd.bytes.end()));
-                for (const DataRelocSite &d : data_sites) {
-                    if (d.sd_index >= sd.size()) {
-                        std::cerr << "[aot] reloc a static_data fuera de rango: N="
-                                  << d.sd_index << ".\n";
-                        return EXIT_FAILURE;
-                    }
-                    const uint64_t entry_off = sd.entries[d.sd_index].byte_offset;
-                    const aot::RelocKind k =
-                        (d.kind == jit::NativeReloc::Kind::DATA_REL32)
-                        ? aot::RelocKind::REL32 : aot::RelocKind::ABS64;
-                    w.add_reloc(tsec, d.site, aot::RelocTarget::addr(rsec, entry_off), k);
                 }
             }
 
             if (stub.has_import_call) {
                 w.add_import_call(aot::ImportCall{
-                    stub.import_dll, stub.import_func, tsec, stub.import_call_off});
+                    stub.import_dll, stub.import_func, text_sec, stub.import_call_off});
             }
 
             std::string werr;

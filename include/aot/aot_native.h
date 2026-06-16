@@ -61,12 +61,13 @@ namespace aot {
     /**
      * @brief Stub @c _start sintetizado para un (arch, formato) dado.
      *
-     * El @c _start asume que @c main viene INMEDIATAMENTE DESPUES del stub en la
-     * misma seccion @c .text (en el offset @c bytes.size()); el @c call a @c main
-     * ya queda resuelto (desplazamiento relativo) dentro de @c bytes.  Para PE,
-     * la terminacion del proceso es un @c call indirecto a @c ExitProcess via la
-     * IAT, que el caller debe registrar con @c ObjectWriter::add_import_call
-     * usando @c import_call_off (offset del @c FF @c 15 dentro de @c bytes).
+     * El @c call a @c main (rel32 @c main_call_off) queda SIN parchear: el caller
+     * declara una reloc REL32 a la VA real de @c main, que el ObjectWriter
+     * resuelve tras el layout (asi @c main puede vivir en cualquier seccion, no
+     * solo justo despues del stub).  Para PE, la terminacion del proceso es un
+     * @c call indirecto a @c ExitProcess via la IAT, que el caller registra con
+     * @c ObjectWriter::add_import_call usando @c import_call_off (offset del
+     * @c FF @c 15 dentro de @c bytes).
      */
     struct StartStub {
         bool                 ok = false;          ///< true si el (arch,fmt) esta soportado.
@@ -76,6 +77,12 @@ namespace aot {
         uint64_t             import_call_off = 0;  ///< offset del @c FF @c 15 a parchear.
         std::string          import_dll;           ///< "KERNEL32.dll" (si @c has_import_call).
         std::string          import_func;          ///< "ExitProcess" (si @c has_import_call).
+        /// AOT 2b: offset del rel32 del @c "call main" dentro de @c bytes.  El
+        /// stub NO lo pre-parchea (queda en 0): el driver declara una reloc
+        /// REL32 a la VA real de @c main (que puede vivir en cualquier seccion),
+        /// resuelta por el ObjectWriter tras el layout.  Asi @c main no esta
+        /// obligado a ir inmediatamente despues del stub.
+        uint64_t             main_call_off = 0;
     };
 
     /**

@@ -1332,6 +1332,12 @@ namespace vex::ast {
         /// registra la firma sin requerir body; otra FunctionDecl con el
         /// mismo nombre debe aparecer despues con body, o error.
         bool                                     is_forward_decl = false;
+        /// Phase AOT.3 2b (dev OS): `@section(".name"[,"perms"])` -- seccion de
+        /// salida del codigo de la funcion en AOT.  Vacio => default `.text`.
+        /// @c attr_section_perms = subconjunto de "rwx" (vacio => convencion del
+        /// nombre).  Solo lo consume el codegen AOT.
+        std::string                              attr_section;
+        std::string                              attr_section_perms;
         FunctionDecl() : Node(NodeKind::FunctionDecl) {}
     };
 
@@ -1392,6 +1398,7 @@ namespace vex::ast {
         bool                      attr_cold  = false;
         uint16_t                  attr_align = 0;     ///< 0 = default
         std::string               attr_section;        ///< vacio = default
+        std::string               attr_section_perms;  ///< "rwx" explicito (vacio = convencion)
         GlobalVarDecl() : Node(NodeKind::GlobalVarDecl) {}
     };
 

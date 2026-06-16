@@ -698,6 +698,7 @@ namespace vex {
         bool     top_attr_cold  = false;
         uint16_t top_attr_align = 0;
         std::string top_attr_section;
+        std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
         while (current_.kind == TokenKind::AT) {
             (void)consume();
             if (current_.kind == TokenKind::IDENTIFIER) {
@@ -757,6 +758,17 @@ namespace vex {
                     } else {
                         top_attr_section = current_.str_val;
                         (void)consume();
+                        // AOT 2b: 2do string opcional = permisos "rwx" (dev OS).
+                        if (current_.kind == TokenKind::COMMA) {
+                            (void)consume();
+                            if (current_.kind != TokenKind::STRING_LIT) {
+                                error_here("@section: el 2do argumento (permisos) "
+                                           "debe ser un string literal \"rwx\"");
+                            } else {
+                                top_attr_section_perms = current_.str_val;
+                                (void)consume();
+                            }
+                        }
                     }
                     (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @section");
                     continue;
@@ -1090,6 +1102,11 @@ namespace vex {
             if (fd && is_comptime_fn)   fd->is_comptime = true;
             if (fd && top_is_macro)     fd->is_macro = true;
             if (fd && top_is_pure)      fd->is_pure  = true;
+            // AOT 2b (dev OS): seccion de salida del codigo + permisos.
+            if (fd && !top_attr_section.empty()) {
+                fd->attr_section       = top_attr_section;
+                fd->attr_section_perms = top_attr_section_perms;
+            }
             if (fd && is_comptime_fn)   fd->type_params = std::move(comptime_type_params);
             // Registrar posiciones de params @c expr para que el parser sepa
             // hacer raw-text capture en los call sites de este @Macro.  Solo
@@ -1126,6 +1143,7 @@ namespace vex {
             gv->attr_cold    = top_attr_cold;
             gv->attr_align   = top_attr_align;
             gv->attr_section = std::move(top_attr_section);
+            gv->attr_section_perms = std::move(top_attr_section_perms);
         }
         apply_pending_visibility(gv.get());
         return gv;

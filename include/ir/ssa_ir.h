@@ -965,6 +965,19 @@ namespace ir {
         std::vector<std::vector<std::string>> asm_clobber_lists;
 
         /**
+         * @brief Phase AOT.3 2b: seccion de salida del CODIGO de esta funcion
+         *        (dev OS: `@section(".name")`).  Vacio => default `.text`.
+         *
+         * @c section_perms son los permisos explicitos del usuario
+         * (`@section(".boot","rwx")`): subconjunto de "rwx".  Vacio => permisos
+         * por CONVENCION del nombre (.text*->rx, .rodata*->r, .data*->rw,
+         * .bss*->rw, otro-codigo->rx).  Solo lo consume el codegen AOT; el
+         * JIT/interp lo ignoran.
+         */
+        std::string              section;
+        std::string              section_perms;
+
+        /**
          * @brief Crea un nuevo valor SSA en el pool.
          * @param type Tipo del valor.
          * @param name Nombre opcional (si vacio se genera "%%N").
@@ -1147,6 +1160,7 @@ namespace ir {
             uint8_t  flags             = 0;     ///< bit0=immutable, bit1=imported, bit2=hot, bit3=cold
             uint16_t source_module_idx = 0;     ///< 0 = local; !=0 = imported (futuro)
             std::string section_name;            ///< vacio = default; usado por AOT
+            std::string section_perms;           ///< permisos explicitos "rwx" (vacio = convencion)
         };
 
         /**
