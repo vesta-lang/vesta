@@ -34,6 +34,7 @@
 #include <utility>
 #include <cctype>
 #include <cstdint>
+#include <functional>
 #if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
 #  include <cpuid.h>
 #endif
@@ -2214,17 +2215,71 @@ namespace vex {
             return true;
         };
 
+        // Evaluador de la cuenta de `times`: expresion aritmetica con enteros,
+        // `$` (offset actual del bloque), `$$` (inicio del bloque = 0), los
+        // operadores + - * / y parentesis.  Permite el idioma NASM
+        // `times 510-($-$$) db 0` (rellenar HASTA una posicion).  `$`/`$$` son
+        // relativos al bloque (no a la seccion): para un boot sector de un
+        // solo bloque coincide con el offset de imagen.
+        std::function<int64_t(bool &)> ev_primary, ev_term, ev_expr;
+        ev_primary = [&](bool &ok) -> int64_t {
+            if (current_.kind == TokenKind::DOLLAR) {
+                (void)consume();
+                if (current_.kind == TokenKind::DOLLAR) { (void)consume(); return 0; }  // $$
+                return (int64_t)bd->data.size();  // $
+            }
+            if (current_.kind == TokenKind::MINUS) { (void)consume(); return -ev_primary(ok); }
+            if (current_.kind == TokenKind::PLUS)  { (void)consume(); return  ev_primary(ok); }
+            if (current_.kind == TokenKind::LPAREN) {
+                (void)consume();
+                int64_t v = ev_expr(ok);
+                if (current_.kind != TokenKind::RPAREN) {
+                    error_here("se esperaba ')' en la cuenta de 'times'"); ok = false; return 0;
+                }
+                (void)consume();
+                return v;
+            }
+            if (current_.kind == TokenKind::INT_LIT) {
+                int64_t v = (int64_t)current_.int_val; (void)consume(); return v;
+            }
+            error_here("operando invalido en 'times' (use entero, $, $$ o parentesis)");
+            ok = false; return 0;
+        };
+        ev_term = [&](bool &ok) -> int64_t {
+            int64_t v = ev_primary(ok);
+            while (ok && (current_.kind == TokenKind::STAR || current_.kind == TokenKind::SLASH)) {
+                const bool mul = current_.kind == TokenKind::STAR; (void)consume();
+                const int64_t r = ev_primary(ok);
+                if (!ok) return 0;
+                if (mul) v *= r;
+                else { if (r == 0) { error_here("division por cero en 'times'"); ok = false; return 0; } v /= r; }
+            }
+            return v;
+        };
+        ev_expr = [&](bool &ok) -> int64_t {
+            int64_t v = ev_term(ok);
+            while (ok && (current_.kind == TokenKind::PLUS || current_.kind == TokenKind::MINUS)) {
+                const bool add = current_.kind == TokenKind::PLUS; (void)consume();
+                const int64_t r = ev_term(ok);
+                if (!ok) return 0;
+                if (add) v += r; else v -= r;
+            }
+            return v;
+        };
+
         // Bucle principal de directivas.
         while (current_.kind != TokenKind::RBRACE
             && current_.kind != TokenKind::END_OF_FILE) {
             if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "times") {
                 (void)consume(); // 'times'
-                if (current_.kind != TokenKind::INT_LIT) {
-                    error_here("se esperaba un contador entero tras 'times'");
+                bool cok = true;
+                const int64_t cnt_s = ev_expr(cok);
+                if (!cok) break;
+                if (cnt_s < 0) {
+                    error_here("la cuenta de 'times' es negativa (revisa el relleno '$-$$')");
                     break;
                 }
-                const uint64_t cnt = current_.int_val;
-                (void)consume();
+                const uint64_t cnt = (uint64_t)cnt_s;
                 std::vector<uint8_t> tmp;
                 // refs==nullptr: dentro de 'times' no se admiten refs a simbolos.
                 if (!emit_data_dir(tmp, 0, nullptr)) break;
