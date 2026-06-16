@@ -113,14 +113,19 @@ namespace aot {
      */
     struct RelocTarget {
         int      section = 0;       ///< seccion objetivo.
-        uint64_t offset  = 0;       ///< offset dentro de la seccion (si !is_size).
+        uint64_t offset  = 0;       ///< offset dentro de la seccion (modo ADDR).
         bool     is_size = false;   ///< true => el valor es el TAMANO de la seccion.
+        bool     is_end  = false;   ///< true => el valor es VA(seccion)+tamano (fin).
 
         static RelocTarget addr(int sec, uint64_t off = 0) {
-            RelocTarget t; t.section = sec; t.offset = off; t.is_size = false; return t;
+            RelocTarget t; t.section = sec; t.offset = off; return t;
         }
         static RelocTarget size(int sec) {
             RelocTarget t; t.section = sec; t.is_size = true; return t;
+        }
+        /// Direccion del FINAL de la seccion (base + tamano) -- @c __stop_NAME.
+        static RelocTarget end(int sec) {
+            RelocTarget t; t.section = sec; t.is_end = true; return t;
         }
     };
 

@@ -154,6 +154,11 @@ namespace ir {
                               ///<   Devuelve la direccion absoluta de un label resuelta por
                               ///<   el linker, expresada como @c @Absolute("code.<func_name>").
                               ///<   Util para slots estaticos, helpers sintetizados, etc.
+        SECTION_REF  = 0x05, ///< %dst = section_ref  func_name=nombre de seccion, imm=kind
+                              ///<   AOT (dev OS): simbolo de seccion estilo linker.  kind:
+                              ///<   0=START (void*, base de la seccion), 1=END (void*, base+size),
+                              ///<   2=SIZE (u64, tamano en bytes).  Lo resuelve el writer AOT tras
+                              ///<   el layout.  En interp/JIT (sin secciones nativas) -> 0.
 
         // ---- aritmetica entera (0x10-0x1F) ----
         ADD      = 0x10, ///< %dst = add.T    %a, %b

@@ -11970,6 +11970,42 @@ namespace vex {
         const std::string &name = id->name;
 
         // -----------------------------------------------------------------
+        // AOT 2c (dev OS): simbolos de seccion.  section_start/end(".x") -> void*,
+        // section_size(".x") -> u64.  El arg debe ser un string LITERAL (el nombre
+        // de la seccion); emitimos SECTION_REF(func_name=nombre, imm=kind).  El
+        // writer AOT lo resuelve via reloc tras el layout; en interp/JIT -> 0.
+        // -----------------------------------------------------------------
+        if ((name == "section_start" || name == "section_end" ||
+             name == "section_size") && e->args.size() == 1) {
+            auto *lit = dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
+            if (lit == nullptr || !lit->interp_parts.empty()) {
+                error_at(e->loc, name + ": el argumento debe ser un string "
+                                 "literal con el nombre de la seccion (e.g. "
+                                 "\".boot\")");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const uint64_t kind = (name == "section_start") ? 0u
+                                : (name == "section_end")   ? 1u : 2u;
+            const ir::IrType rt = (name == "section_size")
+                ? ir::IrType::I64 : ir::IrType::PTR;
+            const ir::IrValueId dst = fn_->new_value(rt);
+            // section_start/end devuelven un host_ptr real (la VA de la seccion);
+            // marcarlo asi para que un LOAD/STORE posterior use el path host.
+            if (kind != 2) fn_->values[dst].is_host_ptr = true;
+            ir::IrInstr is{};
+            is.op          = ir::IrOp::SECTION_REF;
+            is.type        = rt;
+            is.dst         = dst;
+            is.func_name   = lit->value;   // nombre de la seccion
+            is.imm         = kind;
+            is.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(is));
+            out_value = dst;
+            return true;
+        }
+
+        // -----------------------------------------------------------------
         // Sprint 1: builtins comptime de introspection.
         // Disparan SOLO cuando hay type_args.size()>=1.  Devuelven UN
         // valor constante computado a partir del tipo resuelto:
