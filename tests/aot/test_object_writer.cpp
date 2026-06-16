@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -373,6 +374,39 @@ static void test_coff_obj() {
     CHECK(has_main);
 }
 
+// =========================================================================
+//  SHARED PE .dll: exporta una funcion (IMAGE_FILE_DLL + export directory).
+// =========================================================================
+
+static void test_pe_dll() {
+    std::printf("test_pe_dll\n");
+    // .text:  i32 answer(){ return 42; }  ->  B8 2A 00 00 00 C3
+    std::vector<uint8_t> text = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+    ObjectWriter w(ObjFormat::PE);
+    w.set_output_kind(OutputKind::SHARED);
+    const int ts = w.add_section(WriterSection{".text",
+        SecFlag::CODE | SecFlag::EXEC | SecFlag::READ, text, 0, 0, 0});
+    w.add_symbol("answer", ts, 0, /*is_func=*/true);
+
+    std::string err;
+    const std::string path = "shared_test.dll";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+    std::vector<uint8_t> d = read_file(path);
+    CHECK(d.size() > 0x200 && d[0] == 'M' && d[1] == 'Z');
+    const uint32_t lfanew = rd_u32(d, 0x3C);
+    CHECK(rd_u32(d, lfanew) == 0x00004550);          // 'PE\0\0'
+    CHECK(rd_u16(d, lfanew + 4) == 0x8664);          // Machine AMD64
+    // FileHeader.Characteristics @ lfanew+4+18; debe tener IMAGE_FILE_DLL (0x2000).
+    CHECK((rd_u16(d, lfanew + 4 + 18) & 0x2000) != 0);
+    // "answer" debe aparecer (export name string).
+    bool has = false;
+    for (size_t i = 0; i + 6 < d.size(); ++i)
+        if (!memcmp(&d[i], "answer", 6)) { has = true; break; }
+    CHECK(has);
+}
+
 int main() {
     std::printf("=== test_object_writer (Phase AOT.4) ===\n");
     test_pe_exit42();
@@ -382,6 +416,7 @@ int main() {
     test_pe_cross_section_call();
     test_elf_obj();
     test_coff_obj();
+    test_pe_dll();
     std::printf("\n%d checks, %d fallos\n", g_checks, g_fails);
     std::printf("Ficheros: exit42_pe.exe / exit42_elf.elf / rodata_pe.exe / "
                 "rodata_elf.elf (correr para validar la reloc -> exit 42)\n");

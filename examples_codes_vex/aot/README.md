@@ -101,3 +101,14 @@ Validado: libfoo.so (add/triple) cargado via dlopen+dlsym en Linux -> 42/42.
 El codegen usa el ABI del TARGET (SysV para `--format elf`, Win64 para
 `--format pe`), no el del host -> se puede generar ELF en Windows y PE en Linux.
 Validado: ELF generado en Windows corre en WSL Linux (01/03/06 = 42/120/69).
+
+## Libreria compartida .dll (PE Windows) -- LoadLibrary/GetProcAddress
+
+`--emit shared --format pe` produce una DLL PE32+ (IMAGE_FILE_DLL + tabla de
+exports .edata).  Cargable con LoadLibrary + GetProcAddress:
+
+    vm --vex examples_codes_vex/aot/10_shared_dll.vex -m aot --format pe --emit shared -o foo.dll
+    // host C: LoadLibraryA("foo.dll") + GetProcAddress("add") -> add(40,2) == 42
+
+Validado: foo.dll (add/triple) cargada via LoadLibrary+GetProcAddress -> 42/42.
+Codigo PIC (RIP-rel); base fija (DYNAMIC_BASE limpiado, sin .reloc).

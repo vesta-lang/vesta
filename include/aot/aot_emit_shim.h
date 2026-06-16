@@ -233,6 +233,23 @@ int aot_emit_elf_so(const char *path,
                     const AotSym *syms, int num_syms,
                     char *err, size_t err_cap);
 
+/**
+ * @brief Emite una DLL PE32+ (Windows) a disco.
+ *
+ * Analogo a @c aot_emit_elf_so pero en PE: marca @c IMAGE_FILE_DLL, construye una
+ * tabla de exports (@c .edata: export directory + EAT + name pointer table
+ * ordenada + ordinal table) para que @c LoadLibrary + @c GetProcAddress resuelvan
+ * @p syms.  Codigo PIC (RIP-rel) -> las relocs internas se APLICAN; sin @c .reloc,
+ * se limpia @c DYNAMIC_BASE para cargar en la @c ImageBase (base fija).
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
+                    const AotSection *secs, int num_secs,
+                    const AotReloc *relocs, int num_relocs,
+                    const AotSym *syms, int num_syms,
+                    char *err, size_t err_cap);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

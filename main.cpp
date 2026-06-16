@@ -1718,11 +1718,7 @@ int main(int argc, char *argv[]) {
                     return EXIT_FAILURE;
                 }
             }
-            if (emit_shared && fmt != aot::ObjFormat::ELF) {
-                std::cerr << "[aot] --emit shared solo soporta ELF (.so) por ahora; "
-                             "usa --format elf.\n";
-                return EXIT_FAILURE;
-            }
+            // --emit shared: ELF (.so) y PE (.dll).
             if (emit_shared && !aot_pic) {
                 std::cerr << "[aot] --emit shared requiere PIC; --no-pie no es "
                              "compatible con .so.\n";
@@ -2023,9 +2019,12 @@ int main(int argc, char *argv[]) {
 
             const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
             if (emit_shared)
-                std::cout << "[aot] libreria compartida " << fmt_name << " (.so) escrita en '"
-                          << out_prefix << "' (" << compiled.size()
-                          << " simbolo(s) exportado(s); dlopen/dlsym).\n";
+                std::cout << "[aot] libreria compartida " << fmt_name
+                          << (fmt == aot::ObjFormat::PE ? " (.dll)" : " (.so)")
+                          << " escrita en '" << out_prefix << "' (" << compiled.size()
+                          << " simbolo(s) exportado(s); "
+                          << (fmt == aot::ObjFormat::PE ? "LoadLibrary/GetProcAddress"
+                                                        : "dlopen/dlsym") << ").\n";
             else if (emit_obj)
                 std::cout << "[aot] objeto relocatable " << fmt_name
                           << (fmt == aot::ObjFormat::PE ? " (.obj)" : " (.o)")
