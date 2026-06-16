@@ -36,6 +36,7 @@ namespace jit {
             switch (a) {
                 case vex::AsmArch::X86_64: arch = KS_ARCH_X86; mode = KS_MODE_64; return true;
                 case vex::AsmArch::X86_32: arch = KS_ARCH_X86; mode = KS_MODE_32; return true;
+                case vex::AsmArch::X86_16: arch = KS_ARCH_X86; mode = KS_MODE_16; return true;
                 case vex::AsmArch::ARM64:  arch = KS_ARCH_ARM64; mode = KS_MODE_LITTLE_ENDIAN; return true;
                 case vex::AsmArch::ARM32:  arch = KS_ARCH_ARM; mode = KS_MODE_ARM; return true;
             }

@@ -705,6 +705,7 @@ namespace vex {
         std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
         int64_t  top_attr_at    = -1;          // AOT: @at(N) offset/VA fijo (.bin)
         int32_t  top_attr_order = 0x7fffffff;  // AOT: @order(N) orden de seccion
+        uint8_t  top_attr_bits  = 64;          // AOT: @bits(16|32|64) para bloques asm
         while (current_.kind == TokenKind::AT) {
             (void)consume();
             if (current_.kind == TokenKind::IDENTIFIER) {
@@ -739,6 +740,7 @@ namespace vex {
                 const bool is_section = (current_.lexeme == "section");
                 const bool is_at      = (current_.lexeme == "at");
                 const bool is_order   = (current_.lexeme == "order");
+                const bool is_bits    = (current_.lexeme == "bits");
                 (void)consume();
                 if (is_hot)  { top_attr_hot  = true; continue; }
                 if (is_cold) { top_attr_cold = true; continue; }
@@ -803,6 +805,21 @@ namespace vex {
                         (void)consume();
                     }
                     (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @order(N)");
+                    continue;
+                }
+                if (is_bits) {
+                    // @bits(16|32|64): bitness de un bloque `asm` (Keystone).
+                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @bits");
+                    if (current_.kind != TokenKind::INT_LIT) {
+                        error_here("@bits requiere 16, 32 o 64");
+                    } else {
+                        const uint64_t b = current_.int_val;
+                        if (b != 16 && b != 32 && b != 64)
+                            error_here("@bits solo admite 16, 32 o 64");
+                        else top_attr_bits = (uint8_t)b;
+                        (void)consume();
+                    }
+                    (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @bits(N)");
                     continue;
                 }
                 if (is_target) {
@@ -884,6 +901,21 @@ namespace vex {
                 bd->attr_section_perms = std::move(top_attr_section_perms);
                 bd->attr_at            = top_attr_at;
                 bd->attr_order         = top_attr_order;
+            }
+            apply_pending_visibility(bd.get());
+            return bd;
+        }
+        // asm <nombre> { <nasm 16/32/64> }  (codigo ensamblado por Keystone)
+        if (current_.kind == TokenKind::KW_ASM
+         && lex_.peek_at(0).kind == TokenKind::IDENTIFIER
+         && lex_.peek_at(1).kind == TokenKind::LBRACE) {
+            auto bd = parse_asm_block_decl();
+            if (bd) {
+                bd->attr_section       = std::move(top_attr_section);
+                bd->attr_section_perms = std::move(top_attr_section_perms);
+                bd->attr_at            = top_attr_at;
+                bd->attr_order         = top_attr_order;
+                bd->asm_bits           = top_attr_bits;
             }
             apply_pending_visibility(bd.get());
             return bd;
@@ -2327,6 +2359,66 @@ namespace vex {
             }
         }
         (void)expect(TokenKind::RBRACE, "se esperaba '}' al final del bloque bytes");
+        return bd;
+    }
+
+    // -----------------------------------------------------------------
+    // asm: bloque de codigo NASM ensamblado por Keystone (Phase AOT 16/32-bit).
+    //
+    //   @bits(16) @section(".boot","rx")
+    //   asm boot {
+    //       cli
+    //       xor ax, ax
+    //       hang: hlt
+    //             jmp hang        ; labels intra-bloque (Keystone los resuelve)
+    //   }
+    //
+    // El cuerpo se captura VERBATIM (raw-slice del buffer fuente, preservando
+    // saltos de linea que NASM necesita) y el lowering lo ensambla a @c asm_bits
+    // via @c g_asm_backend.  Las directivas $/$$/times NO las soporta Keystone;
+    // para padding/firma se usa un bloque `bytes` con @at/times.  Reusa toda la
+    // maquinaria de placement de @c bytes (@section/@at/@order).
+    // -----------------------------------------------------------------
+    std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
+        auto bd = std::make_unique<ast::BytesDecl>();
+        bd->loc    = current_.loc;
+        bd->is_asm = true;
+        (void)consume(); // 'asm'
+
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del bloque tras 'asm'");
+            return nullptr;
+        }
+        bd->name = consume().lexeme;
+        if (current_.kind != TokenKind::LBRACE) {
+            error_here("se esperaba '{' tras el nombre del bloque asm");
+            return nullptr;
+        }
+        (void)consume(); // '{'
+
+        // Raw-slice del cuerpo (mismo patron que parse_asm_stmt): preserva los
+        // saltos de linea entre instrucciones que el ensamblador necesita.
+        const std::string &src = lex_.source_buffer();
+        const uint32_t start_off = current_.loc.offset;
+        uint32_t end_off = start_off;
+        int brace_depth = 1;
+        while (current_.kind != TokenKind::END_OF_FILE) {
+            if (current_.kind == TokenKind::RBRACE) {
+                if (--brace_depth == 0) { end_off = current_.loc.offset; (void)consume(); break; }
+            } else if (current_.kind == TokenKind::LBRACE) {
+                ++brace_depth;
+            }
+            (void)consume();
+        }
+        if (brace_depth != 0) {
+            error_here("se esperaba '}' al cerrar el bloque 'asm'");
+            return nullptr;
+        }
+        while (end_off > start_off && end_off <= src.size()
+            && (src[end_off-1]==' '||src[end_off-1]=='\t'
+             || src[end_off-1]=='\n'||src[end_off-1]=='\r')) --end_off;
+        if (start_off <= src.size() && end_off >= start_off && end_off <= src.size())
+            bd->asm_body = src.substr(start_off, end_off - start_off);
         return bd;
     }
 

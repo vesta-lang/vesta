@@ -1430,6 +1430,12 @@ namespace vex::ast {
         bool                      is_public = true;
         std::vector<uint8_t>      data;        ///< bytes resueltos (placeholder 0 en sym refs)
         std::vector<BytesSymRef>  sym_refs;    ///< refs a simbolos (vacio en v1 literales)
+        // Bloque `asm` (codigo NASM 16/32/64-bit): si @c is_asm, el lowering
+        // ensambla @c asm_body via Keystone a @c asm_bits y el resultado va a
+        // @c data (la seccion).  Reusa toda la maquinaria de placement.
+        bool                      is_asm   = false;
+        std::string               asm_body;    ///< texto NASM crudo (si is_asm)
+        uint8_t                   asm_bits = 64;///< 16/32/64 (@bits(N))
         BytesDecl() : Node(NodeKind::BytesDecl) {}
     };
 

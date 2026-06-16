@@ -40,7 +40,7 @@
 namespace vex {
 
     /// Arquitectura destino del ensamblado.
-    enum class AsmArch { X86_64, X86_32, ARM64, ARM32 };
+    enum class AsmArch { X86_64, X86_32, X86_16, ARM64, ARM32 };
 
     /// Resultado de ensamblar un fragmento de asm.
     struct AsmAssembleResult {

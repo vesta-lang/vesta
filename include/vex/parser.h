@@ -206,6 +206,8 @@ namespace vex {
         std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
         /// @c bytes name { db/dw/dd/dq/times ... }  (datos crudos NASM, AOT).
         std::unique_ptr<ast::BytesDecl>     parse_bytes_decl();
+        /// @c asm name { <nasm 16/32/64> }  (codigo ensamblado por Keystone, AOT).
+        std::unique_ptr<ast::BytesDecl>     parse_asm_block_decl();
         std::unique_ptr<ast::StructDecl>    parse_struct_decl();
         /// `typedef struct {...} Name;` o
         /// `typedef enum {...} Name;`.  Devuelve StructDecl o EnumDecl.
