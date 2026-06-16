@@ -154,6 +154,7 @@ namespace vex {
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             lo.set_instrument_mode(opts.instrument_mode);
         }
+        lo.set_native_poo(opts.native_poo);  // Phase AOT.2.b: POO nativa (-m aot)
         const std::string mod_name = opts.module_name.empty() ? std::string("main")
                                                               : opts.module_name;
         if (!lo.run(irmod, mod_name)) {

@@ -113,6 +113,11 @@ namespace vex {
             instrument_mode_ = mode;
         }
 
+        /// Phase AOT.2.b: activa el modo POO NATIVA (sin runtime VM).  Cuando
+        /// esta activo, el lowering de clases baja a layout C-struct +
+        /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
+        void set_native_poo(bool on) { native_poo_ = on; }
+
         /// Wrapper publico para que helpers estaticos del modulo (e.g.
         /// @c collect_spawn_captures_in_expr) puedan resolver un nombre
         /// recorriendo todos los scopes activos del lowering.
@@ -1048,6 +1053,8 @@ namespace vex {
         /// no es "none", el lowering envuelve cada funcion usuario con
         /// CALLs a @c vex_trace:enter y @c vex_trace:exit (o equivalente).
         std::string instrument_mode_ = "none";
+        /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
+        bool        native_poo_ = false;
 
         /// Helper: emite CALLN sintetica a @c "vex_trace:enter" con
         /// argumento puntero al string literal del nombre de la funcion.
@@ -1121,7 +1128,10 @@ namespace vex {
                 CALLN_FREE,     ///< CALLN a libreria nativa (e.g. free de colecciones).
                 SMARTPTR_FREE,  ///< Liberar @c unique<T> al exit del scope.
                 SHAREDPTR_REL,  ///< Decrementar refcount de @c shared<T>.
-                SYNC_EXIT       ///< Exit de @c synchronized {} : TRYLEAVE + MONEXIT como IR ops.
+                SYNC_EXIT,      ///< Exit de @c synchronized {} : TRYLEAVE + MONEXIT como IR ops.
+                NATIVE_FREE     ///< Phase AOT.2.b: RAW_FREE(obj) de una instancia de
+                                ///< clase NATIVA (calloc) al exit del scope (RAII; sin GC).
+                                ///< aot_lower lo convierte en call<free>.  Sin dangling.
             };
             Kind                         kind = Kind::RAW_ASM;
             // --- Comun ---
