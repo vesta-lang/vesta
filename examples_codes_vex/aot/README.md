@@ -32,3 +32,15 @@ Por defecto las refs a datos son **RIP-relativas** (position-independent, listo
 para PIE/.so). Con `--no-pie` se emiten **absolutas** (`mov reg,imm64`, requieren
 base de imagen fija; el emisor PE limpia DYNAMIC_BASE para fijarla), analogo a
 `gcc/clang -no-pie`.
+
+## Secciones definidas por el usuario (dev OS) -- Paso 2b
+
+`@section(".name")` (datos o codigo) coloca la funcion/dato en una seccion
+propia; permisos por convencion del nombre (`.text*`->rx, `.rodata*`->r,
+`.data*`/`.bss*`->rw) o explicitos `@section(".boot","rwx")`.  Las llamadas
+cross-seccion las resuelve el ObjectWriter (relocs rel32).  Una funcion con
+`@section` NO se inlinea (permanece fisica en su seccion).
+
+| Ejemplo               | exit-code | nota |
+|:----------------------|----------:|:-----|
+| 07_section_devos.vex  | 42        | `boot_entry` en `.boot` (RWX), main en `.text`, call cross-seccion |

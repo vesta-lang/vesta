@@ -1220,6 +1220,11 @@ namespace vex {
             fn.name = fd->name;
         }
 
+        // AOT 2b (dev OS): seccion de salida del codigo + permisos.  Metadata
+        // pura para el codegen AOT; el interp/JIT la ignoran.
+        fn.section       = fd->attr_section;
+        fn.section_perms = fd->attr_section_perms;
+
         // Tipo de retorno.  Aceptamos tipos primitivos directamente o
         // pasamos por resolve_type_node para PointerTypeNode/ArrayTypeNode
         // (mapeados a IrType::PTR via ir_type_from_primitive).

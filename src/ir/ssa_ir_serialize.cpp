@@ -388,6 +388,10 @@ namespace ir {
             for (const auto &s : lst) write_str(out, s);
         }
 
+        // AOT 2b: seccion de salida del codigo + permisos (dev OS).
+        write_str(out, fn.section);
+        write_str(out, fn.section_perms);
+
         return out.size() - start;
     }
 
@@ -485,6 +489,9 @@ namespace ir {
             }
             out.asm_clobber_lists.push_back(std::move(lst));
         }
+        // AOT 2b: seccion de salida del codigo + permisos.
+        if (!read_str(in, off, out.section))        return false;
+        if (!read_str(in, off, out.section_perms))  return false;
         return true;
     }
 
@@ -638,6 +645,7 @@ namespace ir {
             write_u8 (out, e.meta.flags);
             write_u16(out, e.meta.source_module_idx);
             write_str(out, e.meta.section_name);
+            write_str(out, e.meta.section_perms);  // AOT 2b
         }
     }
 
@@ -665,6 +673,7 @@ namespace ir {
             if (!read_u8 (in, off, e.meta.flags))        return false;
             if (!read_u16(in, off, e.meta.source_module_idx)) return false;
             if (!read_str(in, off, e.meta.section_name)) return false;
+            if (!read_str(in, off, e.meta.section_perms)) return false;  // AOT 2b
             // Validar que el rango cae dentro del pool.
             if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
                 return false;

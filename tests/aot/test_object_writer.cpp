@@ -237,12 +237,64 @@ static void test_elf_rodata_reloc() {
     CHECK(patched);
 }
 
+// =========================================================================
+//  Reloc REL32 cross-SECCION de codigo: .text llama a una funcion en .boot
+//  (Phase AOT.3 2b, dev OS).  El exit-code = lo que .boot devuelve (42).
+// =========================================================================
+
+static void test_pe_cross_section_call() {
+    std::printf("test_pe_cross_section_call\n");
+    // .text (_start):
+    //   48 83 EC 28           sub rsp, 0x28
+    //   E8 <rel32>            call boot              ; (reloc REL32 -> .boot@0, @5)
+    //   89 C1                 mov ecx, eax
+    //   FF 15 <disp32>        call [rip+ExitProcess]  ; (call @11)
+    //   CC
+    std::vector<uint8_t> text = {
+        0x48, 0x83, 0xEC, 0x28,
+        0xE8, 0x00, 0x00, 0x00, 0x00,
+        0x89, 0xC1,
+        0xFF, 0x15, 0x00, 0x00, 0x00, 0x00,
+        0xCC
+    };
+    // .boot:  B8 2A 00 00 00  mov eax, 42 ; C3 ret
+    std::vector<uint8_t> boot = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
+
+    ObjectWriter w(ObjFormat::PE);
+    WriterSection st; st.name = ".text";
+    st.flags = SecFlag::CODE | SecFlag::EXEC | SecFlag::READ; st.data = text;
+    const int ts = w.add_section(std::move(st));
+    WriterSection sb; sb.name = ".boot";
+    sb.flags = SecFlag::CODE | SecFlag::EXEC | SecFlag::READ | SecFlag::WRITE;
+    sb.data = boot;
+    const int bs = w.add_section(std::move(sb));
+    w.set_entry(ts, 0);
+    w.add_reloc(ts, 5, RelocTarget::addr(bs, 0), RelocKind::REL32);  // call boot
+    w.add_import_call(ImportCall{"KERNEL32.dll", "ExitProcess", ts, 11});
+
+    std::string err;
+    const std::string path = "cross_pe.exe";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+    std::vector<uint8_t> pe = read_file(path);
+    CHECK(pe.size() > 0x200 && pe[0] == 'M' && pe[1] == 'Z');
+    // el rel32 del call (@5) debe estar parcheado (!= 0).
+    bool patched = false;
+    for (size_t i = 0; i + 4 < pe.size(); ++i)
+        if (pe[i] == 0xE8 && (pe[i+1] | pe[i+2] | pe[i+3] | pe[i+4]) != 0) {
+            patched = true; break;
+        }
+    CHECK(patched);
+}
+
 int main() {
     std::printf("=== test_object_writer (Phase AOT.4) ===\n");
     test_pe_exit42();
     test_elf_exit42();
     test_pe_rodata_reloc();
     test_elf_rodata_reloc();
+    test_pe_cross_section_call();
     std::printf("\n%d checks, %d fallos\n", g_checks, g_fails);
     std::printf("Ficheros: exit42_pe.exe / exit42_elf.elf / rodata_pe.exe / "
                 "rodata_elf.elf (correr para validar la reloc -> exit 42)\n");

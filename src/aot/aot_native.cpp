@@ -19,15 +19,6 @@ namespace aot {
 
     namespace {
 
-        /** @brief Escribe @p v como rel32 little-endian en @p b[off..off+4). */
-        void patch_rel32(std::vector<uint8_t> &b, size_t off, int32_t v) {
-            const uint32_t u = static_cast<uint32_t>(v);
-            b[off + 0] = static_cast<uint8_t>(u & 0xFF);
-            b[off + 1] = static_cast<uint8_t>((u >> 8) & 0xFF);
-            b[off + 2] = static_cast<uint8_t>((u >> 16) & 0xFF);
-            b[off + 3] = static_cast<uint8_t>((u >> 24) & 0xFF);
-        }
-
         /**
          * @brief @c _start x86-64 para PE: reserva shadow space, llama a main,
          *        y termina via @c kernel32!ExitProcess(eax) por la IAT.
@@ -47,10 +38,10 @@ namespace aot {
                 0xFF, 0x15, 0x00, 0x00, 0x00, 0x00,  // call [rip+disp] (off 11, disp@13)
                 0xCC                                 // int3                   (off 17)
             };
-            // main va inmediatamente despues del stub.
-            const int32_t main_off = static_cast<int32_t>(s.bytes.size());  // 18
-            // rel32 del call: destino - (offset_del_call + 5).
-            patch_rel32(s.bytes, 5, main_off - (4 + 5));  // 18 - 9 = 9
+            // AOT 2b: el `call main` (rel32 @5) NO se pre-parchea -> el driver
+            // declara una reloc REL32 a la VA real de main (puede vivir en
+            // cualquier seccion).  rel32 queda en 0 hasta que el writer resuelve.
+            s.main_call_off = 5;
             s.has_import_call = true;
             s.import_call_off = 11;            // offset del FF 15
             s.import_dll  = "KERNEL32.dll";
@@ -77,8 +68,8 @@ namespace aot {
                 0xB8, 0x3C, 0x00, 0x00, 0x00,        // mov eax, 60 (sys_exit) (off 7)
                 0x0F, 0x05                           // syscall                (off 12)
             };
-            const int32_t main_off = static_cast<int32_t>(s.bytes.size());  // 14
-            patch_rel32(s.bytes, 1, main_off - (0 + 5));  // 14 - 5 = 9
+            // AOT 2b: `call main` (rel32 @1) sin pre-patch -> reloc del driver.
+            s.main_call_off = 1;
             s.has_import_call = false;
             s.ok = true;
             return s;
