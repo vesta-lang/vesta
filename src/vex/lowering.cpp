@@ -7818,7 +7818,12 @@ namespace vex {
                 i = j;
             }
         }
-        ia.func_name = body_sub;            // cuerpo NASM (consts ya sustituidas)
+        // Phase AS inc.5g: normalizar los literales numericos del body a hex
+        // explicito detectando su base (0x/0b/0o/decimal).  Keystone interpreta
+        // los enteros BARE como HEX, asi que sin esto `shl rdx, 32` seria un
+        // shift de 0x32=50.  Tras esto, los 4 bases se soportan correctamente.
+        body_sub = vex::asm_normalize_numbers(body_sub);
+        ia.func_name = body_sub;            // cuerpo NASM (consts + bases ya normalizadas)
 
         // Phase AS inc.4b: validacion de sintaxis en compile-time via el
         // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
