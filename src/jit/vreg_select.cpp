@@ -1671,6 +1671,39 @@ namespace jit {
                         break;
                     }
 
+                    /* CALLIND (AOT.2.c): llamada INDIRECTA a traves de un puntero
+                     * a funcion (func_ptr en un vreg).  Base del dispatch virtual
+                     * nativo (vtable): operands = args, func_ptr = SSA con la
+                     * direccion del metodo (cargada de la vtable).  HOST_LEAF:
+                     * args en arg_regs (via ARG) + MOp::CALL(func_ptr) -> el
+                     * rewrite mueve func_ptr a scratch, hace el parallel-move de
+                     * los args y emite `call reg`.  Retorno en RAX. */
+                    case ir::IrOp::CALLIND: {
+                        flush_pending();
+                        if (abi == AbiKind::HOST_LEAF) {
+                            if (in.func_ptr == ir::IR_NO_VALUE) {
+                                vreg_dbg(fn.name.c_str(), "callind(no-fnptr)");
+                                return false;
+                            }
+                            const size_t nargs = in.operands.size();
+                            if (nargs > host_leaf_nmax) {
+                                vreg_dbg(fn.name.c_str(), "callind(host-leaf-args)");
+                                return false;
+                            }
+                            for (size_t a = 0; a < nargs; ++a)
+                                O.push_back(MInstr::make_arg(
+                                    static_cast<uint8_t>(a), vr(in.operands[a])));
+                            MInstr c; c.op = MOp::CALL; c.src1 = vr(in.func_ptr);
+                            O.push_back(c);
+                            if (in.dst != ir::IR_NO_VALUE)
+                                O.push_back(MInstr::make_unary(MOp::MOV,
+                                    vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
+                            break;
+                        }
+                        vreg_dbg(fn.name.c_str(), "callind(vm-abi)");
+                        return false;
+                    }
+
                     /* TAILCALL: tail-call con REUSO de frame (TCO genuina).  El
                      * frontend (ir_pass_tailcall) promueve CALL+RET a TAILCALL.
                      * Stage de args a proc->registers + pseudo TAILCALL que el

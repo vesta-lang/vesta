@@ -1,0 +1,31 @@
+// AOT.2.c (slice 2): POLIMORFISMO nativo via vtable estatica (sin runtime, sin
+// GC).  Una clase en una jerarquia lleva un puntero a su vtable en obj[0]
+// (lo pone __new_<Class>); una llamada a metodo sobre un tipo base NO-hoja se
+// despacha por la vtable: LOAD vtable=[obj+0]; LOAD fn=[vtable+idx*8]; call fn.
+// Eficiencia C/C++: 2 loads + 1 call indirecto.  La vtable vive en .data.rel.ro
+// (RELRO, como las vtables de C++).
+//   vm -m aot --vex 22_poly_native.vex --emit obj --format elf -o p.o
+//   gcc p.o -o p && ./p        # exit 47
+
+class Shape {
+    i32 area(i32 k) { return k; }
+}
+class Square : Shape {
+    i32 s;
+    Square(i32 side) { this.s = side; }
+    @Override i32 area(i32 k) { return this.s * this.s * k; }
+}
+class Circle : Shape {
+    i32 r;
+    Circle(i32 rad) { this.r = rad; }
+    @Override i32 area(i32 k) { return this.r * k; }
+}
+
+// Dispatch polimorfico por parametros de tipo base.
+i32 total(Shape a, Shape b) { return a.area(2) + b.area(3); }
+
+i32 main() {
+    Shape sq = new Square(4);   // dinamico Square -> 4*4*2 = 32
+    Shape ci = new Circle(5);   // dinamico Circle -> 5*3   = 15
+    return total(sq, ci);       // 47
+}
