@@ -1144,6 +1144,13 @@ namespace vex {
             std::string                  asm_text;     ///< plantilla con {src0..}
             // --- CALL_DTOR ---
             uint32_t                     dtor_vtable_index = 0;
+            // --- NATIVE_FREE (AOT.2.d): dtor polimorfico ---
+            /// @c true si la clase estatica tiene vtable y el dtor es virtual:
+            /// el cleanup despacha @c ~T() por la vtable de la instancia (LOAD
+            /// vtable de obj[0] + LOAD fn[idx] + CALLIND) en vez de un CALL
+            /// directo al dtor estatico -> una ref base que posee una instancia
+            /// derivada (@c Base b = new Derived()) ejecuta el dtor DERIVADO.
+            bool                         native_dtor_virtual = false;
             // --- SMARTPTR_FREE con inner GC class (e.g. @c unique<Resource>) ---
             /// @c true si el contenido apunta a un objeto GC (no a memoria
             /// RAW_ALLOC).  Cuando se setea, el cleanup invoca el destructor

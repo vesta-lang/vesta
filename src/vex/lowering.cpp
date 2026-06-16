@@ -3251,6 +3251,23 @@ namespace vex {
                                                     ? sem_type.struct_name
                                                     : dtor->defining_class;
                         act.func_name = owner + "__" + dtor->name;  // <Class>____dtor
+                        // AOT.2.d (4): dtor polimorfico.  Si la clase estatica
+                        // tiene vtable (es base/derivada o implementa interfaz),
+                        // el dtor es virtual -> despachar por la vtable de la
+                        // INSTANCIA (no por el tipo estatico) para que
+                        // `Base b = new Derived()` ejecute ~Derived().  Misma
+                        // deteccion de needs_vtable que __new_<Class>.
+                        bool has_vtable = !lay.super_name.empty()
+                                       || !lay.interface_names.empty();
+                        if (!has_vtable)
+                            for (const auto &kv : class_layouts)
+                                if (kv.second.super_name == sem_type.struct_name) {
+                                    has_vtable = true; break;
+                                }
+                        if (has_vtable) {
+                            act.native_dtor_virtual = true;
+                            act.dtor_vtable_index   = dtor->vtable_index;
+                        }
                     }
                     cleanup_stack_.push_back(std::move(act));
                 } else
@@ -5705,7 +5722,40 @@ namespace vex {
                     // recursos propios (RAII).  Luego RAW_FREE de la instancia
                     // (host_ptr de calloc) -> aot_lower lo baja a call<free>.
                     // RAW_FREE(0)/free(NULL) es no-op -> seguro si fue movido.
-                    if (!it->func_name.empty()) {
+                    if (it->native_dtor_virtual) {
+                        // AOT.2.d (4): dtor polimorfico via vtable de la
+                        // instancia.  %vt = LOAD [obj+0]; %fn = LOAD
+                        // [%vt + idx*8]; CALLIND %fn(obj).  Asi una ref base
+                        // que posee una instancia derivada ejecuta el dtor
+                        // DERIVADO (la vtable de obj[0] la puso __new_<Derived>).
+                        const ir::IrValueId obj = opnds[0];
+                        const uint32_t      idx = it->dtor_vtable_index;
+                        ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
+                        fn_->values[v_vt].is_host_ptr = true;
+                        { ir::IrInstr ld{}; ld.op=ir::IrOp::LOAD; ld.type=ir::IrType::I64;
+                          ld.dst=v_vt; ld.operands={obj}; ld.source_line=it->source_line;
+                          fn_->append(current_block_, std::move(ld)); }
+                        ir::IrValueId v_slot = v_vt;
+                        if (idx != 0) {
+                            const ir::IrValueId v_off = emit_const(ir::IrType::I64,
+                                static_cast<uint64_t>(idx) * 8u, it->source_line);
+                            v_slot = fn_->new_value(ir::IrType::PTR);
+                            fn_->values[v_slot].is_host_ptr = true;
+                            { ir::IrInstr ad{}; ad.op=ir::IrOp::ADD; ad.type=ir::IrType::PTR;
+                              ad.dst=v_slot; ad.operands={v_vt, v_off};
+                              ad.source_line=it->source_line;
+                              fn_->append(current_block_, std::move(ad)); }
+                        }
+                        ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
+                        fn_->values[v_fn].is_host_ptr = true;
+                        { ir::IrInstr ld2{}; ld2.op=ir::IrOp::LOAD; ld2.type=ir::IrType::I64;
+                          ld2.dst=v_fn; ld2.operands={v_slot}; ld2.source_line=it->source_line;
+                          fn_->append(current_block_, std::move(ld2)); }
+                        ir::IrInstr ci{}; ci.op=ir::IrOp::CALLIND; ci.type=ir::IrType::VOID;
+                        ci.dst=ir::IR_NO_VALUE; ci.func_ptr=v_fn; ci.operands={obj};
+                        ci.source_line=it->source_line;
+                        fn_->append(current_block_, std::move(ci));
+                    } else if (!it->func_name.empty()) {
                         ir::IrInstr dc{};
                         dc.op          = ir::IrOp::CALL;
                         dc.type        = ir::IrType::VOID;
