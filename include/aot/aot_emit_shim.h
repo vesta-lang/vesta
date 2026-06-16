@@ -167,6 +167,36 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                  const AotReloc *relocs, int num_relocs,
                  char *err, size_t err_cap);
 
+/**
+ * @brief Un simbolo GLOBAL exportado en un objeto relocatable.
+ */
+typedef struct {
+    const char *name;     /* nombre del simbolo (e.g. "main") */
+    int         section;  /* seccion donde vive */
+    uint64_t    offset;   /* offset dentro de la seccion */
+    int         is_func;  /* 1 = STT_FUNC, 0 = STT_OBJECT */
+} AotSym;
+
+/**
+ * @brief Emite un objeto RELOCATABLE ELF64 (ET_REL, .o) a disco.
+ *
+ * A diferencia de @c aot_emit_elf (ejecutable: aplica relocs + _start), este
+ * NO lleva _start ni program headers: emite las secciones del usuario + una
+ * @c .symtab (simbolos de seccion locales + @p syms globales) + una @c .rela.<s>
+ * por seccion con relocs.  Las @c AotReloc se emiten como REGISTROS de
+ * relocation (no se aplican): un linker externo (ld/gcc/link) las resuelve.
+ * Cada reloc referencia el simbolo de SECCION de su @c target_section + addend
+ * (REL32 -> R_X86_64_PC32 con addend @c target_off-4; ABS64 -> R_X86_64_64 con
+ * addend @c target_off).  No soporta @c target_is_size/@c target_is_end (v1).
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf_obj(const char *path,
+                     const AotSection *secs, int num_secs,
+                     const AotReloc *relocs, int num_relocs,
+                     const AotSym *syms, int num_syms,
+                     char *err, size_t err_cap);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

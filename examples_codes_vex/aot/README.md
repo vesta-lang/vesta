@@ -55,3 +55,18 @@ El writer AOT los resuelve tras el layout (relocs ADDR/END/SIZE).  En `-m vm`/`-
 | Ejemplo               | exit-code | nota |
 |:----------------------|----------:|:-----|
 | 08_section_symbols.vex | size de .boot | valida `end-start == size` (28 con este codegen) |
+
+## Objeto relocatable .o (AOT.4-ext) -- linkable con toolchains externos
+
+`--emit obj --format elf` produce un ELF ET_REL (.o) en vez de un ejecutable:
+SIN `_start`, con `main` como simbolo GLOBAL y las relocs como registros
+(`.rela.text`: R_X86_64_PC32 / R_X86_64_64).  Se linka con `ld`/`gcc`/`clang`,
+que aportan el crt (`_start` -> `main`) + libc + permiten linker scripts (dev OS):
+
+    vm --vex examples_codes_vex/aot/01_call.vex -m aot --format elf --emit obj -o 01_call.o
+    gcc 01_call.o -o prog        # el crt de gcc llama a main
+    ./prog; echo $?              # 42
+
+Validado: 01_call.o (call), 06_call_rodata.o (data reloc -> .rodata),
+07_section_devos.o (.text + .boot cross-section) linkan con gcc y devuelven
+42/69/42.  COFF (.obj para link.exe) pendiente.
