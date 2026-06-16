@@ -897,6 +897,14 @@ namespace jit {
         /// MInstr @c INLINE_ASM_RAW (@c src1.value).
         std::vector<AsmBlob>       asm_blobs;
 
+        /// Phase AOT.3 Paso 2b: vreg ids de los parametros de la funcion, en
+        /// orden de la convencion de llamada.  Solo lo usa el rewrite en ABI
+        /// HOST_LEAF: los params llegan en los @c arg_regs del ABI host y se
+        /// copian a su ubicacion fisica con un parallel-move en el prologo (en
+        /// VM_ABI el selector ya los carga desde @c proc->registers, por lo que
+        /// este campo se ignora).  @c param_vregs[i] == @c IrFunction::params[i].
+        std::vector<uint32_t>      param_vregs;
+
         /** @brief Marca el vreg @p vid como precoloreado al fisico @p phys
          *  (Phase AS inc.5).  Redimensiona @c vreg_fixed perezosamente. */
         void set_vreg_fixed(uint32_t vid, uint8_t phys) {

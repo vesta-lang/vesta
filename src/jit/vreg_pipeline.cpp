@@ -128,10 +128,11 @@ namespace jit {
         IntervalResult ivs = build_intervals(mf, tri);
         RegAlloc ra = linear_scan(ivs, tri);
 
-        /* 4. Rewrite a fisico con prologue/epilogue HOST_LEAF.  Sin GC: el
-         *    tier BARE no tiene heap del runtime; no se construyen stackmaps
-         *    (no hay un GC que escanee este stack), por eso NO pasamos &ivs
-         *    para stackmaps -- el rewrite solo necesita la asignacion. */
+        /* 4. Rewrite a fisico con prologue/epilogue HOST_LEAF + carga de params
+         *    desde los arg_regs (parallel-move).  Pasamos &ivs (el rewrite lo
+         *    usa para two-address legalization y, si hubiera CALLs, stackmaps);
+         *    en BARE no hay GC que consuma esos stackmaps, pero construirlos es
+         *    inocuo. */
         MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF, &ivs);
 
         /* 5. Encode a bytes nativos. */

@@ -425,6 +425,50 @@ namespace jit {
                 out.push_back(pop(MReg::RBP));
             }
 
+            /**
+             * @brief HOST_LEAF: copia los params entrantes (en los arg_regs del
+             *        ABI host) a su ubicacion fisica asignada por el regalloc.
+             *
+             * El selector emite, al inicio del bloque 0, un @c MOV @c vreg <-
+             * @c arg_reg fisico por param (que ancla su intervalo).  Aqui los
+             * consumimos: los params SPILLED se escriben a su slot directamente
+             * (lee el arg_reg pristino, escribe memoria -- no pisa ningun
+             * arg_reg), y los params en REGISTRO se mueven con un PARALLEL-MOVE
+             * (que rompe ciclos arg_reg<->home con @c scr1).  Hacer los spills
+             * ANTES garantiza que leen el arg_reg antes de que un move de
+             * registro lo sobrescriba.  El prologo nunca toca los arg_regs (son
+             * caller-saved en ambos ABIs), por lo que estan intactos aqui.
+             *
+             * @param instrs Instrucciones del bloque 0 (en forma vreg).
+             * @param params @c MFunction::param_vregs.
+             * @param out    Destino de las instrucciones fisicas.
+             * @return Numero de instrucciones lideres consumidas (el caller las
+             *         salta en el lowering normal).
+             */
+            size_t emit_host_param_loads(const std::vector<MInstr> &instrs,
+                                         const std::vector<uint32_t> &params,
+                                         std::vector<MInstr> &out) const {
+                if (vm_abi || params.empty()) return 0;
+                std::vector<std::pair<MReg, MOperand>> reg_moves;
+                size_t n = 0;
+                /* Los MOV param-init son exactamente los lideres del bloque 0
+                 * con dst vreg y src registro fisico (arg_reg). */
+                while (n < instrs.size() && n < params.size()
+                    && instrs[n].op == MOp::MOV
+                    && instrs[n].dst.is_vreg()
+                    && instrs[n].src1.is_reg()) {
+                    const MOperand dst = resolve(instrs[n].dst);
+                    if (dst.is_reg())
+                        reg_moves.emplace_back(static_cast<MReg>(dst.reg), instrs[n].src1);
+                    else  // param spilled: escribir el arg_reg al slot ya mismo
+                        out.push_back(MInstr::make_unary(MOp::MOV, dst, instrs[n].src1));
+                    ++n;
+                }
+                if (!reg_moves.empty())
+                    emit_parallel_moves(std::move(reg_moves), scr1, out);
+                return n;
+            }
+
             /** @brief Reescribe una instr vreg a 0+ instrs fisicas. */
             void lower(const MInstr &in, std::vector<MInstr> &out) {
                 const MOp op = in.op;
@@ -1118,7 +1162,17 @@ namespace jit {
             std::vector<MInstr> outv;
             outv.reserve(vf.blocks[b].instrs.size() * 2 + 8);
             if (b == 0) lw.emit_prologue(outv);
+            /* HOST_LEAF: cargar los params desde los arg_regs (parallel-move).
+             * Consume las MOV param-init lideres del bloque 0; el lowering
+             * normal las salta (pero gi avanza para no desincronizar las
+             * posiciones de los stackmaps). */
+            size_t param_skip = (b == 0)
+                ? lw.emit_host_param_loads(vf.blocks[0].instrs, vf.param_vregs, outv)
+                : 0;
+            size_t ii = 0;
             for (const MInstr &in : vf.blocks[b].instrs) {
+                if (ii < param_skip) { ++ii; ++gi; continue; }
+                ++ii;
                 lw.cur_call_pos = 2u * gi;
                 lw.lower(in, outv);
                 ++gi;
