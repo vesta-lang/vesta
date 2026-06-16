@@ -59,6 +59,255 @@ namespace {
 }
 
 namespace vex {
+
+    // =====================================================================
+    //  Mini-ensamblador de bloques `asm` (Phase AOT 16/32-bit).
+    //
+    //  Keystone (KS_OPT_SYNTAX_NASM) ensambla instrucciones + labels intra-
+    //  bloque + `db`, PERO no soporta `$`/`$$`/`times`.  Para permitir mezclar
+    //  codigo y datos crudos en UN solo bloque `asm` (como en NASM), partimos
+    //  el cuerpo por lineas: las INSTRUCCIONES se acumulan y se mandan a
+    //  Keystone (un flush por cada directiva de datos, para preservar el orden
+    //  y resolver labels dentro del run); las directivas de DATOS (db/dw/dd/dq/
+    //  times) las evaluamos nosotros con $ = offset actual del bloque y $$ = 0.
+    //
+    //  Limitacion: un label definido antes de una directiva de datos NO es
+    //  visible para instrucciones que vengan DESPUES (Keystone resuelve labels
+    //  dentro de un solo run).  Para boot sectors (codigo contiguo + padding +
+    //  firma al final) esto no es un problema.
+    // =====================================================================
+    namespace {
+        std::string asmblk_trim(const std::string &s) {
+            size_t a = 0, b = s.size();
+            while (a < b && (s[a]==' '||s[a]=='\t'||s[a]=='\r'||s[a]=='\n')) ++a;
+            while (b > a && (s[b-1]==' '||s[b-1]=='\t'||s[b-1]=='\r'||s[b-1]=='\n')) --b;
+            return s.substr(a, b - a);
+        }
+        // Quita un comentario de linea (; o //) respetando comillas.
+        std::string asmblk_strip_comment(const std::string &s) {
+            bool inq = false; char q = 0;
+            for (size_t i = 0; i < s.size(); ++i) {
+                char c = s[i];
+                if (inq) { if (c == q && (i == 0 || s[i-1] != '\\')) inq = false; continue; }
+                if (c == '\'' || c == '"') { inq = true; q = c; continue; }
+                if (c == ';') return s.substr(0, i);
+                if (c == '/' && i + 1 < s.size() && s[i+1] == '/') return s.substr(0, i);
+            }
+            return s;
+        }
+        bool asmblk_is_idchar(char c, bool first) {
+            if ((c>='A'&&c<='Z')||(c>='a'&&c<='z')||c=='_'||c=='.') return true;
+            if (!first && c>='0'&&c<='9') return true;
+            return false;
+        }
+        // Quita un "label:" inicial si lo hay; devuelve el resto (trim).
+        std::string asmblk_strip_label(const std::string &s, bool &had_label) {
+            had_label = false;
+            size_t i = 0; while (i < s.size() && (s[i]==' '||s[i]=='\t')) ++i;
+            if (i < s.size() && asmblk_is_idchar(s[i], true)) {
+                size_t j = i + 1;
+                while (j < s.size() && asmblk_is_idchar(s[j], false)) ++j;
+                if (j < s.size() && s[j] == ':') { had_label = true; return asmblk_trim(s.substr(j+1)); }
+            }
+            return asmblk_trim(s);
+        }
+        std::string asmblk_first_word(const std::string &s) {
+            size_t i = 0; while (i < s.size() && (s[i]==' '||s[i]=='\t')) ++i;
+            size_t j = i; while (j < s.size() && s[j]!=' ' && s[j]!='\t') ++j;
+            std::string w = s.substr(i, j - i);
+            for (auto &c : w) if (c>='A'&&c<='Z') c += 32;
+            return w;
+        }
+        int asmblk_data_width(const std::string &w) {
+            if (w=="db") return 1; if (w=="dw") return 2;
+            if (w=="dd") return 4; if (w=="dq") return 8; return 0;
+        }
+        void asmblk_skip_ws(const std::string &s, size_t &p) {
+            while (p < s.size() && (s[p]==' '||s[p]=='\t')) ++p;
+        }
+        // Parsea un entero (con signo opcional, bases 0x/0b/0o/decimal).
+        bool asmblk_parse_number(const std::string &s, size_t &p, int64_t &out) {
+            asmblk_skip_ws(s, p);
+            bool neg = false;
+            if (p < s.size() && (s[p]=='+'||s[p]=='-')) { neg = (s[p]=='-'); ++p; asmblk_skip_ws(s,p); }
+            if (p >= s.size() || !(s[p]>='0'&&s[p]<='9')) return false;
+            uint64_t v = 0; int base = 10; size_t start = p;
+            if (s[p]=='0' && p+1 < s.size() && (s[p+1]=='x'||s[p+1]=='X')) { base=16; p+=2; start=p; }
+            else if (s[p]=='0' && p+1 < s.size() && (s[p+1]=='b'||s[p+1]=='B')) { base=2; p+=2; start=p; }
+            else if (s[p]=='0' && p+1 < s.size() && (s[p+1]=='o'||s[p+1]=='O')) { base=8; p+=2; start=p; }
+            while (p < s.size()) {
+                char c = s[p]; int d;
+                if (c>='0'&&c<='9') d = c-'0';
+                else if (c>='a'&&c<='f') d = c-'a'+10;
+                else if (c>='A'&&c<='F') d = c-'A'+10;
+                else break;
+                if (d >= base) break;
+                v = v * (uint64_t)base + (uint64_t)d; ++p;
+            }
+            if (p == start) return false;
+            out = neg ? -(int64_t)v : (int64_t)v;
+            return true;
+        }
+        // Evalua la cuenta de `times`: expr con enteros, $ (=cur_off), $$ (=0),
+        // + - * / y parentesis.  Recursivo sobre el string; deja p tras la expr.
+        int64_t asmblk_eval_expr(const std::string &s, size_t &p, int64_t cur_off, bool &ok);
+        int64_t asmblk_eval_primary(const std::string &s, size_t &p, int64_t cur_off, bool &ok) {
+            asmblk_skip_ws(s, p);
+            if (p < s.size() && s[p]=='$') {
+                ++p;
+                if (p < s.size() && s[p]=='$') { ++p; return 0; }  // $$
+                return cur_off;                                     // $
+            }
+            if (p < s.size() && s[p]=='(') {
+                ++p; int64_t v = asmblk_eval_expr(s, p, cur_off, ok);
+                asmblk_skip_ws(s, p);
+                if (p < s.size() && s[p]==')') ++p; else ok = false;
+                return v;
+            }
+            if (p < s.size() && (s[p]=='+'||s[p]=='-')) {
+                bool neg = s[p]=='-'; ++p;
+                int64_t v = asmblk_eval_primary(s, p, cur_off, ok);
+                return neg ? -v : v;
+            }
+            int64_t n;
+            if (!asmblk_parse_number(s, p, n)) { ok = false; return 0; }
+            return n;
+        }
+        int64_t asmblk_eval_term(const std::string &s, size_t &p, int64_t cur_off, bool &ok) {
+            int64_t v = asmblk_eval_primary(s, p, cur_off, ok);
+            for (;;) {
+                asmblk_skip_ws(s, p);
+                if (p < s.size() && (s[p]=='*'||s[p]=='/')) {
+                    bool mul = s[p]=='*'; ++p;
+                    int64_t r = asmblk_eval_primary(s, p, cur_off, ok);
+                    if (!ok) return 0;
+                    if (mul) v *= r; else { if (r==0){ok=false;return 0;} v /= r; }
+                } else break;
+            }
+            return v;
+        }
+        int64_t asmblk_eval_expr(const std::string &s, size_t &p, int64_t cur_off, bool &ok) {
+            int64_t v = asmblk_eval_term(s, p, cur_off, ok);
+            for (;;) {
+                asmblk_skip_ws(s, p);
+                if (p < s.size() && (s[p]=='+'||s[p]=='-')) {
+                    bool add = s[p]=='+'; ++p;
+                    int64_t r = asmblk_eval_term(s, p, cur_off, ok);
+                    if (!ok) return 0;
+                    if (add) v += r; else v -= r;
+                } else break;
+            }
+            return v;
+        }
+        // Evalua los operandos de db/dw/dd/dq desde p, anchos de @c width bytes.
+        bool asmblk_eval_operands(const std::string &s, size_t &p, int width,
+                                  std::vector<uint8_t> &out, std::string &err) {
+            for (;;) {
+                asmblk_skip_ws(s, p);
+                if (p >= s.size()) break;
+                if (s[p]=='"' || s[p]=='\'') {
+                    char q = s[p++]; std::string val;
+                    while (p < s.size() && s[p]!=q) {
+                        char c = s[p++];
+                        if (c=='\\' && p < s.size()) {
+                            char e = s[p++];
+                            c = (e=='n'?'\n':e=='t'?'\t':e=='r'?'\r':e=='0'?'\0':e);
+                        }
+                        val.push_back(c);
+                    }
+                    if (p < s.size()) ++p;  // comilla de cierre
+                    if (q=='"') {
+                        if (width != 1) { err = "cadena solo valida en db"; return false; }
+                        for (unsigned char c : val) out.push_back(c);
+                    } else {
+                        uint64_t v = val.empty() ? 0 : (unsigned char)val[0];
+                        for (int i = 0; i < width; ++i) out.push_back((uint8_t)(v >> (8*i)));
+                    }
+                } else {
+                    int64_t v;
+                    if (!asmblk_parse_number(s, p, v)) {
+                        err = "operando invalido en directiva de datos del bloque asm";
+                        return false;
+                    }
+                    uint64_t u = (uint64_t)v;
+                    for (int i = 0; i < width; ++i) out.push_back((uint8_t)(u >> (8*i)));
+                }
+                asmblk_skip_ws(s, p);
+                if (p < s.size() && s[p]==',') { ++p; continue; }
+                break;
+            }
+            return true;
+        }
+        // Evalua una linea de directiva de datos (db/dw/dd/dq o times <expr> <dir>).
+        bool asmblk_eval_data_line(const std::string &line, std::vector<uint8_t> &out,
+                                   std::string &err) {
+            size_t p = 0;
+            std::string w = asmblk_first_word(line);
+            p = line.find(w);
+            p = (p == std::string::npos ? 0 : p + w.size());
+            if (w == "times") {
+                bool ok = true;
+                int64_t cnt = asmblk_eval_expr(line, p, (int64_t)out.size(), ok);
+                if (!ok) { err = "expresion invalida en 'times' del bloque asm"; return false; }
+                if (cnt < 0) { err = "'times' negativo en el bloque asm (revisa $-$$)"; return false; }
+                asmblk_skip_ws(line, p);
+                // Directiva interna (db/dw/dd/dq).
+                size_t ws_start = p;
+                while (p < line.size() && line[p]!=' ' && line[p]!='\t') ++p;
+                std::string dw = line.substr(ws_start, p - ws_start);
+                for (auto &c : dw) if (c>='A'&&c<='Z') c += 32;
+                int width = asmblk_data_width(dw);
+                if (width == 0) { err = "'times' espera db/dw/dd/dq en el bloque asm"; return false; }
+                std::vector<uint8_t> tmp;
+                if (!asmblk_eval_operands(line, p, width, tmp, err)) return false;
+                for (int64_t k = 0; k < cnt; ++k) out.insert(out.end(), tmp.begin(), tmp.end());
+                return true;
+            }
+            int width = asmblk_data_width(w);
+            if (width == 0) { err = "directiva de datos invalida en el bloque asm: " + w; return false; }
+            return asmblk_eval_operands(line, p, width, out, err);
+        }
+        // Ensambla el cuerpo de un bloque `asm` mezclando codigo (Keystone) y
+        // directivas de datos (propio).  Devuelve false + err en fallo.
+        bool asmblk_assemble(const std::string &body, uint8_t bits,
+                             std::vector<uint8_t> &out, std::string &err) {
+            vex::AsmArch arch = bits==16 ? vex::AsmArch::X86_16
+                              : bits==32 ? vex::AsmArch::X86_32
+                                         : vex::AsmArch::X86_64;
+            std::string instr_buf;
+            auto flush = [&]() -> bool {
+                std::string t = asmblk_trim(instr_buf); instr_buf.clear();
+                if (t.empty()) return true;
+                if (vex::g_asm_backend == nullptr) {
+                    err = "no hay backend de ensamblado (Keystone) disponible"; return false;
+                }
+                vex::AsmAssembleResult r = vex::g_asm_backend->assemble(t, arch);
+                if (!r.ok) { err = "error de ensamblado: " + r.error; return false; }
+                out.insert(out.end(), r.bytes.begin(), r.bytes.end());
+                return true;
+            };
+            std::istringstream is(body);
+            std::string line;
+            while (std::getline(is, line)) {
+                std::string t = asmblk_trim(asmblk_strip_comment(line));
+                if (t.empty()) continue;
+                bool had_label = false;
+                std::string rest = asmblk_strip_label(t, had_label);
+                std::string w = asmblk_first_word(rest);
+                const bool is_data = (asmblk_data_width(w) > 0) || (w == "times");
+                if (is_data) {
+                    if (!flush()) return false;
+                    if (!asmblk_eval_data_line(rest, out, err)) return false;
+                } else {
+                    // Instruccion (o linea solo-label): acumular el texto ORIGINAL
+                    // (con label + comentario) para que Keystone vea los labels.
+                    instr_buf += line; instr_buf += "\n";
+                }
+            }
+            return flush();
+        }
+    } // namespace
+
     /**
      * @brief Recorre un sub-arbol AST acumulando los nombres de variables
      *        que aparecen como destino de AssignExpr o operandos de ++/--.
@@ -604,21 +853,15 @@ namespace vex {
             // Las directivas $/$$/times NO las soporta Keystone; el usuario usa
             // un bloque `bytes` con @at/times para padding/firma.
             if (bd->is_asm) {
-                if (vex::g_asm_backend == nullptr) {
-                    diags_.error(bd->loc, "bloque asm: no hay backend de ensamblado "
-                        "(Keystone) disponible -- requiere compilar via el ejecutable vm");
+                std::vector<uint8_t> asm_bytes;
+                std::string aerr;
+                // Mini-ensamblador: instrucciones via Keystone + db/dw/dd/dq/
+                // times/$/$$ propios, intercalados en orden (estilo NASM).
+                if (!asmblk_assemble(bd->asm_body, bd->asm_bits, asm_bytes, aerr)) {
+                    diags_.error(bd->loc, "bloque asm '" + bd->name + "': " + aerr);
                     continue;
                 }
-                vex::AsmArch arch = bd->asm_bits == 16 ? vex::AsmArch::X86_16
-                                  : bd->asm_bits == 32 ? vex::AsmArch::X86_32
-                                                       : vex::AsmArch::X86_64;
-                vex::AsmAssembleResult ar = vex::g_asm_backend->assemble(bd->asm_body, arch);
-                if (!ar.ok) {
-                    diags_.error(bd->loc, "bloque asm '" + bd->name +
-                        "': error de ensamblado: " + ar.error);
-                    continue;
-                }
-                const size_t idx = out_module.static_data.push_back(std::move(ar.bytes));
+                const size_t idx = out_module.static_data.push_back(std::move(asm_bytes));
                 auto &m = out_module.static_data.meta_at(idx);
                 m.section_name  = bd->attr_section.empty() ? ".text" : bd->attr_section;
                 m.section_perms = bd->attr_section_perms;
