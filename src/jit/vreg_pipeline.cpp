@@ -105,6 +105,51 @@ namespace jit {
         return code;
     }
 
+    std::vector<uint8_t> vreg_compile_native(const ir::IrFunction &fn,
+                                             const CallResolver &resolve_call,
+                                             const VregEntries &ent,
+                                             const CallResolver &resolve_native,
+                                             const CallResolver &resolve_symbol) {
+        /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
+         *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
+         *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
+        MFunction mf;
+        if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
+                         resolve_native, resolve_symbol))
+            return {};
+
+        /* Reusamos el descriptor x86-64 de la VM_ABI: para HOST_LEAF solo
+         * implica que RBX queda RESERVADO (no asignable) -- conservador pero
+         * correcto; el codigo nunca toca RBX, asi que respeta el callee-saved
+         * del host sin necesitar push/pop. */
+        const TargetRegInfo &tri = target_x86_64_vm_abi();
+
+        /* 2. Intervalos + 3. asignacion linear-scan. */
+        IntervalResult ivs = build_intervals(mf, tri);
+        RegAlloc ra = linear_scan(ivs, tri);
+
+        /* 4. Rewrite a fisico con prologue/epilogue HOST_LEAF.  Sin GC: el
+         *    tier BARE no tiene heap del runtime; no se construyen stackmaps
+         *    (no hay un GC que escanee este stack), por eso NO pasamos &ivs
+         *    para stackmaps -- el rewrite solo necesita la asignacion. */
+        MFunction pf = rewrite_to_physical(mf, ra, tri, AbiKind::HOST_LEAF, &ivs);
+
+        /* 5. Encode a bytes nativos. */
+        X86Encoder enc;
+        std::vector<uint8_t> bytes;
+        if (enc.encode(pf, bytes) == 0 || bytes.empty()) return {};
+
+        /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo AOT generado. */
+        static const bool dis = []{
+            const char *v = std::getenv("VESTA_JIT_DISASM");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+        if (dis) debug_dump_jit_code(fn.name + " [aot-native]",
+                                     bytes.data(), bytes.size());
+
+        return bytes;
+    }
+
     uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
                               const CallResolver &resolve_call,
                               const VregEntries &ent,
