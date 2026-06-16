@@ -301,7 +301,9 @@ int main(int argc, char *argv[]) {
             ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
                 cxxopts::value<std::string>())
             ("no-pie",            "AOT: refs a datos absolutas (mov reg,imm64; requiere base de imagen fija) en vez de RIP-relativas (default, position-independent), analogo a gcc/clang -no-pie.")
-            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable linkable: ELF .o o COFF .obj segun --format) | shared (libreria compartida ELF .so que exporta sus funciones; dlopen/dlsym).",
+            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable linkable: ELF .o o COFF .obj segun --format) | shared (libreria compartida ELF .so que exporta sus funciones; dlopen/dlsym) | bin (binario plano sin cabecera: bootloader/ROM/firmware, entry en offset 0).",
+                cxxopts::value<std::string>())
+            ("bin-base",          "AOT --emit bin: base de carga del binario plano (hex, e.g. 0x7C00); afecta solo a refs absolutas (--no-pie). Default 0.",
                 cxxopts::value<std::string>())
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
@@ -1707,14 +1709,15 @@ int main(int argc, char *argv[]) {
             //   OBJECT : .o/.obj relocatable (sin _start; main global; relocs como
             //            registros; linkable con ld/gcc/link).
             //   SHARED : .so/.dll (sin _start; exporta TODAS las funciones; PIC).
-            bool emit_obj = false, emit_shared = false;
+            bool emit_obj = false, emit_shared = false, emit_bin = false;
             if (result.count("emit")) {
                 const std::string em = result["emit"].as<std::string>();
                 if      (em == "exe" || em == "exec")   { }
                 else if (em == "obj" || em == "o")      emit_obj = true;
                 else if (em == "shared" || em == "dll" || em == "so") emit_shared = true;
+                else if (em == "bin" || em == "flat")   emit_bin = true;
                 else {
-                    std::cerr << "[aot] --emit desconocido: '" << em << "' (use exe|obj|shared).\n";
+                    std::cerr << "[aot] --emit desconocido: '" << em << "' (use exe|obj|shared|bin).\n";
                     return EXIT_FAILURE;
                 }
             }
@@ -1724,21 +1727,29 @@ int main(int argc, char *argv[]) {
                              "compatible con .so.\n";
                 return EXIT_FAILURE;
             }
+            // base de carga del binario plano (.bin) -- solo afecta refs absolutas.
+            uint64_t bin_base = 0;
+            if (result.count("bin-base")) {
+                bin_base = std::strtoull(result["bin-base"].as<std::string>().c_str(),
+                                         nullptr, 0);
+            }
+            // OBJECT/SHARED/BIN no llevan _start (lo aporta el crt/host/loader).
+            const bool no_stub = emit_obj || emit_shared || emit_bin;
 
             // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED (libreria).
             const ir::IrFunction *main_fn = nullptr;
             for (const auto &fn : aot_mod.functions)
                 if (fn.name == "main") { main_fn = &fn; break; }
-            if (!main_fn && !emit_shared) {
+            if (!main_fn && !emit_shared && !emit_bin) {
                 std::cerr << "[aot] no se encontro la funcion 'main' en el modulo.\n";
                 return EXIT_FAILURE;
             }
 
-            // _start (arch+formato): solo para EXEC.  OBJECT/SHARED no llevan
-            // _start (lo aporta el crt del linker / el host que carga la .so).
+            // _start (arch+formato): solo para EXEC.  OBJECT/SHARED/BIN no llevan
+            // _start (lo aporta el crt del linker / el host / el loader externo).
             aot::StartStub stub{};
-            if (!emit_obj && !emit_shared) stub = aot::aot_make_start_stub(arch, fmt);
-            if (!emit_obj && !emit_shared && !stub.ok) {
+            if (!no_stub) stub = aot::aot_make_start_stub(arch, fmt);
+            if (!no_stub && !stub.ok) {
                 std::cerr << "[aot] " << stub.err << "\n";
                 return EXIT_FAILURE;
             }
@@ -1945,6 +1956,12 @@ int main(int argc, char *argv[]) {
                 w.set_output_kind(aot::OutputKind::OBJECT);
                 const FnLoc &ml = fn_loc["main"];
                 w.add_symbol("main", ml.sec, ml.off, /*is_func=*/true);
+            } else if (emit_bin) {
+                // Binario plano: sin cabecera ni _start; entry = offset 0 (la
+                // primera seccion .text, donde va main si existe).  Las refs
+                // absolutas se resuelven contra --bin-base.
+                w.set_output_kind(aot::OutputKind::FLAT_BIN);
+                w.set_flat_base(bin_base);
             } else {
                 w.set_entry(text_sec, 0);  // _start en .text offset 0
                 // stub->main: rel32 a la VA real de main (resuelta por el writer).
@@ -2012,7 +2029,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (!emit_obj && !emit_shared && stub.has_import_call) {
+            if (!no_stub && stub.has_import_call) {
                 w.add_import_call(aot::ImportCall{
                     stub.import_dll, stub.import_func, text_sec, stub.import_call_off});
             }
@@ -2039,6 +2056,10 @@ int main(int argc, char *argv[]) {
                           << "' (main GLOBAL; linkable con "
                           << (fmt == aot::ObjFormat::PE ? "link.exe/gcc-mingw" : "ld/gcc")
                           << ").\n";
+            else if (emit_bin)
+                std::cout << "[aot] binario plano (.bin) escrito en '" << out_prefix
+                          << "' (sin cabecera; entry en offset 0; base de carga 0x"
+                          << std::hex << bin_base << std::dec << ").\n";
             else
                 std::cout << "[aot] ejecutable nativo " << fmt_name << " escrito en '"
                           << out_prefix << "' (entry _start -> main -> exit, return "

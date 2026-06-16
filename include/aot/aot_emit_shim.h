@@ -250,6 +250,30 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
                     const AotSym *syms, int num_syms,
                     char *err, size_t err_cap);
 
+/**
+ * @brief Emite un BINARIO PLANO (flat binary, .bin) a disco.
+ *
+ * Sin ninguna cabecera (ni PE ni ELF): solo los bytes de las secciones
+ * concatenadas, en orden, cada una alineada a su @c align (1 por defecto =
+ * empaquetado denso).  Es el formato de un bootloader BIOS, una ROM, un
+ * payload de firmware o una imagen cargada en una direccion fija.
+ *
+ * El layout arranca en el offset 0 del fichero y se carga en @p base (la
+ * direccion fisica/virtual donde el cargador externo lo deposita, p.ej.
+ * @c 0x7C00 para un boot sector).  El punto de entrada es el offset 0 (la
+ * primera seccion, normalmente @c .text).  Las relocs se resuelven contra
+ * @p base: @c ABS64 = @p base + offset_en_imagen; @c REL32 es invariante a
+ * la base (PC-relativo dentro de la imagen).  Las secciones @c BSS no ocupan
+ * bytes en el fichero (se omiten; un flat binary no lleva ceros implicitos
+ * salvo que el usuario los escriba con @c bytes/times).
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_flat_bin(const char *path, uint64_t base,
+                      const AotSection *secs, int num_secs,
+                      const AotReloc *relocs, int num_relocs,
+                      char *err, size_t err_cap);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
