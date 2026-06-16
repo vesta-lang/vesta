@@ -47,6 +47,7 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             PRIVATE capstone
             PRIVATE keystone
             PRIVATE synchronization
+            PRIVATE aot_emit
     )
     
     # OpenSSL

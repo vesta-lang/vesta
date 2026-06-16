@@ -32,7 +32,7 @@ function(print_target_flags tgt)
     message(STATUS "LINK_LIBRARIES: ${_link_libs}")
 endfunction()
 
-# no necesitas los ejecutables de fuzzing,
+# si no necesitamos los ejecutables de fuzzing,
 # deshabilitarlos usando opciones de Keystone/LLVM
 set(ENABLE_FUZZING OFF CACHE BOOL "" FORCE)
 
@@ -208,6 +208,20 @@ add_subdirectory(libs/SourceCode/capstone)
 # Keystone (desensamblador)
 add_subdirectory(libs/SourceCode/keystone)
 
+# LibPEparse (emisor/parser de PE/COFF/ELF, C puro generico) -- usado por el
+# backend AOT (Phase AOT.4) para emitir objetos/ejecutables nativos.  Los
+# ejemplos de la lib quedan OFF al incluirse como subdirectorio.
+add_subdirectory(libs/SourceCode/LibPEparse)
+
+# Shim C del emisor AOT (aot_emit_shim.c): frontera entre el AOT C++ y
+# LibPEparse.  Se compila como C (donde las cabeceras de LibPEparse -- con
+# uniones anonimas y macros ELF -- compilan sin friccion C/C++) y expone la ABI
+# plana de include/aot/aot_emit_shim.h.  Enlaza LibPEparse de forma PUBLIC, asi
+# que linkar aot_emit arrastra LibPEparse transitivamente.
+add_library(aot_emit STATIC ${CMAKE_CURRENT_SOURCE_DIR}/src/aot/aot_emit_shim.c)
+target_include_directories(aot_emit PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(aot_emit PUBLIC LibPEparse)
+
 
 add_executable(vm ${VM_SOURCES})
 
@@ -228,6 +242,7 @@ target_link_libraries(vm
         PRIVATE capstone
         PRIVATE keystone
         PRIVATE vex_lib
+        PRIVATE aot_emit
 )
 if(VESTA_BUILD_PREPROCESSOR)
     target_link_libraries(vm PRIVATE vpp_lib)
@@ -369,6 +384,7 @@ target_link_libraries(vmcore
         PRIVATE sqlite3
         PRIVATE capstone
         PRIVATE keystone
+        PRIVATE aot_emit
 )
 if(VESTA_BUILD_PREPROCESSOR)
     target_link_libraries(vmcore PRIVATE vpp_lib)
