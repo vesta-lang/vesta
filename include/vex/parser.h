@@ -204,6 +204,8 @@ namespace vex {
         std::unique_ptr<ast::ImportDecl>    parse_import_decl(bool is_public_reexport);
         /// @brief Parsea @c "namespace foo { decls }" (Phase M.7.c).
         std::unique_ptr<ast::NamespaceDecl> parse_namespace_decl();
+        /// @c bytes name { db/dw/dd/dq/times ... }  (datos crudos NASM, AOT).
+        std::unique_ptr<ast::BytesDecl>     parse_bytes_decl();
         std::unique_ptr<ast::StructDecl>    parse_struct_decl();
         /// `typedef struct {...} Name;` o
         /// `typedef enum {...} Name;`.  Devuelve StructDecl o EnumDecl.

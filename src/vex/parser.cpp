@@ -346,6 +346,9 @@ namespace vex {
             case ast::NodeKind::ClassDecl:
                 static_cast<ast::ClassDecl*>(n)->is_public = is_public;
                 break;
+            case ast::NodeKind::BytesDecl:
+                static_cast<ast::BytesDecl*>(n)->is_public = is_public;
+                break;
             default: break;
         }
         // Limpiar para no propagar a nested decls.
@@ -841,6 +844,18 @@ namespace vex {
           || current_.kind == TokenKind::KW_PRIVATE)) {
             pending_visibility_ = (current_.kind == TokenKind::KW_PUBLIC) ? 1 : 2;
             (void)consume();
+        }
+        // bytes <nombre> { db/dw/dd/dq/times ... }  (datos crudos estilo NASM)
+        if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "bytes"
+         && lex_.peek_at(0).kind == TokenKind::IDENTIFIER
+         && lex_.peek_at(1).kind == TokenKind::LBRACE) {
+            auto bd = parse_bytes_decl();
+            if (bd) {
+                bd->attr_section       = std::move(top_attr_section);
+                bd->attr_section_perms = std::move(top_attr_section_perms);
+            }
+            apply_pending_visibility(bd.get());
+            return bd;
         }
         // struct <nombre> { ... }
         if (current_.kind == TokenKind::KW_STRUCT) {
@@ -2091,6 +2106,120 @@ namespace vex {
         (void)expect(TokenKind::RBRACE,
             "se esperaba '}' al final del namespace");
         return ns;
+    }
+
+    // -----------------------------------------------------------------
+    // bytes: bloque de datos crudos estilo NASM (Phase AOT).
+    //
+    //   bytes name {
+    //       db 0x55, 'A', "texto"     ; 1 byte por operando (string -> bytes)
+    //       dw 0x1234                  ; 2 bytes LE
+    //       dd 0xDEADBEEF              ; 4 bytes LE
+    //       dq 0x1122334455667788      ; 8 bytes LE
+    //       times 16 db 0             ; repite la directiva N veces
+    //   }
+    //
+    // v1 (Inc 1): solo literales (enteros, char, string en db).  Las
+    // referencias a simbolos (relocs) llegan en un incremento posterior.
+    // Los operandos de una misma directiva se separan con coma; las
+    // directivas entre si no necesitan separador (el lexer ignora saltos
+    // de linea, asi que se delimitan por el siguiente keyword db/dw/...).
+    // -----------------------------------------------------------------
+    std::unique_ptr<ast::BytesDecl> Parser::parse_bytes_decl() {
+        auto bd = std::make_unique<ast::BytesDecl>();
+        bd->loc = current_.loc;
+        (void)consume(); // 'bytes'
+
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del bloque tras 'bytes'");
+            return nullptr;
+        }
+        bd->name = consume().lexeme;
+        (void)expect(TokenKind::LBRACE, "se esperaba '{' tras el nombre del bloque bytes");
+
+        // Ancho en bytes de una directiva de datos.  0 = no es db/dw/dd/dq.
+        auto width_of = [](const std::string &d) -> int {
+            if (d == "db") return 1;
+            if (d == "dw") return 2;
+            if (d == "dd") return 4;
+            if (d == "dq") return 8;
+            return 0;
+        };
+
+        // Emite una directiva de datos (db/dw/dd/dq) hacia @c out.  El token
+        // actual es el identificador de la directiva.  Devuelve false si hay
+        // un error de sintaxis (el caller aborta el bucle).
+        auto emit_data_dir = [&](std::vector<uint8_t> &out) -> bool {
+            const int w = width_of(current_.lexeme);
+            if (w == 0) {
+                error_here("se esperaba una directiva de datos (db/dw/dd/dq)");
+                return false;
+            }
+            (void)consume(); // db/dw/dd/dq
+            // Al menos un operando.
+            for (;;) {
+                if (current_.kind == TokenKind::INT_LIT
+                 || current_.kind == TokenKind::CHAR_LIT) {
+                    const uint64_t v = current_.int_val;
+                    (void)consume();
+                    for (int i = 0; i < w; ++i) out.push_back((uint8_t)(v >> (8 * i)));
+                } else if (current_.kind == TokenKind::MINUS) {
+                    (void)consume();
+                    if (current_.kind != TokenKind::INT_LIT) {
+                        error_here("se esperaba un entero tras '-' en bytes");
+                        return false;
+                    }
+                    const uint64_t v = (uint64_t)(-(int64_t)current_.int_val);
+                    (void)consume();
+                    for (int i = 0; i < w; ++i) out.push_back((uint8_t)(v >> (8 * i)));
+                } else if (current_.kind == TokenKind::STRING_LIT
+                        || current_.kind == TokenKind::RAW_STRING_LIT) {
+                    if (w != 1) {
+                        error_here("un literal de cadena solo es valido en 'db'");
+                        return false;
+                    }
+                    for (unsigned char c : current_.str_val) out.push_back((uint8_t)c);
+                    (void)consume();
+                } else if (current_.kind == TokenKind::IDENTIFIER) {
+                    // Referencia a simbolo (reloc): pendiente en un incremento
+                    // posterior.  v1 acepta solo literales.
+                    error_here("referencias a simbolos en 'bytes' no soportadas todavia (v1: solo literales)");
+                    return false;
+                } else {
+                    error_here("se esperaba un operando (entero, char o cadena) en bytes");
+                    return false;
+                }
+                if (current_.kind == TokenKind::COMMA) { (void)consume(); continue; }
+                break;
+            }
+            return true;
+        };
+
+        // Bucle principal de directivas.
+        while (current_.kind != TokenKind::RBRACE
+            && current_.kind != TokenKind::END_OF_FILE) {
+            if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "times") {
+                (void)consume(); // 'times'
+                if (current_.kind != TokenKind::INT_LIT) {
+                    error_here("se esperaba un contador entero tras 'times'");
+                    break;
+                }
+                const uint64_t cnt = current_.int_val;
+                (void)consume();
+                std::vector<uint8_t> tmp;
+                if (!emit_data_dir(tmp)) break;
+                for (uint64_t k = 0; k < cnt; ++k)
+                    bd->data.insert(bd->data.end(), tmp.begin(), tmp.end());
+            } else if (current_.kind == TokenKind::IDENTIFIER
+                    && width_of(current_.lexeme) > 0) {
+                if (!emit_data_dir(bd->data)) break;
+            } else {
+                error_here("se esperaba db/dw/dd/dq/times o '}' en bloque bytes");
+                break;
+            }
+        }
+        (void)expect(TokenKind::RBRACE, "se esperaba '}' al final del bloque bytes");
+        return bd;
     }
 
     // -----------------------------------------------------------------
