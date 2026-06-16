@@ -28,6 +28,8 @@
 #include "cli/cli.h"
 #include "cli/vsh.h"
 #include "ir/ir_emitter.h"
+#include "ir/ssa_ir_serialize.h"   // Phase AOT: parse_ir_section (round-trip del @ir)
+#include "aot/aot_analyze.h"       // Phase AOT.1: analisis de compatibilidad nativa
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h"  // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
@@ -288,6 +290,10 @@ int main(int argc, char *argv[]) {
                 cxxopts::value<std::string>())
             ("vex-emit-only",     "Solo emitir el .vel intermedio del .vex; no compilar a .velb")
             ("vex-emit-ir",       "Emitir el SSA IR del .vex (pre y post optimizacion) en <output>.ir; util para debug del frontend")
+            // Phase AOT: con -m aot, target de compilacion nativa.
+            ("target",            "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default bare).",
+                cxxopts::value<std::string>()->default_value("bare"))
+            ("freestanding",      "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC requieren hooks @AllocatorOverride/@PanicHandler.")
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
             // Phase M.sandbox: restringe las capabilities del modulo
@@ -417,6 +423,23 @@ int main(int argc, char *argv[]) {
      * eager-compile pass se dispare con el threshold correcto.  Sin esto
      * el threshold se inicializa lazy en el primer maybe_compile_*, ya
      * tarde para eager compile. */
+    // Phase AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
+    // aqui (junto al resto de modos) y se consume en el bloque --vex mas abajo.
+    bool       aot_mode         = false;
+    aot::Tier  aot_tier         = aot::Tier::BARE;
+    bool       aot_freestanding = result.count("freestanding") > 0;
+    {
+        const std::string &tname = result["target"].as<std::string>();
+        if      (tname == "bare")  aot_tier = aot::Tier::BARE;
+        else if (tname == "embed") aot_tier = aot::Tier::EMBED;
+        else if (tname == "full")  aot_tier = aot::Tier::FULL;
+        else {
+            std::cerr << "[aot] --target invalido: '" << tname
+                      << "' (usa bare|embed|full)\n";
+            return EXIT_FAILURE;
+        }
+    }
+
     if (result.count("jit-threshold")) {
         jit::set_jit_threshold(result["jit-threshold"].as<uint32_t>());
     } else if (result.count("mode")) {
@@ -424,6 +447,10 @@ int main(int argc, char *argv[]) {
         if (m == "jit") {
             jit::set_jit_threshold(1);
         } else if (m == "vm" || m == "interp") {
+            jit::set_jit_threshold(UINT32_MAX);
+        } else if (m == "aot") {
+            // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
+            aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
         }
     } else {
@@ -1585,6 +1612,55 @@ int main(int argc, char *argv[]) {
                 vex::print_diagnostic(std::cerr, d);
             }
             return EXIT_FAILURE;
+        }
+
+        // ------------------------------------------------------------------
+        // Phase AOT (Paso 1): modo -m aot.  Analiza la compatibilidad nativa
+        // del modulo (sin emitir binario aun -- eso es el Paso 2: codegen
+        // HOST_LEAF -> ObjectWriter).  El IR optimizado viaja en
+        // cr.ir_section_bytes (mismo @ir que consume el JIT); se deserializa
+        // y se pasa al analizador AOT.1.
+        // ------------------------------------------------------------------
+        if (aot_mode) {
+            aot::AotTarget tgt;
+            tgt.tier         = aot_tier;
+            tgt.freestanding = aot_freestanding;
+
+            const char *tier_name =
+                (aot_tier == aot::Tier::BARE) ? "bare" :
+                (aot_tier == aot::Tier::EMBED) ? "embed" : "full";
+
+            if (cr.ir_section_bytes.empty()) {
+                std::cerr << "[aot] el modulo no produjo IR (seccion @ir vacia); "
+                             "nada que compilar a nativo.\n";
+                return EXIT_FAILURE;
+            }
+
+            ir::IrModule aot_mod;
+            if (!ir::parse_ir_section(cr.ir_section_bytes, 0,
+                                      cr.ir_section_bytes.size(),
+                                      aot_mod.functions)) {
+                std::cerr << "[aot] no se pudo deserializar el IR del modulo.\n";
+                return EXIT_FAILURE;
+            }
+
+            aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
+            std::cout << "[aot] target=" << tier_name
+                      << (aot_freestanding ? " --freestanding" : "")
+                      << ": " << aot_mod.functions.size() << " funcion(es), "
+                      << rep.ok_functions.size() << " compilable(s) a nativo.\n";
+
+            if (!rep.compatible) {
+                std::cerr << rep.render();
+                std::cerr << "[aot] modulo NO compilable a nativo en este target "
+                             "(ver incompatibilidades arriba).\n";
+                return EXIT_FAILURE;
+            }
+
+            std::cout << "[aot] modulo COMPATIBLE con --target=" << tier_name
+                      << ".  (Paso 2: la emision del ejecutable nativo -- codegen"
+                         " HOST_LEAF + ObjectWriter -- llega en el siguiente sprint.)\n";
+            return EXIT_SUCCESS;
         }
 
         /* CACHE MISS + @Macros presentes: hacer two-phase y persistir
