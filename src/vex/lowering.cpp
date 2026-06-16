@@ -7776,8 +7776,49 @@ namespace vex {
         ia.op          = ir::IrOp::INLINE_ASM;
         ia.type        = ir::IrType::VOID;
         ia.dst         = ir::IR_NO_VALUE;
-        ia.func_name   = s->body;          // cuerpo NASM Intel verbatim
         ia.source_line = s->loc.line;
+
+        // Phase AS inc.5g (metaprogramacion): sustituir las `comptime` consts
+        // ENTERAS por su literal en el cuerpo del asm ANTES de ensamblar, igual
+        // que una macro textual (evita hardcodear el valor + mantiene el asm
+        // legible).  Tokenizamos por identificadores [A-Za-z_][A-Za-z0-9_]*; un
+        // identificador que resuelve a una comptime const entera (no str/array/
+        // struct/type) se reemplaza por @c 0x<hex>.  Registros y mnemonicos no
+        // colisionan (el usuario no nombra una const "rax"/"mov").
+        std::string body_sub;
+        {
+            const auto &cmap = tc_.comptime_const_values();
+            const std::string &b = s->body;
+            body_sub.reserve(b.size());
+            size_t i = 0;
+            while (i < b.size()) {
+                const char c = b[i];
+                const bool id_start = (c >= 'A' && c <= 'Z')
+                                   || (c >= 'a' && c <= 'z') || c == '_';
+                if (!id_start) { body_sub.push_back(c); ++i; continue; }
+                size_t j = i + 1;
+                while (j < b.size()) {
+                    const char d = b[j];
+                    if ((d >= 'A' && d <= 'Z') || (d >= 'a' && d <= 'z')
+                     || (d >= '0' && d <= '9') || d == '_') ++j; else break;
+                }
+                const std::string tok = b.substr(i, j - i);
+                auto it = cmap.find(tok);
+                if (it != cmap.end() && !it->second.is_str
+                 && !it->second.is_array && !it->second.is_struct
+                 && !it->second.is_type) {
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "0x%llx",
+                        static_cast<unsigned long long>(
+                            static_cast<uint64_t>(it->second.value)));
+                    body_sub += buf;
+                } else {
+                    body_sub += tok;
+                }
+                i = j;
+            }
+        }
+        ia.func_name = body_sub;            // cuerpo NASM (consts ya sustituidas)
 
         // Phase AS inc.4b: validacion de sintaxis en compile-time via el
         // backend de ensamblado (Keystone).  Si esta registrado y rechaza el
@@ -7785,9 +7826,9 @@ namespace vex {
         // GCC falle al compilar el .c).  Si no hay backend (tests sin main),
         // se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
         // descartan (se usaran en inc.5 JIT).
-        if (vex::g_asm_backend && !s->body.empty()) {
+        if (vex::g_asm_backend && !body_sub.empty()) {
             vex::AsmAssembleResult ar =
-                vex::g_asm_backend->assemble(s->body, vex::AsmArch::X86_64);
+                vex::g_asm_backend->assemble(body_sub, vex::AsmArch::X86_64);
             if (!ar.ok) {
                 error_at(s->loc,
                     "inline asm: sintaxis invalida: " + ar.error);
@@ -7826,7 +7867,7 @@ namespace vex {
         bool final_flags = s->clobbers_flags;
         if (!s->q_noinfer) {
             vex::AsmInferResult inf =
-                vex::asm_infer_clobbers(s->body, bound_canon);
+                vex::asm_infer_clobbers(body_sub, bound_canon);
             // Union de regs (dedup simple: skip si ya esta).
             for (const auto &c : inf.clobber_regs) {
                 bool dup = false;

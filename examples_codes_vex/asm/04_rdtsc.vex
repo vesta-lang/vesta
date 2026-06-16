@@ -14,11 +14,13 @@
 //
 // @expect-run
 u64 main() {
+    
     register("rax") u64 tsc;             // recibe el TSC de 64 bits
     asm volatile {
         rdtsc                            // edx:eax = TSC
         shl rdx, 32                      // rdx = parte alta << 32
         or  rax, rdx                     // rax = (alta << 32) | baja
     };                                   // clobber de rdx ("cc") inferidos
+    
     return tsc;
 }

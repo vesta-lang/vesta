@@ -942,20 +942,60 @@ namespace jit {
                         // para vregs NO-binding vivos a traves del asm -- cubre los
                         // clobbers de callee-saved (r12-r15) que el call-position
                         // (solo caller-saved) no protege.  asm_id en imm bits 8..31.
+                        //
+                        // Phase AS inc.5f: clobbers de registros RESERVADOS por el
+                        // wrapper (rbx = ProcessVM*, rbp = frame).  canon_gp_to_mreg
+                        // los rechaza (no son asignables), pero el asm SI los pisa
+                        // (p.ej. cpuid escribe ebx) -> hay que SALVARLOS y
+                        // RESTAURARLOS alrededor del bloque, o el wrapper corrompe
+                        // proc/el frame.  rsp clobbered NO es envolvible (las
+                        // push/pop usan rsp) -> fallback.
+                        bool save_rbx = false, save_rbp = false;
                         {
                             const uint64_t asm_id = (in.imm >> 8) & 0xFFFFFFull;
                             if (asm_id < fn.asm_clobber_lists.size()) {
                                 for (const auto &cn : fn.asm_clobber_lists[asm_id]) {
-                                    const int phys =
-                                        canon_gp_to_mreg(vex::asm_canonical_reg(cn));
-                                    if (phys >= 0)
+                                    const std::string c = vex::asm_canonical_reg(cn);
+                                    const int phys = canon_gp_to_mreg(c);
+                                    if (phys >= 0) {
                                         blob.clobbers.push_back(
                                             static_cast<uint8_t>(phys));
+                                    } else if (c == "rbx") {
+                                        save_rbx = true;
+                                    } else if (c == "rbp") {
+                                        save_rbp = true;
+                                    } else if (c == "rsp") {
+                                        vreg_dbg(fn.name.c_str(),
+                                                 "inline-asm(clobber-rsp)");
+                                        return false;
+                                    }
                                 }
                             }
                         }
                         const uint32_t bidx = out.intern_asm_blob(std::move(blob));
+                        /* Salvar reservados clobbered ANTES del asm (push). */
+                        if (save_rbx) {
+                            MInstr p; p.op = MOp::PUSH;
+                            p.src1 = MOperand::make_reg(MReg::RBX, 8);
+                            O.push_back(p);
+                        }
+                        if (save_rbp) {
+                            MInstr p; p.op = MOp::PUSH;
+                            p.src1 = MOperand::make_reg(MReg::RBP, 8);
+                            O.push_back(p);
+                        }
                         O.push_back(MInstr::make_inline_asm_raw(bidx));
+                        /* Restaurar en orden inverso (pop). */
+                        if (save_rbp) {
+                            MInstr p; p.op = MOp::POP;
+                            p.dst = MOperand::make_reg(MReg::RBP, 8);
+                            O.push_back(p);
+                        }
+                        if (save_rbx) {
+                            MInstr p; p.op = MOp::POP;
+                            p.dst = MOperand::make_reg(MReg::RBX, 8);
+                            O.push_back(p);
+                        }
                         break;
                     }
 

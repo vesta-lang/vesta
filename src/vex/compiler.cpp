@@ -296,6 +296,29 @@ namespace vex {
         // loader las eager-compila a codigo nativo (JIT activo por defecto,
         // threshold 1500); el cuerpo bytecode-trap NUNCA se ejecuta bajo JIT.
         // Sin flags: `vm --vex prog.vex -o prog && vm --run prog.velb`.
+        //
+        // Phase AS inc.5g: PERO si el inline-asm liga un registro VECTORIAL
+        // (register("xmm0"/"ymm0"/"zmm0")), el JIT v1 no lo soporta (el regalloc
+        // solo asigna el banco GP) -> en lugar de fallar SILENCIOSAMENTE en
+        // runtime (el wrapper no compila -> trap hlt), abortamos AQUI con un
+        // error claro + sugerencia.  (En --port c si funciona: GCC lo maneja.)
+        if (opts.port_target.empty()) {
+            for (const auto &fn : irmod.functions) {
+                for (const auto &b : fn.asm_reg_bindings) {
+                    if (b.is_vector) {
+                        res.diagnostics.error(
+                            SourceLoc{filename, 0, 0},
+                            "inline asm: register(\"" + b.reg + "\") liga un "
+                            "registro vectorial (xmm/ymm/zmm), no soportado en "
+                            "el backend JIT todavia.  Usa el patron de memoria "
+                            "(puntero GP + registro vectorial interno como "
+                            "scratch; ver examples_codes_vex/asm/06_sse2_paddd) "
+                            "o compila con --port c.");
+                    }
+                }
+            }
+            if (res.diagnostics.has_errors()) return res;
+        }
 
         // 4. Emitir IR -> texto .vel.  Aqui es donde el optimizador IR
         // hace DCE / copy prop / etc segun opt_level y el regalloc lineal
