@@ -1166,6 +1166,17 @@ namespace ir {
             uint16_t source_module_idx = 0;     ///< 0 = local; !=0 = imported (futuro)
             std::string section_name;            ///< vacio = default; usado por AOT
             std::string section_perms;           ///< permisos explicitos "rwx" (vacio = convencion)
+            /// Referencia a simbolo dentro de los bytes (AOT): un campo del blob
+            /// que apunta a la direccion de una funcion/dato (p.ej. `dq main` en
+            /// un bloque @c bytes -> tabla de saltos, vtable, GDT).  El emisor AOT
+            /// las traduce a relocs.
+            struct SymRef {
+                uint32_t    offset  = 0;   ///< offset del campo dentro del blob.
+                std::string sym;            ///< nombre del simbolo referenciado.
+                uint8_t     width   = 8;   ///< 8 (dq->ABS64) u 4 (dd->ABS32/REL32).
+                uint8_t     is_rel  = 0;   ///< 1 = PC-relativo; 0 = absoluto.
+            };
+            std::vector<SymRef> sym_refs;        ///< vacio = sin refs (caso comun).
         };
 
         /**

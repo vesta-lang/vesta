@@ -605,6 +605,14 @@ namespace vex {
             m.section_perms = bd->attr_section_perms;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
                      | ir::IrModule::SD_FLAG_NON_DEDUP;
+            // Referencias a simbolos (`dq main`): el emisor AOT las traduce a
+            // relocs (la direccion real se escribe sobre el placeholder).
+            for (const auto &sr : bd->sym_refs) {
+                ir::IrModule::StaticDataMeta::SymRef d;
+                d.offset = sr.offset; d.sym = sr.sym;
+                d.width = sr.width;   d.is_rel = sr.is_rel ? 1 : 0;
+                m.sym_refs.push_back(std::move(d));
+            }
         }
 
         return diags_.error_count() == initial_errors;

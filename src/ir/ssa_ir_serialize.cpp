@@ -646,6 +646,14 @@ namespace ir {
             write_u16(out, e.meta.source_module_idx);
             write_str(out, e.meta.section_name);
             write_str(out, e.meta.section_perms);  // AOT 2b
+            // AOT Inc 3: referencias a simbolos en bloques `bytes` (dq main).
+            write_u32(out, static_cast<uint32_t>(e.meta.sym_refs.size()));
+            for (const auto &sr : e.meta.sym_refs) {
+                write_u32(out, sr.offset);
+                write_u8 (out, sr.width);
+                write_u8 (out, sr.is_rel);
+                write_str(out, sr.sym);
+            }
         }
     }
 
@@ -674,6 +682,19 @@ namespace ir {
             if (!read_u16(in, off, e.meta.source_module_idx)) return false;
             if (!read_str(in, off, e.meta.section_name)) return false;
             if (!read_str(in, off, e.meta.section_perms)) return false;  // AOT 2b
+            // AOT Inc 3: referencias a simbolos.
+            uint32_t nrefs = 0;
+            if (!read_u32(in, off, nrefs)) return false;
+            if (nrefs > 1000000u) return false;  // cap defensivo
+            e.meta.sym_refs.reserve(nrefs);
+            for (uint32_t k = 0; k < nrefs; ++k) {
+                IrModule::StaticDataMeta::SymRef sr;
+                if (!read_u32(in, off, sr.offset)) return false;
+                if (!read_u8 (in, off, sr.width))  return false;
+                if (!read_u8 (in, off, sr.is_rel)) return false;
+                if (!read_str(in, off, sr.sym))    return false;
+                e.meta.sym_refs.push_back(std::move(sr));
+            }
             // Validar que el rango cae dentro del pool.
             if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
                 return false;
