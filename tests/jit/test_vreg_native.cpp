@@ -135,12 +135,99 @@ namespace {
         }
     }
 
+    /* ===================================================================== */
+    /* Test 3: i64 add2(a, b) { return a + b; }  (params en arg_regs)         */
+    /* ===================================================================== */
+    void test_param_add2() {
+        std::printf("[aot-native] add2(a, b) = a + b\n");
+        ir::IrFunction fn;
+        fn.name = "add2";
+        fn.ret_type = ir::IrType::I64;
+        const ir::IrValueId a = mk_value(fn, ir::IrType::I64);
+        const ir::IrValueId b = mk_value(fn, ir::IrType::I64);
+        fn.params = {a, b};
+        const ir::IrValueId t = mk_value(fn, ir::IrType::I64);
+
+        ir::IrBlock entry; entry.id = 0; entry.name = "entry";
+        ir::IrInstr add = mk_instr(ir::IrOp::ADD, ir::IrType::I64, t);
+        add.operands.push_back(a); add.operands.push_back(b);
+        entry.instrs.push_back(add);
+        ir::IrInstr r = mk_instr(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+        r.operands.push_back(t); entry.instrs.push_back(r);
+        fn.blocks.push_back(entry);
+
+        std::vector<uint8_t> bytes = jit::vreg_compile_native(fn);
+        CHECK(!bytes.empty(), "vreg_compile_native produce bytes (add2)");
+        jit::CodeCache cc;
+        uint8_t *code = make_runnable(cc, bytes);
+        CHECK(code != nullptr, "alloc + commit OK (add2)");
+        if (code) {
+            using F = int64_t(*)(int64_t, int64_t);
+            const int64_t got = reinterpret_cast<F>(code)(40, 2);
+            CHECK(got == 42, "add2(40, 2) == 42");
+            if (got != 42) std::printf("    obtuvo %lld\n", (long long)got);
+            CHECK(reinterpret_cast<F>(code)(100, -58) == 42, "add2(100,-58) == 42");
+        }
+    }
+
+    /* ===================================================================== */
+    /* Test 4: i64 combine(a, b, c, d) { return a - b + c * d; }              *
+     * 4 args (cubre todos los arg_regs de Win64) + orden no trivial: estresa *
+     * el parallel-move de la carga de params.                                 */
+    /* ===================================================================== */
+    void test_param_combine4() {
+        std::printf("[aot-native] combine(a,b,c,d) = a - b + c*d\n");
+        ir::IrFunction fn;
+        fn.name = "combine4";
+        fn.ret_type = ir::IrType::I64;
+        const ir::IrValueId a = mk_value(fn, ir::IrType::I64);
+        const ir::IrValueId b = mk_value(fn, ir::IrType::I64);
+        const ir::IrValueId c = mk_value(fn, ir::IrType::I64);
+        const ir::IrValueId d = mk_value(fn, ir::IrType::I64);
+        fn.params = {a, b, c, d};
+        const ir::IrValueId ab  = mk_value(fn, ir::IrType::I64);  // a - b
+        const ir::IrValueId cd  = mk_value(fn, ir::IrType::I64);  // c * d
+        const ir::IrValueId res = mk_value(fn, ir::IrType::I64);  // ab + cd
+
+        ir::IrBlock entry; entry.id = 0; entry.name = "entry";
+        ir::IrInstr sub = mk_instr(ir::IrOp::SUB, ir::IrType::I64, ab);
+        sub.operands.push_back(a); sub.operands.push_back(b);
+        entry.instrs.push_back(sub);
+        ir::IrInstr mul = mk_instr(ir::IrOp::MUL, ir::IrType::I64, cd);
+        mul.operands.push_back(c); mul.operands.push_back(d);
+        entry.instrs.push_back(mul);
+        ir::IrInstr addf = mk_instr(ir::IrOp::ADD, ir::IrType::I64, res);
+        addf.operands.push_back(ab); addf.operands.push_back(cd);
+        entry.instrs.push_back(addf);
+        ir::IrInstr r = mk_instr(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
+        r.operands.push_back(res); entry.instrs.push_back(r);
+        fn.blocks.push_back(entry);
+
+        std::vector<uint8_t> bytes = jit::vreg_compile_native(fn);
+        CHECK(!bytes.empty(), "vreg_compile_native produce bytes (combine4)");
+        jit::CodeCache cc;
+        uint8_t *code = make_runnable(cc, bytes);
+        CHECK(code != nullptr, "alloc + commit OK (combine4)");
+        if (code) {
+            using F = int64_t(*)(int64_t, int64_t, int64_t, int64_t);
+            // 10 - 8 + 5*8 = 2 + 40 = 42
+            const int64_t got = reinterpret_cast<F>(code)(10, 8, 5, 8);
+            CHECK(got == 42, "combine4(10,8,5,8) == 42");
+            if (got != 42) std::printf("    obtuvo %lld\n", (long long)got);
+            // 100 - 100 + 6*7 = 42
+            CHECK(reinterpret_cast<F>(code)(100, 100, 6, 7) == 42,
+                  "combine4(100,100,6,7) == 42");
+        }
+    }
+
 } // namespace
 
 int main() {
     std::printf("=== test_vreg_native (Phase AOT.3 Paso 2) ===\n");
     test_ret42();
     test_add();
+    test_param_add2();
+    test_param_combine4();
     std::printf("\n%d checks OK, %d fallos\n", pass_count, fail_count);
     return fail_count == 0 ? 0 : 1;
 }

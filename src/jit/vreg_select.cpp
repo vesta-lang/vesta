@@ -26,6 +26,7 @@
 
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
+#include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "gc/raw_allocator.h"   // Phase D.7 perf: inline slab fast-path
 #include "vex/asm_backend.h"    // Phase AS inc.5: ensamblar inline-asm -> bytes
 #include "vex/asm_effects.h"    // Phase AS inc.5: asm_canonical_reg
@@ -227,6 +228,11 @@ namespace jit {
          * call_position) -- ese seria invisible al GC en un registro.  Los
          * receptores/args de un call van a proc->registers (que el GC SI
          * escanea) y mueren antes del call, asi que no disparan el rechazo. */
+        /* Phase AOT.3 2b: exponer los vregs de los parametros al rewrite (los
+         * usa en HOST_LEAF para el parallel-move de los arg_regs en el prologo;
+         * en VM_ABI se ignora -- el selector carga los params desde memoria). */
+        out.param_vregs.assign(fn.params.begin(), fn.params.end());
+
         out.vreg_is_gc.assign(fn.values.size(), 0);
         for (size_t i = 0; i < fn.values.size(); ++i) {
             if (!fn.values[i].is_gc_object) continue;
@@ -357,6 +363,23 @@ namespace jit {
                 for (size_t i = 0; i < fn.params.size(); ++i)
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(fn.params[i]),
                         vm_reg_mem(static_cast<int>(i) + 1)));
+            }
+
+            /* HOST_LEAF: los params llegan en los arg_regs del ABI host.  Se
+             * emite un def `MOV vr(param), <arg_reg fisico>` por param: (a) ancla
+             * el intervalo del param en el entry (el regalloc reserva su home
+             * desde la entrada, sin reusarlo antes del primer uso), y (b) es el
+             * propio load.  El rewrite reconoce estos MOV lideres (vreg<-reg
+             * fisico) y los emite como un PARALLEL-MOVE para romper los ciclos
+             * arg_reg<->home (un MOV secuencial seria incorrecto si el home de un
+             * param coincide con el arg_reg de otro).  Params mas alla de los
+             * arg_regs (en pila) no se soportan en v1. */
+            if (!vm && b == 0 && !fn.params.empty()) {
+                const auto &areg =
+                    target_x86_64_vm_abi().arg_regs[static_cast<size_t>(RegClass::GP)];
+                for (size_t i = 0; i < fn.params.size() && i < areg.size(); ++i)
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(fn.params[i]),
+                        MOperand::make_reg(static_cast<MReg>(areg[i]), 8)));
             }
 
             /* Emite las copias de PHI para una arista (b -> target): por cada
