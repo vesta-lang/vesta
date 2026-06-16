@@ -1194,6 +1194,7 @@ int main(int argc, char *argv[]) {
         copts.module_name = mod_name;
         copts.opt_level   = 2;
         copts.dump_ir     = emit_ir;  // habilita CompileResult::ir_text
+        copts.native_poo  = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
         // Instrumentacion: aplica al IR independientemente del target
         // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.
         copts.instrument_mode = result["instrument"].as<std::string>();

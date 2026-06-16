@@ -112,6 +112,14 @@ namespace vex {
         ///   "profile"        - mide tiempo per-funcion (rdtsc); imprime
         ///                      estadisticas al exit del programa.
         std::string instrument_mode;
+
+        /// Phase AOT.2.b: modo POO NATIVA (sin runtime VM).  Cuando true, el
+        /// lowering de clases baja a layout estilo C-struct (offsets estaticos)
+        /// + new->malloc(size)/alloca + ctor directo, SIN __module_init/
+        /// ClassRegistry/GcHeap (no se emiten defclass/newobj/findclass/
+        /// gc_deref_host).  Lo activa el driver @c -m aot.  Default false
+        /// (ruta runtime historica, intacta para la VM/JIT).
+        bool        native_poo = false;
     };
 
     /**

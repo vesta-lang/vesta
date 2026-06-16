@@ -818,7 +818,10 @@ namespace vex {
         // el prologo de main incluye una llamada a __module_init para
         // garantizar que las clases esten registradas antes del cuerpo.
         generate_new_helpers(out_module);
-        generate_module_init_function(out_module);
+        // Phase AOT.2.b: en POO nativa no hay ClassRegistry -> no se genera
+        // __module_init (las clases son layout estatico compile-time).
+        if (!native_poo_)
+            generate_module_init_function(out_module);
 
         // Exportar metadata POO al @c IrModule para que el port transpiler
         // (port-C, etc.) emita codigo POO eficiente sin reconstruir las
@@ -1862,8 +1865,10 @@ namespace vex {
             }
             // L2.2: tambien llamar __module_init si hay globals runtime
             // que requieren inicializacion (string="lit" etc.).
+            // Phase AOT.2.b: en POO nativa NO hay ClassRegistry -> main no
+            // llama a __module_init (las clases son layout estatico).
             bool need_init = any_class || !runtime_global_slots_.empty();
-            if (need_init) {
+            if (need_init && !native_poo_) {
                 ir::IrInstr call_init{};
                 call_init.op          = ir::IrOp::CALL;
                 call_init.type        = ir::IrType::VOID;
@@ -3224,6 +3229,18 @@ namespace vex {
                         break;
                     }
                 }
+                // Phase AOT.2.b: POO nativa -> liberar la instancia (calloc)
+                // al exit del scope via RAW_FREE (RAII; sin GC, sin leak).
+                // El dispatch del destructor via vtable es nativo en 2.c; por
+                // ahora la clase nativa libera memoria (no invoca ~T()).
+                if (native_poo_) {
+                    CleanupAction act;
+                    act.kind          = CleanupAction::Kind::NATIVE_FREE;
+                    act.operands      = {v};
+                    act.source_line   = vd->loc.line;
+                    act.refresh_name  = vd->name;
+                    cleanup_stack_.push_back(std::move(act));
+                } else
                 if (dtor) {
                     // cleanup CALL_DTOR: el regalloc ve un CALLVIRT
                     // real y preserva los regs vivos del scope (incluido el
@@ -5667,6 +5684,20 @@ namespace vex {
                     cv.imm         = static_cast<uint64_t>(it->dtor_vtable_index);
                     cv.source_line = it->source_line;
                     fn_->append(current_block_, std::move(cv));
+                    break;
+                }
+                case CleanupAction::Kind::NATIVE_FREE: {
+                    // Phase AOT.2.b: liberar la instancia de clase nativa
+                    // (host_ptr de calloc) con RAW_FREE -> aot_lower lo baja a
+                    // call<free>.  RAW_FREE(0)/free(NULL) es no-op -> seguro si
+                    // el owner fue movido.  Sin GC, sin dangling.
+                    ir::IrInstr rf{};
+                    rf.op          = ir::IrOp::RAW_FREE;
+                    rf.type        = ir::IrType::VOID;
+                    rf.dst         = ir::IR_NO_VALUE;
+                    rf.operands    = std::move(opnds);
+                    rf.source_line = it->source_line;
+                    fn_->append(current_block_, std::move(rf));
                     break;
                 }
                 case CleanupAction::Kind::RAW_ASM: {
@@ -18304,6 +18335,57 @@ namespace vex {
                                                         : ctor;
             const size_t   nargs           = effective_ctor ? effective_ctor->param_types.size() : 0;
             const uint32_t ctor_vtable_idx = effective_ctor ? effective_ctor->vtable_index : 0;
+
+            // -------------------------------------------------------------
+            // Phase AOT.2.b -- POO NATIVA: __new_<Class>(args) sin runtime.
+            //   %obj = call calloc(1, size_bytes)   ; heap zero-init, host_ptr
+            //   [si hay ctor efectivo:] call <Class>__ctor(%obj, args...)
+            //   ret %obj
+            // calloc zerifica (como hacia gc_heap.alloc) -> los campos no
+            // inicializados por el ctor quedan a 0 sin garbage.  El ptr de
+            // calloc ES el objeto (sin GcHandle, sin ObjectHeader header
+            // logico -- los offsets de campo del layout se respetan tal cual).
+            // El simbolo calloc es EXTERNO (lo resuelve el linker; overridable
+            // por @AllocatorOverride en 2.d).  free pareado via RAII (cleanup).
+            // -------------------------------------------------------------
+            if (native_poo_) {
+                ir::IrFunction nf;
+                nf.name     = "__new_" + cd->name;
+                nf.ret_type = ir::IrType::PTR;
+                for (size_t i = 0; i < nargs; ++i) {
+                    const ir::IrType    pt  = ir_type_from_primitive(effective_ctor->param_types[i].kind);
+                    const ir::IrValueId vid = nf.new_value(pt, "%a" + std::to_string(i));
+                    nf.values[vid].is_param = true;
+                    nf.params.push_back(vid);
+                }
+                const ir::IrBlockId e = nf.new_block("entry");
+                // %n = 1 ; %sz = size_bytes
+                const ir::IrValueId v_n = nf.new_value(ir::IrType::I64);
+                { ir::IrInstr c{}; c.op=ir::IrOp::CONST; c.type=ir::IrType::I64;
+                  c.dst=v_n; c.imm=1; c.source_line=cd->loc.line; nf.append(e, std::move(c)); }
+                const ir::IrValueId v_sz = nf.new_value(ir::IrType::I64);
+                { ir::IrInstr c{}; c.op=ir::IrOp::CONST; c.type=ir::IrType::I64;
+                  c.dst=v_sz; c.imm=lay.size_bytes; c.source_line=cd->loc.line; nf.append(e, std::move(c)); }
+                // %obj = call calloc(%n, %sz) -> host_ptr zero-init
+                const ir::IrValueId v_obj = nf.new_value(ir::IrType::PTR);
+                nf.values[v_obj].is_host_ptr = true;
+                { ir::IrInstr ca{}; ca.op=ir::IrOp::CALL; ca.type=ir::IrType::PTR;
+                  ca.dst=v_obj; ca.func_name="calloc"; ca.operands={v_n, v_sz};
+                  ca.source_line=cd->loc.line; nf.append(e, std::move(ca)); }
+                // [ctor] call <Class>__ctor(%obj, args...) -- CALL directo
+                if (effective_ctor) {
+                    ir::IrInstr cc{}; cc.op=ir::IrOp::CALL; cc.type=ir::IrType::VOID;
+                    cc.dst=ir::IR_NO_VALUE; cc.func_name = cd->name + "__ctor";
+                    cc.operands.reserve(nargs + 1);
+                    cc.operands.push_back(v_obj);
+                    for (size_t i = 0; i < nargs; ++i) cc.operands.push_back(nf.params[i]);
+                    cc.source_line=cd->loc.line; nf.append(e, std::move(cc));
+                }
+                { ir::IrInstr r{}; r.op=ir::IrOp::RET; r.type=ir::IrType::PTR;
+                  r.operands={v_obj}; r.source_line=cd->loc.line; nf.append(e, std::move(r)); }
+                out.add_function(std::move(nf));
+                continue;  // ruta nativa lista; saltar el path runtime de esta clase
+            }
 
             // Registrar el nombre de la clase como datos estaticos.
             const uint64_t name_idx = intern_class_name(out, cd->name);
