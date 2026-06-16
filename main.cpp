@@ -1765,6 +1765,8 @@ int main(int argc, char *argv[]) {
                 std::vector<jit::NativeReloc> relocs;
                 std::string              section;        // @section ("" = .text)
                 std::string              section_perms;  // "rwx" explicito ("" = convencion)
+                int64_t                  section_at    = -1;          // @at(N)
+                int32_t                  section_order = 0x7fffffff;  // @order(N)
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t> compiled_idx;  // name -> compiled[]
@@ -1809,6 +1811,8 @@ int main(int argc, char *argv[]) {
                 af.name          = nm;
                 af.section       = itf->second->section;
                 af.section_perms = itf->second->section_perms;
+                af.section_at    = itf->second->section_at;
+                af.section_order = itf->second->section_order;
                 af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
                                                     &af.relocs, aot_pic,
                                                     /*target_sysv=*/fmt == aot::ObjFormat::ELF);
@@ -1843,19 +1847,33 @@ int main(int argc, char *argv[]) {
                 bool                 is_code = true;
                 std::string          perms;   // "" = por convencion del nombre
                 std::vector<uint8_t> bytes;
+                int64_t              at    = -1;          // @at(N) (.bin)
+                int32_t              order = 0x7fffffff;  // @order(N) (.bin)
             };
             std::vector<SecAccum> secs;
             std::unordered_map<std::string, int> sec_index;
+            // Recoge perms/at/order de cualquier fn/dato que toque la seccion.
+            // El primer @at no-default gana; el menor @order gana.  Conflictos
+            // de @at distintos en la misma seccion se reportan.
             auto get_sec = [&](const std::string &name, bool is_code,
-                               const std::string &perms) -> int {
+                               const std::string &perms,
+                               int64_t at = -1, int32_t order = 0x7fffffff) -> int {
                 auto it = sec_index.find(name);
                 if (it != sec_index.end()) {
-                    if (!perms.empty() && secs[it->second].perms.empty())
-                        secs[it->second].perms = perms;
+                    SecAccum &s = secs[it->second];
+                    if (!perms.empty() && s.perms.empty()) s.perms = perms;
+                    if (at >= 0) {
+                        if (s.at >= 0 && s.at != at)
+                            std::cerr << "[aot] @at en conflicto para la seccion '"
+                                      << name << "' (" << s.at << " vs " << at << ").\n";
+                        else s.at = at;
+                    }
+                    if (order < s.order) s.order = order;
                     return it->second;
                 }
                 const int idx = static_cast<int>(secs.size());
                 SecAccum s; s.name = name; s.is_code = is_code; s.perms = perms;
+                s.at = at; s.order = order;
                 secs.push_back(std::move(s));
                 sec_index[name] = idx;
                 return idx;
@@ -1871,7 +1889,8 @@ int main(int argc, char *argv[]) {
             auto place_fn = [&](size_t ci) {
                 AotFn &af = compiled[ci];
                 const std::string &fsec = af.section.empty() ? ".text" : af.section;
-                const int si = get_sec(fsec, /*is_code=*/true, af.section_perms);
+                const int si = get_sec(fsec, /*is_code=*/true, af.section_perms,
+                                       af.section_at, af.section_order);
                 const uint32_t off = static_cast<uint32_t>(secs[si].bytes.size());
                 fn_loc[af.name] = {si, off};
                 secs[si].bytes.insert(secs[si].bytes.end(),
@@ -1893,7 +1912,8 @@ int main(int argc, char *argv[]) {
                 const auto &e = sd.entries[N];
                 const std::string dsec = e.meta.section_name.empty()
                     ? ".rodata" : e.meta.section_name;
-                const int si = get_sec(dsec, /*is_code=*/false, e.meta.section_perms);
+                const int si = get_sec(dsec, /*is_code=*/false, e.meta.section_perms,
+                                       e.meta.section_at, e.meta.section_order);
                 const uint64_t off = secs[si].bytes.size();
                 const uint8_t *p = sd.bytes.data() + e.byte_offset;
                 secs[si].bytes.insert(secs[si].bytes.end(), p, p + e.byte_len);
@@ -1950,6 +1970,7 @@ int main(int argc, char *argv[]) {
                 else      flags |= aot::SecFlag::DATA;
                 aot::WriterSection ws;
                 ws.name = s.name; ws.flags = flags; ws.data = s.bytes;
+                ws.at = s.at; ws.order = s.order;  // ubicacion/orden (.bin)
                 w.add_section(std::move(ws));
             }
             if (emit_shared) {

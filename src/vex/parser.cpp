@@ -703,6 +703,8 @@ namespace vex {
         uint16_t top_attr_align = 0;
         std::string top_attr_section;
         std::string top_attr_section_perms;  // AOT 2b: @section(".x","rwx")
+        int64_t  top_attr_at    = -1;          // AOT: @at(N) offset/VA fijo (.bin)
+        int32_t  top_attr_order = 0x7fffffff;  // AOT: @order(N) orden de seccion
         while (current_.kind == TokenKind::AT) {
             (void)consume();
             if (current_.kind == TokenKind::IDENTIFIER) {
@@ -735,6 +737,8 @@ namespace vex {
                 const bool is_hot     = (current_.lexeme == "hot");
                 const bool is_cold    = (current_.lexeme == "cold");
                 const bool is_section = (current_.lexeme == "section");
+                const bool is_at      = (current_.lexeme == "at");
+                const bool is_order   = (current_.lexeme == "order");
                 (void)consume();
                 if (is_hot)  { top_attr_hot  = true; continue; }
                 if (is_cold) { top_attr_cold = true; continue; }
@@ -775,6 +779,30 @@ namespace vex {
                         }
                     }
                     (void)expect(TokenKind::RPAREN, "se esperaba ')' tras @section");
+                    continue;
+                }
+                if (is_at) {
+                    // @at(N): offset/VA fijo de la seccion en la imagen (AOT .bin).
+                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @at");
+                    if (current_.kind != TokenKind::INT_LIT) {
+                        error_here("@at requiere un offset entero");
+                    } else {
+                        top_attr_at = (int64_t)current_.int_val;
+                        (void)consume();
+                    }
+                    (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @at(N)");
+                    continue;
+                }
+                if (is_order) {
+                    // @order(N): orden relativo de la seccion en la imagen.
+                    (void)expect(TokenKind::LPAREN, "se esperaba '(' tras @order");
+                    if (current_.kind != TokenKind::INT_LIT) {
+                        error_here("@order requiere un entero");
+                    } else {
+                        top_attr_order = (int32_t)current_.int_val;
+                        (void)consume();
+                    }
+                    (void)expect(TokenKind::RPAREN, "se esperaba ')' tras N en @order(N)");
                     continue;
                 }
                 if (is_target) {
@@ -854,6 +882,8 @@ namespace vex {
             if (bd) {
                 bd->attr_section       = std::move(top_attr_section);
                 bd->attr_section_perms = std::move(top_attr_section_perms);
+                bd->attr_at            = top_attr_at;
+                bd->attr_order         = top_attr_order;
             }
             apply_pending_visibility(bd.get());
             return bd;
@@ -1123,6 +1153,7 @@ namespace vex {
                 fd->attr_section       = top_attr_section;
                 fd->attr_section_perms = top_attr_section_perms;
             }
+            if (fd) { fd->attr_at = top_attr_at; fd->attr_order = top_attr_order; }
             if (fd && is_comptime_fn)   fd->type_params = std::move(comptime_type_params);
             // Registrar posiciones de params @c expr para que el parser sepa
             // hacer raw-text capture en los call sites de este @Macro.  Solo

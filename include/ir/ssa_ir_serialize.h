@@ -108,7 +108,7 @@ namespace ir {
     /**
      * @brief Version del formato @ir.  Bump cuando cambia el layout.
      */
-    static constexpr uint16_t IR_SECTION_VERSION = 3;  // v3: + fn.section/section_perms (AOT 2b)
+    static constexpr uint16_t IR_SECTION_VERSION = 4;  // v4: + fn.section_at/section_order (AOT @at/@order)
 
     /**
      * @brief Emit del bytes de la seccion @c @ir lista para append a
@@ -154,7 +154,7 @@ namespace ir {
      *        recompilar el dep (auto-invalidacion del cache obsoleto).
      */
     static constexpr uint32_t IR_MODULE_CACHE_MAGIC = 0x434D5856U; /* 'V''X''M''C' */
-    static constexpr uint16_t IR_MODULE_CACHE_VERSION = 4;  // v4: + meta.sym_refs (bytes dq sym, AOT Inc 3)
+    static constexpr uint16_t IR_MODULE_CACHE_VERSION = 5;  // v5: + section_at/section_order (AOT @at/@order)
 
     /**
      * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vexir`.

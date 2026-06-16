@@ -981,6 +981,8 @@ namespace ir {
          */
         std::string              section;
         std::string              section_perms;
+        int64_t                  section_at    = -1;          ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
+        int32_t                  section_order = 0x7fffffff;  ///< @order(N): orden de seccion; max = creacion
 
         /**
          * @brief Crea un nuevo valor SSA en el pool.
@@ -1166,6 +1168,8 @@ namespace ir {
             uint16_t source_module_idx = 0;     ///< 0 = local; !=0 = imported (futuro)
             std::string section_name;            ///< vacio = default; usado por AOT
             std::string section_perms;           ///< permisos explicitos "rwx" (vacio = convencion)
+            int64_t     section_at    = -1;      ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
+            int32_t     section_order = 0x7fffffff; ///< @order(N): orden de seccion; max = creacion
             /// Referencia a simbolo dentro de los bytes (AOT): un campo del blob
             /// que apunta a la direccion de una funcion/dato (p.ej. `dq main` en
             /// un bloque @c bytes -> tabla de saltos, vtable, GDT).  El emisor AOT
