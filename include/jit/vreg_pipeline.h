@@ -103,6 +103,10 @@ namespace jit {
      * @param pic            true (default) = referencias a datos position-
      *                       independent (lea [rip+disp32]); false (--no-pie) =
      *                       absolutas (mov reg,imm64, dependen de base fija).
+     * @param target_sysv    ABI del TARGET (no del host): true = System V AMD64
+     *                       (ELF/Linux), false = Win64 (PE/Windows).  Determina
+     *                       arg_regs + caller/callee-saved -> permite cross-target
+     *                       (generar ELF en Windows y PE en Linux).
      * @return Bytes nativos del cuerpo de @p fn (ABI HOST_LEAF), o vector vacio
      *         si la funcion no es del subset soportado por el selector vreg.
      */
@@ -112,7 +116,14 @@ namespace jit {
                                              const CallResolver &resolve_native = {},
                                              const CallResolver &resolve_symbol = {},
                                              std::vector<NativeReloc> *relocs_out = nullptr,
-                                             bool pic = true);
+                                             bool pic = true,
+                                             bool target_sysv =
+#if defined(_WIN32)
+                                                 false
+#else
+                                                 true
+#endif
+                                             );
 
     /**
      * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

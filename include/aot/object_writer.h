@@ -55,6 +55,8 @@ namespace aot {
         EXEC   = 0,  ///< ejecutable standalone (con _start; relocs aplicadas).
         OBJECT = 1,  ///< objeto relocatable (.o/.obj; SIN _start; relocs como
                      ///< registros + symtab -> linkable con ld/gcc/link).
+        SHARED = 2,  ///< libreria compartida (.so/.dll): exporta simbolos
+                     ///< (dynsym/export table); PIC, relocs internas aplicadas.
     };
 
     /**

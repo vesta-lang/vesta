@@ -301,7 +301,7 @@ int main(int argc, char *argv[]) {
             ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
                 cxxopts::value<std::string>())
             ("no-pie",            "AOT: refs a datos absolutas (mov reg,imm64; requiere base de imagen fija) en vez de RIP-relativas (default, position-independent), analogo a gcc/clang -no-pie.")
-            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable linkable: ELF .o con ld/gcc, o COFF .obj con link.exe/gcc-mingw segun --format).",
+            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable linkable: ELF .o o COFF .obj segun --format) | shared (libreria compartida ELF .so que exporta sus funciones; dlopen/dlsym).",
                 cxxopts::value<std::string>())
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
@@ -1702,48 +1702,47 @@ int main(int argc, char *argv[]) {
             // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
             const bool aot_pic = (result.count("no-pie") == 0);
 
+            // --emit exe|obj|shared.
+            //   EXEC   : ejecutable standalone con _start (requiere main).
+            //   OBJECT : .o/.obj relocatable (sin _start; main global; relocs como
+            //            registros; linkable con ld/gcc/link).
+            //   SHARED : .so/.dll (sin _start; exporta TODAS las funciones; PIC).
+            bool emit_obj = false, emit_shared = false;
+            if (result.count("emit")) {
+                const std::string em = result["emit"].as<std::string>();
+                if      (em == "exe" || em == "exec")   { }
+                else if (em == "obj" || em == "o")      emit_obj = true;
+                else if (em == "shared" || em == "dll" || em == "so") emit_shared = true;
+                else {
+                    std::cerr << "[aot] --emit desconocido: '" << em << "' (use exe|obj|shared).\n";
+                    return EXIT_FAILURE;
+                }
+            }
+            if (emit_shared && fmt != aot::ObjFormat::ELF) {
+                std::cerr << "[aot] --emit shared solo soporta ELF (.so) por ahora; "
+                             "usa --format elf.\n";
+                return EXIT_FAILURE;
+            }
+            if (emit_shared && !aot_pic) {
+                std::cerr << "[aot] --emit shared requiere PIC; --no-pie no es "
+                             "compatible con .so.\n";
+                return EXIT_FAILURE;
+            }
+
+            // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED (libreria).
             const ir::IrFunction *main_fn = nullptr;
             for (const auto &fn : aot_mod.functions)
                 if (fn.name == "main") { main_fn = &fn; break; }
-            if (!main_fn) {
+            if (!main_fn && !emit_shared) {
                 std::cerr << "[aot] no se encontro la funcion 'main' en el modulo.\n";
                 return EXIT_FAILURE;
             }
 
-            // ------------------------------------------------------------------
-            // Paso 2b-ii: layout multi-funcion con relocations intra-.text.
-            //
-            // Compilamos `main` y, por BFS sobre sus CALLs, cada funcion del
-            // modulo que alcanza (CALL_SYM deja una reloc por nombre).  Las
-            // concatenamos en .text tras el _start, registramos el offset de
-            // cada una y, al final, parcheamos las relocations:
-            //   CALL_REL32: rel32 = callee_off - (call_site_off + 4).
-            // (ABS64 a datos llega con .rodata en el hito siguiente.)
-            //
-            // `main` va PRIMERO (justo tras el stub): el `call main` del _start
-            // asume ese offset.  El resto va en orden de descubrimiento.
-            // ------------------------------------------------------------------
-
-            // --emit exe|obj.  OBJECT (.o relocatable): SIN _start ni imports;
-            // main es un simbolo global y las relocs se emiten como registros
-            // (linkable con ld/gcc).  EXEC: ejecutable standalone con _start.
-            bool emit_obj = false;
-            if (result.count("emit")) {
-                const std::string em = result["emit"].as<std::string>();
-                if      (em == "exe" || em == "exec") emit_obj = false;
-                else if (em == "obj" || em == "o")    emit_obj = true;
-                else {
-                    std::cerr << "[aot] --emit desconocido: '" << em << "' (use exe|obj).\n";
-                    return EXIT_FAILURE;
-                }
-            }
-            // --emit obj soporta ELF (.o) y PE (COFF .obj).
-
-            // _start (arch+formato): llama a main (justo despues) y termina.
-            // Solo para EXEC; OBJECT no lleva _start (lo aporta el crt del linker).
+            // _start (arch+formato): solo para EXEC.  OBJECT/SHARED no llevan
+            // _start (lo aporta el crt del linker / el host que carga la .so).
             aot::StartStub stub{};
-            if (!emit_obj) stub = aot::aot_make_start_stub(arch, fmt);
-            if (!emit_obj && !stub.ok) {
+            if (!emit_obj && !emit_shared) stub = aot::aot_make_start_stub(arch, fmt);
+            if (!emit_obj && !emit_shared && !stub.ok) {
                 std::cerr << "[aot] " << stub.err << "\n";
                 return EXIT_FAILURE;
             }
@@ -1764,16 +1763,15 @@ int main(int argc, char *argv[]) {
             std::unordered_map<std::string, size_t> compiled_idx;  // name -> compiled[]
 
             // BFS desde main: compila cada funcion alcanzada por un CALL.  Ademas
-            // se SIEMBRAN las funciones con @section explicito: el usuario las
-            // coloco a proposito (dev OS) y pueden referenciarse SOLO via simbolos
-            // de seccion (section_start/end) o desde asm, sin un CALL directo ->
-            // no deben dead-striparse.
+            // se SIEMBRAN las funciones con @section explicito (el usuario las
+            // coloco a proposito; pueden referenciarse SOLO via section_start/end
+            // o asm, sin CALL directo -> no dead-strip).  En SHARED (.so) se
+            // siembran TODAS las funciones: la libreria las EXPORTA todas.
             std::vector<std::string> work;
             std::unordered_map<std::string, bool> queued;
-            work.push_back("main");
-            queued["main"] = true;
+            if (main_fn) { work.push_back("main"); queued["main"] = true; }
             for (const auto &fn : aot_mod.functions) {
-                if (!fn.section.empty() && !queued.count(fn.name)) {
+                if ((emit_shared || !fn.section.empty()) && !queued.count(fn.name)) {
                     queued[fn.name] = true;
                     work.push_back(fn.name);
                 }
@@ -1795,7 +1793,8 @@ int main(int argc, char *argv[]) {
                 af.section       = itf->second->section;
                 af.section_perms = itf->second->section_perms;
                 af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
-                                                    &af.relocs, aot_pic);
+                                                    &af.relocs, aot_pic,
+                                                    /*target_sysv=*/fmt == aot::ObjFormat::ELF);
                 if (af.bytes.empty()) {
                     std::cerr << "[aot] el selector vreg no soporta la funcion '"
                               << nm << "' todavia (op fuera del subset nativo).\n";
@@ -1861,9 +1860,10 @@ int main(int argc, char *argv[]) {
                 secs[si].bytes.insert(secs[si].bytes.end(),
                                       af.bytes.begin(), af.bytes.end());
             };
-            place_fn(compiled_idx["main"]);
+            // main primero (si existe; en SHARED puede no haber).
+            if (main_fn) place_fn(compiled_idx["main"]);
             for (size_t ci = 0; ci < compiled.size(); ++ci)
-                if (compiled[ci].name != "main") place_fn(ci);
+                if (!main_fn || compiled[ci].name != "main") place_fn(ci);
 
             // PASADA 1: colocar (lazy, una vez por entry) los datos referenciados
             // en su seccion (default .rodata) -> completa `secs` ANTES de crearlas
@@ -1928,7 +1928,15 @@ int main(int argc, char *argv[]) {
                 ws.name = s.name; ws.flags = flags; ws.data = s.bytes;
                 w.add_section(std::move(ws));
             }
-            if (emit_obj) {
+            if (emit_shared) {
+                // Libreria compartida: exporta TODAS las funciones como simbolos
+                // globales (dlsym).  Sin _start ni entry.
+                w.set_output_kind(aot::OutputKind::SHARED);
+                for (const AotFn &af : compiled) {
+                    const FnLoc &fl = fn_loc[af.name];
+                    w.add_symbol(af.name, fl.sec, fl.off, /*is_func=*/true);
+                }
+            } else if (emit_obj) {
                 // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el crt
                 // del linker externo); sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::OBJECT);
@@ -2001,7 +2009,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (!emit_obj && stub.has_import_call) {
+            if (!emit_obj && !emit_shared && stub.has_import_call) {
                 w.add_import_call(aot::ImportCall{
                     stub.import_dll, stub.import_func, text_sec, stub.import_call_off});
             }
@@ -2014,7 +2022,11 @@ int main(int argc, char *argv[]) {
             }
 
             const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
-            if (emit_obj)
+            if (emit_shared)
+                std::cout << "[aot] libreria compartida " << fmt_name << " (.so) escrita en '"
+                          << out_prefix << "' (" << compiled.size()
+                          << " simbolo(s) exportado(s); dlopen/dlsym).\n";
+            else if (emit_obj)
                 std::cout << "[aot] objeto relocatable " << fmt_name
                           << (fmt == aot::ObjFormat::PE ? " (.obj)" : " (.o)")
                           << " escrito en '" << out_prefix

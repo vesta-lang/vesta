@@ -109,28 +109,30 @@ namespace jit {
      * @return Referencia a una instancia construida una sola vez (thread-safe
      *         por inicializacion de static local en C++11).
      */
-    inline const TargetRegInfo &target_x86_64_vm_abi() {
-        static const TargetRegInfo info = []() {
-            TargetRegInfo t;
-            t.pointer_size  = 8;
-            t.is_two_address = true;
+    /**
+     * @brief Construye el @c TargetRegInfo x86-64 para el ABI dado.
+     * @param sysv  true = System V AMD64 (Linux/ELF); false = Win64 (Windows/PE).
+     *
+     * IMPORTANTE (AOT cross-target): el ABI es del TARGET (formato de salida),
+     * NO del host.  Un @c .so/.dll o @c .o que exporta funciones invocadas
+     * externamente DEBE usar el ABI de su plataforma (SysV para ELF/Linux, Win64
+     * para PE/Windows): los @c arg_regs y la particion caller/callee-saved
+     * difieren.  El JIT en proceso usa el ABI del host (ver
+     * @c target_x86_64_vm_abi).
+     */
+    inline TargetRegInfo build_x86_64_target(bool sysv) {
+        TargetRegInfo t;
+        t.pointer_size  = 8;
+        t.is_two_address = true;
 
-            const size_t GP = static_cast<size_t>(RegClass::GP);
-            const size_t FP = static_cast<size_t>(RegClass::FP);
+        const size_t GP = static_cast<size_t>(RegClass::GP);
+        const size_t FP = static_cast<size_t>(RegClass::FP);
+        auto id = [](MReg r) { return reg_id(r); };
 
-            auto id = [](MReg r) { return reg_id(r); };
-
-            /* ---- GP ---- */
-            /* R10/R11 reservados como SCRATCH del rewrite (no asignables). */
-            t.scratch[GP] = { id(MReg::R10), id(MReg::R11) };
-            /* La particion caller/callee-saved DEPENDE del ABI del host: en
-             * Win64 RSI/RDI son NO-VOLATILES (callee-saved); en SysV son
-             * volatiles (caller-saved).  Confundirlos hace que el codigo JIT
-             * clobbee registros que el llamador host espera preservados ->
-             * corrupcion/crash.  RBX es callee-saved en ambos pero reservado
-             * (ProcessVM*). */
-#if defined(_WIN32)
-            /* Win64 volatiles: RAX RCX RDX R8 R9 (R10/R11 scratch). */
+        /* R10/R11 reservados como SCRATCH del rewrite (no asignables). */
+        t.scratch[GP] = { id(MReg::R10), id(MReg::R11) };
+        if (!sysv) {
+            /* Win64 volatiles: RAX RCX RDX R8 R9. */
             t.caller_saved[GP] = {
                 id(MReg::RAX), id(MReg::RCX), id(MReg::RDX),
                 id(MReg::R8),  id(MReg::R9)
@@ -140,8 +142,8 @@ namespace jit {
                 id(MReg::RSI), id(MReg::RDI),
                 id(MReg::R12), id(MReg::R13), id(MReg::R14), id(MReg::R15)
             };
-#else
-            /* SysV volatiles: RAX RCX RDX RSI RDI R8 R9 (R10/R11 scratch). */
+        } else {
+            /* SysV volatiles: RAX RCX RDX RSI RDI R8 R9. */
             t.caller_saved[GP] = {
                 id(MReg::RAX), id(MReg::RCX), id(MReg::RDX),
                 id(MReg::RSI), id(MReg::RDI),
@@ -151,46 +153,51 @@ namespace jit {
             t.callee_saved[GP] = {
                 id(MReg::R12), id(MReg::R13), id(MReg::R14), id(MReg::R15)
             };
-#endif
-            /* Asignables = caller-saved + callee-saved.  Orden: primero
-             * caller-saved (mas baratos: no requieren push/pop) y luego
-             * callee-saved.  El allocator afina la eleccion segun si el
-             * intervalo cruza un CALL. */
-            t.allocatable[GP] = t.caller_saved[GP];
-            t.allocatable[GP].insert(t.allocatable[GP].end(),
-                                     t.callee_saved[GP].begin(),
-                                     t.callee_saved[GP].end());
-            t.ret_reg[GP] = id(MReg::RAX);
+        }
+        t.allocatable[GP] = t.caller_saved[GP];
+        t.allocatable[GP].insert(t.allocatable[GP].end(),
+                                 t.callee_saved[GP].begin(),
+                                 t.callee_saved[GP].end());
+        t.ret_reg[GP] = id(MReg::RAX);
 
-            /* ---- FP (XMM) -- tabla completa, no asignada en v1 ---- */
-            for (int i = 16; i <= 31; ++i) {
-                t.allocatable[FP].push_back(static_cast<uint8_t>(i));
-                /* Todos los XMM son caller-saved en SysV y Win64. */
-                t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
-            }
-            t.ret_reg[FP] = id(MReg::XMM0);
+        for (int i = 16; i <= 31; ++i) {
+            t.allocatable[FP].push_back(static_cast<uint8_t>(i));
+            t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
+        }
+        t.ret_reg[FP] = id(MReg::XMM0);
+        t.reserved = { id(MReg::RSP), id(MReg::RBP), id(MReg::RBX) };
 
-            /* ---- Reservados (frame + ProcessVM*) ---- */
-            t.reserved = { id(MReg::RSP), id(MReg::RBP), id(MReg::RBX) };
-
-            /* ---- Convencion de llamada del host ---- */
-#if defined(_WIN32)
+        if (!sysv) {
             /* Win64: args enteros en RCX RDX R8 R9; float en XMM0..3. */
             t.arg_regs[GP] = { id(MReg::RCX), id(MReg::RDX),
                                id(MReg::R8),  id(MReg::R9) };
             t.arg_regs[FP] = { id(MReg::XMM0), id(MReg::XMM1),
                                id(MReg::XMM2), id(MReg::XMM3) };
-#else
+        } else {
             /* SysV AMD64: args enteros en RDI RSI RDX RCX R8 R9; float XMM0..7. */
             t.arg_regs[GP] = { id(MReg::RDI), id(MReg::RSI), id(MReg::RDX),
                                id(MReg::RCX), id(MReg::R8),  id(MReg::R9) };
             t.arg_regs[FP] = { id(MReg::XMM0), id(MReg::XMM1), id(MReg::XMM2),
                                id(MReg::XMM3), id(MReg::XMM4), id(MReg::XMM5),
                                id(MReg::XMM6), id(MReg::XMM7) };
+        }
+        return t;
+    }
+
+    /** @brief @c TargetRegInfo x86-64 para el ABI @p sysv (cacheado por ABI). */
+    inline const TargetRegInfo &target_x86_64_abi(bool sysv) {
+        static const TargetRegInfo sysv_info = build_x86_64_target(true);
+        static const TargetRegInfo win_info  = build_x86_64_target(false);
+        return sysv ? sysv_info : win_info;
+    }
+
+    /** @brief @c TargetRegInfo del ABI del HOST (para el JIT en proceso). */
+    inline const TargetRegInfo &target_x86_64_vm_abi() {
+#if defined(_WIN32)
+        return target_x86_64_abi(/*sysv=*/false);
+#else
+        return target_x86_64_abi(/*sysv=*/true);
 #endif
-            return t;
-        }();
-        return info;
     }
 
 } // namespace jit
