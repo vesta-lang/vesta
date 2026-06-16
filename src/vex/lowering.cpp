@@ -599,6 +599,36 @@ namespace vex {
             if (!decl || decl->kind != ast::NodeKind::BytesDecl) continue;
             auto *bd = static_cast<ast::BytesDecl *>(decl.get());
 
+            // Bloque `asm`: ensamblar el cuerpo NASM via Keystone a la bitness
+            // indicada (@bits) y colocarlo en su seccion como datos crudos.
+            // Las directivas $/$$/times NO las soporta Keystone; el usuario usa
+            // un bloque `bytes` con @at/times para padding/firma.
+            if (bd->is_asm) {
+                if (vex::g_asm_backend == nullptr) {
+                    diags_.error(bd->loc, "bloque asm: no hay backend de ensamblado "
+                        "(Keystone) disponible -- requiere compilar via el ejecutable vm");
+                    continue;
+                }
+                vex::AsmArch arch = bd->asm_bits == 16 ? vex::AsmArch::X86_16
+                                  : bd->asm_bits == 32 ? vex::AsmArch::X86_32
+                                                       : vex::AsmArch::X86_64;
+                vex::AsmAssembleResult ar = vex::g_asm_backend->assemble(bd->asm_body, arch);
+                if (!ar.ok) {
+                    diags_.error(bd->loc, "bloque asm '" + bd->name +
+                        "': error de ensamblado: " + ar.error);
+                    continue;
+                }
+                const size_t idx = out_module.static_data.push_back(std::move(ar.bytes));
+                auto &m = out_module.static_data.meta_at(idx);
+                m.section_name  = bd->attr_section.empty() ? ".text" : bd->attr_section;
+                m.section_perms = bd->attr_section_perms;
+                m.section_at    = bd->attr_at;
+                m.section_order = bd->attr_order;
+                m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
+                         | ir::IrModule::SD_FLAG_NON_DEDUP;
+                continue;
+            }
+
             // Reconstruir el blob resolviendo los operandos identificador.  Un
             // identificador puede ser:
             //   (a) comptime const entero -> literal del ancho de la directiva.

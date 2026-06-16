@@ -1,0 +1,29 @@
+// AOT: boot sector BIOS de 16-bit con CODIGO REAL ensamblado (no db a mano).
+// El bloque `asm` se ensambla con Keystone en modo 16-bit; el bloque `bytes`
+// aporta el relleno + la firma 0x55AA via times/@at.  Compilar:
+//   vm -m aot --vex 17_boot16.vex --emit bin --bin-base 0x7C00 -o boot.bin
+// (qemu-system-i386 -drive format=raw,file=boot.bin)
+
+// Codigo de arranque en .text (offset 0): imprime 'V' por la BIOS y cuelga.
+@bits(16) @section(".text", "rx") @order(0)
+asm boot {
+    cli
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
+
+    mov ah, 0x0E          ; BIOS teletype
+    mov al, 0x56          ; 'V'
+    int 0x10
+
+hang:
+    hlt
+    jmp hang              ; label intra-bloque (Keystone lo resuelve)
+}
+
+// Relleno hasta 510 + firma MBR.  `bytes` empieza en su seccion propia,
+// anclada justo tras el codigo no -> usamos @at para la firma en 510.
+@section(".sig") @at(510)
+bytes mbr_sig { dw 0xAA55 }
