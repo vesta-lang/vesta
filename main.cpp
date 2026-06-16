@@ -1744,11 +1744,21 @@ int main(int argc, char *argv[]) {
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t> compiled_idx;  // name -> compiled[]
 
-            // BFS desde main: compila cada funcion alcanzada por un CALL.
+            // BFS desde main: compila cada funcion alcanzada por un CALL.  Ademas
+            // se SIEMBRAN las funciones con @section explicito: el usuario las
+            // coloco a proposito (dev OS) y pueden referenciarse SOLO via simbolos
+            // de seccion (section_start/end) o desde asm, sin un CALL directo ->
+            // no deben dead-striparse.
             std::vector<std::string> work;
-            work.push_back("main");
             std::unordered_map<std::string, bool> queued;
+            work.push_back("main");
             queued["main"] = true;
+            for (const auto &fn : aot_mod.functions) {
+                if (!fn.section.empty() && !queued.count(fn.name)) {
+                    queued[fn.name] = true;
+                    work.push_back(fn.name);
+                }
+            }
             bool aot_codegen_ok = true;
             while (!work.empty()) {
                 const std::string nm = work.back();
@@ -1858,6 +1868,7 @@ int main(int argc, char *argv[]) {
             for (const AotFn &af : compiled) {
                 for (const jit::NativeReloc &r : af.relocs) {
                     if (r.kind == jit::NativeReloc::Kind::CALL_REL32) continue;
+                    if (r.symbol.rfind("secsym:", 0) == 0) continue;  // simbolo de seccion (pass 2)
                     if (r.symbol.rfind("rodata.", 0) != 0) {
                         std::cerr << "[aot] reloc de dato con simbolo inesperado: '"
                                   << r.symbol << "'.\n";
@@ -1923,6 +1934,33 @@ int main(int argc, char *argv[]) {
                                     aot::RelocTarget::addr(it->second.sec,
                                                            it->second.off),
                                     aot::RelocKind::REL32);
+                    } else if (r.symbol.rfind("secsym:", 0) == 0) {
+                        // Simbolo de seccion "secsym:<k>:<name>" (dev OS):
+                        // s=start (base), e=end (base+size), z=size (tamano).
+                        const char kc = r.symbol.size() > 7 ? r.symbol[7] : 's';
+                        const std::string sname = r.symbol.substr(9);
+                        auto si = sec_index.find(sname);
+                        if (si == sec_index.end()) {
+                            std::cerr << "[aot] section_"
+                                      << (kc=='z'?"size":kc=='e'?"end":"start")
+                                      << "(\"" << sname << "\"): la seccion no existe "
+                                         "(ningun codigo/dato la usa).\n";
+                            return EXIT_FAILURE;
+                        }
+                        const int tsi = si->second;
+                        // REL32 si la ref fue RIP-relativa (DATA_REL32), ABS64 si
+                        // absoluta (--no-pie).  SIZE es siempre un inmediato (IMM64).
+                        const bool rel = (r.kind == jit::NativeReloc::Kind::DATA_REL32);
+                        if (kc == 'z') {
+                            w.add_reloc(fl.sec, site, aot::RelocTarget::size(tsi),
+                                        aot::RelocKind::IMM64);
+                        } else if (kc == 'e') {
+                            w.add_reloc(fl.sec, site, aot::RelocTarget::end(tsi),
+                                        rel ? aot::RelocKind::REL32 : aot::RelocKind::ABS64);
+                        } else {
+                            w.add_reloc(fl.sec, site, aot::RelocTarget::addr(tsi, 0),
+                                        rel ? aot::RelocKind::REL32 : aot::RelocKind::ABS64);
+                        }
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));

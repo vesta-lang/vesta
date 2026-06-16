@@ -44,3 +44,14 @@ cross-seccion las resuelve el ObjectWriter (relocs rel32).  Una funcion con
 | Ejemplo               | exit-code | nota |
 |:----------------------|----------:|:-----|
 | 07_section_devos.vex  | 42        | `boot_entry` en `.boot` (RWX), main en `.text`, call cross-seccion |
+
+## Simbolos de seccion (dev OS) -- Paso 2c
+
+`section_start(".x") -> void*`, `section_end(".x") -> void*`,
+`section_size(".x") -> u64` -- estilo `__start_NAME`/`__stop_NAME` del linker.
+El writer AOT los resuelve tras el layout (relocs ADDR/END/SIZE).  En `-m vm`/`-m jit`
+(sin secciones nativas) devuelven 0.
+
+| Ejemplo               | exit-code | nota |
+|:----------------------|----------:|:-----|
+| 08_section_symbols.vex | size de .boot | valida `end-start == size` (28 con este codegen) |

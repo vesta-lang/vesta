@@ -1,0 +1,18 @@
+// dev OS: simbolos de seccion estilo linker (__start_/__stop_/size).
+// Dos funciones en .boot; main consulta el TAMANO de .boot via section_size.
+// section_start(".x") / section_end(".x") dan la base / el fin (punteros);
+// section_size(".x") da el tamano en bytes (u64).  En -m vm/jit (sin secciones
+// nativas) estos builtins devuelven 0.
+@section(".boot", "rwx")
+i32 boot_a(i32 x) { return x + 1; }
+@section(".boot", "rwx")
+i32 boot_b(i32 x) { return x + 2; }
+
+i32 main() {
+    u64 start = (u64) section_start(".boot");
+    u64 end   = (u64) section_end(".boot");
+    u64 size  = section_size(".boot");
+    // end - start == size  ->  devolvemos size (28 = 0x1c con este codegen).
+    if ((end - start) != size) { return 1; }   // inconsistencia -> 1
+    return (i32) size;
+}

@@ -52,6 +52,8 @@ namespace aot {
             case IrOp::NOP:
             case IrOp::STR_LIT_ADDR:
             case IrOp::LABEL_ADDR:
+            // Simbolo de seccion (dev OS): el writer AOT lo resuelve via reloc.
+            case IrOp::SECTION_REF:
             // -- markers semanticos (no emiten codigo; el backing real
             //    -- ALLOCA/STORE o GC_ALLOC -- se clasifica por separado) --
             case IrOp::MAKE_VARIANT:

@@ -96,8 +96,9 @@ typedef struct {
     int      site_section;    /* seccion donde parchear */
     uint64_t site_off;        /* offset del campo a parchear dentro de la seccion */
     int      target_section;  /* seccion objetivo */
-    uint64_t target_off;      /* offset dentro del target (si !target_is_size) */
+    uint64_t target_off;      /* offset dentro del target (modo ADDR) */
     int      target_is_size;  /* 1 => target_value = tamano de target_section */
+    int      target_is_end;   /* 1 => target_value = VA(target_section)+tamano */
     int      kind;            /* AOT_RELOC_* */
     int64_t  addend;          /* desplazamiento adicional */
 } AotReloc;

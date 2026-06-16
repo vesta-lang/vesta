@@ -1988,6 +1988,15 @@ namespace vex {
         // try/catch FatalError lo captura; si no, mata el proceso (no la VM).
         reg_builtin("panic",  Type{PrimitiveKind::VOID}, {PrimitiveKind::PTR});
 
+        // AOT 2c (dev OS): simbolos de seccion estilo linker (__start_/__stop_).
+        // El arg es un string LITERAL con el nombre de la seccion (".boot", etc.);
+        // el lowering extrae el literal y emite SECTION_REF.  En interp/JIT (sin
+        // secciones nativas) devuelven 0.  section_start/end -> puntero a la
+        // base/fin de la seccion; section_size -> tamano en bytes.
+        reg_builtin("section_start", Type{PrimitiveKind::PTR}, {PrimitiveKind::STRING});
+        reg_builtin("section_end",   Type{PrimitiveKind::PTR}, {PrimitiveKind::STRING});
+        reg_builtin("section_size",  Type{PrimitiveKind::U64}, {PrimitiveKind::STRING});
+
         // dispose(xs) libera explicitamente una coleccion antes
         // del exit del scope.  Tras la llamada, el local queda con handle=0
         // y el cleanup automatico llama free fn que es no-op con handle=0.

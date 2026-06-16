@@ -153,12 +153,16 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 freePE64File(&pe); return 0;
             }
             uint64_t target_value;
-            if (rl->target_is_size)
+            if (rl->target_is_size) {
                 target_value = aot_sec_size(&secs[rl->target_section]);
-            else
+            } else {
                 target_value = image_base +
-                    pe.sectionHeaders[rl->target_section].VirtualAddress +
-                    rl->target_off;
+                    pe.sectionHeaders[rl->target_section].VirtualAddress;
+                if (rl->target_is_end)
+                    target_value += aot_sec_size(&secs[rl->target_section]);
+                else
+                    target_value += rl->target_off;
+            }
             target_value = (uint64_t)((int64_t)target_value + rl->addend);
             uint64_t site_va = image_base +
                 pe.sectionHeaders[rl->site_section].VirtualAddress + rl->site_off;
@@ -395,10 +399,15 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 return 0;
             }
             uint64_t target_value;
-            if (rl->target_is_size)
+            if (rl->target_is_size) {
                 target_value = aot_sec_size(&secs[rl->target_section]);
-            else
-                target_value = sec_va[rl->target_section] + rl->target_off;
+            } else {
+                target_value = sec_va[rl->target_section];
+                if (rl->target_is_end)
+                    target_value += aot_sec_size(&secs[rl->target_section]);
+                else
+                    target_value += rl->target_off;
+            }
             target_value = (uint64_t)((int64_t)target_value + rl->addend);
             uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
             uint32_t width = (rl->kind == AOT_RELOC_ABS64 ||

@@ -2170,6 +2170,34 @@ namespace jit {
                         break;
                     }
 
+                    /* SECTION_REF (AOT dev OS): simbolo de seccion start/end/size.
+                     * func_name = nombre de seccion, imm = kind (0/1/2).  En
+                     * HOST_LEAF emitimos una ref por NOMBRE "secsym:<k>:<name>"
+                     * que el driver mapea a (ADDR/END/SIZE de la seccion):
+                     *   START/END = direccion -> lea[rip] (pic) o mov imm64 (no-pie);
+                     *   SIZE = constante -> SIEMPRE mov imm64 (un tamano no es una
+                     *   direccion, no aplica RIP-relativo).
+                     * En VM_ABI (JIT) no hay secciones nativas -> 0. */
+                    case ir::IrOp::SECTION_REF: {
+                        flush_pending();
+                        if (in.dst == ir::IR_NO_VALUE) return false;
+                        if (abi != AbiKind::HOST_LEAF) {
+                            O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                MOperand::make_imm32(0)));
+                            break;
+                        }
+                        const char kc = (in.imm == 0) ? 's'
+                                      : (in.imm == 1) ? 'e' : 'z';
+                        const uint32_t sidx = out.intern_reloc_symbol(
+                            std::string("secsym:") + kc + ":" + in.func_name);
+                        const bool is_size = (in.imm == 2);
+                        if (pic && !is_size)
+                            O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
+                        else
+                            O.push_back(MInstr::make_mov_sym(vr(in.dst), sidx));
+                        break;
+                    }
+
                     case ir::IrOp::GETPROC: {
                         /* %dst = ProcessVM* del proceso actual.  En VM_ABI el
                          * proc esta en RBX (reservado, preservado por el

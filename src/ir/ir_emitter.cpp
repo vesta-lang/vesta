@@ -1463,6 +1463,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             break;
         }
 
+        // --- SECTION_REF (AOT dev OS) ---
+        // Simbolo de seccion (start/end/size).  Solo tiene sentido en AOT
+        // (donde el writer lo resuelve via reloc).  En la VM/interp no hay
+        // secciones nativas -> se emite 0 (consulta no aplicable).
+        case IrOp::SECTION_REF: {
+            std::string rd = ctx.dst_of(ins.dst);
+            ctx.out << "    mov " << rd << ", 0\n";
+            ctx.store_spilled(ins.dst);
+            break;
+        }
+
         // --- MOV ---
         case IrOp::MOV:
             if (!ins.operands.empty()) {
