@@ -1931,6 +1931,55 @@ int main(int argc, char *argv[]) {
             for (size_t ci = 0; ci < compiled.size(); ++ci)
                 if (!main_fn || compiled[ci].name != "main") place_fn(ci);
 
+            // ------------------------------------------------------------------
+            // AOT.2.exec (PE-IAT): EXEC/SHARED standalone que llaman a simbolos
+            // EXTERNOS (libc malloc/free/calloc/abort, o un FFI extern).  El
+            // codigo emitio `call <sym>` (E8 rel32 directo) pero el simbolo NO
+            // esta en la imagen -> hay que pasar por la IAT.  Como un `call
+            // [rip+IAT]` (FF 15) mide 6 bytes y el E8 ya emitido mide 5, NO se
+            // puede parchear in-situ.  Solucion estandar (como un linker): un
+            // THUNK de import por simbolo en .text -- `FF 25 disp32` (jmp
+            // [rip+IAT], 6 bytes) -- y el `call <sym>` apunta al thunk (REL32
+            // normal intra-.text).  El `FF 25` del thunk se parchea via el
+            // mecanismo de imports (mismo que ExitProcess del _start).  El
+            // loader rellena la IAT con la direccion real -> el thunk salta ahi.
+            // Solo PE EXEC por ahora (ELF EXEC = PLT-GOT, slice 2; SHARED/.dll =
+            // follow-up; .o sigue emitiendo relocs externas que resuelve gcc/ld).
+            struct PeThunkImport { std::string dll, func; uint64_t off; };
+            std::vector<PeThunkImport> pe_thunk_imports;
+            const bool exec_pe = !no_stub && fmt == aot::ObjFormat::PE;
+            if (exec_pe) {
+                // Recolectar externos (CALL_REL32 a un nombre que NO es funcion
+                // del modulo), en orden estable y deduplicado.
+                std::vector<std::string> ext_syms;
+                std::unordered_set<std::string> ext_seen;
+                for (const AotFn &af : compiled)
+                    for (const jit::NativeReloc &r : af.relocs)
+                        if (r.kind == jit::NativeReloc::Kind::CALL_REL32
+                         && !fn_by_name.count(r.symbol)
+                         && !ext_seen.count(r.symbol)) {
+                            ext_seen.insert(r.symbol);
+                            ext_syms.push_back(r.symbol);
+                        }
+                // Mapa simbolo -> DLL.  libc (MinGW/Windows) = msvcrt.dll; los
+                // FFI extern de DLL del usuario llegan como "sym" (el lib se
+                // perdio en el selector) -> default msvcrt.dll (un follow-up
+                // cablearia el DLL real desde el CompileResult).
+                auto dll_for = [](const std::string &) -> std::string {
+                    return "msvcrt.dll";
+                };
+                for (const std::string &sym : ext_syms) {
+                    const uint32_t toff =
+                        static_cast<uint32_t>(secs[text_sec].bytes.size());
+                    // FF 25 00 00 00 00 -> jmp [rip+disp32]; disp32 a parchear.
+                    const uint8_t thunk[6] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
+                    secs[text_sec].bytes.insert(secs[text_sec].bytes.end(),
+                                                thunk, thunk + 6);
+                    fn_loc[sym] = {text_sec, toff};  // el call <sym> -> el thunk
+                    pe_thunk_imports.push_back({dll_for(sym), sym, toff});
+                }
+            }
+
             // PASADA 1: colocar (lazy, una vez por entry) los datos referenciados
             // en su seccion (default .rodata) -> completa `secs` ANTES de crearlas
             // en el writer.  Devuelve (sec, off) del entry N.
@@ -2047,9 +2096,16 @@ int main(int argc, char *argv[]) {
                             // resuelve.  EXEC/SHARED/BIN necesitarian IAT/PLT-GOT
                             // (AOT.2.exec, futuro).
                             if (!emit_obj) {
+                                // PE EXEC ya resolvio sus externos via thunks de
+                                // IAT (el simbolo ESTA en fn_loc -> no llega aqui).
+                                // Quedan: ELF EXEC/SHARED (PLT-GOT, slice 2),
+                                // PE SHARED (.dll, follow-up) y .bin.
                                 std::cerr << "[aot] llamada a simbolo externo '" << r.symbol
-                                          << "' requiere --emit obj (enlazar con gcc/ld); "
-                                             "EXEC/shared/bin con libc llegan en AOT.2.exec.\n";
+                                          << "' aun no soportada para este target ("
+                                          << (fmt == aot::ObjFormat::ELF ? "ELF EXEC/shared: "
+                                                 "PLT-GOT pendiente" : "PE shared/.bin")
+                                          << "); usa --emit obj (enlazar con gcc/ld) o, en "
+                                             "Windows, --emit exe (PE-IAT).\n";
                                 return EXIT_FAILURE;
                             }
                             w.add_reloc(fl.sec, site,
@@ -2130,6 +2186,12 @@ int main(int argc, char *argv[]) {
             if (!no_stub && stub.has_import_call) {
                 w.add_import_call(aot::ImportCall{
                     stub.import_dll, stub.import_func, text_sec, stub.import_call_off});
+            }
+            // AOT.2.exec: registrar el import de cada thunk (FF 25 -> IAT).  Se
+            // agrupan por DLL junto al ExitProcess (kernel32) en el emisor PE.
+            for (const PeThunkImport &ti : pe_thunk_imports) {
+                w.add_import_call(aot::ImportCall{
+                    ti.dll, ti.func, text_sec, ti.off});
             }
 
             std::string werr;
