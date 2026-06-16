@@ -1,0 +1,26 @@
+// AOT.2.exec (ELF PLT-GOT / eager-GOT) -- EXEC ELF standalone que llama a libc.
+// El `new`/malloc/free/panic se resuelven contra libc.so.6 por el linker
+// dinamico: el binario es un PIE (ET_DYN) con interprete /lib64/ld-linux-x86-64.so.2.
+//
+//   vm -m aot --vex examples_codes_vex/aot/28_elf_exec_libc.vex \
+//      -o elf_libc.elf --format elf
+//   ./elf_libc.elf ; echo $?   # -> 42
+//
+// Como funciona (mismo thunk que el PE-IAT, distinta metadata):
+//   - El codigo emite `call calloc` (E8 rel32); el driver emite por cada externo
+//     un THUNK `FF 25 [GOT]` (jmp [rip+GOT]) en .text y el call apunta al thunk.
+//   - Cada entrada GOT lleva una reloc R_X86_64_GLOB_DAT contra un .dynsym UND.
+//   - .dynamic: DT_NEEDED(libc.so.6) + DF_BIND_NOW -> ld.so resuelve las GOT al
+//     cargar (eager, sin PLT lazy).
+//   readelf -d: NEEDED libc.so.6, HASH, SYMTAB, RELA, BIND_NOW.
+//
+// PIE: position-independent (PIC por defecto); --no-pie (ABS64) NO va aqui.
+// valgrind: 0 leaks (el RAII free libera la instancia).
+
+class Box { i64 v; }
+
+i64 main() {
+    Box b = new Box();   // calloc (libc.so.6); RAII -> free al salir de scope
+    b.v = 42;
+    return b.v;          // 42
+}

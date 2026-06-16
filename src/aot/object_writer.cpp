@@ -185,6 +185,24 @@ namespace aot {
                              static_cast<int>(cimps.size()),
                              crel_ptr, crel_n,
                              errbuf, sizeof(errbuf));
+        } else if (!imports_.empty()) {
+            // AOT.2.exec slice 2: ELF EXEC que importa libc -> ejecutable
+            // dinamico (PIE) via eager-GOT.  Los imports = thunks FF 25 que el
+            // driver emitio (mismo mecanismo que PE-IAT).
+            std::vector<AotImport> cimps(imports_.size());
+            for (size_t i = 0; i < imports_.size(); ++i) {
+                const ImportCall &ic = imports_[i];
+                cimps[i].dll          = ic.dll.c_str();   // ignorado (libc.so.6)
+                cimps[i].func         = ic.func.c_str();
+                cimps[i].call_section = ic.call_section;
+                cimps[i].call_off     = ic.call_off;
+            }
+            ok = aot_emit_elf_dynexec(path.c_str(), &ccfg,
+                                      csecs.data(), static_cast<int>(csecs.size()),
+                                      entry_sec_, entry_off_,
+                                      crel_ptr, crel_n,
+                                      cimps.data(), static_cast<int>(cimps.size()),
+                                      errbuf, sizeof(errbuf));
         } else {
             ok = aot_emit_elf(path.c_str(), &ccfg,
                               csecs.data(), static_cast<int>(csecs.size()),

@@ -174,6 +174,28 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                  char *err, size_t err_cap);
 
 /**
+ * @brief Emite un EJECUTABLE ELF64 DINaMICO (PIE ET_DYN) que importa simbolos
+ *        externos (libc malloc/free/abort...) via eager-GOT.  AOT.2.exec slice 2.
+ *
+ * A diferencia de @c aot_emit_elf (estatico freestanding, syscall exit), este
+ * lleva PT_INTERP (-> ld.so), .dynsym/.dynstr/.hash, .rela.dyn con
+ * R_X86_64_GLOB_DAT por entrada GOT, y .dynamic (DT_NEEDED libc.so.6 +
+ * DF_BIND_NOW).  Cada @p imps[i] (su @c func + @c call_section/@c call_off del
+ * thunk @c FF @c 25 que emitio el driver) recibe una entrada GOT; el thunk se
+ * parchea para saltar por ella.  PIE: vaddr == file offset; solo relocs
+ * PC-relativas (ABS64/--no-pie NO soportado).  El campo @c dll de @c AotImport
+ * se ignora (todo va a libc.so.6 via DT_NEEDED).
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
+                         const AotSection *secs, int num_secs,
+                         int entry_sec, uint64_t entry_off,
+                         const AotReloc *relocs, int num_relocs,
+                         const AotImport *imps, int num_imps,
+                         char *err, size_t err_cap);
+
+/**
  * @brief Un simbolo GLOBAL exportado en un objeto relocatable.
  */
 typedef struct {

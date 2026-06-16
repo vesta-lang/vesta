@@ -1947,8 +1947,12 @@ int main(int argc, char *argv[]) {
             // follow-up; .o sigue emitiendo relocs externas que resuelve gcc/ld).
             struct PeThunkImport { std::string dll, func; uint64_t off; };
             std::vector<PeThunkImport> pe_thunk_imports;
-            const bool exec_pe = !no_stub && fmt == aot::ObjFormat::PE;
-            if (exec_pe) {
+            // EXEC (PE o ELF) que llama a externos -> thunks de import.  PE los
+            // resuelve por IAT (slice 1); ELF por eager-GOT como PIE dinamico
+            // (slice 2).  El mismo thunk FF 25 sirve a ambos; difiere solo la
+            // metadata (idata vs dynamic) que pone el emisor.
+            const bool exec_native = !no_stub;
+            if (exec_native) {
                 // Recolectar externos (CALL_REL32 a un nombre que NO es funcion
                 // del modulo), en orden estable y deduplicado.
                 std::vector<std::string> ext_syms;
@@ -1961,12 +1965,14 @@ int main(int argc, char *argv[]) {
                             ext_seen.insert(r.symbol);
                             ext_syms.push_back(r.symbol);
                         }
-                // Mapa simbolo -> DLL.  libc (MinGW/Windows) = msvcrt.dll; los
-                // FFI extern de DLL del usuario llegan como "sym" (el lib se
-                // perdio en el selector) -> default msvcrt.dll (un follow-up
-                // cablearia el DLL real desde el CompileResult).
-                auto dll_for = [](const std::string &) -> std::string {
-                    return "msvcrt.dll";
+                // Mapa simbolo -> DLL.  PE: libc (MinGW/Windows) = msvcrt.dll;
+                // los FFI extern de DLL del usuario llegan como "sym" (el lib se
+                // perdio en el selector) -> default msvcrt.dll (follow-up:
+                // cablear el DLL real desde el CompileResult).  ELF: el campo se
+                // ignora (todo va a libc.so.6 via DT_NEEDED).
+                const bool is_pe = (fmt == aot::ObjFormat::PE);
+                auto dll_for = [is_pe](const std::string &) -> std::string {
+                    return is_pe ? "msvcrt.dll" : "libc.so.6";
                 };
                 for (const std::string &sym : ext_syms) {
                     const uint32_t toff =
