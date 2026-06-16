@@ -97,6 +97,32 @@ namespace aot {
         char errbuf[256] = {0};
         int ok = 0;
 
+        // OBJECT relocatable: sin _start, sin imports; relocs como REGISTROS +
+        // symtab.  v1: solo ELF (.o).  COFF (.obj) pendiente.
+        if (kind_ == OutputKind::OBJECT) {
+            if (fmt_ != ObjFormat::ELF) {
+                err = "ObjectWriter: --emit obj solo soporta ELF (.o) por ahora";
+                return false;
+            }
+            std::vector<AotSym> csyms(symbols_.size());
+            std::vector<std::string> hold(symbols_.size());
+            for (size_t i = 0; i < symbols_.size(); ++i) {
+                hold[i] = symbols_[i].name;
+                csyms[i].name    = hold[i].c_str();
+                csyms[i].section = symbols_[i].section;
+                csyms[i].offset  = symbols_[i].offset;
+                csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
+            }
+            ok = aot_emit_elf_obj(path.c_str(),
+                                  csecs.data(), static_cast<int>(csecs.size()),
+                                  crel_ptr, crel_n,
+                                  csyms.empty() ? nullptr : csyms.data(),
+                                  static_cast<int>(csyms.size()),
+                                  errbuf, sizeof(errbuf));
+            if (!ok) { err = errbuf[0] ? errbuf : "ObjectWriter: error obj"; return false; }
+            return true;
+        }
+
         if (fmt_ == ObjFormat::PE) {
             std::vector<AotImport> cimps(imports_.size());
             for (size_t i = 0; i < imports_.size(); ++i) {

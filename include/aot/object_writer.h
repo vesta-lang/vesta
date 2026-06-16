@@ -48,6 +48,25 @@ namespace aot {
         ELF = 1,  ///< ELF64 (Linux).
     };
 
+    /**
+     * @brief Tipo de artefacto de salida.
+     */
+    enum class OutputKind : uint8_t {
+        EXEC   = 0,  ///< ejecutable standalone (con _start; relocs aplicadas).
+        OBJECT = 1,  ///< objeto relocatable (.o/.obj; SIN _start; relocs como
+                     ///< registros + symtab -> linkable con ld/gcc/link).
+    };
+
+    /**
+     * @brief Simbolo exportado en un objeto relocatable (OBJECT).
+     */
+    struct ExportSym {
+        std::string name;       ///< nombre del simbolo (e.g. "main").
+        int         section;    ///< seccion donde vive.
+        uint64_t    offset;     ///< offset dentro de la seccion.
+        bool        is_func;    ///< true = STT_FUNC, false = STT_OBJECT.
+    };
+
     /// Flags de seccion (alias C++ de los AOT_SEC_* de la ABI).
     namespace SecFlag {
         constexpr uint32_t READ  = AOT_SEC_READ;
@@ -174,6 +193,18 @@ namespace aot {
         /// Fija la configuracion de layout.
         void set_config(const LayoutConfig &c) { cfg_ = c; }
 
+        /// Fija el tipo de artefacto (EXEC por defecto, OBJECT relocatable).
+        void set_output_kind(OutputKind k) { kind_ = k; }
+
+        /// Registra un simbolo exportado (solo OBJECT): nombre global en la
+        /// tabla de simbolos del objeto, para que el linker externo lo resuelva.
+        void add_symbol(const std::string &name, int section, uint64_t offset,
+                        bool is_func = true) {
+            ExportSym s; s.name = name; s.section = section; s.offset = offset;
+            s.is_func = is_func;
+            symbols_.push_back(std::move(s));
+        }
+
         /// Fija el punto de entrada: seccion + offset.
         void set_entry(int section, uint64_t off) { entry_sec_ = section; entry_off_ = off; }
 
@@ -212,6 +243,8 @@ namespace aot {
         uint64_t                   entry_off_ = 0;
         std::vector<ImportCall>    imports_;
         std::vector<AbsReloc>      relocs_;
+        OutputKind                 kind_ = OutputKind::EXEC;
+        std::vector<ExportSym>     symbols_;
     };
 
 } // namespace aot

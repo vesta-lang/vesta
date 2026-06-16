@@ -288,6 +288,52 @@ static void test_pe_cross_section_call() {
     CHECK(patched);
 }
 
+// =========================================================================
+//  OBJECT relocatable ELF (.o, ET_REL): main global + .text->.rodata reloc.
+//  (Phase AOT.4-ext)  Linkable con ld/gcc.
+// =========================================================================
+
+static void test_elf_obj() {
+    std::printf("test_elf_obj\n");
+    // .text:  i32 main(){ return rodata[0]; }
+    //   48 8D 05 <disp32>     lea rax, [rip+disp32]   ; &rodata  (reloc @3)
+    //   0F B6 00              movzx eax, byte [rax]
+    //   C3                    ret
+    std::vector<uint8_t> text = {
+        0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00,
+        0x0F, 0xB6, 0x00,
+        0xC3
+    };
+    std::vector<uint8_t> rodata = { 42 };
+
+    ObjectWriter w(ObjFormat::ELF);
+    w.set_output_kind(OutputKind::OBJECT);
+    const int ts = w.add_section(WriterSection{".text",
+        SecFlag::CODE | SecFlag::EXEC | SecFlag::READ, text, 0, 0, 0});
+    const int rs = w.add_section(WriterSection{".rodata",
+        SecFlag::DATA | SecFlag::READ, rodata, 0, 0, 0});
+    w.add_reloc(ts, 3, RelocTarget::addr(rs, 0), RelocKind::REL32);
+    w.add_symbol("main", ts, 0, /*is_func=*/true);
+
+    std::string err;
+    const std::string path = "obj_main.o";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+    std::vector<uint8_t> o = read_file(path);
+    CHECK(o.size() > 64);
+    CHECK(o.size() >= 4 && o[0] == 0x7F && o[1] == 'E' && o[2] == 'L' && o[3] == 'F');
+    CHECK(o[4] == 2);                  // ELFCLASS64
+    CHECK(rd_u16(o, 16) == 1);         // e_type ET_REL
+    CHECK(rd_u16(o, 18) == 62);        // e_machine EM_X86_64
+    CHECK(rd_u16(o, 60) > 0);          // e_shnum > 0
+    // El nombre "main" debe aparecer en la .strtab.
+    bool has_main = false;
+    for (size_t i = 0; i + 4 < o.size(); ++i)
+        if (o[i]=='m'&&o[i+1]=='a'&&o[i+2]=='i'&&o[i+3]=='n'&&o[i+4]==0) { has_main = true; break; }
+    CHECK(has_main);
+}
+
 int main() {
     std::printf("=== test_object_writer (Phase AOT.4) ===\n");
     test_pe_exit42();
@@ -295,6 +341,7 @@ int main() {
     test_pe_rodata_reloc();
     test_elf_rodata_reloc();
     test_pe_cross_section_call();
+    test_elf_obj();
     std::printf("\n%d checks, %d fallos\n", g_checks, g_fails);
     std::printf("Ficheros: exit42_pe.exe / exit42_elf.elf / rodata_pe.exe / "
                 "rodata_elf.elf (correr para validar la reloc -> exit 42)\n");

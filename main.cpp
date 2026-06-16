@@ -301,6 +301,8 @@ int main(int argc, char *argv[]) {
             ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
                 cxxopts::value<std::string>())
             ("no-pie",            "AOT: refs a datos absolutas (mov reg,imm64; requiere base de imagen fija) en vez de RIP-relativas (default, position-independent), analogo a gcc/clang -no-pie.")
+            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable .o linkable con ld/gcc; solo ELF por ahora).",
+                cxxopts::value<std::string>())
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
             // Phase M.sandbox: restringe las capabilities del modulo
@@ -1722,9 +1724,30 @@ int main(int argc, char *argv[]) {
             // asume ese offset.  El resto va en orden de descubrimiento.
             // ------------------------------------------------------------------
 
+            // --emit exe|obj.  OBJECT (.o relocatable): SIN _start ni imports;
+            // main es un simbolo global y las relocs se emiten como registros
+            // (linkable con ld/gcc).  EXEC: ejecutable standalone con _start.
+            bool emit_obj = false;
+            if (result.count("emit")) {
+                const std::string em = result["emit"].as<std::string>();
+                if      (em == "exe" || em == "exec") emit_obj = false;
+                else if (em == "obj" || em == "o")    emit_obj = true;
+                else {
+                    std::cerr << "[aot] --emit desconocido: '" << em << "' (use exe|obj).\n";
+                    return EXIT_FAILURE;
+                }
+            }
+            if (emit_obj && fmt != aot::ObjFormat::ELF) {
+                std::cerr << "[aot] --emit obj solo soporta ELF (.o) por ahora; "
+                             "usa --format elf.\n";
+                return EXIT_FAILURE;
+            }
+
             // _start (arch+formato): llama a main (justo despues) y termina.
-            aot::StartStub stub = aot::aot_make_start_stub(arch, fmt);
-            if (!stub.ok) {
+            // Solo para EXEC; OBJECT no lleva _start (lo aporta el crt del linker).
+            aot::StartStub stub{};
+            if (!emit_obj) stub = aot::aot_make_start_stub(arch, fmt);
+            if (!emit_obj && !stub.ok) {
                 std::cerr << "[aot] " << stub.err << "\n";
                 return EXIT_FAILURE;
             }
@@ -1909,16 +1932,24 @@ int main(int argc, char *argv[]) {
                 ws.name = s.name; ws.flags = flags; ws.data = s.bytes;
                 w.add_section(std::move(ws));
             }
-            w.set_entry(text_sec, 0);  // _start en .text offset 0
-
-            // PASADA 2: declarar TODAS las relocs (el writer las resuelve tras el
-            // layout).  stub->main + llamadas (CALL/JMP cross-seccion) + datos.
-            {
+            if (emit_obj) {
+                // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el crt
+                // del linker externo); sin _start ni entry.
+                w.set_output_kind(aot::OutputKind::OBJECT);
+                const FnLoc &ml = fn_loc["main"];
+                w.add_symbol("main", ml.sec, ml.off, /*is_func=*/true);
+            } else {
+                w.set_entry(text_sec, 0);  // _start en .text offset 0
+                // stub->main: rel32 a la VA real de main (resuelta por el writer).
                 const FnLoc &ml = fn_loc["main"];
                 w.add_reloc(text_sec, stub.main_call_off,
                             aot::RelocTarget::addr(ml.sec, ml.off),
                             aot::RelocKind::REL32);
             }
+
+            // PASADA 2: declarar las relocs de cada funcion (llamadas + datos +
+            // simbolos de seccion).  El writer las resuelve (EXEC) o las emite
+            // como registros (OBJECT) tras el layout.
             for (const AotFn &af : compiled) {
                 const FnLoc &fl = fn_loc[af.name];
                 for (const jit::NativeReloc &r : af.relocs) {
@@ -1974,7 +2005,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            if (stub.has_import_call) {
+            if (!emit_obj && stub.has_import_call) {
                 w.add_import_call(aot::ImportCall{
                     stub.import_dll, stub.import_func, text_sec, stub.import_call_off});
             }
@@ -1987,9 +2018,13 @@ int main(int argc, char *argv[]) {
             }
 
             const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
-            std::cout << "[aot] ejecutable nativo " << fmt_name << " escrito en '"
-                      << out_prefix << "' (entry _start -> main -> exit, return "
-                         "de main como exit-code).\n";
+            if (emit_obj)
+                std::cout << "[aot] objeto relocatable " << fmt_name << " (.o) escrito en '"
+                          << out_prefix << "' (main GLOBAL; linkable con ld/gcc).\n";
+            else
+                std::cout << "[aot] ejecutable nativo " << fmt_name << " escrito en '"
+                          << out_prefix << "' (entry _start -> main -> exit, return "
+                             "de main como exit-code).\n";
             return EXIT_SUCCESS;
         }
 
