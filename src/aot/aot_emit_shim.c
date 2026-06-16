@@ -553,15 +553,31 @@ int aot_emit_elf_obj(const char *path,
     const int shstr_sh = next_sh++;
     const int shnum = next_sh;
 
+    /* Simbolos EXTERNOS indefinidos (convencion libc: malloc/free/abort, pero
+     * los resuelve el LINKER -> el .o NO depende de libc).  Dedup lineal. */
+    const char **extn = (const char **)calloc((size_t)num_relocs + 1, sizeof(char *));
+    int n_extn = 0;
+    if (!extn) { free(sec_nrel); free(rela_sh);
+        set_err(err, err_cap, "oom"); return 0; }
+    for (int r = 0; r < num_relocs; ++r) {
+        const char *e = relocs[r].extern_name;
+        if (!e) continue;
+        int found = 0;
+        for (int k = 0; k < n_extn; ++k) if (strcmp(extn[k], e) == 0) { found = 1; break; }
+        if (!found) extn[n_extn++] = e;
+    }
+    const int extn_base = 1 + num_secs + num_syms;  /* indice del 1er externo */
+
     /* .strtab (nombres de simbolos) + symtab.  Simbolos:
      *   [0]            null
      *   [1..num_secs]  STT_SECTION (LOCAL) por seccion de usuario
-     *   [globales...]  STB_GLOBAL (syms[])  -- DESPUES de los locales. */
+     *   [globales...]  STB_GLOBAL (syms[])  -- DESPUES de los locales
+     *   [externos...]  STB_GLOBAL indefinidos (SHN_UNDEF) -- al final. */
     OBuf strtab; memset(&strtab, 0, sizeof(strtab));
     { uint8_t z = 0; ob_put(&strtab, &z, 1); }  /* [0] = "" */
-    const int nsym = 1 + num_secs + num_syms;
+    const int nsym = 1 + num_secs + num_syms + n_extn;
     Elf64_Sym *symtab = (Elf64_Sym *)calloc((size_t)nsym, sizeof(Elf64_Sym));
-    if (!symtab) { free(sec_nrel); free(rela_sh); free(strtab.p);
+    if (!symtab) { free(sec_nrel); free(rela_sh); free(strtab.p); free(extn);
         set_err(err, err_cap, "oom"); return 0; }
     for (int i = 0; i < num_secs; ++i) {
         symtab[1 + i].st_info  = ELF64_ST_INFO(STB_LOCAL, STT_SECTION);
@@ -575,13 +591,22 @@ int aot_emit_elf_obj(const char *path,
         s->st_shndx = (Elf64_Half)(1 + syms[g].section);
         s->st_value = syms[g].offset;
     }
+    /* Externos: indefinidos (SHN_UNDEF), STB_GLOBAL -> el linker los resuelve. */
+    for (int e = 0; e < n_extn; ++e) {
+        Elf64_Sym *s = &symtab[extn_base + e];
+        s->st_name  = (Elf64_Word)strtab.len;
+        ob_put(&strtab, extn[e], strlen(extn[e]) + 1);
+        s->st_info  = ELF64_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+        s->st_shndx = SHN_UNDEF;
+        s->st_value = 0;
+    }
     const int first_global = 1 + num_secs;  /* symtab sh_info */
 
     /* .rela arrays por seccion. */
     Elf64_Rela **rela = (Elf64_Rela **)calloc((size_t)num_secs, sizeof(Elf64_Rela *));
     int *rela_n = (int *)calloc((size_t)num_secs, sizeof(int));
     if (!rela || !rela_n) { free(sec_nrel); free(rela_sh); free(strtab.p); free(symtab);
-        free(rela); free(rela_n); set_err(err, err_cap, "oom"); return 0; }
+        free(extn); free(rela); free(rela_n); set_err(err, err_cap, "oom"); return 0; }
     for (int i = 0; i < num_secs; ++i)
         if (sec_nrel[i] > 0)
             rela[i] = (Elf64_Rela *)calloc((size_t)sec_nrel[i], sizeof(Elf64_Rela));
@@ -589,6 +614,15 @@ int aot_emit_elf_obj(const char *path,
         const AotReloc *rl = &relocs[r];
         Elf64_Rela *re = &rela[rl->site_section][rela_n[rl->site_section]++];
         re->r_offset = rl->site_off;
+        if (rl->extern_name) {
+            /* Llamada a simbolo externo: PLT32 contra el simbolo indefinido. */
+            uint32_t si = 0;
+            for (int k = 0; k < n_extn; ++k)
+                if (strcmp(extn[k], rl->extern_name) == 0) { si = (uint32_t)(extn_base + k); break; }
+            re->r_info   = ELF64_R_INFO(si, R_X86_64_PLT32);
+            re->r_addend = (Elf64_Sxword)(-4) + rl->addend;
+            continue;
+        }
         const uint32_t sym_idx = (uint32_t)(1 + rl->target_section);  /* section symbol */
         if (rl->kind == AOT_RELOC_REL32) {
             re->r_info   = ELF64_R_INFO(sym_idx, R_X86_64_PC32);
@@ -699,7 +733,7 @@ int aot_emit_elf_obj(const char *path,
         if (w != out.len) { set_err(err, err_cap, "aot_emit_elf_obj: escritura incompleta"); ok = 0; }
     }
 
-    free(sec_nrel); free(rela_sh); free(strtab.p); free(symtab);
+    free(sec_nrel); free(rela_sh); free(strtab.p); free(symtab); free(extn);
     for (int i = 0; i < num_secs; ++i) free(rela[i]);
     free(rela); free(rela_n); free(shstr.p); free(sec_nameoff);
     free(rela_nameoff); free(sec_off); free(rela_off); free(shdr); free(out.p);
@@ -730,9 +764,14 @@ int aot_emit_coff_obj(const char *path,
             set_err(err, err_cap, "aot_emit_coff_obj: reloc kind no soportado en .obj");
             return 0;
         }
-        if (relocs[r].site_section < 0 || relocs[r].site_section >= num_secs ||
-            relocs[r].target_section < 0 || relocs[r].target_section >= num_secs) {
-            set_err(err, err_cap, "aot_emit_coff_obj: reloc con seccion fuera de rango");
+        if (relocs[r].site_section < 0 || relocs[r].site_section >= num_secs) {
+            set_err(err, err_cap, "aot_emit_coff_obj: site_section fuera de rango");
+            return 0;
+        }
+        /* Los externos no tienen target_section (lo resuelve el linker). */
+        if (!relocs[r].extern_name &&
+            (relocs[r].target_section < 0 || relocs[r].target_section >= num_secs)) {
+            set_err(err, err_cap, "aot_emit_coff_obj: target_section fuera de rango");
             return 0;
         }
     }
@@ -754,9 +793,24 @@ int aot_emit_coff_obj(const char *path,
             set_err(err, err_cap, "aot_emit_coff_obj: reloc fuera de la seccion del sitio");
             return 0;
         }
+        /* Externo (call a simbolo indefinido): IMAGE_REL_AMD64_REL32 ya es
+         * relativo al byte siguiente; el campo se deja en 0 (sin pre-escribir
+         * addend) -> el linker calcula sym - (site+4). */
+        if (rl->extern_name) continue;
         const uint64_t addend = (uint64_t)((int64_t)rl->target_off + rl->addend);
         uint8_t *p = data[rl->site_section] + rl->site_off;
         if (width == 8) wr64le(p, addend); else wr32le(p, (uint32_t)addend);
+    }
+
+    /* Externos unicos (convencion libc; los resuelve el linker). */
+    const char **extn = (const char **)calloc((size_t)num_relocs + 1, sizeof(char *));
+    int n_extn = 0;
+    if (extn) for (int r = 0; r < num_relocs; ++r) {
+        const char *e = relocs[r].extern_name;
+        if (!e) continue;
+        int found = 0;
+        for (int k = 0; k < n_extn; ++k) if (strcmp(extn[k], e) == 0) { found = 1; break; }
+        if (!found) extn[n_extn++] = e;
     }
 
     /* Secciones COFF (las relocs se anyaden con add_relocation). */
@@ -771,15 +825,23 @@ int aot_emit_coff_obj(const char *path,
         ns[i] = create_section(secs[i].name, chars, data[i],
                                secs[i].size ? secs[i].size : 0, NULL, 0);
     }
-    /* Relocs -> registros COFF contra el simbolo de SECCION del target (los
-     * primeros num_secs simbolos son los de seccion, indices 0..num_secs-1). */
+    /* Relocs -> registros COFF.  Internos: contra el simbolo de SECCION del
+     * target (indices 0..num_secs-1).  Externos: contra el simbolo externo
+     * (indices num_secs+num_syms..) con REL32. */
     for (int r = 0; r < num_relocs; ++r) {
         const AotReloc *rl = &relocs[r];
-        const uint16_t type = (rl->kind == AOT_RELOC_ABS64)
-            ? (uint16_t)IMAGE_REL_AMD64_ADDR64 : (uint16_t)IMAGE_REL_AMD64_REL32;
+        uint32_t sym_idx; uint16_t type;
+        if (rl->extern_name) {
+            int k = 0; for (; k < n_extn; ++k) if (strcmp(extn[k], rl->extern_name) == 0) break;
+            sym_idx = (uint32_t)(num_secs + num_syms + k);
+            type    = (uint16_t)IMAGE_REL_AMD64_REL32;
+        } else {
+            sym_idx = (uint32_t)rl->target_section;
+            type    = (rl->kind == AOT_RELOC_ABS64)
+                ? (uint16_t)IMAGE_REL_AMD64_ADDR64 : (uint16_t)IMAGE_REL_AMD64_REL32;
+        }
         add_relocation(&ns[rl->site_section],
-            create_relocation((uint32_t)rl->site_off,
-                              (uint32_t)rl->target_section, type));
+            create_relocation((uint32_t)rl->site_off, sym_idx, type));
     }
 
     SECTION_HEADER *sh = (SECTION_HEADER *)calloc((size_t)num_secs, sizeof(SECTION_HEADER));
@@ -787,8 +849,8 @@ int aot_emit_coff_obj(const char *path,
     /* En un .obj la VirtualAddress de cada seccion es 0 (la fija el linker). */
     for (int i = 0; i < num_secs; ++i) sh[i].VirtualAddress = 0;
 
-    /* Simbolos: [0..num_secs-1] seccion (STATIC, value 0), luego los globales. */
-    const int nsym = num_secs + num_syms;
+    /* Simbolos: [0..num_secs-1] seccion (STATIC), [globales], [externos]. */
+    const int nsym = num_secs + num_syms + n_extn;
     COFF_SYMBOL *symtab = (COFF_SYMBOL *)calloc((size_t)nsym, sizeof(COFF_SYMBOL));
     /* String table: 4 bytes de tamano + nombres > 8 chars. */
     char *strtab = (char *)calloc(1, 4);
@@ -823,6 +885,16 @@ int aot_emit_coff_obj(const char *path,
         s->StorageClass = AOT_COFF_SYM_EXTERNAL;
         s->NumberOfAuxSymbols = 0;
     }
+    /* Externos: indefinidos (SectionNumber=0), EXTERNAL -> el linker resuelve. */
+    for (int e = 0; e < n_extn; ++e) {
+        COFF_SYMBOL *s = &symtab[num_secs + num_syms + e];
+        AOT_COFF_SET_NAME(*s, extn[e]);
+        s->Value = 0;
+        s->SectionNumber = 0;   /* IMAGE_SYM_UNDEFINED */
+        s->Type = AOT_COFF_SYM_FUNC;
+        s->StorageClass = AOT_COFF_SYM_EXTERNAL;
+        s->NumberOfAuxSymbols = 0;
+    }
     #undef AOT_COFF_SET_NAME
 
     COFF_HEADER header;
@@ -840,7 +912,7 @@ int aot_emit_coff_obj(const char *path,
     if (!ok) set_err(err, err_cap, "aot_emit_coff_obj: create_coff_file fallo");
 
     cleanup_resources(ns, num_secs);  /* libera ns[i].data + relocations */
-    free(ns); free(sh); free(symtab); free(strtab);
+    free(ns); free(sh); free(symtab); free(strtab); free(extn);
     for (int i = 0; i < num_secs; ++i) free(data[i]);
     free(data);
     return ok;

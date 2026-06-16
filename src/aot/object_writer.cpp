@@ -92,6 +92,9 @@ namespace aot {
             c.target_is_end  = r.target.is_end ? 1 : 0;
             c.kind           = static_cast<int>(r.kind);  // espejo de AOT_RELOC_*
             c.addend         = r.addend;
+            // El puntero apunta al std::string en relocs_ (vive durante write()).
+            c.extern_name    = r.target.extern_name.empty()
+                                 ? nullptr : r.target.extern_name.c_str();
         }
         const AotReloc *crel_ptr = crelocs.empty() ? nullptr : crelocs.data();
         const int       crel_n   = static_cast<int>(crelocs.size());
