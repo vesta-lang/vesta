@@ -79,6 +79,7 @@ namespace vex::ast {
         ExternFnDecl,    ///< @c extern "lib.dll" fn name(params) -> ret; (FFI declarativo, 0 overhead).
         ImportDecl,      ///< @c import "path" [as alias] [only A, B];  (Phase M sistema de modulos).
         NamespaceDecl,   ///< @c namespace foo { decls }  (Phase M.7.c, inline namespace estilo C++).
+        BytesDecl,       ///< @c bytes name { db/dw/dd/dq/times ... }  (datos crudos estilo NASM, AOT).
 
         // ----- Statements -----
         BlockStmt,
@@ -1400,6 +1401,32 @@ namespace vex::ast {
         std::string               attr_section;        ///< vacio = default
         std::string               attr_section_perms;  ///< "rwx" explicito (vacio = convencion)
         GlobalVarDecl() : Node(NodeKind::GlobalVarDecl) {}
+    };
+
+    /**
+     * @struct BytesDecl
+     * @brief Bloque de datos crudos estilo NASM (AOT): @c bytes name { ... }.
+     *
+     * Directivas: @c db (1B), @c dw (2B), @c dd (4B), @c dq (8B) -- cada una
+     * acepta literales (int/char/string) y, mas adelante, referencias a simbolos
+     * (funcion/dato -> reloc).  @c times N <dir> repite.  Da control byte a byte
+     * para firmas, tablas, estructuras binarias exactas, firmware, etc.  Se coloca
+     * en la @c @section indicada (default @c .rodata) y se emite VERBATIM.
+     */
+    struct BytesSymRef {
+        uint32_t    offset;   ///< offset dentro de @c data del campo a relocar.
+        std::string sym;      ///< simbolo referenciado (funcion/dato).
+        uint8_t     width;    ///< 4 (dd) u 8 (dq).
+        bool        is_rel;   ///< true = REL32 (rip-rel); false = ABS64.
+    };
+    struct BytesDecl : Node {
+        std::string               name;
+        std::string               attr_section;        ///< @section (vacio = .rodata)
+        std::string               attr_section_perms;
+        bool                      is_public = true;
+        std::vector<uint8_t>      data;        ///< bytes resueltos (placeholder 0 en sym refs)
+        std::vector<BytesSymRef>  sym_refs;    ///< refs a simbolos (vacio en v1 literales)
+        BytesDecl() : Node(NodeKind::BytesDecl) {}
     };
 
     /**

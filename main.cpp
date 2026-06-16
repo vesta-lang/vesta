@@ -1899,6 +1899,13 @@ int main(int argc, char *argv[]) {
                     place_data(N);
                 }
             }
+            // FORCE_EMIT: bloques `bytes` y datos en @section que deben
+            // emitirse aunque ningun reloc los referencie (firmas, tablas,
+            // boot sectors).  Se colocan en orden de aparicion.
+            for (uint32_t N = 0; N < sd.size(); ++N) {
+                if (sd.entries[N].meta.flags & ir::IrModule::SD_FLAG_FORCE_EMIT)
+                    place_data(N);
+            }
 
             // Crear el writer + TODAS las secciones (writer idx == secs idx, mismo
             // orden; `secs` ya esta completa tras la pasada 1).

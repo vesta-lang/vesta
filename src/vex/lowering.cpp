@@ -589,6 +589,24 @@ namespace vex {
         }
         pending_spawn_helpers_.clear();
 
+        // Bloques `bytes name { db/dw/dd/dq/times }` (datos crudos NASM, AOT):
+        // se internan como entradas de static_data en su @section (default
+        // .rodata) y se marcan FORCE_EMIT para que el emisor AOT las coloque
+        // aunque ningun codigo las referencie (firmas, tablas, boot sectors).
+        // NON_DEDUP evita que el dedup post-merge colapse dos bloques con los
+        // mismos bytes en secciones distintas.
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::BytesDecl) continue;
+            auto *bd = static_cast<ast::BytesDecl *>(decl.get());
+            std::vector<uint8_t> bytes = bd->data;  // copia: el AST sobrevive
+            const size_t idx = out_module.static_data.push_back(std::move(bytes));
+            auto &m = out_module.static_data.meta_at(idx);
+            m.section_name  = bd->attr_section.empty() ? ".rodata" : bd->attr_section;
+            m.section_perms = bd->attr_section_perms;
+            m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
+                     | ir::IrModule::SD_FLAG_NON_DEDUP;
+        }
+
         return diags_.error_count() == initial_errors;
     }
 

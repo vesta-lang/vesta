@@ -1274,6 +1274,10 @@ namespace ir {
         /// iniciales (caso comun: globals `i64 g = 0;` empiezan en 0
         /// pero deben tener storage independiente).
         static constexpr uint8_t SD_FLAG_NON_DEDUP  = 1 << 4;
+        /// AOT: emite el slot en su seccion AUNQUE ningun reloc lo
+        /// referencie (caso: bloques @c bytes para firmas, tablas,
+        /// boot sectors).  El emisor AOT lo coloca siempre.
+        static constexpr uint8_t SD_FLAG_FORCE_EMIT = 1 << 5;
 
         /**
          * @brief Funciones nativas que el modulo declara importar.
