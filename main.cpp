@@ -1685,7 +1685,10 @@ int main(int argc, char *argv[]) {
             aot::AotLowerConfig lcfg;
             if (!cr.aot_alloc_sym.empty()) lcfg.alloc_sym = cr.aot_alloc_sym;
             if (!cr.aot_free_sym.empty())  lcfg.free_sym  = cr.aot_free_sym;
-            if (!cr.aot_panic_sym.empty()) lcfg.panic_sym = cr.aot_panic_sym;
+            if (!cr.aot_panic_sym.empty()) {
+                lcfg.panic_sym       = cr.aot_panic_sym;
+                lcfg.panic_takes_msg = true;  // @PanicHandler(msg_addr, len)
+            }
             aot::aot_lower_runtime(aot_mod, lcfg);
 
             // ------------------------------------------------------------------

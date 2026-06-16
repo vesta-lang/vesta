@@ -64,11 +64,13 @@ namespace aot {
                         }
 
                         case ir::IrOp::PANIC:
-                            // panic(msg,len) -> <panic>() (convencion "abort").
-                            // El paso del mensaje + @PanicHandler llegan en AOT.2.d.
+                            // panic(msg,len) -> call <panic>(...).  Con un
+                            // @PanicHandler (panic_takes_msg) se le pasa
+                            // (msg_addr, len); sin el (default abort) se
+                            // descarta el mensaje (abort no toma argumentos).
                             in.op        = ir::IrOp::CALL;
                             in.func_name = cfg.panic_sym;
-                            in.operands.clear();
+                            if (!cfg.panic_takes_msg) in.operands.clear();
                             in.dst = ir::IR_NO_VALUE;
                             break;
 
