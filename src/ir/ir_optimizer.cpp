@@ -1663,6 +1663,45 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
     return true;
 }
 
+/**
+ * @brief Reescribe (o solo valida) un LOAD de un campo que el ctor NO
+ *        inicializo, produciendo @c CONST 0 (valor por defecto).
+ *
+ * SOUND: @c NEWOBJ / @c GC_ALLOC zero-inicializan el payload del objeto
+ * (@c gc_heap.alloc hace @c memset(payload, 0, size)), asi que un campo
+ * accedido pero no escrito por el ctor lee deterministamente 0.  Esto amplia
+ * la cobertura del scalar-replace al "18% v2" (campos default-0) sin riesgo.
+ * Solo enteros (float/ptr/handle -> abortar, conservador como el resto del
+ * pase).
+ *
+ * @param ld    Instruccion LOAD a reescribir.
+ * @param fn    Funcion contenedora (para actualizar @c fn.values del dst).
+ * @param apply false = solo validar (no muta); true = aplicar.
+ * @return true si es posible / se aplico; false -> tipo no soportado.
+ */
+/* Tamano del @c ObjectHeader (ABI v2/v3 = 24 bytes: class_ptr, flags,
+ * hash_code, owner_pid, lock_depth/_pad).  Los campos de USUARIO empiezan en
+ * este offset; los reads de offset < 24 son metadata de cabecera (class_ptr,
+ * etc.) puesta por NEWOBJ -> NUNCA son default-0 (ver sr default-0). */
+static constexpr uint32_t SR_OBJ_HEADER_SIZE = 24;
+
+bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
+    const IrType T = ld.type;
+    if (!sr_type_is_int(T)) return false;   /* solo enteros */
+    if (apply) {
+        ld.op = IrOp::CONST;
+        ld.imm = 0;
+        ld.operands.clear();
+        ld.func_name.clear();
+        if (ld.dst != IR_NO_VALUE && ld.dst < fn.values.size()) {
+            fn.values[ld.dst].is_const    = true;
+            fn.values[ld.dst].const_val   = 0;
+            fn.values[ld.dst].is_host_ptr = false;
+        }
+    }
+    return true;
+}
+
 //==============================================================================
 //  Dominancia: idom + dominance frontier + dom-tree (para SROA/mem2reg).
 //==============================================================================
@@ -1851,11 +1890,21 @@ bool sr_mem2reg_object(IrFunction &fn,
     }
     if (offsets.empty()) { reason = "sin accesos a campos"; return false; }
 
-    /* Todo offset accedido debe estar en el modelo (ctor-init disponible) y su
-     * tipo coincidir con el del ctor (default-0 no soportado en mem2reg v1). */
+    /* Cada offset accedido o bien lo inicializa el ctor (tipo debe coincidir) o
+     * bien NO -> default-0 (el objeto GC se zero-inicializa al alocar; el init
+     * sera un CONST 0 materializado abajo). */
     for (uint32_t off : offsets) {
         const SrFieldInit *fi = model.find(off);
-        if (!fi) { reason = "campo no inicializado por el ctor (default-0)"; return false; }
+        if (!fi) {
+            /* Campo de usuario no inicializado -> default-0 (init = CONST 0,
+             * materializado abajo).  Pero un read de la CABECERA (offset < 24:
+             * class_ptr, etc.) NO es default-0 -> bail (identidad/reflexion). */
+            if (off < SR_OBJ_HEADER_SIZE) {
+                reason = "lectura de cabecera no inicializada (identidad/class_ptr)";
+                return false;
+            }
+            continue;   /* default-0 permitido para campo de usuario */
+        }
         if (fi->field_type != field_type[off]) { reason = "tipo ctor/acceso difiere"; return false; }
     }
 
@@ -1873,6 +1922,19 @@ bool sr_mem2reg_object(IrFunction &fn,
     for (uint32_t off : offsets) {
         const SrFieldInit *fi = model.find(off);
         const IrType T = field_type[off];
+        if (!fi) {
+            /* default-0: campo no inicializado por el ctor -> init = CONST 0.
+             * Sound porque el payload del objeto GC se zero-inicializa. */
+            IrInstr ci; ci.op = IrOp::CONST; ci.type = T; ci.imm = 0;
+            IrValue nv; nv.id = (IrValueId)fn.values.size(); nv.type = T;
+            nv.is_const = true; nv.const_val = 0;
+            nv.name = "%m2ri" + std::to_string(nv.id);
+            ci.dst = nv.id;
+            fn.values.push_back(nv);
+            init_val[off] = nv.id;
+            init_instrs.push_back(std::move(ci));
+            continue;
+        }
         if (fi->kind == SrFieldInit::CONST) {
             uint64_t v = fi->const_val;
             int sz = sr_type_size(T);
@@ -2336,12 +2398,26 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
             std::vector<PendingRewrite> pending;
             for (const auto &lr : loads) {
                 const SrFieldInit *fi = model->find(lr.off);
-                if (!fi) {
-                    ok = false;
-                    use_reason = "load de campo no inicializado por el ctor (default-0)";
-                    break;
-                }
                 IrInstr &probe = fn.blocks[lr.bi].instrs[lr.ii];
+                if (!fi) {
+                    /* Read de la cabecera del objeto (class_ptr offset 0, etc.):
+                     * NO es default-0 (lo pone NEWOBJ).  Tratar como antes: bail
+                     * (protege identidad/reflexion -- getClass lee offset 0). */
+                    if (lr.off < SR_OBJ_HEADER_SIZE) {
+                        ok = false;
+                        use_reason = "lectura de cabecera del objeto no inicializada (identidad/class_ptr)";
+                        break;
+                    }
+                    /* Campo de usuario no inicializado por el ctor -> default-0
+                     * (el objeto GC se zero-inicializa al alocar). */
+                    if (!sr_rewrite_load_zero(probe, fn, /*apply=*/false)) {
+                        ok = false;
+                        use_reason = "default-0 de tipo no soportado (float/ptr/handle)";
+                        break;
+                    }
+                    pending.push_back({lr.bi, lr.ii, nullptr});
+                    continue;
+                }
                 if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
                     ok = false;
                     use_reason = "tipo de campo no soportado (float/ptr/handle/widening)";
@@ -2353,7 +2429,8 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
 
             for (const auto &pr : pending) {
                 IrInstr &ld = fn.blocks[pr.bi].instrs[pr.ii];
-                sr_rewrite_load(ld, *pr.fi, args, fn, /*apply=*/true);
+                if (pr.fi) sr_rewrite_load(ld, *pr.fi, args, fn, /*apply=*/true);
+                else       sr_rewrite_load_zero(ld, fn, /*apply=*/true);
             }
             for (const auto &da : dead_addr) {
                 IrInstr &ai = fn.blocks[da.first].instrs[da.second];
@@ -2402,7 +2479,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         {
             auto &blkv = fn.blocks[site.block_idx].instrs;
             /* DRY-RUN: simular current[offset] en orden de bloque + validar. */
-            struct LdPlan { size_t ii; bool from_store; IrValueId stored; const SrFieldInit *fi; };
+            struct LdPlan { size_t ii; bool from_store; IrValueId stored; const SrFieldInit *fi; bool zero_init; };
             std::vector<LdPlan> ld_plan;
             std::vector<size_t> store_iis;
             std::unordered_map<uint32_t, IrValueId> sim;  /* offset -> ultimo valor escrito */
@@ -2439,16 +2516,30 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                          || fn.values[v].type != in.type) {
                             vok = false; vreason = "tipo store/load no coincide"; break;
                         }
-                        ld_plan.push_back({ii, true, v, nullptr});
+                        ld_plan.push_back({ii, true, v, nullptr, false});
                     } else {
                         /* primer load del campo: valor de construccion. */
                         const SrFieldInit *fi = model->find(off);
-                        if (!fi) { vok = false; vreason = "load de campo no inicializado (default-0)"; break; }
-                        IrInstr probe = blkv[ii];   /* copia: apply=false no muta */
-                        if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
-                            vok = false; vreason = "tipo de campo no soportado (float/ptr/handle/widening)"; break;
+                        if (!fi) {
+                            /* read de cabecera (class_ptr offset 0, etc.) NO es
+                             * default-0 -> bail (protege identidad/reflexion). */
+                            if (off < SR_OBJ_HEADER_SIZE) {
+                                vok = false; vreason = "lectura de cabecera no inicializada (identidad/class_ptr)"; break;
+                            }
+                            /* campo de usuario no inicializado -> default-0
+                             * (el objeto GC se zero-inicializa al alocar). */
+                            IrInstr probe = blkv[ii];   /* copia: apply=false no muta */
+                            if (!sr_rewrite_load_zero(probe, fn, /*apply=*/false)) {
+                                vok = false; vreason = "default-0 de tipo no soportado (float/ptr/handle)"; break;
+                            }
+                            ld_plan.push_back({ii, false, IR_NO_VALUE, nullptr, true});
+                        } else {
+                            IrInstr probe = blkv[ii];   /* copia: apply=false no muta */
+                            if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
+                                vok = false; vreason = "tipo de campo no soportado (float/ptr/handle/widening)"; break;
+                            }
+                            ld_plan.push_back({ii, false, IR_NO_VALUE, fi, false});
                         }
-                        ld_plan.push_back({ii, false, IR_NO_VALUE, fi});
                     }
                 } else if (is_st) {
                     sim[off] = sval;
@@ -2468,6 +2559,8 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                         fn.values[ld.dst].is_const = false;
                         fn.values[ld.dst].is_host_ptr = false;
                     }
+                } else if (lp.zero_init) {
+                    sr_rewrite_load_zero(ld, fn, /*apply=*/true);
                 } else {
                     sr_rewrite_load(ld, *lp.fi, args, fn, /*apply=*/true);
                 }
@@ -4724,6 +4817,20 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
         if (is_blacklisted(fn.name)) return false;
+        /* Phase C2.13 fix (2026-06-16): NO inlinear los helpers __new_X cuando
+         * el scalar-replacement de objetos GC esta activo.  El pase siembra en
+         * `call __new_X` (is_new_helper_name); si el inliner lo expande antes a
+         * `newobj` + `callvirt ctor`, el seed desaparece y el objeto ademas
+         * escapa via el callvirt -> scalar_replace queda INERTE (regresion del
+         * feature C2.13: 178_escape_scalar_repl no transformaba nada).  Mantener
+         * __new_X como una call preserva el seed: el propio scalar_replace
+         * elimina la call de los objetos NO-escapantes; los escapantes conservan
+         * una call barata a un helper trivial (coste despreciable vs habilitar
+         * la eliminacion completa del alloc para los no-escapantes).  Gated por
+         * VESTA_NO_ESCAPE_SCALAR para A/B testing limpio (con el pase OFF, el
+         * comportamiento de inline previo se mantiene). */
+        static const bool sr_on = !env_flag_on("VESTA_NO_ESCAPE_SCALAR");
+        if (sr_on && is_new_helper_name(fn.name, nullptr)) return false;
         if (fn.blocks.size() != 1) return false;
         if (fn.blocks[0].instrs.empty()) return false;
         /* Ultima instr debe ser RET. */
