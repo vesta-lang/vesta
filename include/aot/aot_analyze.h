@@ -78,6 +78,12 @@ namespace aot {
         bool freestanding = false;       ///< true => sin libc; RAW_ALLOC/FREE/PANIC
                                          ///< requieren hooks de usuario (@AllocatorOverride/
                                          ///< @PanicHandler).  Solo significativo con BARE.
+        /// AOT.2.d: el usuario proporciona el rol via @AllocatorOverride /
+        /// @PanicHandler -> la op LIBC_MAPPED correspondiente se admite tambien
+        /// en --freestanding (el simbolo lo aporta el usuario, no la libc).
+        bool alloc_provided = false;     ///< RAW_ALLOC ok en freestanding.
+        bool free_provided  = false;     ///< RAW_FREE / SMARTPTR_FREE ok en freestanding.
+        bool panic_provided = false;     ///< PANIC ok en freestanding.
     };
 
     /**

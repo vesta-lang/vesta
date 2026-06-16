@@ -135,6 +135,13 @@ namespace vex {
         bool        ok = false;     ///< Exito global.
         std::string vel_text;       ///< Texto .vel generado a partir del IR.
         std::string ir_text;        ///< dump del IrModule (solo si CompileOptions::dump_ir).
+        /// AOT.2.d: simbolos de override (@AllocatorOverride / @PanicHandler).
+        /// Vacio = sin override (convencion calloc/free/abort).  El driver
+        /// @c -m aot los pasa a @c AotLowerConfig y habilita LIBC_MAPPED en
+        /// --freestanding para el rol cubierto.
+        std::string aot_alloc_sym;  ///< @AllocatorOverride que devuelve ptr.
+        std::string aot_free_sym;   ///< @AllocatorOverride que devuelve void.
+        std::string aot_panic_sym;  ///< @PanicHandler.
         /// Diagrama Mermaid del AST post type-check.  Llenado solo si
         /// @c CompileOptions::dump_mermaid_ast == true.  Vacio en caso
         /// contrario para no pagar el coste de generacion en builds prod.

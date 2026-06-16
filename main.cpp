@@ -1638,6 +1638,11 @@ int main(int argc, char *argv[]) {
             aot::AotTarget tgt;
             tgt.tier         = aot_tier;
             tgt.freestanding = aot_freestanding;
+            // AOT.2.d: roles cubiertos por @AllocatorOverride / @PanicHandler
+            // -> admiten su LIBC_MAPPED tambien en --freestanding.
+            tgt.alloc_provided = !cr.aot_alloc_sym.empty();
+            tgt.free_provided  = !cr.aot_free_sym.empty();
+            tgt.panic_provided = !cr.aot_panic_sym.empty();
 
             const char *tier_name =
                 (aot_tier == aot::Tier::BARE) ? "bare" :
@@ -1675,7 +1680,13 @@ int main(int argc, char *argv[]) {
             // el linker -> el .o NO depende de libc).  Tras esto el selector ve
             // solo CALL.  Se ejecuta DESPUES del gate de analyze para que el
             // chequeo freestanding sobre RAW_ALLOC siga aplicando.
-            aot::aot_lower_runtime(aot_mod);
+            // AOT.2.d: nombres de simbolo segun @AllocatorOverride/@PanicHandler
+            // (vacio = convencion C malloc/free/abort).
+            aot::AotLowerConfig lcfg;
+            if (!cr.aot_alloc_sym.empty()) lcfg.alloc_sym = cr.aot_alloc_sym;
+            if (!cr.aot_free_sym.empty())  lcfg.free_sym  = cr.aot_free_sym;
+            if (!cr.aot_panic_sym.empty()) lcfg.panic_sym = cr.aot_panic_sym;
+            aot::aot_lower_runtime(aot_mod, lcfg);
 
             // ------------------------------------------------------------------
             // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.

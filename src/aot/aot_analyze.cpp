@@ -252,8 +252,17 @@ namespace aot {
         const AotOpClass cls = aot_classify_op(op);
         if (cls == AotOpClass::PURE_NATIVE)
             return true;  // stack/aritmetica/control/llamadas-linker: siempre.
-        if (cls == AotOpClass::LIBC_MAPPED)
-            return !target.freestanding;  // libc solo si NO freestanding.
+        if (cls == AotOpClass::LIBC_MAPPED) {
+            if (!target.freestanding) return true;  // libc disponible.
+            // freestanding: admitir SOLO si el usuario aporta el rol via
+            // @AllocatorOverride / @PanicHandler (el simbolo lo da el, no la libc).
+            switch (op) {
+                case IrOp::RAW_ALLOC:                       return target.alloc_provided;
+                case IrOp::RAW_FREE: case IrOp::SMARTPTR_FREE: return target.free_provided;
+                case IrOp::PANIC:                            return target.panic_provided;
+                default:                                     return false;
+            }
+        }
         // RUNTIME_DEPENDENT:
         switch (target.tier) {
             case Tier::FULL:  return true;

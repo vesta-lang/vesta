@@ -1341,6 +1341,8 @@ namespace vex::ast {
         std::string                              attr_section_perms;
         int64_t                                  attr_at    = -1;          ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
         int32_t                                  attr_order = 0x7fffffff;  ///< @order(N): orden de seccion; max = creacion
+        bool                                     is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
+        bool                                     is_panic_handler  = false; ///< @PanicHandler (AOT freestanding)
         FunctionDecl() : Node(NodeKind::FunctionDecl) {}
     };
 

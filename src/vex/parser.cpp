@@ -677,6 +677,8 @@ namespace vex {
         //   Otras se aceptan y se ignoran silenciosamente.
         bool top_is_aspect     = false;
         bool top_is_async      = false;
+        bool top_is_alloc_override = false;  /* AOT.2.d: @AllocatorOverride */
+        bool top_is_panic_handler  = false;  /* AOT.2.d: @PanicHandler */
         bool top_is_introspect = false;
         bool top_is_macro      = false;  /* A.43.16: @Macro */
         bool top_is_pure       = false;  /* A.43.20: @Pure -- memoizable */
@@ -715,6 +717,8 @@ namespace vex {
                 else if (current_.lexeme == "Introspect") top_is_introspect = true;
                 else if (current_.lexeme == "Macro") top_is_macro = true;
                 else if (current_.lexeme == "Pure")  top_is_pure  = true;
+                else if (current_.lexeme == "AllocatorOverride") top_is_alloc_override = true;
+                else if (current_.lexeme == "PanicHandler")      top_is_panic_handler  = true;
                 // Sprint lombok (2026-06-03): anotaciones class-level.
                 // El parser solo marca los flags; el pre-pase del
                 // TypeChecker (expand_lombok_annotations) genera los
@@ -1180,6 +1184,8 @@ namespace vex {
             if (fd && is_comptime_fn)   fd->is_comptime = true;
             if (fd && top_is_macro)     fd->is_macro = true;
             if (fd && top_is_pure)      fd->is_pure  = true;
+            if (fd && top_is_alloc_override) fd->is_alloc_override = true;
+            if (fd && top_is_panic_handler)  fd->is_panic_handler  = true;
             // AOT 2b (dev OS): seccion de salida del codigo + permisos.
             if (fd && !top_attr_section.empty()) {
                 fd->attr_section       = top_attr_section;
