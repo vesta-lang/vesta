@@ -1,0 +1,39 @@
+// AOT.2.d -- @AllocatorOverride: el `new` nativo usa el allocator del usuario
+// (no la libc).  Imprescindible para dev-OS / freestanding, donde no hay
+// calloc/free del sistema.
+//
+// Compilar a objeto nativo (sin _start; main GLOBAL):
+//   vm -m aot --vex examples_codes_vex/aot/25_alloc_override.vex \
+//      -o ovr.o --format elf --emit obj
+//
+// Enlazar con un allocator propio (aqui kzalloc-style sobre malloc) y ejecutar:
+//   gcc -no-pie ovr.o harness.c -o ovr && ./ovr ; echo $?   # -> 99
+//
+// El .o resultante NO referencia calloc/free de libc: solo rt_alloc / rt_free
+// (los simbolos externos que aporta el usuario).  El @AllocatorOverride que
+// devuelve puntero -> allocator del `new`; el que devuelve void -> free del RAII.
+//
+// harness.c de ejemplo:
+//   #include <stdlib.h>
+//   #include <string.h>
+//   void* rt_alloc(unsigned long n){ void*p=malloc(n); if(p) memset(p,0,n); return p; }
+//   void  rt_free(void* p){ free(p); }
+
+extern "vmrt" { fn rt_alloc(u64 n) -> i64*; fn rt_free(i64* p) -> void; }
+
+// El allocator debe ZERIFICAR (convencion kzalloc) para preservar el cero-init
+// de los campos no escritos por el constructor.
+@AllocatorOverride
+i64* my_alloc(u64 n) { return rt_alloc(n); }
+
+@AllocatorOverride
+void my_free(i64* p) { rt_free(p); }
+
+class Box { i64 v; }
+
+i64 main() {
+    Box b = new Box();   // -> my_alloc(size); RAII -> my_free(b) al salir de scope
+    b.v = 99;
+    i64 r = b.v;
+    return r;            // 99
+}

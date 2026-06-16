@@ -2036,6 +2036,32 @@ namespace jit {
                             O.push_back(cm);
                             break;
                         }
+                        /* HOST_LEAF (AOT): un CALLN a un extern (FFI nativo, p.ej.
+                         * @AllocatorOverride que envuelve kmalloc) no tiene
+                         * direccion en compile time -> se referencia por NOMBRE
+                         * (CALL_SYM) y lo resuelve el linker.  El func_name viene
+                         * como "lib:simbolo"; el linker solo necesita el simbolo
+                         * (la lib la aporta el enlace).  Los intrinsics vmath_*
+                         * ya se han inline-ado arriba sin tocar esta rama. */
+                        if (abi == AbiKind::HOST_LEAF) {
+                            const size_t nargs = in.operands.size();
+                            if (nargs > host_leaf_nmax) {
+                                vreg_dbg(fn.name.c_str(), "calln(host-leaf-args)");
+                                return false;
+                            }
+                            std::string sym = in.func_name;
+                            const size_t colon = sym.rfind(':');
+                            if (colon != std::string::npos) sym = sym.substr(colon + 1);
+                            for (size_t a = 0; a < nargs; ++a)
+                                O.push_back(MInstr::make_arg(
+                                    static_cast<uint8_t>(a), vr(in.operands[a])));
+                            O.push_back(MInstr::make_call_sym(
+                                out.intern_reloc_symbol(sym)));
+                            if (in.dst != ir::IR_NO_VALUE)
+                                O.push_back(MInstr::make_unary(MOp::MOV,
+                                    vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
+                            break;
+                        }
                         if (!resolve_native) {
                             vreg_dbg(fn.name.c_str(), "calln(no-resolver)"); return false;
                         }
