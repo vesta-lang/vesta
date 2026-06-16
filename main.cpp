@@ -1783,6 +1783,16 @@ int main(int argc, char *argv[]) {
                     work.push_back(fn.name);
                 }
             }
+            // Sembrar las funciones referenciadas por bloques `bytes` (`dq foo`)
+            // para que se compilen aunque main no las alcance por CALL.
+            for (const auto &e : aot_mod.static_data.entries) {
+                for (const auto &sr : e.meta.sym_refs) {
+                    if (fn_by_name.count(sr.sym) && !queued.count(sr.sym)) {
+                        queued[sr.sym] = true;
+                        work.push_back(sr.sym);
+                    }
+                }
+            }
             bool aot_codegen_ok = true;
             while (!work.empty()) {
                 const std::string nm = work.back();
@@ -2026,6 +2036,32 @@ int main(int argc, char *argv[]) {
                         w.add_reloc(fl.sec, site,
                                     aot::RelocTarget::addr(loc.first, loc.second), k);
                     }
+                }
+            }
+
+            // Relocs de los bloques `bytes` con referencias a simbolos
+            // (`dq main`): el campo (placeholder 0) se parchea con la direccion
+            // del simbolo.  Solo se resuelven contra FUNCIONES (fn_loc); una ref
+            // a otro dato/seccion es trabajo futuro.
+            for (uint32_t N = 0; N < sd.size(); ++N) {
+                const auto &meta = sd.entries[N].meta;
+                if (meta.sym_refs.empty()) continue;
+                auto dit = data_loc.find(N);
+                if (dit == data_loc.end()) continue;  // no colocada (no deberia)
+                const int      dsec = dit->second.first;
+                const uint64_t doff = dit->second.second;
+                for (const auto &sr : meta.sym_refs) {
+                    auto fit = fn_loc.find(sr.sym);
+                    if (fit == fn_loc.end()) {
+                        std::cerr << "[aot] bytes: referencia a simbolo no resuelto '"
+                                  << sr.sym << "' (solo funciones soportadas).\n";
+                        return EXIT_FAILURE;
+                    }
+                    const aot::RelocKind k = sr.is_rel ? aot::RelocKind::REL32
+                                                       : aot::RelocKind::ABS64;
+                    w.add_reloc(dsec, doff + sr.offset,
+                                aot::RelocTarget::addr(fit->second.sec,
+                                                       fit->second.off), k);
                 }
             }
 

@@ -2147,9 +2147,13 @@ namespace vex {
         };
 
         // Emite una directiva de datos (db/dw/dd/dq) hacia @c out.  El token
-        // actual es el identificador de la directiva.  Devuelve false si hay
-        // un error de sintaxis (el caller aborta el bucle).
-        auto emit_data_dir = [&](std::vector<uint8_t> &out) -> bool {
+        // actual es el identificador de la directiva.  @c refs (si no es nullptr)
+        // recibe las referencias a simbolos (operandos identificador, p.ej.
+        // `dq main`); su offset se calcula relativo a @c base_off (= inicio del
+        // blob).  En el contexto @c times no se permiten refs (refs==nullptr).
+        // Devuelve false si hay un error de sintaxis.
+        auto emit_data_dir = [&](std::vector<uint8_t> &out, uint32_t base_off,
+                                 std::vector<ast::BytesSymRef> *refs) -> bool {
             const int w = width_of(current_.lexeme);
             if (w == 0) {
                 error_here("se esperaba una directiva de datos (db/dw/dd/dq)");
@@ -2181,12 +2185,28 @@ namespace vex {
                     for (unsigned char c : current_.str_val) out.push_back((uint8_t)c);
                     (void)consume();
                 } else if (current_.kind == TokenKind::IDENTIFIER) {
-                    // Referencia a simbolo (reloc): pendiente en un incremento
-                    // posterior.  v1 acepta solo literales.
-                    error_here("referencias a simbolos en 'bytes' no soportadas todavia (v1: solo literales)");
-                    return false;
+                    // Referencia a simbolo (reloc): `dq main`, `dq tabla`, etc.
+                    // v1: solo absoluta de 64 bits (dq) -- cubre tablas de
+                    // saltos, vtables, punteros a funcion/dato.
+                    if (refs == nullptr) {
+                        error_here("una referencia a simbolo no es valida dentro de 'times'");
+                        return false;
+                    }
+                    if (w != 8) {
+                        error_here("una referencia a simbolo requiere 'dq' (direccion de 64 bits)");
+                        return false;
+                    }
+                    ast::BytesSymRef sr;
+                    sr.offset = base_off + (uint32_t)out.size();
+                    sr.sym    = current_.lexeme;
+                    sr.width  = 8;
+                    sr.is_rel = false;  // absoluta; rip-relativa = trabajo futuro
+                    refs->push_back(std::move(sr));
+                    (void)consume();
+                    // Placeholder: el emisor AOT escribe la direccion real.
+                    for (int i = 0; i < 8; ++i) out.push_back(0);
                 } else {
-                    error_here("se esperaba un operando (entero, char o cadena) en bytes");
+                    error_here("se esperaba un operando (entero, char, cadena o simbolo) en bytes");
                     return false;
                 }
                 if (current_.kind == TokenKind::COMMA) { (void)consume(); continue; }
@@ -2207,12 +2227,15 @@ namespace vex {
                 const uint64_t cnt = current_.int_val;
                 (void)consume();
                 std::vector<uint8_t> tmp;
-                if (!emit_data_dir(tmp)) break;
+                // refs==nullptr: dentro de 'times' no se admiten refs a simbolos.
+                if (!emit_data_dir(tmp, 0, nullptr)) break;
                 for (uint64_t k = 0; k < cnt; ++k)
                     bd->data.insert(bd->data.end(), tmp.begin(), tmp.end());
             } else if (current_.kind == TokenKind::IDENTIFIER
                     && width_of(current_.lexeme) > 0) {
-                if (!emit_data_dir(bd->data)) break;
+                // base_off=0: `out` ES bd->data, asi out.size() ya da el offset
+                // absoluto del operando dentro del blob (no sumar de nuevo).
+                if (!emit_data_dir(bd->data, 0, &bd->sym_refs)) break;
             } else {
                 error_here("se esperaba db/dw/dd/dq/times o '}' en bloque bytes");
                 break;
