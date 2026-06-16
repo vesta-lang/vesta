@@ -100,10 +100,6 @@ namespace aot {
         // OBJECT relocatable: sin _start, sin imports; relocs como REGISTROS +
         // symtab.  v1: solo ELF (.o).  COFF (.obj) pendiente.
         if (kind_ == OutputKind::OBJECT) {
-            if (fmt_ != ObjFormat::ELF) {
-                err = "ObjectWriter: --emit obj solo soporta ELF (.o) por ahora";
-                return false;
-            }
             std::vector<AotSym> csyms(symbols_.size());
             std::vector<std::string> hold(symbols_.size());
             for (size_t i = 0; i < symbols_.size(); ++i) {
@@ -113,12 +109,18 @@ namespace aot {
                 csyms[i].offset  = symbols_[i].offset;
                 csyms[i].is_func = symbols_[i].is_func ? 1 : 0;
             }
-            ok = aot_emit_elf_obj(path.c_str(),
-                                  csecs.data(), static_cast<int>(csecs.size()),
-                                  crel_ptr, crel_n,
-                                  csyms.empty() ? nullptr : csyms.data(),
-                                  static_cast<int>(csyms.size()),
-                                  errbuf, sizeof(errbuf));
+            const AotSym *sym_ptr = csyms.empty() ? nullptr : csyms.data();
+            const int     sym_n   = static_cast<int>(csyms.size());
+            if (fmt_ == ObjFormat::ELF)
+                ok = aot_emit_elf_obj(path.c_str(),
+                                      csecs.data(), static_cast<int>(csecs.size()),
+                                      crel_ptr, crel_n, sym_ptr, sym_n,
+                                      errbuf, sizeof(errbuf));
+            else  /* PE -> COFF .obj */
+                ok = aot_emit_coff_obj(path.c_str(),
+                                       csecs.data(), static_cast<int>(csecs.size()),
+                                       crel_ptr, crel_n, sym_ptr, sym_n,
+                                       errbuf, sizeof(errbuf));
             if (!ok) { err = errbuf[0] ? errbuf : "ObjectWriter: error obj"; return false; }
             return true;
         }
