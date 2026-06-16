@@ -118,7 +118,8 @@ namespace jit {
 #else
                          true
 #endif
-                     );
+                     ,
+                     bool mode32 = false);
 
 } // namespace jit
 

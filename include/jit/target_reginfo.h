@@ -184,6 +184,55 @@ namespace jit {
         return t;
     }
 
+    /**
+     * @brief Construye el @c TargetRegInfo x86-32 (modo protegido, kernels).
+     *
+     * Solo 8 GP (eax=0..edi=7; no hay r8-r15) -> pointer_size=4.  Convencion
+     * REGPARM(3) (estilo GCC @c -mregparm=3): args enteros en EAX, EDX, ECX;
+     * retorno en EAX; callee-saved EBX, ESI, EDI, EBP.  Se elige regparm (no
+     * cdecl con args en pila) para reusar el modelo de @c arg_regs del selector
+     * HOST_LEAF sin implementar paso por pila -> cubre kernel freestanding con
+     * funciones leaf + llamadas internas (las externas/BIOS van por asm).
+     *
+     * ESP/EBP reservados (frame).  ESI/EDI reservados como SCRATCH del rewrite
+     * (materializar spills + two-address).  Asignables: EAX ECX EDX EBX (4).
+     * FP (XMM) vacio en v1: el subset 32-bit es entero (i32/u32/ptr32); las ops
+     * float no aparecen.
+     */
+    inline TargetRegInfo build_x86_32_target() {
+        TargetRegInfo t;
+        t.pointer_size  = 4;
+        t.is_two_address = true;
+
+        const size_t GP = static_cast<size_t>(RegClass::GP);
+        auto id = [](MReg r) { return reg_id(r); };
+
+        /* ESI/EDI = scratch del rewrite (no asignables). */
+        t.scratch[GP] = { id(MReg::RSI), id(MReg::RDI) };
+        /* Volatiles regparm: EAX ECX EDX. */
+        t.caller_saved[GP] = { id(MReg::RAX), id(MReg::RCX), id(MReg::RDX) };
+        /* No-volatiles asignables: EBX. */
+        t.callee_saved[GP] = { id(MReg::RBX) };
+        t.allocatable[GP] = t.caller_saved[GP];
+        t.allocatable[GP].insert(t.allocatable[GP].end(),
+                                 t.callee_saved[GP].begin(),
+                                 t.callee_saved[GP].end());
+        t.ret_reg[GP] = id(MReg::RAX);
+
+        /* FP vacio (sin float en v1). */
+        t.reserved = { id(MReg::RSP), id(MReg::RBP) };
+
+        /* regparm(3): EAX, EDX, ECX. */
+        t.arg_regs[GP] = { id(MReg::RAX), id(MReg::RDX), id(MReg::RCX) };
+        return t;
+    }
+
+    /** @brief @c TargetRegInfo x86-32 (cacheado). */
+    inline const TargetRegInfo &target_x86_32() {
+        static const TargetRegInfo info = build_x86_32_target();
+        return info;
+    }
+
     /** @brief @c TargetRegInfo x86-64 para el ABI @p sysv (cacheado por ABI). */
     inline const TargetRegInfo &target_x86_64_abi(bool sysv) {
         static const TargetRegInfo sysv_info = build_x86_64_target(true);

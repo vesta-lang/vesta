@@ -107,6 +107,9 @@ namespace jit {
      *                       (ELF/Linux), false = Win64 (PE/Windows).  Determina
      *                       arg_regs + caller/callee-saved -> permite cross-target
      *                       (generar ELF en Windows y PE en Linux).
+     * @param mode32         true = codegen x86-32 (modo protegido, kernels): 8 GP
+     *                       eax-edi, sin REX, operando 32-bit, regparm(3).  El
+     *                       subset es entero de 32-bit (i32/u32/ptr32).
      * @return Bytes nativos del cuerpo de @p fn (ABI HOST_LEAF), o vector vacio
      *         si la funcion no es del subset soportado por el selector vreg.
      */
@@ -123,7 +126,8 @@ namespace jit {
 #else
                                                  true
 #endif
-                                             );
+                                             ,
+                                             bool mode32 = false);
 
     /**
      * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

@@ -215,12 +215,15 @@ namespace jit {
                      const CallResolver &resolve_call, const VregEntries &ent,
                      const CallResolver &resolve_native,
                      const CallResolver &resolve_symbol, bool pic,
-                     bool target_sysv) {
+                     bool target_sysv, bool mode32) {
         /* HOST_LEAF (AOT): arg_regs del ABI del TARGET (SysV para ELF, Win64 para
          * PE), NO del host -> permite cross-target (ELF en Windows, PE en Linux).
-         * En VM_ABI (JIT en proceso) no se usa (el codigo VM usa el ABI host). */
+         * x86-32 (mode32): regparm(3) (EAX/EDX/ECX).  En VM_ABI (JIT en proceso)
+         * no se usa (el codigo VM usa el ABI host). */
+        const TargetRegInfo &tri_sel =
+            mode32 ? target_x86_32() : target_x86_64_abi(target_sysv);
         const size_t host_leaf_nmax =
-            target_x86_64_abi(target_sysv).arg_regs[static_cast<size_t>(RegClass::GP)].size();
+            tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
         out = MFunction{};
         out.name = fn.name;
         out.vreg_count = static_cast<uint32_t>(fn.values.size());
@@ -382,7 +385,7 @@ namespace jit {
              * arg_regs (en pila) no se soportan en v1. */
             if (!vm && b == 0 && !fn.params.empty()) {
                 const auto &areg =
-                    target_x86_64_abi(target_sysv).arg_regs[static_cast<size_t>(RegClass::GP)];
+                    tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)];
                 for (size_t i = 0; i < fn.params.size() && i < areg.size(); ++i)
                     O.push_back(MInstr::make_unary(MOp::MOV, vr(fn.params[i]),
                         MOperand::make_reg(static_cast<MReg>(areg[i]), 8)));
