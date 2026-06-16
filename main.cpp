@@ -300,6 +300,7 @@ int main(int argc, char *argv[]) {
             ("freestanding",      "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC requieren hooks @AllocatorOverride/@PanicHandler.")
             ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
                 cxxopts::value<std::string>())
+            ("no-pie",            "AOT: refs a datos absolutas (mov reg,imm64; requiere base de imagen fija) en vez de RIP-relativas (default, position-independent), analogo a gcc/clang -no-pie.")
             ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
                 cxxopts::value<std::string>()->default_value("0x0"))
             // Phase M.sandbox: restringe las capabilities del modulo
@@ -1636,16 +1637,16 @@ int main(int argc, char *argv[]) {
                 (aot_tier == aot::Tier::BARE) ? "bare" :
                 (aot_tier == aot::Tier::EMBED) ? "embed" : "full";
 
-            if (cr.ir_section_bytes.empty()) {
-                std::cerr << "[aot] el modulo no produjo IR (seccion @ir vacia); "
-                             "nada que compilar a nativo.\n";
+            if (cr.ir_module_cache_bytes.empty()) {
+                std::cerr << "[aot] el modulo no produjo IR; nada que compilar a "
+                             "nativo.\n";
                 return EXIT_FAILURE;
             }
 
+            // Modulo COMPLETO (functions + static_data + globals): el codegen AOT
+            // necesita el static_data para materializar los literales en .rodata.
             ir::IrModule aot_mod;
-            if (!ir::parse_ir_section(cr.ir_section_bytes, 0,
-                                      cr.ir_section_bytes.size(),
-                                      aot_mod.functions)) {
+            if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, aot_mod)) {
                 std::cerr << "[aot] no se pudo deserializar el IR del modulo.\n";
                 return EXIT_FAILURE;
             }
@@ -1694,6 +1695,10 @@ int main(int argc, char *argv[]) {
                     return EXIT_FAILURE;
                 }
             }
+
+            // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
+            // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
+            const bool aot_pic = (result.count("no-pie") == 0);
 
             const ir::IrFunction *main_fn = nullptr;
             for (const auto &fn : aot_mod.functions)
@@ -1758,7 +1763,7 @@ int main(int argc, char *argv[]) {
                 AotFn af;
                 af.name  = nm;
                 af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
-                                                    &af.relocs);
+                                                    &af.relocs, aot_pic);
                 if (af.bytes.empty()) {
                     std::cerr << "[aot] el selector vreg no soporta la funcion '"
                               << nm << "' todavia (op fuera del subset nativo).\n";
@@ -1795,7 +1800,16 @@ int main(int argc, char *argv[]) {
             for (size_t ci = 0; ci < compiled.size(); ++ci)
                 if (compiled[ci].name != "main") place_fn(ci);
 
-            // Parchear relocations.  CALL_REL32: rel = callee - (site + 4).
+            // 1) CALL_REL32 (intra-.text, ambos extremos en .text): se parchean
+            //    INLINE en el buffer (offset-relativo, no necesita VA).  Las refs
+            //    a DATOS (.rodata) se difieren al writer (solo el writer conoce la
+            //    VA de .rodata tras el layout).  Recolectamos los sitios de datos.
+            struct DataRelocSite {
+                uint32_t site;        // offset absoluto en .text
+                uint32_t sd_index;    // indice de entry en static_data ("rodata.N")
+                jit::NativeReloc::Kind kind;
+            };
+            std::vector<DataRelocSite> data_sites;
             for (const AotFn &af : compiled) {
                 for (const jit::NativeReloc &r : af.relocs) {
                     const uint32_t site = af.text_off + r.offset;
@@ -1815,11 +1829,20 @@ int main(int argc, char *argv[]) {
                         text[site + 2] = static_cast<uint8_t>((u >> 16) & 0xFF);
                         text[site + 3] = static_cast<uint8_t>((u >> 24) & 0xFF);
                     } else {
-                        // ABS64 (refs a .rodata): hito siguiente.
-                        std::cerr << "[aot] reloc ABS64 a '" << r.symbol
-                                  << "' aun no soportada (datos en .rodata "
-                                     "pendiente).\n";
-                        return EXIT_FAILURE;
+                        // DATA_REL32 / ABS64: ref a .rodata "rodata.<N>".
+                        const std::string &s = r.symbol;
+                        const char *pfx = "rodata.";
+                        if (s.rfind(pfx, 0) != 0) {
+                            std::cerr << "[aot] reloc de dato con simbolo inesperado: '"
+                                      << s << "'.\n";
+                            return EXIT_FAILURE;
+                        }
+                        DataRelocSite d;
+                        d.site = site;
+                        d.sd_index = static_cast<uint32_t>(
+                            std::strtoul(s.c_str() + 7, nullptr, 10));
+                        d.kind = r.kind;
+                        data_sites.push_back(d);
                     }
                 }
             }
@@ -1827,6 +1850,28 @@ int main(int argc, char *argv[]) {
 
             aot::ObjectWriter w(fmt);
             const int tsec = w.add_text(std::move(text));  // crea .text + entry off 0
+
+            // .rodata = pool contiguo del static_data del modulo.  Cada entry N
+            // vive en static_data.entries[N].byte_offset.  Solo se anyade si hay
+            // refs a datos (ruteo por defecto: literales inmutables -> .rodata).
+            if (!data_sites.empty()) {
+                const auto &sd = aot_mod.static_data;
+                int rsec = w.add_rodata(std::vector<uint8_t>(
+                    sd.bytes.begin(), sd.bytes.end()));
+                for (const DataRelocSite &d : data_sites) {
+                    if (d.sd_index >= sd.size()) {
+                        std::cerr << "[aot] reloc a static_data fuera de rango: N="
+                                  << d.sd_index << ".\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t entry_off = sd.entries[d.sd_index].byte_offset;
+                    const aot::RelocKind k =
+                        (d.kind == jit::NativeReloc::Kind::DATA_REL32)
+                        ? aot::RelocKind::REL32 : aot::RelocKind::ABS64;
+                    w.add_reloc(tsec, d.site, aot::RelocTarget::addr(rsec, entry_off), k);
+                }
+            }
+
             if (stub.has_import_call) {
                 w.add_import_call(aot::ImportCall{
                     stub.import_dll, stub.import_func, tsec, stub.import_call_off});

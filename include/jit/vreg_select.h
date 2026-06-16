@@ -110,7 +110,8 @@ namespace jit {
                      const CallResolver &resolve_call = {},
                      const VregEntries &ent = {},
                      const CallResolver &resolve_native = {},
-                     const CallResolver &resolve_symbol = {});
+                     const CallResolver &resolve_symbol = {},
+                     bool pic = true);
 
 } // namespace jit
 

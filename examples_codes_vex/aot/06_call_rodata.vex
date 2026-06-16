@@ -1,0 +1,3 @@
+// CALL intra-modulo + dato .rodata cruzando la llamada: pick("VEX", 1) = 'E' = 69.
+i32 pick(char* s, i32 i) { return (i32) s[i]; }
+i32 main() { return pick("VEX", 1); }

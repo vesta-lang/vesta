@@ -100,9 +100,10 @@ namespace jit {
             case MOp::MOVQ_GP_XMM: case MOp::MOVQ_XMM_GP:
                 r.dst = R::DEF; r.src1 = R::USE; break;
 
-            /* AOT MOV_SYM: dst = &simbolo (def); src1 es el IMM32(sym_idx),
-             * no un vreg. */
+            /* AOT MOV_SYM / LEA_RIP_SYM: dst = &simbolo (def); src1 es el
+             * IMM32(sym_idx), no un vreg. */
             case MOp::MOV_SYM:
+            case MOp::LEA_RIP_SYM:
                 r.dst = R::DEF; break;
 
             /* Control de flujo / pseudo: sin operandos de registro vreg.

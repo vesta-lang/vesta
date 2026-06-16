@@ -20,3 +20,15 @@ Ejecutar -> el `return` de `main` es el codigo de salida del proceso:
 El codegen va por el path vreg en ABI HOST_LEAF (args en arg_regs, retorno en
 RAX, sin ProcessVM*); las CALL cross-funcion y los tail-call se resuelven con
 relocations rel32 parcheadas tras el layout de `.text`.
+
+## Referencias a datos (.rodata) -- Paso 2b/2a
+
+| Ejemplo            | exit-code | nota |
+|:-------------------|----------:|:-----|
+| 05_rodata.vex      | 67 ('C')  | `char* m="ABC"; m[2]` -> literal en `.rodata` |
+| 06_call_rodata.vex | 69 ('E')  | CALL + dato `.rodata` cruzando la llamada |
+
+Por defecto las refs a datos son **RIP-relativas** (position-independent, listo
+para PIE/.so). Con `--no-pie` se emiten **absolutas** (`mov reg,imm64`, requieren
+base de imagen fija; el emisor PE limpia DYNAMIC_BASE para fijarla), analogo a
+`gcc/clang -no-pie`.

@@ -76,6 +76,23 @@ namespace aot {
         ccfg.elf_stack_vaddr = cfg_.elf_stack_vaddr;
         ccfg.elf_stack_size  = cfg_.elf_stack_size;
 
+        // Relocations cross-seccion (refs a datos / simbolos de seccion).  El
+        // shim las resuelve tras el layout.
+        std::vector<AotReloc> crelocs(relocs_.size());
+        for (size_t i = 0; i < relocs_.size(); ++i) {
+            const AbsReloc &r = relocs_[i];
+            AotReloc &c = crelocs[i];
+            c.site_section   = r.site_section;
+            c.site_off       = r.site_off;
+            c.target_section = r.target.section;
+            c.target_off     = r.target.offset;
+            c.target_is_size = r.target.is_size ? 1 : 0;
+            c.kind           = static_cast<int>(r.kind);  // espejo de AOT_RELOC_*
+            c.addend         = r.addend;
+        }
+        const AotReloc *crel_ptr = crelocs.empty() ? nullptr : crelocs.data();
+        const int       crel_n   = static_cast<int>(crelocs.size());
+
         char errbuf[256] = {0};
         int ok = 0;
 
@@ -93,11 +110,13 @@ namespace aot {
                              entry_sec_, entry_off_,
                              cimps.empty() ? nullptr : cimps.data(),
                              static_cast<int>(cimps.size()),
+                             crel_ptr, crel_n,
                              errbuf, sizeof(errbuf));
         } else {
             ok = aot_emit_elf(path.c_str(), &ccfg,
                               csecs.data(), static_cast<int>(csecs.size()),
                               entry_sec_, entry_off_,
+                              crel_ptr, crel_n,
                               errbuf, sizeof(errbuf));
         }
 

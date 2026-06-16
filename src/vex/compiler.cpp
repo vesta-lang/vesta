@@ -345,6 +345,9 @@ namespace vex {
             ir::IrModule irmod_for_section = irmod;
             ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level));
             res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);
+            /* Phase AOT: modulo completo (functions + static_data + globals) para
+             * que el driver -m aot materialice los literales en .rodata. */
+            res.ir_module_cache_bytes = ir::emit_ir_module_cache(irmod_for_section);
         }
 
         ir::EmitResult eres = ir::ir_emit_module(irmod, emit_opts);

@@ -530,6 +530,24 @@ namespace jit {
                 put32(out, 0);  /* placeholder rel32 */
                 return true;
             }
+            case MOp::LEA_RIP_SYM: {
+                /* AOT: lea r64, [rip+disp32] -> direccion de un dato (.rodata)
+                 * position-independent.  REX.W + 8D + ModRM(mod=00,reg=dst,rm=101
+                 * = RIP) + disp32=0 (placeholder) + MReloc{DATA_REL32}.  El writer
+                 * resuelve disp32 = target_VA - (site_VA + 4) tras el layout. */
+                if (mi.dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
+                put8(out, rex_byte(true, mi.dst.reg, 0));  /* REX.W + REX.R si dst>=R8 */
+                put8(out, 0x8D);
+                put8(out, modrm(0, mi.dst.reg & 7, 5));    /* mod=00 rm=101 -> [rip+disp32] */
+                MReloc r;
+                r.kind     = MRelocKind::DATA_REL32;
+                r.patch_at = static_cast<uint32_t>(out.size());
+                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
+                r.addend   = 0;
+                fn.relocs.push_back(r);
+                put32(out, 0);  /* placeholder disp32 */
+                return true;
+            }
             case MOp::MOV_SYM: {
                 /* AOT: mov r64, &simbolo (.rodata).  REX.W + B8+rd + imm64=0
                  * (placeholder) + MReloc ABS64.  El driver escribe la VA

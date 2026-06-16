@@ -163,11 +163,88 @@ static void test_elf_exit42() {
     CHECK(found);
 }
 
+// =========================================================================
+//  Reloc REL32 cross-seccion: leer un byte de .rodata via lea RIP-relativo
+//  (Phase AOT.3 2a).  El exit-code = ese byte (42).  Valida add_reloc.
+// =========================================================================
+
+static void test_pe_rodata_reloc() {
+    std::printf("test_pe_rodata_reloc\n");
+    //   48 83 EC 28           sub rsp, 0x28
+    //   48 8D 0D <disp32>     lea rcx, [rip+disp32]   ; &rodata  (reloc @7)
+    //   0F B6 09              movzx ecx, byte [rcx]    ; ecx = rodata[0] = 42
+    //   FF 15 <disp32>        call [rip+ExitProcess]   ; (call @14)
+    //   CC
+    std::vector<uint8_t> code = {
+        0x48, 0x83, 0xEC, 0x28,
+        0x48, 0x8D, 0x0D, 0x00, 0x00, 0x00, 0x00,
+        0x0F, 0xB6, 0x09,
+        0xFF, 0x15, 0x00, 0x00, 0x00, 0x00,
+        0xCC
+    };
+    ObjectWriter w(ObjFormat::PE);
+    const int t = w.add_text(code);
+    const int rd = w.add_rodata(std::vector<uint8_t>{42});
+    w.add_reloc(t, 7, RelocTarget::addr(rd, 0), RelocKind::REL32);
+    w.add_import_call(ImportCall{"KERNEL32.dll", "ExitProcess", t, 14});
+
+    std::string err;
+    const std::string path = "rodata_pe.exe";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+    std::vector<uint8_t> pe = read_file(path);
+    CHECK(pe.size() > 0x200);
+    CHECK(pe.size() >= 2 && pe[0] == 'M' && pe[1] == 'Z');
+    // Tras la reloc, el disp32 del lea (@7) NO debe seguir en 0 (se parcheo).
+    bool patched = false;
+    for (size_t i = 0; i + 6 < pe.size(); ++i)
+        if (pe[i] == 0x48 && pe[i+1] == 0x8D && pe[i+2] == 0x0D &&
+            (pe[i+3] | pe[i+4] | pe[i+5] | pe[i+6]) != 0) { patched = true; break; }
+    CHECK(patched);
+}
+
+static void test_elf_rodata_reloc() {
+    std::printf("test_elf_rodata_reloc\n");
+    //   48 8D 3D <disp32>     lea rdi, [rip+disp32]   ; &rodata  (reloc @3)
+    //   0F B6 3F              movzx edi, byte [rdi]    ; edi = 42
+    //   B8 3C 00 00 00        mov eax, 60              ; sys_exit
+    //   0F 05                 syscall
+    std::vector<uint8_t> code = {
+        0x48, 0x8D, 0x3D, 0x00, 0x00, 0x00, 0x00,
+        0x0F, 0xB6, 0x3F,
+        0xB8, 0x3C, 0x00, 0x00, 0x00,
+        0x0F, 0x05
+    };
+    ObjectWriter w(ObjFormat::ELF);
+    const int t = w.add_text(code);
+    const int rd = w.add_rodata(std::vector<uint8_t>{42});
+    w.add_reloc(t, 3, RelocTarget::addr(rd, 0), RelocKind::REL32);
+
+    std::string err;
+    const std::string path = "rodata_elf.elf";
+    const bool ok = w.write(path, err);
+    if (!ok) std::printf("  write error: %s\n", err.c_str());
+    CHECK(ok);
+    std::vector<uint8_t> elf = read_file(path);
+    CHECK(elf.size() > 64);
+    CHECK(elf.size() >= 4 && elf[0] == 0x7F && elf[1] == 'E');
+    // el lea (48 8D 3D) debe tener disp32 != 0 tras la reloc.
+    bool patched = false;
+    for (size_t i = 0; i + 6 < elf.size(); ++i)
+        if (elf[i] == 0x48 && elf[i+1] == 0x8D && elf[i+2] == 0x3D &&
+            (elf[i+3] | elf[i+4] | elf[i+5] | elf[i+6]) != 0) { patched = true; break; }
+    CHECK(patched);
+}
+
 int main() {
     std::printf("=== test_object_writer (Phase AOT.4) ===\n");
     test_pe_exit42();
     test_elf_exit42();
+    test_pe_rodata_reloc();
+    test_elf_rodata_reloc();
     std::printf("\n%d checks, %d fallos\n", g_checks, g_fails);
-    std::printf("Ficheros: exit42_pe.exe (correr en host) / exit42_elf.elf\n");
+    std::printf("Ficheros: exit42_pe.exe / exit42_elf.elf / rodata_pe.exe / "
+                "rodata_elf.elf (correr para validar la reloc -> exit 42)\n");
     return g_fails == 0 ? 0 : 1;
 }

@@ -110,14 +110,15 @@ namespace jit {
                                              const VregEntries &ent,
                                              const CallResolver &resolve_native,
                                              const CallResolver &resolve_symbol,
-                                             std::vector<NativeReloc> *relocs_out) {
+                                             std::vector<NativeReloc> *relocs_out,
+                                             bool pic) {
         if (relocs_out) relocs_out->clear();
         /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
          *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
          *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
         MFunction mf;
         if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
-                         resolve_native, resolve_symbol))
+                         resolve_native, resolve_symbol, pic))
             return {};
 
         /* Reusamos el descriptor x86-64 de la VM_ABI: para HOST_LEAF solo
@@ -149,8 +150,11 @@ namespace jit {
             relocs_out->reserve(pf.relocs.size());
             for (const MReloc &r : pf.relocs) {
                 NativeReloc nr;
-                nr.kind = (r.kind == MRelocKind::CALL_REL32)
-                    ? NativeReloc::Kind::CALL_REL32 : NativeReloc::Kind::ABS64;
+                switch (r.kind) {
+                    case MRelocKind::CALL_REL32: nr.kind = NativeReloc::Kind::CALL_REL32; break;
+                    case MRelocKind::DATA_REL32: nr.kind = NativeReloc::Kind::DATA_REL32; break;
+                    case MRelocKind::ABS64:      nr.kind = NativeReloc::Kind::ABS64;      break;
+                }
                 nr.offset = r.patch_at;
                 nr.addend = r.addend;
                 nr.symbol = (r.sym_idx < pf.reloc_symbols.size())

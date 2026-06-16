@@ -214,7 +214,7 @@ namespace jit {
     bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                      const CallResolver &resolve_call, const VregEntries &ent,
                      const CallResolver &resolve_native,
-                     const CallResolver &resolve_symbol) {
+                     const CallResolver &resolve_symbol, bool pic) {
         out = MFunction{};
         out.name = fn.name;
         out.vreg_count = static_cast<uint32_t>(fn.values.size());
@@ -851,7 +851,11 @@ namespace jit {
                         }
                         const int  w   = ir_type_bytes(in.type);
                         const bool sgn = ir_type_signed(in.type);
-                        if (!fn.values[in.operands[0]].is_host_ptr) {
+                        /* AOT (HOST_LEAF): NO hay vm_mem -> toda direccion es host
+                         * (el str_lit_addr/.rodata, malloc, alloca son host_ptr
+                         * reales).  Solo el VM_ABI traduce vaddr -> host via
+                         * LOAD_VM; en bare emitimos LOAD host directo. */
+                        if (vm && !fn.values[in.operands[0]].is_host_ptr) {
                             /* vm_mem (vaddr): page-cache inline + fallback al
                              * runtime vrt_vm_read_u<w> (la direccion se hornea
                              * en imm64_pool; el rewrite expande POST-regalloc). */
@@ -896,7 +900,9 @@ namespace jit {
                             vreg_dbg(fn.name.c_str(), "store-float"); return false;
                         }
                         const int w = ir_type_bytes(in.type);
-                        if (!fn.values[in.operands[1]].is_host_ptr) {
+                        /* AOT (HOST_LEAF): toda direccion es host -> STORE directo
+                         * (ver nota en LOAD).  Solo VM_ABI usa STORE_VM. */
+                        if (vm && !fn.values[in.operands[1]].is_host_ptr) {
                             /* vm_mem (vaddr): page-cache inline + fallback al
                              * runtime vrt_vm_write_u<w>. */
                             uint64_t fn_addr = 0;
@@ -2104,6 +2110,23 @@ namespace jit {
                          * host-ness aqui: solo emitimos el inmediato. */
                         flush_pending();
                         if (in.dst == ir::IR_NO_VALUE) return false;
+                        /* AOT (HOST_LEAF): el literal vive en .rodata, NO en vm_mem.
+                         * Emitimos una referencia por NOMBRE ("rodata.<imm>") que el
+                         * driver resuelve contra el offset de la entry en el pool de
+                         * static_data, y el writer parchea tras el layout.  PIC
+                         * (default) -> lea [rip+disp32] (DATA_REL32, position-
+                         * independent); --no-pie -> mov reg,imm64 (ABS64).  El
+                         * resultado es un host_ptr real (los LOAD posteriores en
+                         * HOST_LEAF ya son host directos). */
+                        if (abi == AbiKind::HOST_LEAF) {
+                            const uint32_t sidx = out.intern_reloc_symbol(
+                                "rodata." + std::to_string(in.imm));
+                            if (pic)
+                                O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
+                            else
+                                O.push_back(MInstr::make_mov_sym(vr(in.dst), sidx));
+                            break;
+                        }
                         uint64_t addr = 0;
                         if (resolve_symbol)
                             addr = resolve_symbol("code.s_" + std::to_string(in.imm));

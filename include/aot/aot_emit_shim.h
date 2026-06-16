@@ -73,6 +73,35 @@ typedef struct {
     uint64_t    call_off;      /* offset del FF 15 dentro de esa seccion */
 } AotImport;
 
+/* -------------------------------------------------------------------------
+ *  Relocations cross-seccion (resueltas por el emisor TRAS el layout).
+ *  El emisor conoce VA + tamano de cada seccion cuando ya las coloco, asi
+ *  que es quien puede parchear refs a datos (.rodata), simbolos de seccion
+ *  (start/end/size), etc.  ARCH-agnostico: site + target + como escribir.
+ * ------------------------------------------------------------------------- */
+#define AOT_RELOC_REL32  0  /* *(int32*)site  = (target_value) - (site_va + 4) */
+#define AOT_RELOC_ABS64  1  /* *(uint64*)site = target_value (direccion absoluta) */
+#define AOT_RELOC_IMM32  2  /* *(uint32*)site = target_value (inmediato, e.g. SIZE) */
+#define AOT_RELOC_IMM64  3  /* *(uint64*)site = target_value */
+
+/**
+ * @brief Una relocation a resolver tras el layout.
+ *
+ * @c target_value = @c target_is_size ? tamano(@c target_section)
+ *                                     : VA(@c target_section) + @c target_off;
+ * luego se le suma @c addend.  Se escribe en @c secs[@c site_section] en
+ * @c site_off segun @c kind (rel32 PC-relativo, abs64, o inmediato).
+ */
+typedef struct {
+    int      site_section;    /* seccion donde parchear */
+    uint64_t site_off;        /* offset del campo a parchear dentro de la seccion */
+    int      target_section;  /* seccion objetivo */
+    uint64_t target_off;      /* offset dentro del target (si !target_is_size) */
+    int      target_is_size;  /* 1 => target_value = tamano de target_section */
+    int      kind;            /* AOT_RELOC_* */
+    int64_t  addend;          /* desplazamiento adicional */
+} AotReloc;
+
 /**
  * @brief Configuracion de layout / linker.  Campos en 0 => default del formato.
  *
@@ -111,6 +140,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs,
                 int entry_sec, uint64_t entry_off,
                 const AotImport *imps, int num_imps,
+                const AotReloc *relocs, int num_relocs,
                 char *err, size_t err_cap);
 
 /**
@@ -133,6 +163,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
 int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                  const AotSection *secs, int num_secs,
                  int entry_sec, uint64_t entry_off,
+                 const AotReloc *relocs, int num_relocs,
                  char *err, size_t err_cap);
 
 #ifdef __cplusplus
