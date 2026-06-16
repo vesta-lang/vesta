@@ -142,6 +142,7 @@ namespace vex {
             case TokenKind::KW_OVERRIDE:     return "override";
             case TokenKind::KW_MATCH:        return "match";
             case TokenKind::KW_CASE:         return "case";
+            case TokenKind::DOLLAR:          return "$";
             case TokenKind::PLUS:            return "+";
             case TokenKind::MINUS:           return "-";
             case TokenKind::STAR:            return "*";
@@ -1325,6 +1326,10 @@ namespace vex {
                 return emit(TokenKind::DOT, 1);
             case '?':  return emit(TokenKind::QUESTION,  1);
             case '@':  return emit(TokenKind::AT,        1);
+            // `$` suelto (fuera de `${...}`): operador de offset actual en los
+            // bloques `bytes` (NASM-style `times 510-($-$$)`).  `$$` = dos
+            // tokens DOLLAR adyacentes (el parser de bytes lo interpreta).
+            case '$':  return emit(TokenKind::DOLLAR,    1);
             default:
                 break;
         }

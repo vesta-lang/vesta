@@ -203,6 +203,7 @@ namespace vex {
         // Categoria 8: operadores y simbolos.
         // ---------------------------------------------------------------
         // Aritmeticos
+        DOLLAR,             ///< $  (offset actual; usado en `times` de bloques bytes)
         PLUS,               ///< +
         MINUS,              ///< -
         STAR,               ///< *
