@@ -7920,6 +7920,12 @@ namespace vex {
         // reordenarse por el optimizer del IR.
         ia.preserve    = true;
         fn_->append(current_block_, std::move(ia));
+
+        // Phase AS inc.6: registrar el import nativo del helper runner para que
+        // el linker resuelva el `calln @Method("vrt:inline_asm_exec")` que
+        // ir_emitter emite en el backend bytecode (interp puro, sin JIT).
+        // Idempotente (register_native_import dedup).
+        out_mod_->register_native_import("vrt", "inline_asm_exec");
     }
 
     // ---------------------------------------------------------------------

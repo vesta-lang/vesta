@@ -508,6 +508,14 @@ namespace runtime {
         tlb::LazyHybridTLB tlb{};           ///< TLB privado del proceso
         vm::VirtualMemory  vm_mem;           ///< Interfaz de memoria virtual (combina TLB + ArenaManager)
 
+        // --- Scratch para inline-asm en el interprete (Phase AS inc.6) ---
+        // Buffer host de 16 qwords que el helper @c vrt_inline_asm_exec usa
+        // como @c ctx[16] del trampolin (marshalling GP host <-> valores VM).
+        // Vive en el ProcessVM (host), no en vm_mem, porque el trampolin
+        // nativo lo dereferencia como puntero host crudo.  Sincronico y
+        // no-reentrante por proceso (cada bloque asm lo usa secuencialmente).
+        uint64_t asm_ctx[16] = {0};         ///< ctx[16] del trampolin de inline-asm
+
         // --- GC del proceso ---
         gc::GcHeap       gc_heap{manager_mem_priv, 2 * 1024 * 1024, 8 * 1024 * 1024}; ///< Heap del GC (min 2 MiB, max 8 MiB)
         gc::RawAllocator raw_alloc{};                                                   ///< Asignador raw sin GC

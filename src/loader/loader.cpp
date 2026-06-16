@@ -24,6 +24,7 @@
 #include "cli/sync_io.h"
 #include "jit/auto_jit.h"           // eager-compile main + jit_entry_fn
 #include "jit/jit_compiler.h"       // CompileResult forward decl ya en auto_jit.h
+#include "jit/inline_asm_trampoline.h" // inc.6: trampolines de inline-asm para interp
 
 /*
  *  Loader
@@ -567,6 +568,13 @@ namespace loader {
                 for (size_t i = 0; i < exe->ir_functions.size(); ++i) {
                     exe->ir_lookup[exe->ir_functions[i].name] = i;
                 }
+                /* Phase AS inc.6: ensamblar + registrar el trampoline de cada
+                 * bloque inline-asm (indexado por hash del NASM).  Permite que
+                 * el interprete (modo -m vm, SIN JIT) ejecute inline-asm via el
+                 * helper vrt:inline_asm_exec.  Usa solo el ENSAMBLADOR
+                 * (g_asm_backend), no el compilador JIT. */
+                jit::build_and_register_inline_asm_trampolines(
+                    exe->ir_functions);
             }
             /* Si !ok, ignoramos silenciosamente (graceful degradation).
              * El bytecode sigue siendo ejecutable via interp. */
