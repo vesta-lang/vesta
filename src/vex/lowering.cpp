@@ -598,21 +598,81 @@ namespace vex {
         for (auto &decl : mod_.decls) {
             if (!decl || decl->kind != ast::NodeKind::BytesDecl) continue;
             auto *bd = static_cast<ast::BytesDecl *>(decl.get());
-            std::vector<uint8_t> bytes = bd->data;  // copia: el AST sobrevive
-            const size_t idx = out_module.static_data.push_back(std::move(bytes));
+
+            // Reconstruir el blob resolviendo los operandos identificador.  Un
+            // identificador puede ser:
+            //   (a) comptime const entero -> literal del ancho de la directiva.
+            //   (b) comptime array        -> sus elementos (cada uno del ancho).
+            //   (c) simbolo de funcion     -> reloc ABS64 (requiere dq=8).
+            // Los sym_refs vienen en orden de offset creciente (el parser los
+            // anyade segun avanza); reconstruimos de izquierda a derecha.
+            const auto &ccv = tc_.comptime_const_values();
+            std::vector<uint8_t> rebuilt;
+            std::vector<ir::IrModule::StaticDataMeta::SymRef> kept;
+            rebuilt.reserve(bd->data.size());
+            size_t cursor = 0;
+            bool ok = true;
+            for (const auto &sr : bd->sym_refs) {
+                if (sr.offset > bd->data.size()) { ok = false; break; }
+                // Bytes literales que preceden a este operando.
+                rebuilt.insert(rebuilt.end(),
+                               bd->data.begin() + cursor,
+                               bd->data.begin() + sr.offset);
+                auto cit = ccv.find(sr.sym);
+                if (cit != ccv.end()) {
+                    const auto &cc = cit->second;
+                    if (cc.is_str || cc.is_struct || cc.is_type) {
+                        diags_.error(bd->loc, "bytes: comptime '" + sr.sym +
+                            "' no es entero ni array; no es embebible");
+                        ok = false; break;
+                    }
+                    if (cc.is_array) {
+                        for (const auto &ev : cc.array_vals) {
+                            if (!ev || ev->is_str || ev->is_array || ev->is_struct) {
+                                diags_.error(bd->loc, "bytes: el array comptime '" +
+                                    sr.sym + "' tiene elementos no enteros");
+                                ok = false; break;
+                            }
+                            const uint64_t v = (uint64_t)ev->value;
+                            for (int i = 0; i < sr.width; ++i)
+                                rebuilt.push_back((uint8_t)(v >> (8 * i)));
+                        }
+                        if (!ok) break;
+                    } else {
+                        const uint64_t v = (uint64_t)cc.value;
+                        for (int i = 0; i < sr.width; ++i)
+                            rebuilt.push_back((uint8_t)(v >> (8 * i)));
+                    }
+                } else {
+                    // Simbolo de funcion -> reloc absoluta de 64 bits.
+                    if (sr.width != 8) {
+                        diags_.error(bd->loc, "bytes: la referencia a la funcion '" +
+                            sr.sym + "' requiere 'dq' (direccion de 64 bits)");
+                        ok = false; break;
+                    }
+                    ir::IrModule::StaticDataMeta::SymRef d;
+                    d.offset = (uint32_t)rebuilt.size();   // offset en el blob nuevo
+                    d.sym = sr.sym; d.width = 8; d.is_rel = sr.is_rel ? 1 : 0;
+                    kept.push_back(std::move(d));
+                    for (int i = 0; i < 8; ++i) rebuilt.push_back(0);  // placeholder
+                }
+                cursor = (size_t)sr.offset + sr.width;  // saltar el placeholder original
+            }
+            if (!ok) continue;  // error ya emitido; saltar este bloque
+            // Resto de bytes literales tras el ultimo operando.
+            if (cursor <= bd->data.size())
+                rebuilt.insert(rebuilt.end(),
+                               bd->data.begin() + cursor, bd->data.end());
+
+            const size_t idx = out_module.static_data.push_back(std::move(rebuilt));
             auto &m = out_module.static_data.meta_at(idx);
             m.section_name  = bd->attr_section.empty() ? ".rodata" : bd->attr_section;
             m.section_perms = bd->attr_section_perms;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
                      | ir::IrModule::SD_FLAG_NON_DEDUP;
-            // Referencias a simbolos (`dq main`): el emisor AOT las traduce a
-            // relocs (la direccion real se escribe sobre el placeholder).
-            for (const auto &sr : bd->sym_refs) {
-                ir::IrModule::StaticDataMeta::SymRef d;
-                d.offset = sr.offset; d.sym = sr.sym;
-                d.width = sr.width;   d.is_rel = sr.is_rel ? 1 : 0;
-                m.sym_refs.push_back(std::move(d));
-            }
+            // Solo las refs de funcion sobreviven como relocs (las comptime
+            // consts ya se materializaron como bytes).
+            m.sym_refs = std::move(kept);
         }
 
         return diags_.error_count() == initial_errors;
