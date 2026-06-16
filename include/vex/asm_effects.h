@@ -48,6 +48,26 @@ namespace vex {
     std::string asm_canonical_reg(const std::string &raw);
 
     /**
+     * @brief Normaliza los literales numericos de un cuerpo NASM Intel a hex
+     *        explicito (@c 0x...), detectando la base de entrada.
+     *
+     * El ensamblador (Keystone) interpreta los enteros BARE como HEX (no
+     * decimal); para que @c shl rdx, 32 signifique 32 (no 0x32) y para soportar
+     * binario/octal, reescribimos cada literal a @c 0x<hex>:
+     *   - @c 0x.. / @c 0X..  -> hexadecimal
+     *   - @c 0b.. / @c 0B..  -> binario
+     *   - @c 0o.. / @c 0O..  -> octal
+     *   - resto              -> DECIMAL (convencion NASM)
+     * Permite @c _ como separador de digitos.  NO toca identificadores ni
+     * nombres de registro (r8/r15/xmm0): un literal es un digito cuyo char
+     * previo no es parte de un identificador.
+     *
+     * @param body Cuerpo NASM Intel.
+     * @return Cuerpo con todos los literales en @c 0x<hex>.
+     */
+    std::string asm_normalize_numbers(const std::string &body);
+
+    /**
      * @brief Efectos de un mnemonico x86-64 sobre registros/memoria/flags.
      *
      * Los registros van en forma CANONICA (rax..r15, vN).  @c known=false

@@ -22,12 +22,72 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace vex {
+
+    std::string asm_normalize_numbers(const std::string &body) {
+        std::string out;
+        out.reserve(body.size());
+        const size_t n = body.size();
+        auto is_id = [](char c) {
+            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9') || c == '_';
+        };
+        size_t i = 0;
+        while (i < n) {
+            const char c = body[i];
+            /* Identificador (incl. registros r8/r15/xmm0): copiar el token
+             * entero -> sus digitos NO son un literal numerico. */
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_') {
+                size_t j = i;
+                while (j < n && is_id(body[j])) ++j;
+                out.append(body, i, j - i);
+                i = j;
+                continue;
+            }
+            /* Literal numerico: empieza por digito (char previo no-identificador). */
+            if (c >= '0' && c <= '9') {
+                int base = 10;
+                size_t j = i;
+                if (c == '0' && i + 1 < n) {
+                    const char p = body[i + 1];
+                    if (p == 'x' || p == 'X') { base = 16; j = i + 2; }
+                    else if (p == 'b' || p == 'B') { base = 2; j = i + 2; }
+                    else if (p == 'o' || p == 'O') { base = 8; j = i + 2; }
+                }
+                unsigned long long val = 0;
+                bool any = false;
+                while (j < n) {
+                    const char d = body[j];
+                    int dv;
+                    if (d == '_') { ++j; continue; }   // separador de digitos
+                    if (d >= '0' && d <= '9') dv = d - '0';
+                    else if (d >= 'a' && d <= 'f') dv = d - 'a' + 10;
+                    else if (d >= 'A' && d <= 'F') dv = d - 'A' + 10;
+                    else break;
+                    if (dv >= base) break;
+                    val = val * static_cast<unsigned long long>(base)
+                        + static_cast<unsigned long long>(dv);
+                    any = true;
+                    ++j;
+                }
+                if (!any) { out.push_back(c); ++i; continue; }  // "0" suelto
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "0x%llx", val);
+                out += buf;
+                i = j;
+                continue;
+            }
+            out.push_back(c);
+            ++i;
+        }
+        return out;
+    }
 
     std::string asm_canonical_reg(const std::string &raw) {
         std::string r;
