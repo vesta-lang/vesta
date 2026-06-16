@@ -3229,11 +3229,16 @@ namespace vex {
                         break;
                     }
                 }
-                // Phase AOT.2.b: POO nativa -> liberar la instancia (calloc)
-                // al exit del scope via RAW_FREE (RAII; sin GC, sin leak).
-                // El dispatch del destructor via vtable es nativo en 2.c; por
-                // ahora la clase nativa libera memoria (no invoca ~T()).
-                if (native_poo_) {
+                // Phase AOT.2.b/c: POO nativa -> liberar la instancia HEAP
+                // (calloc, via `= new`) al exit del scope via RAW_FREE (RAII;
+                // sin GC, sin leak).  Una instancia STACK (`Rect r;` -> alloca)
+                // NO se libera (la pila se reclama sola; free de un ptr de pila
+                // seria un dangling/crash).  El dispatch del destructor via
+                // vtable es nativo en el siguiente slice; por ahora libera
+                // memoria (no invoca ~T()).
+                const bool is_heap_new =
+                    vd->init && vd->init->kind == ast::NodeKind::NewExpr;
+                if (native_poo_ && is_heap_new) {
                     CleanupAction act;
                     act.kind          = CleanupAction::Kind::NATIVE_FREE;
                     act.operands      = {v};
@@ -20240,6 +20245,41 @@ namespace vex {
             if (!spec_cands.empty())
                 fn_->spec_devirt_sites[dst] = std::move(spec_cands);
             return visible_dst;
+        }
+
+        // Phase AOT.2.c: POO nativa -- DEVIRT MONOMORFICA.  Si la clase
+        // receptora estatica es HOJA (ninguna otra clase la extiende), el tipo
+        // dinamico == el estatico, por lo que la llamada NO puede resolver a un
+        // override de subclase -> emitimos un CALL DIRECTO a <owner>__<metodo>
+        // (cero overhead, igual que C++ con tipo final).  El dispatch virtual
+        // real (vtable) para clases base con subclases llega en el siguiente
+        // slice de 2.c.  Mismo orden de operandos que el CALLVIRT (obj, retbuf
+        // SRET, args).
+        if (native_poo_) {
+            bool is_leaf = true;
+            for (const auto &kv : tc_.class_layouts())
+                if (kv.second.super_name == bt.struct_name) { is_leaf = false; break; }
+            if (is_leaf) {
+                const std::string owner = mtd->defining_class.empty()
+                                            ? bt.struct_name : mtd->defining_class;
+                ir::IrInstr dc{};
+                dc.op   = ir::IrOp::CALL;
+                dc.type = ret_ir;
+                dc.dst  = dst;
+                dc.func_name = owner + "__" + mtd->name;
+                dc.operands.push_back(obj);
+                if (method_call_sret)
+                    dc.operands.push_back(v_method_call_retbuf);
+                for (auto av: arg_vals) dc.operands.push_back(av);
+                dc.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(dc));
+                if (dst != ir::IR_NO_VALUE
+                    && mtd->return_type.kind == PrimitiveKind::CLASS) {
+                    fn_->values[dst].is_host_ptr  = true;
+                    fn_->values[dst].is_gc_object = true;
+                }
+                return visible_dst;
+            }
         }
 
         // Path por defecto: dispatch via vtable_idx (clase concreta).
