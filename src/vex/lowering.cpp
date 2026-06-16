@@ -18358,7 +18358,8 @@ namespace vex {
                 // (tiene super o es extendida) -> dispatch virtual nativo.  La
                 // vtable = blob en .rodata con sym_refs a <owner>__<metodo> por
                 // vtable_index (mismo mecanismo que `dq func` del bloque bytes).
-                bool needs_vtable = !lay.super_name.empty();
+                bool needs_vtable = !lay.super_name.empty()
+                                 || !lay.interface_names.empty();
                 if (!needs_vtable)
                     for (const auto &kv : tc_.class_layouts())
                         if (kv.second.super_name == cd->name) { needs_vtable = true; break; }
@@ -20035,7 +20036,7 @@ namespace vex {
         // su SSA value viene directamente de un @c new ConcreteClass()
         // (caso comun: @c IServicio s = new ImplA();).
         // -----------------------------------------------------------------
-        if (lay.is_interface) {
+        if (lay.is_interface && !native_poo_) {
             auto it_conc = ssa_concrete_class_.find(obj);
             if (it_conc != ssa_concrete_class_.end()) {
                 const std::string &concrete_name = it_conc->second;
@@ -20066,6 +20067,49 @@ namespace vex {
                     }
                 }
             }
+        }
+        // AOT.2.c: dispatch de INTERFAZ polimorfico nativo via la vtable del
+        // objeto (obj[0]).  El metodo de interfaz esta en el slot
+        // mtd->vtable_index (posicion en la interfaz); los implementadores
+        // colocan los metodos de interfaz en esos mismos slots de su vtable
+        // (verificado por ejecucion).  Misma secuencia que CALLVIRT: LOAD
+        // vtable; LOAD fn[idx]; CALLIND.
+        if (lay.is_interface && native_poo_) {
+            fn_->values[obj].is_host_ptr = true;
+            const uint32_t idx = mtd->vtable_index;
+            ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_vt].is_host_ptr = true;
+            { ir::IrInstr ld{}; ld.op=ir::IrOp::LOAD; ld.type=ir::IrType::I64;
+              ld.dst=v_vt; ld.operands={obj}; ld.source_line=e->loc.line;
+              fn_->append(current_block_, std::move(ld)); }
+            ir::IrValueId v_slot = v_vt;
+            if (idx != 0) {
+                const ir::IrValueId v_off = emit_const(ir::IrType::I64,
+                    static_cast<uint64_t>(idx) * 8u, e->loc.line);
+                v_slot = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_slot].is_host_ptr = true;
+                { ir::IrInstr ad{}; ad.op=ir::IrOp::ADD; ad.type=ir::IrType::PTR;
+                  ad.dst=v_slot; ad.operands={v_vt, v_off}; ad.source_line=e->loc.line;
+                  fn_->append(current_block_, std::move(ad)); }
+            }
+            ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_fn].is_host_ptr = true;
+            { ir::IrInstr ld2{}; ld2.op=ir::IrOp::LOAD; ld2.type=ir::IrType::I64;
+              ld2.dst=v_fn; ld2.operands={v_slot}; ld2.source_line=e->loc.line;
+              fn_->append(current_block_, std::move(ld2)); }
+            ir::IrInstr ci{}; ci.op=ir::IrOp::CALLIND; ci.type=ret_ir; ci.dst=dst;
+            ci.func_ptr=v_fn;
+            ci.operands.push_back(obj);
+            if (method_call_sret) ci.operands.push_back(v_method_call_retbuf);
+            for (auto av: arg_vals) ci.operands.push_back(av);
+            ci.source_line=e->loc.line;
+            fn_->append(current_block_, std::move(ci));
+            if (dst != ir::IR_NO_VALUE
+                && mtd->return_type.kind == PrimitiveKind::CLASS) {
+                fn_->values[dst].is_host_ptr  = true;
+                fn_->values[dst].is_gc_object = true;
+            }
+            return visible_dst;
         }
         if (lay.is_interface) {
             // Marcar obj como host_ptr (instancia GC-derivada).
