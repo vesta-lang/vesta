@@ -91,6 +91,8 @@ namespace aot {
         uint32_t             bss_size = 0;///< tamano BSS si SecFlag::BSS.
         uint64_t             vaddr = 0;   ///< VA fija (0 = auto).
         uint64_t             align = 0;   ///< alineamiento (0 = default).
+        int64_t              at    = -1;          ///< @at(N): offset fijo en .bin; -1 = auto.
+        int32_t              order = 0x7fffffff;  ///< @order(N): orden de seccion (.bin); max = creacion.
     };
 
     /**

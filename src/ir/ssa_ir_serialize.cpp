@@ -391,6 +391,9 @@ namespace ir {
         // AOT 2b: seccion de salida del codigo + permisos (dev OS).
         write_str(out, fn.section);
         write_str(out, fn.section_perms);
+        // AOT: ubicacion fija (@at) + orden (@order) de la seccion.
+        write_u64(out, (uint64_t)fn.section_at);
+        write_u32(out, (uint32_t)fn.section_order);
 
         return out.size() - start;
     }
@@ -492,6 +495,12 @@ namespace ir {
         // AOT 2b: seccion de salida del codigo + permisos.
         if (!read_str(in, off, out.section))        return false;
         if (!read_str(in, off, out.section_perms))  return false;
+        // AOT: ubicacion fija (@at) + orden (@order).
+        uint64_t at_u = 0; uint32_t ord_u = 0;
+        if (!read_u64(in, off, at_u))  return false;
+        if (!read_u32(in, off, ord_u)) return false;
+        out.section_at    = (int64_t)at_u;
+        out.section_order = (int32_t)ord_u;
         return true;
     }
 
@@ -646,6 +655,8 @@ namespace ir {
             write_u16(out, e.meta.source_module_idx);
             write_str(out, e.meta.section_name);
             write_str(out, e.meta.section_perms);  // AOT 2b
+            write_u64(out, (uint64_t)e.meta.section_at);     // AOT @at
+            write_u32(out, (uint32_t)e.meta.section_order);  // AOT @order
             // AOT Inc 3: referencias a simbolos en bloques `bytes` (dq main).
             write_u32(out, static_cast<uint32_t>(e.meta.sym_refs.size()));
             for (const auto &sr : e.meta.sym_refs) {
@@ -682,6 +693,11 @@ namespace ir {
             if (!read_u16(in, off, e.meta.source_module_idx)) return false;
             if (!read_str(in, off, e.meta.section_name)) return false;
             if (!read_str(in, off, e.meta.section_perms)) return false;  // AOT 2b
+            uint64_t sat_u = 0; uint32_t sord_u = 0;
+            if (!read_u64(in, off, sat_u))  return false;   // AOT @at
+            if (!read_u32(in, off, sord_u)) return false;   // AOT @order
+            e.meta.section_at    = (int64_t)sat_u;
+            e.meta.section_order = (int32_t)sord_u;
             // AOT Inc 3: referencias a simbolos.
             uint32_t nrefs = 0;
             if (!read_u32(in, off, nrefs)) return false;

@@ -58,6 +58,8 @@ typedef struct {
     uint32_t       bss_size;   /* tamano BSS si AOT_SEC_BSS */
     uint64_t       vaddr;      /* VA fija (0 = auto) */
     uint64_t       align;      /* alineamiento (0 = default del formato) */
+    int64_t        at;         /* @at(N): offset fijo en .bin (-1 = auto) */
+    int32_t        order;      /* @order(N): orden de seccion en .bin (max = creacion) */
 } AotSection;
 
 /**

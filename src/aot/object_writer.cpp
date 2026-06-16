@@ -62,6 +62,8 @@ namespace aot {
             c.bss_size = w.bss_size;
             c.vaddr    = w.vaddr;
             c.align    = w.align;
+            c.at       = w.at;
+            c.order    = w.order;
         }
 
         AotLayoutCfg ccfg;

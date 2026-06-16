@@ -1339,6 +1339,8 @@ namespace vex::ast {
         /// nombre).  Solo lo consume el codegen AOT.
         std::string                              attr_section;
         std::string                              attr_section_perms;
+        int64_t                                  attr_at    = -1;          ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
+        int32_t                                  attr_order = 0x7fffffff;  ///< @order(N): orden de seccion; max = creacion
         FunctionDecl() : Node(NodeKind::FunctionDecl) {}
     };
 
@@ -1423,6 +1425,8 @@ namespace vex::ast {
         std::string               name;
         std::string               attr_section;        ///< @section (vacio = .rodata)
         std::string               attr_section_perms;
+        int64_t                   attr_at    = -1;          ///< @at(N): offset fijo (AOT .bin); -1 = auto
+        int32_t                   attr_order = 0x7fffffff;  ///< @order(N): orden de seccion; max = creacion
         bool                      is_public = true;
         std::vector<uint8_t>      data;        ///< bytes resueltos (placeholder 0 en sym refs)
         std::vector<BytesSymRef>  sym_refs;    ///< refs a simbolos (vacio en v1 literales)

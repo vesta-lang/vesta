@@ -668,6 +668,8 @@ namespace vex {
             auto &m = out_module.static_data.meta_at(idx);
             m.section_name  = bd->attr_section.empty() ? ".rodata" : bd->attr_section;
             m.section_perms = bd->attr_section_perms;
+            m.section_at    = bd->attr_at;
+            m.section_order = bd->attr_order;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
                      | ir::IrModule::SD_FLAG_NON_DEDUP;
             // Solo las refs de funcion sobreviven como relocs (las comptime
@@ -1310,6 +1312,8 @@ namespace vex {
         // pura para el codegen AOT; el interp/JIT la ignoran.
         fn.section       = fd->attr_section;
         fn.section_perms = fd->attr_section_perms;
+        fn.section_at    = fd->attr_at;
+        fn.section_order = fd->attr_order;
 
         // Tipo de retorno.  Aceptamos tipos primitivos directamente o
         // pasamos por resolve_type_node para PointerTypeNode/ArrayTypeNode

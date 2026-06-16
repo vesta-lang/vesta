@@ -1047,23 +1047,79 @@ int aot_emit_flat_bin(const char *path, uint64_t base,
                       char *err, size_t err_cap) {
     if (num_secs <= 0) { set_err(err, err_cap, "aot_emit_flat_bin: sin secciones"); return 0; }
 
-    /* Offset en la imagen de cada seccion (tras el alineamiento). */
+    /* Offset en la imagen de cada seccion (tras la colocacion). */
     uint64_t *sec_off = (uint64_t *)calloc((size_t)num_secs, sizeof(uint64_t));
-    if (!sec_off) { set_err(err, err_cap, "aot_emit_flat_bin: OOM"); return 0; }
-
+    int      *flow    = (int *)malloc((size_t)num_secs * sizeof(int));
+    int      *fixd    = (int *)malloc((size_t)num_secs * sizeof(int));
+    if (!sec_off || !flow || !fixd) {
+        set_err(err, err_cap, "aot_emit_flat_bin: OOM");
+        free(sec_off); free(flow); free(fixd); return 0;
+    }
     OBuf out; out.p = NULL; out.len = 0; out.cap = 0;
 
-    /* Layout denso: cada seccion alineada a max(align,1); BSS se materializa
-     * como ceros (imagen autocontenida).  El offset 0 = punto de entrada. */
+    /* Particionar: FLUYENTES (at<0, se colocan secuencialmente por @order) y
+     * FIJAS (at>=0, ancladas a su offset).  El offset 0 = punto de entrada. */
+    int nflow = 0, nfixd = 0;
     for (int i = 0; i < num_secs; ++i) {
-        size_t a = secs[i].align ? (size_t)secs[i].align : 1u;
-        if (!ob_align(&out, a)) { set_err(err, err_cap, "aot_emit_flat_bin: OOM align"); goto fail; }
-        sec_off[i] = (uint64_t)out.len;
-        uint64_t sz = aot_sec_size(&secs[i]);
-        if (secs[i].flags & AOT_SEC_BSS) {
-            if (!ob_put(&out, NULL, (size_t)sz)) { set_err(err, err_cap, "aot_emit_flat_bin: OOM bss"); goto fail; }
-        } else if (sz) {
-            if (!ob_put(&out, secs[i].data, (size_t)sz)) { set_err(err, err_cap, "aot_emit_flat_bin: OOM data"); goto fail; }
+        if (secs[i].at >= 0) fixd[nfixd++] = i; else flow[nflow++] = i;
+    }
+    /* Orden estable de las FLUYENTES por (order asc, indice asc) -- insertion
+     * sort (N de secciones es pequeno). */
+    for (int a = 1; a < nflow; ++a) {
+        int key = flow[a]; int b = a - 1;
+        while (b >= 0 && secs[flow[b]].order > secs[key].order) { flow[b+1] = flow[b]; --b; }
+        flow[b+1] = key;
+    }
+    /* FIJAS por @at ascendente. */
+    for (int a = 1; a < nfixd; ++a) {
+        int key = fixd[a]; int b = a - 1;
+        while (b >= 0 && secs[fixd[b]].at > secs[key].at) { fixd[b+1] = fixd[b]; --b; }
+        fixd[b+1] = key;
+    }
+
+    /* Merge greedy: coloca FLUYENTES secuencialmente hasta que la siguiente no
+     * cabe antes del proximo ancla FIJO; entonces rellena con ceros hasta el
+     * ancla y coloca la seccion FIJA.  Reporta solapes. */
+    {
+        uint64_t cursor = 0;
+        int qi = 0, fi = 0;
+        while (qi < nflow || fi < nfixd) {
+            int take_fixed = 0;
+            uint64_t aligned = cursor;
+            if (qi < nflow) {
+                size_t al = secs[flow[qi]].align ? (size_t)secs[flow[qi]].align : 1u;
+                while (aligned % al) ++aligned;
+            }
+            if (fi < nfixd) {
+                uint64_t fa = (uint64_t)secs[fixd[fi]].at;
+                if (qi >= nflow) take_fixed = 1;
+                else if (aligned + aot_sec_size(&secs[flow[qi]]) > fa) take_fixed = 1;
+            }
+            if (take_fixed) {
+                uint64_t fa = (uint64_t)secs[fixd[fi]].at;
+                if (cursor > fa) {
+                    set_err(err, err_cap, "aot_emit_flat_bin: solape -- una seccion @at se "
+                                          "superpone con datos previos");
+                    goto fail;
+                }
+                sec_off[fixd[fi]] = fa;
+                cursor = fa + aot_sec_size(&secs[fixd[fi]]);
+                ++fi;
+            } else {
+                sec_off[flow[qi]] = aligned;
+                cursor = aligned + aot_sec_size(&secs[flow[qi]]);
+                ++qi;
+            }
+        }
+        /* Construir la imagen (ceros) del tamano total y volcar cada seccion. */
+        if (!ob_put(&out, NULL, (size_t)cursor)) {
+            set_err(err, err_cap, "aot_emit_flat_bin: OOM imagen"); goto fail;
+        }
+        for (int i = 0; i < num_secs; ++i) {
+            if (secs[i].flags & AOT_SEC_BSS) continue;  /* ya es cero */
+            uint64_t sz = aot_sec_size(&secs[i]);
+            if (sz && secs[i].data)
+                memcpy(out.p + sec_off[i], secs[i].data, (size_t)sz);
         }
     }
 
@@ -1105,10 +1161,10 @@ int aot_emit_flat_bin(const char *path, uint64_t base,
         if (w != out.len) { set_err(err, err_cap, "aot_emit_flat_bin: fwrite incompleto"); goto fail; }
     }
 
-    free(sec_off); free(out.p);
+    free(sec_off); free(flow); free(fixd); free(out.p);
     return 1;
 
 fail:
-    free(sec_off); free(out.p);
+    free(sec_off); free(flow); free(fixd); free(out.p);
     return 0;
 }
