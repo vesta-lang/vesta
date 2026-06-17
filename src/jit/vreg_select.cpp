@@ -703,28 +703,30 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* FNEG / FABS: manipulan el bit de signo via una mascara XOR/AND
-             * en XMM.  La mascara se construye en un GP temp y se mueve a un
-             * XMM temp (MOVQ_GP_XMM); luego XORPS (neg = flip bit signo) o
-             * ANDPS (abs = clear bit signo).  f64: bit 63 (0x8000...0000);
-             * f32: bit 31 (0x80000000).  ANDPS aun no esta en el set ->
-             * FABS via "neg si negativo": usamos XORPS para FNEG; FABS via
-             * AND con ~signbit -> reusa XORPS sobre el complemento.  Para v1
-             * implementamos FNEG (XORPS mask) y FABS (AND mask) ambos con la
-             * misma maquinaria, emitiendo XORPS para neg y un AND empaquetado
-             * para abs.  ANDPS pendiente -> FABS cae a fallback por ahora. */
-            case ir::IrOp::FNEG: {
+            /* FNEG / FABS: manipulan el bit de signo via una mascara en XMM.
+             * La mascara se construye en un GP temp y se mueve a un XMM temp
+             * (MOVQ_GP_XMM); luego XORPS (neg = flip bit signo, mascara =
+             * signbit) o ANDPS (abs = clear bit signo, mascara = ~signbit).
+             * f64: bit 63 (0x8000...0000); f32: bit 31 (0x80000000).  Ambos
+             * comparten la misma maquinaria (3-op pre-legalizado por el
+             * rewrite), cambiando solo la mascara y la op packed. */
+            case ir::IrOp::FNEG:
+            case ir::IrOp::FABS: {
                 flush_pending();
                 if (!fp_ok) {
-                    vreg_dbg(fn.name.c_str(), "fneg");
+                    vreg_dbg(fn.name.c_str(),
+                             in.op == ir::IrOp::FABS ? "fabs" : "fneg");
                     return false;
                 }
                 if (in.operands.size() != 1 || in.dst == ir::IR_NO_VALUE)
                     return false;
                 const bool is_f32 = (in.type == ir::IrType::F32);
-                /* mascara del bit de signo en un GP temp -> XMM temp. */
-                const uint64_t mask = is_f32 ? 0x80000000ull
-                                             : 0x8000000000000000ull;
+                const bool is_abs = (in.op == ir::IrOp::FABS);
+                /* FNEG: signbit (XOR para invertir).  FABS: ~signbit (AND para
+                 * limpiar). */
+                const uint64_t signbit =
+                    is_f32 ? 0x80000000ull : 0x8000000000000000ull;
+                const uint64_t mask = is_abs ? ~signbit : signbit;
                 const ir::IrValueId gpm = new_tmp();
                 const uint32_t midx = out.intern_imm64(mask);
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(gpm),
@@ -732,8 +734,9 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                 const ir::IrValueId xm = new_ftmp();
                 O.push_back(
                     MInstr::make_unary(MOp::MOVQ_GP_XMM, vrt(xm), vr(gpm)));
-                /* dst = src XOR mask (forma 3-op; el rewrite legaliza). */
-                O.push_back(MInstr::make_binary(MOp::XORPS, vrt(in.dst),
+                /* dst = src (XOR|AND) mask (forma 3-op; el rewrite legaliza). */
+                O.push_back(MInstr::make_binary(is_abs ? MOp::ANDPS : MOp::XORPS,
+                                                vrt(in.dst),
                                                 vrt(in.operands[0]), vrt(xm)));
                 break;
             }

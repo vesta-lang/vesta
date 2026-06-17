@@ -554,6 +554,23 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
+    case MOp::ANDPS: {
+        /* ANDPS xmm_dst, xmm_src: (REX) + 0F + 54 + ModR/M.  Sin prefijo
+         * (paquete f32).  Lo usa el selector para FABS (AND con ~signbit). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t rex = rex_byte(false, xd, xs);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x54);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
 
     case MOp::IDIV: {
         /* IDIV r/m64: REX.W + F7 /7 con divisor en src1.reg. */
