@@ -264,6 +264,49 @@ if (WIN32)
     set(OPENSSL_INCLUDE_DIR "${OPENSSL_ROOT_DIR}/include")
     set(OPENSSL_LIB_DIR "${OPENSSL_ROOT_DIR}/lib/VC/x64/MD")
 
+    # --- Auto-descarga de OpenSSL precompilado (FireDaemon) -----------------
+    # Las .lib/.dll de OpenSSL son binarios precompilados que NO se versionan
+    # en git (solo los headers + applink.c estan trackeados).  En un clone
+    # limpio -- o si los binarios se pierden -- se descargan aqui y se colocan
+    # en el layout que el resto del CMake espera (lib/VC/x64/MD + bin).
+    # Idempotente: si libssl.lib ya existe, no hace nada.  Reproducible: la
+    # version y el hash SHA-256 del zip estan fijados.
+    if (NOT EXISTS "${OPENSSL_LIB_DIR}/libssl.lib")
+        set(_ossl_ver "3.6.1")
+        set(_ossl_url "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-${_ossl_ver}.zip")
+        set(_ossl_sha "48f53e49fda1ac9600f6356ef7a88cf9a3a1a4f69abf8e4918453f167884ddf8")
+        set(_ossl_zip "${CMAKE_BINARY_DIR}/openssl-${_ossl_ver}.zip")
+        set(_ossl_dir "${CMAKE_BINARY_DIR}/openssl-${_ossl_ver}-extract")
+        message(STATUS "[OpenSSL] ${OPENSSL_LIB_DIR}/libssl.lib no encontrado; descargando FireDaemon OpenSSL ${_ossl_ver}...")
+        if (NOT EXISTS "${_ossl_zip}")
+            file(DOWNLOAD "${_ossl_url}" "${_ossl_zip}"
+                    SHOW_PROGRESS
+                    EXPECTED_HASH SHA256=${_ossl_sha}
+                    STATUS _ossl_st)
+            list(GET _ossl_st 0 _ossl_code)
+            if (NOT _ossl_code EQUAL 0)
+                list(GET _ossl_st 1 _ossl_msg)
+                message(FATAL_ERROR "[OpenSSL] descarga fallo (${_ossl_code}): ${_ossl_msg}\n  URL: ${_ossl_url}\n  Alternativa: descarga el zip a mano y copia x64/lib/{libssl,libcrypto}.lib en ${OPENSSL_LIB_DIR} y x64/bin/*-x64.dll junto al ejecutable.")
+            endif()
+        endif()
+        file(ARCHIVE_EXTRACT INPUT "${_ossl_zip}" DESTINATION "${_ossl_dir}")
+        # Layout FireDaemon ${_ossl_ver}: x64/{lib,bin,include}.  El proyecto
+        # espera las .lib en lib/VC/x64/MD (layout historico reorganizado).
+        file(MAKE_DIRECTORY "${OPENSSL_LIB_DIR}")
+        file(COPY "${_ossl_dir}/x64/lib/libssl.lib" "${_ossl_dir}/x64/lib/libcrypto.lib"
+                DESTINATION "${OPENSSL_LIB_DIR}")
+        file(COPY "${_ossl_dir}/x64/bin/libssl-3-x64.dll" "${_ossl_dir}/x64/bin/libcrypto-3-x64.dll"
+                DESTINATION "${OPENSSL_ROOT_DIR}/bin")
+        # Headers: ya estan versionados en git; si faltaran, restaurarlos.
+        if (NOT EXISTS "${OPENSSL_INCLUDE_DIR}/openssl/ssl.h")
+            file(COPY "${_ossl_dir}/x64/include/openssl" DESTINATION "${OPENSSL_INCLUDE_DIR}")
+        endif()
+        # DLLs junto al ejecutable (runtime: vm.exe las carga al arrancar).
+        file(COPY "${_ossl_dir}/x64/bin/libssl-3-x64.dll" "${_ossl_dir}/x64/bin/libcrypto-3-x64.dll"
+                DESTINATION "${CMAKE_BINARY_DIR}")
+        message(STATUS "[OpenSSL] instalado en ${OPENSSL_ROOT_DIR} (lib/VC/x64/MD + bin)")
+    endif()
+
     target_include_directories(vm PRIVATE ${OPENSSL_INCLUDE_DIR})
     target_link_directories(vm PRIVATE ${OPENSSL_LIB_DIR})
 
