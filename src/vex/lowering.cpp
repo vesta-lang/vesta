@@ -269,11 +269,54 @@ namespace vex {
         }
         // Ensambla el cuerpo de un bloque `asm` mezclando codigo (Keystone) y
         // directivas de datos (propio).  Devuelve false + err en fallo.
+        /// @brief True si @p w es un nombre de registro x86 (no un simbolo).
+        bool asmblk_is_register(const std::string &w) {
+            static const std::set<std::string> regs = {
+                "al","bl","cl","dl","ah","bh","ch","dh","spl","bpl","sil","dil",
+                "ax","bx","cx","dx","si","di","sp","bp",
+                "eax","ebx","ecx","edx","esi","edi","esp","ebp",
+                "rax","rbx","rcx","rdx","rsi","rdi","rsp","rbp",
+                "r8","r9","r10","r11","r12","r13","r14","r15",
+                "cs","ds","es","fs","gs","ss"
+            };
+            std::string l; l.reserve(w.size());
+            for (char c : w) l.push_back((char)std::tolower((unsigned char)c));
+            return regs.count(l) > 0;
+        }
+
+        /// @brief Ensambla un bloque @c asm.  @p sym_refs (opcional) recibe las
+        /// referencias a SiMBOLOS externos (funciones Vex) que aparecen como
+        /// @c call/jmp @c <ident>: se emite @c E8/@c E9 + placeholder rel32 y el
+        /// driver las resuelve (REL32) contra la funcion -> un trampolin asm
+        /// puede invocar codigo generado (p.ej. un kernel multiboot que llama a
+        /// @c main).  Un @c call/jmp a un label LOCAL (definido en el bloque) o
+        /// a un registro/memoria lo sigue ensamblando Keystone.
         bool asmblk_assemble(const std::string &body, uint8_t bits,
-                             std::vector<uint8_t> &out, std::string &err) {
+                             std::vector<uint8_t> &out, std::string &err,
+                             std::vector<ir::IrModule::StaticDataMeta::SymRef>
+                                 *sym_refs = nullptr) {
             vex::AsmArch arch = bits==16 ? vex::AsmArch::X86_16
                               : bits==32 ? vex::AsmArch::X86_32
                                          : vex::AsmArch::X86_64;
+            /* Pre-pase: recolectar los labels LOCALes (def `ident:`) para no
+             * confundirlos con simbolos externos en call/jmp. */
+            std::set<std::string> local_labels;
+            {
+                std::istringstream ls(body);
+                std::string line;
+                while (std::getline(ls, line)) {
+                    std::string t = asmblk_trim(asmblk_strip_comment(line));
+                    bool had = false;
+                    std::string before = t;
+                    asmblk_strip_label(t, had);
+                    if (had) {
+                        /* extraer el nombre del label (antes del ':') */
+                        size_t c = before.find(':');
+                        if (c != std::string::npos)
+                            local_labels.insert(asmblk_trim(before.substr(0, c)));
+                    }
+                }
+            }
             std::string instr_buf;
             auto flush = [&]() -> bool {
                 std::string t = asmblk_trim(instr_buf); instr_buf.clear();
@@ -295,6 +338,28 @@ namespace vex {
                 std::string rest = asmblk_strip_label(t, had_label);
                 std::string w = asmblk_first_word(rest);
                 const bool is_data = (asmblk_data_width(w) > 0) || (w == "times");
+                /* call/jmp a un simbolo externo (funcion Vex): emitir E8/E9 +
+                 * placeholder rel32 + sym_ref REL32 (lo resuelve el driver). */
+                std::string wl; for (char c : w) wl.push_back((char)std::tolower((unsigned char)c));
+                if (sym_refs && (wl == "call" || wl == "jmp")) {
+                    std::string operand = asmblk_trim(rest.substr(w.size()));
+                    const bool bare_ident =
+                        !operand.empty()
+                        && (std::isalpha((unsigned char)operand[0]) || operand[0]=='_')
+                        && operand.find_first_of(" \t[]+-*,") == std::string::npos
+                        && !asmblk_is_register(operand)
+                        && !local_labels.count(operand);
+                    if (bare_ident) {
+                        if (!flush()) return false;
+                        out.push_back(wl == "call" ? 0xE8 : 0xE9);
+                        ir::IrModule::StaticDataMeta::SymRef sr;
+                        sr.offset = (uint32_t)out.size();   // rel32 justo tras E8/E9
+                        sr.sym = operand; sr.width = 4; sr.is_rel = 1;
+                        sym_refs->push_back(std::move(sr));
+                        for (int i = 0; i < 4; ++i) out.push_back(0);
+                        continue;
+                    }
+                }
                 if (is_data) {
                     if (!flush()) return false;
                     if (!asmblk_eval_data_line(rest, out, err)) return false;
@@ -859,8 +924,11 @@ namespace vex {
                 std::vector<uint8_t> asm_bytes;
                 std::string aerr;
                 // Mini-ensamblador: instrucciones via Keystone + db/dw/dd/dq/
-                // times/$/$$ propios, intercalados en orden (estilo NASM).
-                if (!asmblk_assemble(bd->asm_body, bd->asm_bits, asm_bytes, aerr)) {
+                // times/$/$$ propios, intercalados en orden (estilo NASM).  Los
+                // call/jmp a un simbolo (funcion Vex) salen como sym_refs REL32.
+                std::vector<ir::IrModule::StaticDataMeta::SymRef> asm_syms;
+                if (!asmblk_assemble(bd->asm_body, bd->asm_bits, asm_bytes, aerr,
+                                     &asm_syms)) {
                     diags_.error(bd->loc, "bloque asm '" + bd->name + "': " + aerr);
                     continue;
                 }
@@ -870,6 +938,7 @@ namespace vex {
                 m.section_perms = bd->attr_section_perms;
                 m.section_at    = bd->attr_at;
                 m.section_order = bd->attr_order;
+                m.sym_refs      = std::move(asm_syms);  // call/jmp -> funcion Vex
                 m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT
                          | ir::IrModule::SD_FLAG_NON_DEDUP;
                 continue;
