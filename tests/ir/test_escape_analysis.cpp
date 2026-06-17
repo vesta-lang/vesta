@@ -24,12 +24,15 @@
 using namespace ir;
 
 static int g_checks = 0;
-static int g_fails  = 0;
+static int g_fails = 0;
 
 static void check(bool cond, const std::string &msg) {
     ++g_checks;
-    if (!cond) { ++g_fails; std::printf("  FAIL: %s\n", msg.c_str()); }
-    else        std::printf("  ok:   %s\n", msg.c_str());
+    if (!cond) {
+        ++g_fails;
+        std::printf("  FAIL: %s\n", msg.c_str());
+    } else
+        std::printf("  ok:   %s\n", msg.c_str());
 }
 
 /** @brief Cuenta las instrucciones `call __new_Foo` en @p fn. */
@@ -67,10 +70,10 @@ static IrModule make_module_with_foo() {
     {
         IrBuilder b(ctor_fn);
         IrValueId thisv = b.param(IrType::PTR, "this");
-        IrValueId v     = b.param(IrType::I32, "v");
+        IrValueId v = b.param(IrType::I32, "v");
         IrBlockId entry = b.new_block("entry");
         b.set_insert_point(entry);
-        IrValueId off  = b.const_i64(24);
+        IrValueId off = b.const_i64(24);
         IrValueId addr = b.add(thisv, off, IrType::PTR);
         b.store(v, addr, IrType::I32);
         b.ret_void();
@@ -81,69 +84,79 @@ static IrModule make_module_with_foo() {
 
 /** @brief read_only(i): `f = new Foo(i); return f.x`. */
 static IrFunction make_readonly_caller() {
-    IrFunction fn; fn.name = "read_only"; fn.ret_type = IrType::I32;
+    IrFunction fn;
+    fn.name = "read_only";
+    fn.ret_type = IrType::I32;
     IrBuilder b(fn);
     IrValueId arg = b.param(IrType::I32, "i");
     IrBlockId entry = b.new_block("entry");
     b.set_insert_point(entry);
-    IrValueId o    = b.call("__new_Foo", {arg}, IrType::PTR);
-    IrValueId off  = b.const_i64(24);
+    IrValueId o = b.call("__new_Foo", {arg}, IrType::PTR);
+    IrValueId off = b.const_i64(24);
     IrValueId addr = b.add(o, off, IrType::PTR);
-    IrValueId val  = b.load(addr, IrType::I32);
+    IrValueId val = b.load(addr, IrType::I32);
     b.ret(val);
     return fn;
 }
 
 /** @brief mutable(v): `c = new Foo(v); c.x = c.x + 5; return c.x`. */
 static IrFunction make_mutable_caller() {
-    IrFunction fn; fn.name = "mutable"; fn.ret_type = IrType::I32;
+    IrFunction fn;
+    fn.name = "mutable";
+    fn.ret_type = IrType::I32;
     IrBuilder b(fn);
     IrValueId arg = b.param(IrType::I32, "v");
     IrBlockId entry = b.new_block("entry");
     b.set_insert_point(entry);
-    IrValueId o    = b.call("__new_Foo", {arg}, IrType::PTR);
-    IrValueId off  = b.const_i64(24);
+    IrValueId o = b.call("__new_Foo", {arg}, IrType::PTR);
+    IrValueId off = b.const_i64(24);
     IrValueId addr = b.add(o, off, IrType::PTR);
-    IrValueId v1   = b.load(addr, IrType::I32);     // ctor-init
+    IrValueId v1 = b.load(addr, IrType::I32); // ctor-init
     IrValueId five = b.const_i32(5);
-    IrValueId w    = b.add(v1, five, IrType::I32);
-    b.store(w, addr, IrType::I32);                   // field write
-    IrValueId v2   = b.load(addr, IrType::I32);     // forward a w
+    IrValueId w = b.add(v1, five, IrType::I32);
+    b.store(w, addr, IrType::I32);            // field write
+    IrValueId v2 = b.load(addr, IrType::I32); // forward a w
     b.ret(v2);
     return fn;
 }
 
 /** @brief phi(cond): dos objetos seleccionados por un PHI -> debe BAILAR. */
 static IrFunction make_phi_caller() {
-    IrFunction fn; fn.name = "phi_pick"; fn.ret_type = IrType::I32;
+    IrFunction fn;
+    fn.name = "phi_pick";
+    fn.ret_type = IrType::I32;
     IrBuilder b(fn);
     IrValueId cond = b.param(IrType::I32, "cond");
     IrBlockId entry = b.new_block("entry");
-    IrBlockId bt    = b.new_block("t");
-    IrBlockId bf    = b.new_block("f");
+    IrBlockId bt = b.new_block("t");
+    IrBlockId bf = b.new_block("f");
     IrBlockId merge = b.new_block("merge");
     b.set_insert_point(entry);
-    IrValueId c10  = b.const_i32(10);
-    IrValueId a    = b.call("__new_Foo", {c10}, IrType::PTR);
-    IrValueId c20  = b.const_i32(20);
-    IrValueId bb   = b.call("__new_Foo", {c20}, IrType::PTR);
+    IrValueId c10 = b.const_i32(10);
+    IrValueId a = b.call("__new_Foo", {c10}, IrType::PTR);
+    IrValueId c20 = b.const_i32(20);
+    IrValueId bb = b.call("__new_Foo", {c20}, IrType::PTR);
     IrValueId zero = b.const_i32(0);
-    IrValueId cmp  = b.cmp_eq(cond, zero);
+    IrValueId cmp = b.cmp_eq(cond, zero);
     b.br_cond(cmp, bt, bf);
-    b.set_insert_point(bt); b.br(merge);
-    b.set_insert_point(bf); b.br(merge);
+    b.set_insert_point(bt);
+    b.br(merge);
+    b.set_insert_point(bf);
+    b.br(merge);
     b.set_insert_point(merge);
-    IrValueId r    = b.phi(IrType::PTR, {{bt, a}, {bf, bb}});
-    IrValueId off  = b.const_i64(24);
+    IrValueId r = b.phi(IrType::PTR, {{bt, a}, {bf, bb}});
+    IrValueId off = b.const_i64(24);
     IrValueId addr = b.add(r, off, IrType::PTR);
-    IrValueId val  = b.load(addr, IrType::I32);
+    IrValueId val = b.load(addr, IrType::I32);
     b.ret(val);
     return fn;
 }
 
 /** @brief escaping(i): `o = new Foo(i); return o`  (el objeto escapa). */
 static IrFunction make_escaping_caller() {
-    IrFunction fn; fn.name = "escaping"; fn.ret_type = IrType::PTR;
+    IrFunction fn;
+    fn.name = "escaping";
+    fn.ret_type = IrType::PTR;
     IrBuilder b(fn);
     IrValueId arg = b.param(IrType::I32, "i");
     IrBlockId entry = b.new_block("entry");
@@ -163,35 +176,37 @@ static IrFunction make_escaping_caller() {
  *   return f.x;
  */
 static IrFunction make_crossblock_caller() {
-    IrFunction fn; fn.name = "crossb"; fn.ret_type = IrType::I32;
+    IrFunction fn;
+    fn.name = "crossb";
+    fn.ret_type = IrType::I32;
     IrBuilder b(fn);
     IrValueId cond = b.param(IrType::I32, "cond");
-    IrValueId p    = b.param(IrType::I32, "p");
+    IrValueId p = b.param(IrType::I32, "p");
     IrBlockId entry = b.new_block("entry");
-    IrBlockId bt    = b.new_block("then");
-    IrBlockId be    = b.new_block("else");
+    IrBlockId bt = b.new_block("then");
+    IrBlockId be = b.new_block("else");
     IrBlockId merge = b.new_block("merge");
     b.set_insert_point(entry);
-    IrValueId o    = b.call("__new_Foo", {p}, IrType::PTR);
-    IrValueId off  = b.const_i64(24);
-    IrValueId addr = b.add(o, off, IrType::PTR);   /* field-addr cross-block */
+    IrValueId o = b.call("__new_Foo", {p}, IrType::PTR);
+    IrValueId off = b.const_i64(24);
+    IrValueId addr = b.add(o, off, IrType::PTR); /* field-addr cross-block */
     IrValueId zero = b.const_i32(0);
-    IrValueId cmp  = b.cmp_eq(cond, zero);
+    IrValueId cmp = b.cmp_eq(cond, zero);
     b.br_cond(cmp, bt, be);
     b.set_insert_point(bt);
-    IrValueId la  = b.load(addr, IrType::I32);
+    IrValueId la = b.load(addr, IrType::I32);
     IrValueId ten = b.const_i32(10);
-    IrValueId a1  = b.add(la, ten, IrType::I32);
+    IrValueId a1 = b.add(la, ten, IrType::I32);
     b.store(a1, addr, IrType::I32);
     b.br(merge);
     b.set_insert_point(be);
-    IrValueId lb  = b.load(addr, IrType::I32);
+    IrValueId lb = b.load(addr, IrType::I32);
     IrValueId two = b.const_i32(2);
-    IrValueId a2  = b.mul(lb, two, IrType::I32);
+    IrValueId a2 = b.mul(lb, two, IrType::I32);
     b.store(a2, addr, IrType::I32);
     b.br(merge);
     b.set_insert_point(merge);
-    IrValueId v   = b.load(addr, IrType::I32);
+    IrValueId v = b.load(addr, IrType::I32);
     b.ret(v);
     return fn;
 }
@@ -210,7 +225,8 @@ int main() {
     {
         IrModule mod = make_module_with_foo();
         IrFunction caller = make_readonly_caller();
-        check(count_new_calls(caller) == 1, "read_only: 1 call __new_Foo antes");
+        check(count_new_calls(caller) == 1,
+              "read_only: 1 call __new_Foo antes");
         bool changed = ir_pass_scalar_replace_gc(caller, mod);
         check(changed, "read_only: el pase reporta cambio");
         check(count_new_calls(caller) == 0,

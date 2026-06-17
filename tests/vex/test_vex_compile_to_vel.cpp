@@ -16,7 +16,8 @@
  *
  * Valida la cadena facade:
  *
- *   .vex source -> Lexer -> Parser -> TypeChecker -> Lowering -> IR emit -> .vel text
+ *   .vex source -> Lexer -> Parser -> TypeChecker -> Lowering -> IR emit ->
+ * .vel text
  *
  * Las aserciones inspeccionan el texto .vel resultante para confirmar
  * que contiene los anclajes esperados (directivas @Module, @Function,
@@ -31,19 +32,23 @@
 #include <cstdio>
 #include <string>
 
+using vex::compile_vex_source;
 using vex::CompileOptions;
 using vex::CompileResult;
-using vex::compile_vex_source;
 
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define VEX_ASSERT(cond, msg) do {                                          \
-    if (!(cond)) {                                                          \
-        std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__, msg); \
-        ++g_failed;                                                         \
-    } else { ++g_passed; }                                                  \
-} while (0)
+#define VEX_ASSERT(cond, msg)                                                  \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
+                         msg);                                                 \
+            ++g_failed;                                                        \
+        } else {                                                               \
+            ++g_passed;                                                        \
+        }                                                                      \
+    } while (0)
 
 // Helper: chequear que un string aparece dentro del .vel emitido.
 static bool contains(const std::string &haystack, const std::string &needle) {
@@ -51,12 +56,16 @@ static bool contains(const std::string &haystack, const std::string &needle) {
 }
 
 static void test_minimal_main_emits_vel() {
-    CompileOptions opts; opts.module_name = "min"; opts.opt_level = 1;
-    CompileResult r = compile_vex_source("i32 main() { return 42; }", "<min>", opts);
+    CompileOptions opts;
+    opts.module_name = "min";
+    opts.opt_level = 1;
+    CompileResult r =
+        compile_vex_source("i32 main() { return 42; }", "<min>", opts);
     if (!r.ok) {
         std::fprintf(stderr, "Diagnosticos:\n");
         for (auto &d : r.diagnostics.all()) {
-            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(), d.loc.line, d.message.c_str());
+            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(),
+                         d.loc.line, d.message.c_str());
         }
     }
     VEX_ASSERT(r.ok, "compilacion ok");
@@ -65,14 +74,16 @@ static void test_minimal_main_emits_vel() {
     // El emisor usa etiquetas tipo "name:" + prologo "enter N" / epilogo
     // "leave + hlt"; NO usa @Function (eso es del .vsh / parser de .vel).
     VEX_ASSERT(contains(r.vel_text, "@Module"), ".vel contiene @Module");
-    VEX_ASSERT(contains(r.vel_text, "main:"),   ".vel contiene etiqueta main:");
-    VEX_ASSERT(contains(r.vel_text, "enter"),   ".vel contiene prologo 'enter'");
-    VEX_ASSERT(contains(r.vel_text, "leave"),   ".vel contiene epilogo 'leave'");
-    VEX_ASSERT(contains(r.vel_text, "42"),      ".vel contiene literal 42");
+    VEX_ASSERT(contains(r.vel_text, "main:"), ".vel contiene etiqueta main:");
+    VEX_ASSERT(contains(r.vel_text, "enter"), ".vel contiene prologo 'enter'");
+    VEX_ASSERT(contains(r.vel_text, "leave"), ".vel contiene epilogo 'leave'");
+    VEX_ASSERT(contains(r.vel_text, "42"), ".vel contiene literal 42");
 }
 
 static void test_factorial_recursive_emits_vel() {
-    CompileOptions opts; opts.module_name = "fact"; opts.opt_level = 1;
+    CompileOptions opts;
+    opts.module_name = "fact";
+    opts.opt_level = 1;
     const std::string src = R"(
         i64 fact(i64 n) {
             if (n <= 1) return 1;
@@ -83,7 +94,8 @@ static void test_factorial_recursive_emits_vel() {
     CompileResult r = compile_vex_source(src, "<fact>", opts);
     if (!r.ok) {
         for (auto &d : r.diagnostics.all()) {
-            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(), d.loc.line, d.message.c_str());
+            std::fprintf(stderr, "  %s:%u: %s\n", d.loc.file.c_str(),
+                         d.loc.line, d.message.c_str());
         }
     }
     VEX_ASSERT(r.ok, "factorial recursivo compila");
@@ -99,7 +111,8 @@ static void test_error_propagates() {
     // Programa con error sintactico: el facade debe devolver !ok y cero
     // .vel.  El test verifica que NO se aborta y que los diagnosticos
     // estan disponibles para que el caller los imprima.
-    CompileResult r = compile_vex_source("i32 main() { return ; }", "<bad>", {});
+    CompileResult r =
+        compile_vex_source("i32 main() { return ; }", "<bad>", {});
     VEX_ASSERT(!r.ok, "error sintactico => no ok");
     VEX_ASSERT(r.diagnostics.has_errors(), "diagnosticos contienen error");
 }

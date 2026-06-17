@@ -7,7 +7,8 @@
 
 /**
  * @file test_ir_emitter.cpp
- * @brief Test del emisor SSA IR -> .vel: liveness, regalloc, optimizer y emitter.
+ * @brief Test del emisor SSA IR -> .vel: liveness, regalloc, optimizer y
+ * emitter.
  *
  * Verifica:
  *   - compute_liveness: intervalos de vida correctos
@@ -33,8 +34,13 @@ static int g_pass = 0;
 static int g_fail = 0;
 
 static void check(bool cond, const char *msg) {
-    if (cond) { ++g_pass; std::cout << "  [PASS] " << msg << "\n"; }
-    else       { ++g_fail; std::cout << "  [FAIL] " << msg << "\n"; }
+    if (cond) {
+        ++g_pass;
+        std::cout << "  [PASS] " << msg << "\n";
+    } else {
+        ++g_fail;
+        std::cout << "  [FAIL] " << msg << "\n";
+    }
 }
 
 // Verifica que la cadena haystack contiene needle
@@ -52,7 +58,7 @@ static ir::IrModule build_add() {
     mod.name = "test";
 
     ir::IrFunction fn;
-    fn.name     = "add";
+    fn.name = "add";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrValueId va = fn.new_value(ir::IrType::I64, "a");
@@ -64,10 +70,21 @@ static ir::IrModule build_add() {
     ir::IrBlockId entry = fn.new_block("entry");
 
     ir::IrValueId vr = fn.new_value(ir::IrType::I64, "r");
-    { ir::IrInstr i; i.op=ir::IrOp::ADD; i.type=ir::IrType::I64;
-      i.dst=vr; i.operands={va,vb}; fn.append(entry,i); }
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={vr}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ADD;
+        i.type = ir::IrType::I64;
+        i.dst = vr;
+        i.operands = {va, vb};
+        fn.append(entry, i);
+    }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {vr};
+        fn.append(entry, i);
+    }
 
     mod.add_function(std::move(fn));
     return mod;
@@ -79,40 +96,80 @@ static ir::IrModule build_abs() {
     mod.name = "test";
 
     ir::IrFunction fn;
-    fn.name     = "abs_val";
+    fn.name = "abs_val";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrValueId vx = fn.new_value(ir::IrType::I64, "x");
     fn.params = {vx};
     fn.values[vx].is_param = true;
 
-    ir::IrBlockId entry  = fn.new_block("entry");
+    ir::IrBlockId entry = fn.new_block("entry");
     ir::IrBlockId bb_neg = fn.new_block("negate");
     ir::IrBlockId bb_end = fn.new_block("end");
     fn.blocks[bb_neg].preds = {entry};
     fn.blocks[bb_end].preds = {entry, bb_neg};
 
     ir::IrValueId vzero = fn.new_value(ir::IrType::I64, "zero");
-    { ir::IrInstr i; i.op=ir::IrOp::CONST; i.type=ir::IrType::I64;
-      i.dst=vzero; i.imm=0; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CONST;
+        i.type = ir::IrType::I64;
+        i.dst = vzero;
+        i.imm = 0;
+        fn.append(entry, i);
+    }
     ir::IrValueId vcond = fn.new_value(ir::IrType::BOOL, "cond");
-    { ir::IrInstr i; i.op=ir::IrOp::CMP_LT; i.type=ir::IrType::I64;
-      i.dst=vcond; i.operands={vx,vzero}; fn.append(entry,i); }
-    { ir::IrInstr i; i.op=ir::IrOp::BR_COND; i.type=ir::IrType::VOID;
-      i.operands={vcond}; i.target_block=bb_neg; i.false_block=bb_end;
-      fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CMP_LT;
+        i.type = ir::IrType::I64;
+        i.dst = vcond;
+        i.operands = {vx, vzero};
+        fn.append(entry, i);
+    }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::BR_COND;
+        i.type = ir::IrType::VOID;
+        i.operands = {vcond};
+        i.target_block = bb_neg;
+        i.false_block = bb_end;
+        fn.append(entry, i);
+    }
 
     ir::IrValueId vneg = fn.new_value(ir::IrType::I64, "negx");
-    { ir::IrInstr i; i.op=ir::IrOp::NEG; i.type=ir::IrType::I64;
-      i.dst=vneg; i.operands={vx}; fn.append(bb_neg,i); }
-    { ir::IrInstr i; i.op=ir::IrOp::BR; i.type=ir::IrType::VOID;
-      i.target_block=bb_end; fn.append(bb_neg,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::NEG;
+        i.type = ir::IrType::I64;
+        i.dst = vneg;
+        i.operands = {vx};
+        fn.append(bb_neg, i);
+    }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::BR;
+        i.type = ir::IrType::VOID;
+        i.target_block = bb_end;
+        fn.append(bb_neg, i);
+    }
 
     ir::IrValueId vres = fn.new_value(ir::IrType::I64, "result");
-    { ir::IrInstr i; i.op=ir::IrOp::PHI; i.type=ir::IrType::I64;
-      i.dst=vres; i.phi_args={{vx,entry},{vneg,bb_neg}}; fn.append(bb_end,i); }
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={vres}; fn.append(bb_end,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::PHI;
+        i.type = ir::IrType::I64;
+        i.dst = vres;
+        i.phi_args = {{vx, entry}, {vneg, bb_neg}};
+        fn.append(bb_end, i);
+    }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {vres};
+        fn.append(bb_end, i);
+    }
 
     mod.add_function(std::move(fn));
     return mod;
@@ -175,7 +232,10 @@ static void test_regalloc() {
     // Encontrar el id del valor 'r'
     ir::IrValueId vr = ir::IR_NO_VALUE;
     for (const auto &v : fn.values) {
-        if (v.name == "r") { vr = v.id; break; }
+        if (v.name == "r") {
+            vr = v.id;
+            break;
+        }
     }
     check(vr != ir::IR_NO_VALUE, "valor 'r' encontrado");
     if (vr != ir::IR_NO_VALUE) {
@@ -193,17 +253,22 @@ static void test_regalloc() {
     ir::IrModule mod2;
     mod2.name = "test";
     ir::IrFunction fn2;
-    fn2.name     = "many_params";
+    fn2.name = "many_params";
     fn2.ret_type = ir::IrType::I64;
     // Crear 13 parametros (mas del limite de 12 en registros)
     for (int i = 0; i < 13; ++i) {
-        ir::IrValueId vid = fn2.new_value(ir::IrType::I64, "p" + std::to_string(i));
+        ir::IrValueId vid =
+            fn2.new_value(ir::IrType::I64, "p" + std::to_string(i));
         fn2.params.push_back(vid);
         fn2.values[vid].is_param = true;
     }
     ir::IrBlockId e2 = fn2.new_block("entry");
-    { ir::IrInstr ins; ins.op=ir::IrOp::RET; ins.type=ir::IrType::VOID;
-      fn2.append(e2,ins); }
+    {
+        ir::IrInstr ins;
+        ins.op = ir::IrOp::RET;
+        ins.type = ir::IrType::VOID;
+        fn2.append(e2, ins);
+    }
     mod2.add_function(std::move(fn2));
 
     ir::LivenessResult lv2 = ir::compute_liveness(mod2.functions[0]);
@@ -222,7 +287,7 @@ static void test_optimizer_dce() {
     ir::IrModule mod;
     mod.name = "test";
     ir::IrFunction fn;
-    fn.name     = "dead_code";
+    fn.name = "dead_code";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrValueId va = fn.new_value(ir::IrType::I64, "a");
@@ -233,21 +298,31 @@ static void test_optimizer_dce() {
 
     // Instruccion muerta: %dead = add %a, %a  (nunca usada)
     ir::IrValueId vdead = fn.new_value(ir::IrType::I64, "dead");
-    { ir::IrInstr i; i.op=ir::IrOp::ADD; i.type=ir::IrType::I64;
-      i.dst=vdead; i.operands={va,va}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ADD;
+        i.type = ir::IrType::I64;
+        i.dst = vdead;
+        i.operands = {va, va};
+        fn.append(entry, i);
+    }
 
     // Ret vivo
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={va}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {va};
+        fn.append(entry, i);
+    }
 
     size_t before = fn.blocks[0].instrs.size();
-    bool changed  = ir::ir_pass_dce(fn);
+    bool changed = ir::ir_pass_dce(fn);
 
     check(changed, "DCE: detecto instruccion muerta");
     check(fn.blocks[0].instrs.size() < before,
           "DCE: reducio el numero de instrucciones");
-    check(fn.blocks[0].instrs.size() == 1,
-          "DCE: solo queda el ret");
+    check(fn.blocks[0].instrs.size() == 1, "DCE: solo queda el ret");
 
     mod.add_function(std::move(fn));
 }
@@ -261,32 +336,55 @@ static void test_optimizer_const_fold() {
     ir::IrModule mod;
     mod.name = "test";
     ir::IrFunction fn;
-    fn.name     = "const_fold";
+    fn.name = "const_fold";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrBlockId entry = fn.new_block("entry");
 
     // %a = const 10
     ir::IrValueId va = fn.new_value(ir::IrType::I64, "a");
-    fn.values[va].is_const  = true;
+    fn.values[va].is_const = true;
     fn.values[va].const_val = 10;
-    { ir::IrInstr i; i.op=ir::IrOp::CONST; i.type=ir::IrType::I64;
-      i.dst=va; i.imm=10; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CONST;
+        i.type = ir::IrType::I64;
+        i.dst = va;
+        i.imm = 10;
+        fn.append(entry, i);
+    }
 
     // %b = const 20
     ir::IrValueId vb = fn.new_value(ir::IrType::I64, "b");
-    fn.values[vb].is_const  = true;
+    fn.values[vb].is_const = true;
     fn.values[vb].const_val = 20;
-    { ir::IrInstr i; i.op=ir::IrOp::CONST; i.type=ir::IrType::I64;
-      i.dst=vb; i.imm=20; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CONST;
+        i.type = ir::IrType::I64;
+        i.dst = vb;
+        i.imm = 20;
+        fn.append(entry, i);
+    }
 
     // %r = add %a, %b  -> debe plegarse a const 30
     ir::IrValueId vr = fn.new_value(ir::IrType::I64, "r");
-    { ir::IrInstr i; i.op=ir::IrOp::ADD; i.type=ir::IrType::I64;
-      i.dst=vr; i.operands={va,vb}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ADD;
+        i.type = ir::IrType::I64;
+        i.dst = vr;
+        i.operands = {va, vb};
+        fn.append(entry, i);
+    }
 
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={vr}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {vr};
+        fn.append(entry, i);
+    }
 
     mod.add_function(std::move(fn));
     bool changed = ir::ir_pass_const_fold(mod.functions[0]);
@@ -309,9 +407,10 @@ static void test_emit_add() {
 
     ir::IrModule mod = build_add();
     ir::EmitOptions opts;
-    opts.opt_level    = ir::OptLevel::O0; // sin optimizacion para ver la salida cruda
+    opts.opt_level =
+        ir::OptLevel::O0; // sin optimizacion para ver la salida cruda
     opts.emit_comments = false;
-    opts.export_all   = true;
+    opts.export_all = true;
 
     ir::EmitResult r = ir::ir_emit_module(mod, opts);
     check(r.ok, "emit add: ok=true");
@@ -319,12 +418,12 @@ static void test_emit_add() {
     check(contains(r.vel_text, "add:"), "emit add: etiqueta 'add' presente");
     check(contains(r.vel_text, "enter"), "emit add: prologo enter presente");
     check(contains(r.vel_text, "leave"), "emit add: epilogo leave presente");
-    check(contains(r.vel_text, "ret"),   "emit add: ret presente");
+    check(contains(r.vel_text, "ret"), "emit add: ret presente");
     // La instruccion adds (suma signada) debe estar
     check(contains(r.vel_text, "adds"), "emit add: instruccion adds presente");
 
-    std::cout << "    --- .vel generado ---\n" << r.vel_text
-              << "    --------------------\n";
+    std::cout << "    --- .vel generado ---\n"
+              << r.vel_text << "    --------------------\n";
 }
 
 // =========================================================================
@@ -335,23 +434,23 @@ static void test_emit_abs() {
 
     ir::IrModule mod = build_abs();
     ir::EmitOptions opts;
-    opts.opt_level    = ir::OptLevel::O1;
+    opts.opt_level = ir::OptLevel::O1;
     opts.emit_comments = false;
-    opts.export_all   = true;
+    opts.export_all = true;
 
     ir::EmitResult r = ir::ir_emit_module(mod, opts);
     check(r.ok, "emit abs: ok=true");
     check(contains(r.vel_text, "abs_val:"), "emit abs: etiqueta abs_val");
     // Debe haber cmps por la comparacion CMP_LT signed
-    check(contains(r.vel_text, "cmps"),  "emit abs: cmps para CMP_LT");
+    check(contains(r.vel_text, "cmps"), "emit abs: cmps para CMP_LT");
     // Debe haber una instruccion de salto condicional
     bool has_cond_jmp = contains(r.vel_text, "jmp.jge") ||
                         contains(r.vel_text, "jmp.jlt") ||
                         contains(r.vel_text, "jmp.je");
     check(has_cond_jmp, "emit abs: salto condicional presente");
 
-    std::cout << "    --- .vel generado ---\n" << r.vel_text
-              << "    --------------------\n";
+    std::cout << "    --- .vel generado ---\n"
+              << r.vel_text << "    --------------------\n";
 }
 
 // =========================================================================
@@ -365,46 +464,73 @@ static void test_emit_calln() {
     mod.native_libs.push_back("stdlib/native/io/vesta_io");
 
     ir::IrFunction fn;
-    fn.name     = "print_hello";
+    fn.name = "print_hello";
     fn.ret_type = ir::IrType::VOID;
 
     ir::IrBlockId entry = fn.new_block("entry");
 
     ir::IrValueId v_proc = fn.new_value(ir::IrType::PTR, "proc");
-    { ir::IrInstr i; i.op=ir::IrOp::GETPROC; i.type=ir::IrType::PTR;
-      i.dst=v_proc; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::GETPROC;
+        i.type = ir::IrType::PTR;
+        i.dst = v_proc;
+        fn.append(entry, i);
+    }
 
     ir::IrValueId v_addr = fn.new_value(ir::IrType::I64, "addr");
-    { ir::IrInstr i; i.op=ir::IrOp::CONST; i.type=ir::IrType::I64;
-      i.dst=v_addr; i.imm=0x1000; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CONST;
+        i.type = ir::IrType::I64;
+        i.dst = v_addr;
+        i.imm = 0x1000;
+        fn.append(entry, i);
+    }
 
     ir::IrValueId v_len = fn.new_value(ir::IrType::I64, "len");
-    { ir::IrInstr i; i.op=ir::IrOp::CONST; i.type=ir::IrType::I64;
-      i.dst=v_len; i.imm=5; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CONST;
+        i.type = ir::IrType::I64;
+        i.dst = v_len;
+        i.imm = 5;
+        fn.append(entry, i);
+    }
 
-    { ir::IrInstr i; i.op=ir::IrOp::CALLN; i.type=ir::IrType::VOID;
-      i.dst=ir::IR_NO_VALUE;
-      i.func_name="stdlib/native/io/vesta_io:vio_println";
-      i.operands={v_proc, v_addr, v_len}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::CALLN;
+        i.type = ir::IrType::VOID;
+        i.dst = ir::IR_NO_VALUE;
+        i.func_name = "stdlib/native/io/vesta_io:vio_println";
+        i.operands = {v_proc, v_addr, v_len};
+        fn.append(entry, i);
+    }
 
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::VOID;
-      fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::VOID;
+        fn.append(entry, i);
+    }
 
     mod.add_function(std::move(fn));
 
     ir::EmitOptions opts;
-    opts.opt_level     = ir::OptLevel::O1;
+    opts.opt_level = ir::OptLevel::O1;
     opts.emit_comments = false;
-    opts.export_all    = true;
+    opts.export_all = true;
 
     ir::EmitResult r = ir::ir_emit_module(mod, opts);
     check(r.ok, "emit calln: ok=true");
     check(contains(r.vel_text, "getproc"), "emit calln: getproc presente");
-    check(contains(r.vel_text, "calln"),   "emit calln: calln presente");
-    check(contains(r.vel_text, "vio_println"), "emit calln: nombre de funcion nativa");
+    check(contains(r.vel_text, "calln"), "emit calln: calln presente");
+    check(contains(r.vel_text, "vio_println"),
+          "emit calln: nombre de funcion nativa");
 
-    std::cout << "    --- .vel generado ---\n" << r.vel_text
-              << "    --------------------\n";
+    std::cout << "    --- .vel generado ---\n"
+              << r.vel_text << "    --------------------\n";
 }
 
 // =========================================================================
@@ -416,7 +542,7 @@ static void test_optimizer_unreachable() {
     ir::IrModule mod;
     mod.name = "test";
     ir::IrFunction fn;
-    fn.name     = "dead_block";
+    fn.name = "dead_block";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrValueId va = fn.new_value(ir::IrType::I64, "a");
@@ -424,22 +550,37 @@ static void test_optimizer_unreachable() {
     fn.values[va].is_param = true;
 
     ir::IrBlockId entry = fn.new_block("entry");
-    ir::IrBlockId dead  = fn.new_block("dead"); // nunca alcanzado
-    ir::IrBlockId end   = fn.new_block("end");
+    ir::IrBlockId dead = fn.new_block("dead"); // nunca alcanzado
+    ir::IrBlockId end = fn.new_block("end");
     fn.blocks[end].preds = {entry};
     (void)dead; // para evitar warning
 
     // entry: br end  (salta directamente a end, nunca va a dead)
-    { ir::IrInstr i; i.op=ir::IrOp::BR; i.type=ir::IrType::VOID;
-      i.target_block=end; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::BR;
+        i.type = ir::IrType::VOID;
+        i.target_block = end;
+        fn.append(entry, i);
+    }
 
     // dead: ret (inalcanzable)
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={va}; fn.append(dead,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {va};
+        fn.append(dead, i);
+    }
 
     // end: ret a
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={va}; fn.append(end,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {va};
+        fn.append(end, i);
+    }
 
     size_t before = fn.blocks.size();
     mod.add_function(std::move(fn));
@@ -471,9 +612,9 @@ entry:
 )ir";
 
     ir::EmitOptions opts;
-    opts.opt_level     = ir::OptLevel::O2;
+    opts.opt_level = ir::OptLevel::O2;
     opts.emit_comments = false;
-    opts.export_all    = true;
+    opts.export_all = true;
 
     ir::EmitResult r = ir::ir_emit_text(ir_src, opts);
     check(r.ok, "ir_emit_text: ok=true");
@@ -482,8 +623,8 @@ entry:
           "ir_emit_text: instruccion mul presente");
     check(contains(r.vel_text, "ret"), "ir_emit_text: ret presente");
 
-    std::cout << "    --- .vel generado ---\n" << r.vel_text
-              << "    --------------------\n";
+    std::cout << "    --- .vel generado ---\n"
+              << r.vel_text << "    --------------------\n";
 }
 
 // =========================================================================
@@ -495,7 +636,7 @@ static void test_optimizer_cse() {
     ir::IrModule mod;
     mod.name = "test";
     ir::IrFunction fn;
-    fn.name     = "cse_test";
+    fn.name = "cse_test";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrValueId va = fn.new_value(ir::IrType::I64, "a");
@@ -508,21 +649,45 @@ static void test_optimizer_cse() {
 
     // %r1 = add a, b
     ir::IrValueId vr1 = fn.new_value(ir::IrType::I64, "r1");
-    { ir::IrInstr i; i.op=ir::IrOp::ADD; i.type=ir::IrType::I64;
-      i.dst=vr1; i.operands={va,vb}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ADD;
+        i.type = ir::IrType::I64;
+        i.dst = vr1;
+        i.operands = {va, vb};
+        fn.append(entry, i);
+    }
 
-    // %r2 = add a, b  (subexpresion comun: mismo op, mismo tipo, mismos operandos)
+    // %r2 = add a, b  (subexpresion comun: mismo op, mismo tipo, mismos
+    // operandos)
     ir::IrValueId vr2 = fn.new_value(ir::IrType::I64, "r2");
-    { ir::IrInstr i; i.op=ir::IrOp::ADD; i.type=ir::IrType::I64;
-      i.dst=vr2; i.operands={va,vb}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ADD;
+        i.type = ir::IrType::I64;
+        i.dst = vr2;
+        i.operands = {va, vb};
+        fn.append(entry, i);
+    }
 
     // %res = add r1, r2
     ir::IrValueId vres = fn.new_value(ir::IrType::I64, "res");
-    { ir::IrInstr i; i.op=ir::IrOp::ADD; i.type=ir::IrType::I64;
-      i.dst=vres; i.operands={vr1,vr2}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ADD;
+        i.type = ir::IrType::I64;
+        i.dst = vres;
+        i.operands = {vr1, vr2};
+        fn.append(entry, i);
+    }
 
-    { ir::IrInstr i; i.op=ir::IrOp::RET; i.type=ir::IrType::I64;
-      i.operands={vres}; fn.append(entry,i); }
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::RET;
+        i.type = ir::IrType::I64;
+        i.operands = {vres};
+        fn.append(entry, i);
+    }
 
     size_t before = fn.blocks[0].instrs.size();
     mod.add_function(std::move(fn));
@@ -539,7 +704,8 @@ static void test_optimizer_cse() {
 
 static void test_raw_asm() {
     using namespace ir;
-    std::cout << "\n[Test 11] raw_asm: emision verbatim y no eliminacion por DCE\n";
+    std::cout
+        << "\n[Test 11] raw_asm: emision verbatim y no eliminacion por DCE\n";
 
     // --- subtest A: round-trip parse/print ---
     const char *src = R"(
@@ -561,7 +727,10 @@ entry:
     if (ok && !mod.functions.empty()) {
         for (const auto &bb : mod.functions[0].blocks) {
             for (const auto &ins : bb.instrs) {
-                if (ins.op == IrOp::RAW_ASM) { found_raw = true; break; }
+                if (ins.op == IrOp::RAW_ASM) {
+                    found_raw = true;
+                    break;
+                }
             }
         }
     }
@@ -572,11 +741,16 @@ entry:
         const IrInstr *raw_ins = nullptr;
         for (const auto &bb : mod.functions[0].blocks) {
             for (const auto &ins : bb.instrs)
-                if (ins.op == IrOp::RAW_ASM) { raw_ins = &ins; break; }
+                if (ins.op == IrOp::RAW_ASM) {
+                    raw_ins = &ins;
+                    break;
+                }
         }
-        check(raw_ins != nullptr && raw_ins->func_name.find("mov r14, r1") != std::string::npos,
+        check(raw_ins != nullptr &&
+                  raw_ins->func_name.find("mov r14, r1") != std::string::npos,
               "raw_asm: func_name contiene la primera instruccion");
-        check(raw_ins != nullptr && raw_ins->func_name.find('\n') != std::string::npos,
+        check(raw_ins != nullptr &&
+                  raw_ins->func_name.find('\n') != std::string::npos,
               "raw_asm: \\n expandido a newline real");
     }
 
@@ -620,7 +794,8 @@ entry:
 // =========================================================================
 static void test_getfield_setfield() {
     using namespace ir;
-    std::cout << "\n[Test 12] GETFIELD/SETFIELD -> gcderef+addcur+readcur/writecur\n";
+    std::cout
+        << "\n[Test 12] GETFIELD/SETFIELD -> gcderef+addcur+readcur/writecur\n";
 
     // getfield.i64 %obj, 32  (campo en byte 32 del objeto GC)
     const char *src = R"(
@@ -645,7 +820,10 @@ entry:
     std::string err;
     bool ok = ir_parse(src, mod, err);
     check(ok, "getfield/setfield parse ok");
-    if (!ok) { std::cout << "    error: " << err << "\n"; return; }
+    if (!ok) {
+        std::cout << "    error: " << err << "\n";
+        return;
+    }
 
     // Verificar que el parse creo los opcodes correctos
     bool found_getfield = false, found_setfield = false;
@@ -660,24 +838,28 @@ entry:
     check(found_getfield, "getfield: IrOp::GETFIELD parseado");
     check(found_setfield, "setfield: IrOp::SETFIELD parseado");
 
-    // Emitir y verificar que NO se emite getfield/setfield nativo (instruccion VM incorrecta)
+    // Emitir y verificar que NO se emite getfield/setfield nativo (instruccion
+    // VM incorrecta)
     EmitOptions opts;
     opts.opt_level = OptLevel::O0;
     EmitResult er = ir_emit_module(mod, opts);
     check(er.ok, "getfield/setfield emit ok");
 
     // Debe emitir gcderef + addcur + readcur en vez de getfield
-    check(contains(er.vel_text, "gcderef"),  "getfield emit: usa gcderef");
-    check(contains(er.vel_text, "readcur"),  "getfield emit: usa readcur");
+    check(contains(er.vel_text, "gcderef"), "getfield emit: usa gcderef");
+    check(contains(er.vel_text, "readcur"), "getfield emit: usa readcur");
     check(contains(er.vel_text, "writecur"), "setfield emit: usa writecur");
-    check(contains(er.vel_text, "addcur"),   "field emit: usa addcur con offset");
+    check(contains(er.vel_text, "addcur"), "field emit: usa addcur con offset");
 
     // NO debe emitir las instrucciones incorrectas
-    check(!contains(er.vel_text, "    getfield "), "getfield emit: no emite opcode VM 'getfield'");
-    check(!contains(er.vel_text, "    setfield "), "setfield emit: no emite opcode VM 'setfield'");
+    check(!contains(er.vel_text, "    getfield "),
+          "getfield emit: no emite opcode VM 'getfield'");
+    check(!contains(er.vel_text, "    setfield "),
+          "setfield emit: no emite opcode VM 'setfield'");
 
     // El setfield con tipo HANDLE debe emitir gcwb (write barrier)
-    check(contains(er.vel_text, "gcwb"), "setfield.handle emit: gcwb write barrier");
+    check(contains(er.vel_text, "gcwb"),
+          "setfield.handle emit: gcwb write barrier");
 }
 
 // =========================================================================
@@ -710,7 +892,10 @@ entry:
     std::string err;
     bool ok = ir_parse(src, mod, err);
     check(ok, "string ops parse ok");
-    if (!ok) { std::cout << "    error: " << err << "\n"; return; }
+    if (!ok) {
+        std::cout << "    error: " << err << "\n";
+        return;
+    }
 
     // Verificar presencia de opcodes
     bool has_strcat = false, has_strlen = false, has_strcmp = false;
@@ -719,37 +904,39 @@ entry:
     for (const auto &fn : mod.functions)
         for (const auto &bb : fn.blocks)
             for (const auto &ins : bb.instrs) {
-                if (ins.op == IrOp::STRCAT)    has_strcat    = true;
-                if (ins.op == IrOp::STRLEN)    has_strlen    = true;
-                if (ins.op == IrOp::STRCMP)    has_strcmp    = true;
-                if (ins.op == IrOp::STRFLAT)   has_strflat   = true;
-                if (ins.op == IrOp::STRHASH)   has_strhash   = true;
+                if (ins.op == IrOp::STRCAT) has_strcat = true;
+                if (ins.op == IrOp::STRLEN) has_strlen = true;
+                if (ins.op == IrOp::STRCMP) has_strcmp = true;
+                if (ins.op == IrOp::STRFLAT) has_strflat = true;
+                if (ins.op == IrOp::STRHASH) has_strhash = true;
                 if (ins.op == IrOp::STRINTERN) has_strintern = true;
-                if (ins.op == IrOp::STRRAW)    has_strraw    = true;
+                if (ins.op == IrOp::STRRAW) has_strraw = true;
                 if (ins.op == IrOp::STRRESERVE) has_strreserve = true;
             }
-    check(has_strcat,    "strcat: IrOp parseado");
-    check(has_strlen,    "strlen: IrOp parseado");
-    check(has_strcmp,    "strcmp: IrOp parseado");
-    check(has_strflat,   "strflat: IrOp parseado");
-    check(has_strhash,   "strhash: IrOp parseado");
+    check(has_strcat, "strcat: IrOp parseado");
+    check(has_strlen, "strlen: IrOp parseado");
+    check(has_strcmp, "strcmp: IrOp parseado");
+    check(has_strflat, "strflat: IrOp parseado");
+    check(has_strhash, "strhash: IrOp parseado");
     check(has_strintern, "strintern: IrOp parseado");
-    check(has_strraw,    "strraw: IrOp parseado");
-    check(has_strreserve,"strreserve: IrOp parseado");
+    check(has_strraw, "strraw: IrOp parseado");
+    check(has_strreserve, "strreserve: IrOp parseado");
 
     // Emitir y verificar instrucciones .vel
     EmitOptions opts;
     opts.opt_level = OptLevel::O0;
     EmitResult er = ir_emit_module(mod, opts);
     check(er.ok, "string ops emit ok");
-    check(contains(er.vel_text, "strcat"),    "strcat emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strlen"),    "strlen emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strcmp"),    "strcmp emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strflat"),   "strflat emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strhash"),   "strhash emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strintern"), "strintern emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strraw"),    "strraw emit: mnemonic en .vel");
-    check(contains(er.vel_text, "strreserve"),"strreserve emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strcat"), "strcat emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strlen"), "strlen emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strcmp"), "strcmp emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strflat"), "strflat emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strhash"), "strhash emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strintern"),
+          "strintern emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strraw"), "strraw emit: mnemonic en .vel");
+    check(contains(er.vel_text, "strreserve"),
+          "strreserve emit: mnemonic en .vel");
 
     // Round-trip print
     std::ostringstream printed;
@@ -790,12 +977,16 @@ entry:
     std::string err;
     bool ok = ir_parse(src, mod, err);
     check(ok, "TCO parse ok");
-    if (!ok) { std::cout << "    error: " << err << "\n"; return; }
+    if (!ok) {
+        std::cout << "    error: " << err << "\n";
+        return;
+    }
 
     // Aplicar el pase TCO directamente
     bool changed1 = ir_pass_tailcall(mod.functions[0]); // fact
     bool changed2 = ir_pass_tailcall(mod.functions[1]); // void_tail
-    bool changed3 = ir_pass_tailcall(mod.functions[2]); // no_tail (no debe cambiar)
+    bool changed3 =
+        ir_pass_tailcall(mod.functions[2]); // no_tail (no debe cambiar)
 
     check(changed1, "TCO: fact tail call convertida");
     check(changed2, "TCO: void_tail convertida");
@@ -806,17 +997,18 @@ entry:
     for (const auto &bb : mod.functions[0].blocks)
         for (const auto &ins : bb.instrs) {
             if (ins.op == IrOp::TAILCALL) has_tailcall = true;
-            if (ins.op == IrOp::CALL)     has_call     = true;
+            if (ins.op == IrOp::CALL) has_call = true;
         }
     check(has_tailcall, "TCO: fact contiene TAILCALL despues del pase");
-    check(!has_call,    "TCO: fact NO contiene CALL normal despues del pase");
+    check(!has_call, "TCO: fact NO contiene CALL normal despues del pase");
 
     // Emitir y verificar mnemonic tailcall en .vel
     EmitOptions opts;
     opts.opt_level = OptLevel::O0;
     EmitResult er = ir_emit_module(mod, opts);
     check(er.ok, "TCO emit ok");
-    check(contains(er.vel_text, "tailcall"), "TCO emit: mnemonic tailcall en .vel");
+    check(contains(er.vel_text, "tailcall"),
+          "TCO emit: mnemonic tailcall en .vel");
 
     // TCO debe activarse automaticamente en O2
     IrModule mod2;
@@ -859,18 +1051,21 @@ entry:
     std::string err;
     bool ok = ir_parse(src, mod, err);
     check(ok, "array ops parse ok");
-    if (!ok) { std::cout << "    error: " << err << "\n"; return; }
+    if (!ok) {
+        std::cout << "    error: " << err << "\n";
+        return;
+    }
 
     bool has_array_len = false, has_array_load = false, has_array_store = false;
     for (const auto &fn : mod.functions)
         for (const auto &bb : fn.blocks)
             for (const auto &ins : bb.instrs) {
-                if (ins.op == IrOp::ARRAY_LEN)   has_array_len   = true;
-                if (ins.op == IrOp::ARRAY_LOAD)  has_array_load  = true;
+                if (ins.op == IrOp::ARRAY_LEN) has_array_len = true;
+                if (ins.op == IrOp::ARRAY_LOAD) has_array_load = true;
                 if (ins.op == IrOp::ARRAY_STORE) has_array_store = true;
             }
-    check(has_array_len,   "array_len: IrOp parseado");
-    check(has_array_load,  "array_load: IrOp parseado");
+    check(has_array_len, "array_len: IrOp parseado");
+    check(has_array_load, "array_load: IrOp parseado");
     check(has_array_store, "array_store: IrOp parseado");
 
     // Emitir y verificar MOVC SIB generado
@@ -879,9 +1074,11 @@ entry:
     EmitResult er = ir_emit_module(mod, opts);
     check(er.ok, "array ops emit ok");
     // ARRAY_LOAD y ARRAY_STORE emiten movc con SIB (stride, offset=8)
-    check(contains(er.vel_text, "movc"), "array ops emit: usa movc para acceso");
+    check(contains(er.vel_text, "movc"),
+          "array ops emit: usa movc para acceso");
     // ARRAY_STORE con handle debe emitir gcwb
-    check(contains(er.vel_text, "gcwb"), "array_store.handle emit: gcwb write barrier");
+    check(contains(er.vel_text, "gcwb"),
+          "array_store.handle emit: gcwb write barrier");
     // array_len usa movc con offset 0
     check(contains(er.vel_text, ", 0]") || contains(er.vel_text, ", 0, 0]"),
           "array_len emit: movc offset 0");
@@ -908,18 +1105,21 @@ entry:
     std::string err;
     bool ok = ir_parse(src, mod, err);
     check(ok, "gep/gcwb_ir/gcderef_ir parse ok");
-    if (!ok) { std::cout << "    error: " << err << "\n"; return; }
+    if (!ok) {
+        std::cout << "    error: " << err << "\n";
+        return;
+    }
 
     bool has_gep = false, has_gcwb_ir = false, has_gcderef_ir = false;
     for (const auto &fn : mod.functions)
         for (const auto &bb : fn.blocks)
             for (const auto &ins : bb.instrs) {
-                if (ins.op == IrOp::GEP)        has_gep        = true;
-                if (ins.op == IrOp::GCWB_IR)    has_gcwb_ir    = true;
+                if (ins.op == IrOp::GEP) has_gep = true;
+                if (ins.op == IrOp::GCWB_IR) has_gcwb_ir = true;
                 if (ins.op == IrOp::GCDEREF_IR) has_gcderef_ir = true;
             }
-    check(has_gep,        "gep: IrOp::GEP parseado");
-    check(has_gcwb_ir,    "gcwb_ir: IrOp::GCWB_IR parseado");
+    check(has_gep, "gep: IrOp::GEP parseado");
+    check(has_gcwb_ir, "gcwb_ir: IrOp::GCWB_IR parseado");
     check(has_gcderef_ir, "gcderef_ir: IrOp::GCDEREF_IR parseado");
 
     // gep debe emitir gcderef + addcur
@@ -927,9 +1127,9 @@ entry:
     opts.opt_level = OptLevel::O0;
     EmitResult er = ir_emit_module(mod, opts);
     check(er.ok, "gep/gcwb_ir emit ok");
-    check(contains(er.vel_text, "gcderef"),    "gep emit: gcderef");
-    check(contains(er.vel_text, "addcur"),     "gep emit: addcur con offset");
-    check(contains(er.vel_text, "gcwb"),       "gcwb_ir emit: gcwb VM instruction");
+    check(contains(er.vel_text, "gcderef"), "gep emit: gcderef");
+    check(contains(er.vel_text, "addcur"), "gep emit: addcur con offset");
+    check(contains(er.vel_text, "gcwb"), "gcwb_ir emit: gcwb VM instruction");
 
     // DCE no debe eliminar gcwb_ir ni gep (son side-effecting)
     IrModule mod2;
@@ -969,21 +1169,23 @@ entry:
 
     // Sin emit_debug: no deben aparecer @line
     EmitOptions opts_no;
-    opts_no.opt_level    = OptLevel::O0;
-    opts_no.emit_debug   = false;
+    opts_no.opt_level = OptLevel::O0;
+    opts_no.emit_debug = false;
     opts_no.emit_comments = false;
     EmitResult er_no = ir_emit_module(mod, opts_no);
     check(er_no.ok, "emit_debug=false: emit ok");
-    check(!contains(er_no.vel_text, "@line"), "emit_debug=false: sin comentarios @line");
+    check(!contains(er_no.vel_text, "@line"),
+          "emit_debug=false: sin comentarios @line");
 
     // Con emit_debug: deben aparecer @line
     EmitOptions opts_yes;
-    opts_yes.opt_level    = OptLevel::O0;
-    opts_yes.emit_debug   = true;
+    opts_yes.opt_level = OptLevel::O0;
+    opts_yes.emit_debug = true;
     opts_yes.emit_comments = false;
     EmitResult er_yes = ir_emit_module(mod, opts_yes);
     check(er_yes.ok, "emit_debug=true: emit ok");
-    check(contains(er_yes.vel_text, "@line"), "emit_debug=true: comentarios @line presentes");
+    check(contains(er_yes.vel_text, "@line"),
+          "emit_debug=true: comentarios @line presentes");
 }
 
 // =========================================================================
@@ -991,7 +1193,8 @@ entry:
 // =========================================================================
 static void test_new_opcodes_roundtrip() {
     using namespace ir;
-    std::cout << "\n[Test 18] Round-trip parse/print de todos los nuevos opcodes\n";
+    std::cout
+        << "\n[Test 18] Round-trip parse/print de todos los nuevos opcodes\n";
 
     const char *src = R"(
 @module test_roundtrip
@@ -1018,7 +1221,10 @@ entry:
     std::string err;
     bool ok = ir_parse(src, mod, err);
     check(ok, "new opcodes round-trip: parse ok");
-    if (!ok) { std::cout << "    error: " << err << "\n"; return; }
+    if (!ok) {
+        std::cout << "    error: " << err << "\n";
+        return;
+    }
 
     // Imprimir y re-parsear
     std::ostringstream printed;
@@ -1033,10 +1239,13 @@ entry:
     if (ok && ok2) {
         size_t cnt1 = 0, cnt2 = 0;
         for (const auto &fn : mod.functions)
-            for (const auto &bb : fn.blocks) cnt1 += bb.instrs.size();
+            for (const auto &bb : fn.blocks)
+                cnt1 += bb.instrs.size();
         for (const auto &fn : mod2.functions)
-            for (const auto &bb : fn.blocks) cnt2 += bb.instrs.size();
-        check(cnt1 == cnt2, "new opcodes round-trip: mismo numero de instrucciones");
+            for (const auto &bb : fn.blocks)
+                cnt2 += bb.instrs.size();
+        check(cnt1 == cnt2,
+              "new opcodes round-trip: mismo numero de instrucciones");
     }
 }
 
@@ -1065,6 +1274,7 @@ int main() {
     test_emit_debug();
     test_new_opcodes_roundtrip();
 
-    std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail << " FAIL ===\n";
+    std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail
+              << " FAIL ===\n";
     return g_fail == 0 ? 0 : 1;
 }

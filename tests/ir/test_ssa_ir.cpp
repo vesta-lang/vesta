@@ -55,32 +55,30 @@ static void check(bool cond, const char *msg) {
 static void test_type_roundtrip() {
     std::cout << "\n[Test 1] ir_type_name / ir_type_parse round-trip\n";
 
-    struct { ir::IrType t; const char *expected; } cases[] = {
-        { ir::IrType::VOID,   "void"   },
-        { ir::IrType::I8,     "i8"     },
-        { ir::IrType::I16,    "i16"    },
-        { ir::IrType::I32,    "i32"    },
-        { ir::IrType::I64,    "i64"    },
-        { ir::IrType::U8,     "u8"     },
-        { ir::IrType::U16,    "u16"    },
-        { ir::IrType::U32,    "u32"    },
-        { ir::IrType::U64,    "u64"    },
-        { ir::IrType::F32,    "f32"    },
-        { ir::IrType::F64,    "f64"    },
-        { ir::IrType::PTR,    "ptr"    },
-        { ir::IrType::HANDLE, "handle" },
-        { ir::IrType::BOOL,   "bool"   },
+    struct {
+        ir::IrType t;
+        const char *expected;
+    } cases[] = {
+        {ir::IrType::VOID, "void"},     {ir::IrType::I8, "i8"},
+        {ir::IrType::I16, "i16"},       {ir::IrType::I32, "i32"},
+        {ir::IrType::I64, "i64"},       {ir::IrType::U8, "u8"},
+        {ir::IrType::U16, "u16"},       {ir::IrType::U32, "u32"},
+        {ir::IrType::U64, "u64"},       {ir::IrType::F32, "f32"},
+        {ir::IrType::F64, "f64"},       {ir::IrType::PTR, "ptr"},
+        {ir::IrType::HANDLE, "handle"}, {ir::IrType::BOOL, "bool"},
     };
 
     for (auto &c : cases) {
         const char *name = ir::ir_type_name(c.t);
         char msg[64];
-        snprintf(msg, sizeof(msg), "ir_type_name(%s) == \"%s\"", c.expected, c.expected);
+        snprintf(msg, sizeof(msg), "ir_type_name(%s) == \"%s\"", c.expected,
+                 c.expected);
         check(std::string(name) == c.expected, msg);
 
         ir::IrType parsed;
         bool ok = ir::ir_type_parse(c.expected, parsed);
-        snprintf(msg, sizeof(msg), "ir_type_parse(\"%s\") round-trip", c.expected);
+        snprintf(msg, sizeof(msg), "ir_type_parse(\"%s\") round-trip",
+                 c.expected);
         check(ok && parsed == c.t, msg);
     }
 }
@@ -92,103 +90,106 @@ static void test_type_roundtrip() {
 static void test_op_roundtrip() {
     std::cout << "\n[Test 2] ir_op_name / ir_op_parse round-trip\n";
 
-    struct { ir::IrOp op; const char *expected; } cases[] = {
-        { ir::IrOp::CONST,    "const"    },
-        { ir::IrOp::MOV,      "mov"      },
-        { ir::IrOp::ADD,      "add"      },
-        { ir::IrOp::SUB,      "sub"      },
-        { ir::IrOp::MUL,      "mul"      },
-        { ir::IrOp::DIV,      "div"      },
-        { ir::IrOp::MOD,      "mod"      },
-        { ir::IrOp::NEG,      "neg"      },
-        { ir::IrOp::FADD,     "fadd"     },
-        { ir::IrOp::FSUB,     "fsub"     },
-        { ir::IrOp::FMUL,     "fmul"     },
-        { ir::IrOp::FDIV,     "fdiv"     },
-        { ir::IrOp::FNEG,     "fneg"     },
-        { ir::IrOp::FABS,     "fabs"     },
-        { ir::IrOp::FSQRT,    "fsqrt"    },
-        { ir::IrOp::FMIN,     "fmin"     },
-        { ir::IrOp::FMAX,     "fmax"     },
-        { ir::IrOp::AND,      "and"      },
-        { ir::IrOp::OR,       "or"       },
-        { ir::IrOp::XOR,      "xor"      },
-        { ir::IrOp::NOT,      "not"      },
-        { ir::IrOp::SHL,      "shl"      },
-        { ir::IrOp::SHR,      "shr"      },
-        { ir::IrOp::SAR,      "sar"      },
-        { ir::IrOp::CMP_EQ,   "cmp.eq"   },
-        { ir::IrOp::CMP_NE,   "cmp.ne"   },
-        { ir::IrOp::CMP_LT,   "cmp.lt"   },
-        { ir::IrOp::CMP_GT,   "cmp.gt"   },
-        { ir::IrOp::CMP_LE,   "cmp.le"   },
-        { ir::IrOp::CMP_GE,   "cmp.ge"   },
-        { ir::IrOp::CMP_ULT,  "cmp.ult"  },
-        { ir::IrOp::CMP_UGT,  "cmp.ugt"  },
-        { ir::IrOp::CMP_ULE,  "cmp.ule"  },
-        { ir::IrOp::CMP_UGE,  "cmp.uge"  },
-        { ir::IrOp::FCMP_EQ,  "fcmp.eq"  },
-        { ir::IrOp::FCMP_NE,  "fcmp.ne"  },
-        { ir::IrOp::FCMP_LT,  "fcmp.lt"  },
-        { ir::IrOp::FCMP_GT,  "fcmp.gt"  },
-        { ir::IrOp::FCMP_LE,  "fcmp.le"  },
-        { ir::IrOp::FCMP_GE,  "fcmp.ge"  },
-        { ir::IrOp::CAST,     "cast"     },
-        { ir::IrOp::ZEXT,     "zext"     },
-        { ir::IrOp::SEXT,     "sext"     },
-        { ir::IrOp::TRUNC,    "trunc"    },
-        { ir::IrOp::ITOF,     "itof"     },
-        { ir::IrOp::UITOF,    "uitof"    },
-        { ir::IrOp::FTOI,     "ftoi"     },
-        { ir::IrOp::FTOUI,    "ftoui"    },
-        { ir::IrOp::F32TOF64, "f32tof64" },
-        { ir::IrOp::F64TOF32, "f64tof32" },
-        { ir::IrOp::BITCAST,  "bitcast"  },
-        { ir::IrOp::BR,       "br"       },
-        { ir::IrOp::BR_COND,  "br.cond"  },
-        { ir::IrOp::RET,      "ret"      },
-        { ir::IrOp::UNREACHABLE, "unreachable" },
-        { ir::IrOp::PHI,      "phi"      },
-        { ir::IrOp::CALL,     "call"     },
-        { ir::IrOp::CALLIND,  "callind"  },
-        { ir::IrOp::TAILCALL, "tailcall" },
-        { ir::IrOp::CALLVIRT, "callvirt" },
-        { ir::IrOp::CALLN,    "calln"    },
-        { ir::IrOp::ALLOCA,   "alloca"   },
-        { ir::IrOp::LOAD,     "load"     },
-        { ir::IrOp::STORE,    "store"    },
-        { ir::IrOp::MEMCPY,   "memcpy"   },
-        { ir::IrOp::NEWOBJ,   "newobj"   },
-        { ir::IrOp::GETFIELD, "getfield" },
-        { ir::IrOp::SETFIELD, "setfield" },
-        { ir::IrOp::INSTANCEOF, "instanceof" },
-        { ir::IrOp::CHECKCAST, "checkcast" },
-        { ir::IrOp::ISNULL,   "isnull"   },
-        { ir::IrOp::UNWRAP,   "unwrap"   },
-        { ir::IrOp::SPECIALIZE, "specialize" },
-        { ir::IrOp::THROW,    "throw"    },
-        { ir::IrOp::TRYENTER, "tryenter" },
-        { ir::IrOp::TRYLEAVE, "tryleave" },
-        { ir::IrOp::LANDINGPAD, "landingpad" },
-        { ir::IrOp::FUTURE,   "future"   },
-        { ir::IrOp::AWAIT,    "await"    },
-        { ir::IrOp::FULFILL,  "fulfill"  },
-        { ir::IrOp::REJECT,   "reject"   },
-        { ir::IrOp::MSGSEND,  "msgsend"  },
-        { ir::IrOp::MSGRECV,  "msgrecv"  },
-        { ir::IrOp::RSPAWN,   "rspawn"   },
-        { ir::IrOp::MONENTER, "monenter" },
-        { ir::IrOp::MONEXIT,  "monexit"  },
-        { ir::IrOp::MONWAIT,  "monwait"  },
-        { ir::IrOp::MONNOTI,  "monnoti"  },
-        { ir::IrOp::MONNOTA,  "monnota"  },
-        { ir::IrOp::GETPROC,  "getproc"  },
-        { ir::IrOp::GETVM,    "getvm"    },
-        { ir::IrOp::GETMGR,   "getmgr"   },
-        { ir::IrOp::SPAWN,    "spawn"    },
-        { ir::IrOp::RESUME,   "resume"   },
-        { ir::IrOp::YIELD,    "yield"    },
-        { ir::IrOp::SWAPCTX,  "swapctx"  },
+    struct {
+        ir::IrOp op;
+        const char *expected;
+    } cases[] = {
+        {ir::IrOp::CONST, "const"},
+        {ir::IrOp::MOV, "mov"},
+        {ir::IrOp::ADD, "add"},
+        {ir::IrOp::SUB, "sub"},
+        {ir::IrOp::MUL, "mul"},
+        {ir::IrOp::DIV, "div"},
+        {ir::IrOp::MOD, "mod"},
+        {ir::IrOp::NEG, "neg"},
+        {ir::IrOp::FADD, "fadd"},
+        {ir::IrOp::FSUB, "fsub"},
+        {ir::IrOp::FMUL, "fmul"},
+        {ir::IrOp::FDIV, "fdiv"},
+        {ir::IrOp::FNEG, "fneg"},
+        {ir::IrOp::FABS, "fabs"},
+        {ir::IrOp::FSQRT, "fsqrt"},
+        {ir::IrOp::FMIN, "fmin"},
+        {ir::IrOp::FMAX, "fmax"},
+        {ir::IrOp::AND, "and"},
+        {ir::IrOp::OR, "or"},
+        {ir::IrOp::XOR, "xor"},
+        {ir::IrOp::NOT, "not"},
+        {ir::IrOp::SHL, "shl"},
+        {ir::IrOp::SHR, "shr"},
+        {ir::IrOp::SAR, "sar"},
+        {ir::IrOp::CMP_EQ, "cmp.eq"},
+        {ir::IrOp::CMP_NE, "cmp.ne"},
+        {ir::IrOp::CMP_LT, "cmp.lt"},
+        {ir::IrOp::CMP_GT, "cmp.gt"},
+        {ir::IrOp::CMP_LE, "cmp.le"},
+        {ir::IrOp::CMP_GE, "cmp.ge"},
+        {ir::IrOp::CMP_ULT, "cmp.ult"},
+        {ir::IrOp::CMP_UGT, "cmp.ugt"},
+        {ir::IrOp::CMP_ULE, "cmp.ule"},
+        {ir::IrOp::CMP_UGE, "cmp.uge"},
+        {ir::IrOp::FCMP_EQ, "fcmp.eq"},
+        {ir::IrOp::FCMP_NE, "fcmp.ne"},
+        {ir::IrOp::FCMP_LT, "fcmp.lt"},
+        {ir::IrOp::FCMP_GT, "fcmp.gt"},
+        {ir::IrOp::FCMP_LE, "fcmp.le"},
+        {ir::IrOp::FCMP_GE, "fcmp.ge"},
+        {ir::IrOp::CAST, "cast"},
+        {ir::IrOp::ZEXT, "zext"},
+        {ir::IrOp::SEXT, "sext"},
+        {ir::IrOp::TRUNC, "trunc"},
+        {ir::IrOp::ITOF, "itof"},
+        {ir::IrOp::UITOF, "uitof"},
+        {ir::IrOp::FTOI, "ftoi"},
+        {ir::IrOp::FTOUI, "ftoui"},
+        {ir::IrOp::F32TOF64, "f32tof64"},
+        {ir::IrOp::F64TOF32, "f64tof32"},
+        {ir::IrOp::BITCAST, "bitcast"},
+        {ir::IrOp::BR, "br"},
+        {ir::IrOp::BR_COND, "br.cond"},
+        {ir::IrOp::RET, "ret"},
+        {ir::IrOp::UNREACHABLE, "unreachable"},
+        {ir::IrOp::PHI, "phi"},
+        {ir::IrOp::CALL, "call"},
+        {ir::IrOp::CALLIND, "callind"},
+        {ir::IrOp::TAILCALL, "tailcall"},
+        {ir::IrOp::CALLVIRT, "callvirt"},
+        {ir::IrOp::CALLN, "calln"},
+        {ir::IrOp::ALLOCA, "alloca"},
+        {ir::IrOp::LOAD, "load"},
+        {ir::IrOp::STORE, "store"},
+        {ir::IrOp::MEMCPY, "memcpy"},
+        {ir::IrOp::NEWOBJ, "newobj"},
+        {ir::IrOp::GETFIELD, "getfield"},
+        {ir::IrOp::SETFIELD, "setfield"},
+        {ir::IrOp::INSTANCEOF, "instanceof"},
+        {ir::IrOp::CHECKCAST, "checkcast"},
+        {ir::IrOp::ISNULL, "isnull"},
+        {ir::IrOp::UNWRAP, "unwrap"},
+        {ir::IrOp::SPECIALIZE, "specialize"},
+        {ir::IrOp::THROW, "throw"},
+        {ir::IrOp::TRYENTER, "tryenter"},
+        {ir::IrOp::TRYLEAVE, "tryleave"},
+        {ir::IrOp::LANDINGPAD, "landingpad"},
+        {ir::IrOp::FUTURE, "future"},
+        {ir::IrOp::AWAIT, "await"},
+        {ir::IrOp::FULFILL, "fulfill"},
+        {ir::IrOp::REJECT, "reject"},
+        {ir::IrOp::MSGSEND, "msgsend"},
+        {ir::IrOp::MSGRECV, "msgrecv"},
+        {ir::IrOp::RSPAWN, "rspawn"},
+        {ir::IrOp::MONENTER, "monenter"},
+        {ir::IrOp::MONEXIT, "monexit"},
+        {ir::IrOp::MONWAIT, "monwait"},
+        {ir::IrOp::MONNOTI, "monnoti"},
+        {ir::IrOp::MONNOTA, "monnota"},
+        {ir::IrOp::GETPROC, "getproc"},
+        {ir::IrOp::GETVM, "getvm"},
+        {ir::IrOp::GETMGR, "getmgr"},
+        {ir::IrOp::SPAWN, "spawn"},
+        {ir::IrOp::RESUME, "resume"},
+        {ir::IrOp::YIELD, "yield"},
+        {ir::IrOp::SWAPCTX, "swapctx"},
     };
 
     for (auto &c : cases) {
@@ -199,7 +200,8 @@ static void test_op_roundtrip() {
 
         ir::IrOp parsed;
         bool ok = ir::ir_op_parse(c.expected, parsed);
-        snprintf(msg, sizeof(msg), "ir_op_parse(\"%s\") round-trip", c.expected);
+        snprintf(msg, sizeof(msg), "ir_op_parse(\"%s\") round-trip",
+                 c.expected);
         check(ok && parsed == c.op, msg);
     }
 }
@@ -213,7 +215,7 @@ static ir::IrModule build_add_module() {
     mod.name = "test.add";
 
     ir::IrFunction fn;
-    fn.name     = "add";
+    fn.name = "add";
     fn.ret_type = ir::IrType::I64;
 
     // parametros: a: i64, b: i64
@@ -230,19 +232,19 @@ static ir::IrModule build_add_module() {
     ir::IrValueId vr = fn.new_value(ir::IrType::I64, "0");
     {
         ir::IrInstr ins;
-        ins.op   = ir::IrOp::ADD;
+        ins.op = ir::IrOp::ADD;
         ins.type = ir::IrType::I64;
-        ins.dst  = vr;
-        ins.operands = { va, vb };
+        ins.dst = vr;
+        ins.operands = {va, vb};
         fn.append(entry, ins);
     }
 
     // ret.i64 %0
     {
         ir::IrInstr ins;
-        ins.op   = ir::IrOp::RET;
+        ins.op = ir::IrOp::RET;
         ins.type = ir::IrType::I64;
-        ins.operands = { vr };
+        ins.operands = {vr};
         fn.append(entry, ins);
     }
 
@@ -259,12 +261,15 @@ static void test_build_and_verify_add() {
     bool ok = ir::ir_verify(mod, errors);
 
     if (!ok) {
-        for (auto &e : errors) std::cout << "    ERROR: " << e << "\n";
+        for (auto &e : errors)
+            std::cout << "    ERROR: " << e << "\n";
     }
     check(ok, "ir_verify(add) sin errores");
     check(mod.functions.size() == 1, "modulo tiene exactamente 1 funcion");
-    check(mod.functions[0].blocks.size() == 1, "funcion tiene exactamente 1 bloque");
-    check(mod.functions[0].blocks[0].instrs.size() == 2, "entry tiene 2 instrucciones");
+    check(mod.functions[0].blocks.size() == 1,
+          "funcion tiene exactamente 1 bloque");
+    check(mod.functions[0].blocks[0].instrs.size() == 2,
+          "entry tiene 2 instrucciones");
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +299,9 @@ static void test_print_parse_add() {
 
     std::vector<std::string> verr;
     bool vok = ir::ir_verify(parsed, verr);
-    if (!vok) for (auto &e : verr) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : verr)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify del modulo parseado");
 }
 
@@ -307,14 +314,14 @@ static ir::IrModule build_abs_module() {
     mod.name = "test.abs";
 
     ir::IrFunction fn;
-    fn.name     = "abs_val";
+    fn.name = "abs_val";
     fn.ret_type = ir::IrType::I64;
 
     ir::IrValueId vx = fn.new_value(ir::IrType::I64, "x");
     fn.params.push_back(vx);
     fn.values[vx].is_param = true;
 
-    ir::IrBlockId entry  = fn.new_block("entry");
+    ir::IrBlockId entry = fn.new_block("entry");
     ir::IrBlockId bb_neg = fn.new_block("negate");
     ir::IrBlockId bb_end = fn.new_block("end");
 
@@ -322,8 +329,8 @@ static ir::IrModule build_abs_module() {
     ir::IrValueId v_zero = fn.new_value(ir::IrType::I64, "zero");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::I64;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::I64;
         c.dst = v_zero;
         c.imm = 0;
         fn.append(entry, c);
@@ -332,43 +339,43 @@ static ir::IrModule build_abs_module() {
     ir::IrValueId v_cond = fn.new_value(ir::IrType::BOOL, "cond");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::CMP_LT;
-        c.type    = ir::IrType::I64;
-        c.dst     = v_cond;
-        c.operands= { vx, v_zero };
+        c.op = ir::IrOp::CMP_LT;
+        c.type = ir::IrType::I64;
+        c.dst = v_cond;
+        c.operands = {vx, v_zero};
         fn.append(entry, c);
     }
 
     // br.cond %cond, negate, end
     {
         ir::IrInstr c;
-        c.op           = ir::IrOp::BR_COND;
-        c.type         = ir::IrType::VOID;
-        c.operands     = { v_cond };
+        c.op = ir::IrOp::BR_COND;
+        c.type = ir::IrType::VOID;
+        c.operands = {v_cond};
         c.target_block = bb_neg;
-        c.false_block  = bb_end;
+        c.false_block = bb_end;
         fn.append(entry, c);
     }
 
-    fn.blocks[bb_neg].preds = { entry };
-    fn.blocks[bb_end].preds = { entry, bb_neg };
+    fn.blocks[bb_neg].preds = {entry};
+    fn.blocks[bb_end].preds = {entry, bb_neg};
 
     // negate: %neg = neg.i64 %x
     ir::IrValueId v_neg = fn.new_value(ir::IrType::I64, "negx");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::NEG;
-        c.type    = ir::IrType::I64;
-        c.dst     = v_neg;
-        c.operands= { vx };
+        c.op = ir::IrOp::NEG;
+        c.type = ir::IrType::I64;
+        c.dst = v_neg;
+        c.operands = {vx};
         fn.append(bb_neg, c);
     }
 
     // br end
     {
         ir::IrInstr c;
-        c.op           = ir::IrOp::BR;
-        c.type         = ir::IrType::VOID;
+        c.op = ir::IrOp::BR;
+        c.type = ir::IrType::VOID;
         c.target_block = bb_end;
         fn.append(bb_neg, c);
     }
@@ -377,19 +384,19 @@ static ir::IrModule build_abs_module() {
     ir::IrValueId v_result = fn.new_value(ir::IrType::I64, "result");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::PHI;
-        c.type    = ir::IrType::I64;
-        c.dst     = v_result;
-        c.phi_args= { {vx, entry}, {v_neg, bb_neg} };
+        c.op = ir::IrOp::PHI;
+        c.type = ir::IrType::I64;
+        c.dst = v_result;
+        c.phi_args = {{vx, entry}, {v_neg, bb_neg}};
         fn.append(bb_end, c);
     }
 
     // ret.i64 %result
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::RET;
-        c.type    = ir::IrType::I64;
-        c.operands= { v_result };
+        c.op = ir::IrOp::RET;
+        c.type = ir::IrType::I64;
+        c.operands = {v_result};
         fn.append(bb_end, c);
     }
 
@@ -404,7 +411,9 @@ static void test_phi_brcond() {
 
     std::vector<std::string> errs;
     bool vok = ir::ir_verify(orig, errs);
-    if (!vok) for (auto &e : errs) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : errs)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify(abs_val) sin errores");
 
     std::ostringstream oss;
@@ -420,7 +429,9 @@ static void test_phi_brcond() {
 
     std::vector<std::string> verrs2;
     bool vok2 = ir::ir_verify(parsed, verrs2);
-    if (!vok2) for (auto &e : verrs2) std::cout << "    VERIFY2: " << e << "\n";
+    if (!vok2)
+        for (auto &e : verrs2)
+            std::cout << "    VERIFY2: " << e << "\n";
     check(vok2, "ir_verify(abs_val parsed)");
 }
 
@@ -436,7 +447,7 @@ static void test_calln() {
     mod.native_libs.push_back("stdlib/native/io/vesta_io");
 
     ir::IrFunction fn;
-    fn.name     = "print_hello";
+    fn.name = "print_hello";
     fn.ret_type = ir::IrType::VOID;
 
     ir::IrBlockId entry = fn.new_block("entry");
@@ -445,8 +456,8 @@ static void test_calln() {
     ir::IrValueId v_proc = fn.new_value(ir::IrType::PTR, "proc");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::GETPROC;
-        c.type= ir::IrType::PTR;
+        c.op = ir::IrOp::GETPROC;
+        c.type = ir::IrType::PTR;
         c.dst = v_proc;
         fn.append(entry, c);
     }
@@ -455,8 +466,8 @@ static void test_calln() {
     ir::IrValueId v_addr = fn.new_value(ir::IrType::I64, "msg_addr");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::I64;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::I64;
         c.dst = v_addr;
         c.imm = 0x1000;
         fn.append(entry, c);
@@ -466,8 +477,8 @@ static void test_calln() {
     ir::IrValueId v_len = fn.new_value(ir::IrType::I64, "len");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::I64;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::I64;
         c.dst = v_len;
         c.imm = 13;
         fn.append(entry, c);
@@ -476,19 +487,19 @@ static void test_calln() {
     // calln.void @stdlib/native/io/vesta_io:vio_println(%proc, %msg_addr, %len)
     {
         ir::IrInstr c;
-        c.op       = ir::IrOp::CALLN;
-        c.type     = ir::IrType::VOID;
-        c.dst      = ir::IR_NO_VALUE;
-        c.func_name= "stdlib/native/io/vesta_io:vio_println";
-        c.operands = { v_proc, v_addr, v_len };
+        c.op = ir::IrOp::CALLN;
+        c.type = ir::IrType::VOID;
+        c.dst = ir::IR_NO_VALUE;
+        c.func_name = "stdlib/native/io/vesta_io:vio_println";
+        c.operands = {v_proc, v_addr, v_len};
         fn.append(entry, c);
     }
 
     // ret.void
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::RET;
-        c.type= ir::IrType::VOID;
+        c.op = ir::IrOp::RET;
+        c.type = ir::IrType::VOID;
         fn.append(entry, c);
     }
 
@@ -496,7 +507,9 @@ static void test_calln() {
 
     std::vector<std::string> errs;
     bool vok = ir::ir_verify(mod, errs);
-    if (!vok) for (auto &e : errs) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : errs)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify(calln) sin errores");
 
     std::ostringstream oss;
@@ -515,11 +528,11 @@ static void test_calln() {
         bool found_getproc = false;
         for (auto &blk : parsed.functions[0].blocks) {
             for (auto &ins : blk.instrs) {
-                if (ins.op == ir::IrOp::CALLN)   found_calln   = true;
-                if (ins.op == ir::IrOp::GETPROC)  found_getproc = true;
+                if (ins.op == ir::IrOp::CALLN) found_calln = true;
+                if (ins.op == ir::IrOp::GETPROC) found_getproc = true;
             }
         }
-        check(found_calln,   "instruccion CALLN presente tras parseo");
+        check(found_calln, "instruccion CALLN presente tras parseo");
         check(found_getproc, "instruccion GETPROC presente tras parseo");
     }
 }
@@ -535,7 +548,7 @@ static void test_async() {
     mod.name = "test.async";
 
     ir::IrFunction fn;
-    fn.name     = "async_example";
+    fn.name = "async_example";
     fn.ret_type = ir::IrType::VOID;
 
     ir::IrBlockId entry = fn.new_block("entry");
@@ -544,8 +557,8 @@ static void test_async() {
     ir::IrValueId v_fut = fn.new_value(ir::IrType::HANDLE, "fut");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::FUTURE;
-        c.type= ir::IrType::HANDLE;
+        c.op = ir::IrOp::FUTURE;
+        c.type = ir::IrType::HANDLE;
         c.dst = v_fut;
         fn.append(entry, c);
     }
@@ -554,8 +567,8 @@ static void test_async() {
     ir::IrValueId v_val = fn.new_value(ir::IrType::I64, "val");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::I64;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::I64;
         c.dst = v_val;
         c.imm = 42;
         fn.append(entry, c);
@@ -564,9 +577,9 @@ static void test_async() {
     // fulfill %fut, %val
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::FULFILL;
-        c.type    = ir::IrType::VOID;
-        c.operands= { v_fut, v_val };
+        c.op = ir::IrOp::FULFILL;
+        c.type = ir::IrType::VOID;
+        c.operands = {v_fut, v_val};
         fn.append(entry, c);
     }
 
@@ -574,18 +587,18 @@ static void test_async() {
     ir::IrValueId v_result = fn.new_value(ir::IrType::I64, "result");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::AWAIT;
-        c.type    = ir::IrType::I64;
-        c.dst     = v_result;
-        c.operands= { v_fut };
+        c.op = ir::IrOp::AWAIT;
+        c.type = ir::IrType::I64;
+        c.dst = v_result;
+        c.operands = {v_fut};
         fn.append(entry, c);
     }
 
     // ret.void
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::RET;
-        c.type= ir::IrType::VOID;
+        c.op = ir::IrOp::RET;
+        c.type = ir::IrType::VOID;
         fn.append(entry, c);
     }
 
@@ -603,7 +616,9 @@ static void test_async() {
 
     std::vector<std::string> verrs;
     bool vok = ir::ir_verify(parsed, verrs);
-    if (!vok) for (auto &e : verrs) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : verrs)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify(async) sin errores");
 }
 
@@ -618,7 +633,7 @@ static void test_monitors() {
     mod.name = "test.monitor";
 
     ir::IrFunction fn;
-    fn.name     = "sync_example";
+    fn.name = "sync_example";
     fn.ret_type = ir::IrType::VOID;
 
     ir::IrBlockId entry = fn.new_block("entry");
@@ -627,8 +642,8 @@ static void test_monitors() {
     ir::IrValueId v_obj = fn.new_value(ir::IrType::PTR, "obj");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::PTR;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::PTR;
         c.dst = v_obj;
         c.imm = 0x2000;
         fn.append(entry, c);
@@ -637,26 +652,26 @@ static void test_monitors() {
     // monenter %obj
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::MONENTER;
-        c.type    = ir::IrType::VOID;
-        c.operands= { v_obj };
+        c.op = ir::IrOp::MONENTER;
+        c.type = ir::IrType::VOID;
+        c.operands = {v_obj};
         fn.append(entry, c);
     }
 
     // monexit %obj
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::MONEXIT;
-        c.type    = ir::IrType::VOID;
-        c.operands= { v_obj };
+        c.op = ir::IrOp::MONEXIT;
+        c.type = ir::IrType::VOID;
+        c.operands = {v_obj};
         fn.append(entry, c);
     }
 
     // ret.void
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::RET;
-        c.type= ir::IrType::VOID;
+        c.op = ir::IrOp::RET;
+        c.type = ir::IrType::VOID;
         fn.append(entry, c);
     }
 
@@ -674,7 +689,9 @@ static void test_monitors() {
 
     std::vector<std::string> verrs;
     bool vok = ir::ir_verify(parsed, verrs);
-    if (!vok) for (auto &e : verrs) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : verrs)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify(monitor) sin errores");
 }
 
@@ -689,22 +706,22 @@ static void test_exceptions() {
     mod.name = "test.exc";
 
     ir::IrFunction fn;
-    fn.name     = "exc_example";
+    fn.name = "exc_example";
     fn.ret_type = ir::IrType::VOID;
 
-    ir::IrBlockId entry   = fn.new_block("entry");
+    ir::IrBlockId entry = fn.new_block("entry");
     ir::IrBlockId handler = fn.new_block("handler");
-    ir::IrBlockId bb_end  = fn.new_block("end");
+    ir::IrBlockId bb_end = fn.new_block("end");
 
-    fn.blocks[handler].preds = { entry };
-    fn.blocks[bb_end].preds  = { entry, handler };
+    fn.blocks[handler].preds = {entry};
+    fn.blocks[bb_end].preds = {entry, handler};
 
     // %handler_addr = const.i64  (id de handler block — valor simbolico)
     ir::IrValueId v_hpc = fn.new_value(ir::IrType::I64, "hpc");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::I64;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::I64;
         c.dst = v_hpc;
         c.imm = 0xDEAD;
         fn.append(entry, c);
@@ -714,8 +731,8 @@ static void test_exceptions() {
     ir::IrValueId v_cls = fn.new_value(ir::IrType::PTR, "cls");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::PTR;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::PTR;
         c.dst = v_cls;
         c.imm = 0;
         fn.append(entry, c);
@@ -724,9 +741,9 @@ static void test_exceptions() {
     // tryenter %hpc, %cls
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::TRYENTER;
-        c.type    = ir::IrType::VOID;
-        c.operands= { v_hpc, v_cls };
+        c.op = ir::IrOp::TRYENTER;
+        c.type = ir::IrType::VOID;
+        c.operands = {v_hpc, v_cls};
         fn.append(entry, c);
     }
 
@@ -734,8 +751,8 @@ static void test_exceptions() {
     ir::IrValueId v_exc = fn.new_value(ir::IrType::PTR, "exc");
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::CONST;
-        c.type= ir::IrType::PTR;
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::PTR;
         c.dst = v_exc;
         c.imm = 0x3000;
         fn.append(entry, c);
@@ -744,25 +761,25 @@ static void test_exceptions() {
     // throw %exc  (terminador del bloque entry)
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::THROW;
-        c.type    = ir::IrType::VOID;
-        c.operands= { v_exc };
+        c.op = ir::IrOp::THROW;
+        c.type = ir::IrType::VOID;
+        c.operands = {v_exc};
         fn.append(entry, c);
     }
 
     // handler: tryleave
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::TRYLEAVE;
-        c.type= ir::IrType::VOID;
+        c.op = ir::IrOp::TRYLEAVE;
+        c.type = ir::IrType::VOID;
         fn.append(handler, c);
     }
 
     // br end
     {
         ir::IrInstr c;
-        c.op           = ir::IrOp::BR;
-        c.type         = ir::IrType::VOID;
+        c.op = ir::IrOp::BR;
+        c.type = ir::IrType::VOID;
         c.target_block = bb_end;
         fn.append(handler, c);
     }
@@ -770,8 +787,8 @@ static void test_exceptions() {
     // end: ret.void
     {
         ir::IrInstr c;
-        c.op  = ir::IrOp::RET;
-        c.type= ir::IrType::VOID;
+        c.op = ir::IrOp::RET;
+        c.type = ir::IrType::VOID;
         fn.append(bb_end, c);
     }
 
@@ -790,7 +807,9 @@ static void test_exceptions() {
 
     std::vector<std::string> verrs;
     bool vok = ir::ir_verify(parsed, verrs);
-    if (!vok) for (auto &e : verrs) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : verrs)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify(exceptions) sin errores");
 }
 
@@ -805,7 +824,7 @@ static void test_float_ops() {
     mod.name = "test.float";
 
     ir::IrFunction fn;
-    fn.name     = "float_ops";
+    fn.name = "float_ops";
     fn.ret_type = ir::IrType::F64;
 
     ir::IrValueId vn = fn.new_value(ir::IrType::I64, "n");
@@ -818,10 +837,10 @@ static void test_float_ops() {
     ir::IrValueId vf = fn.new_value(ir::IrType::F64, "f");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::ITOF;
-        c.type    = ir::IrType::F64;
-        c.dst     = vf;
-        c.operands= { vn };
+        c.op = ir::IrOp::ITOF;
+        c.type = ir::IrType::F64;
+        c.dst = vf;
+        c.operands = {vn};
         fn.append(entry, c);
     }
 
@@ -829,10 +848,10 @@ static void test_float_ops() {
     ir::IrValueId vsq = fn.new_value(ir::IrType::F64, "sq");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::FSQRT;
-        c.type    = ir::IrType::F64;
-        c.dst     = vsq;
-        c.operands= { vf };
+        c.op = ir::IrOp::FSQRT;
+        c.type = ir::IrType::F64;
+        c.dst = vsq;
+        c.operands = {vf};
         fn.append(entry, c);
     }
 
@@ -840,19 +859,19 @@ static void test_float_ops() {
     ir::IrValueId vsum = fn.new_value(ir::IrType::F64, "sum");
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::FADD;
-        c.type    = ir::IrType::F64;
-        c.dst     = vsum;
-        c.operands= { vf, vsq };
+        c.op = ir::IrOp::FADD;
+        c.type = ir::IrType::F64;
+        c.dst = vsum;
+        c.operands = {vf, vsq};
         fn.append(entry, c);
     }
 
     // ret.f64 %sum
     {
         ir::IrInstr c;
-        c.op      = ir::IrOp::RET;
-        c.type    = ir::IrType::F64;
-        c.operands= { vsum };
+        c.op = ir::IrOp::RET;
+        c.type = ir::IrType::F64;
+        c.operands = {vsum};
         fn.append(entry, c);
     }
 
@@ -870,7 +889,9 @@ static void test_float_ops() {
 
     std::vector<std::string> verrs;
     bool vok = ir::ir_verify(parsed, verrs);
-    if (!vok) for (auto &e : verrs) std::cout << "    VERIFY: " << e << "\n";
+    if (!vok)
+        for (auto &e : verrs)
+            std::cout << "    VERIFY: " << e << "\n";
     check(vok, "ir_verify(float_ops) sin errores");
 }
 
@@ -892,6 +913,7 @@ int main() {
     test_exceptions();
     test_float_ops();
 
-    std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail << " FAIL ===\n";
+    std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail
+              << " FAIL ===\n";
     return g_fail == 0 ? 0 : 1;
 }

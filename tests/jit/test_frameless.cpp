@@ -23,7 +23,8 @@
  *     (balance exacto de los push/pop de RBX y callee-saved);
  *   - una funcion CON un CALL conserva @c push rbp / mov rbp,rsp (frame intacto
  *     -> la cadena RBP que la GC camina sigue valida);
- *   - el gate @c VESTA_JIT_NO_FRAMELESS=1 fuerza el frame completo aun en hojas.
+ *   - el gate @c VESTA_JIT_NO_FRAMELESS=1 fuerza el frame completo aun en
+ * hojas.
  *
  * Es un test AISLADO (no usa el runtime ni @c test_vreg_vm, que tiene un crash
  * pre-existente en @c test_vm_gc_stackmap que enmascararia el resumen).
@@ -50,15 +51,20 @@
 using namespace jit;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(cond, msg)                                                    \
-    do { ++g_checks; if (!(cond)) { ++g_fails;                              \
-        std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__); } } while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fails;                                                         \
+            std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
+    } while (0)
 
 /** @brief Proxy con el layout que el codigo JIT VM_ABI espera (RBX=ProcessVM*,
  *  safepoint_flag@0, registers@96). */
 struct Proxy {
-    uint8_t  safepoint_flag;
-    uint8_t  _pad[VESTA_PROC_REGISTERS_OFFSET - 1];
+    uint8_t safepoint_flag;
+    uint8_t _pad[VESTA_PROC_REGISTERS_OFFSET - 1];
     uint64_t regs[VESTA_PROC_REGISTER_COUNT];
 };
 static_assert(offsetof(Proxy, regs) == VESTA_PROC_REGISTERS_OFFSET,
@@ -66,32 +72,60 @@ static_assert(offsetof(Proxy, regs) == VESTA_PROC_REGISTERS_OFFSET,
 
 /* ---- Helpers IR minimos ----------------------------------------------- */
 static ir::IrInstr konst(ir::IrValueId d, int64_t k) {
-    ir::IrInstr i; i.op = ir::IrOp::CONST; i.type = ir::IrType::I64;
-    i.dst = d; i.imm = static_cast<uint64_t>(k); return i;
+    ir::IrInstr i;
+    i.op = ir::IrOp::CONST;
+    i.type = ir::IrType::I64;
+    i.dst = d;
+    i.imm = static_cast<uint64_t>(k);
+    return i;
 }
-static ir::IrInstr bin(ir::IrOp op, ir::IrValueId d, ir::IrValueId a, ir::IrValueId b) {
-    ir::IrInstr i; i.op = op; i.type = ir::IrType::I64;
-    i.dst = d; i.operands = { a, b }; return i;
+static ir::IrInstr bin(ir::IrOp op, ir::IrValueId d, ir::IrValueId a,
+                       ir::IrValueId b) {
+    ir::IrInstr i;
+    i.op = op;
+    i.type = ir::IrType::I64;
+    i.dst = d;
+    i.operands = {a, b};
+    return i;
 }
 static ir::IrInstr ret1(ir::IrValueId v) {
-    ir::IrInstr i; i.op = ir::IrOp::RET; i.type = ir::IrType::I64;
-    i.operands = { v }; return i;
+    ir::IrInstr i;
+    i.op = ir::IrOp::RET;
+    i.type = ir::IrType::I64;
+    i.operands = {v};
+    return i;
 }
-static ir::IrInstr cmp(ir::IrOp op, ir::IrValueId d, ir::IrValueId a, ir::IrValueId b) {
-    ir::IrInstr i; i.op = op; i.type = ir::IrType::BOOL;
-    i.dst = d; i.operands = { a, b }; return i;
+static ir::IrInstr cmp(ir::IrOp op, ir::IrValueId d, ir::IrValueId a,
+                       ir::IrValueId b) {
+    ir::IrInstr i;
+    i.op = op;
+    i.type = ir::IrType::BOOL;
+    i.dst = d;
+    i.operands = {a, b};
+    return i;
 }
 static ir::IrInstr br(ir::IrBlockId t) {
-    ir::IrInstr i; i.op = ir::IrOp::BR; i.target_block = t; return i;
+    ir::IrInstr i;
+    i.op = ir::IrOp::BR;
+    i.target_block = t;
+    return i;
 }
 static ir::IrInstr brc(ir::IrValueId c, ir::IrBlockId t, ir::IrBlockId f) {
-    ir::IrInstr i; i.op = ir::IrOp::BR_COND; i.operands = { c };
-    i.target_block = t; i.false_block = f; return i;
+    ir::IrInstr i;
+    i.op = ir::IrOp::BR_COND;
+    i.operands = {c};
+    i.target_block = t;
+    i.false_block = f;
+    return i;
 }
 static ir::IrInstr phi2(ir::IrValueId d, ir::IrValueId v0, ir::IrBlockId b0,
                         ir::IrValueId v1, ir::IrBlockId b1) {
-    ir::IrInstr i; i.op = ir::IrOp::PHI; i.type = ir::IrType::I64; i.dst = d;
-    i.phi_args = { { v0, b0 }, { v1, b1 } }; return i;
+    ir::IrInstr i;
+    i.op = ir::IrOp::PHI;
+    i.type = ir::IrType::I64;
+    i.dst = d;
+    i.phi_args = {{v0, b0}, {v1, b1}};
+    return i;
 }
 
 /** @brief Compila @p fn (VM_ABI), captura los bytes en @p bytes y la ejecuta
@@ -112,15 +146,15 @@ static bool compile_run(const ir::IrFunction &fn, Proxy &px,
     std::memcpy(code, bytes.data(), bytes.size());
     cc.commit(code, bytes.size());
     reinterpret_cast<void (*)(void *)>(code)(&px);
-    asm volatile("" : : "r"(&cc) : "memory");  // mantener cc viva
+    asm volatile("" : : "r"(&cc) : "memory"); // mantener cc viva
     return true;
 }
 
 /** @brief True si los bytes empiezan con @c push rbp; mov rbp,rsp
  *  (0x55 0x48 0x89 0xe5) -> hay frame pointer. */
 static bool has_frame_pointer(const std::vector<uint8_t> &b) {
-    return b.size() >= 4 && b[0] == 0x55 && b[1] == 0x48 &&
-           b[2] == 0x89 && b[3] == 0xe5;
+    return b.size() >= 4 && b[0] == 0x55 && b[1] == 0x48 && b[2] == 0x89 &&
+           b[3] == 0xe5;
 }
 /** @brief True si los bytes terminan con @c pop rbp; ret (0x5d 0xc3). */
 static bool ends_with_pop_rbp(const std::vector<uint8_t> &b) {
@@ -136,11 +170,13 @@ static bool contains_mov_rbp_rsp(const std::vector<uint8_t> &b) {
 
 /** @brief Construye una hoja vm_abi simple: add(a,b) = a + b. */
 static ir::IrFunction make_leaf_add() {
-    ir::IrFunction fn; fn.name = "add"; fn.ret_type = ir::IrType::I64;
+    ir::IrFunction fn;
+    fn.name = "add";
+    fn.ret_type = ir::IrType::I64;
     auto a = fn.new_value(ir::IrType::I64);
     auto b = fn.new_value(ir::IrType::I64);
     auto c = fn.new_value(ir::IrType::I64);
-    fn.params = { a, b };
+    fn.params = {a, b};
     auto bb = fn.new_block("e");
     fn.append(bb, bin(ir::IrOp::ADD, c, a, b));
     fn.append(bb, ret1(c));
@@ -151,16 +187,22 @@ static ir::IrFunction make_leaf_add() {
 static void test_leaf_is_frameless() {
     std::printf("[frameless] hoja add(a,b): sin push rbp, ejecuta 40+2=42\n");
     ir::IrFunction fn = make_leaf_add();
-    Proxy px; std::memset(&px, 0, sizeof(px));
-    px.regs[1] = 40; px.regs[2] = 2;
+    Proxy px;
+    std::memset(&px, 0, sizeof(px));
+    px.regs[1] = 40;
+    px.regs[2] = 2;
     std::vector<uint8_t> bytes;
     CHECK(compile_run(fn, px, bytes), "compila + ejecuta (add)");
     CHECK(!bytes.empty(), "emitio bytes");
-    CHECK(!has_frame_pointer(bytes), "hoja NO empieza con push rbp/mov rbp,rsp");
-    CHECK(!contains_mov_rbp_rsp(bytes), "hoja NO usa el frame pointer en ningun sitio");
+    CHECK(!has_frame_pointer(bytes),
+          "hoja NO empieza con push rbp/mov rbp,rsp");
+    CHECK(!contains_mov_rbp_rsp(bytes),
+          "hoja NO usa el frame pointer en ningun sitio");
     CHECK(!ends_with_pop_rbp(bytes), "hoja NO termina con pop rbp; ret");
-    /* vm_abi conserva RBX (callee-saved host = ProcessVM*): primer byte = push rbx. */
-    CHECK(!bytes.empty() && bytes[0] == 0x53, "primer byte = push rbx (0x53), no push rbp");
+    /* vm_abi conserva RBX (callee-saved host = ProcessVM*): primer byte = push
+     * rbx. */
+    CHECK(!bytes.empty() && bytes[0] == 0x53,
+          "primer byte = push rbx (0x53), no push rbp");
     CHECK(px.regs[0] == 42, "add(40,2)==42 (balance push/pop correcto)");
     if (px.regs[0] != 42)
         std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
@@ -172,19 +214,23 @@ static void test_leaf_is_frameless() {
  * con un loop.  n=10 -> 45. */
 static void test_leaf_loop_is_frameless() {
     std::printf("[frameless] hoja sum(n) con loop: sin push rbp, sum(10)=45\n");
-    ir::IrFunction fn; fn.name = "sum_n"; fn.ret_type = ir::IrType::I64;
+    ir::IrFunction fn;
+    fn.name = "sum_n";
+    fn.ret_type = ir::IrType::I64;
     auto T = ir::IrType::I64;
     ir::IrValueId n = fn.new_value(T);
     ir::IrValueId zero = fn.new_value(T), one = fn.new_value(T);
     ir::IrValueId i = fn.new_value(T), sum = fn.new_value(T);
     ir::IrValueId cond = fn.new_value(ir::IrType::BOOL);
     ir::IrValueId sum_next = fn.new_value(T), i_next = fn.new_value(T);
-    fn.params = { n };
+    fn.params = {n};
     ir::IrBlockId b0 = fn.new_block("entry");
     ir::IrBlockId b1 = fn.new_block("header");
     ir::IrBlockId b2 = fn.new_block("body");
     ir::IrBlockId b3 = fn.new_block("exit");
-    fn.append(b0, konst(zero, 0)); fn.append(b0, konst(one, 1)); fn.append(b0, br(b1));
+    fn.append(b0, konst(zero, 0));
+    fn.append(b0, konst(one, 1));
+    fn.append(b0, br(b1));
     fn.append(b1, phi2(i, zero, b0, i_next, b2));
     fn.append(b1, phi2(sum, zero, b0, sum_next, b2));
     fn.append(b1, cmp(ir::IrOp::CMP_LT, cond, i, n));
@@ -194,12 +240,14 @@ static void test_leaf_loop_is_frameless() {
     fn.append(b2, br(b1));
     fn.append(b3, ret1(sum));
 
-    Proxy px; std::memset(&px, 0, sizeof(px));
+    Proxy px;
+    std::memset(&px, 0, sizeof(px));
     px.regs[1] = 10;
     std::vector<uint8_t> bytes;
     CHECK(compile_run(fn, px, bytes), "compila + ejecuta (sum)");
     CHECK(!has_frame_pointer(bytes), "hoja con loop NO empieza con push rbp");
-    CHECK(!contains_mov_rbp_rsp(bytes), "hoja con loop NO usa el frame pointer");
+    CHECK(!contains_mov_rbp_rsp(bytes),
+          "hoja con loop NO usa el frame pointer");
     CHECK(px.regs[0] == 45, "sum(0..9)==45 (balance correcto con saltos)");
     if (px.regs[0] != 45)
         std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
@@ -220,14 +268,23 @@ extern "C" void frameless_call_stub(void *proc) {
  * correr).  g()=50, x=7 -> 57. */
 static void test_call_preserves_frame() {
     std::printf("[frameless] funcion con CALL conserva push rbp (GC-safety)\n");
-    ir::IrFunction fn; fn.name = "caller"; fn.ret_type = ir::IrType::I64;
+    ir::IrFunction fn;
+    fn.name = "caller";
+    fn.ret_type = ir::IrType::I64;
     auto I64 = ir::IrType::I64;
-    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64), s = fn.new_value(I64);
-    fn.params = { x };
+    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64),
+                  s = fn.new_value(I64);
+    fn.params = {x};
     ir::IrBlockId bb = fn.new_block("e");
-    { ir::IrInstr c; c.op = ir::IrOp::CALL; c.type = I64; c.dst = r;
-      c.func_name = "g"; fn.append(bb, c); }
-    fn.append(bb, bin(ir::IrOp::ADD, s, r, x));   // x vivo a traves del call
+    {
+        ir::IrInstr c;
+        c.op = ir::IrOp::CALL;
+        c.type = I64;
+        c.dst = r;
+        c.func_name = "g";
+        fn.append(bb, c);
+    }
+    fn.append(bb, bin(ir::IrOp::ADD, s, r, x)); // x vivo a traves del call
     fn.append(bb, ret1(s));
 
     CallResolver resolver = [](const std::string &n) -> uint64_t {
@@ -236,13 +293,16 @@ static void test_call_preserves_frame() {
                 reinterpret_cast<void *>(&frameless_call_stub));
         return 0;
     };
-    Proxy px; std::memset(&px, 0, sizeof(px));
+    Proxy px;
+    std::memset(&px, 0, sizeof(px));
     px.regs[1] = 7;
     std::vector<uint8_t> bytes;
     CHECK(compile_run(fn, px, bytes, resolver), "compila + ejecuta (caller)");
-    CHECK(has_frame_pointer(bytes),
-          "funcion CON call SI empieza con push rbp/mov rbp,rsp (frame intacto)");
-    CHECK(ends_with_pop_rbp(bytes), "funcion CON call termina con pop rbp; ret");
+    CHECK(
+        has_frame_pointer(bytes),
+        "funcion CON call SI empieza con push rbp/mov rbp,rsp (frame intacto)");
+    CHECK(ends_with_pop_rbp(bytes),
+          "funcion CON call termina con pop rbp; ret");
     CHECK(px.regs[0] == 57, "caller(7) == g()(50) + 7 == 57");
     if (px.regs[0] != 57)
         std::printf("    regs[0]=%llu\n", (unsigned long long)px.regs[0]);
@@ -255,7 +315,8 @@ static void test_call_preserves_frame() {
 
 int main() {
     std::setbuf(stdout, nullptr);
-    std::printf("=== test_frameless (Phase D.8 / C2: codegen frameless de hojas) ===\n");
+    std::printf("=== test_frameless (Phase D.8 / C2: codegen frameless de "
+                "hojas) ===\n");
     test_leaf_is_frameless();
     test_leaf_loop_is_frameless();
     test_call_preserves_frame();

@@ -50,7 +50,7 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     imap.reserve(fn.values.size());
     for (const auto &v : fn.values) {
         LiveInterval li;
-        li.id  = v.id;
+        li.id = v.id;
         li.def = UNDEF; // no definido aun
         li.end = 0;
         imap[v.id] = li;
@@ -90,7 +90,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
         auto it = imap.find(vid);
         if (it == imap.end()) return;
         if (it->second.def == UNDEF) it->second.def = def_pos;
-        // en SSA la definicion ocurre exactamente una vez; ignoramos redefiniciones
+        // en SSA la definicion ocurre exactamente una vez; ignoramos
+        // redefiniciones
     };
 
     // Permite SOBREESCRIBIR el def con una posicion mas temprana.  Solo
@@ -118,7 +119,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     for (size_t b = 0; b < nblocks; ++b) {
         const IrBlock &bb = fn.blocks[b];
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
-            uint32_t instr_pos = result.block_start[b] + static_cast<uint32_t>(i);
+            uint32_t instr_pos =
+                result.block_start[b] + static_cast<uint32_t>(i);
             const IrInstr &ins = bb.instrs[i];
 
             // Definicion: el valor destino nace aqui.  Para PHIs, la
@@ -141,8 +143,9 @@ LivenessResult compute_liveness(const IrFunction &fn) {
             }
 
             // Argumentos phi: el valor V que llega desde el bloque P
-            // se considera "usado" al FINAL del bloque P (no en la instruccion phi).
-            // Esto modela correctamente que V debe estar en un registro al salir de P.
+            // se considera "usado" al FINAL del bloque P (no en la instruccion
+            // phi). Esto modela correctamente que V debe estar en un registro
+            // al salir de P.
             //
             // Adicionalmente: el DESTINO del PHI ya esta vivo en su reg
             // desde el final del predecesor (emit_phi_copies emite la
@@ -156,15 +159,15 @@ LivenessResult compute_liveness(const IrFunction &fn) {
             for (const auto &pa : ins.phi_args) {
                 if (pa.value == IR_NO_VALUE) continue;
                 uint32_t pred_end = (pa.block < static_cast<IrBlockId>(nblocks))
-                                    ? result.block_end[pa.block]
-                                    : instr_pos;
+                                        ? result.block_end[pa.block]
+                                        : instr_pos;
                 mark_use(pa.value, pred_end);
                 if (ins.op == IrOp::PHI && pred_end < earliest_pred_end) {
                     earliest_pred_end = pred_end;
                 }
             }
-            if (ins.op == IrOp::PHI && ins.dst != IR_NO_VALUE
-             && earliest_pred_end < instr_pos) {
+            if (ins.op == IrOp::PHI && ins.dst != IR_NO_VALUE &&
+                earliest_pred_end < instr_pos) {
                 mark_def_extend_earlier(ins.dst, earliest_pred_end);
             }
         }
@@ -180,8 +183,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     // Algoritmo clasico de dataflow:
     //   use[B] = valores que el bloque B usa antes de definirlos
     //   def[B] = valores que B define
-    //   live_out[B] = U_{S in succs(B)}  live_in[S]  U  {phi.value que llegan a S desde B}
-    //   live_in[B]  = use[B] U (live_out[B] - def[B])
+    //   live_out[B] = U_{S in succs(B)}  live_in[S]  U  {phi.value que llegan a
+    //   S desde B} live_in[B]  = use[B] U (live_out[B] - def[B])
     // Iteramos en orden inverso hasta fixed point (rapido en CFGs reducibles).
     std::vector<std::unordered_set<IrValueId>> block_use(nblocks);
     std::vector<std::unordered_set<IrValueId>> block_def(nblocks);
@@ -196,8 +199,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
             // Mismo razonamiento que arriba para CALLCLOSURE en el
             // dataflow de live-in/live-out por bloque: tratamos el
             // func_ptr como uso si no fue definido en el bloque.
-            if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE)
-             && ins.func_ptr != IR_NO_VALUE) {
+            if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE) &&
+                ins.func_ptr != IR_NO_VALUE) {
                 if (!block_def[b].count(ins.func_ptr))
                     block_use[b].insert(ins.func_ptr);
             }
@@ -220,15 +223,16 @@ LivenessResult compute_liveness(const IrFunction &fn) {
             // live_in de cada sucesor.
             for (IrBlockId s : fn.blocks[b].succs) {
                 if (s >= static_cast<IrBlockId>(nblocks)) continue;
-                for (IrValueId v : live_in[s]) new_out.insert(v);
+                for (IrValueId v : live_in[s])
+                    new_out.insert(v);
                 // PHI args en el sucesor que vengan de este bloque b: el
                 // valor entregado se debe poder leer al salir de b, asi
                 // que esta vivo en live_out[b].
                 for (const IrInstr &ins_s : fn.blocks[s].instrs) {
                     if (ins_s.op != IrOp::PHI) continue;
                     for (const auto &pa : ins_s.phi_args) {
-                        if (pa.block == static_cast<IrBlockId>(b)
-                         && pa.value != IR_NO_VALUE) {
+                        if (pa.block == static_cast<IrBlockId>(b) &&
+                            pa.value != IR_NO_VALUE) {
                             new_out.insert(pa.value);
                         }
                     }
@@ -278,7 +282,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     // Si un parametro nunca se uso, su end quedaria a 0 < def=0.
     for (IrValueId pid : fn.params) {
         auto it = imap.find(pid);
-        if (it != imap.end() && it->second.def == 0 && it->second.end < it->second.def) {
+        if (it != imap.end() && it->second.def == 0 &&
+            it->second.end < it->second.def) {
             it->second.end = it->second.def;
         }
     }
@@ -287,7 +292,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     result.intervals.reserve(imap.size());
     for (auto &[id, li] : imap) {
         if (li.def < UNDEF) {
-            // Garantizar end >= def (un valor usado exactamente en su def tiene end==def)
+            // Garantizar end >= def (un valor usado exactamente en su def tiene
+            // end==def)
             if (li.end < li.def) li.end = li.def;
             result.intervals.push_back(li);
         }

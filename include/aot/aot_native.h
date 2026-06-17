@@ -32,7 +32,7 @@
 #ifndef AOT_AOT_NATIVE_H
 #define AOT_AOT_NATIVE_H
 
-#include "aot/object_writer.h"  // ObjFormat
+#include "aot/object_writer.h" // ObjFormat
 
 #include <cstdint>
 #include <string>
@@ -40,65 +40,65 @@
 
 namespace aot {
 
-    /**
-     * @brief Arquitectura objetivo del codegen AOT.
-     *
-     * Cada valor implica un @c TargetRegInfo + selector + encoder propios para
-     * el cuerpo de las funciones, y un @c case en @c aot_make_start_stub para
-     * el @c _start.  Solo @c X86_64 esta implementado en el hito inicial; el
-     * resto son extensiones futuras (el enum los reserva para no romper la ABI
-     * del modulo cuando lleguen).
-     */
-    enum class AotArch : uint8_t {
-        X86_64 = 0,  ///< x86-64 (AMD64).  Implementado.
-        X86_32 = 1,  ///< x86 de 32 bits (i386).  Futuro.
-        X86_16 = 2,  ///< x86 de 16 bits (8086/real mode).  Futuro.
-        ARM64  = 3,  ///< AArch64.  Futuro.
-        ARM32  = 4,  ///< ARMv7.  Futuro.
-        RISCV64 = 5, ///< RISC-V 64.  Futuro.
-    };
+/**
+ * @brief Arquitectura objetivo del codegen AOT.
+ *
+ * Cada valor implica un @c TargetRegInfo + selector + encoder propios para
+ * el cuerpo de las funciones, y un @c case en @c aot_make_start_stub para
+ * el @c _start.  Solo @c X86_64 esta implementado en el hito inicial; el
+ * resto son extensiones futuras (el enum los reserva para no romper la ABI
+ * del modulo cuando lleguen).
+ */
+enum class AotArch : uint8_t {
+    X86_64 = 0,  ///< x86-64 (AMD64).  Implementado.
+    X86_32 = 1,  ///< x86 de 32 bits (i386).  Futuro.
+    X86_16 = 2,  ///< x86 de 16 bits (8086/real mode).  Futuro.
+    ARM64 = 3,   ///< AArch64.  Futuro.
+    ARM32 = 4,   ///< ARMv7.  Futuro.
+    RISCV64 = 5, ///< RISC-V 64.  Futuro.
+};
 
-    /**
-     * @brief Stub @c _start sintetizado para un (arch, formato) dado.
-     *
-     * El @c call a @c main (rel32 @c main_call_off) queda SIN parchear: el caller
-     * declara una reloc REL32 a la VA real de @c main, que el ObjectWriter
-     * resuelve tras el layout (asi @c main puede vivir en cualquier seccion, no
-     * solo justo despues del stub).  Para PE, la terminacion del proceso es un
-     * @c call indirecto a @c ExitProcess via la IAT, que el caller registra con
-     * @c ObjectWriter::add_import_call usando @c import_call_off (offset del
-     * @c FF @c 15 dentro de @c bytes).
-     */
-    struct StartStub {
-        bool                 ok = false;          ///< true si el (arch,fmt) esta soportado.
-        std::string          err;                 ///< motivo si @c !ok.
-        std::vector<uint8_t> bytes;               ///< codigo del @c _start (entrada en offset 0).
-        bool                 has_import_call = false; ///< true => terminar via import (PE).
-        uint64_t             import_call_off = 0;  ///< offset del @c FF @c 15 a parchear.
-        std::string          import_dll;           ///< "KERNEL32.dll" (si @c has_import_call).
-        std::string          import_func;          ///< "ExitProcess" (si @c has_import_call).
-        /// AOT 2b: offset del rel32 del @c "call main" dentro de @c bytes.  El
-        /// stub NO lo pre-parchea (queda en 0): el driver declara una reloc
-        /// REL32 a la VA real de @c main (que puede vivir en cualquier seccion),
-        /// resuelta por el ObjectWriter tras el layout.  Asi @c main no esta
-        /// obligado a ir inmediatamente despues del stub.
-        uint64_t             main_call_off = 0;
-    };
+/**
+ * @brief Stub @c _start sintetizado para un (arch, formato) dado.
+ *
+ * El @c call a @c main (rel32 @c main_call_off) queda SIN parchear: el caller
+ * declara una reloc REL32 a la VA real de @c main, que el ObjectWriter
+ * resuelve tras el layout (asi @c main puede vivir en cualquier seccion, no
+ * solo justo despues del stub).  Para PE, la terminacion del proceso es un
+ * @c call indirecto a @c ExitProcess via la IAT, que el caller registra con
+ * @c ObjectWriter::add_import_call usando @c import_call_off (offset del
+ * @c FF @c 15 dentro de @c bytes).
+ */
+struct StartStub {
+    bool ok = false;            ///< true si el (arch,fmt) esta soportado.
+    std::string err;            ///< motivo si @c !ok.
+    std::vector<uint8_t> bytes; ///< codigo del @c _start (entrada en offset 0).
+    bool has_import_call = false; ///< true => terminar via import (PE).
+    uint64_t import_call_off = 0; ///< offset del @c FF @c 15 a parchear.
+    std::string import_dll;       ///< "KERNEL32.dll" (si @c has_import_call).
+    std::string import_func;      ///< "ExitProcess" (si @c has_import_call).
+    /// AOT 2b: offset del rel32 del @c "call main" dentro de @c bytes.  El
+    /// stub NO lo pre-parchea (queda en 0): el driver declara una reloc
+    /// REL32 a la VA real de @c main (que puede vivir en cualquier seccion),
+    /// resuelta por el ObjectWriter tras el layout.  Asi @c main no esta
+    /// obligado a ir inmediatamente despues del stub.
+    uint64_t main_call_off = 0;
+};
 
-    /**
-     * @brief Sintetiza el @c _start para @p arch + @p fmt.
-     *
-     * El stub llama a @c main (situado justo despues, en @c bytes.size()) y
-     * termina el proceso con @c main()->eax (PE: @c ExitProcess via IAT; ELF:
-     * @c syscall @c exit).  El @c call a @c main queda ya parcheado para apuntar
-     * al offset @c bytes.size().
-     *
-     * @param arch Arquitectura objetivo.
-     * @param fmt  Formato de salida (PE/ELF).
-     * @return @c StartStub con @c ok=true y los bytes, o @c ok=false + @c err si
-     *         la combinacion (arch,fmt) no esta soportada todavia.
-     */
-    StartStub aot_make_start_stub(AotArch arch, ObjFormat fmt);
+/**
+ * @brief Sintetiza el @c _start para @p arch + @p fmt.
+ *
+ * El stub llama a @c main (situado justo despues, en @c bytes.size()) y
+ * termina el proceso con @c main()->eax (PE: @c ExitProcess via IAT; ELF:
+ * @c syscall @c exit).  El @c call a @c main queda ya parcheado para apuntar
+ * al offset @c bytes.size().
+ *
+ * @param arch Arquitectura objetivo.
+ * @param fmt  Formato de salida (PE/ELF).
+ * @return @c StartStub con @c ok=true y los bytes, o @c ok=false + @c err si
+ *         la combinacion (arch,fmt) no esta soportada todavia.
+ */
+StartStub aot_make_start_stub(AotArch arch, ObjFormat fmt);
 
 } // namespace aot
 

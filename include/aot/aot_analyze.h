@@ -61,126 +61,133 @@
 
 namespace aot {
 
-    /**
-     * @brief Tier de compilacion AOT (cuanto runtime se enlaza al binario).
-     */
-    enum class Tier : uint8_t {
-        FULL  = 0,  ///< Runtime completo (libvesta_rt): GC, scheduler, async, distribucion.
-        EMBED = 1,  ///< Mini-runtime: GC/strings/excepciones/monitores; sin async/distrib/reflexion.
-        BARE  = 2,  ///< Freestanding-capable: PURE_NATIVE (+ libc opcional).  Kernels/drivers/embedded.
-    };
+/**
+ * @brief Tier de compilacion AOT (cuanto runtime se enlaza al binario).
+ */
+enum class Tier : uint8_t {
+    FULL = 0,  ///< Runtime completo (libvesta_rt): GC, scheduler, async,
+               ///< distribucion.
+    EMBED = 1, ///< Mini-runtime: GC/strings/excepciones/monitores; sin
+               ///< async/distrib/reflexion.
+    BARE = 2,  ///< Freestanding-capable: PURE_NATIVE (+ libc opcional).
+               ///< Kernels/drivers/embedded.
+};
+
+/**
+ * @brief Target de compilacion AOT: tier + independencia de libc.
+ */
+struct AotTarget {
+    Tier tier = Tier::BARE; ///< tier (FULL/EMBED/BARE).
+    bool freestanding =
+        false; ///< true => sin libc; RAW_ALLOC/FREE/PANIC
+               ///< requieren hooks de usuario (@AllocatorOverride/
+               ///< @PanicHandler).  Solo significativo con BARE.
+    /// AOT.2.d: el usuario proporciona el rol via @AllocatorOverride /
+    /// @PanicHandler -> la op LIBC_MAPPED correspondiente se admite tambien
+    /// en --freestanding (el simbolo lo aporta el usuario, no la libc).
+    bool alloc_provided = false; ///< RAW_ALLOC ok en freestanding.
+    bool free_provided =
+        false; ///< RAW_FREE / SMARTPTR_FREE ok en freestanding.
+    bool panic_provided = false; ///< PANIC ok en freestanding.
+};
+
+/**
+ * @brief Clase de una operacion IR segun lo que necesita para ejecutarse.
+ */
+enum class AotOpClass : uint8_t {
+    PURE_NATIVE = 0, ///< 1:1 a x86-64; sin runtime ni libc.
+    LIBC_MAPPED = 1, ///< dependencia de libc sintetizada por el compilador.
+    RUNTIME_DEPENDENT = 2, ///< necesita libvesta_rt.
+};
+
+/**
+ * @brief Clasifica una operacion IR (independiente del target).
+ * @param op Operacion a clasificar.
+ * @return Categoria PURE_NATIVE / LIBC_MAPPED / RUNTIME_DEPENDENT.
+ */
+AotOpClass aot_classify_op(ir::IrOp op) noexcept;
+
+/**
+ * @brief Simbolo de libc que el compilador sintetiza para una op LIBC_MAPPED.
+ * @param op Operacion (idealmente LIBC_MAPPED).
+ * @return "malloc"/"free"/"exit"/... ; "" si la op no es LIBC_MAPPED.
+ */
+const char *aot_libc_symbol(ir::IrOp op) noexcept;
+
+/**
+ * @brief Decide si una operacion es admisible en un target dado.
+ *
+ *   - PURE_NATIVE:        admisible siempre (incluido freestanding).
+ *   - LIBC_MAPPED:        admisible salvo en freestanding (donde requiere
+ *                         hook de usuario; AOT.2 lo reescribe).
+ *   - RUNTIME_DEPENDENT:  FULL la admite; EMBED solo su subset; BARE no.
+ *
+ * @param op     Operacion a evaluar.
+ * @param target Target de compilacion (tier + freestanding).
+ * @return true si la op se puede materializar en ese target.
+ */
+bool aot_op_allowed(ir::IrOp op, const AotTarget &target) noexcept;
+
+/**
+ * @brief Razon legible por la que una op no es admisible.
+ *
+ * Para RUNTIME_DEPENDENT devuelve el subsistema requerido ("GC heap",
+ * "dispatch virtual", "strings GC", ...).  Para LIBC_MAPPED en freestanding
+ * devuelve la dependencia de libc ("libc malloc", ...).
+ *
+ * @param op     Operacion.
+ * @param target Target (para distinguir el caso libc/freestanding).
+ * @return Cadena ASCII; "" si la op es admisible en ese target.
+ */
+const char *aot_op_requirement(ir::IrOp op, const AotTarget &target) noexcept;
+
+/**
+ * @brief Una incompatibilidad concreta encontrada en el analisis.
+ */
+struct AotIncompat {
+    std::string fn_name;  ///< funcion donde aparece la op.
+    uint32_t source_line; ///< linea fuente (0 = desconocida).
+    ir::IrOp op;          ///< operacion ofensora.
+    std::string reason;   ///< subsistema/dependencia requerida + contexto.
+};
+
+/**
+ * @brief Resultado del analisis de un modulo para un target dado.
+ */
+struct AotCompatReport {
+    AotTarget target;       ///< target evaluado.
+    bool compatible = true; ///< true si NO hay incompatibilidades.
+    std::vector<AotIncompat>
+        issues; ///< incompatibilidades (vacio si compatible).
+
+    /// Nombres de funciones completamente compilables en este target.
+    std::vector<std::string> ok_functions;
 
     /**
-     * @brief Target de compilacion AOT: tier + independencia de libc.
+     * @brief Renderiza el reporte como texto estilo error de compilacion.
+     * @return Cadena multilinea ASCII; vacia si @c compatible.
      */
-    struct AotTarget {
-        Tier tier         = Tier::BARE;  ///< tier (FULL/EMBED/BARE).
-        bool freestanding = false;       ///< true => sin libc; RAW_ALLOC/FREE/PANIC
-                                         ///< requieren hooks de usuario (@AllocatorOverride/
-                                         ///< @PanicHandler).  Solo significativo con BARE.
-        /// AOT.2.d: el usuario proporciona el rol via @AllocatorOverride /
-        /// @PanicHandler -> la op LIBC_MAPPED correspondiente se admite tambien
-        /// en --freestanding (el simbolo lo aporta el usuario, no la libc).
-        bool alloc_provided = false;     ///< RAW_ALLOC ok en freestanding.
-        bool free_provided  = false;     ///< RAW_FREE / SMARTPTR_FREE ok en freestanding.
-        bool panic_provided = false;     ///< PANIC ok en freestanding.
-    };
+    std::string render() const;
+};
 
-    /**
-     * @brief Clase de una operacion IR segun lo que necesita para ejecutarse.
-     */
-    enum class AotOpClass : uint8_t {
-        PURE_NATIVE       = 0,  ///< 1:1 a x86-64; sin runtime ni libc.
-        LIBC_MAPPED       = 1,  ///< dependencia de libc sintetizada por el compilador.
-        RUNTIME_DEPENDENT = 2,  ///< necesita libvesta_rt.
-    };
+/**
+ * @brief Analiza un modulo IR completo para un target de compilacion.
+ * @param mod    Modulo IR (idealmente ya optimizado).
+ * @param target Target objetivo (tier + freestanding).
+ * @return Reporte con incompatibilidades y funciones OK.  No muta el IR.
+ */
+AotCompatReport aot_analyze_module(const ir::IrModule &mod,
+                                   const AotTarget &target);
 
-    /**
-     * @brief Clasifica una operacion IR (independiente del target).
-     * @param op Operacion a clasificar.
-     * @return Categoria PURE_NATIVE / LIBC_MAPPED / RUNTIME_DEPENDENT.
-     */
-    AotOpClass aot_classify_op(ir::IrOp op) noexcept;
-
-    /**
-     * @brief Simbolo de libc que el compilador sintetiza para una op LIBC_MAPPED.
-     * @param op Operacion (idealmente LIBC_MAPPED).
-     * @return "malloc"/"free"/"exit"/... ; "" si la op no es LIBC_MAPPED.
-     */
-    const char *aot_libc_symbol(ir::IrOp op) noexcept;
-
-    /**
-     * @brief Decide si una operacion es admisible en un target dado.
-     *
-     *   - PURE_NATIVE:        admisible siempre (incluido freestanding).
-     *   - LIBC_MAPPED:        admisible salvo en freestanding (donde requiere
-     *                         hook de usuario; AOT.2 lo reescribe).
-     *   - RUNTIME_DEPENDENT:  FULL la admite; EMBED solo su subset; BARE no.
-     *
-     * @param op     Operacion a evaluar.
-     * @param target Target de compilacion (tier + freestanding).
-     * @return true si la op se puede materializar en ese target.
-     */
-    bool aot_op_allowed(ir::IrOp op, const AotTarget &target) noexcept;
-
-    /**
-     * @brief Razon legible por la que una op no es admisible.
-     *
-     * Para RUNTIME_DEPENDENT devuelve el subsistema requerido ("GC heap",
-     * "dispatch virtual", "strings GC", ...).  Para LIBC_MAPPED en freestanding
-     * devuelve la dependencia de libc ("libc malloc", ...).
-     *
-     * @param op     Operacion.
-     * @param target Target (para distinguir el caso libc/freestanding).
-     * @return Cadena ASCII; "" si la op es admisible en ese target.
-     */
-    const char *aot_op_requirement(ir::IrOp op, const AotTarget &target) noexcept;
-
-    /**
-     * @brief Una incompatibilidad concreta encontrada en el analisis.
-     */
-    struct AotIncompat {
-        std::string fn_name;      ///< funcion donde aparece la op.
-        uint32_t    source_line;  ///< linea fuente (0 = desconocida).
-        ir::IrOp    op;           ///< operacion ofensora.
-        std::string reason;       ///< subsistema/dependencia requerida + contexto.
-    };
-
-    /**
-     * @brief Resultado del analisis de un modulo para un target dado.
-     */
-    struct AotCompatReport {
-        AotTarget                target;             ///< target evaluado.
-        bool                     compatible = true;  ///< true si NO hay incompatibilidades.
-        std::vector<AotIncompat> issues;             ///< incompatibilidades (vacio si compatible).
-
-        /// Nombres de funciones completamente compilables en este target.
-        std::vector<std::string> ok_functions;
-
-        /**
-         * @brief Renderiza el reporte como texto estilo error de compilacion.
-         * @return Cadena multilinea ASCII; vacia si @c compatible.
-         */
-        std::string render() const;
-    };
-
-    /**
-     * @brief Analiza un modulo IR completo para un target de compilacion.
-     * @param mod    Modulo IR (idealmente ya optimizado).
-     * @param target Target objetivo (tier + freestanding).
-     * @return Reporte con incompatibilidades y funciones OK.  No muta el IR.
-     */
-    AotCompatReport aot_analyze_module(const ir::IrModule &mod, const AotTarget &target);
-
-    /**
-     * @brief Analiza una sola funcion IR para un target.
-     * @param fn         Funcion IR.
-     * @param target     Target objetivo.
-     * @param out_issues Vector destino (se anyaden entradas, no se limpia).
-     * @return true si la funcion es completamente compilable en el target.
-     */
-    bool aot_analyze_function(const ir::IrFunction &fn, const AotTarget &target,
-                              std::vector<AotIncompat> &out_issues);
+/**
+ * @brief Analiza una sola funcion IR para un target.
+ * @param fn         Funcion IR.
+ * @param target     Target objetivo.
+ * @param out_issues Vector destino (se anyaden entradas, no se limpia).
+ * @return true si la funcion es completamente compilable en el target.
+ */
+bool aot_analyze_function(const ir::IrFunction &fn, const AotTarget &target,
+                          std::vector<AotIncompat> &out_issues);
 
 } // namespace aot
 

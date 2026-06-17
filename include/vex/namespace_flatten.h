@@ -19,7 +19,9 @@
 
 namespace vex {
 
-namespace ast { struct ModuleNode; }
+namespace ast {
+struct ModuleNode;
+}
 
 /**
  * @brief Descriptor de un namespace inline aplanado.
@@ -29,17 +31,17 @@ namespace ast { struct ModuleNode; }
  * efectivo en el bytecode, e.g. @c "ui__Button").
  */
 struct FlattenedNamespace {
-    std::string name;       ///< nombre del namespace (e.g. "ui").
+    std::string name; ///< nombre del namespace (e.g. "ui").
 
     struct Sym {
         enum Kind {
             Function = 0,
-            Type     = 1,    ///< struct, class, enum, typedef
+            Type = 1, ///< struct, class, enum, typedef
             Variable = 2,
         };
-        Kind        kind;
-        std::string public_name;     ///< visible: "Button"
-        std::string mangled_label;   ///< interno: "ui__Button"
+        Kind kind;
+        std::string public_name;   ///< visible: "Button"
+        std::string mangled_label; ///< interno: "ui__Button"
     };
 
     std::vector<Sym> symbols;

@@ -60,126 +60,126 @@
 
 namespace jit {
 
+/**
+ * @class CodeCache
+ * @brief Pool de paginas executable-writable para codigo JIT.
+ */
+class CodeCache {
+  public:
     /**
-     * @class CodeCache
-     * @brief Pool de paginas executable-writable para codigo JIT.
+     * @brief Construye un cache con maximo @p max_total_bytes.
+     * @param chunk_bytes tamano de cada chunk de reserva (default
+     *                    1 MiB).  Debe ser potencia de 2.
+     * @param max_total_bytes capacidad total (default 64 MiB).  Cuando
+     *                    se alcanza, @c alloc devuelve nullptr.
      */
-    class CodeCache {
-    public:
-        /**
-         * @brief Construye un cache con maximo @p max_total_bytes.
-         * @param chunk_bytes tamano de cada chunk de reserva (default
-         *                    1 MiB).  Debe ser potencia de 2.
-         * @param max_total_bytes capacidad total (default 64 MiB).  Cuando
-         *                    se alcanza, @c alloc devuelve nullptr.
-         */
-        explicit CodeCache(size_t chunk_bytes     = 1u * 1024u * 1024u,
-                           size_t max_total_bytes = 64u * 1024u * 1024u);
+    explicit CodeCache(size_t chunk_bytes = 1u * 1024u * 1024u,
+                       size_t max_total_bytes = 64u * 1024u * 1024u);
 
-        /** @brief Libera todos los chunks. */
-        ~CodeCache();
+    /** @brief Libera todos los chunks. */
+    ~CodeCache();
 
-        CodeCache(const CodeCache &)            = delete;
-        CodeCache &operator=(const CodeCache &) = delete;
+    CodeCache(const CodeCache &) = delete;
+    CodeCache &operator=(const CodeCache &) = delete;
 
-        /**
-         * @brief Reserva @p size bytes alineados a @p align.
-         * @return puntero al primer byte reservado, o @c nullptr si OOM
-         *         (alcanzado el limite total).  La memoria devuelta es
-         *         R/W (escribible para emit).  El caller debe llamar
-         *         @c commit cuando termine para hacer flush de icache.
-         *
-         * Multi-page alocations: si el chunk actual no cabe, se reserva
-         * el siguiente y se aloca alli (el espacio restante del chunk
-         * anterior se descarta - simple, sin compactacion).
-         */
-        uint8_t *alloc(size_t size, size_t align = 16);
+    /**
+     * @brief Reserva @p size bytes alineados a @p align.
+     * @return puntero al primer byte reservado, o @c nullptr si OOM
+     *         (alcanzado el limite total).  La memoria devuelta es
+     *         R/W (escribible para emit).  El caller debe llamar
+     *         @c commit cuando termine para hacer flush de icache.
+     *
+     * Multi-page alocations: si el chunk actual no cabe, se reserva
+     * el siguiente y se aloca alli (el espacio restante del chunk
+     * anterior se descarta - simple, sin compactacion).
+     */
+    uint8_t *alloc(size_t size, size_t align = 16);
 
-        /**
-         * @brief Marca @p size bytes desde @p ptr como listos para
-         *        ejecutar.  Hace @c FlushInstructionCache (Win) o
-         *        @c __builtin___clear_cache (POSIX) y, si se activo
-         *        @c VESTA_JIT_WX_DUAL_MODE, transiciona la pagina a
-         *        permisos RX.
-         */
-        void commit(const uint8_t *ptr, size_t size);
+    /**
+     * @brief Marca @p size bytes desde @p ptr como listos para
+     *        ejecutar.  Hace @c FlushInstructionCache (Win) o
+     *        @c __builtin___clear_cache (POSIX) y, si se activo
+     *        @c VESTA_JIT_WX_DUAL_MODE, transiciona la pagina a
+     *        permisos RX.
+     */
+    void commit(const uint8_t *ptr, size_t size);
 
-        /**
-         * @brief Sobrescribe @p size bytes desde @p ptr con @c 0xCC
-         *        (INT3 = breakpoint x86) para invalidar el codigo.
-         *        Cualquier intento de ejecutar el codigo invalidado
-         *        crasheara controladamente con SIGTRAP/EXCEPTION_BREAKPOINT.
-         *
-         * Usado para deopt: cuando una funcion C2 falla un
-         * guard, se invalida y el caller se redirige al interprete.
-         */
-        void invalidate(uint8_t *ptr, size_t size);
+    /**
+     * @brief Sobrescribe @p size bytes desde @p ptr con @c 0xCC
+     *        (INT3 = breakpoint x86) para invalidar el codigo.
+     *        Cualquier intento de ejecutar el codigo invalidado
+     *        crasheara controladamente con SIGTRAP/EXCEPTION_BREAKPOINT.
+     *
+     * Usado para deopt: cuando una funcion C2 falla un
+     * guard, se invalida y el caller se redirige al interprete.
+     */
+    void invalidate(uint8_t *ptr, size_t size);
 
-        /** @brief Bytes alocados hasta ahora (suma de todos los chunks usados). */
-        size_t used_bytes() const noexcept { return used_; }
+    /** @brief Bytes alocados hasta ahora (suma de todos los chunks usados). */
+    size_t used_bytes() const noexcept { return used_; }
 
-        /** @brief Bytes maximos que el cache puede alcanzar. */
-        size_t max_bytes() const noexcept { return max_total_; }
+    /** @brief Bytes maximos que el cache puede alcanzar. */
+    size_t max_bytes() const noexcept { return max_total_; }
 
-        /** @brief Numero de chunks reservados al sistema. */
-        size_t chunk_count() const noexcept { return chunks_.size(); }
+    /** @brief Numero de chunks reservados al sistema. */
+    size_t chunk_count() const noexcept { return chunks_.size(); }
 
-        /**
-         * @brief Comprueba si @p ptr esta dentro del cache (cualquier chunk).
-         *        Util para validar punteros antes de llamar @c invalidate.
-         */
-        bool contains(const uint8_t *ptr) const noexcept;
+    /**
+     * @brief Comprueba si @p ptr esta dentro del cache (cualquier chunk).
+     *        Util para validar punteros antes de llamar @c invalidate.
+     */
+    bool contains(const uint8_t *ptr) const noexcept;
 
-        /**
-         * @brief Devuelve una region [ptr, ptr+size) al free-list para que
-         *        @c alloc la reuse en compilaciones futuras.
-         *
-         * Usado por el reclaim del C2 tier-up: cuando una funcion sube de
-         * tier (C1 -> C2) y se ha comprobado que NINGUNA referencia al codigo
-         * C1 sobrevive (frames en vuelo drenados por quiescencia, entradas de
-         * PIC limpiadas, campos de dispatch reapuntados a C2), su region C1 se
-         * devuelve aqui.  La region se envenena con @c 0xCC (INT3) por defensa:
-         * si una referencia perdida la ejecutase antes de reusarse, trapearia
-         * en vez de correr basura.
-         *
-         * NO es thread-safe por si mismo: el caller debe serializar (en el JIT
-         * todas las mutaciones del cache van bajo @c g_compile_mtx).  El espacio
-         * NO se devuelve al SO (las regiones son sub-alocaciones de chunks de
-         * 1 MiB); se recicla internamente.
-         */
-        void free_region(uint8_t *ptr, size_t size) noexcept;
+    /**
+     * @brief Devuelve una region [ptr, ptr+size) al free-list para que
+     *        @c alloc la reuse en compilaciones futuras.
+     *
+     * Usado por el reclaim del C2 tier-up: cuando una funcion sube de
+     * tier (C1 -> C2) y se ha comprobado que NINGUNA referencia al codigo
+     * C1 sobrevive (frames en vuelo drenados por quiescencia, entradas de
+     * PIC limpiadas, campos de dispatch reapuntados a C2), su region C1 se
+     * devuelve aqui.  La region se envenena con @c 0xCC (INT3) por defensa:
+     * si una referencia perdida la ejecutase antes de reusarse, trapearia
+     * en vez de correr basura.
+     *
+     * NO es thread-safe por si mismo: el caller debe serializar (en el JIT
+     * todas las mutaciones del cache van bajo @c g_compile_mtx).  El espacio
+     * NO se devuelve al SO (las regiones son sub-alocaciones de chunks de
+     * 1 MiB); se recicla internamente.
+     */
+    void free_region(uint8_t *ptr, size_t size) noexcept;
 
-        /** @brief Numero de regiones libres en el free-list (introspeccion). */
-        size_t free_region_count() const noexcept { return free_list_.size(); }
+    /** @brief Numero de regiones libres en el free-list (introspeccion). */
+    size_t free_region_count() const noexcept { return free_list_.size(); }
 
-    private:
-        struct Chunk {
-            uint8_t *base   = nullptr; ///< inicio de la pagina (page-aligned)
-            size_t   size   = 0;       ///< tamano total reservado
-            size_t   used   = 0;       ///< bump pointer dentro del chunk
-        };
-
-        /// Region liberada disponible para reuso por @c alloc (free-list).
-        struct FreeRegion {
-            uint8_t *ptr  = nullptr;
-            size_t   size = 0;
-        };
-
-        /// Reserva un nuevo chunk del SO con permisos RWX (o RW si W^X).
-        bool reserve_chunk();
-
-        /// Activa permisos de ejecucion para una pagina (no-op en modo RWX).
-        void transition_to_executable(uint8_t *ptr, size_t size);
-
-        /// Flush icache (CPU-specific).
-        void flush_icache(const uint8_t *ptr, size_t size);
-
-        std::vector<Chunk>      chunks_;
-        std::vector<FreeRegion> free_list_;  ///< regiones recicladas (reclaim C2)
-        size_t                  chunk_bytes_;
-        size_t                  max_total_;
-        size_t                  used_;
+  private:
+    struct Chunk {
+        uint8_t *base = nullptr; ///< inicio de la pagina (page-aligned)
+        size_t size = 0;         ///< tamano total reservado
+        size_t used = 0;         ///< bump pointer dentro del chunk
     };
+
+    /// Region liberada disponible para reuso por @c alloc (free-list).
+    struct FreeRegion {
+        uint8_t *ptr = nullptr;
+        size_t size = 0;
+    };
+
+    /// Reserva un nuevo chunk del SO con permisos RWX (o RW si W^X).
+    bool reserve_chunk();
+
+    /// Activa permisos de ejecucion para una pagina (no-op en modo RWX).
+    void transition_to_executable(uint8_t *ptr, size_t size);
+
+    /// Flush icache (CPU-specific).
+    void flush_icache(const uint8_t *ptr, size_t size);
+
+    std::vector<Chunk> chunks_;
+    std::vector<FreeRegion> free_list_; ///< regiones recicladas (reclaim C2)
+    size_t chunk_bytes_;
+    size_t max_total_;
+    size_t used_;
+};
 
 } // namespace jit
 

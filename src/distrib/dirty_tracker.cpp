@@ -10,7 +10,8 @@
 
 /**
  * @file dirty_tracker.cpp
- * @brief Implementacion del tracker de paginas modificadas con Adler-32 + BLAKE2s-256.
+ * @brief Implementacion del tracker de paginas modificadas con Adler-32 +
+ * BLAKE2s-256.
  *
  * BLAKE2s-256 se computa via la interfaz EVP de OpenSSL 3.x.
  * Adler-32 se computa de forma directa sin dependencias externas.
@@ -28,13 +29,10 @@ namespace distrib {
 // ---------------------------------------------------------------------------
 
 DirtyTracker::DirtyTracker(uint64_t base_addr, uint64_t region_size)
-    : base_addr_(base_addr)
-    , region_size_(region_size)
-{
+    : base_addr_(base_addr), region_size_(region_size) {
     // calcular numero de paginas necesarias (ceiling division)
-    size_t n_pages = static_cast<size_t>(
-        (region_size_ + DT_PAGE_SIZE - 1) / DT_PAGE_SIZE
-    );
+    size_t n_pages =
+        static_cast<size_t>((region_size_ + DT_PAGE_SIZE - 1) / DT_PAGE_SIZE);
     baselines_.resize(n_pages);
     // inicializar todo a cero: adler32=0 y blake2s=0 indica "sin baseline"
     for (auto &b : baselines_) {
@@ -51,7 +49,8 @@ DirtyTracker::DirtyTracker(uint64_t base_addr, uint64_t region_size)
 void DirtyTracker::update_baseline(const std::vector<DirtyPage> &pages) {
     for (const DirtyPage &dp : pages) {
         if (dp.page_idx < baselines_.size()) {
-            std::memcpy(baselines_[dp.page_idx].blake2s, dp.blake2s, DT_BLAKE2S_LEN);
+            std::memcpy(baselines_[dp.page_idx].blake2s, dp.blake2s,
+                        DT_BLAKE2S_LEN);
             // recalcular Adler-32 a partir del blake2s conocido no es posible;
             // marcamos adler32 = 1 para forzar recalculo en proxima deteccion
             baselines_[dp.page_idx].adler32 = 1;
@@ -79,8 +78,8 @@ uint32_t DirtyTracker::adler32(const uint8_t *buf, size_t len) {
     uint32_t a = 1; // suma de bytes (modulo MOD_ADLER)
     uint32_t b = 0; // suma de sumas (modulo MOD_ADLER)
 
-    // procesar en bloques de 5552 bytes para evitar desbordamiento antes del modulo
-    // (5552 es el mayor N tal que 255*N*(N+1)/2 < 2^32)
+    // procesar en bloques de 5552 bytes para evitar desbordamiento antes del
+    // modulo (5552 es el mayor N tal que 255*N*(N+1)/2 < 2^32)
     static constexpr size_t NMAX = 5552;
     const uint8_t *ptr = buf;
     size_t remaining = len;
@@ -105,7 +104,8 @@ uint32_t DirtyTracker::adler32(const uint8_t *buf, size_t len) {
 // BLAKE2s-256 via OpenSSL EVP
 // ---------------------------------------------------------------------------
 
-bool DirtyTracker::blake2s_256(const uint8_t *buf, size_t len, uint8_t out[DT_BLAKE2S_LEN]) {
+bool DirtyTracker::blake2s_256(const uint8_t *buf, size_t len,
+                               uint8_t out[DT_BLAKE2S_LEN]) {
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (!ctx) return false;
 
@@ -121,7 +121,8 @@ bool DirtyTracker::blake2s_256(const uint8_t *buf, size_t len, uint8_t out[DT_BL
     if (EVP_DigestInit_ex(ctx, md, nullptr) != 1) ok = false;
     if (ok && EVP_DigestUpdate(ctx, buf, len) != 1) ok = false;
     if (ok && EVP_DigestFinal_ex(ctx, out, &out_len) != 1) ok = false;
-    if (ok && out_len != DT_BLAKE2S_LEN) ok = false; // paranoia: verificar tamano
+    if (ok && out_len != DT_BLAKE2S_LEN)
+        ok = false; // paranoia: verificar tamano
 
     EVP_MD_CTX_free(ctx);
     return ok;

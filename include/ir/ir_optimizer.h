@@ -22,7 +22,8 @@
  *   O1: pases puramente locales y baratos (lineales en numero de instrs):
  *         - ir_pass_dce             elimina instrs puras sin usos
  *         - ir_pass_copy_prop       propaga MOVs trivials
- *         - ir_pass_simplify        identidades algebraicas + cast-fold + phi-fold
+ *         - ir_pass_simplify        identidades algebraicas + cast-fold +
+ * phi-fold
  *         - ir_pass_dead_alloc_elim purga news cuyo resultado no se usa
  *
  *   O2: anyade analisis de flujo + transformaciones globales:
@@ -32,15 +33,20 @@
  *         - ir_pass_reassoc         (x+c1)+c2 -> x+(c1+c2)  (y otras assoc ops)
  *         - ir_pass_tailcall        CALL+RET -> TAILCALL (libera frame OOP)
  *         - ir_pass_licm            sube invariantes fuera del loop
- *         - ir_pass_load_narrow     elide sign-extend redundante tras LOAD i8/16/32
- *         - ir_pass_dse             elimina STOREs consecutivos a misma direccion
- *         - ir_pass_devirt_monomorphic  CALLVIRT con clase conocida -> CALL directo
+ *         - ir_pass_load_narrow     elide sign-extend redundante tras LOAD
+ * i8/16/32
+ *         - ir_pass_dse             elimina STOREs consecutivos a misma
+ * direccion
+ *         - ir_pass_devirt_monomorphic  CALLVIRT con clase conocida -> CALL
+ * directo
  *
  *   O3: anyade pases de duplicacion / reordenacion mas agresivos:
- *         - ir_pass_cse             dedup de subexpresiones comunes (intra-block)
+ *         - ir_pass_cse             dedup de subexpresiones comunes
+ * (intra-block)
  *         - ir_pass_const_cse_entry hoist de CONSTs a entry block
  *         - ir_pass_inline          inlining cross-function (modulo)
- *         - ir_pass_schedule        list scheduling para exponer ILP al host CPU
+ *         - ir_pass_schedule        list scheduling para exponer ILP al host
+ * CPU
  *
  * Todos los pases operan sobre IrFunction o IrModule en memoria.  No
  * generan texto ni bytecode; son transformaciones puras sobre la IR.
@@ -304,8 +310,8 @@ bool ir_pass_reassoc(IrFunction &fn);
  * @param mod Modulo a optimizar (mutado).
  * @param threshold Tamano maximo (en instrs del body) del callee inlineable.
  *        Default 12 (balance code-size en O2).  El C2/OSR sube este valor para
- *        inlinear agresivamente las CALLs de un loop CALIENTE (donde el code-size
- *        no importa porque el loop domina el tiempo): elimina el CALL + el
+ *        inlinear agresivamente las CALLs de un loop CALIENTE (donde el
+ * code-size no importa porque el loop domina el tiempo): elimina el CALL + el
  *        marshalling VM_ABI de args por memoria, que O2 dejo por su heuristica
  *        conservadora.
  * @return true si inline al menos una CALL.
@@ -360,8 +366,8 @@ bool ir_pass_devirt_monomorphic(IrModule &mod);
  * los IC slots del PIC durante el tier-up C1->C2) y emite un dispatch GUARDADO:
  *
  *     cls = load [obj]              ; class_ptr (offset 0, obj es host_ptr)
- *     if (cls == T_const) {         ; T = clase observada (ClassInfo* como CONST)
- *         r_fast = call @callee     ; CALL directo -> ir_pass_inline lo inlinea
+ *     if (cls == T_const) {         ; T = clase observada (ClassInfo* como
+ * CONST) r_fast = call @callee     ; CALL directo -> ir_pass_inline lo inlinea
  *     } else {
  *         r_slow = callvirt obj ... ; dispatch dinamico original (fallback)
  *     }
@@ -379,9 +385,9 @@ bool ir_pass_devirt_monomorphic(IrModule &mod);
  * @return true si transformo al menos un site.
  */
 struct SpecDevirtSite {
-    IrValueId   callvirt_dst;    ///< dst SSA del CALLVIRT objetivo (unico)
-    uint64_t    class_ptr;        ///< ClassInfo* observado (embebido como CONST)
-    std::string callee_ir_name;   ///< ir_fn_name del metodo resuelto (a inlinar)
+    IrValueId callvirt_dst;     ///< dst SSA del CALLVIRT objetivo (unico)
+    uint64_t class_ptr;         ///< ClassInfo* observado (embebido como CONST)
+    std::string callee_ir_name; ///< ir_fn_name del metodo resuelto (a inlinar)
 };
 bool ir_pass_speculative_devirt(IrFunction &fn,
                                 const std::vector<SpecDevirtSite> &sites);
@@ -399,8 +405,8 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
  *     if (cls == cls_value_1) r1 = call C1__m(obj, args...)   ; fast 1
  *     elif (cls == cls_value_2) r2 = call C2__m(obj, args...) ; fast 2
  *     ... (hasta K) ...
- *     else                    rN = <CALLITF/CALLVIRT/CALLM original>  ; fallback
- *     r = phi(r1, r2, ..., rN)
+ *     else                    rN = <CALLITF/CALLVIRT/CALLM original>  ;
+ * fallback r = phi(r1, r2, ..., rN)
  *
  * Como el @c ClassInfo* de cada candidato NO es constante en compile-time (se
  * crea en @c __module_init), el @c cls_value de cada candidato es un SSA value
@@ -506,13 +512,15 @@ bool ir_pass_const_cse_entry(IrFunction &fn);
 bool ir_pass_tailcall(IrFunction &fn);
 
 /**
- * @brief Pase Load Narrow: elide sign-extension redundante tras LOAD i8/i16/i32.
+ * @brief Pase Load Narrow: elide sign-extension redundante tras LOAD
+ * i8/i16/i32.
  *
- * Para cada @c LOAD con tipo I8/I16/I32, computa el cierre transitivo de valores
- * derivados via ADD/SUB/MUL/AND/OR/XOR (ops que preservan los bits bajos).  Si
- * todos los usos de cada valor del cierre son: otra op segura de mismo ancho,
- * STORE de mismo ancho, o RET de mismo ancho, marca @c narrow_only=true en el
- * SSA value del LOAD.  El emisor IR salta el patron @c shl/sar de 64-N bits.
+ * Para cada @c LOAD con tipo I8/I16/I32, computa el cierre transitivo de
+ * valores derivados via ADD/SUB/MUL/AND/OR/XOR (ops que preservan los bits
+ * bajos).  Si todos los usos de cada valor del cierre son: otra op segura de
+ * mismo ancho, STORE de mismo ancho, o RET de mismo ancho, marca @c
+ * narrow_only=true en el SSA value del LOAD.  El emisor IR salta el patron @c
+ * shl/sar de 64-N bits.
  *
  * Ops UNSAFE que abortan la elision: CMP_* (cualquier comparacion 64-bit),
  * SEXT/ZEXT/CAST/BITCAST/TRUNC (anchos cruzados), SHL/SHR/SAR (necesitan bits

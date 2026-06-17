@@ -30,21 +30,22 @@
 /**
  * @brief Conexion TCP con soporte TLS opcional basado en OpenSSL.
  *
- * Hereda de Connection y sobreescribe start(), stop(), read_data() y write_data()
- * para operar sobre un canal SSL cuando tls_enabled es true.
- * El objeto SSL se libera en el destructor si fue proporcionado en el constructor.
+ * Hereda de Connection y sobreescribe start(), stop(), read_data() y
+ * write_data() para operar sobre un canal SSL cuando tls_enabled es true. El
+ * objeto SSL se libera en el destructor si fue proporcionado en el constructor.
  */
 class TLSConnection : public Connection {
-private:
-    SSL  *ssl;         ///< Objeto SSL de OpenSSL; nullptr si TLS no esta activo
-    bool  tls_enabled; ///< true si la conexion opera sobre TLS
+  private:
+    SSL *ssl;         ///< Objeto SSL de OpenSSL; nullptr si TLS no esta activo
+    bool tls_enabled; ///< true si la conexion opera sobre TLS
 
-public:
+  public:
     /**
      * @brief Construye la conexion con el descriptor de socket y el objeto SSL.
      *
      * @param fd      Descriptor de socket del cliente ya aceptado.
-     * @param ssl_ctx Puntero al objeto SSL (puede ser nullptr para conexion sin cifrado).
+     * @param ssl_ctx Puntero al objeto SSL (puede ser nullptr para conexion sin
+     * cifrado).
      */
     TLSConnection(socket_t fd, SSL *ssl_ctx);
 
@@ -68,7 +69,7 @@ public:
      */
     void stop() override;
 
-protected:
+  protected:
     /**
      * @brief Devuelve el puntero al objeto SSL interno.
      *
@@ -77,7 +78,7 @@ protected:
      *
      * @return Puntero al objeto SSL; nullptr si TLS no esta activo.
      */
-    SSL* get_ssl() { return ssl; }
+    SSL *get_ssl() { return ssl; }
 
     /**
      * @brief Lee datos del canal (TLS o TCP segun configuracion).
@@ -85,7 +86,8 @@ protected:
      * Usa SSL_read() si tls_enabled es true, o recv() en caso contrario.
      *
      * @param buffer Vector donde se almacenan los bytes leidos.
-     * @return Numero de bytes leidos, 0 si la conexion cerro, o valor negativo en error.
+     * @return Numero de bytes leidos, 0 si la conexion cerro, o valor negativo
+     * en error.
      */
     int read_data(std::vector<uint8_t> &buffer) override;
 

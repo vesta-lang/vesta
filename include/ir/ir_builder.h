@@ -96,7 +96,7 @@ namespace ir {
  * Thread-unsafe: usar uno por funcion siendo construida.
  */
 class IrBuilder {
-public:
+  public:
     explicit IrBuilder(IrFunction &fn) noexcept
         : fn_(fn), current_block_(IR_NO_BLOCK) {}
 
@@ -128,7 +128,7 @@ public:
     IrValueId const_u32(uint32_t v);
     IrValueId const_u64(uint64_t v);
     IrValueId const_bool(bool v);
-    IrValueId const_ptr(uint64_t addr);          ///< Puntero crudo VM.
+    IrValueId const_ptr(uint64_t addr); ///< Puntero crudo VM.
     IrValueId const_null_ptr() { return const_ptr(0); }
 
     // -- Aritmetica entera --------------------------------------------------
@@ -136,8 +136,8 @@ public:
     IrValueId add(IrValueId a, IrValueId b, IrType type);
     IrValueId sub(IrValueId a, IrValueId b, IrType type);
     IrValueId mul(IrValueId a, IrValueId b, IrType type);
-    IrValueId sdiv(IrValueId a, IrValueId b, IrType type);  ///< signed
-    IrValueId udiv(IrValueId a, IrValueId b, IrType type);  ///< unsigned
+    IrValueId sdiv(IrValueId a, IrValueId b, IrType type); ///< signed
+    IrValueId udiv(IrValueId a, IrValueId b, IrType type); ///< unsigned
     IrValueId smod(IrValueId a, IrValueId b, IrType type);
     IrValueId umod(IrValueId a, IrValueId b, IrType type);
     IrValueId neg(IrValueId v, IrType type);
@@ -147,26 +147,26 @@ public:
     IrValueId xor_(IrValueId a, IrValueId b, IrType type);
     IrValueId not_(IrValueId v, IrType type);
     IrValueId shl(IrValueId a, IrValueId b, IrType type);
-    IrValueId shr(IrValueId a, IrValueId b, IrType type);   ///< logical
-    IrValueId sar(IrValueId a, IrValueId b, IrType type);   ///< arithmetic
+    IrValueId shr(IrValueId a, IrValueId b, IrType type); ///< logical
+    IrValueId sar(IrValueId a, IrValueId b, IrType type); ///< arithmetic
 
     // -- Comparaciones ------------------------------------------------------
 
-    IrValueId cmp_eq (IrValueId a, IrValueId b);
-    IrValueId cmp_ne (IrValueId a, IrValueId b);
-    IrValueId cmp_lt (IrValueId a, IrValueId b);   ///< signed
-    IrValueId cmp_le (IrValueId a, IrValueId b);
-    IrValueId cmp_gt (IrValueId a, IrValueId b);
-    IrValueId cmp_ge (IrValueId a, IrValueId b);
-    IrValueId cmp_ult(IrValueId a, IrValueId b);   ///< unsigned
+    IrValueId cmp_eq(IrValueId a, IrValueId b);
+    IrValueId cmp_ne(IrValueId a, IrValueId b);
+    IrValueId cmp_lt(IrValueId a, IrValueId b); ///< signed
+    IrValueId cmp_le(IrValueId a, IrValueId b);
+    IrValueId cmp_gt(IrValueId a, IrValueId b);
+    IrValueId cmp_ge(IrValueId a, IrValueId b);
+    IrValueId cmp_ult(IrValueId a, IrValueId b); ///< unsigned
     IrValueId cmp_ule(IrValueId a, IrValueId b);
     IrValueId cmp_ugt(IrValueId a, IrValueId b);
     IrValueId cmp_uge(IrValueId a, IrValueId b);
 
     // -- Casts --------------------------------------------------------------
 
-    IrValueId sext (IrValueId v, IrType to);   ///< sign-extend
-    IrValueId zext (IrValueId v, IrType to);   ///< zero-extend
+    IrValueId sext(IrValueId v, IrType to); ///< sign-extend
+    IrValueId zext(IrValueId v, IrType to); ///< zero-extend
     IrValueId trunc(IrValueId v, IrType to);
     IrValueId bitcast(IrValueId v, IrType to);
 
@@ -178,13 +178,13 @@ public:
     /// Reserva en heap host (raw malloc).  @return host_ptr (is_host_ptr=true).
     IrValueId raw_alloc(IrValueId size_bytes);
     /// Libera un host_ptr devuelto por @c raw_alloc.
-    void      raw_free(IrValueId ptr);
+    void raw_free(IrValueId ptr);
 
     /// Lee @p type bytes desde el puntero @p ptr.  Si @c ptr.is_host_ptr,
     /// el emisor usa @c movh (memoria host); sino @c mov (memoria VM).
     IrValueId load(IrValueId ptr, IrType type);
     /// Escribe @p value (de tipo @p type) en @p ptr.
-    void      store(IrValueId value, IrValueId ptr, IrType type);
+    void store(IrValueId value, IrValueId ptr, IrType type);
 
     // -- Control de flujo ---------------------------------------------------
 
@@ -208,21 +208,19 @@ public:
 
     /// CALL directa por nombre.  Lo resuelve el linker al patchear.
     IrValueId call(const std::string &fn_name,
-                   const std::vector<IrValueId> &args,
-                   IrType ret_type);
+                   const std::vector<IrValueId> &args, IrType ret_type);
     /// Version sin valor de retorno (void).
     void call_void(const std::string &fn_name,
                    const std::vector<IrValueId> &args);
 
     /// CALL indirecta via puntero a funcion (en runtime).
     IrValueId call_indirect(IrValueId fn_ptr,
-                             const std::vector<IrValueId> &args,
-                             IrType ret_type);
+                            const std::vector<IrValueId> &args,
+                            IrType ret_type);
 
     /// CALL nativa (FFI).  @p lib_func = "lib:func" (ver vesta_io etc.).
     IrValueId call_native(const std::string &lib_func,
-                           const std::vector<IrValueId> &args,
-                           IrType ret_type);
+                          const std::vector<IrValueId> &args, IrType ret_type);
 
     // -- Helpers comunes ----------------------------------------------------
 
@@ -233,7 +231,7 @@ public:
     /// Util para variables locales con valor inicial.
     IrValueId alloca_init(IrValueId initial, IrType type);
 
-private:
+  private:
     /// Crea un nuevo SSA value con tipo dado y nombre opcional.
     IrValueId new_value(IrType type, const std::string &name = "");
 
@@ -250,7 +248,7 @@ private:
     IrValueId castop(IrOp op, IrValueId v, IrType to);
 
     IrFunction &fn_;
-    IrBlockId   current_block_;
+    IrBlockId current_block_;
 };
 
 } // namespace ir

@@ -22,5 +22,5 @@
 #include "vex/asm_backend.h"
 
 namespace vex {
-    AsmBackend *g_asm_backend = nullptr;
+AsmBackend *g_asm_backend = nullptr;
 }

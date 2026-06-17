@@ -14,8 +14,8 @@
  * @file optimizer.h
  * @brief Optimizador de bytecode para VestaVM.
  *
- * Expone la clase @c BytecodeOptimizer que aplica transformaciones de optimizacion
- * sobre un buffer de bytecode ya generado por el ensamblador.
+ * Expone la clase @c BytecodeOptimizer que aplica transformaciones de
+ * optimizacion sobre un buffer de bytecode ya generado por el ensamblador.
  *
  * Optimizaciones previstas:
  *  - Eliminacion de NOPs redundantes.
@@ -23,9 +23,9 @@
  *  - Eliminacion de bloques de codigo muerto (dead code elimination).
  *  - Compactacion de saltos (shrink de desplazamientos).
  *
- * @note El optimizador opera in-place sobre el vector de bytes y puede modificar
- *       los offsets de instrucciones.  El linker debe recalcular las relocalizaciones
- *       tras aplicar optimizaciones.
+ * @note El optimizador opera in-place sobre el vector de bytes y puede
+ * modificar los offsets de instrucciones.  El linker debe recalcular las
+ * relocalizaciones tras aplicar optimizaciones.
  */
 
 #ifndef OPTIMIZER_H
@@ -36,32 +36,34 @@
 
 namespace Assembly::Bytecode::Optimizer {
 
+/**
+ * @class BytecodeOptimizer
+ * @brief Aplica optimizaciones de peephole y eliminacion de codigo muerto al
+ * bytecode.
+ *
+ * La clase se instancia sin estado y su unico punto de entrada es @c
+ * optimize(), que modifica el buffer de bytecode proporcionado.
+ *
+ * Uso tipico (llamado por el linker):
+ * @code
+ *   BytecodeOptimizer opt;
+ *   opt.optimize(module_bytecode);
+ * @endcode
+ */
+class BytecodeOptimizer {
+  public:
     /**
-     * @class BytecodeOptimizer
-     * @brief Aplica optimizaciones de peephole y eliminacion de codigo muerto al bytecode.
+     * @brief Aplica todas las optimizaciones disponibles sobre el bytecode
+     * dado.
      *
-     * La clase se instancia sin estado y su unico punto de entrada es @c optimize(),
-     * que modifica el buffer de bytecode proporcionado.
+     * El contenido de @p code puede reducirse o modificarse.  Los offsets
+     * absolutos embebidos en instrucciones de salto son actualizados de forma
+     * correspondiente.
      *
-     * Uso tipico (llamado por el linker):
-     * @code
-     *   BytecodeOptimizer opt;
-     *   opt.optimize(module_bytecode);
-     * @endcode
+     * @param code Buffer de bytecode a optimizar; se modifica in-place.
      */
-    class BytecodeOptimizer {
-    public:
-        /**
-         * @brief Aplica todas las optimizaciones disponibles sobre el bytecode dado.
-         *
-         * El contenido de @p code puede reducirse o modificarse.  Los offsets
-         * absolutos embebidos en instrucciones de salto son actualizados de forma
-         * correspondiente.
-         *
-         * @param code Buffer de bytecode a optimizar; se modifica in-place.
-         */
-        void optimize(std::vector<uint8_t> &code);
-    };
+    void optimize(std::vector<uint8_t> &code);
+};
 
 } // namespace Assembly::Bytecode::Optimizer
 

@@ -25,13 +25,13 @@
 
 namespace jit {
 
-    /**
-     * @brief Instala una @c KeystoneAsmBackend (singleton) en
-     *        @c vex::g_asm_backend.  Idempotente.  Si Keystone no se puede
-     *        abrir, @c g_asm_backend queda en @c nullptr (la validacion de
-     *        sintaxis en compile-time se omite; GCC valida en port-C).
-     */
-    void register_keystone_asm_backend();
+/**
+ * @brief Instala una @c KeystoneAsmBackend (singleton) en
+ *        @c vex::g_asm_backend.  Idempotente.  Si Keystone no se puede
+ *        abrir, @c g_asm_backend queda en @c nullptr (la validacion de
+ *        sintaxis en compile-time se omite; GCC valida en port-C).
+ */
+void register_keystone_asm_backend();
 
 } // namespace jit
 

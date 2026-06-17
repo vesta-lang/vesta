@@ -38,77 +38,77 @@
 
 namespace pkg {
 
-    /**
-     * @brief Entrada de un paquete resuelto en el lockfile.
-     */
-    struct LockEntry {
-        std::string name;
-        std::string version;
-        std::string source;           ///< git+url, https+url, path
-        std::string resolved_rev;     ///< commit hash o version-rev exacto
-        std::string sha256;           ///< checksum del contenido descargado
-        std::string author_fp;        ///< huella publica autor (kpub1:...)
-        std::string signature_alg;    ///< "ed25519" hoy
-        bool        unsafe = false;
-        std::vector<std::string> declared_caps;
-        std::vector<std::string> deps;
-        std::string install_at;       ///< "project" | "user" | "system"
-    };
+/**
+ * @brief Entrada de un paquete resuelto en el lockfile.
+ */
+struct LockEntry {
+    std::string name;
+    std::string version;
+    std::string source;        ///< git+url, https+url, path
+    std::string resolved_rev;  ///< commit hash o version-rev exacto
+    std::string sha256;        ///< checksum del contenido descargado
+    std::string author_fp;     ///< huella publica autor (kpub1:...)
+    std::string signature_alg; ///< "ed25519" hoy
+    bool unsafe = false;
+    std::vector<std::string> declared_caps;
+    std::vector<std::string> deps;
+    std::string install_at; ///< "project" | "user" | "system"
+};
 
-    /**
-     * @brief Metadata global del lockfile.
-     */
-    struct LockMeta {
-        std::string version = "1";
-        std::string generated_at;     ///< ISO-8601 UTC
-        std::string resolver = "mvr-1";
-    };
+/**
+ * @brief Metadata global del lockfile.
+ */
+struct LockMeta {
+    std::string version = "1";
+    std::string generated_at; ///< ISO-8601 UTC
+    std::string resolver = "mvr-1";
+};
 
-    /**
-     * @brief Estructura completa del lockfile.
-     */
-    struct Lockfile {
-        LockMeta meta;
-        std::vector<LockEntry> packages;
-    };
+/**
+ * @brief Estructura completa del lockfile.
+ */
+struct Lockfile {
+    LockMeta meta;
+    std::vector<LockEntry> packages;
+};
 
-    /**
-     * @brief Resultado de parse_lockfile.
-     */
-    struct LockParseResult {
-        bool        ok = false;
-        Lockfile    lock;
-        std::string error_msg;
-    };
+/**
+ * @brief Resultado de parse_lockfile.
+ */
+struct LockParseResult {
+    bool ok = false;
+    Lockfile lock;
+    std::string error_msg;
+};
 
-    /**
-     * @brief Parsea @c vex.lock desde un buffer TOML.
-     */
-    LockParseResult parse_lockfile_buffer(const std::string &buffer);
+/**
+ * @brief Parsea @c vex.lock desde un buffer TOML.
+ */
+LockParseResult parse_lockfile_buffer(const std::string &buffer);
 
-    /**
-     * @brief Parsea @c vex.lock desde archivo.
-     */
-    LockParseResult parse_lockfile_file(const std::string &path);
+/**
+ * @brief Parsea @c vex.lock desde archivo.
+ */
+LockParseResult parse_lockfile_file(const std::string &path);
 
-    /**
-     * @brief Serializa un @c Lockfile a TOML canonico.
-     *
-     * Orden estable: meta primero, luego packages ordenados por name+version.
-     */
-    std::string serialize_lockfile(const Lockfile &lock);
+/**
+ * @brief Serializa un @c Lockfile a TOML canonico.
+ *
+ * Orden estable: meta primero, luego packages ordenados por name+version.
+ */
+std::string serialize_lockfile(const Lockfile &lock);
 
-    /**
-     * @brief Devuelve el timestamp ISO-8601 UTC actual ("2026-05-26T12:34:56Z").
-     */
-    std::string current_utc_iso8601();
+/**
+ * @brief Devuelve el timestamp ISO-8601 UTC actual ("2026-05-26T12:34:56Z").
+ */
+std::string current_utc_iso8601();
 
-    /**
-     * @brief Busca una entrada por nombre exacto en el lockfile.
-     *
-     * @return Puntero a la entrada o @c nullptr si no existe.
-     */
-    const LockEntry *find_package(const Lockfile &lock, const std::string &name);
+/**
+ * @brief Busca una entrada por nombre exacto en el lockfile.
+ *
+ * @return Puntero a la entrada o @c nullptr si no existe.
+ */
+const LockEntry *find_package(const Lockfile &lock, const std::string &name);
 
 } // namespace pkg
 

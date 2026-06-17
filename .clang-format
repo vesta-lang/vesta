@@ -13,3 +13,4 @@ PointerAlignment: Right
 SpaceAfterCStyleCast: false
 AlignAfterOpenBracket: Align
 KeepEmptyLinesAtTheStartOfBlocks: false
+SortIncludes: false

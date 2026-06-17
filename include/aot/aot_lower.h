@@ -10,7 +10,8 @@
 
 /**
  * @file aot/aot_lower.h
- * @brief Phase AOT.2 -- re-bajada de ops sintetizadas a CALL a simbolos externos.
+ * @brief Phase AOT.2 -- re-bajada de ops sintetizadas a CALL a simbolos
+ * externos.
  *
  * Pase IR->IR (independiente del target) que el driver @c -m aot ejecuta ANTES
  * del codegen.  Reescribe las operaciones que el COMPILADOR sintetiza por
@@ -43,37 +44,39 @@
 
 #include <string>
 
-namespace ir { struct IrModule; }
+namespace ir {
+struct IrModule;
+}
 
 namespace aot {
 
-    /**
-     * @brief Nombres de los simbolos externos a los que se re-bajan las ops
-     *        sintetizadas.  Por defecto la CONVENCION C (malloc/free/abort);
-     *        @c @AllocatorOverride / @c @PanicHandler (AOT.2.d) los sustituyen.
-     */
-    struct AotLowerConfig {
-        std::string alloc_sym = "malloc";  ///< RAW_ALLOC -> call <alloc_sym>
-        std::string free_sym  = "free";    ///< RAW_FREE  -> call <free_sym>
-        std::string panic_sym = "abort";   ///< PANIC     -> call <panic_sym>
-        /// AOT.2.d: si true, @c PANIC pasa (msg_addr, len) al @c panic_sym
-        /// (un @c @PanicHandler con esa firma).  Si false (default, abort),
-        /// se descarta el mensaje (abort no toma argumentos).
-        bool        panic_takes_msg = false;
-        /// AOT.2.d: si true, hay un @c @AllocatorOverride.  El @c calloc(1,size)
-        /// que emite @c __new_<Class> se reescribe a @c alloc_sym(size) (1 arg)
-        /// -> en freestanding/dev-OS el `new` usa el allocator del usuario, no
-        /// la libc.  El override debe devolver memoria ZERIFICADA (convencion
-        /// @c kzalloc) para preservar el cero-init de los campos no escritos.
-        bool        has_alloc_override = false;
-    };
+/**
+ * @brief Nombres de los simbolos externos a los que se re-bajan las ops
+ *        sintetizadas.  Por defecto la CONVENCION C (malloc/free/abort);
+ *        @c @AllocatorOverride / @c @PanicHandler (AOT.2.d) los sustituyen.
+ */
+struct AotLowerConfig {
+    std::string alloc_sym = "malloc"; ///< RAW_ALLOC -> call <alloc_sym>
+    std::string free_sym = "free";    ///< RAW_FREE  -> call <free_sym>
+    std::string panic_sym = "abort";  ///< PANIC     -> call <panic_sym>
+    /// AOT.2.d: si true, @c PANIC pasa (msg_addr, len) al @c panic_sym
+    /// (un @c @PanicHandler con esa firma).  Si false (default, abort),
+    /// se descarta el mensaje (abort no toma argumentos).
+    bool panic_takes_msg = false;
+    /// AOT.2.d: si true, hay un @c @AllocatorOverride.  El @c calloc(1,size)
+    /// que emite @c __new_<Class> se reescribe a @c alloc_sym(size) (1 arg)
+    /// -> en freestanding/dev-OS el `new` usa el allocator del usuario, no
+    /// la libc.  El override debe devolver memoria ZERIFICADA (convencion
+    /// @c kzalloc) para preservar el cero-init de los campos no escritos.
+    bool has_alloc_override = false;
+};
 
-    /**
-     * @brief Reescribe in-place las ops sintetizadas del modulo a CALL externos.
-     * @param mod Modulo IR (se modifica).
-     * @param cfg Nombres de simbolos (default = convencion C, overridable).
-     */
-    void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg = {});
+/**
+ * @brief Reescribe in-place las ops sintetizadas del modulo a CALL externos.
+ * @param mod Modulo IR (se modifica).
+ * @param cfg Nombres de simbolos (default = convencion C, overridable).
+ */
+void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg = {});
 
 } // namespace aot
 

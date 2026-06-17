@@ -21,1303 +21,1339 @@
 
 namespace jit {
 
-    namespace {
-        /* Opcodes de ALU (reg/reg, REX.W + opcode + ModR/M) y subops
-         * para variantes reg/imm32 (REX.W + 0x81 /subop + imm32).
-         *
-         * Indice por enum MOp - MOp::ADD (0..5):
-         *   0 = ADD, 1 = SUB, 2 = AND, 3 = OR, 4 = XOR, 5 = CMP
-         * Pero usamos la enum MOp tal cual para mantenerlo simple. */
+namespace {
+/* Opcodes de ALU (reg/reg, REX.W + opcode + ModR/M) y subops
+ * para variantes reg/imm32 (REX.W + 0x81 /subop + imm32).
+ *
+ * Indice por enum MOp - MOp::ADD (0..5):
+ *   0 = ADD, 1 = SUB, 2 = AND, 3 = OR, 4 = XOR, 5 = CMP
+ * Pero usamos la enum MOp tal cual para mantenerlo simple. */
 
-        struct AluEnc {
-            uint8_t op_rr;   ///< opcode reg/reg (direccion 0: dst=r/m, src=reg)
-            uint8_t subop;   ///< subop para variantes imm32 con opcode 0x81
-        };
+struct AluEnc {
+    uint8_t op_rr; ///< opcode reg/reg (direccion 0: dst=r/m, src=reg)
+    uint8_t subop; ///< subop para variantes imm32 con opcode 0x81
+};
 
-        /// Funcion helper que devuelve el AluEnc para un MOp dado.
-        /// Mantiene el mapping ALU op -> (opcode reg/reg, alu_subop) sin
-        /// usar designated initializers (no soportados en non-trivial
-        /// init en gcc/mingw modo C++).
-        inline AluEnc alu_enc_for(MOp op) noexcept {
-            switch (op) {
-                case MOp::ADD: return AluEnc{0x01, 0};
-                case MOp::OR:  return AluEnc{0x09, 1};
-                case MOp::AND: return AluEnc{0x21, 4};
-                case MOp::SUB: return AluEnc{0x29, 5};
-                case MOp::XOR: return AluEnc{0x31, 6};
-                case MOp::CMP: return AluEnc{0x39, 7};
-                default:       return AluEnc{0, 0};
-            }
-        }
-
-        /// Opcode de Jcc para una condicion dada (corto: 0x70+cc, largo: 0x0F 0x80+cc).
-        /// Devuelve byte de la variante larga.
-        inline uint8_t jcc_long_opcode(MCond cc) {
-            return static_cast<uint8_t>(0x80 + static_cast<uint8_t>(cc));
-        }
-    } // namespace anonymous
-
-    /* ===================================================================== */
-    /* encode (pasada principal + resolve)                                    */
-    /* ===================================================================== */
-
-    size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
-        instr_count_ = 0;
-        const size_t base = out.size();
-        /* AOT: las MReloc que emitan los MOp CALL_SYM/MOV_SYM se registran con
-         * patch_at en offset absoluto de @c out; tras el emit las reubicamos a
-         * relativo-a-la-funcion (restando base).  Recordamos cuantas habia ya. */
-        const size_t reloc_base = fn.relocs.size();
-
-        /* Reservar capacidad estimada: ~6 bytes promedio por instr. */
-        size_t total_instrs = 0;
-        for (const auto &b : fn.blocks) total_instrs += b.instrs.size();
-        out.reserve(out.size() + total_instrs * 6);
-
-        for (auto &block : fn.blocks) {
-            block.byte_offset = static_cast<uint32_t>(out.size() - base);
-            /* Si el bloque tiene label_id, registrarlo. */
-            if (block.label_id != MLABEL_INVALID
-             && block.label_id < fn.label_offsets.size()) {
-                fn.label_offsets[block.label_id] =
-                    static_cast<uint32_t>(out.size() - base);
-            }
-            for (const auto &mi : block.instrs) {
-                ++instr_count_;
-                if (!emit_instr(fn, mi, out)) {
-                    /* fail-fast: opcode no soportado.  El INT3 hace que la
-                     * ejecucion crasheee con SIGTRAP en lugar de seguir
-                     * con basura. */
-                    put8(out, 0xCC);
-                    return 0;
-                }
-            }
-        }
-
-        resolve_fixups(fn, out, base);
-
-        /* AOT: reubicar las MReloc emitidas en esta pasada a offset relativo
-         * al inicio de la funcion (el driver les sumara la base de la funcion
-         * en .text al hacer el layout). */
-        for (size_t i = reloc_base; i < fn.relocs.size(); ++i)
-            fn.relocs[i].patch_at -= static_cast<uint32_t>(base);
-
-        return out.size() - base;
+/// Funcion helper que devuelve el AluEnc para un MOp dado.
+/// Mantiene el mapping ALU op -> (opcode reg/reg, alu_subop) sin
+/// usar designated initializers (no soportados en non-trivial
+/// init en gcc/mingw modo C++).
+inline AluEnc alu_enc_for(MOp op) noexcept {
+    switch (op) {
+    case MOp::ADD: return AluEnc{0x01, 0};
+    case MOp::OR: return AluEnc{0x09, 1};
+    case MOp::AND: return AluEnc{0x21, 4};
+    case MOp::SUB: return AluEnc{0x29, 5};
+    case MOp::XOR: return AluEnc{0x31, 6};
+    case MOp::CMP: return AluEnc{0x39, 7};
+    default: return AluEnc{0, 0};
     }
+}
 
-    /* ===================================================================== */
-    /* Dispatcher                                                             */
-    /* ===================================================================== */
+/// Opcode de Jcc para una condicion dada (corto: 0x70+cc, largo: 0x0F 0x80+cc).
+/// Devuelve byte de la variante larga.
+inline uint8_t jcc_long_opcode(MCond cc) {
+    return static_cast<uint8_t>(0x80 + static_cast<uint8_t>(cc));
+}
+} // namespace
 
-    bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
-                                std::vector<uint8_t> &out) {
-        switch (mi.op) {
-            case MOp::NOP:        put8(out, 0x90); return true;
-            case MOp::INT3:       put8(out, 0xCC); return true;
-            case MOp::RET:        emit_ret(out); return true;
-            case MOp::MOV:        emit_mov(fn, mi, out); return true;
-            case MOp::LEA:        emit_lea(fn, mi, out); return true;
-            case MOp::PUSH:       emit_push(mi, out); return true;
-            case MOp::POP:        emit_pop(mi, out); return true;
-            case MOp::ADD:
-            case MOp::SUB:
-            case MOp::AND:
-            case MOp::OR:
-            case MOp::XOR: {
-                const AluEnc enc = alu_enc_for(mi.op);
-                emit_alu(fn, mi, out, enc.op_rr, enc.subop);
-                return true;
-            }
-            case MOp::CMP:        emit_cmp(fn, mi, out); return true;
-            case MOp::TEST:       emit_test(fn, mi, out); return true;
-            case MOp::IMUL:       emit_imul(fn, mi, out); return true;
-            case MOp::SHL:        emit_shift(fn, mi, out, 4); return true;
-            case MOp::SHR:        emit_shift(fn, mi, out, 5); return true;
-            case MOp::SAR:        emit_shift(fn, mi, out, 7); return true;
-            /* Math-IR-promote v2.2a: bit ops nativos.
-             * ROL/ROR reusan emit_shift con subop 0/1; POPCNT/LZCNT/TZCNT
-             * comparten encoding F3 0F <op> /r; BSWAP es 0F C8+rd. */
-            case MOp::ROL:        emit_shift(fn, mi, out, 0); return true;
-            case MOp::ROR:        emit_shift(fn, mi, out, 1); return true;
-            case MOp::POPCNT:
-            case MOp::LZCNT:
-            case MOp::TZCNT: {
-                /* F3 + REX.W + 0F + <op_byte> + ModR/M(11 dst src).
-                 * Todas reg-reg 64-bit; cae a INT3 si operandos invalidos. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC);
-                    return true;
-                }
-                put8(out, 0xF3);                  /* prefix obligatorio */
-                const uint8_t rex = rex_byte(true,
-                                              static_cast<uint8_t>(mi.dst.reg),
-                                              static_cast<uint8_t>(mi.src1.reg));
-                if (rex) put8(out, rex);
-                put8(out, 0x0F);                  /* escape */
-                const uint8_t opcode =
-                    (mi.op == MOp::POPCNT) ? 0xB8 :
-                    (mi.op == MOp::LZCNT)  ? 0xBD :
-                                              0xBC;  /* TZCNT */
-                put8(out, opcode);
-                put8(out, modrm(3, mi.dst.reg & 7, mi.src1.reg & 7));
-                return true;
-            }
-            case MOp::BSWAP: {
-                /* BSWAP r64: REX.W + 0F C8+rd. */
-                if (mi.dst.kind != MOperandKind::REG) {
-                    put8(out, 0xCC);
-                    return true;
-                }
-                const uint8_t rex = rex_byte(true, 0,
-                                              static_cast<uint8_t>(mi.dst.reg));
-                if (rex) put8(out, rex);
-                put8(out, 0x0F);
-                put8(out, static_cast<uint8_t>(0xC8 + (mi.dst.reg & 7)));
-                return true;
-            }
+/* ===================================================================== */
+/* encode (pasada principal + resolve)                                    */
+/* ===================================================================== */
 
-            /* Math-IR-promote v2.2b: FP ops nativas con XMM.
-             *
-             * Convencion: dst.reg y src1.reg son indices MReg.  Los XMM
-             * regs estan en 32..47 (XMM0..XMM15) y el encoding x86 usa
-             * los low 3 bits + REX.R/B para el bit 3.  Para distinguir
-             * GP de XMM en MOVQ, el encoder usa el reg id (32+ = XMM).
-             *
-             * Helper local: extraer el indice fisico (0..15) del MReg y
-             * el bit alto para REX. */
-            case MOp::MOVQ_GP_XMM: {
-                /* MOVQ xmm, r64: 66 + REX.W + 0F 6E /r
-                 * dst es XMM, src1 es GP.  ModR/M: mod=11, reg=xmm&7, rm=gp&7. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xmm = static_cast<uint8_t>(mi.dst.reg) - 16;  /* XMM0=16 */
-                const uint8_t gp  = static_cast<uint8_t>(mi.src1.reg);
-                put8(out, 0x66);
-                /* REX.W=1, REX.R=xmm>=8, REX.B=gp>=8.  rex_byte(W, R_reg, B_reg). */
-                const uint8_t rex = rex_byte(true, xmm, gp);
-                if (rex) put8(out, rex);
-                put8(out, 0x0F);
-                put8(out, 0x6E);
-                put8(out, modrm(3, xmm & 7, gp & 7));
-                return true;
-            }
-            case MOp::MOVQ_XMM_GP: {
-                /* MOVQ r64, xmm: 66 + REX.W + 0F 7E /r
-                 * dst es GP, src1 es XMM.  ModR/M: mod=11, reg=xmm&7, rm=gp&7. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t gp  = static_cast<uint8_t>(mi.dst.reg);
-                const uint8_t xmm = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0x66);
-                const uint8_t rex = rex_byte(true, xmm, gp);
-                if (rex) put8(out, rex);
-                put8(out, 0x0F);
-                put8(out, 0x7E);
-                put8(out, modrm(3, xmm & 7, gp & 7));
-                return true;
-            }
-            case MOp::SQRTSD:
-            case MOp::MINSD:
-            case MOp::MAXSD: {
-                /* SQRTSD/MINSD/MAXSD xmm_dst, xmm_src:
-                 *   F2 + (REX si hay xmm>=8) + 0F + <op> + ModR/M(11, dst&7, src&7).
-                 *   SQRTSD opcode = 0x51, MINSD = 0x5D, MAXSD = 0x5F. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
-                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0xF2);
-                /* REX solo si alguno >= 8.  REX.W no necesario para SSE. */
-                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
-                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
-                if (rex_R || rex_B) {
-                    put8(out, 0x40 | (rex_R << 2) | rex_B);
-                }
-                put8(out, 0x0F);
-                const uint8_t opcode = (mi.op == MOp::SQRTSD) ? 0x51 :
-                                       (mi.op == MOp::MINSD)  ? 0x5D :
-                                                                 0x5F;
-                put8(out, opcode);
-                put8(out, modrm(3, xd & 7, xs & 7));
-                return true;
-            }
-            case MOp::ROUNDSD: {
-                /* ROUNDSD xmm_dst, xmm_src, imm8:
-                 *   66 + (REX) + 0F 3A 0B + ModR/M + imm8(mode)
-                 *   variant tiene el rounding mode (0=nearest, 1=floor, 2=ceil, 3=trunc).
-                 *   SSE4.1 required (todo x86-64 moderno lo tiene). */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
-                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-                const uint8_t mode = static_cast<uint8_t>(mi.variant) & 0x3;
-                put8(out, 0x66);
-                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
-                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
-                if (rex_R || rex_B) {
-                    put8(out, 0x40 | (rex_R << 2) | rex_B);
-                }
-                put8(out, 0x0F);
-                put8(out, 0x3A);
-                put8(out, 0x0B);
-                put8(out, modrm(3, xd & 7, xs & 7));
-                put8(out, mode);
-                return true;
-            }
-            case MOp::ADDSD:
-            case MOp::SUBSD:
-            case MOp::MULSD:
-            case MOp::DIVSD: {
-                /* ADDSD/SUBSD/MULSD/DIVSD xmm_dst, xmm_src:
-                 *   F2 + (REX) + 0F + <op_byte> + ModR/M.
-                 *   ADDSD=0x58, SUBSD=0x5C, MULSD=0x59, DIVSD=0x5E.  */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
-                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0xF2);
-                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
-                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
-                if (rex_R || rex_B) {
-                    put8(out, 0x40 | (rex_R << 2) | rex_B);
-                }
-                put8(out, 0x0F);
-                const uint8_t opcode =
-                    (mi.op == MOp::ADDSD) ? 0x58 :
-                    (mi.op == MOp::SUBSD) ? 0x5C :
-                    (mi.op == MOp::MULSD) ? 0x59 :
-                                             0x5E;  /* DIVSD */
-                put8(out, opcode);
-                put8(out, modrm(3, xd & 7, xs & 7));
-                return true;
-            }
-            case MOp::CVTSI2SD: {
-                /* CVTSI2SD xmm, r64: F2 + REX.W + 0F + 2A + ModR/M(11, xmm&7, gp&7).
-                 * Convierte int64 signed a f64. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
-                const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
-                put8(out, 0xF2);
-                put_rex(out, true, xd, gp);
-                put8(out, 0x0F);
-                put8(out, 0x2A);
-                put8(out, modrm(3, xd & 7, gp & 7));
-                return true;
-            }
-            case MOp::CVTTSD2SI: {
-                /* CVTTSD2SI r64, xmm: F2 + REX.W + 0F + 2C + ModR/M.
-                 * Convierte f64 a int64 signed con truncacion hacia cero. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
-                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0xF2);
-                put_rex(out, true, gp, xs);
-                put8(out, 0x0F);
-                put8(out, 0x2C);
-                put8(out, modrm(3, gp & 7, xs & 7));
-                return true;
-            }
-            case MOp::CVTSS2SD: {
-                /* CVTSS2SD xmm, xmm: F3 + (REX) + 0F + 5A + ModR/M.
-                 * Convierte f32 a f64 (widening). */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
-                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0xF3);
-                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
-                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
-                if (rex_R || rex_B) {
-                    put8(out, 0x40 | (rex_R << 2) | rex_B);
-                }
-                put8(out, 0x0F);
-                put8(out, 0x5A);
-                put8(out, modrm(3, xd & 7, xs & 7));
-                return true;
-            }
-            case MOp::CVTSD2SS: {
-                /* CVTSD2SS xmm, xmm: F2 + (REX) + 0F + 5A + ModR/M.
-                 * Convierte f64 a f32 (narrowing, truncacion). */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xd = static_cast<uint8_t>(mi.dst.reg)  - 16;
-                const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0xF2);
-                const uint8_t rex_R = (xd >= 8) ? 1 : 0;
-                const uint8_t rex_B = (xs >= 8) ? 1 : 0;
-                if (rex_R || rex_B) {
-                    put8(out, 0x40 | (rex_R << 2) | rex_B);
-                }
-                put8(out, 0x0F);
-                put8(out, 0x5A);
-                put8(out, modrm(3, xd & 7, xs & 7));
-                return true;
-            }
-            case MOp::UCOMISD: {
-                /* UCOMISD xmm_a, xmm_b: 66 + (REX) + 0F + 2E + ModR/M.
-                 * Compara dos f64; setea ZF/PF/CF para SETCC/JCC. */
-                if (mi.dst.kind != MOperandKind::REG
-                 || mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC); return true;
-                }
-                const uint8_t xa = static_cast<uint8_t>(mi.dst.reg)  - 16;
-                const uint8_t xb = static_cast<uint8_t>(mi.src1.reg) - 16;
-                put8(out, 0x66);
-                const uint8_t rex_R = (xa >= 8) ? 1 : 0;
-                const uint8_t rex_B = (xb >= 8) ? 1 : 0;
-                if (rex_R || rex_B) {
-                    put8(out, 0x40 | (rex_R << 2) | rex_B);
-                }
-                put8(out, 0x0F);
-                put8(out, 0x2E);
-                put8(out, modrm(3, xa & 7, xb & 7));
-                return true;
-            }
-            case MOp::IDIV: {
-                /* IDIV r/m64: REX.W + F7 /7 con divisor en src1.reg. */
-                if (mi.src1.kind != MOperandKind::REG) {
-                    put8(out, 0xCC);
-                    return true;
-                }
-                const uint8_t rex = rex_byte(true, 0, mi.src1.reg);
-                if (rex) put8(out, rex);
-                put8(out, 0xF7);
-                put8(out, modrm(3, 7, mi.src1.reg & 7));
-                return true;
-            }
-            case MOp::CQO: {
-                /* CQO: REX.W + 99 -- sign-extend RAX -> RDX:RAX. */
-                put8(out, 0x48);
-                put8(out, 0x99);
-                return true;
-            }
-            case MOp::MOVZX:
-            case MOp::MOVSX: {
-                /* MOVZX/MOVSX dst64, src_mem<width>.  Encoding:
-                 *   MOVZX r64, r/m8:  REX.W + 0F B6 /r
-                 *   MOVZX r64, r/m16: REX.W + 0F B7 /r
-                 *   MOVSX r64, r/m8:  REX.W + 0F BE /r
-                 *   MOVSX r64, r/m16: REX.W + 0F BF /r
-                 *   MOVSX r64, r/m32: REX.W + 63 /r    (MOVSXD)
-                 *
-                 * src.flags determina el ancho del operando fuente
-                 * (1/2/4 bytes).  Para src REG, usa src.width.
-                 * dst es siempre 64-bit. */
-                if (mi.dst.kind != MOperandKind::REG) {
-                    put8(out, 0xCC);
-                    return true;
-                }
-                const uint8_t src_width = (mi.src1.kind == MOperandKind::MEM)
-                                            ? mi.src1.flags
-                                            : mi.src1.width;
-                /* Determine opcode bytes. */
-                uint8_t op_byte1 = 0x0F;
-                uint8_t op_byte2 = 0;
-                bool single_byte = false;  /* true para MOVSXD (sin 0F) */
-                if (mi.op == MOp::MOVZX) {
-                    if (src_width == 1) op_byte2 = 0xB6;
-                    else if (src_width == 2) op_byte2 = 0xB7;
-                    else { put8(out, 0xCC); return true; }
-                } else {  /* MOVSX */
-                    if (src_width == 1) op_byte2 = 0xBE;
-                    else if (src_width == 2) op_byte2 = 0xBF;
-                    else if (src_width == 4) { single_byte = true; }
-                    else { put8(out, 0xCC); return true; }
-                }
-                if (mi.src1.kind == MOperandKind::REG) {
-                    const uint8_t rex = rex_byte(true, mi.dst.reg, mi.src1.reg);
-                    if (rex) put8(out, rex);
-                    if (single_byte) {
-                        /* x86-32: MOVSXD (0x63) no existe (es ARPL); un 32->64
-                         * sign-extend no aplica sin reg de 64-bit -> mov r32 plano
-                         * (8B /r), el valor YA es de 32-bit. */
-                        put8(out, mode32_ ? 0x8B : 0x63);
-                    } else {
-                        put8(out, op_byte1);
-                        put8(out, op_byte2);
-                    }
-                    put8(out, modrm(3, mi.dst.reg & 7, mi.src1.reg & 7));
-                } else if (mi.src1.kind == MOperandKind::MEM) {
-                    const uint8_t base  = mi.src1.reg;
-                    const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
-                    const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-                    const uint8_t rex = rex_byte(true, mi.dst.reg, base,
-                                                  has_index ? index : 0);
-                    if (rex) put8(out, rex);
-                    if (single_byte) {
-                        /* x86-32: MOVSXD -> mov r32, r/m32 (8B /r); ver arriba. */
-                        put8(out, mode32_ ? 0x8B : 0x63);
-                    } else {
-                        put8(out, op_byte1);
-                        put8(out, op_byte2);
-                    }
-                    emit_modrm_mem(mi.src1, mi.dst.reg & 7, out);
-                } else {
-                    put8(out, 0xCC);
-                }
-                return true;
-            }
-            case MOp::NEG:        emit_unary_alu(fn, mi, out, 3); return true;
-            case MOp::NOT:        emit_unary_alu(fn, mi, out, 2); return true;
-            case MOp::INC: {
-                /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
-                const MOperand &dst = mi.dst;
-                if (dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
-                const uint8_t rex = rex_byte(true, 0, dst.reg);
-                if (rex) put8(out, rex);
-                put8(out, 0xFF);
-                put8(out, modrm(3, 0, dst.reg & 7));
-                return true;
-            }
-            case MOp::DEC: {
-                /* DEC r64: REX.W + 0xFF /1.  3 bytes total. */
-                const MOperand &dst = mi.dst;
-                if (dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
-                const uint8_t rex = rex_byte(true, 0, dst.reg);
-                if (rex) put8(out, rex);
-                put8(out, 0xFF);
-                put8(out, modrm(3, 1, dst.reg & 7));
-                return true;
-            }
-            case MOp::SETCC:      emit_setcc(fn, mi, out); return true;
-            case MOp::CMOVCC:     emit_cmovcc(fn, mi, out); return true;
-            case MOp::JMP:        emit_jmp(fn, mi, out); return true;
-            case MOp::JCC:        emit_jcc(fn, mi, out); return true;
-            case MOp::CALL_SYM: {
-                /* AOT: CALL rel32 a una funcion del modulo por nombre.  Se
-                 * emite E8 + rel32=0 (placeholder) y se registra una MReloc
-                 * CALL_REL32 que el driver parchea tras el layout de .text.
-                 * patch_at se deja en offset ABSOLUTO de @c out; encode() le
-                 * resta @c base para dejarlo relativo a la funcion. */
-                put8(out, 0xE8);
-                MReloc r;
-                r.kind     = MRelocKind::CALL_REL32;
-                r.patch_at = static_cast<uint32_t>(out.size());
-                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
-                r.addend   = 0;
-                fn.relocs.push_back(r);
-                put32(out, 0);  /* placeholder rel32 */
-                return true;
-            }
-            case MOp::JMP_SYM: {
-                /* AOT: JMP rel32 a una funcion del modulo (cola del tail-call).
-                 * E9 + rel32=0 (placeholder) + MReloc CALL_REL32 (misma
-                 * matematica rel32 que el CALL E8). */
-                put8(out, 0xE9);
-                MReloc r;
-                r.kind     = MRelocKind::CALL_REL32;
-                r.patch_at = static_cast<uint32_t>(out.size());
-                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
-                r.addend   = 0;
-                fn.relocs.push_back(r);
-                put32(out, 0);  /* placeholder rel32 */
-                return true;
-            }
-            case MOp::LEA_RIP_SYM: {
-                /* AOT: lea r64, [rip+disp32] -> direccion de un dato (.rodata)
-                 * position-independent.  REX.W + 8D + ModRM(mod=00,reg=dst,rm=101
-                 * = RIP) + disp32=0 (placeholder) + MReloc{DATA_REL32}.  El writer
-                 * resuelve disp32 = target_VA - (site_VA + 4) tras el layout. */
-                if (mi.dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
-                put_rex(out, true, mi.dst.reg, 0);  /* REX.W + REX.R si dst>=R8 */
-                put8(out, 0x8D);
-                put8(out, modrm(0, mi.dst.reg & 7, 5));    /* mod=00 rm=101 -> [rip+disp32] */
-                MReloc r;
-                r.kind     = MRelocKind::DATA_REL32;
-                r.patch_at = static_cast<uint32_t>(out.size());
-                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
-                r.addend   = 0;
-                fn.relocs.push_back(r);
-                put32(out, 0);  /* placeholder disp32 */
-                return true;
-            }
-            case MOp::MOV_SYM: {
-                /* AOT: mov r64, &simbolo (.rodata).  REX.W + B8+rd + imm64=0
-                 * (placeholder) + MReloc ABS64.  El driver escribe la VA
-                 * absoluta del dato tras conocer el layout de .rodata. */
-                if (mi.dst.kind != MOperandKind::REG) { put8(out, 0xCC); return true; }
-                put_rex(out, true, 0, mi.dst.reg);
-                put8(out, 0xB8 + (mi.dst.reg & 7));
-                MReloc r;
-                r.kind     = MRelocKind::ABS64;
-                r.patch_at = static_cast<uint32_t>(out.size());
-                r.sym_idx  = static_cast<uint32_t>(mi.src1.value);
-                r.addend   = 0;
-                fn.relocs.push_back(r);
-                put64(out, 0);  /* placeholder imm64 */
-                return true;
-            }
-            case MOp::CALL: {
-                /* si el CALL tiene stackmap asociado (flags
-                 * != UINT16_MAX), rellenar su pc_offset.  Esto permite
-                 * que el GC walker encuentre el stackmap correcto
-                 * cuando el callee triggera GC. */
-                if (mi.flags != UINT16_MAX
-                 && mi.flags < fn.stackmaps.size()) {
-                    fn.stackmaps[mi.flags].pc_offset =
-                        static_cast<uint32_t>(out.size());
-                }
-                emit_call(fn, mi, out);
-                return true;
-            }
-            case MOp::LABEL_DEF:
-                /* No emite bytes; label_offset ya se setea en encode().
-                 * Sin embargo, si el LABEL_DEF aparece A MITAD del bloque
-                 * (insertado por el selector dentro de un BB grande)
-                 * necesitamos registrar el offset aqui tambien. */
-                if (mi.src1.kind == MOperandKind::LABEL) {
-                    const uint32_t id = static_cast<uint32_t>(mi.src1.value);
-                    if (id < fn.label_offsets.size()) {
-                        /* Solo si no esta seteado por encode().  Calcular
-                         * el offset relativo al base de la funcion. */
-                        if (fn.label_offsets[id] == UINT32_MAX) {
-                            fn.label_offsets[id] = static_cast<uint32_t>(out.size());
-                        }
-                    }
-                }
-                return true;
-            case MOp::COMMENT:
-                /* skip en release */
-                return true;
-            case MOp::INLINE_ASM_RAW: {
-                /* Phase AS inc.5: apendea los bytes del bloque inline-asm ya
-                 * ensamblado (via vex::g_asm_backend) verbatim al code cache.
-                 * El indice del blob viaja como IMM32 en src1.  Los inputs/
-                 * outputs register-bound ya estan en sus registros fisicos
-                 * (pineados por el regalloc); el asm opera sobre ellos. */
-                if (mi.src1.kind == MOperandKind::IMM32) {
-                    const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
-                    if (idx < fn.asm_blobs.size()) {
-                        const std::vector<uint8_t> &b = fn.asm_blobs[idx].bytes;
-                        out.insert(out.end(), b.begin(), b.end());
-                    }
-                }
-                return true;
-            }
-            case MOp::ARG:
-                /* pseudo: el rewrite ya lo expandio a moves a arg_regs antes
-                 * del CALL.  No deberia llegar aqui; si llega, no emite. */
-                return true;
-            case MOp::SAFEPOINT: {
-                /* poll expansion: lee safepoint_flag desde [rbx+0],
-                 * si != 0 salta al slow path que llama al handler.
-                 *
-                 * Layout:
-                 *
-                 *     80 7B 00 00          cmp byte [rbx+0], 0
-                 *     74 0F                je  skip                ; rel8
-                 *     48 89 DF             mov rdi, rbx            ; SysV: proc en rdi
-                 *     48 B8 <imm64>        mov rax, handler_addr
-                 *     FF D0                call rax
-                 *   skip:
-                 *
-                 * Total: 4 + 2 + 3 + 10 + 2 = 21 bytes.
-                 * En Win64 cambia: mov rcx, rbx (3 bytes).
-                 */
-                /* rellenar pc_offset del stackmap asociado.
-                 * MInstr::flags lleva el indice del stackmap en mf.stackmaps.
-                 * El pc_offset que escribimos es la direccion DEL POLL, no
-                 * la del handler -- asi el GC encuentra el stackmap correcto
-                 * cuando captura RIP dentro o despues del poll. */
-                if (mi.flags != UINT16_MAX
-                 && mi.flags < fn.stackmaps.size()) {
-                    fn.stackmaps[mi.flags].pc_offset =
-                        static_cast<uint32_t>(out.size());
-                }
-                /* cmp byte [rbx+0], 0  -- usamos disp8=0 explicito */
-                put8(out, 0x80);  /* cmp r/m8, imm8 */
-                put8(out, modrm(1, 7, 3));  /* mod=01 (disp8), reg=7 (subop), r/m=3 (rbx) */
-                put8(out, 0x00);  /* disp8 = 0 (safepoint_flag offset) */
-                put8(out, 0x00);  /* imm8 = 0 */
-                /* je rel8 = 0x74, salto al final de la secuencia (skip).
-                 * El slow path mide: mov rdi/rcx, rbx (3) + mov rax, imm64 (10) + call rax (2) = 15.
-                 * rel8 = 15. */
-#if defined(_WIN32)
-                put8(out, 0x74);  /* je rel8 */
-                put8(out, 15);
-                /* mov rcx, rbx (Win64 ABI: proc en rcx) */
-                put8(out, 0x48);  /* REX.W */
-                put8(out, 0x89);
-                put8(out, modrm(3, 3, 1));  /* rcx <- rbx */
-#else
-                put8(out, 0x74);  /* je rel8 */
-                put8(out, 15);
-                /* mov rdi, rbx (SysV: proc en rdi) */
-                put8(out, 0x48);  /* REX.W */
-                put8(out, 0x89);
-                put8(out, modrm(3, 3, 7));  /* rdi <- rbx */
-#endif
-                /* mov rax, imm64 = handler addr */
-                {
-                    const uint32_t pool_idx = static_cast<uint32_t>(mi.src1.value);
-                    const uint64_t handler = (pool_idx < fn.imm64_pool.size())
-                        ? fn.imm64_pool[pool_idx] : 0ULL;
-                    put8(out, 0x48);  /* REX.W */
-                    put8(out, 0xB8);  /* MOV RAX, imm64 */
-                    put64(out, handler);
-                }
-                /* call rax */
-                put8(out, 0xFF);
-                put8(out, modrm(3, 2, 0));  /* /2 reg=rax */
-                return true;
-            }
-            case MOp::LOAD_PROC: {
-                /* Carga ProcessVM* en dst (RBX por convencion del callback).
-                 *
-                 * TLS-direct (src1.value != -1, Win64):
-                 *   65 48 8B <modrm> 25 <disp32>   mov dst, gs:[disp32]
-                 *   modrm = mod=00, reg=dst, r/m=100 (SIB);  SIB=0x25 (disp32 abs).
-                 *
-                 * Fallback (src1.value == -1):
-                 *   48 B8 <imm64>   mov rax, get_current_executing_process
-                 *   FF D0           call rax
-                 *   48 89 C0|dst    mov dst, rax
-                 */
-                const uint8_t dst = mi.dst.reg;  /* reg id completo (RBX=3) */
-                if (mi.src1.value != -1) {
-                    put8(out, 0x65);                            /* gs: prefix */
-                    put_rex(out, true, dst, 0, 0);       /* REX.W (+R si dst>=8) */
-                    put8(out, 0x8B);                            /* mov r64, r/m64 */
-                    put8(out, modrm(0, dst, 4));                /* mod=00 reg=dst rm=SIB */
-                    put8(out, 0x25);                            /* SIB: disp32 absoluto */
-                    put32(out, static_cast<uint32_t>(mi.src1.value));
-                } else {
-                    const uint32_t pool_idx = static_cast<uint32_t>(mi.src2.value);
-                    const uint64_t getproc  = (pool_idx < fn.imm64_pool.size())
-                        ? fn.imm64_pool[pool_idx] : 0ULL;
-                    put8(out, 0x48); put8(out, 0xB8); put64(out, getproc); /* mov rax, imm64 */
-                    put8(out, 0xFF); put8(out, modrm(3, 2, 0));            /* call rax */
-                    /* mov dst, rax: REX.W (+B si dst>=8) + 0x89 + modrm(3, rax, dst) */
-                    put_rex(out, true, 0, dst, 0);
-                    put8(out, 0x89);
-                    put8(out, modrm(3, 0, dst));
-                }
-                return true;
-            }
-            default:
-                /* Opcode no implementado en este encoder. */
-                return false;
+size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
+    instr_count_ = 0;
+    const size_t base = out.size();
+    /* AOT: las MReloc que emitan los MOp CALL_SYM/MOV_SYM se registran con
+     * patch_at en offset absoluto de @c out; tras el emit las reubicamos a
+     * relativo-a-la-funcion (restando base).  Recordamos cuantas habia ya. */
+    const size_t reloc_base = fn.relocs.size();
+
+    /* Reservar capacidad estimada: ~6 bytes promedio por instr. */
+    size_t total_instrs = 0;
+    for (const auto &b : fn.blocks)
+        total_instrs += b.instrs.size();
+    out.reserve(out.size() + total_instrs * 6);
+
+    for (auto &block : fn.blocks) {
+        block.byte_offset = static_cast<uint32_t>(out.size() - base);
+        /* Si el bloque tiene label_id, registrarlo. */
+        if (block.label_id != MLABEL_INVALID &&
+            block.label_id < fn.label_offsets.size()) {
+            fn.label_offsets[block.label_id] =
+                static_cast<uint32_t>(out.size() - base);
         }
-    }
-
-    /* ===================================================================== */
-    /* MOV (formas: r/r, r/imm32, r/imm64, r/m, m/r)                          */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
-                              std::vector<uint8_t> &out) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-
-        /* Caso 1: MOV reg, reg.  Ancho via dst.width (commit 9):
-         *   8 -> REX.W + 0x89 (mov r64,r64)
-         *   4 -> 0x89 sin REX.W (mov r32,r32 -> zero-extiende a 64)
-         *   2 -> 66 + 0x89; 1 -> 0x88. */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
-            const uint8_t w = dst.width;
-            if (w == 2) put8(out, 0x66);
-            const bool need_rex_w = (w == 8);
-            const uint8_t rex = rex_byte(need_rex_w, src.reg, dst.reg);
-            if (rex) put8(out, rex);
-            put8(out, (w == 1) ? 0x88 : 0x89);
-            put8(out, modrm(3, src.reg & 7, dst.reg & 7));
-            return;
-        }
-
-        /* Caso 2: MOV reg, imm32 (sign-extended -> reg64) */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM32) {
-            /* Optimizacion: si valor cabe en 32-bit y no necesitamos
-             * sign-ext especifico, usar MOV r32, imm32 (no REX.W).
-             * Pero como la mayoria del codigo VM usa i64, emitimos REX.W
-             * + 0xC7 /0 + imm32 (sign-extended a 64). */
-            const uint8_t rex = rex_byte(true, 0, dst.reg);
-            if (rex) put8(out, rex);
-            put8(out, 0xC7);
-            put8(out, modrm(3, 0, dst.reg & 7));
-            put32(out, static_cast<uint32_t>(src.value));
-            return;
-        }
-
-        /* Caso 3: MOV reg, imm64 (via pool) */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM64_IDX) {
-            const uint32_t idx = static_cast<uint32_t>(src.value);
-            const uint64_t v64 = (idx < fn.imm64_pool.size()) ? fn.imm64_pool[idx] : 0;
-            /* MOV r64, imm64: REX.W + B8+r + imm64 */
-            put_rex(out, true, 0, dst.reg);
-            put8(out, 0xB8 + (dst.reg & 7));
-            const size_t imm64_pos = out.size();
-            put64(out, v64);
-            /* Sprint fib-recursion: si este idx esta en self_ref_imm64_indices,
-             * registrar la posicion del imm64 emitido para que el JitCompiler
-             * pueda parchearlo con code_start tras la asignacion final. */
-            for (uint32_t sref_idx : fn.self_ref_imm64_indices) {
-                if (sref_idx == idx) {
-                    fn.self_ref_byte_offsets.push_back(imm64_pos);
-                    break;
-                }
-            }
-            return;
-        }
-
-        /* Caso 4: MOV reg, [mem].  Ancho controlado por dst.width:
-         *   8 -> mov r64, [mem]  (REX.W + 0x8B)  -- qword load
-         *   4 -> mov r32, [mem]  (sin REX.W + 0x8B) -- dword load, zero-extend
-         *   2 -> mov r16, [mem]  (66 prefix + 0x8B)
-         *   1 -> mov r8,  [mem]  (0x8A) */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::MEM) {
-            const uint8_t base  = src.reg;
-            const uint8_t index = static_cast<uint8_t>(src.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t w = dst.width;
-            if (w == 2) put8(out, 0x66);  /* 16-bit override */
-            const bool need_rex_w = (w == 8);
-            const uint8_t rex = rex_byte(need_rex_w, dst.reg, base,
-                                          has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, (w == 1) ? 0x8A : 0x8B);
-            emit_modrm_mem(src, dst.reg & 7, out);
-            return;
-        }
-
-        /* Caso 5: MOV [mem], reg.  Ancho via src.width. */
-        if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG) {
-            const uint8_t base  = dst.reg;
-            const uint8_t index = static_cast<uint8_t>(dst.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t w = src.width;
-            if (w == 2) put8(out, 0x66);
-            const bool need_rex_w = (w == 8);
-            const uint8_t rex = rex_byte(need_rex_w, src.reg, base,
-                                          has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, (w == 1) ? 0x88 : 0x89);
-            emit_modrm_mem(dst, src.reg & 7, out);
-            return;
-        }
-
-        /* Caso 6: MOV [mem], imm32 (sign-extended) */
-        if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::IMM32) {
-            const uint8_t base  = dst.reg;
-            const uint8_t index = static_cast<uint8_t>(dst.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(true, 0, base, has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, 0xC7);  /* MOV r/m64, imm32 (sign-ext) */
-            emit_modrm_mem(dst, 0, out);
-            put32(out, static_cast<uint32_t>(src.value));
-            return;
-        }
-
-        /* Cualquier otra combinacion no soportada -> INT3 para fail-fast. */
-        put8(out, 0xCC);
-    }
-
-    /* ===================================================================== */
-    /* LEA reg, [mem]                                                         */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_lea(MFunction & /*fn*/, const MInstr &mi,
-                              std::vector<uint8_t> &out) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-        if (dst.kind != MOperandKind::REG || src.kind != MOperandKind::MEM) {
-            put8(out, 0xCC);
-            return;
-        }
-        const uint8_t base  = src.reg;
-        const uint8_t index = static_cast<uint8_t>(src.mem_index());
-        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-        const uint8_t rex = rex_byte(true, dst.reg, base, has_index ? index : 0);
-        if (rex) put8(out, rex);
-        put8(out, 0x8D);  /* LEA r64, m */
-        emit_modrm_mem(src, dst.reg & 7, out);
-    }
-
-    /* ===================================================================== */
-    /* ALU binarias (ADD/SUB/AND/OR/XOR/CMP)                                  */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_alu(MFunction & /*fn*/, const MInstr &mi,
-                              std::vector<uint8_t> &out,
-                              uint8_t op_byte, uint8_t alu_subop) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-
-        /* ALU reg/reg: REX.W + op_byte + ModR/M(3, src, dst) */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
-            const uint8_t rex = rex_byte(true, src.reg, dst.reg);
-            if (rex) put8(out, rex);
-            put8(out, op_byte);
-            put8(out, modrm(3, src.reg & 7, dst.reg & 7));
-            return;
-        }
-        /* ALU reg/imm32: REX.W + 0x81 /subop + imm32 (sign-ext) */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM32) {
-            const uint8_t rex = rex_byte(true, 0, dst.reg);
-            if (rex) put8(out, rex);
-            /* Optimizacion: si imm32 cabe en imm8 sign-ext, usar 0x83
-             * que reduce 3 bytes.  Encoding: REX.W + 0x83 /subop + imm8. */
-            if (src.value >= -128 && src.value <= 127) {
-                put8(out, 0x83);
-                put8(out, modrm(3, alu_subop, dst.reg & 7));
-                put8(out, static_cast<uint8_t>(src.value & 0xFF));
-            } else {
-                put8(out, 0x81);
-                put8(out, modrm(3, alu_subop, dst.reg & 7));
-                put32(out, static_cast<uint32_t>(src.value));
-            }
-            return;
-        }
-        /* ALU reg/mem: REX.W + (op_byte+2) + ModR/M */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::MEM) {
-            const uint8_t base  = src.reg;
-            const uint8_t index = static_cast<uint8_t>(src.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(true, dst.reg, base, has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, op_byte + 2);  /* dir bit flipped */
-            emit_modrm_mem(src, dst.reg & 7, out);
-            return;
-        }
-        /* ALU mem/reg: REX.W + op_byte + ModR/M */
-        if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG) {
-            const uint8_t base  = dst.reg;
-            const uint8_t index = static_cast<uint8_t>(dst.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(true, src.reg, base, has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, op_byte);
-            emit_modrm_mem(dst, src.reg & 7, out);
-            return;
-        }
-        /* ALU mem/imm32: REX.W + 0x81 /subop + ModR/M + imm32.
-         * Forma optimizada con imm8 sign-ext: REX.W + 0x83 /subop + ModR/M + imm8.
-         * Usado por @c add qword [&counter], N en el JIT MIPS profiler. */
-        if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::IMM32) {
-            const uint8_t base  = dst.reg;
-            const uint8_t index = static_cast<uint8_t>(dst.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(true, 0, base, has_index ? index : 0);
-            if (rex) put8(out, rex);
-            if (src.value >= -128 && src.value <= 127) {
-                put8(out, 0x83);
-                emit_modrm_mem(dst, alu_subop, out);
-                put8(out, static_cast<uint8_t>(src.value & 0xFF));
-            } else {
-                put8(out, 0x81);
-                emit_modrm_mem(dst, alu_subop, out);
-                put32(out, static_cast<uint32_t>(src.value));
-            }
-            return;
-        }
-        put8(out, 0xCC);
-    }
-
-    /* ===================================================================== */
-    /* IMUL reg, reg / reg, reg, imm32                                        */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_imul(MFunction & /*fn*/, const MInstr &mi,
-                               std::vector<uint8_t> &out) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-        const MOperand &src2 = mi.src2;
-        /* Forma 1: IMUL reg, reg -> REX.W + 0x0F 0xAF /r */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG
-         && src2.kind == MOperandKind::NONE) {
-            const uint8_t rex = rex_byte(true, dst.reg, src.reg);
-            if (rex) put8(out, rex);
-            put8(out, 0x0F);
-            put8(out, 0xAF);
-            put8(out, modrm(3, dst.reg & 7, src.reg & 7));
-            return;
-        }
-        /* Forma 2: IMUL reg, reg, imm32 -> REX.W + 0x69 /r + imm32 */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG
-         && src2.kind == MOperandKind::IMM32) {
-            const uint8_t rex = rex_byte(true, dst.reg, src.reg);
-            if (rex) put8(out, rex);
-            /* imm8 si cabe (0x6B), imm32 si no (0x69) */
-            if (src2.value >= -128 && src2.value <= 127) {
-                put8(out, 0x6B);
-                put8(out, modrm(3, dst.reg & 7, src.reg & 7));
-                put8(out, static_cast<uint8_t>(src2.value & 0xFF));
-            } else {
-                put8(out, 0x69);
-                put8(out, modrm(3, dst.reg & 7, src.reg & 7));
-                put32(out, static_cast<uint32_t>(src2.value));
-            }
-            return;
-        }
-        put8(out, 0xCC);
-    }
-
-    /* ===================================================================== */
-    /* SHL/SHR/SAR reg, imm8                                                  */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_shift(MFunction & /*fn*/, const MInstr &mi,
-                                std::vector<uint8_t> &out,
-                                uint8_t shift_subop) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-        if (dst.kind != MOperandKind::REG) {
-            put8(out, 0xCC);
-            return;
-        }
-        const uint8_t rex = rex_byte(true, 0, dst.reg);
-        if (src.kind == MOperandKind::REG) {
-            /* Variante por CL: REX.W + 0xD3 /subop -- el caller debe
-             * garantizar que la cuenta vive en CL (RCX low byte).  Solo
-             * aceptamos src == RCX explicito para que el caller sepa que
-             * debe coordinar el reg destino. */
-            if (src.reg != static_cast<uint8_t>(MReg::RCX)) {
+        for (const auto &mi : block.instrs) {
+            ++instr_count_;
+            if (!emit_instr(fn, mi, out)) {
+                /* fail-fast: opcode no soportado.  El INT3 hace que la
+                 * ejecucion crasheee con SIGTRAP en lugar de seguir
+                 * con basura. */
                 put8(out, 0xCC);
-                return;
+                return 0;
             }
-            if (rex) put8(out, rex);
-            put8(out, 0xD3);
-            put8(out, modrm(3, shift_subop, dst.reg & 7));
-            return;
         }
-        if (src.kind != MOperandKind::IMM32) {
+    }
+
+    resolve_fixups(fn, out, base);
+
+    /* AOT: reubicar las MReloc emitidas en esta pasada a offset relativo
+     * al inicio de la funcion (el driver les sumara la base de la funcion
+     * en .text al hacer el layout). */
+    for (size_t i = reloc_base; i < fn.relocs.size(); ++i)
+        fn.relocs[i].patch_at -= static_cast<uint32_t>(base);
+
+    return out.size() - base;
+}
+
+/* ===================================================================== */
+/* Dispatcher                                                             */
+/* ===================================================================== */
+
+bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
+                            std::vector<uint8_t> &out) {
+    switch (mi.op) {
+    case MOp::NOP: put8(out, 0x90); return true;
+    case MOp::INT3: put8(out, 0xCC); return true;
+    case MOp::RET: emit_ret(out); return true;
+    case MOp::MOV: emit_mov(fn, mi, out); return true;
+    case MOp::LEA: emit_lea(fn, mi, out); return true;
+    case MOp::PUSH: emit_push(mi, out); return true;
+    case MOp::POP: emit_pop(mi, out); return true;
+    case MOp::ADD:
+    case MOp::SUB:
+    case MOp::AND:
+    case MOp::OR:
+    case MOp::XOR: {
+        const AluEnc enc = alu_enc_for(mi.op);
+        emit_alu(fn, mi, out, enc.op_rr, enc.subop);
+        return true;
+    }
+    case MOp::CMP: emit_cmp(fn, mi, out); return true;
+    case MOp::TEST: emit_test(fn, mi, out); return true;
+    case MOp::IMUL: emit_imul(fn, mi, out); return true;
+    case MOp::SHL: emit_shift(fn, mi, out, 4); return true;
+    case MOp::SHR: emit_shift(fn, mi, out, 5); return true;
+    case MOp::SAR: emit_shift(fn, mi, out, 7); return true;
+    /* Math-IR-promote v2.2a: bit ops nativos.
+     * ROL/ROR reusan emit_shift con subop 0/1; POPCNT/LZCNT/TZCNT
+     * comparten encoding F3 0F <op> /r; BSWAP es 0F C8+rd. */
+    case MOp::ROL: emit_shift(fn, mi, out, 0); return true;
+    case MOp::ROR: emit_shift(fn, mi, out, 1); return true;
+    case MOp::POPCNT:
+    case MOp::LZCNT:
+    case MOp::TZCNT: {
+        /* F3 + REX.W + 0F + <op_byte> + ModR/M(11 dst src).
+         * Todas reg-reg 64-bit; cae a INT3 si operandos invalidos. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
-            return;
+            return true;
         }
+        put8(out, 0xF3); /* prefix obligatorio */
+        const uint8_t rex = rex_byte(true, static_cast<uint8_t>(mi.dst.reg),
+                                     static_cast<uint8_t>(mi.src1.reg));
         if (rex) put8(out, rex);
-        if ((src.value & 0xFF) == 1) {
-            /* Variante por 1: REX.W + 0xD1 /subop -- mas compacta */
-            put8(out, 0xD1);
-            put8(out, modrm(3, shift_subop, dst.reg & 7));
-        } else {
-            /* Variante imm8: REX.W + 0xC1 /subop + imm8 */
-            put8(out, 0xC1);
-            put8(out, modrm(3, shift_subop, dst.reg & 7));
-            put8(out, static_cast<uint8_t>(src.value & 0xFF));
+        put8(out, 0x0F); /* escape */
+        const uint8_t opcode = (mi.op == MOp::POPCNT)  ? 0xB8
+                               : (mi.op == MOp::LZCNT) ? 0xBD
+                                                       : 0xBC; /* TZCNT */
+        put8(out, opcode);
+        put8(out, modrm(3, mi.dst.reg & 7, mi.src1.reg & 7));
+        return true;
+    }
+    case MOp::BSWAP: {
+        /* BSWAP r64: REX.W + 0F C8+rd. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
         }
-    }
-
-    /* ===================================================================== */
-    /* NEG/NOT reg                                                            */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_unary_alu(MFunction & /*fn*/, const MInstr &mi,
-                                    std::vector<uint8_t> &out, uint8_t subop) {
-        const MOperand &dst = mi.dst;
-        if (dst.kind != MOperandKind::REG) { put8(out, 0xCC); return; }
-        const uint8_t rex = rex_byte(true, 0, dst.reg);
-        if (rex) put8(out, rex);
-        put8(out, 0xF7);
-        put8(out, modrm(3, subop, dst.reg & 7));
-    }
-
-    /* ===================================================================== */
-    /* CMP / TEST                                                             */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_cmp(MFunction &fn, const MInstr &mi,
-                              std::vector<uint8_t> &out) {
-        /* CMP usa la misma tabla que ADD/SUB/etc.  El alu_subop=7 y
-         * op_byte=0x39 estan en la tabla bajo MOp::CMP. */
-        emit_alu(fn, mi, out, 0x39, 7);
-    }
-
-    void X86Encoder::emit_test(MFunction & /*fn*/, const MInstr &mi,
-                               std::vector<uint8_t> &out) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-        /* TEST reg, reg: REX.W + 0x85 /r */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
-            const uint8_t rex = rex_byte(true, src.reg, dst.reg);
-            if (rex) put8(out, rex);
-            put8(out, 0x85);
-            put8(out, modrm(3, src.reg & 7, dst.reg & 7));
-            return;
-        }
-        /* TEST reg, imm32: REX.W + 0xF7 /0 + imm32 */
-        if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM32) {
-            const uint8_t rex = rex_byte(true, 0, dst.reg);
-            if (rex) put8(out, rex);
-            put8(out, 0xF7);
-            put8(out, modrm(3, 0, dst.reg & 7));
-            put32(out, static_cast<uint32_t>(src.value));
-            return;
-        }
-        put8(out, 0xCC);
-    }
-
-    /* ===================================================================== */
-    /* SETcc / CMOVcc                                                          */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_setcc(MFunction & /*fn*/, const MInstr &mi,
-                                std::vector<uint8_t> &out) {
-        const MOperand &dst = mi.dst;
-        const MCond cc = static_cast<MCond>(mi.variant);
-        if (dst.kind != MOperandKind::REG) { put8(out, 0xCC); return; }
-        /* SETcc r/m8: 0x0F 0x90+cc /0 -- NO REX.W (es 8-bit). */
-        const uint8_t rex = rex_byte(false, 0, dst.reg);
+        const uint8_t rex = rex_byte(true, 0, static_cast<uint8_t>(mi.dst.reg));
         if (rex) put8(out, rex);
         put8(out, 0x0F);
-        put8(out, 0x90 + static_cast<uint8_t>(cc));
-        put8(out, modrm(3, 0, dst.reg & 7));
+        put8(out, static_cast<uint8_t>(0xC8 + (mi.dst.reg & 7)));
+        return true;
     }
 
-    void X86Encoder::emit_cmovcc(MFunction & /*fn*/, const MInstr &mi,
-                                 std::vector<uint8_t> &out) {
-        const MOperand &dst = mi.dst;
-        const MOperand &src = mi.src1;
-        const MCond cc = static_cast<MCond>(mi.variant);
-        if (dst.kind != MOperandKind::REG || src.kind != MOperandKind::REG) {
+    /* Math-IR-promote v2.2b: FP ops nativas con XMM.
+     *
+     * Convencion: dst.reg y src1.reg son indices MReg.  Los XMM
+     * regs estan en 32..47 (XMM0..XMM15) y el encoding x86 usa
+     * los low 3 bits + REX.R/B para el bit 3.  Para distinguir
+     * GP de XMM en MOVQ, el encoder usa el reg id (32+ = XMM).
+     *
+     * Helper local: extraer el indice fisico (0..15) del MReg y
+     * el bit alto para REX. */
+    case MOp::MOVQ_GP_XMM: {
+        /* MOVQ xmm, r64: 66 + REX.W + 0F 6E /r
+         * dst es XMM, src1 es GP.  ModR/M: mod=11, reg=xmm&7, rm=gp&7. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
-            return;
+            return true;
         }
-        /* CMOVcc r64, r/m64: REX.W + 0x0F 0x40+cc /r */
+        const uint8_t xmm = static_cast<uint8_t>(mi.dst.reg) - 16; /* XMM0=16 */
+        const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        put8(out, 0x66);
+        /* REX.W=1, REX.R=xmm>=8, REX.B=gp>=8.  rex_byte(W, R_reg, B_reg). */
+        const uint8_t rex = rex_byte(true, xmm, gp);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x6E);
+        put8(out, modrm(3, xmm & 7, gp & 7));
+        return true;
+    }
+    case MOp::MOVQ_XMM_GP: {
+        /* MOVQ r64, xmm: 66 + REX.W + 0F 7E /r
+         * dst es GP, src1 es XMM.  ModR/M: mod=11, reg=xmm&7, rm=gp&7. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
+        const uint8_t xmm = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0x66);
+        const uint8_t rex = rex_byte(true, xmm, gp);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x7E);
+        put8(out, modrm(3, xmm & 7, gp & 7));
+        return true;
+    }
+    case MOp::SQRTSD:
+    case MOp::MINSD:
+    case MOp::MAXSD: {
+        /* SQRTSD/MINSD/MAXSD xmm_dst, xmm_src:
+         *   F2 + (REX si hay xmm>=8) + 0F + <op> + ModR/M(11, dst&7, src&7).
+         *   SQRTSD opcode = 0x51, MINSD = 0x5D, MAXSD = 0x5F. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF2);
+        /* REX solo si alguno >= 8.  REX.W no necesario para SSE. */
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
+                               : (mi.op == MOp::MINSD) ? 0x5D
+                                                       : 0x5F;
+        put8(out, opcode);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+    case MOp::ROUNDSD: {
+        /* ROUNDSD xmm_dst, xmm_src, imm8:
+         *   66 + (REX) + 0F 3A 0B + ModR/M + imm8(mode)
+         *   variant tiene el rounding mode (0=nearest, 1=floor, 2=ceil,
+         * 3=trunc). SSE4.1 required (todo x86-64 moderno lo tiene). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t mode = static_cast<uint8_t>(mi.variant) & 0x3;
+        put8(out, 0x66);
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        put8(out, 0x3A);
+        put8(out, 0x0B);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        put8(out, mode);
+        return true;
+    }
+    case MOp::ADDSD:
+    case MOp::SUBSD:
+    case MOp::MULSD:
+    case MOp::DIVSD: {
+        /* ADDSD/SUBSD/MULSD/DIVSD xmm_dst, xmm_src:
+         *   F2 + (REX) + 0F + <op_byte> + ModR/M.
+         *   ADDSD=0x58, SUBSD=0x5C, MULSD=0x59, DIVSD=0x5E.  */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF2);
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        const uint8_t opcode = (mi.op == MOp::ADDSD)   ? 0x58
+                               : (mi.op == MOp::SUBSD) ? 0x5C
+                               : (mi.op == MOp::MULSD) ? 0x59
+                                                       : 0x5E; /* DIVSD */
+        put8(out, opcode);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+    case MOp::CVTSI2SD: {
+        /* CVTSI2SD xmm, r64: F2 + REX.W + 0F + 2A + ModR/M(11, xmm&7, gp&7).
+         * Convierte int64 signed a f64. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        put8(out, 0xF2);
+        put_rex(out, true, xd, gp);
+        put8(out, 0x0F);
+        put8(out, 0x2A);
+        put8(out, modrm(3, xd & 7, gp & 7));
+        return true;
+    }
+    case MOp::CVTTSD2SI: {
+        /* CVTTSD2SI r64, xmm: F2 + REX.W + 0F + 2C + ModR/M.
+         * Convierte f64 a int64 signed con truncacion hacia cero. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF2);
+        put_rex(out, true, gp, xs);
+        put8(out, 0x0F);
+        put8(out, 0x2C);
+        put8(out, modrm(3, gp & 7, xs & 7));
+        return true;
+    }
+    case MOp::CVTSS2SD: {
+        /* CVTSS2SD xmm, xmm: F3 + (REX) + 0F + 5A + ModR/M.
+         * Convierte f32 a f64 (widening). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF3);
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        put8(out, 0x5A);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+    case MOp::CVTSD2SS: {
+        /* CVTSD2SS xmm, xmm: F2 + (REX) + 0F + 5A + ModR/M.
+         * Convierte f64 a f32 (narrowing, truncacion). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF2);
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        put8(out, 0x5A);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+    case MOp::UCOMISD: {
+        /* UCOMISD xmm_a, xmm_b: 66 + (REX) + 0F + 2E + ModR/M.
+         * Compara dos f64; setea ZF/PF/CF para SETCC/JCC. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xa = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xb = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0x66);
+        const uint8_t rex_R = (xa >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xb >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        put8(out, 0x2E);
+        put8(out, modrm(3, xa & 7, xb & 7));
+        return true;
+    }
+    case MOp::IDIV: {
+        /* IDIV r/m64: REX.W + F7 /7 con divisor en src1.reg. */
+        if (mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t rex = rex_byte(true, 0, mi.src1.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xF7);
+        put8(out, modrm(3, 7, mi.src1.reg & 7));
+        return true;
+    }
+    case MOp::CQO: {
+        /* CQO: REX.W + 99 -- sign-extend RAX -> RDX:RAX. */
+        put8(out, 0x48);
+        put8(out, 0x99);
+        return true;
+    }
+    case MOp::MOVZX:
+    case MOp::MOVSX: {
+        /* MOVZX/MOVSX dst64, src_mem<width>.  Encoding:
+         *   MOVZX r64, r/m8:  REX.W + 0F B6 /r
+         *   MOVZX r64, r/m16: REX.W + 0F B7 /r
+         *   MOVSX r64, r/m8:  REX.W + 0F BE /r
+         *   MOVSX r64, r/m16: REX.W + 0F BF /r
+         *   MOVSX r64, r/m32: REX.W + 63 /r    (MOVSXD)
+         *
+         * src.flags determina el ancho del operando fuente
+         * (1/2/4 bytes).  Para src REG, usa src.width.
+         * dst es siempre 64-bit. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t src_width =
+            (mi.src1.kind == MOperandKind::MEM) ? mi.src1.flags : mi.src1.width;
+        /* Determine opcode bytes. */
+        uint8_t op_byte1 = 0x0F;
+        uint8_t op_byte2 = 0;
+        bool single_byte = false; /* true para MOVSXD (sin 0F) */
+        if (mi.op == MOp::MOVZX) {
+            if (src_width == 1)
+                op_byte2 = 0xB6;
+            else if (src_width == 2)
+                op_byte2 = 0xB7;
+            else {
+                put8(out, 0xCC);
+                return true;
+            }
+        } else { /* MOVSX */
+            if (src_width == 1)
+                op_byte2 = 0xBE;
+            else if (src_width == 2)
+                op_byte2 = 0xBF;
+            else if (src_width == 4) {
+                single_byte = true;
+            } else {
+                put8(out, 0xCC);
+                return true;
+            }
+        }
+        if (mi.src1.kind == MOperandKind::REG) {
+            const uint8_t rex = rex_byte(true, mi.dst.reg, mi.src1.reg);
+            if (rex) put8(out, rex);
+            if (single_byte) {
+                /* x86-32: MOVSXD (0x63) no existe (es ARPL); un 32->64
+                 * sign-extend no aplica sin reg de 64-bit -> mov r32 plano
+                 * (8B /r), el valor YA es de 32-bit. */
+                put8(out, mode32_ ? 0x8B : 0x63);
+            } else {
+                put8(out, op_byte1);
+                put8(out, op_byte2);
+            }
+            put8(out, modrm(3, mi.dst.reg & 7, mi.src1.reg & 7));
+        } else if (mi.src1.kind == MOperandKind::MEM) {
+            const uint8_t base = mi.src1.reg;
+            const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
+            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+            const uint8_t rex =
+                rex_byte(true, mi.dst.reg, base, has_index ? index : 0);
+            if (rex) put8(out, rex);
+            if (single_byte) {
+                /* x86-32: MOVSXD -> mov r32, r/m32 (8B /r); ver arriba. */
+                put8(out, mode32_ ? 0x8B : 0x63);
+            } else {
+                put8(out, op_byte1);
+                put8(out, op_byte2);
+            }
+            emit_modrm_mem(mi.src1, mi.dst.reg & 7, out);
+        } else {
+            put8(out, 0xCC);
+        }
+        return true;
+    }
+    case MOp::NEG: emit_unary_alu(fn, mi, out, 3); return true;
+    case MOp::NOT: emit_unary_alu(fn, mi, out, 2); return true;
+    case MOp::INC: {
+        /* INC r64: REX.W + 0xFF /0.  3 bytes total. */
+        const MOperand &dst = mi.dst;
+        if (dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t rex = rex_byte(true, 0, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xFF);
+        put8(out, modrm(3, 0, dst.reg & 7));
+        return true;
+    }
+    case MOp::DEC: {
+        /* DEC r64: REX.W + 0xFF /1.  3 bytes total. */
+        const MOperand &dst = mi.dst;
+        if (dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t rex = rex_byte(true, 0, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xFF);
+        put8(out, modrm(3, 1, dst.reg & 7));
+        return true;
+    }
+    case MOp::SETCC: emit_setcc(fn, mi, out); return true;
+    case MOp::CMOVCC: emit_cmovcc(fn, mi, out); return true;
+    case MOp::JMP: emit_jmp(fn, mi, out); return true;
+    case MOp::JCC: emit_jcc(fn, mi, out); return true;
+    case MOp::CALL_SYM: {
+        /* AOT: CALL rel32 a una funcion del modulo por nombre.  Se
+         * emite E8 + rel32=0 (placeholder) y se registra una MReloc
+         * CALL_REL32 que el driver parchea tras el layout de .text.
+         * patch_at se deja en offset ABSOLUTO de @c out; encode() le
+         * resta @c base para dejarlo relativo a la funcion. */
+        put8(out, 0xE8);
+        MReloc r;
+        r.kind = MRelocKind::CALL_REL32;
+        r.patch_at = static_cast<uint32_t>(out.size());
+        r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+        r.addend = 0;
+        fn.relocs.push_back(r);
+        put32(out, 0); /* placeholder rel32 */
+        return true;
+    }
+    case MOp::JMP_SYM: {
+        /* AOT: JMP rel32 a una funcion del modulo (cola del tail-call).
+         * E9 + rel32=0 (placeholder) + MReloc CALL_REL32 (misma
+         * matematica rel32 que el CALL E8). */
+        put8(out, 0xE9);
+        MReloc r;
+        r.kind = MRelocKind::CALL_REL32;
+        r.patch_at = static_cast<uint32_t>(out.size());
+        r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+        r.addend = 0;
+        fn.relocs.push_back(r);
+        put32(out, 0); /* placeholder rel32 */
+        return true;
+    }
+    case MOp::LEA_RIP_SYM: {
+        /* AOT: lea r64, [rip+disp32] -> direccion de un dato (.rodata)
+         * position-independent.  REX.W + 8D + ModRM(mod=00,reg=dst,rm=101
+         * = RIP) + disp32=0 (placeholder) + MReloc{DATA_REL32}.  El writer
+         * resuelve disp32 = target_VA - (site_VA + 4) tras el layout. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        put_rex(out, true, mi.dst.reg, 0); /* REX.W + REX.R si dst>=R8 */
+        put8(out, 0x8D);
+        put8(out,
+             modrm(0, mi.dst.reg & 7, 5)); /* mod=00 rm=101 -> [rip+disp32] */
+        MReloc r;
+        r.kind = MRelocKind::DATA_REL32;
+        r.patch_at = static_cast<uint32_t>(out.size());
+        r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+        r.addend = 0;
+        fn.relocs.push_back(r);
+        put32(out, 0); /* placeholder disp32 */
+        return true;
+    }
+    case MOp::MOV_SYM: {
+        /* AOT: mov r64, &simbolo (.rodata).  REX.W + B8+rd + imm64=0
+         * (placeholder) + MReloc ABS64.  El driver escribe la VA
+         * absoluta del dato tras conocer el layout de .rodata. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        put_rex(out, true, 0, mi.dst.reg);
+        put8(out, 0xB8 + (mi.dst.reg & 7));
+        MReloc r;
+        r.kind = MRelocKind::ABS64;
+        r.patch_at = static_cast<uint32_t>(out.size());
+        r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+        r.addend = 0;
+        fn.relocs.push_back(r);
+        put64(out, 0); /* placeholder imm64 */
+        return true;
+    }
+    case MOp::CALL: {
+        /* si el CALL tiene stackmap asociado (flags
+         * != UINT16_MAX), rellenar su pc_offset.  Esto permite
+         * que el GC walker encuentre el stackmap correcto
+         * cuando el callee triggera GC. */
+        if (mi.flags != UINT16_MAX && mi.flags < fn.stackmaps.size()) {
+            fn.stackmaps[mi.flags].pc_offset =
+                static_cast<uint32_t>(out.size());
+        }
+        emit_call(fn, mi, out);
+        return true;
+    }
+    case MOp::LABEL_DEF:
+        /* No emite bytes; label_offset ya se setea en encode().
+         * Sin embargo, si el LABEL_DEF aparece A MITAD del bloque
+         * (insertado por el selector dentro de un BB grande)
+         * necesitamos registrar el offset aqui tambien. */
+        if (mi.src1.kind == MOperandKind::LABEL) {
+            const uint32_t id = static_cast<uint32_t>(mi.src1.value);
+            if (id < fn.label_offsets.size()) {
+                /* Solo si no esta seteado por encode().  Calcular
+                 * el offset relativo al base de la funcion. */
+                if (fn.label_offsets[id] == UINT32_MAX) {
+                    fn.label_offsets[id] = static_cast<uint32_t>(out.size());
+                }
+            }
+        }
+        return true;
+    case MOp::COMMENT:
+        /* skip en release */
+        return true;
+    case MOp::INLINE_ASM_RAW: {
+        /* Phase AS inc.5: apendea los bytes del bloque inline-asm ya
+         * ensamblado (via vex::g_asm_backend) verbatim al code cache.
+         * El indice del blob viaja como IMM32 en src1.  Los inputs/
+         * outputs register-bound ya estan en sus registros fisicos
+         * (pineados por el regalloc); el asm opera sobre ellos. */
+        if (mi.src1.kind == MOperandKind::IMM32) {
+            const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
+            if (idx < fn.asm_blobs.size()) {
+                const std::vector<uint8_t> &b = fn.asm_blobs[idx].bytes;
+                out.insert(out.end(), b.begin(), b.end());
+            }
+        }
+        return true;
+    }
+    case MOp::ARG:
+        /* pseudo: el rewrite ya lo expandio a moves a arg_regs antes
+         * del CALL.  No deberia llegar aqui; si llega, no emite. */
+        return true;
+    case MOp::SAFEPOINT: {
+        /* poll expansion: lee safepoint_flag desde [rbx+0],
+         * si != 0 salta al slow path que llama al handler.
+         *
+         * Layout:
+         *
+         *     80 7B 00 00          cmp byte [rbx+0], 0
+         *     74 0F                je  skip                ; rel8
+         *     48 89 DF             mov rdi, rbx            ; SysV: proc en rdi
+         *     48 B8 <imm64>        mov rax, handler_addr
+         *     FF D0                call rax
+         *   skip:
+         *
+         * Total: 4 + 2 + 3 + 10 + 2 = 21 bytes.
+         * En Win64 cambia: mov rcx, rbx (3 bytes).
+         */
+        /* rellenar pc_offset del stackmap asociado.
+         * MInstr::flags lleva el indice del stackmap en mf.stackmaps.
+         * El pc_offset que escribimos es la direccion DEL POLL, no
+         * la del handler -- asi el GC encuentra el stackmap correcto
+         * cuando captura RIP dentro o despues del poll. */
+        if (mi.flags != UINT16_MAX && mi.flags < fn.stackmaps.size()) {
+            fn.stackmaps[mi.flags].pc_offset =
+                static_cast<uint32_t>(out.size());
+        }
+        /* cmp byte [rbx+0], 0  -- usamos disp8=0 explicito */
+        put8(out, 0x80); /* cmp r/m8, imm8 */
+        put8(out,
+             modrm(1, 7, 3)); /* mod=01 (disp8), reg=7 (subop), r/m=3 (rbx) */
+        put8(out, 0x00);      /* disp8 = 0 (safepoint_flag offset) */
+        put8(out, 0x00);      /* imm8 = 0 */
+        /* je rel8 = 0x74, salto al final de la secuencia (skip).
+         * El slow path mide: mov rdi/rcx, rbx (3) + mov rax, imm64 (10) + call
+         * rax (2) = 15. rel8 = 15. */
+#if defined(_WIN32)
+        put8(out, 0x74); /* je rel8 */
+        put8(out, 15);
+        /* mov rcx, rbx (Win64 ABI: proc en rcx) */
+        put8(out, 0x48); /* REX.W */
+        put8(out, 0x89);
+        put8(out, modrm(3, 3, 1)); /* rcx <- rbx */
+#else
+        put8(out, 0x74); /* je rel8 */
+        put8(out, 15);
+        /* mov rdi, rbx (SysV: proc en rdi) */
+        put8(out, 0x48); /* REX.W */
+        put8(out, 0x89);
+        put8(out, modrm(3, 3, 7)); /* rdi <- rbx */
+#endif
+        /* mov rax, imm64 = handler addr */
+        {
+            const uint32_t pool_idx = static_cast<uint32_t>(mi.src1.value);
+            const uint64_t handler = (pool_idx < fn.imm64_pool.size())
+                                         ? fn.imm64_pool[pool_idx]
+                                         : 0ULL;
+            put8(out, 0x48); /* REX.W */
+            put8(out, 0xB8); /* MOV RAX, imm64 */
+            put64(out, handler);
+        }
+        /* call rax */
+        put8(out, 0xFF);
+        put8(out, modrm(3, 2, 0)); /* /2 reg=rax */
+        return true;
+    }
+    case MOp::LOAD_PROC: {
+        /* Carga ProcessVM* en dst (RBX por convencion del callback).
+         *
+         * TLS-direct (src1.value != -1, Win64):
+         *   65 48 8B <modrm> 25 <disp32>   mov dst, gs:[disp32]
+         *   modrm = mod=00, reg=dst, r/m=100 (SIB);  SIB=0x25 (disp32 abs).
+         *
+         * Fallback (src1.value == -1):
+         *   48 B8 <imm64>   mov rax, get_current_executing_process
+         *   FF D0           call rax
+         *   48 89 C0|dst    mov dst, rax
+         */
+        const uint8_t dst = mi.dst.reg; /* reg id completo (RBX=3) */
+        if (mi.src1.value != -1) {
+            put8(out, 0x65);               /* gs: prefix */
+            put_rex(out, true, dst, 0, 0); /* REX.W (+R si dst>=8) */
+            put8(out, 0x8B);               /* mov r64, r/m64 */
+            put8(out, modrm(0, dst, 4));   /* mod=00 reg=dst rm=SIB */
+            put8(out, 0x25);               /* SIB: disp32 absoluto */
+            put32(out, static_cast<uint32_t>(mi.src1.value));
+        } else {
+            const uint32_t pool_idx = static_cast<uint32_t>(mi.src2.value);
+            const uint64_t getproc = (pool_idx < fn.imm64_pool.size())
+                                         ? fn.imm64_pool[pool_idx]
+                                         : 0ULL;
+            put8(out, 0x48);
+            put8(out, 0xB8);
+            put64(out, getproc); /* mov rax, imm64 */
+            put8(out, 0xFF);
+            put8(out, modrm(3, 2, 0)); /* call rax */
+            /* mov dst, rax: REX.W (+B si dst>=8) + 0x89 + modrm(3, rax, dst) */
+            put_rex(out, true, 0, dst, 0);
+            put8(out, 0x89);
+            put8(out, modrm(3, 0, dst));
+        }
+        return true;
+    }
+    default:
+        /* Opcode no implementado en este encoder. */
+        return false;
+    }
+}
+
+/* ===================================================================== */
+/* MOV (formas: r/r, r/imm32, r/imm64, r/m, m/r)                          */
+/* ===================================================================== */
+
+void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
+                          std::vector<uint8_t> &out) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+
+    /* Caso 1: MOV reg, reg.  Ancho via dst.width (commit 9):
+     *   8 -> REX.W + 0x89 (mov r64,r64)
+     *   4 -> 0x89 sin REX.W (mov r32,r32 -> zero-extiende a 64)
+     *   2 -> 66 + 0x89; 1 -> 0x88. */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
+        const uint8_t w = dst.width;
+        if (w == 2) put8(out, 0x66);
+        const bool need_rex_w = (w == 8);
+        const uint8_t rex = rex_byte(need_rex_w, src.reg, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, (w == 1) ? 0x88 : 0x89);
+        put8(out, modrm(3, src.reg & 7, dst.reg & 7));
+        return;
+    }
+
+    /* Caso 2: MOV reg, imm32 (sign-extended -> reg64) */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM32) {
+        /* Optimizacion: si valor cabe en 32-bit y no necesitamos
+         * sign-ext especifico, usar MOV r32, imm32 (no REX.W).
+         * Pero como la mayoria del codigo VM usa i64, emitimos REX.W
+         * + 0xC7 /0 + imm32 (sign-extended a 64). */
+        const uint8_t rex = rex_byte(true, 0, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xC7);
+        put8(out, modrm(3, 0, dst.reg & 7));
+        put32(out, static_cast<uint32_t>(src.value));
+        return;
+    }
+
+    /* Caso 3: MOV reg, imm64 (via pool) */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM64_IDX) {
+        const uint32_t idx = static_cast<uint32_t>(src.value);
+        const uint64_t v64 =
+            (idx < fn.imm64_pool.size()) ? fn.imm64_pool[idx] : 0;
+        /* MOV r64, imm64: REX.W + B8+r + imm64 */
+        put_rex(out, true, 0, dst.reg);
+        put8(out, 0xB8 + (dst.reg & 7));
+        const size_t imm64_pos = out.size();
+        put64(out, v64);
+        /* Sprint fib-recursion: si este idx esta en self_ref_imm64_indices,
+         * registrar la posicion del imm64 emitido para que el JitCompiler
+         * pueda parchearlo con code_start tras la asignacion final. */
+        for (uint32_t sref_idx : fn.self_ref_imm64_indices) {
+            if (sref_idx == idx) {
+                fn.self_ref_byte_offsets.push_back(imm64_pos);
+                break;
+            }
+        }
+        return;
+    }
+
+    /* Caso 4: MOV reg, [mem].  Ancho controlado por dst.width:
+     *   8 -> mov r64, [mem]  (REX.W + 0x8B)  -- qword load
+     *   4 -> mov r32, [mem]  (sin REX.W + 0x8B) -- dword load, zero-extend
+     *   2 -> mov r16, [mem]  (66 prefix + 0x8B)
+     *   1 -> mov r8,  [mem]  (0x8A) */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::MEM) {
+        const uint8_t base = src.reg;
+        const uint8_t index = static_cast<uint8_t>(src.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t w = dst.width;
+        if (w == 2) put8(out, 0x66); /* 16-bit override */
+        const bool need_rex_w = (w == 8);
+        const uint8_t rex =
+            rex_byte(need_rex_w, dst.reg, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, (w == 1) ? 0x8A : 0x8B);
+        emit_modrm_mem(src, dst.reg & 7, out);
+        return;
+    }
+
+    /* Caso 5: MOV [mem], reg.  Ancho via src.width. */
+    if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t w = src.width;
+        if (w == 2) put8(out, 0x66);
+        const bool need_rex_w = (w == 8);
+        const uint8_t rex =
+            rex_byte(need_rex_w, src.reg, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, (w == 1) ? 0x88 : 0x89);
+        emit_modrm_mem(dst, src.reg & 7, out);
+        return;
+    }
+
+    /* Caso 6: MOV [mem], imm32 (sign-extended) */
+    if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::IMM32) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex = rex_byte(true, 0, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0xC7); /* MOV r/m64, imm32 (sign-ext) */
+        emit_modrm_mem(dst, 0, out);
+        put32(out, static_cast<uint32_t>(src.value));
+        return;
+    }
+
+    /* Cualquier otra combinacion no soportada -> INT3 para fail-fast. */
+    put8(out, 0xCC);
+}
+
+/* ===================================================================== */
+/* LEA reg, [mem]                                                         */
+/* ===================================================================== */
+
+void X86Encoder::emit_lea(MFunction & /*fn*/, const MInstr &mi,
+                          std::vector<uint8_t> &out) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+    if (dst.kind != MOperandKind::REG || src.kind != MOperandKind::MEM) {
+        put8(out, 0xCC);
+        return;
+    }
+    const uint8_t base = src.reg;
+    const uint8_t index = static_cast<uint8_t>(src.mem_index());
+    const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+    const uint8_t rex = rex_byte(true, dst.reg, base, has_index ? index : 0);
+    if (rex) put8(out, rex);
+    put8(out, 0x8D); /* LEA r64, m */
+    emit_modrm_mem(src, dst.reg & 7, out);
+}
+
+/* ===================================================================== */
+/* ALU binarias (ADD/SUB/AND/OR/XOR/CMP)                                  */
+/* ===================================================================== */
+
+void X86Encoder::emit_alu(MFunction & /*fn*/, const MInstr &mi,
+                          std::vector<uint8_t> &out, uint8_t op_byte,
+                          uint8_t alu_subop) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+
+    /* ALU reg/reg: REX.W + op_byte + ModR/M(3, src, dst) */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
+        const uint8_t rex = rex_byte(true, src.reg, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, op_byte);
+        put8(out, modrm(3, src.reg & 7, dst.reg & 7));
+        return;
+    }
+    /* ALU reg/imm32: REX.W + 0x81 /subop + imm32 (sign-ext) */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM32) {
+        const uint8_t rex = rex_byte(true, 0, dst.reg);
+        if (rex) put8(out, rex);
+        /* Optimizacion: si imm32 cabe en imm8 sign-ext, usar 0x83
+         * que reduce 3 bytes.  Encoding: REX.W + 0x83 /subop + imm8. */
+        if (src.value >= -128 && src.value <= 127) {
+            put8(out, 0x83);
+            put8(out, modrm(3, alu_subop, dst.reg & 7));
+            put8(out, static_cast<uint8_t>(src.value & 0xFF));
+        } else {
+            put8(out, 0x81);
+            put8(out, modrm(3, alu_subop, dst.reg & 7));
+            put32(out, static_cast<uint32_t>(src.value));
+        }
+        return;
+    }
+    /* ALU reg/mem: REX.W + (op_byte+2) + ModR/M */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::MEM) {
+        const uint8_t base = src.reg;
+        const uint8_t index = static_cast<uint8_t>(src.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex =
+            rex_byte(true, dst.reg, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, op_byte + 2); /* dir bit flipped */
+        emit_modrm_mem(src, dst.reg & 7, out);
+        return;
+    }
+    /* ALU mem/reg: REX.W + op_byte + ModR/M */
+    if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex =
+            rex_byte(true, src.reg, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, op_byte);
+        emit_modrm_mem(dst, src.reg & 7, out);
+        return;
+    }
+    /* ALU mem/imm32: REX.W + 0x81 /subop + ModR/M + imm32.
+     * Forma optimizada con imm8 sign-ext: REX.W + 0x83 /subop + ModR/M + imm8.
+     * Usado por @c add qword [&counter], N en el JIT MIPS profiler. */
+    if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::IMM32) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex = rex_byte(true, 0, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        if (src.value >= -128 && src.value <= 127) {
+            put8(out, 0x83);
+            emit_modrm_mem(dst, alu_subop, out);
+            put8(out, static_cast<uint8_t>(src.value & 0xFF));
+        } else {
+            put8(out, 0x81);
+            emit_modrm_mem(dst, alu_subop, out);
+            put32(out, static_cast<uint32_t>(src.value));
+        }
+        return;
+    }
+    put8(out, 0xCC);
+}
+
+/* ===================================================================== */
+/* IMUL reg, reg / reg, reg, imm32                                        */
+/* ===================================================================== */
+
+void X86Encoder::emit_imul(MFunction & /*fn*/, const MInstr &mi,
+                           std::vector<uint8_t> &out) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+    const MOperand &src2 = mi.src2;
+    /* Forma 1: IMUL reg, reg -> REX.W + 0x0F 0xAF /r */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG &&
+        src2.kind == MOperandKind::NONE) {
         const uint8_t rex = rex_byte(true, dst.reg, src.reg);
         if (rex) put8(out, rex);
         put8(out, 0x0F);
-        put8(out, 0x40 + static_cast<uint8_t>(cc));
+        put8(out, 0xAF);
         put8(out, modrm(3, dst.reg & 7, src.reg & 7));
+        return;
     }
+    /* Forma 2: IMUL reg, reg, imm32 -> REX.W + 0x69 /r + imm32 */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG &&
+        src2.kind == MOperandKind::IMM32) {
+        const uint8_t rex = rex_byte(true, dst.reg, src.reg);
+        if (rex) put8(out, rex);
+        /* imm8 si cabe (0x6B), imm32 si no (0x69) */
+        if (src2.value >= -128 && src2.value <= 127) {
+            put8(out, 0x6B);
+            put8(out, modrm(3, dst.reg & 7, src.reg & 7));
+            put8(out, static_cast<uint8_t>(src2.value & 0xFF));
+        } else {
+            put8(out, 0x69);
+            put8(out, modrm(3, dst.reg & 7, src.reg & 7));
+            put32(out, static_cast<uint32_t>(src2.value));
+        }
+        return;
+    }
+    put8(out, 0xCC);
+}
 
-    /* ===================================================================== */
-    /* JMP / Jcc / CALL (rel32)                                                */
-    /* ===================================================================== */
+/* ===================================================================== */
+/* SHL/SHR/SAR reg, imm8                                                  */
+/* ===================================================================== */
 
-    void X86Encoder::emit_jmp(MFunction &fn, const MInstr &mi,
-                              std::vector<uint8_t> &out) {
-        if (mi.src1.kind == MOperandKind::LABEL) {
-            put8(out, 0xE9);
-            const uint32_t patch_at = static_cast<uint32_t>(out.size());
-            put32(out, 0);  /* placeholder rel32 */
-            const uint32_t instr_end = static_cast<uint32_t>(out.size());
-            fn.fixups.push_back(MFixup{
-                static_cast<MLabelId>(mi.src1.value),
-                patch_at, instr_end, 4
-            });
-            return;
-        }
-        /* JMP reg INDIRECTO: FF /4 (mod=11).  Usado por el frame-swap del OSR
-         * (salto C1->C2 a una direccion absoluta en un registro).  Mismo patron
-         * que CALL reg (FF /2) pero con el campo reg del ModRM = 4. */
-        if (mi.src1.kind == MOperandKind::REG) {
-            const uint8_t rex = rex_byte(false, 0, mi.src1.reg);
-            if (rex) put8(out, rex);
-            put8(out, 0xFF);
-            put8(out, modrm(3, 4, mi.src1.reg & 7));
-            return;
-        }
-        /* JMP mem INDIRECTO: FF /4 con un operando de memoria. */
-        if (mi.src1.kind == MOperandKind::MEM) {
-            const uint8_t base  = mi.src1.reg;
-            const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, 0xFF);
-            emit_modrm_mem(mi.src1, 4, out);
-            return;
-        }
+void X86Encoder::emit_shift(MFunction & /*fn*/, const MInstr &mi,
+                            std::vector<uint8_t> &out, uint8_t shift_subop) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+    if (dst.kind != MOperandKind::REG) {
         put8(out, 0xCC);
+        return;
     }
-
-    void X86Encoder::emit_jcc(MFunction &fn, const MInstr &mi,
-                              std::vector<uint8_t> &out) {
-        if (mi.src1.kind != MOperandKind::LABEL) {
+    const uint8_t rex = rex_byte(true, 0, dst.reg);
+    if (src.kind == MOperandKind::REG) {
+        /* Variante por CL: REX.W + 0xD3 /subop -- el caller debe
+         * garantizar que la cuenta vive en CL (RCX low byte).  Solo
+         * aceptamos src == RCX explicito para que el caller sepa que
+         * debe coordinar el reg destino. */
+        if (src.reg != static_cast<uint8_t>(MReg::RCX)) {
             put8(out, 0xCC);
             return;
         }
-        const MCond cc = static_cast<MCond>(mi.variant);
-        put8(out, 0x0F);
-        put8(out, jcc_long_opcode(cc));
+        if (rex) put8(out, rex);
+        put8(out, 0xD3);
+        put8(out, modrm(3, shift_subop, dst.reg & 7));
+        return;
+    }
+    if (src.kind != MOperandKind::IMM32) {
+        put8(out, 0xCC);
+        return;
+    }
+    if (rex) put8(out, rex);
+    if ((src.value & 0xFF) == 1) {
+        /* Variante por 1: REX.W + 0xD1 /subop -- mas compacta */
+        put8(out, 0xD1);
+        put8(out, modrm(3, shift_subop, dst.reg & 7));
+    } else {
+        /* Variante imm8: REX.W + 0xC1 /subop + imm8 */
+        put8(out, 0xC1);
+        put8(out, modrm(3, shift_subop, dst.reg & 7));
+        put8(out, static_cast<uint8_t>(src.value & 0xFF));
+    }
+}
+
+/* ===================================================================== */
+/* NEG/NOT reg                                                            */
+/* ===================================================================== */
+
+void X86Encoder::emit_unary_alu(MFunction & /*fn*/, const MInstr &mi,
+                                std::vector<uint8_t> &out, uint8_t subop) {
+    const MOperand &dst = mi.dst;
+    if (dst.kind != MOperandKind::REG) {
+        put8(out, 0xCC);
+        return;
+    }
+    const uint8_t rex = rex_byte(true, 0, dst.reg);
+    if (rex) put8(out, rex);
+    put8(out, 0xF7);
+    put8(out, modrm(3, subop, dst.reg & 7));
+}
+
+/* ===================================================================== */
+/* CMP / TEST                                                             */
+/* ===================================================================== */
+
+void X86Encoder::emit_cmp(MFunction &fn, const MInstr &mi,
+                          std::vector<uint8_t> &out) {
+    /* CMP usa la misma tabla que ADD/SUB/etc.  El alu_subop=7 y
+     * op_byte=0x39 estan en la tabla bajo MOp::CMP. */
+    emit_alu(fn, mi, out, 0x39, 7);
+}
+
+void X86Encoder::emit_test(MFunction & /*fn*/, const MInstr &mi,
+                           std::vector<uint8_t> &out) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+    /* TEST reg, reg: REX.W + 0x85 /r */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::REG) {
+        const uint8_t rex = rex_byte(true, src.reg, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0x85);
+        put8(out, modrm(3, src.reg & 7, dst.reg & 7));
+        return;
+    }
+    /* TEST reg, imm32: REX.W + 0xF7 /0 + imm32 */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::IMM32) {
+        const uint8_t rex = rex_byte(true, 0, dst.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xF7);
+        put8(out, modrm(3, 0, dst.reg & 7));
+        put32(out, static_cast<uint32_t>(src.value));
+        return;
+    }
+    put8(out, 0xCC);
+}
+
+/* ===================================================================== */
+/* SETcc / CMOVcc                                                          */
+/* ===================================================================== */
+
+void X86Encoder::emit_setcc(MFunction & /*fn*/, const MInstr &mi,
+                            std::vector<uint8_t> &out) {
+    const MOperand &dst = mi.dst;
+    const MCond cc = static_cast<MCond>(mi.variant);
+    if (dst.kind != MOperandKind::REG) {
+        put8(out, 0xCC);
+        return;
+    }
+    /* SETcc r/m8: 0x0F 0x90+cc /0 -- NO REX.W (es 8-bit). */
+    const uint8_t rex = rex_byte(false, 0, dst.reg);
+    if (rex) put8(out, rex);
+    put8(out, 0x0F);
+    put8(out, 0x90 + static_cast<uint8_t>(cc));
+    put8(out, modrm(3, 0, dst.reg & 7));
+}
+
+void X86Encoder::emit_cmovcc(MFunction & /*fn*/, const MInstr &mi,
+                             std::vector<uint8_t> &out) {
+    const MOperand &dst = mi.dst;
+    const MOperand &src = mi.src1;
+    const MCond cc = static_cast<MCond>(mi.variant);
+    if (dst.kind != MOperandKind::REG || src.kind != MOperandKind::REG) {
+        put8(out, 0xCC);
+        return;
+    }
+    /* CMOVcc r64, r/m64: REX.W + 0x0F 0x40+cc /r */
+    const uint8_t rex = rex_byte(true, dst.reg, src.reg);
+    if (rex) put8(out, rex);
+    put8(out, 0x0F);
+    put8(out, 0x40 + static_cast<uint8_t>(cc));
+    put8(out, modrm(3, dst.reg & 7, src.reg & 7));
+}
+
+/* ===================================================================== */
+/* JMP / Jcc / CALL (rel32)                                                */
+/* ===================================================================== */
+
+void X86Encoder::emit_jmp(MFunction &fn, const MInstr &mi,
+                          std::vector<uint8_t> &out) {
+    if (mi.src1.kind == MOperandKind::LABEL) {
+        put8(out, 0xE9);
+        const uint32_t patch_at = static_cast<uint32_t>(out.size());
+        put32(out, 0); /* placeholder rel32 */
+        const uint32_t instr_end = static_cast<uint32_t>(out.size());
+        fn.fixups.push_back(MFixup{static_cast<MLabelId>(mi.src1.value),
+                                   patch_at, instr_end, 4});
+        return;
+    }
+    /* JMP reg INDIRECTO: FF /4 (mod=11).  Usado por el frame-swap del OSR
+     * (salto C1->C2 a una direccion absoluta en un registro).  Mismo patron
+     * que CALL reg (FF /2) pero con el campo reg del ModRM = 4. */
+    if (mi.src1.kind == MOperandKind::REG) {
+        const uint8_t rex = rex_byte(false, 0, mi.src1.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xFF);
+        put8(out, modrm(3, 4, mi.src1.reg & 7));
+        return;
+    }
+    /* JMP mem INDIRECTO: FF /4 con un operando de memoria. */
+    if (mi.src1.kind == MOperandKind::MEM) {
+        const uint8_t base = mi.src1.reg;
+        const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0xFF);
+        emit_modrm_mem(mi.src1, 4, out);
+        return;
+    }
+    put8(out, 0xCC);
+}
+
+void X86Encoder::emit_jcc(MFunction &fn, const MInstr &mi,
+                          std::vector<uint8_t> &out) {
+    if (mi.src1.kind != MOperandKind::LABEL) {
+        put8(out, 0xCC);
+        return;
+    }
+    const MCond cc = static_cast<MCond>(mi.variant);
+    put8(out, 0x0F);
+    put8(out, jcc_long_opcode(cc));
+    const uint32_t patch_at = static_cast<uint32_t>(out.size());
+    put32(out, 0);
+    const uint32_t instr_end = static_cast<uint32_t>(out.size());
+    fn.fixups.push_back(
+        MFixup{static_cast<MLabelId>(mi.src1.value), patch_at, instr_end, 4});
+}
+
+void X86Encoder::emit_call(MFunction &fn, const MInstr &mi,
+                           std::vector<uint8_t> &out) {
+    if (mi.src1.kind == MOperandKind::LABEL) {
+        put8(out, 0xE8);
         const uint32_t patch_at = static_cast<uint32_t>(out.size());
         put32(out, 0);
         const uint32_t instr_end = static_cast<uint32_t>(out.size());
-        fn.fixups.push_back(MFixup{
-            static_cast<MLabelId>(mi.src1.value),
-            patch_at, instr_end, 4
-        });
+        fn.fixups.push_back(MFixup{static_cast<MLabelId>(mi.src1.value),
+                                   patch_at, instr_end, 4});
+        return;
     }
-
-    void X86Encoder::emit_call(MFunction &fn, const MInstr &mi,
-                               std::vector<uint8_t> &out) {
-        if (mi.src1.kind == MOperandKind::LABEL) {
-            put8(out, 0xE8);
-            const uint32_t patch_at = static_cast<uint32_t>(out.size());
-            put32(out, 0);
-            const uint32_t instr_end = static_cast<uint32_t>(out.size());
-            fn.fixups.push_back(MFixup{
-                static_cast<MLabelId>(mi.src1.value),
-                patch_at, instr_end, 4
-            });
-            return;
-        }
-        /* CALL reg/mem: FF /2 */
-        if (mi.src1.kind == MOperandKind::REG) {
-            const uint8_t rex = rex_byte(false, 0, mi.src1.reg);
-            if (rex) put8(out, rex);
-            put8(out, 0xFF);
-            put8(out, modrm(3, 2, mi.src1.reg & 7));
-            return;
-        }
-        if (mi.src1.kind == MOperandKind::MEM) {
-            const uint8_t base  = mi.src1.reg;
-            const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
-            const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-            const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
-            if (rex) put8(out, rex);
-            put8(out, 0xFF);
-            emit_modrm_mem(mi.src1, 2, out);
-            return;
-        }
-        put8(out, 0xCC);
+    /* CALL reg/mem: FF /2 */
+    if (mi.src1.kind == MOperandKind::REG) {
+        const uint8_t rex = rex_byte(false, 0, mi.src1.reg);
+        if (rex) put8(out, rex);
+        put8(out, 0xFF);
+        put8(out, modrm(3, 2, mi.src1.reg & 7));
+        return;
     }
-
-    /* ===================================================================== */
-    /* RET / PUSH / POP                                                       */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_ret(std::vector<uint8_t> &out) {
-        put8(out, 0xC3);
+    if (mi.src1.kind == MOperandKind::MEM) {
+        const uint8_t base = mi.src1.reg;
+        const uint8_t index = static_cast<uint8_t>(mi.src1.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex = rex_byte(false, 0, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0xFF);
+        emit_modrm_mem(mi.src1, 2, out);
+        return;
     }
+    put8(out, 0xCC);
+}
 
-    void X86Encoder::emit_push(const MInstr &mi, std::vector<uint8_t> &out) {
-        if (mi.src1.kind == MOperandKind::REG) {
-            const uint8_t r = mi.src1.reg;
-            if (r & 0x8) put8(out, 0x41);  /* REX.B para R8..R15 */
-            put8(out, 0x50 + (r & 7));
-            return;
-        }
-        /* PUSH imm32: 0x68 + imm32 (sign-ext a 64) */
-        if (mi.src1.kind == MOperandKind::IMM32) {
-            if (mi.src1.value >= -128 && mi.src1.value <= 127) {
-                put8(out, 0x6A);
-                put8(out, static_cast<uint8_t>(mi.src1.value & 0xFF));
-            } else {
-                put8(out, 0x68);
-                put32(out, static_cast<uint32_t>(mi.src1.value));
-            }
-            return;
-        }
-        put8(out, 0xCC);
+/* ===================================================================== */
+/* RET / PUSH / POP                                                       */
+/* ===================================================================== */
+
+void X86Encoder::emit_ret(std::vector<uint8_t> &out) {
+    put8(out, 0xC3);
+}
+
+void X86Encoder::emit_push(const MInstr &mi, std::vector<uint8_t> &out) {
+    if (mi.src1.kind == MOperandKind::REG) {
+        const uint8_t r = mi.src1.reg;
+        if (r & 0x8) put8(out, 0x41); /* REX.B para R8..R15 */
+        put8(out, 0x50 + (r & 7));
+        return;
     }
-
-    void X86Encoder::emit_pop(const MInstr &mi, std::vector<uint8_t> &out) {
-        if (mi.dst.kind == MOperandKind::REG) {
-            const uint8_t r = mi.dst.reg;
-            if (r & 0x8) put8(out, 0x41);
-            put8(out, 0x58 + (r & 7));
-            return;
-        }
-        put8(out, 0xCC);
-    }
-
-    /* ===================================================================== */
-    /* emit_modrm_mem (ModR/M + SIB? + disp para operandos MEM)                */
-    /* ===================================================================== */
-
-    void X86Encoder::emit_modrm_mem(const MOperand &mem, uint8_t reg_field,
-                                    std::vector<uint8_t> &out) {
-        const uint8_t base   = mem.reg;
-        const MReg    idx    = mem.mem_index();
-        const uint8_t scale  = mem.mem_scale();
-        const int32_t disp   = mem.mem_disp();
-        const bool    has_index = (idx != MReg::NONE);
-
-        /* scale_bits: 1->0, 2->1, 4->2, 8->3 */
-        uint8_t scale_bits = 0;
-        switch (scale) {
-            case 1: scale_bits = 0; break;
-            case 2: scale_bits = 1; break;
-            case 4: scale_bits = 2; break;
-            case 8: scale_bits = 3; break;
-        }
-
-        const uint8_t base_3 = base & 7;
-        const uint8_t reg_3  = reg_field & 7;
-
-        /* Decidir mod segun disp + casos especiales:
-         *   mod=00 si disp==0 y base != RBP (5) y base != R13 (13)
-         *   mod=01 si disp cabe en int8
-         *   mod=10 si disp es int32 */
-        uint8_t mod = 0;
-        bool emit_disp8 = false;
-        bool emit_disp32 = false;
-        if (disp == 0 && base_3 != 5) {
-            mod = 0;
-        } else if (disp >= -128 && disp <= 127) {
-            mod = 1;
-            emit_disp8 = true;
+    /* PUSH imm32: 0x68 + imm32 (sign-ext a 64) */
+    if (mi.src1.kind == MOperandKind::IMM32) {
+        if (mi.src1.value >= -128 && mi.src1.value <= 127) {
+            put8(out, 0x6A);
+            put8(out, static_cast<uint8_t>(mi.src1.value & 0xFF));
         } else {
-            mod = 2;
-            emit_disp32 = true;
+            put8(out, 0x68);
+            put32(out, static_cast<uint32_t>(mi.src1.value));
         }
+        return;
+    }
+    put8(out, 0xCC);
+}
 
-        /* Si hay index O si base es RSP (4) o R12 (12 & 7 == 4), debemos
-         * usar SIB. */
-        const bool needs_sib = has_index || base_3 == 4;
+void X86Encoder::emit_pop(const MInstr &mi, std::vector<uint8_t> &out) {
+    if (mi.dst.kind == MOperandKind::REG) {
+        const uint8_t r = mi.dst.reg;
+        if (r & 0x8) put8(out, 0x41);
+        put8(out, 0x58 + (r & 7));
+        return;
+    }
+    put8(out, 0xCC);
+}
 
-        if (needs_sib) {
-            put8(out, modrm(mod, reg_3, 4));  /* r/m = 4 -> SIB sigue */
-            const uint8_t idx_3 = has_index ? (static_cast<uint8_t>(idx) & 7) : 4;
-            /* SIB con index=4 = no-index */
-            put8(out, sib(scale_bits, idx_3, base_3));
-        } else {
-            put8(out, modrm(mod, reg_3, base_3));
-        }
+/* ===================================================================== */
+/* emit_modrm_mem (ModR/M + SIB? + disp para operandos MEM)                */
+/* ===================================================================== */
 
-        if (emit_disp8) {
-            put8(out, static_cast<uint8_t>(disp & 0xFF));
-        } else if (emit_disp32) {
-            put32(out, static_cast<uint32_t>(disp));
-        } else if (mod == 0 && base_3 == 5) {
-            /* base = RBP / R13 -> disp32 forzado por encoding */
-            put32(out, 0);
-        }
+void X86Encoder::emit_modrm_mem(const MOperand &mem, uint8_t reg_field,
+                                std::vector<uint8_t> &out) {
+    const uint8_t base = mem.reg;
+    const MReg idx = mem.mem_index();
+    const uint8_t scale = mem.mem_scale();
+    const int32_t disp = mem.mem_disp();
+    const bool has_index = (idx != MReg::NONE);
+
+    /* scale_bits: 1->0, 2->1, 4->2, 8->3 */
+    uint8_t scale_bits = 0;
+    switch (scale) {
+    case 1: scale_bits = 0; break;
+    case 2: scale_bits = 1; break;
+    case 4: scale_bits = 2; break;
+    case 8: scale_bits = 3; break;
     }
 
-    /* ===================================================================== */
-    /* resolve_fixups                                                          */
-    /* ===================================================================== */
+    const uint8_t base_3 = base & 7;
+    const uint8_t reg_3 = reg_field & 7;
 
-    void X86Encoder::resolve_fixups(MFunction &fn, std::vector<uint8_t> &out,
-                                    size_t base) {
-        for (const auto &fx : fn.fixups) {
-            if (fx.label_id >= fn.label_offsets.size()) continue;
-            const uint32_t target_off = fn.label_offsets[fx.label_id];
-            if (target_off == UINT32_MAX) continue;  /* unresolved (bug) */
-            const int64_t rel = static_cast<int64_t>(target_off)
-                              - static_cast<int64_t>(fx.instr_end);
-            /* Comprobar rango int32. */
-            if (rel < INT32_MIN || rel > INT32_MAX) continue;
-            const uint32_t rel32 = static_cast<uint32_t>(static_cast<int32_t>(rel));
-            const size_t at = base + fx.patch_at;
-            out[at]     = static_cast<uint8_t>(rel32);
-            out[at + 1] = static_cast<uint8_t>(rel32 >> 8);
-            out[at + 2] = static_cast<uint8_t>(rel32 >> 16);
-            out[at + 3] = static_cast<uint8_t>(rel32 >> 24);
-        }
+    /* Decidir mod segun disp + casos especiales:
+     *   mod=00 si disp==0 y base != RBP (5) y base != R13 (13)
+     *   mod=01 si disp cabe en int8
+     *   mod=10 si disp es int32 */
+    uint8_t mod = 0;
+    bool emit_disp8 = false;
+    bool emit_disp32 = false;
+    if (disp == 0 && base_3 != 5) {
+        mod = 0;
+    } else if (disp >= -128 && disp <= 127) {
+        mod = 1;
+        emit_disp8 = true;
+    } else {
+        mod = 2;
+        emit_disp32 = true;
     }
+
+    /* Si hay index O si base es RSP (4) o R12 (12 & 7 == 4), debemos
+     * usar SIB. */
+    const bool needs_sib = has_index || base_3 == 4;
+
+    if (needs_sib) {
+        put8(out, modrm(mod, reg_3, 4)); /* r/m = 4 -> SIB sigue */
+        const uint8_t idx_3 = has_index ? (static_cast<uint8_t>(idx) & 7) : 4;
+        /* SIB con index=4 = no-index */
+        put8(out, sib(scale_bits, idx_3, base_3));
+    } else {
+        put8(out, modrm(mod, reg_3, base_3));
+    }
+
+    if (emit_disp8) {
+        put8(out, static_cast<uint8_t>(disp & 0xFF));
+    } else if (emit_disp32) {
+        put32(out, static_cast<uint32_t>(disp));
+    } else if (mod == 0 && base_3 == 5) {
+        /* base = RBP / R13 -> disp32 forzado por encoding */
+        put32(out, 0);
+    }
+}
+
+/* ===================================================================== */
+/* resolve_fixups                                                          */
+/* ===================================================================== */
+
+void X86Encoder::resolve_fixups(MFunction &fn, std::vector<uint8_t> &out,
+                                size_t base) {
+    for (const auto &fx : fn.fixups) {
+        if (fx.label_id >= fn.label_offsets.size()) continue;
+        const uint32_t target_off = fn.label_offsets[fx.label_id];
+        if (target_off == UINT32_MAX) continue; /* unresolved (bug) */
+        const int64_t rel = static_cast<int64_t>(target_off) -
+                            static_cast<int64_t>(fx.instr_end);
+        /* Comprobar rango int32. */
+        if (rel < INT32_MIN || rel > INT32_MAX) continue;
+        const uint32_t rel32 = static_cast<uint32_t>(static_cast<int32_t>(rel));
+        const size_t at = base + fx.patch_at;
+        out[at] = static_cast<uint8_t>(rel32);
+        out[at + 1] = static_cast<uint8_t>(rel32 >> 8);
+        out[at + 2] = static_cast<uint8_t>(rel32 >> 16);
+        out[at + 3] = static_cast<uint8_t>(rel32 >> 24);
+    }
+}
 
 } // namespace jit

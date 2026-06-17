@@ -40,34 +40,43 @@ namespace ir {
 // valor que lo este "esperando" via hint.  Si si, ese reg se prioriza para
 // el siguiente alloc (en lugar de un reg arbitrario).
 struct RegHint {
-    IrValueId pref_via_value = IR_NO_VALUE; // %dst quiere el reg de pref_via_value
+    IrValueId pref_via_value =
+        IR_NO_VALUE; // %dst quiere el reg de pref_via_value
 };
 
 // Devuelve true si el `op` es un binop/unop two-address donde el primer
-// operando se "consume" en rd (es decir, el emit hace `mov rd, src1; op rd, src2`
-// o `mov rd, src; op rd`).  Estos son los candidatos a hinting porque el
+// operando se "consume" en rd (es decir, el emit hace `mov rd, src1; op rd,
+// src2` o `mov rd, src; op rd`).  Estos son los candidatos a hinting porque el
 // MOV se elimina si rd == src1's reg.
 static bool is_two_address_op(IrOp op) {
     switch (op) {
-        case IrOp::ADD: case IrOp::SUB: case IrOp::MUL:
-        case IrOp::DIV: case IrOp::MOD:
-        case IrOp::AND: case IrOp::OR:  case IrOp::XOR:
-        case IrOp::SHL: case IrOp::SHR: case IrOp::SAR:
-        case IrOp::NEG: case IrOp::NOT:
-        case IrOp::MOV:
-        case IrOp::SEXT: case IrOp::ZEXT: case IrOp::TRUNC:
-        case IrOp::CAST: case IrOp::BITCAST:
-            return true;
-        default:
-            return false;
+    case IrOp::ADD:
+    case IrOp::SUB:
+    case IrOp::MUL:
+    case IrOp::DIV:
+    case IrOp::MOD:
+    case IrOp::AND:
+    case IrOp::OR:
+    case IrOp::XOR:
+    case IrOp::SHL:
+    case IrOp::SHR:
+    case IrOp::SAR:
+    case IrOp::NEG:
+    case IrOp::NOT:
+    case IrOp::MOV:
+    case IrOp::SEXT:
+    case IrOp::ZEXT:
+    case IrOp::TRUNC:
+    case IrOp::CAST:
+    case IrOp::BITCAST: return true;
+    default: return false;
     }
 }
 
 // --- tabla de nombres de registros ---
-static const char *REG_NAMES[16] = {
-    "r0","r1","r2","r3","r4","r5","r6","r7",
-    "r8","r9","r10","r11","r12","r13","r14","r15"
-};
+static const char *REG_NAMES[16] = {"r0",  "r1",  "r2",  "r3", "r4",  "r5",
+                                    "r6",  "r7",  "r8",  "r9", "r10", "r11",
+                                    "r12", "r13", "r14", "r15"};
 
 const char *reg_name(int reg) {
     if (reg >= 0 && reg < 16) return REG_NAMES[reg];
@@ -78,10 +87,11 @@ const char *reg_name(int reg) {
 //  Algoritmo de barrido lineal
 // =========================================================================
 
-AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) {
+AllocResult allocate_regs(const IrFunction &fn,
+                          const LivenessResult &liveness) {
     AllocResult result;
     result.spill_count = 0;
-    result.ok          = true;
+    result.ok = true;
 
     if (liveness.intervals.empty()) return result;
 
@@ -94,10 +104,12 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
     {
         // Mapa rapido vid -> interval.end
         std::unordered_map<IrValueId, uint32_t> end_of;
-        for (const auto &li : liveness.intervals) end_of[li.id] = li.end;
+        for (const auto &li : liveness.intervals)
+            end_of[li.id] = li.end;
 
         // Set de params (no hintear sobre params; sus regs son fijos)
-        std::unordered_set<IrValueId> param_set(fn.params.begin(), fn.params.end());
+        std::unordered_set<IrValueId> param_set(fn.params.begin(),
+                                                fn.params.end());
 
         // Walk linealizado paralelo a liveness.  Mismo orden que el liveness.
         uint32_t pos = 0;
@@ -162,9 +174,9 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
     // Conjunto activo: intervalos en vuelo, ordenados por end para facilitar
     // la eleccion del candidato a desalojar.
     struct ActiveEntry {
-        uint32_t  end;
+        uint32_t end;
         IrValueId id;
-        int       reg;
+        int reg;
         bool operator<(const ActiveEntry &o) const {
             return end < o.end || (end == o.end && id < o.id);
         }
@@ -182,13 +194,16 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
     // Barrido lineal sobre intervalos ordenados por def
     for (const auto &li : liveness.intervals) {
         // Saltar valores ya asignados (parametros pre-asignados o extra-spill)
-        if (result.reg_map.count(li.id) || result.spill_map.count(li.id)) continue;
+        if (result.reg_map.count(li.id) || result.spill_map.count(li.id))
+            continue;
 
         // Expirar intervalos cuyo end < li.def (ya no estan vivos)
         std::vector<ActiveEntry> expired;
         for (const auto &a : active) {
-            if (a.end < li.def) expired.push_back(a);
-            else break; // el set esta ordenado por end, podemos parar
+            if (a.end < li.def)
+                expired.push_back(a);
+            else
+                break; // el set esta ordenado por end, podemos parar
         }
         for (const auto &a : expired) {
             active.erase(a);
@@ -218,7 +233,8 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
                 result.reg_map[li.id] = spilled.reg;
                 active.insert({li.end, li.id, spilled.reg});
             } else {
-                // El intervalo actual tiene el mayor end; lo derramamos directamente
+                // El intervalo actual tiene el mayor end; lo derramamos
+                // directamente
                 result.spill_map[li.id] = result.spill_count++;
             }
         } else {
@@ -239,7 +255,8 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
                 auto rm = result.reg_map.find(hit->second);
                 if (rm != result.reg_map.end()) {
                     int pref = rm->second;
-                    auto pit = std::find(free_pool.begin(), free_pool.end(), pref);
+                    auto pit =
+                        std::find(free_pool.begin(), free_pool.end(), pref);
                     if (pit != free_pool.end()) {
                         reg = pref;
                         free_pool.erase(pit);
@@ -254,8 +271,8 @@ AllocResult allocate_regs(const IrFunction &fn, const LivenessResult &liveness) 
                             }
                         }
                         if (ait != active.end()) {
-                            // Steal: extraer y reusar.  No devolver al free_pool
-                            // (lo entregamos directamente a li.id).
+                            // Steal: extraer y reusar.  No devolver al
+                            // free_pool (lo entregamos directamente a li.id).
                             reg = ait->reg;
                             active.erase(ait);
                         }

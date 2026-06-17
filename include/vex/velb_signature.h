@@ -29,18 +29,18 @@
 namespace vex {
 
 /// Magic del footer (los ultimos 4 bytes del .velb firmado).
-inline constexpr uint32_t VSIG_MAGIC = 0x47495356;  // 'VSIG' LE
+inline constexpr uint32_t VSIG_MAGIC = 0x47495356; // 'VSIG' LE
 
 /// Algoritmo de firma usado.
 enum class VsigAlgo : uint32_t {
-    RSA_SHA256   = 0,
+    RSA_SHA256 = 0,
     ECDSA_SHA256 = 1,
 };
 
 /// Resultado de @c velb_verify_signature.
 struct VsigVerifyResult {
-    bool        ok = false;
-    bool        signed_ = false;     ///< @c true si el archivo trae footer.
+    bool ok = false;
+    bool signed_ = false; ///< @c true si el archivo trae footer.
     std::string error;
 };
 
@@ -52,18 +52,17 @@ struct VsigVerifyResult {
 /// @param out_signed  Buffer destino con velb + footer VSIG appendado.
 /// @return @c true si exito.  En error, @c err contiene el mensaje.
 bool velb_sign(const std::vector<uint8_t> &velb_in,
-                const std::string &privkey_path,
-                VsigAlgo algo,
-                std::vector<uint8_t> &out_signed,
-                std::string &err);
+               const std::string &privkey_path, VsigAlgo algo,
+               std::vector<uint8_t> &out_signed, std::string &err);
 
 /// @brief Verifica la firma de un @c .velb firmado.
 ///
 /// @param velb_with_sig  Bytes del @c .velb tal como esta en disco.
 /// @param pubkey_path    Path a @c public_key.pem .
 /// @return VsigVerifyResult con @c ok=true si la firma matchea.
-VsigVerifyResult velb_verify_signature(const std::vector<uint8_t> &velb_with_sig,
-                                        const std::string &pubkey_path);
+VsigVerifyResult
+velb_verify_signature(const std::vector<uint8_t> &velb_with_sig,
+                      const std::string &pubkey_path);
 
 /// @brief Helper: detecta si un @c .velb trae footer VSIG (sin verificar).
 /// @return @c true si los ultimos 4 bytes son el magic.

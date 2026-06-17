@@ -12,11 +12,12 @@
 
 /**
  * @file request_router.h
- * @brief Enrutador de peticiones entre el servidor de sockets y el gestor de VMs.
+ * @brief Enrutador de peticiones entre el servidor de sockets y el gestor de
+ * VMs.
  *
- * RequestRouter es la capa intermedia del controlador de VestaVM.  Recibe los mensajes
- * brutos aceptados por el SocketServer, los parsea como comandos y los redirige al
- * VMManager que gestiona las instancias VM activas.
+ * RequestRouter es la capa intermedia del controlador de VestaVM.  Recibe los
+ * mensajes brutos aceptados por el SocketServer, los parsea como comandos y los
+ * redirige al VMManager que gestiona las instancias VM activas.
  *
  * Flujo del controlador:
  * @verbatim

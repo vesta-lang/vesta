@@ -34,7 +34,8 @@
  * Invocan este helper:
  *   - @c exec_instr_calln (FFI estatico declarado en el .velb por el linker).
  *   - @c exec_instr_callni (FFI dinamico runtime: llamada via puntero
- *                            obtenido por @c dlsym/@c GetProcAddress en runtime).
+ *                            obtenido por @c dlsym/@c GetProcAddress en
+ * runtime).
  *
  * Header inline para que ambos cpp compartan la misma implementacion sin
  * indireccion ni copia.
@@ -42,63 +43,107 @@
 #pragma once
 
 #include "runtime/proceso_runtime.h"
-#include "runtime/exception_runtime.h"  // set_current_executing_process (TLS proc)
+#include "runtime/exception_runtime.h" // set_current_executing_process (TLS proc)
 
 #include <cstdint>
 
 namespace runtime {
 
-    /**
-     * @brief Invoca @p fn pasando @p argc registros desde R01..R12 como
-     *        @c uint64_t y devuelve el resultado como @c uint64_t.
+/**
+ * @brief Invoca @p fn pasando @p argc registros desde R01..R12 como
+ *        @c uint64_t y devuelve el resultado como @c uint64_t.
+ *
+ * @param fn   Puntero a funcion nativa (ya resuelto via LoadLibraryA +
+ *             GetProcAddress o equivalente POSIX).
+ * @param argc Numero de argumentos en R01..R12 (clamp [0,12]).  Si excede
+ *             12 dispara @c VM_ASSERT (configurable).
+ * @param vm   Proceso virtual; los argumentos se leen de
+ *             @c vm->registers.regs[R01..R12].qword().
+ * @return Valor devuelto por la funcion nativa (sin proteccion de
+ *         excepciones; el caller debe envolver en try/__try si quiere
+ *         capturar crashes nativos).
+ */
+inline uint64_t invoke_native_unchecked(void *fn, uint64_t argc,
+                                        ProcessVM *vm) {
+    /* Sprint JIT-cross-fn 2026-06-01: setear TLS proc ANTES de
+     * invocar la fn nativa.  Esto permite que la fn C consulte
+     * `runtime::get_current_executing_process()` para obtener el
+     * proc actual sin pasar arg implicito.  Critico para:
+     *   - `vex_get_native_thunk` (callbacks B.1): necesita el proc
+     *     para forzar JIT compile de la fn Vex callee.
+     *   - cualquier fn C futura que necesite acceder al GC, classes,
+     *     o cualquier estado del proceso VM.
      *
-     * @param fn   Puntero a funcion nativa (ya resuelto via LoadLibraryA +
-     *             GetProcAddress o equivalente POSIX).
-     * @param argc Numero de argumentos en R01..R12 (clamp [0,12]).  Si excede
-     *             12 dispara @c VM_ASSERT (configurable).
-     * @param vm   Proceso virtual; los argumentos se leen de
-     *             @c vm->registers.regs[R01..R12].qword().
-     * @return Valor devuelto por la funcion nativa (sin proteccion de
-     *         excepciones; el caller debe envolver en try/__try si quiere
-     *         capturar crashes nativos).
-     */
-    inline uint64_t invoke_native_unchecked(void *fn, uint64_t argc,
-                                             ProcessVM *vm) {
-        /* Sprint JIT-cross-fn 2026-06-01: setear TLS proc ANTES de
-         * invocar la fn nativa.  Esto permite que la fn C consulte
-         * `runtime::get_current_executing_process()` para obtener el
-         * proc actual sin pasar arg implicito.  Critico para:
-         *   - `vex_get_native_thunk` (callbacks B.1): necesita el proc
-         *     para forzar JIT compile de la fn Vex callee.
-         *   - cualquier fn C futura que necesite acceder al GC, classes,
-         *     o cualquier estado del proceso VM.
-         *
-         * Coste: 1 store TLS (~1 ns) por CALLN.  Negligible vs el
-         * coste tipico de una llamada nativa.  El scheduler tambien
-         * setea TLS pero solo cuando hay try/catch activo (optimizacion
-         * del AV recovery); este setter garantiza disponibilidad SIEMPRE
-         * para CALLNs sin necesitar try/catch envolvente. */
-        runtime::set_current_executing_process(vm);
-        typedef uint64_t u64;
+     * Coste: 1 store TLS (~1 ns) por CALLN.  Negligible vs el
+     * coste tipico de una llamada nativa.  El scheduler tambien
+     * setea TLS pero solo cuando hay try/catch activo (optimizacion
+     * del AV recovery); este setter garantiza disponibilidad SIEMPRE
+     * para CALLNs sin necesitar try/catch envolvente. */
+    runtime::set_current_executing_process(vm);
+    typedef uint64_t u64;
 #define NATIVE_INVOKE_A(n) vm->registers.regs[R##n].qword()
-        switch (argc) {
-            case 0:  return reinterpret_cast<u64(*)()>(fn)();
-            case 1:  return reinterpret_cast<u64(*)(u64)>(fn)(NATIVE_INVOKE_A(01));
-            case 2:  return reinterpret_cast<u64(*)(u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02));
-            case 3:  return reinterpret_cast<u64(*)(u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03));
-            case 4:  return reinterpret_cast<u64(*)(u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04));
-            case 5:  return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05));
-            case 6:  return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06));
-            case 7:  return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06),NATIVE_INVOKE_A(07));
-            case 8:  return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06),NATIVE_INVOKE_A(07),NATIVE_INVOKE_A(08));
-            case 9:  return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06),NATIVE_INVOKE_A(07),NATIVE_INVOKE_A(08),NATIVE_INVOKE_A(09));
-            case 10: return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06),NATIVE_INVOKE_A(07),NATIVE_INVOKE_A(08),NATIVE_INVOKE_A(09),NATIVE_INVOKE_A(10));
-            case 11: return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06),NATIVE_INVOKE_A(07),NATIVE_INVOKE_A(08),NATIVE_INVOKE_A(09),NATIVE_INVOKE_A(10),NATIVE_INVOKE_A(11));
-            case 12: return reinterpret_cast<u64(*)(u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64)>(fn)(NATIVE_INVOKE_A(01),NATIVE_INVOKE_A(02),NATIVE_INVOKE_A(03),NATIVE_INVOKE_A(04),NATIVE_INVOKE_A(05),NATIVE_INVOKE_A(06),NATIVE_INVOKE_A(07),NATIVE_INVOKE_A(08),NATIVE_INVOKE_A(09),NATIVE_INVOKE_A(10),NATIVE_INVOKE_A(11),NATIVE_INVOKE_A(12));
-            default:
-                return 0; // argc fuera de rango: el caller debe validar
-        }
-#undef NATIVE_INVOKE_A
+    switch (argc) {
+    case 0: return reinterpret_cast<u64 (*)()>(fn)();
+    case 1: return reinterpret_cast<u64 (*)(u64)>(fn)(NATIVE_INVOKE_A(01));
+    case 2:
+        return reinterpret_cast<u64 (*)(u64, u64)>(fn)(NATIVE_INVOKE_A(01),
+                                                       NATIVE_INVOKE_A(02));
+    case 3:
+        return reinterpret_cast<u64 (*)(u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03));
+    case 4:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04));
+    case 5:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05));
+    case 6:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06));
+    case 7:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06),
+            NATIVE_INVOKE_A(07));
+    case 8:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64, u64,
+                                        u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06),
+            NATIVE_INVOKE_A(07), NATIVE_INVOKE_A(08));
+    case 9:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64,
+                                        u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06),
+            NATIVE_INVOKE_A(07), NATIVE_INVOKE_A(08), NATIVE_INVOKE_A(09));
+    case 10:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64,
+                                        u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06),
+            NATIVE_INVOKE_A(07), NATIVE_INVOKE_A(08), NATIVE_INVOKE_A(09),
+            NATIVE_INVOKE_A(10));
+    case 11:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64,
+                                        u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06),
+            NATIVE_INVOKE_A(07), NATIVE_INVOKE_A(08), NATIVE_INVOKE_A(09),
+            NATIVE_INVOKE_A(10), NATIVE_INVOKE_A(11));
+    case 12:
+        return reinterpret_cast<u64 (*)(u64, u64, u64, u64, u64, u64, u64, u64,
+                                        u64, u64, u64, u64)>(fn)(
+            NATIVE_INVOKE_A(01), NATIVE_INVOKE_A(02), NATIVE_INVOKE_A(03),
+            NATIVE_INVOKE_A(04), NATIVE_INVOKE_A(05), NATIVE_INVOKE_A(06),
+            NATIVE_INVOKE_A(07), NATIVE_INVOKE_A(08), NATIVE_INVOKE_A(09),
+            NATIVE_INVOKE_A(10), NATIVE_INVOKE_A(11), NATIVE_INVOKE_A(12));
+    default: return 0; // argc fuera de rango: el caller debe validar
     }
+#undef NATIVE_INVOKE_A
+}
 
 } // namespace runtime

@@ -12,7 +12,8 @@
 
 /**
  * @file test_no_moving_oldgen.cpp
- * @brief Tests para el modelo (iv): GC no-moving en OldGen con free lists segregadas.
+ * @brief Tests para el modelo (iv): GC no-moving en OldGen con free lists
+ * segregadas.
  *
  * Verifica:
  *   1. alloc/free repetido del mismo tamano reusa slots via free list (O(1)).
@@ -38,16 +39,21 @@ static int g_run = 0;
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define SECTION(name) \
-    do { \
-        printf("\n=== %s ===\n", name); \
+#define SECTION(name)                                                          \
+    do {                                                                       \
+        printf("\n=== %s ===\n", name);                                        \
     } while (0)
 
-#define EXPECT(cond, msg) \
-    do { \
-        ++g_run; \
-        if (cond) { ++g_pass; printf("  OK   %s\n", msg); } \
-        else      { ++g_fail; printf("  FAIL %s  (linea %d)\n", msg, __LINE__); } \
+#define EXPECT(cond, msg)                                                      \
+    do {                                                                       \
+        ++g_run;                                                               \
+        if (cond) {                                                            \
+            ++g_pass;                                                          \
+            printf("  OK   %s\n", msg);                                        \
+        } else {                                                               \
+            ++g_fail;                                                          \
+            printf("  FAIL %s  (linea %d)\n", msg, __LINE__);                  \
+        }                                                                      \
     } while (0)
 
 // ---------------------------------------------------------------------------
@@ -69,8 +75,9 @@ static void test_reuso_same_class() {
     // manual abajo).
     gc::GcHeap heap(mgr, 8 * 1024, 64 * 1024 * 1024);
 
-    constexpr size_t N    = 32;
-    constexpr size_t SIZE = 64;  // payload; total slot = 16 bytes header + 64 + pad = 72 -> class 96
+    constexpr size_t N = 32;
+    constexpr size_t SIZE =
+        64; // payload; total slot = 16 bytes header + 64 + pad = 72 -> class 96
 
     // Lote 1
     std::vector<gc::GcHandle> h1;
@@ -85,12 +92,14 @@ static void test_reuso_same_class() {
     // handles siguen vivos, todos se evacuan.
     heap.minor_gc();
     const size_t reserved_after_lote1 = heap.stats().old_reserved_bytes;
-    printf("  reserved tras lote 1 promovido: %zu bytes\n", reserved_after_lote1);
+    printf("  reserved tras lote 1 promovido: %zu bytes\n",
+           reserved_after_lote1);
     EXPECT(reserved_after_lote1 > 0, "old_reserved_bytes > 0 tras promocion");
 
     // Soltar los handles y disparar major_gc para que sweep marque DEAD
     // y reconstruya las free lists.
-    for (gc::GcHandle h : h1) heap.drop(h);
+    for (gc::GcHandle h : h1)
+        heap.drop(h);
     heap.major_gc();
     printf("  freelist_bytes tras drop+major_gc: %llu bytes\n",
            (unsigned long long)heap.stats().old_freelist_bytes);
@@ -99,8 +108,8 @@ static void test_reuso_same_class() {
 
     // Lote 2: mismas N alocaciones del mismo tamano.  Deberian salir
     // de la free list (O(1)) sin reservar memoria nueva.
-    const size_t reserved_pre_lote2  = heap.stats().old_reserved_bytes;
-    const size_t freelist_alloc_pre  = heap.stats().old_alloc_freelist;
+    const size_t reserved_pre_lote2 = heap.stats().old_reserved_bytes;
+    const size_t freelist_alloc_pre = heap.stats().old_alloc_freelist;
     std::vector<gc::GcHandle> h2;
     h2.reserve(N);
     for (size_t i = 0; i < N; ++i) {
@@ -117,13 +126,13 @@ static void test_reuso_same_class() {
     printf("  reserved pre lote 2:  %zu bytes\n", reserved_pre_lote2);
     printf("  reserved post lote 2: %zu bytes\n", reserved_post_lote2);
     printf("  alloc_freelist delta: %llu (esperado >= %zu)\n",
-           (unsigned long long)(freelist_alloc_post - freelist_alloc_pre),
-           N);
+           (unsigned long long)(freelist_alloc_post - freelist_alloc_pre), N);
 
     EXPECT(reserved_post_lote2 == reserved_pre_lote2,
            "old_reserved_bytes NO crece (slots reusados, no nueva memoria)");
-    EXPECT((freelist_alloc_post - freelist_alloc_pre) >= N,
-           "old_alloc_freelist incremento por al menos N (todos via free list)");
+    EXPECT(
+        (freelist_alloc_post - freelist_alloc_pre) >= N,
+        "old_alloc_freelist incremento por al menos N (todos via free list)");
 }
 
 // ---------------------------------------------------------------------------
@@ -138,14 +147,15 @@ static void test_multi_size_class() {
 
     // Alocar mezcla: tamanos pequenos, medianos, grandes.
     // Cada tamano caera en un size class distinto.
-    constexpr size_t SIZES[] = { 16, 100, 500, 2000 };
+    constexpr size_t SIZES[] = {16, 100, 500, 2000};
     constexpr size_t COUNT_PER_SIZE = 8;
 
     std::vector<gc::GcHandle> all_handles;
     for (size_t s : SIZES) {
         for (size_t i = 0; i < COUNT_PER_SIZE; ++i) {
             gc::GcHandle h = heap.alloc(s);
-            EXPECT(h != gc::GC_NULL_HANDLE, "alloc multi-size produce handle valido");
+            EXPECT(h != gc::GC_NULL_HANDLE,
+                   "alloc multi-size produce handle valido");
             all_handles.push_back(h);
         }
     }
@@ -155,19 +165,21 @@ static void test_multi_size_class() {
 
     // Soltar TODOS y barrer.  Las free lists deben tener entradas en
     // varias size classes distintas.
-    for (gc::GcHandle h : all_handles) heap.drop(h);
+    for (gc::GcHandle h : all_handles)
+        heap.drop(h);
     heap.major_gc();
     EXPECT(heap.stats().old_freelist_bytes > 0,
            "free lists pobladas tras sweep masivo");
 
     // Re-alocar exactamente los mismos tamanos: deberian todos salir
     // de las free lists.
-    const size_t freelist_pre  = heap.stats().old_alloc_freelist;
-    const size_t reserved_pre  = heap.stats().old_reserved_bytes;
+    const size_t freelist_pre = heap.stats().old_alloc_freelist;
+    const size_t reserved_pre = heap.stats().old_reserved_bytes;
     for (size_t s : SIZES) {
         for (size_t i = 0; i < COUNT_PER_SIZE; ++i) {
             gc::GcHandle h = heap.alloc(s);
-            EXPECT(h != gc::GC_NULL_HANDLE, "re-alloc multi-size produce handle valido");
+            EXPECT(h != gc::GC_NULL_HANDLE,
+                   "re-alloc multi-size produce handle valido");
         }
     }
     heap.minor_gc(); // promueve, disparando alloc_in_old via evacuacion
@@ -207,7 +219,8 @@ static void test_host_ptr_estable_oldgen() {
     EXPECT(p_pre != nullptr, "deref post-promocion valido");
 
     // Marcar el payload con un patron reconocible.
-    for (int i = 0; i < 128; ++i) p_pre[i] = static_cast<uint8_t>(i);
+    for (int i = 0; i < 128; ++i)
+        p_pre[i] = static_cast<uint8_t>(i);
 
     // Disparar major_gc: el objeto sigue vivo (handle no soltado), asi que
     // sweep lo marca BLACK y NO lo libera.  Como (iv) es no-moving, el
@@ -218,13 +231,17 @@ static void test_host_ptr_estable_oldgen() {
            "host_ptr identico antes y despues de major_gc (no-moving OldGen)");
     bool patron_ok = true;
     for (int i = 0; i < 128; ++i) {
-        if (p_post[i] != static_cast<uint8_t>(i)) { patron_ok = false; break; }
+        if (p_post[i] != static_cast<uint8_t>(i)) {
+            patron_ok = false;
+            break;
+        }
     }
     EXPECT(patron_ok, "payload preservado byte-a-byte tras major_gc");
 
     // handle_for_ptr (lookup inverso) sigue funcionando con el mismo ptr.
     gc::GcHandle h_back = heap.handle_for_ptr(p_post);
-    EXPECT(h_back == h, "handle_for_ptr devuelve el mismo handle tras major_gc");
+    EXPECT(h_back == h,
+           "handle_for_ptr devuelve el mismo handle tras major_gc");
 }
 
 // ---------------------------------------------------------------------------

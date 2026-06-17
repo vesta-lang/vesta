@@ -34,27 +34,29 @@ namespace {
 int g_checks_passed = 0;
 int g_checks_failed = 0;
 
-#define CHECK(cond, label)                                                      \
-    do {                                                                        \
-        if (cond) {                                                             \
-            ++g_checks_passed;                                                  \
-            std::cout << "  PASS  " << label << "\n";                           \
-        } else {                                                                \
-            ++g_checks_failed;                                                  \
+#define CHECK(cond, label)                                                     \
+    do {                                                                       \
+        if (cond) {                                                            \
+            ++g_checks_passed;                                                 \
+            std::cout << "  PASS  " << label << "\n";                          \
+        } else {                                                               \
+            ++g_checks_failed;                                                 \
             std::cout << "  FAIL  " << label << "  (" << __FILE__ << ":"       \
-                      << __LINE__ << ")\n";                                     \
-        }                                                                       \
+                      << __LINE__ << ")\n";                                    \
+        }                                                                      \
     } while (0)
 
 /// Crea un directorio temporal unico para esta corrida.  Lo devuelve
 /// como ruta absoluta normalizada (forward slash).
 std::string make_temp_dir(const std::string &suffix) {
-    fs::path base = fs::temp_directory_path()
-                  / ("vex_modtest_" + std::to_string(::getpid()) + "_" + suffix);
-    fs::remove_all(base);     // limpia si quedo de una corrida anterior
+    fs::path base =
+        fs::temp_directory_path() /
+        ("vex_modtest_" + std::to_string(::getpid()) + "_" + suffix);
+    fs::remove_all(base); // limpia si quedo de una corrida anterior
     fs::create_directories(base);
     std::string s = base.string();
-    for (char &c : s) if (c == '\\') c = '/';
+    for (char &c : s)
+        if (c == '\\') c = '/';
     return s;
 }
 
@@ -73,12 +75,10 @@ void test_simple_chain() {
 
     std::string root = make_temp_dir("chain");
     write_file(root + "/c.vex", "i32 main() { return 1; }\n");
-    write_file(root + "/b.vex",
-        "import \"c\";\n"
-        "i32 fn_b() { return 2; }\n");
-    write_file(root + "/a.vex",
-        "import \"b\";\n"
-        "i32 main() { return 3; }\n");
+    write_file(root + "/b.vex", "import \"c\";\n"
+                                "i32 fn_b() { return 2; }\n");
+    write_file(root + "/a.vex", "import \"b\";\n"
+                                "i32 main() { return 3; }\n");
 
     vex::Diagnostics diags;
     vex::ModuleGraph graph(diags);
@@ -112,23 +112,21 @@ void test_diamond() {
 
     std::string root = make_temp_dir("diamond");
     write_file(root + "/d.vex", "i32 fn_d() { return 4; }\n");
-    write_file(root + "/c.vex",
-        "import \"d\";\n"
-        "i32 fn_c() { return 3; }\n");
-    write_file(root + "/b.vex",
-        "import \"d\";\n"
-        "i32 fn_b() { return 2; }\n");
-    write_file(root + "/a.vex",
-        "import \"b\";\n"
-        "import \"c\";\n"
-        "i32 main() { return 1; }\n");
+    write_file(root + "/c.vex", "import \"d\";\n"
+                                "i32 fn_c() { return 3; }\n");
+    write_file(root + "/b.vex", "import \"d\";\n"
+                                "i32 fn_b() { return 2; }\n");
+    write_file(root + "/a.vex", "import \"b\";\n"
+                                "import \"c\";\n"
+                                "i32 main() { return 1; }\n");
 
     vex::Diagnostics diags;
     vex::ModuleGraph graph(diags);
 
     const uint32_t root_id = graph.build_from_root(root + "/a.vex");
     CHECK(root_id != UINT32_MAX, "build_from_root OK");
-    CHECK(graph.module_count() == 4, "se cargaron 4 modulos (a,b,c,d, sin dups)");
+    CHECK(graph.module_count() == 4,
+          "se cargaron 4 modulos (a,b,c,d, sin dups)");
     CHECK(!graph.has_cycle(), "no se detecto ciclo");
 
     auto order = graph.topological_order();
@@ -139,10 +137,14 @@ void test_diamond() {
         int pos_a = -1, pos_b = -1, pos_c = -1, pos_d = -1;
         for (size_t i = 0; i < order.size(); ++i) {
             const std::string &n = graph.module(order[i])->module_name;
-            if (n == "a") pos_a = (int)i;
-            else if (n == "b") pos_b = (int)i;
-            else if (n == "c") pos_c = (int)i;
-            else if (n == "d") pos_d = (int)i;
+            if (n == "a")
+                pos_a = (int)i;
+            else if (n == "b")
+                pos_b = (int)i;
+            else if (n == "c")
+                pos_c = (int)i;
+            else if (n == "d")
+                pos_d = (int)i;
         }
         CHECK(pos_d >= 0 && pos_d < pos_b, "d antes de b");
         CHECK(pos_d >= 0 && pos_d < pos_c, "d antes de c");
@@ -159,12 +161,10 @@ void test_cycle() {
     std::cout << "\n[Test] ciclo A <-> B\n";
 
     std::string root = make_temp_dir("cycle");
-    write_file(root + "/a.vex",
-        "import \"b\";\n"
-        "i32 fn_a() { return 1; }\n");
-    write_file(root + "/b.vex",
-        "import \"a\";\n"
-        "i32 fn_b() { return 2; }\n");
+    write_file(root + "/a.vex", "import \"b\";\n"
+                                "i32 fn_a() { return 1; }\n");
+    write_file(root + "/b.vex", "import \"a\";\n"
+                                "i32 fn_b() { return 2; }\n");
 
     vex::Diagnostics diags;
     vex::ModuleGraph graph(diags);
@@ -190,9 +190,8 @@ void test_not_found() {
     std::cout << "\n[Test] modulo no encontrado\n";
 
     std::string root = make_temp_dir("missing");
-    write_file(root + "/a.vex",
-        "import \"no_existe\";\n"
-        "i32 main() { return 0; }\n");
+    write_file(root + "/a.vex", "import \"no_existe\";\n"
+                                "i32 main() { return 0; }\n");
 
     vex::Diagnostics diags;
     vex::ModuleGraph graph(diags);
@@ -200,7 +199,8 @@ void test_not_found() {
     const uint32_t root_id = graph.build_from_root(root + "/a.vex");
     // root_id es valido (a.vex existe y parsea) pero hay error de import.
     CHECK(root_id != UINT32_MAX, "el root se carga aunque haya import roto");
-    CHECK(diags.has_errors(), "diagnostics reporta error de modulo no encontrado");
+    CHECK(diags.has_errors(),
+          "diagnostics reporta error de modulo no encontrado");
 
     fs::remove_all(root);
 }
@@ -215,8 +215,8 @@ void test_path_normalization() {
     fs::create_directories(root + "/sub");
     write_file(root + "/sub/lib.vex", "i32 fn_lib() { return 9; }\n");
     write_file(root + "/main.vex",
-        "import \"sub/lib\";\n"        // import normal
-        "i32 main() { return 0; }\n");
+               "import \"sub/lib\";\n" // import normal
+               "i32 main() { return 0; }\n");
 
     vex::Diagnostics diags;
     vex::ModuleGraph graph(diags);
@@ -232,8 +232,8 @@ void test_path_normalization() {
             const auto *m = graph.module(static_cast<uint32_t>(i));
             CHECK(m != nullptr, "modulo no nulo");
             if (m) {
-                bool no_backslash = (m->canonical_path.find('\\')
-                                     == std::string::npos);
+                bool no_backslash =
+                    (m->canonical_path.find('\\') == std::string::npos);
                 CHECK(no_backslash, "canonical_path sin backslash");
             }
         }
@@ -253,13 +253,11 @@ void test_import_alias_and_only() {
     // En M1 solo verificamos el PARSING del import, no la resolucion
     // de simbolos publicos cross-module.  Por eso lib.vex no usa public.
     std::string root = make_temp_dir("alias");
-    write_file(root + "/lib.vex",
-        "i32 fn_a() { return 1; }\n"
-        "i32 fn_b() { return 2; }\n");
-    write_file(root + "/main.vex",
-        "import \"lib\" as core;\n"
-        "import \"lib\" only fn_a, fn_b as bee;\n"
-        "i32 main() { return 0; }\n");
+    write_file(root + "/lib.vex", "i32 fn_a() { return 1; }\n"
+                                  "i32 fn_b() { return 2; }\n");
+    write_file(root + "/main.vex", "import \"lib\" as core;\n"
+                                   "import \"lib\" only fn_a, fn_b as bee;\n"
+                                   "i32 main() { return 0; }\n");
 
     vex::Diagnostics diags;
     vex::ModuleGraph graph(diags);
@@ -279,12 +277,12 @@ void test_import_alias_and_only() {
                 if (!imp->only_symbols.empty()) ++only_imports;
                 // Verificar rename en only: "fn_b as bee".
                 if (imp->only_symbols.size() == 2) {
-                    CHECK(imp->only_symbols[0].name == "fn_a"
-                       && imp->only_symbols[0].rename.empty(),
-                       "only_symbols[0] = fn_a sin rename");
-                    CHECK(imp->only_symbols[1].name == "fn_b"
-                       && imp->only_symbols[1].rename == "bee",
-                       "only_symbols[1] = fn_b as bee");
+                    CHECK(imp->only_symbols[0].name == "fn_a" &&
+                              imp->only_symbols[0].rename.empty(),
+                          "only_symbols[0] = fn_a sin rename");
+                    CHECK(imp->only_symbols[1].name == "fn_b" &&
+                              imp->only_symbols[1].rename == "bee",
+                          "only_symbols[1] = fn_b as bee");
                 }
             }
         }

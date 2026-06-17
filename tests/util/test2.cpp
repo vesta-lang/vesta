@@ -10,10 +10,10 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-
 // test_sqlite_singleton.cpp
-// Test minimalista para SqliteSingleton usando solo C/C++ estándar y la API de sqlite3.
-// Compilar con: g++ -std=c++17 test_sqlite_singleton.cpp -lsqlite3 -pthread -o test_sqlite_singleton
+// Test minimalista para SqliteSingleton usando solo C/C++ estándar y la API de
+// sqlite3. Compilar con: g++ -std=c++17 test_sqlite_singleton.cpp -lsqlite3
+// -pthread -o test_sqlite_singleton
 
 #include <atomic>
 #include <iostream>
@@ -29,21 +29,22 @@
 #include "cli/sync_io.h"
 #include "util/sqlite_singleton.h"
 
-
 // Helper: elimina fichero si existe
 static void remove_file_if_exists(const std::string &p) {
     std::error_code ec;
     std::filesystem::remove(p, ec);
-    (void) ec;
+    (void)ec;
 }
 
 // Helper: ejecutar query y recoger filas (usando sqlite3 API)
-static std::vector<std::vector<std::string> > query_rows(sqlite3 *db, const std::string &sql) {
-    std::vector<std::vector<std::string> > rows;
+static std::vector<std::vector<std::string>>
+query_rows(sqlite3 *db, const std::string &sql) {
+    std::vector<std::vector<std::string>> rows;
     char *errmsg = nullptr;
 
     auto cb = [](void *userdata, int argc, char **argv, char **colname) -> int {
-        auto *out = static_cast<std::vector<std::vector<std::string> > *>(userdata);
+        auto *out =
+            static_cast<std::vector<std::vector<std::string>> *>(userdata);
         std::vector<std::string> row;
         for (int i = 0; i < argc; ++i) {
             row.emplace_back(argv[i] ? argv[i] : "");
@@ -54,7 +55,8 @@ static std::vector<std::vector<std::string> > query_rows(sqlite3 *db, const std:
 
     int rc = sqlite3_exec(db, sql.c_str(), cb, &rows, &errmsg);
     if (rc != SQLITE_OK) {
-        std::cerr << "query_rows: sqlite error: " << (errmsg ? errmsg : "(null)") << "\n";
+        std::cerr << "query_rows: sqlite error: "
+                  << (errmsg ? errmsg : "(null)") << "\n";
         if (errmsg) sqlite3_free(errmsg);
         return {};
     }
@@ -69,7 +71,8 @@ static bool test_create_and_cleanup(const std::string &dbpath) {
         std::cerr << "[FAIL] get_instance returned nullptr\n";
         return false;
     }
-    // comprobar que sqlite3_open devolvió handle válido consultando pragma user_version
+    // comprobar que sqlite3_open devolvió handle válido consultando pragma
+    // user_version
     auto rows = query_rows(db, "PRAGMA user_version;");
     if (rows.empty()) {
         std::cerr << "[FAIL] PRAGMA user_version returned no rows\n";
@@ -91,14 +94,16 @@ static bool test_execute_create_insert(const std::string &dbpath) {
         return false;
     }
 
-    bool ok = Sqlite::SqliteSingleton::execute("CREATE TABLE kv(key TEXT PRIMARY KEY, val TEXT);");
+    bool ok = Sqlite::SqliteSingleton::execute(
+        "CREATE TABLE kv(key TEXT PRIMARY KEY, val TEXT);");
     if (!ok) {
         std::cerr << "[FAIL] CREATE TABLE failed\n";
         Sqlite::SqliteSingleton::cleanup();
         return false;
     }
 
-    ok = Sqlite::SqliteSingleton::execute("INSERT INTO kv(key,val) VALUES('a','1'),('b','2');");
+    ok = Sqlite::SqliteSingleton::execute(
+        "INSERT INTO kv(key,val) VALUES('a','1'),('b','2');");
     if (!ok) {
         std::cerr << "[FAIL] INSERT failed\n";
         Sqlite::SqliteSingleton::cleanup();
@@ -140,7 +145,8 @@ static bool test_execute_bad_sql(const std::string &dbpath) {
 
     bool ok = Sqlite::SqliteSingleton::execute("THIS IS NOT SQL;", &err);
     if (ok) {
-        std::cerr << "[FAIL] execute returned true for invalid SQL" << err << "\n";
+        std::cerr << "[FAIL] execute returned true for invalid SQL" << err
+                  << "\n";
         Sqlite::SqliteSingleton::cleanup();
         return false;
     } else {
@@ -165,7 +171,8 @@ static bool test_concurrency_get_instance(const std::string &dbpath) {
             results[i] = Sqlite::SqliteSingleton::get_instance(dbpath);
         });
     }
-    for (auto &t: threads) t.join();
+    for (auto &t : threads)
+        t.join();
 
     // comprobar no nulos y todos iguales
     for (int i = 0; i < N; ++i) {
@@ -201,7 +208,8 @@ static bool test_concurrent_selects_verbose(const std::string &dbpath) {
         return false;
     }
 
-    if (!Sqlite::SqliteSingleton::execute("CREATE TABLE kv2(id INTEGER PRIMARY KEY, val TEXT);", &err)) {
+    if (!Sqlite::SqliteSingleton::execute(
+            "CREATE TABLE kv2(id INTEGER PRIMARY KEY, val TEXT);", &err)) {
         std::cerr << "[FAIL] CREATE TABLE kv2 failed" << err << "\n";
         Sqlite::SqliteSingleton::cleanup();
         return false;
@@ -211,7 +219,8 @@ static bool test_concurrent_selects_verbose(const std::string &dbpath) {
     {
         std::string sql = "BEGIN TRANSACTION;";
         for (int i = 0; i < 100; ++i) {
-            sql += "INSERT INTO kv2(id,val) VALUES(" + std::to_string(i) + ",'v" + std::to_string(i) + "');";
+            sql += "INSERT INTO kv2(id,val) VALUES(" + std::to_string(i) +
+                   ",'v" + std::to_string(i) + "');";
         }
         sql += "COMMIT;";
         if (!Sqlite::SqliteSingleton::execute(sql, &err)) {
@@ -222,12 +231,14 @@ static bool test_concurrent_selects_verbose(const std::string &dbpath) {
     }
 
     // Worker: ejecuta SELECT y valida; imprime progreso cada X iteraciones
-    auto worker = [&](int thread_id, int iterations, std::atomic<int> &errors, int progress_every) {
+    auto worker = [&](int thread_id, int iterations, std::atomic<int> &errors,
+                      int progress_every) {
         for (int it = 0; it < iterations; ++it) {
             auto rows = query_rows(db, "SELECT id, val FROM kv2 ORDER BY id;");
             if (rows.size() != 100) {
-                std::cerr << "[thread " << thread_id << "] unexpected row count: " << rows.size() << " (iter " << it <<
-                        ")\n";
+                std::cerr << "[thread " << thread_id
+                          << "] unexpected row count: " << rows.size()
+                          << " (iter " << it << ")\n";
                 errors.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
@@ -247,7 +258,8 @@ static bool test_concurrent_selects_verbose(const std::string &dbpath) {
             if (progress_every > 0 && (it % progress_every) == 0) {
                 // Mensaje de progreso (no demasiado frecuente)
                 std::lock_guard<std::mutex> lk(vesta::cout_mutex);
-                std::cout << "[thread " << thread_id << "] iter " << it << "/" << iterations << "\n";
+                std::cout << "[thread " << thread_id << "] iter " << it << "/"
+                          << iterations << "\n";
             }
 
             // pequeña pausa para aumentar concurrencia
@@ -265,41 +277,48 @@ static bool test_concurrent_selects_verbose(const std::string &dbpath) {
     auto t0 = std::chrono::steady_clock::now();
 
     for (int i = 0; i < THREADS; ++i) {
-        threads.emplace_back(worker, i, ITERATIONS, std::ref(errors), PROGRESS_EVERY);
+        threads.emplace_back(worker, i, ITERATIONS, std::ref(errors),
+                             PROGRESS_EVERY);
     }
-    for (auto &t: threads) t.join();
+    for (auto &t : threads)
+        t.join();
 
     auto t1 = std::chrono::steady_clock::now();
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
     Sqlite::SqliteSingleton::cleanup();
     remove_file_if_exists(dbpath);
 
     if (errors.load(std::memory_order_relaxed) == 0) {
-        std::cout << "[PASS] test_concurrent_selects_verbose (time " << ms << " ms)\n";
+        std::cout << "[PASS] test_concurrent_selects_verbose (time " << ms
+                  << " ms)\n";
         return true;
     } else {
-        std::cerr << "[FAIL] test_concurrent_selects_verbose: errors = " << errors.load() << " (time " << ms <<
-                " ms)\n";
+        std::cerr << "[FAIL] test_concurrent_selects_verbose: errors = "
+                  << errors.load() << " (time " << ms << " ms)\n";
         return false;
     }
 }
 
-static std::vector<std::map<std::string, std::string> > query_json_rows_map(
-    const std::string &sql, std::string *err = nullptr) {
+static std::vector<std::map<std::string, std::string>>
+query_json_rows_map(const std::string &sql, std::string *err = nullptr) {
     Sqlite::json j = Sqlite::SqliteSingleton::execute_json(sql);
     if (j.is_object() && j.contains("error")) {
         if (err) *err = j["error"].get<std::string>();
         return {};
     }
-    std::vector<std::map<std::string, std::string> > rows;
-    for (const auto &r: j) {
+    std::vector<std::map<std::string, std::string>> rows;
+    for (const auto &r : j) {
         if (!r.is_object()) continue;
         std::map<std::string, std::string> rowmap;
         for (auto it = r.begin(); it != r.end(); ++it) {
-            if (it.value().is_null()) rowmap[it.key()] = "";
-            else if (it.value().is_string()) rowmap[it.key()] = it.value().get<std::string>();
-            else rowmap[it.key()] = it.value().dump();
+            if (it.value().is_null())
+                rowmap[it.key()] = "";
+            else if (it.value().is_string())
+                rowmap[it.key()] = it.value().get<std::string>();
+            else
+                rowmap[it.key()] = it.value().dump();
         }
         rows.push_back(std::move(rowmap));
     }
@@ -318,7 +337,8 @@ static bool test_concurrent_selects_json(const std::string &dbpath) {
         return false;
     }
 
-    if (!Sqlite::SqliteSingleton::execute("CREATE TABLE kv2(id INTEGER PRIMARY KEY, val TEXT);", &err)) {
+    if (!Sqlite::SqliteSingleton::execute(
+            "CREATE TABLE kv2(id INTEGER PRIMARY KEY, val TEXT);", &err)) {
         std::cerr << "[FAIL] CREATE TABLE kv2 failed: " << err << "\n";
         Sqlite::SqliteSingleton::cleanup();
         return false;
@@ -328,7 +348,8 @@ static bool test_concurrent_selects_json(const std::string &dbpath) {
     {
         std::string sql = "BEGIN TRANSACTION;";
         for (int i = 0; i < 100; ++i) {
-            sql += "INSERT INTO kv2(id,val) VALUES(" + std::to_string(i) + ",'v" + std::to_string(i) + "');";
+            sql += "INSERT INTO kv2(id,val) VALUES(" + std::to_string(i) +
+                   ",'v" + std::to_string(i) + "');";
         }
         sql += "COMMIT;";
         if (!Sqlite::SqliteSingleton::execute(sql, &err)) {
@@ -338,27 +359,34 @@ static bool test_concurrent_selects_json(const std::string &dbpath) {
         }
     }
 
-    // Worker: ejecuta SELECT via query_json_rows_map y valida por nombre de columna
-    auto worker = [&](int thread_id, int iterations, std::atomic<int> &errors, int progress_every) {
+    // Worker: ejecuta SELECT via query_json_rows_map y valida por nombre de
+    // columna
+    auto worker = [&](int thread_id, int iterations, std::atomic<int> &errors,
+                      int progress_every) {
         for (int it = 0; it < iterations; ++it) {
             std::string local_err;
-            auto rows = query_json_rows_map("SELECT id, val FROM kv2 ORDER BY id;", &local_err);
+            auto rows = query_json_rows_map(
+                "SELECT id, val FROM kv2 ORDER BY id;", &local_err);
             Sqlite::print_table(std::cout, rows);
-            
+
             if (!local_err.empty()) {
-                std::cerr << "[thread " << thread_id << "] SELECT error: " << local_err << " (iter " << it << ")\n";
+                std::cerr << "[thread " << thread_id
+                          << "] SELECT error: " << local_err << " (iter " << it
+                          << ")\n";
                 errors.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
 
             if (rows.size() != 100) {
-                std::cerr << "[thread " << thread_id << "] unexpected row count: " << rows.size() << " (iter " << it <<
-                        ")\n";
+                std::cerr << "[thread " << thread_id
+                          << "] unexpected row count: " << rows.size()
+                          << " (iter " << it << ")\n";
                 errors.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
 
-            // Validar existencia de columnas y valores concretos de forma segura
+            // Validar existencia de columnas y valores concretos de forma
+            // segura
             try {
                 const auto &r0 = rows[0];
                 const auto &r50 = rows[50];
@@ -367,7 +395,8 @@ static bool test_concurrent_selects_json(const std::string &dbpath) {
                 auto it_id0 = r0.find("id");
                 auto it_val0 = r0.find("val");
                 if (it_id0 == r0.end() || it_val0 == r0.end()) {
-                    std::cerr << "[thread " << thread_id << "] missing columns in row 0\n";
+                    std::cerr << "[thread " << thread_id
+                              << "] missing columns in row 0\n";
                     errors.fetch_add(1, std::memory_order_relaxed);
                     return;
                 }
@@ -398,15 +427,18 @@ static bool test_concurrent_selects_json(const std::string &dbpath) {
                     return;
                 }
             } catch (const std::exception &e) {
-                std::cerr << "[thread " << thread_id << "] validation exception: " << e.what() << "\n";
+                std::cerr << "[thread " << thread_id
+                          << "] validation exception: " << e.what() << "\n";
                 errors.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
 
             if (progress_every > 0 && (it % progress_every) == 0) {
-                // Protege la salida por consola si usas un mutex global (vesta::cout_mutex en tu proyecto)
+                // Protege la salida por consola si usas un mutex global
+                // (vesta::cout_mutex en tu proyecto)
                 std::lock_guard<std::mutex> lk(vesta::cout_mutex);
-                std::cout << "[thread " << thread_id << "] iter " << it << "/" << iterations << "\n";
+                std::cout << "[thread " << thread_id << "] iter " << it << "/"
+                          << iterations << "\n";
             }
 
             std::this_thread::yield();
@@ -423,21 +455,26 @@ static bool test_concurrent_selects_json(const std::string &dbpath) {
     auto t0 = std::chrono::steady_clock::now();
 
     for (int i = 0; i < THREADS; ++i) {
-        threads.emplace_back(worker, i, ITERATIONS, std::ref(errors), PROGRESS_EVERY);
+        threads.emplace_back(worker, i, ITERATIONS, std::ref(errors),
+                             PROGRESS_EVERY);
     }
-    for (auto &t: threads) t.join();
+    for (auto &t : threads)
+        t.join();
 
     auto t1 = std::chrono::steady_clock::now();
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
     Sqlite::SqliteSingleton::cleanup();
     remove_file_if_exists(dbpath);
 
     if (errors.load(std::memory_order_relaxed) == 0) {
-        std::cout << "[PASS] test_concurrent_selects_json (time " << ms << " ms)\n";
+        std::cout << "[PASS] test_concurrent_selects_json (time " << ms
+                  << " ms)\n";
         return true;
     } else {
-        std::cerr << "[FAIL] test_concurrent_selects_json: errors = " << errors.load() << " (time " << ms << " ms)\n";
+        std::cerr << "[FAIL] test_concurrent_selects_json: errors = "
+                  << errors.load() << " (time " << ms << " ms)\n";
         return false;
     }
 }
@@ -453,7 +490,7 @@ int main() {
     if (!test_concurrent_selects_verbose(dbpath)) ++failures;
     if (!test_concurrent_selects_json(dbpath)) ++failures;
 
-    std::vector<std::map<std::string, std::string> > rows = {
+    std::vector<std::map<std::string, std::string>> rows = {
         {{"id", "0"}, {"name", "Alice"}, {"age", "30"}},
         {{"id", "1"}, {"name", "Bob"}, {"age", "27"}},
         {{"id", "2"}, {"name", "Clara"}} // age ausente
@@ -470,7 +507,6 @@ int main() {
     // Obtener como string
     std::string s = Sqlite::table_to_string(rows, order);
     // usar s en logs o tests
-
 
     if (failures == 0) {
         std::cout << "ALL TESTS PASSED\n";

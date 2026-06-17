@@ -31,50 +31,50 @@
 
 #include <stdint.h>
 #if defined(_WIN32)
-#  ifndef _WIN32_WINNT
-#    define _WIN32_WINNT 0x0600
-#  endif
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-typedef CRITICAL_SECTION     vex_mutex_t;
-typedef CONDITION_VARIABLE   vex_cond_t;
-typedef HANDLE               vex_thread_t;
-#  define VEX_MUTEX_INIT(m)   InitializeCriticalSection(m)
-#  define VEX_MUTEX_LOCK(m)   EnterCriticalSection(m)
-#  define VEX_MUTEX_UNLOCK(m) LeaveCriticalSection(m)
-#  define VEX_COND_INIT(c)    InitializeConditionVariable(c)
-#  define VEX_COND_WAIT(c,m)  SleepConditionVariableCS((c),(m),INFINITE)
-#  define VEX_COND_SIGNAL(c)  WakeConditionVariable(c)
-#  define VEX_COND_BCAST(c)   WakeAllConditionVariable(c)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+typedef CRITICAL_SECTION vex_mutex_t;
+typedef CONDITION_VARIABLE vex_cond_t;
+typedef HANDLE vex_thread_t;
+#define VEX_MUTEX_INIT(m) InitializeCriticalSection(m)
+#define VEX_MUTEX_LOCK(m) EnterCriticalSection(m)
+#define VEX_MUTEX_UNLOCK(m) LeaveCriticalSection(m)
+#define VEX_COND_INIT(c) InitializeConditionVariable(c)
+#define VEX_COND_WAIT(c, m) SleepConditionVariableCS((c), (m), INFINITE)
+#define VEX_COND_SIGNAL(c) WakeConditionVariable(c)
+#define VEX_COND_BCAST(c) WakeAllConditionVariable(c)
 #else
-#  include <pthread.h>
-#  include <unistd.h>
-typedef pthread_mutex_t      vex_mutex_t;
-typedef pthread_cond_t       vex_cond_t;
-typedef pthread_t            vex_thread_t;
-#  define VEX_MUTEX_INIT(m)   pthread_mutex_init(m, 0)
-#  define VEX_MUTEX_LOCK(m)   pthread_mutex_lock(m)
-#  define VEX_MUTEX_UNLOCK(m) pthread_mutex_unlock(m)
-#  define VEX_COND_INIT(c)    pthread_cond_init(c, 0)
-#  define VEX_COND_WAIT(c,m)  pthread_cond_wait((c),(m))
-#  define VEX_COND_SIGNAL(c)  pthread_cond_signal(c)
-#  define VEX_COND_BCAST(c)   pthread_cond_broadcast(c)
+#include <pthread.h>
+#include <unistd.h>
+typedef pthread_mutex_t vex_mutex_t;
+typedef pthread_cond_t vex_cond_t;
+typedef pthread_t vex_thread_t;
+#define VEX_MUTEX_INIT(m) pthread_mutex_init(m, 0)
+#define VEX_MUTEX_LOCK(m) pthread_mutex_lock(m)
+#define VEX_MUTEX_UNLOCK(m) pthread_mutex_unlock(m)
+#define VEX_COND_INIT(c) pthread_cond_init(c, 0)
+#define VEX_COND_WAIT(c, m) pthread_cond_wait((c), (m))
+#define VEX_COND_SIGNAL(c) pthread_cond_signal(c)
+#define VEX_COND_BCAST(c) pthread_cond_broadcast(c)
 #endif
 
-#include <stdatomic.h>  /* C11 atomics; GCC y Clang los soportan desde
+#include <stdatomic.h> /* C11 atomics; GCC y Clang los soportan desde
                           hace años.  En MSVC requiere /std:c11 o C17. */
 
 /* ----- Future con state atomico ----- */
 typedef struct VexFuture {
-    _Atomic int32_t state;    /* 0=pending, 1=resolved */
-    int32_t         _pad;
-    int64_t         value;
-    vex_mutex_t     mtx;
-    vex_cond_t      cv;
+    _Atomic int32_t state; /* 0=pending, 1=resolved */
+    int32_t _pad;
+    int64_t value;
+    vex_mutex_t mtx;
+    vex_cond_t cv;
 } VexFuture;
 
 static VEX_UNUSED int64_t vex_future_alloc(void) {
-    VexFuture *f = (VexFuture*)malloc(sizeof(VexFuture));
+    VexFuture *f = (VexFuture *)malloc(sizeof(VexFuture));
     if (!f) return 0;
     atomic_store_explicit(&f->state, 0, memory_order_relaxed);
     f->value = 0;
@@ -84,7 +84,7 @@ static VEX_UNUSED int64_t vex_future_alloc(void) {
 }
 
 static VEX_UNUSED int64_t vex_future_await(int64_t handle) {
-    VexFuture *f = (VexFuture*)(intptr_t)handle;
+    VexFuture *f = (VexFuture *)(intptr_t)handle;
     if (!f) return 0;
     /* Fast path: acquire load del state. Si ya esta resolved, leer value
      * directamente (memory_order_acquire ordena el read de value despues). */
@@ -102,7 +102,7 @@ static VEX_UNUSED int64_t vex_future_await(int64_t handle) {
 }
 
 static VEX_UNUSED void vex_future_fulfill(int64_t handle, int64_t value) {
-    VexFuture *f = (VexFuture*)(intptr_t)handle;
+    VexFuture *f = (VexFuture *)(intptr_t)handle;
     if (!f) return;
     VEX_MUTEX_LOCK(&f->mtx);
     f->value = value;
@@ -117,21 +117,21 @@ typedef void (*VexAsyncFn)(int64_t);
 
 typedef struct VexJob {
     VexAsyncFn fn;
-    int64_t    arg;
+    int64_t arg;
 } VexJob;
 
 #define VEX_POOL_QUEUE_SIZE 256
 
-static vex_mutex_t      vex_pool_mtx_;
-static vex_cond_t       vex_pool_not_empty_;
-static vex_cond_t       vex_pool_not_full_;
-static VexJob           vex_pool_q_[VEX_POOL_QUEUE_SIZE];
-static volatile int     vex_pool_head_ = 0;
-static volatile int     vex_pool_tail_ = 0;
-static vex_thread_t    *vex_pool_threads_ = 0;
-static int              vex_pool_n_ = 0;
-static _Atomic int      vex_pool_init_done_ = 0;
-static _Atomic int      vex_pool_shutdown_ = 0;
+static vex_mutex_t vex_pool_mtx_;
+static vex_cond_t vex_pool_not_empty_;
+static vex_cond_t vex_pool_not_full_;
+static VexJob vex_pool_q_[VEX_POOL_QUEUE_SIZE];
+static volatile int vex_pool_head_ = 0;
+static volatile int vex_pool_tail_ = 0;
+static vex_thread_t *vex_pool_threads_ = 0;
+static int vex_pool_n_ = 0;
+static _Atomic int vex_pool_init_done_ = 0;
+static _Atomic int vex_pool_shutdown_ = 0;
 
 static int vex_pool_get_hw_concurrency_(void) {
 #if defined(_WIN32)
@@ -153,12 +153,13 @@ static void *vex_pool_worker_(void *arg) {
     (void)arg;
     for (;;) {
         VEX_MUTEX_LOCK(&vex_pool_mtx_);
-        while (vex_pool_head_ == vex_pool_tail_
-            && !atomic_load_explicit(&vex_pool_shutdown_, memory_order_acquire)) {
+        while (
+            vex_pool_head_ == vex_pool_tail_ &&
+            !atomic_load_explicit(&vex_pool_shutdown_, memory_order_acquire)) {
             VEX_COND_WAIT(&vex_pool_not_empty_, &vex_pool_mtx_);
         }
-        if (vex_pool_head_ == vex_pool_tail_
-         && atomic_load_explicit(&vex_pool_shutdown_, memory_order_acquire)) {
+        if (vex_pool_head_ == vex_pool_tail_ &&
+            atomic_load_explicit(&vex_pool_shutdown_, memory_order_acquire)) {
             VEX_MUTEX_UNLOCK(&vex_pool_mtx_);
 #if defined(_WIN32)
             return 0;
@@ -181,7 +182,7 @@ static void vex_pool_init_(void) {
     VEX_COND_INIT(&vex_pool_not_full_);
     int n = vex_pool_get_hw_concurrency_();
     vex_pool_n_ = n;
-    vex_pool_threads_ = (vex_thread_t*)malloc(sizeof(vex_thread_t) * n);
+    vex_pool_threads_ = (vex_thread_t *)malloc(sizeof(vex_thread_t) * n);
     if (!vex_pool_threads_) return;
     for (int i = 0; i < n; ++i) {
 #if defined(_WIN32)
@@ -195,14 +196,15 @@ static void vex_pool_init_(void) {
 /* Lazy initialization: usa atomic CAS para garantizar single-init. */
 static void vex_pool_init_once_(void) {
     int expected = 0;
-    if (atomic_compare_exchange_strong_explicit(
-            &vex_pool_init_done_, &expected, 1,
-            memory_order_acq_rel, memory_order_acquire)) {
+    if (atomic_compare_exchange_strong_explicit(&vex_pool_init_done_, &expected,
+                                                1, memory_order_acq_rel,
+                                                memory_order_acquire)) {
         vex_pool_init_();
         atomic_store_explicit(&vex_pool_init_done_, 2, memory_order_release);
     } else {
         /* Otro thread ya esta inicializando; esperar. */
-        while (atomic_load_explicit(&vex_pool_init_done_, memory_order_acquire) != 2) {
+        while (atomic_load_explicit(&vex_pool_init_done_,
+                                    memory_order_acquire) != 2) {
 #if defined(_WIN32)
             SwitchToThread();
 #else
@@ -221,7 +223,7 @@ static VEX_UNUSED void vex_spawn(VexAsyncFn fn, int64_t arg) {
         VEX_COND_WAIT(&vex_pool_not_full_, &vex_pool_mtx_);
         next_tail = (vex_pool_tail_ + 1) % VEX_POOL_QUEUE_SIZE;
     }
-    vex_pool_q_[vex_pool_tail_].fn  = fn;
+    vex_pool_q_[vex_pool_tail_].fn = fn;
     vex_pool_q_[vex_pool_tail_].arg = arg;
     vex_pool_tail_ = next_tail;
     VEX_COND_SIGNAL(&vex_pool_not_empty_);

@@ -52,20 +52,22 @@ void hex_dump_annotated(const std::vector<uint8_t> &b) {
 } // namespace
 
 int main() {
-    std::cout << "================================================================\n";
+    std::cout
+        << "================================================================\n";
     std::cout << "Modulo Vex (lo que el usuario escribio):\n";
-    std::cout << "================================================================\n";
-    std::cout <<
-        "// buffer.vex\n"
-        "public typedef u64 user_id new @opaque {\n"
-        "    public explicit from u64;\n"
-        "    explicit to u64;\n"
-        "}\n"
-        "\n"
-        "public struct Point { f64 x; f64 y; }\n"
-        "\n"
-        "public i32 doblar(i32 n) { return n + n; }\n";
-    std::cout << "================================================================\n\n";
+    std::cout
+        << "================================================================\n";
+    std::cout << "// buffer.vex\n"
+                 "public typedef u64 user_id new @opaque {\n"
+                 "    public explicit from u64;\n"
+                 "    explicit to u64;\n"
+                 "}\n"
+                 "\n"
+                 "public struct Point { f64 x; f64 y; }\n"
+                 "\n"
+                 "public i32 doblar(i32 n) { return n + n; }\n";
+    std::cout << "============================================================="
+                 "===\n\n";
 
     // VexiModule equivalente (construido a mano para que la demo sea
     // independiente del TypeChecker y se vea limpia).
@@ -74,18 +76,18 @@ int main() {
 
     {
         vex::VexiSymbol s;
-        s.kind            = vex::VexiSymbolKind::TYPEDEF_NEW;
-        s.name            = "user_id";
+        s.kind = vex::VexiSymbolKind::TYPEDEF_NEW;
+        s.name = "user_id";
         s.underlying_type = "u64";
-        s.is_opaque       = true;
-        s.nominal_abi     = vex::vexi_fnv1a(s.name);
+        s.is_opaque = true;
+        s.nominal_abi = vex::vexi_fnv1a(s.name);
         m.symbols.push_back(std::move(s));
     }
     {
         vex::VexiSymbol s;
-        s.kind        = vex::VexiSymbolKind::STRUCT;
-        s.name        = "Point";
-        s.size_bytes  = 16;
+        s.kind = vex::VexiSymbolKind::STRUCT;
+        s.name = "Point";
+        s.size_bytes = 16;
         s.align_bytes = 8;
         s.fields = {
             {"x", "f64", 0, 8, 0, 0},
@@ -95,11 +97,11 @@ int main() {
     }
     {
         vex::VexiSymbol s;
-        s.kind         = vex::VexiSymbolKind::FUNCTION;
-        s.name         = "doblar";
-        s.return_type  = "i32";
-        s.param_types  = {"i32"};
-        s.param_names  = {"n"};
+        s.kind = vex::VexiSymbolKind::FUNCTION;
+        s.name = "doblar";
+        s.return_type = "i32";
+        s.param_types = {"i32"};
+        s.param_names = {"n"};
         m.symbols.push_back(std::move(s));
     }
 
@@ -116,26 +118,27 @@ int main() {
     std::printf("Symbol count:       %zu\n\n", parsed.module_.symbols.size());
 
     std::cout << "Simbolos decodificados:\n";
-    std::cout << "----------------------------------------------------------------\n";
+    std::cout
+        << "----------------------------------------------------------------\n";
     for (const auto &s : parsed.module_.symbols) {
         const char *k = "?";
         switch (s.kind) {
-            case vex::VexiSymbolKind::TYPEDEF_ALIAS: k = "TYPEDEF    "; break;
-            case vex::VexiSymbolKind::TYPEDEF_NEW:   k = "TYPEDEF_NEW"; break;
-            case vex::VexiSymbolKind::STRUCT:        k = "STRUCT     "; break;
-            case vex::VexiSymbolKind::CLASS:         k = "CLASS      "; break;
-            case vex::VexiSymbolKind::ENUM:          k = "ENUM       "; break;
-            case vex::VexiSymbolKind::FUNCTION:      k = "FUNCTION   "; break;
-            case vex::VexiSymbolKind::GLOBAL_VAR:    k = "GLOBAL     "; break;
+        case vex::VexiSymbolKind::TYPEDEF_ALIAS: k = "TYPEDEF    "; break;
+        case vex::VexiSymbolKind::TYPEDEF_NEW: k = "TYPEDEF_NEW"; break;
+        case vex::VexiSymbolKind::STRUCT: k = "STRUCT     "; break;
+        case vex::VexiSymbolKind::CLASS: k = "CLASS      "; break;
+        case vex::VexiSymbolKind::ENUM: k = "ENUM       "; break;
+        case vex::VexiSymbolKind::FUNCTION: k = "FUNCTION   "; break;
+        case vex::VexiSymbolKind::GLOBAL_VAR: k = "GLOBAL     "; break;
         }
         std::printf("  [%s] %-10s", k, s.name.c_str());
-        if (s.kind == vex::VexiSymbolKind::TYPEDEF_NEW
-         || s.kind == vex::VexiSymbolKind::TYPEDEF_ALIAS) {
+        if (s.kind == vex::VexiSymbolKind::TYPEDEF_NEW ||
+            s.kind == vex::VexiSymbolKind::TYPEDEF_ALIAS) {
             std::printf(" : %s", s.underlying_type.c_str());
             if (s.is_opaque) std::printf("  @opaque");
             if (s.align_override) std::printf("  @align(%u)", s.align_override);
-        } else if (s.kind == vex::VexiSymbolKind::STRUCT
-                || s.kind == vex::VexiSymbolKind::CLASS) {
+        } else if (s.kind == vex::VexiSymbolKind::STRUCT ||
+                   s.kind == vex::VexiSymbolKind::CLASS) {
             std::printf(" { ");
             for (size_t i = 0; i < s.fields.size(); ++i) {
                 if (i) std::printf(", ");
@@ -156,12 +159,15 @@ int main() {
         }
         std::printf("\n");
     }
-    std::cout << "----------------------------------------------------------------\n\n";
+    std::cout << "-------------------------------------------------------------"
+                 "---\n\n";
 
     std::cout << "Hex dump del fichero .vexi:\n";
-    std::cout << "----------------------------------------------------------------\n";
+    std::cout
+        << "----------------------------------------------------------------\n";
     hex_dump_annotated(bytes);
-    std::cout << "----------------------------------------------------------------\n";
+    std::cout
+        << "----------------------------------------------------------------\n";
 
     return 0;
 }

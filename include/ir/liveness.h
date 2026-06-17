@@ -36,9 +36,9 @@ namespace ir {
  * linealizados) durante el cual el valor debe estar en un registro.
  */
 struct LiveInterval {
-    IrValueId id;   ///< identificador del valor SSA
-    uint32_t  def;  ///< posicion de definicion (indice de instruccion)
-    uint32_t  end;  ///< ultima posicion de uso (inclusive)
+    IrValueId id; ///< identificador del valor SSA
+    uint32_t def; ///< posicion de definicion (indice de instruccion)
+    uint32_t end; ///< ultima posicion de uso (inclusive)
 
     /** @brief Compara intervalos por posicion de definicion. */
     bool operator<(const LiveInterval &o) const { return def < o.def; }
@@ -51,14 +51,17 @@ struct LiveInterval {
  * informacion de posicion de cada bloque basico en el orden lineal.
  */
 struct LivenessResult {
-    std::vector<LiveInterval> intervals;   ///< intervalos ordenados por def
-    std::vector<uint32_t>     block_start; ///< block_start[b] = primer indice del bloque b
-    std::vector<uint32_t>     block_end;   ///< block_end[b]   = ultimo indice del bloque b
-    uint32_t                   num_instrs;  ///< total de instrucciones linealizadas
+    std::vector<LiveInterval> intervals; ///< intervalos ordenados por def
+    std::vector<uint32_t>
+        block_start; ///< block_start[b] = primer indice del bloque b
+    std::vector<uint32_t>
+        block_end;       ///< block_end[b]   = ultimo indice del bloque b
+    uint32_t num_instrs; ///< total de instrucciones linealizadas
 };
 
 /**
- * @brief Calcula los intervalos de vida de todos los valores SSA de una funcion.
+ * @brief Calcula los intervalos de vida de todos los valores SSA de una
+ * funcion.
  *
  * @param fn Funcion SSA a analizar.
  * @return Resultado con los intervalos de vida y mapas de posicion de bloques.

@@ -28,18 +28,19 @@
 #include <thread>
 #include <vector>
 
-static int g_tests_run    = 0;
+static int g_tests_run = 0;
 static int g_tests_passed = 0;
 
-#define CHECK(cond, msg) do {                                          \
-    ++g_tests_run;                                                      \
-    if (cond) {                                                         \
-        ++g_tests_passed;                                               \
-        std::printf("  [OK] %s\n", msg);                                \
-    } else {                                                            \
-        std::printf("  [FAIL] %s\n", msg);                              \
-    }                                                                   \
-} while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_tests_run;                                                         \
+        if (cond) {                                                            \
+            ++g_tests_passed;                                                  \
+            std::printf("  [OK] %s\n", msg);                                   \
+        } else {                                                               \
+            std::printf("  [FAIL] %s\n", msg);                                 \
+        }                                                                      \
+    } while (0)
 
 // ----------------------------------------------------------------------
 // Test 1: register / lookup / unregister single-thread
@@ -130,7 +131,10 @@ static void test_many_registers() {
     // Verificar que cada handle resuelve a su propio ptr
     bool ok = true;
     for (int i = 0; i < N; ++i) {
-        if (t.lookup(handles[i]) != ptrs[i]) { ok = false; break; }
+        if (t.lookup(handles[i]) != ptrs[i]) {
+            ok = false;
+            break;
+        }
     }
     CHECK(ok, "cada handle resuelve a su propio ptr (10K)");
     // Verificar que todos son distintos
@@ -169,7 +173,8 @@ static void test_concurrent_register() {
             }
         });
     }
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
 
     // Recolectar todos los handles + verificar unicidad + lookup correcto
     std::set<uint32_t> all;
@@ -177,7 +182,10 @@ static void test_concurrent_register() {
     for (int tid = 0; tid < THREADS; ++tid) {
         for (int i = 0; i < PER; ++i) {
             uint32_t h = handles[tid][i];
-            if (h == gc::SHARED_NULL_HANDLE) { errors++; continue; }
+            if (h == gc::SHARED_NULL_HANDLE) {
+                errors++;
+                continue;
+            }
             if (!all.insert(h).second) errors++; // duplicado
             if (t.lookup(h) != ptrs[tid][i]) errors++;
         }
@@ -188,8 +196,10 @@ static void test_concurrent_register() {
 
     // Cleanup
     for (int tid = 0; tid < THREADS; ++tid) {
-        for (auto h : handles[tid]) t.unregister(h);
-        for (auto *p : ptrs[tid]) delete[] p;
+        for (auto h : handles[tid])
+            t.unregister(h);
+        for (auto *p : ptrs[tid])
+            delete[] p;
     }
 }
 
@@ -214,13 +224,17 @@ static void test_aba_stress() {
             std::memset(buf, (uint8_t)(tid & 0xFF), sizeof(buf));
             for (int i = 0; i < OPS; ++i) {
                 uint32_t h = t.register_object(buf, 16);
-                if (h == gc::SHARED_NULL_HANDLE) { errors.fetch_add(1); continue; }
+                if (h == gc::SHARED_NULL_HANDLE) {
+                    errors.fetch_add(1);
+                    continue;
+                }
                 if (t.lookup(h) != buf) errors.fetch_add(1);
                 t.unregister(h);
             }
         });
     }
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
 
     CHECK(errors.load() == 0, "0 errores en ABA stress");
     CHECK(t.live_count() == 0, "tabla vacia tras balance register/unregister");

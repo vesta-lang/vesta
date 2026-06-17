@@ -24,16 +24,20 @@
 #include <sstream>
 
 #if defined(_WIN32)
-  #include <direct.h>
-  #include <io.h>
-  #define VEX_PATH_SEP_ENV ';'
-  #define VEX_F_OK 0
-  // _access en Windows.
-  static inline bool vex_file_access_ok(const char *p) { return _access(p, 0) == 0; }
+#include <direct.h>
+#include <io.h>
+#define VEX_PATH_SEP_ENV ';'
+#define VEX_F_OK 0
+// _access en Windows.
+static inline bool vex_file_access_ok(const char *p) {
+    return _access(p, 0) == 0;
+}
 #else
-  #include <unistd.h>
-  #define VEX_PATH_SEP_ENV ':'
-  static inline bool vex_file_access_ok(const char *p) { return access(p, F_OK) == 0; }
+#include <unistd.h>
+#define VEX_PATH_SEP_ENV ':'
+static inline bool vex_file_access_ok(const char *p) {
+    return access(p, F_OK) == 0;
+}
 #endif
 
 #include "vex/ast.h"
@@ -50,7 +54,7 @@ namespace vex {
 // ---------------------------------------------------------------------------
 uint64_t ModuleGraph::fnv1a_(const std::string &s) noexcept {
     constexpr uint64_t OFFSET = 0xCBF29CE484222325ULL;
-    constexpr uint64_t PRIME  = 0x100000001B3ULL;
+    constexpr uint64_t PRIME = 0x100000001B3ULL;
     uint64_t h = OFFSET;
     for (unsigned char c : s) {
         h ^= static_cast<uint64_t>(c);
@@ -68,10 +72,10 @@ bool ModuleGraph::is_absolute_(const std::string &path) noexcept {
     if (path.empty()) return false;
     if (path[0] == '/' || path[0] == '\\') return true;
 #if defined(_WIN32)
-    if (path.size() >= 2
-     && ((path[0] >= 'A' && path[0] <= 'Z')
-      || (path[0] >= 'a' && path[0] <= 'z'))
-     && path[1] == ':') {
+    if (path.size() >= 2 &&
+        ((path[0] >= 'A' && path[0] <= 'Z') ||
+         (path[0] >= 'a' && path[0] <= 'z')) &&
+        path[1] == ':') {
         return true;
     }
 #endif
@@ -109,7 +113,7 @@ bool ModuleGraph::file_exists_(const std::string &path) noexcept {
 //      silente (deja el path tal cual; el filesystem lo rechazara).
 // ---------------------------------------------------------------------------
 std::string ModuleGraph::normalize_path_(const std::string &raw,
-                                          const std::string &base_dir) const {
+                                         const std::string &base_dir) const {
     std::string p;
     p.reserve(raw.size() + base_dir.size() + 8);
 
@@ -185,7 +189,7 @@ std::string ModuleGraph::normalize_path_(const std::string &raw,
 // ModuleGraph: ctor + config de search paths.
 // ---------------------------------------------------------------------------
 ModuleGraph::ModuleGraph(Diagnostics &diags) : diags_(diags) {
-    modules_.reserve(32);     // pre-reservar para evitar reallocs tempranas
+    modules_.reserve(32); // pre-reservar para evitar reallocs tempranas
     search_paths_.reserve(8);
 }
 
@@ -247,16 +251,16 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     // Crear entrada.  Reservar id ANTES de parsear para que un import
     // del propio fichero (auto-import) detecte el ciclo correctamente.
     auto mod = std::make_unique<ResolvedModule>();
-    mod->module_id      = static_cast<uint32_t>(modules_.size());
+    mod->module_id = static_cast<uint32_t>(modules_.size());
     mod->canonical_path = canonical_path;
-    mod->path_hash      = path_hash;
-    mod->source_hash    = fnv1a_(source);
+    mod->path_hash = path_hash;
+    mod->source_hash = fnv1a_(source);
 
     // Extraer module_name = ultimo segmento sin extension.
     size_t slash = canonical_path.find_last_of('/');
     std::string base = (slash == std::string::npos)
-        ? canonical_path
-        : canonical_path.substr(slash + 1);
+                           ? canonical_path
+                           : canonical_path.substr(slash + 1);
     size_t dot = base.find_last_of('.');
     mod->module_name = (dot == std::string::npos) ? base : base.substr(0, dot);
 
@@ -268,8 +272,8 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
         const std::string parent = canonical_path.substr(0, slash);
         const size_t parent_slash = parent.find_last_of('/');
         const std::string parent_name = (parent_slash == std::string::npos)
-            ? parent
-            : parent.substr(parent_slash + 1);
+                                            ? parent
+                                            : parent.substr(parent_slash + 1);
         if (!parent_name.empty()) {
             mod->module_name = parent_name;
         }
@@ -299,14 +303,15 @@ uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
 // candidato existente, o NOT_FOUND con la lista de paths intentados.
 // ---------------------------------------------------------------------------
 ResolveResult ModuleGraph::resolve(const std::string &raw_path,
-                                    const std::string &importer_file) {
+                                   const std::string &importer_file) {
     ResolveResult res;
 
     // Derivar el directorio del importador.
     std::string importer_dir;
     if (!importer_file.empty()) {
         std::string norm = importer_file;
-        for (char &c : norm) if (c == '\\') c = '/';
+        for (char &c : norm)
+            if (c == '\\') c = '/';
         size_t slash = norm.find_last_of('/');
         if (slash != std::string::npos) {
             importer_dir = norm.substr(0, slash);
@@ -351,7 +356,7 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
                 res.error_message = "fallo al cargar/parsear: " + c;
                 return res;
             }
-            res.status    = ResolveResult::Status::OK;
+            res.status = ResolveResult::Status::OK;
             res.module_id = id;
             return res;
         }
@@ -359,7 +364,8 @@ ResolveResult ModuleGraph::resolve(const std::string &raw_path,
 
     // NOT_FOUND con lista de paths intentados.
     res.status = ResolveResult::Status::NOT_FOUND;
-    std::string msg = "modulo '" + raw_path + "' no encontrado. Paths probados:";
+    std::string msg =
+        "modulo '" + raw_path + "' no encontrado. Paths probados:";
     for (const auto &c : res.tried_paths) {
         msg += "\n  - " + c;
     }
@@ -388,8 +394,8 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
             diags_.error(imp->loc, r.error_message);
             continue;
         }
-        if (r.status == ResolveResult::Status::PARSE_ERROR
-         || r.status == ResolveResult::Status::IO_ERROR) {
+        if (r.status == ResolveResult::Status::PARSE_ERROR ||
+            r.status == ResolveResult::Status::IO_ERROR) {
             diags_.error(imp->loc, r.error_message);
             continue;
         }
@@ -401,7 +407,10 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
         // importado dos veces solo aparece una vez).
         bool dup = false;
         for (uint32_t d : mod.dependencies) {
-            if (d == r.module_id) { dup = true; break; }
+            if (d == r.module_id) {
+                dup = true;
+                break;
+            }
         }
         if (!dup) {
             mod.dependencies.push_back(r.module_id);
@@ -449,14 +458,15 @@ std::vector<uint32_t> ModuleGraph::topological_order() const {
     // pero const_cast aqui es seguro porque este metodo no es thread-safe
     // y el caller no ejecuta multiples topological_order concurrentes).
     auto *self = const_cast<ModuleGraph *>(this);
-    for (auto &m : self->modules_) m->color = ResolveColor::WHITE;
+    for (auto &m : self->modules_)
+        m->color = ResolveColor::WHITE;
     self->cycle_detected_ = false;
 
     // DFS iterativa con stack explicita para evitar stack overflow en
     // proyectos profundos (mas de ~1000 niveles raros pero defensivo).
     struct Frame {
         uint32_t mod_id;
-        size_t   dep_idx;
+        size_t dep_idx;
     };
     std::vector<Frame> stack;
     stack.reserve(128);
@@ -485,9 +495,11 @@ std::vector<uint32_t> ModuleGraph::topological_order() const {
                     std::string cycle_msg = "ciclo de imports detectado: ";
                     bool found_start = false;
                     for (const auto &f : stack) {
-                        if (!found_start && f.mod_id == next) found_start = true;
+                        if (!found_start && f.mod_id == next)
+                            found_start = true;
                         if (found_start) {
-                            cycle_msg += self->modules_[f.mod_id]->module_name + " -> ";
+                            cycle_msg +=
+                                self->modules_[f.mod_id]->module_name + " -> ";
                         }
                     }
                     cycle_msg += child->module_name;

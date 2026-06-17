@@ -1,5 +1,5 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Máquina Virtual Distribuida
  *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
@@ -17,10 +17,9 @@
 #include "cli/cli.h"
 #include "cli/sync_io.h"
 
-
-
 int main() {
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+#if defined(WIN32) || defined(_WIN32) ||                                       \
+    defined(__WIN32) && !defined(__CYGWIN__)
     system("chcp 65001");
 #endif
     // Inicializar runtime con 4 hilos
@@ -31,7 +30,7 @@ int main() {
     cli::VestaViewManager vm(cfg);
 
     // Callback que usa run_command_async y muestra resultado cuando termine
-    vm.set_execute_callback([](const std::string &cmd){
+    vm.set_execute_callback([](const std::string &cmd) {
         auto token = runtime::make_cancel_token();
         auto fut = runtime::run_command_async(cmd, token);
         std::thread([f = std::move(fut)]() mutable {

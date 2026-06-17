@@ -10,8 +10,6 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-
-
 #include <cstdlib>
 #include <iostream>
 #include <iomanip>
@@ -28,23 +26,23 @@
 #include "cli/cli.h"
 #include "cli/vsh.h"
 #include "ir/ir_emitter.h"
-#include "ir/ssa_ir_serialize.h"   // Phase AOT: parse_ir_section (round-trip del @ir)
-#include "aot/aot_analyze.h"       // Phase AOT.1: analisis de compatibilidad nativa
-#include "aot/aot_lower.h"         // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
-#include "aot/object_writer.h"     // Phase AOT.4: emisor PE/ELF (ObjectWriter)
-#include "aot/aot_native.h"        // Phase AOT.3 Paso 2: _start arch-portable
-#include "jit/vreg_pipeline.h"     // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
+#include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
+#include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
+#include "aot/aot_lower.h" // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
+#include "aot/object_writer.h" // Phase AOT.4: emisor PE/ELF (ObjectWriter)
+#include "aot/aot_native.h"    // Phase AOT.3 Paso 2: _start arch-portable
+#include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/auto_jit.h"
-#include "jit/keystone_asm_backend.h"  // Phase AS inc.4b: registrar backend asm
+#include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
-#include "runtime/profile.h"          // Sprint D.6 (2026-06-03)
+#include "runtime/profile.h"           // Sprint D.6 (2026-06-03)
 #include "pkg/cli.h"
 #include "runtime/proceso_runtime.h"
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "vex/compiler.h"
-#include "vex/comptime_vm.h"   /* Phase MC.4 probe del ComptimeRuntime */
-#include "vex/project_cache.h" /* Phase M5.B project-level cache */
+#include "vex/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
+#include "vex/project_cache.h"  /* Phase M5.B project-level cache */
 #include "vex/velb_signature.h" /* Phase M.L28: firmas digitales */
 #include "util/sqlite_singleton.h"
 #include "util/fs_utils.h"
@@ -60,19 +58,21 @@
 #include "install/install.h"
 
 #include <filesystem>
-#include <map>     // Phase MC.16: per-macro manifest map
-#include <unordered_map>  // Phase AOT.3 2b-ii: layout name->offset
-#include <set>     // Phase MC.16: manifest diff seen-set
-#include <cctype>  // Phase MC.16: isalnum en find_macro_ranges_with_names
+#include <map>           // Phase MC.16: per-macro manifest map
+#include <unordered_map> // Phase AOT.3 2b-ii: layout name->offset
+#include <set>           // Phase MC.16: manifest diff seen-set
+#include <cctype>        // Phase MC.16: isalnum en find_macro_ranges_with_names
 #include <openssl/rand.h>
 
 #ifdef VESTA_HAS_PREPROCESSOR
-    #include "preprocessor/preprocessor.h"
+#include "preprocessor/preprocessor.h"
 #endif
 
 // flag global para el modo --dist-server; SIGINT lo pone a false
 static std::atomic<bool> g_server_running{true};
-static void on_dist_sigint(int) { g_server_running.store(false); }
+static void on_dist_sigint(int) {
+    g_server_running.store(false);
+}
 
 /**
  * @brief Construye la NodeAuthConfig a partir de los flags de autenticacion.
@@ -87,13 +87,9 @@ static void on_dist_sigint(int) { g_server_running.store(false); }
  * @param ca       Ruta al CA bundle PEM para verificar pares.
  * @return NodeAuthConfig relleno.
  */
-static distrib::NodeAuthConfig build_node_auth(
-    const std::string &token,
-    bool               use_tls,
-    const std::string &cert,
-    const std::string &key,
-    const std::string &ca)
-{
+static distrib::NodeAuthConfig
+build_node_auth(const std::string &token, bool use_tls, const std::string &cert,
+                const std::string &key, const std::string &ca) {
     distrib::NodeAuthConfig auth{};
     if (!token.empty()) {
         auth.use_token = true;
@@ -102,9 +98,10 @@ static distrib::NodeAuthConfig build_node_auth(
     }
     if (use_tls) {
         auth.use_tls = true;
-        std::snprintf(auth.cert_path, sizeof(auth.cert_path), "%s", cert.c_str());
-        std::snprintf(auth.key_path,  sizeof(auth.key_path),  "%s", key.c_str());
-        std::snprintf(auth.ca_path,   sizeof(auth.ca_path),   "%s", ca.c_str());
+        std::snprintf(auth.cert_path, sizeof(auth.cert_path), "%s",
+                      cert.c_str());
+        std::snprintf(auth.key_path, sizeof(auth.key_path), "%s", key.c_str());
+        std::snprintf(auth.ca_path, sizeof(auth.ca_path), "%s", ca.c_str());
     }
     return auth;
 }
@@ -116,32 +113,34 @@ static distrib::NodeAuthConfig build_node_auth(
  * configurado segun los flags --dist-* de la linea de comandos.
  * Si --dist-port > 0 o --dist-discover esta activo, llama a start() para
  * abrir el servidor VDP y/o el hilo de descubrimiento UDP.
- * Registra cualquier nodo estatico indicado con --dist-add-node (formato IP:PUERTO).
+ * Registra cualquier nodo estatico indicado con --dist-add-node (formato
+ * IP:PUERTO).
  *
  * @param vm     Instancia VM sobre la que se aplica la configuracion.
  * @param result Resultado del parseo de cxxopts con todos los flags.
  */
-static void apply_dist_config(runtime::VM *vm, const cxxopts::ParseResult &result)
-{
-    const std::string token   = result["dist-token"].as<std::string>();
-    const bool        use_tls = result.count("dist-tls") > 0;
-    const std::string cert    = result["dist-cert"].as<std::string>();
-    const std::string key     = result["dist-key"].as<std::string>();
-    const std::string ca      = result["dist-ca"].as<std::string>();
+static void apply_dist_config(runtime::VM *vm,
+                              const cxxopts::ParseResult &result) {
+    const std::string token = result["dist-token"].as<std::string>();
+    const bool use_tls = result.count("dist-tls") > 0;
+    const std::string cert = result["dist-cert"].as<std::string>();
+    const std::string key = result["dist-key"].as<std::string>();
+    const std::string ca = result["dist-ca"].as<std::string>();
 
     // construir configuracion del DistRuntime
     distrib::DistRuntimeConfig cfg{};
-    cfg.local_node_id    = result["dist-node-id"].as<uint64_t>();
-    cfg.vdp_listen_port  = result["dist-port"].as<uint16_t>();
-    cfg.discover_port    = result["dist-discover-port"].as<uint16_t>();
+    cfg.local_node_id = result["dist-node-id"].as<uint64_t>();
+    cfg.vdp_listen_port = result["dist-port"].as<uint16_t>();
+    cfg.discover_port = result["dist-discover-port"].as<uint16_t>();
     cfg.enable_discovery = result.count("dist-discover") > 0;
 
     std::string name = result["dist-name"].as<std::string>();
     if (!name.empty())
-        std::snprintf(cfg.local_node_name, sizeof(cfg.local_node_name), "%s", name.c_str());
+        std::snprintf(cfg.local_node_name, sizeof(cfg.local_node_name), "%s",
+                      name.c_str());
     else
-        std::snprintf(cfg.local_node_name, sizeof(cfg.local_node_name), "vm-%llu",
-                      static_cast<unsigned long long>(vm->id));
+        std::snprintf(cfg.local_node_name, sizeof(cfg.local_node_name),
+                      "vm-%llu", static_cast<unsigned long long>(vm->id));
 
     cfg.server_auth = build_node_auth(token, use_tls, cert, key, ca);
 
@@ -155,7 +154,8 @@ static void apply_dist_config(runtime::VM *vm, const cxxopts::ParseResult &resul
             if (cfg.vdp_listen_port)
                 msg += " en puerto " + std::to_string(cfg.vdp_listen_port);
             if (cfg.enable_discovery)
-                msg += " con descubrimiento UDP (puerto " + std::to_string(cfg.discover_port) + ")";
+                msg += " con descubrimiento UDP (puerto " +
+                       std::to_string(cfg.discover_port) + ")";
             vesta::scout() << msg << "\n";
         } else {
             std::cerr << "[dist] Error al iniciar el servidor VDP\n";
@@ -164,17 +164,25 @@ static void apply_dist_config(runtime::VM *vm, const cxxopts::ParseResult &resul
 
     // registrar nodos estaticos proporcionados con --dist-add-node IP:PUERTO
     if (result.count("dist-add-node")) {
-        distrib::NodeAuthConfig node_auth = build_node_auth(token, use_tls, cert, key, ca);
-        for (auto &spec : result["dist-add-node"].as<std::vector<std::string>>()) {
+        distrib::NodeAuthConfig node_auth =
+            build_node_auth(token, use_tls, cert, key, ca);
+        for (auto &spec :
+             result["dist-add-node"].as<std::vector<std::string>>()) {
             auto colon = spec.rfind(':');
             if (colon == std::string::npos) {
-                std::cerr << "[dist] Formato invalido (esperado IP:PUERTO): " << spec << "\n";
+                std::cerr << "[dist] Formato invalido (esperado IP:PUERTO): "
+                          << spec << "\n";
                 continue;
             }
-            std::string node_ip   = spec.substr(0, colon);
-            uint16_t    node_port = 0;
-            try { node_port = static_cast<uint16_t>(std::stoul(spec.substr(colon + 1))); }
-            catch (...) { std::cerr << "[dist] Puerto invalido en: " << spec << "\n"; continue; }
+            std::string node_ip = spec.substr(0, colon);
+            uint16_t node_port = 0;
+            try {
+                node_port =
+                    static_cast<uint16_t>(std::stoul(spec.substr(colon + 1)));
+            } catch (...) {
+                std::cerr << "[dist] Puerto invalido en: " << spec << "\n";
+                continue;
+            }
 
             uint32_t idx = vm->dist_runtime->add_node(
                 node_ip.c_str(), node_port, node_auth, node_ip.c_str());
@@ -184,12 +192,12 @@ static void apply_dist_config(runtime::VM *vm, const cxxopts::ParseResult &resul
     }
 }
 
-
 /* forzar registro de virtual fns runtime (callbacks Vex->C). */
 extern "C" void runtime_ensure_vex_callback_registered(void);
 
 int main(int argc, char *argv[]) {
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+#if defined(WIN32) || defined(_WIN32) ||                                       \
+    defined(__WIN32) && !defined(__CYGWIN__)
     asm_multi_process::run_and_capture("chcp 65001");
 #endif
     runtime_ensure_vex_callback_registered();
@@ -211,7 +219,8 @@ int main(int argc, char *argv[]) {
         // Construimos un argc/argv nuevo skipeando el "pkg" literal.
         std::vector<char *> sub;
         sub.push_back(argv[0]);
-        for (int i = 2; i < argc; ++i) sub.push_back(argv[i]);
+        for (int i = 2; i < argc; ++i)
+            sub.push_back(argv[i]);
         return pkg::cli::run(static_cast<int>(sub.size()), sub.data());
     }
 
@@ -225,167 +234,334 @@ int main(int argc, char *argv[]) {
 
     cxxopts::Options options("VMProject", "Virtual Machine Example");
 
-    options.add_options()
-            ("h,help", "Mostrar ayuda")
-            ("o,output", "Archivo de salida (sin extensión o completo)", cxxopts::value<std::string>())
-            ("driver", "Compilar un directorio completo en paralelo", cxxopts::value<std::string>())
-            ("worker", "Compilar un único archivo (modo interno)", cxxopts::value<std::string>())
-            ("j,threads", "Número de hilos para el driver", cxxopts::value<int>()->default_value("0"))
-            ("v,version", "Mostrar versión")
-            ("m,mode", "Modo de ejecución (vm/jit)", cxxopts::value<std::string>()->default_value("vm"))
-            ("list-arch", "Imprimir arquitecturas soportadas")
-            ("asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())
-            ("disasm-file", "Archivo binario a desensamblar", cxxopts::value<std::string>())
-            ("arch", "Arquitectura para ensamblar/desensamblar", cxxopts::value<std::string>())
-            ("save-output", "Guardar código ensamblado/desensamblado en archivo")
-            ("output-prefix", "Prefijo/nombre base para archivos de salida",
-             cxxopts::value<std::string>()->default_value("out"))
-            ("run", "Ejecutar un archivo .velb en la VM", cxxopts::value<std::string>())
-            ("build", "Compilar un archivo .vel a .velb", cxxopts::value<std::string>())
-            ("schedulers", "Número de schedulers para el comando run", cxxopts::value<size_t>()->default_value("1"))
-            ("install",   "Ejecutar el instalador interactivo (o con flags adicionales)")
-            ("uninstall", "Desinstalar Vesta usando el manifest")
-            ("repair",    "Reparar la instalacion existente")
-            ("silent",    "Modo silencioso para install/uninstall")
-            ("per-user",  "Forzar instalacion per-user")
-            ("system-wide","Forzar instalacion system-wide")
-            ("prefix",    "Directorio destino", cxxopts::value<std::string>())
-            ("manifest",  "Ruta a install_manifest.json", cxxopts::value<std::string>())
-            ("stats", "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)")
-            // ---- opciones de JIT ----
-            ("jit-threshold", "Umbral de invocaciones de un metodo para disparar JIT (default: UINT32_MAX = JIT off; sugerido para test: 1)",
-                cxxopts::value<uint32_t>())
-            ("jit-warn",      "Imprimir warnings cada vez que el Selector encuentra una IR op no soportada (dedup por op+linea)")
-            ("jit-stats",     "Imprimir snapshot final de counters del JIT: compiled/unsupported/no_ir + threshold")
-            ("jit-disasm",    "Volcar hex bytes + disasm (Capstone) de cada funcion JIT-compilada a stderr")
-            // ---- opciones de profiling (D.6 PGO) ----
-            ("profile",       "Generar @c .vprof con branch/type/alloc counters al exit (PGO para C2). Path opcional; default: 'program.vprof'.",
-                cxxopts::value<std::string>()->implicit_value("program.vprof"))
-            // ---- opciones de runtime distribuido ----
-            ("dist-port",         "Puerto VDP del servidor distribuido (0 = sin servidor TCP)",
-                cxxopts::value<uint16_t>()->default_value("0"))
-            ("dist-discover",     "Activar descubrimiento UDP de nodos en la LAN")
-            ("dist-discover-port","Puerto UDP para descubrimiento de nodos",
-                cxxopts::value<uint16_t>()->default_value("7790"))
-            ("dist-name",         "Nombre del nodo local (cadena identificativa)",
-                cxxopts::value<std::string>()->default_value(""))
-            ("dist-node-id",      "ID de 64 bits del nodo (0 = generar automaticamente)",
-                cxxopts::value<uint64_t>()->default_value("0"))
-            ("dist-add-node",     "Nodo estatico a registrar y conectar (formato IP:PUERTO, repetible)",
-                cxxopts::value<std::vector<std::string>>())
-            ("dist-token",        "Token de autenticacion en texto plano (se almacena como SHA-256)",
-                cxxopts::value<std::string>()->default_value(""))
-            ("dist-tls",          "Usar TLS en las conexiones VDP salientes y entrantes")
-            ("dist-cert",         "Ruta al certificado TLS del nodo local (PEM)",
-                cxxopts::value<std::string>()->default_value(""))
-            ("dist-key",          "Ruta a la clave privada TLS del nodo local (PEM)",
-                cxxopts::value<std::string>()->default_value(""))
-            ("dist-ca",           "Ruta al CA bundle TLS para verificar pares (PEM)",
-                cxxopts::value<std::string>()->default_value(""))
-            ("dist-server",       "Modo servidor distribuido puro: espera conexiones VDP sin ejecutar bytecode")
-            ("dist-debug",        "Activar trazas de depuracion del subsistema distribuido (RSPAWN, HALT, FUTURE_FULFILL)")
-            ("script",            "Ejecutar un fichero VestaShell (.vsh) y salir", cxxopts::value<std::string>())
-            ("interprete",        "Abrir el interprete interactivo VestaShell (REPL .vsh)")
-            ("ir-file",           "Compilar archivo .ir (SSA IR) a .vel y opcionalmente a .velb",
-                cxxopts::value<std::string>())
-            ("ir-opt",            "Nivel de optimizacion IR: 0=O0, 1=O1, 2=O2, 3=O3 (defecto: 1)",
-                cxxopts::value<int>()->default_value("1"))
-            ("ir-emit-only",      "Solo emitir el texto .vel; no compilar a .velb")
-            ("vex",               "Compilar archivo .vex (lenguaje Vex) a .velb",
-                cxxopts::value<std::string>())
-            ("vex-emit-only",     "Solo emitir el .vel intermedio del .vex; no compilar a .velb")
-            ("vex-emit-ir",       "Emitir el SSA IR del .vex (pre y post optimizacion) en <output>.ir; util para debug del frontend")
-            // Phase AOT: con -m aot, target de compilacion nativa.
-            ("target",            "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default bare).",
-                cxxopts::value<std::string>()->default_value("bare"))
-            ("freestanding",      "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC requieren hooks @AllocatorOverride/@PanicHandler.")
-            ("format",            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en Windows, ELF en el resto).",
-                cxxopts::value<std::string>())
-            ("no-pie",            "AOT: refs a datos absolutas (mov reg,imm64; requiere base de imagen fija) en vez de RIP-relativas (default, position-independent), analogo a gcc/clang -no-pie.")
-            ("emit",              "AOT: tipo de artefacto: exe (ejecutable standalone, default) | obj (objeto relocatable linkable: ELF .o o COFF .obj segun --format) | shared (libreria compartida ELF .so que exporta sus funciones; dlopen/dlsym) | bin (binario plano sin cabecera: bootloader/ROM/firmware, entry en offset 0).",
-                cxxopts::value<std::string>())
-            ("bin-base",          "AOT --emit bin: base de carga del binario plano (hex, e.g. 0x7C00); afecta solo a refs absolutas (--no-pie). Default 0.",
-                cxxopts::value<std::string>())
-            ("aot-arch",          "AOT: arquitectura objetivo: x86-64 (default) | x86-32 (modo protegido, kernels: 8 GP eax-edi, regparm(3), subset entero de 32-bit).",
-                cxxopts::value<std::string>()->default_value("x86-64"))
-            ("vex-base",          "VA base address para el modulo (hex, e.g. 0x10000000). Usado para plugins cargados via loadmodule, evita solapamiento con el caller (default 0x0).",
-                cxxopts::value<std::string>()->default_value("0x0"))
-            // Phase M.sandbox: restringe las capabilities del modulo
-            // principal al subset listado.  Default vacio = ALL granted
-            // (zero overhead, backward compat).  Sintaxis: 'fs:read,net,
-            // ffi:call=kernel32.dll;user32.dll' etc.  Ver include/loader/
-            // sandbox.h para tabla completa de caps + sintaxis.
-            ("vex-caps",          "Phase M.sandbox: restringe caps del modulo principal. Sintaxis: 'fs:read,net,ffi:call=kernel32.dll;user32.dll'. Vacio = ALL granted (default). 'none' = sandbox total.",
-                cxxopts::value<std::string>()->default_value(""))
-            // Diagramas para debug y traceo del pipeline Vex.  Tres formatos
-            // seleccionables via --diagram-format:
-            //   mermaid (default): escribe .mmd con bloque ```mermaid```;
-            //                      listo para VS Code / GitHub / mermaid.live.
-            //   graphviz:          escribe .dot con `digraph G { ... }`;
-            //                      listo para `dot -Tsvg foo.dot -o foo.svg`.
-            //   html:              escribe .html interactivo AUTOCONTENIDO
-            //                      (CSS+JS embebidos, sin CDN): pan/zoom, panel
-            //                      de detalle por nodo, busqueda, filtros de
-            //                      aristas.  Se abre directo en el navegador.
-            //   both:              mermaid + graphviz.   all: los tres.
-            // El contenido es paralelo entre formatos: misma topologia, misma
-            // info por nodo (Graphviz/HTML llevan extra via tooltips/detalle).
-            // --diagram-all genera las 4 vistas (AST, IR pre, IR post, VEL)
-            // en el formato escogido.
-            ("diagram-vex",     "Generar diagrama del AST Vex post type-check (.ast.<ext>)")
-            ("diagram-ir",      "Generar diagrama del SSA IR pre-optimizacion (.ir.pre.<ext>)")
-            ("diagram-ir-opt",  "Generar diagrama del SSA IR post-optimizacion (.ir.post.<ext>)")
-            ("diagram-vel",     "Generar diagrama del bytecode .vel final (.vel.<ext>)")
-            ("diagram-all",     "Generar las 4 vistas (vex, ir pre, ir post, vel) con sufijos correspondientes")
-            ("diagram-format",  "Formato: mermaid | graphviz | html | both | all (default: mermaid). html produce paginas interactivas autocontenidas (.html); both=mermaid+graphviz; all=los tres.",
-                cxxopts::value<std::string>()->default_value("mermaid"))
-            ("gc-debug",        "Activar trazas de debug del Garbage Collector a stderr (minor_gc, major_gc, sweep, release_handle, evacuate). Util para diagnosticar use-after-free o objetos colectados prematuramente. Alt: env VESTA_GC_DEBUG=1.")
-            ("gc-debug-buffered","Activar modo BUFFERED del GC debug: ~100x mas rapido (buffer thread-local de 64KB) pero pierde las ultimas trazas en crash. Implica --gc-debug. Alt: env VESTA_GC_DEBUG_BUFFERED=1.")
-            ("debug-port",      "Activar el servidor de depuracion TCP en el puerto N (default 9229 si N=0). Soporta multiples clientes simultaneos y JSON via length-prefix framing. El servidor permanece disponible mientras la VM ejecuta; los clientes (e.g. tools/dbg_client.vsh) se conectan via tcp_connect, envian comandos JSON y reciben eventos asincronos (break/exit/exception/spawned). Sin este flag, el debugger NO se instancia y el coste runtime es exactamente cero. Cuando esta presente, el proceso main arranca PAUSADO en su primera instruccion para dar tiempo al cliente a conectarse y poner breakpoints; el cliente debe enviar 'continue 0' para arrancar la ejecucion.",
-                cxxopts::value<uint16_t>()->default_value("0"))
-            ("server-mode",     "Iniciar la VM como un servidor persistente de depuracion. Implica --debug-port (default 9229). No requiere --run: la VM se queda viva esperando comandos del debugger para cargar/ejecutar/matar procesos remotamente. Compatible con --schedulers, --dist-port, etc. Termina con SIGINT (Ctrl+C) o con el comando 'server_shutdown' del cliente. Comandos disponibles: load_velb, load_velb_bytes, kill_proc, server_info, server_shutdown, auth_login/logout/whoami, auth_create_user/delete_user/list_users/change_pass, fs_read/write/list/stat/delete/mkdir/rename.")
-            ("server-port",     "Puerto del servidor persistente (sinonimo de --debug-port en modo --server-mode). Default 9229.",
-                cxxopts::value<uint16_t>()->default_value("0"))
-            ("server-root",     "Directorio raiz del sandbox de filesystem en modo --server-mode. Todas las rutas usadas por fs_* y load_velb se resuelven contra este directorio; cualquier intento de salir (con '..' o rutas absolutas) se rechaza. Sin este flag NO hay sandbox (modo back-compat: cualquier ruta absoluta del servidor es accesible). Recomendado en despliegues compartidos.",
-                cxxopts::value<std::string>()->default_value(""))
-            ("auth-db",         "Ruta al fichero SQLite con la tabla vm_users (usuarios, hashes PBKDF2 y roles) en modo --server-mode. Sin este flag la autenticacion esta desactivada y cualquier cliente puede invocar cualquier comando (modo desarrollo).",
-                cxxopts::value<std::string>()->default_value(""))
-            ("admin-user",      "Nombre del usuario admin a crear automaticamente cuando la base de datos --auth-db esta vacia. Default 'admin'.",
-                cxxopts::value<std::string>()->default_value("admin"))
-            ("admin-password",  "Contrasenya del usuario admin a crear automaticamente. Si se omite y --auth-db apunta a una BD vacia, se genera una contrasenya aleatoria de 24 caracteres y se imprime en stdout UNA UNICA VEZ.",
-                cxxopts::value<std::string>()->default_value(""))
-            ("no-repl",         "Desactivar el REPL interactivo local en modo --server-mode (modo headless). Sin este flag, el operador local mantiene un prompt vesta> que comparte el mismo runtime con los clientes remotos; con el, el proceso solo escucha el socket TCP.")
-            ("vex-debug",       "Emitir comentarios `// @line N` en el .vel intermedio del compilador Vex y, cuando se integre la pipeline completa de debug section (Phase 2), embeber la tabla bytecode_offset -> (file, line) en el .velb final.  Sin este flag, el .vel/.velb no contienen info de debug -> el ejecutable es mas pequeno y el frontend NO genera datos extra.  Con el flag, el cliente del debugger puede setear breakpoints por linea Vex (`b file.vex:42`) en lugar de solo por addr.")
-            ("port","Transpilar el IR a codigo fuente del lenguaje destino y escribir a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: 'java', 'js', 'rust'.  Con --port=c se genera codigo C99 portable listo para compilar con gcc/clang -O3 -std=c11 SIN dependencias de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se aplica al pipeline Vex post-optimizacion).",
-                cxxopts::value<std::string>())
-            ("port-gc",         "Modelo de memoria del codigo portado: none|vesta|boehm.  none (default): malloc/free + sin GC.  Las IR ops de objetos GC (NEWOBJ/strings) emiten stub.  vesta: enlazar contra vesta_rt.lib.  boehm: enlazar contra libgc (placeholder).",
-                cxxopts::value<std::string>()->default_value("none"))
-            ("port-exc",        "Manejo de excepciones del codigo portado: none|setjmp|returncode.  none: throw -> abort.  setjmp (default): longjmp portable.  returncode: codigo de retorno + propagacion explicita (no impl v1).",
-                cxxopts::value<std::string>()->default_value("setjmp"))
-            ("port-types",      "Estilo de tipos del codigo portado: stdint (default) usa int8_t/uint64_t/etc de stdint.h.  builtin usa char/int/long del C clasico (menos portable).",
-                cxxopts::value<std::string>()->default_value("stdint"))
-            ("port-strings",    "Modelo de strings: raw (const char* solo literales) | managed (default: VexString con tracking per-thread).",
-                cxxopts::value<std::string>()->default_value("managed"))
-            ("port-freestanding", "Generar C freestanding (sin includes automaticos de stdio/stdlib/math).  El usuario debe proveer vex_throw + vex_panic_with_str.  Para bootloaders, kernels, firmware.")
-            ("port-stdlib-dir", "Path al directorio stdlib/port/c con los snippets .v.c (autodetect si vacio).",
-                cxxopts::value<std::string>()->default_value(""))
-            ("port-arch", "Target CPU: '' (portable, default) | native | x86-64-v2 | x86-64-v3 | x86-64-v4.  Emite #pragma GCC target con flags agresivas (AVX2/FMA/BMI2 segun nivel).",
-                cxxopts::value<std::string>()->default_value(""))
-            ("port-no-aggressive", "Desactivar atributos agresivos (const/cold/restrict/always_inline + __builtin_expect/unreachable).  Default: activado.")
-            ("instrument", "Instrumentacion en el IR Vex (heredada por bytecode VM, JIT, port C, port futuros): none (default) | trace (calls a vex_trace:enter/exit por funcion) | profile (timing per-funcion).",
-                cxxopts::value<std::string>()->default_value("none"))
+    options.add_options()("h,help", "Mostrar ayuda")(
+        "o,output", "Archivo de salida (sin extensión o completo)",
+        cxxopts::value<std::string>())(
+        "driver", "Compilar un directorio completo en paralelo",
+        cxxopts::value<std::string>())(
+        "worker", "Compilar un único archivo (modo interno)",
+        cxxopts::value<std::string>())(
+        "j,threads", "Número de hilos para el driver",
+        cxxopts::value<int>()->default_value("0"))("v,version",
+                                                   "Mostrar versión")(
+        "m,mode", "Modo de ejecución (vm/jit)",
+        cxxopts::value<std::string>()->default_value("vm"))(
+        "list-arch", "Imprimir arquitecturas soportadas")(
+        "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
+        "disasm-file", "Archivo binario a desensamblar",
+        cxxopts::value<std::string>())(
+        "arch", "Arquitectura para ensamblar/desensamblar",
+        cxxopts::value<std::string>())(
+        "save-output", "Guardar código ensamblado/desensamblado en archivo")(
+        "output-prefix", "Prefijo/nombre base para archivos de salida",
+        cxxopts::value<std::string>()->default_value("out"))(
+        "run", "Ejecutar un archivo .velb en la VM",
+        cxxopts::value<std::string>())("build",
+                                       "Compilar un archivo .vel a .velb",
+                                       cxxopts::value<std::string>())(
+        "schedulers", "Número de schedulers para el comando run",
+        cxxopts::value<size_t>()->default_value("1"))(
+        "install",
+        "Ejecutar el instalador interactivo (o con flags adicionales)")(
+        "uninstall", "Desinstalar Vesta usando el manifest")(
+        "repair", "Reparar la instalacion existente")(
+        "silent", "Modo silencioso para install/uninstall")(
+        "per-user", "Forzar instalacion per-user")(
+        "system-wide", "Forzar instalacion system-wide")(
+        "prefix", "Directorio destino", cxxopts::value<std::string>())(
+        "manifest", "Ruta a install_manifest.json",
+        cxxopts::value<std::string>())(
+        "stats",
+        "Mostrar estadísticas de ejecución al finalizar (tiempo, MIPS)")
+        // ---- opciones de JIT ----
+        ("jit-threshold",
+         "Umbral de invocaciones de un metodo para disparar JIT (default: "
+         "UINT32_MAX = JIT off; sugerido para test: 1)",
+         cxxopts::value<uint32_t>())(
+            "jit-warn", "Imprimir warnings cada vez que el Selector encuentra "
+                        "una IR op no soportada (dedup por op+linea)")(
+            "jit-stats", "Imprimir snapshot final de counters del JIT: "
+                         "compiled/unsupported/no_ir + threshold")(
+            "jit-disasm", "Volcar hex bytes + disasm (Capstone) de cada "
+                          "funcion JIT-compilada a stderr")
+        // ---- opciones de profiling (D.6 PGO) ----
+        ("profile",
+         "Generar @c .vprof con branch/type/alloc counters al exit (PGO para "
+         "C2). Path opcional; default: 'program.vprof'.",
+         cxxopts::value<std::string>()->implicit_value("program.vprof"))
+        // ---- opciones de runtime distribuido ----
+        ("dist-port",
+         "Puerto VDP del servidor distribuido (0 = sin servidor TCP)",
+         cxxopts::value<uint16_t>()->default_value("0"))(
+            "dist-discover", "Activar descubrimiento UDP de nodos en la LAN")(
+            "dist-discover-port", "Puerto UDP para descubrimiento de nodos",
+            cxxopts::value<uint16_t>()->default_value("7790"))(
+            "dist-name", "Nombre del nodo local (cadena identificativa)",
+            cxxopts::value<std::string>()->default_value(""))(
+            "dist-node-id",
+            "ID de 64 bits del nodo (0 = generar automaticamente)",
+            cxxopts::value<uint64_t>()->default_value("0"))(
+            "dist-add-node",
+            "Nodo estatico a registrar y conectar (formato IP:PUERTO, "
+            "repetible)",
+            cxxopts::value<std::vector<std::string>>())(
+            "dist-token",
+            "Token de autenticacion en texto plano (se almacena como SHA-256)",
+            cxxopts::value<std::string>()->default_value(""))(
+            "dist-tls", "Usar TLS en las conexiones VDP salientes y entrantes")(
+            "dist-cert", "Ruta al certificado TLS del nodo local (PEM)",
+            cxxopts::value<std::string>()->default_value(""))(
+            "dist-key", "Ruta a la clave privada TLS del nodo local (PEM)",
+            cxxopts::value<std::string>()->default_value(""))(
+            "dist-ca", "Ruta al CA bundle TLS para verificar pares (PEM)",
+            cxxopts::value<std::string>()->default_value(""))(
+            "dist-server", "Modo servidor distribuido puro: espera conexiones "
+                           "VDP sin ejecutar bytecode")(
+            "dist-debug", "Activar trazas de depuracion del subsistema "
+                          "distribuido (RSPAWN, HALT, FUTURE_FULFILL)")(
+            "script", "Ejecutar un fichero VestaShell (.vsh) y salir",
+            cxxopts::value<std::string>())(
+            "interprete",
+            "Abrir el interprete interactivo VestaShell (REPL .vsh)")(
+            "ir-file",
+            "Compilar archivo .ir (SSA IR) a .vel y opcionalmente a .velb",
+            cxxopts::value<std::string>())(
+            "ir-opt",
+            "Nivel de optimizacion IR: 0=O0, 1=O1, 2=O2, 3=O3 (defecto: 1)",
+            cxxopts::value<int>()->default_value("1"))(
+            "ir-emit-only", "Solo emitir el texto .vel; no compilar a .velb")(
+            "vex", "Compilar archivo .vex (lenguaje Vex) a .velb",
+            cxxopts::value<std::string>())(
+            "vex-emit-only",
+            "Solo emitir el .vel intermedio del .vex; no compilar a .velb")(
+            "vex-emit-ir",
+            "Emitir el SSA IR del .vex (pre y post optimizacion) en "
+            "<output>.ir; util para debug del frontend")
+        // Phase AOT: con -m aot, target de compilacion nativa.
+        ("target",
+         "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
+         "bare).",
+         cxxopts::value<std::string>()->default_value("bare"))(
+            "freestanding",
+            "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC "
+            "requieren hooks @AllocatorOverride/@PanicHandler.")(
+            "format",
+            "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
+            "Windows, ELF en el resto).",
+            cxxopts::value<std::string>())(
+            "no-pie", "AOT: refs a datos absolutas (mov reg,imm64; requiere "
+                      "base de imagen fija) en vez de RIP-relativas (default, "
+                      "position-independent), analogo a gcc/clang -no-pie.")(
+            "emit",
+            "AOT: tipo de artefacto: exe (ejecutable standalone, default) | "
+            "obj (objeto relocatable linkable: ELF .o o COFF .obj segun "
+            "--format) | shared (libreria compartida ELF .so que exporta sus "
+            "funciones; dlopen/dlsym) | bin (binario plano sin cabecera: "
+            "bootloader/ROM/firmware, entry en offset 0).",
+            cxxopts::value<std::string>())(
+            "bin-base",
+            "AOT --emit bin: base de carga del binario plano (hex, e.g. "
+            "0x7C00); afecta solo a refs absolutas (--no-pie). Default 0.",
+            cxxopts::value<std::string>())(
+            "aot-arch",
+            "AOT: arquitectura objetivo: x86-64 (default) | x86-32 (modo "
+            "protegido, kernels: 8 GP eax-edi, regparm(3), subset entero de "
+            "32-bit).",
+            cxxopts::value<std::string>()->default_value("x86-64"))(
+            "vex-base",
+            "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
+            "plugins cargados via loadmodule, evita solapamiento con el caller "
+            "(default 0x0).",
+            cxxopts::value<std::string>()->default_value("0x0"))
+        // Phase M.sandbox: restringe las capabilities del modulo
+        // principal al subset listado.  Default vacio = ALL granted
+        // (zero overhead, backward compat).  Sintaxis: 'fs:read,net,
+        // ffi:call=kernel32.dll;user32.dll' etc.  Ver include/loader/
+        // sandbox.h para tabla completa de caps + sintaxis.
+        ("vex-caps",
+         "Phase M.sandbox: restringe caps del modulo principal. Sintaxis: "
+         "'fs:read,net,ffi:call=kernel32.dll;user32.dll'. Vacio = ALL granted "
+         "(default). 'none' = sandbox total.",
+         cxxopts::value<std::string>()->default_value(""))
+        // Diagramas para debug y traceo del pipeline Vex.  Tres formatos
+        // seleccionables via --diagram-format:
+        //   mermaid (default): escribe .mmd con bloque ```mermaid```;
+        //                      listo para VS Code / GitHub / mermaid.live.
+        //   graphviz:          escribe .dot con `digraph G { ... }`;
+        //                      listo para `dot -Tsvg foo.dot -o foo.svg`.
+        //   html:              escribe .html interactivo AUTOCONTENIDO
+        //                      (CSS+JS embebidos, sin CDN): pan/zoom, panel
+        //                      de detalle por nodo, busqueda, filtros de
+        //                      aristas.  Se abre directo en el navegador.
+        //   both:              mermaid + graphviz.   all: los tres.
+        // El contenido es paralelo entre formatos: misma topologia, misma
+        // info por nodo (Graphviz/HTML llevan extra via tooltips/detalle).
+        // --diagram-all genera las 4 vistas (AST, IR pre, IR post, VEL)
+        // en el formato escogido.
+        ("diagram-vex",
+         "Generar diagrama del AST Vex post type-check (.ast.<ext>)")(
+            "diagram-ir",
+            "Generar diagrama del SSA IR pre-optimizacion (.ir.pre.<ext>)")(
+            "diagram-ir-opt",
+            "Generar diagrama del SSA IR post-optimizacion (.ir.post.<ext>)")(
+            "diagram-vel",
+            "Generar diagrama del bytecode .vel final (.vel.<ext>)")(
+            "diagram-all", "Generar las 4 vistas (vex, ir pre, ir post, vel) "
+                           "con sufijos correspondientes")(
+            "diagram-format",
+            "Formato: mermaid | graphviz | html | both | all (default: "
+            "mermaid). html produce paginas interactivas autocontenidas "
+            "(.html); both=mermaid+graphviz; all=los tres.",
+            cxxopts::value<std::string>()->default_value("mermaid"))(
+            "gc-debug",
+            "Activar trazas de debug del Garbage Collector a stderr (minor_gc, "
+            "major_gc, sweep, release_handle, evacuate). Util para "
+            "diagnosticar use-after-free o objetos colectados prematuramente. "
+            "Alt: env VESTA_GC_DEBUG=1.")(
+            "gc-debug-buffered",
+            "Activar modo BUFFERED del GC debug: ~100x mas rapido (buffer "
+            "thread-local de 64KB) pero pierde las ultimas trazas en crash. "
+            "Implica --gc-debug. Alt: env VESTA_GC_DEBUG_BUFFERED=1.")(
+            "debug-port",
+            "Activar el servidor de depuracion TCP en el puerto N (default "
+            "9229 si N=0). Soporta multiples clientes simultaneos y JSON via "
+            "length-prefix framing. El servidor permanece disponible mientras "
+            "la VM ejecuta; los clientes (e.g. tools/dbg_client.vsh) se "
+            "conectan via tcp_connect, envian comandos JSON y reciben eventos "
+            "asincronos (break/exit/exception/spawned). Sin este flag, el "
+            "debugger NO se instancia y el coste runtime es exactamente cero. "
+            "Cuando esta presente, el proceso main arranca PAUSADO en su "
+            "primera instruccion para dar tiempo al cliente a conectarse y "
+            "poner breakpoints; el cliente debe enviar 'continue 0' para "
+            "arrancar la ejecucion.",
+            cxxopts::value<uint16_t>()->default_value("0"))(
+            "server-mode",
+            "Iniciar la VM como un servidor persistente de depuracion. Implica "
+            "--debug-port (default 9229). No requiere --run: la VM se queda "
+            "viva esperando comandos del debugger para cargar/ejecutar/matar "
+            "procesos remotamente. Compatible con --schedulers, --dist-port, "
+            "etc. Termina con SIGINT (Ctrl+C) o con el comando "
+            "'server_shutdown' del cliente. Comandos disponibles: load_velb, "
+            "load_velb_bytes, kill_proc, server_info, server_shutdown, "
+            "auth_login/logout/whoami, "
+            "auth_create_user/delete_user/list_users/change_pass, "
+            "fs_read/write/list/stat/delete/mkdir/rename.")(
+            "server-port",
+            "Puerto del servidor persistente (sinonimo de --debug-port en modo "
+            "--server-mode). Default 9229.",
+            cxxopts::value<uint16_t>()->default_value("0"))(
+            "server-root",
+            "Directorio raiz del sandbox de filesystem en modo --server-mode. "
+            "Todas las rutas usadas por fs_* y load_velb se resuelven contra "
+            "este directorio; cualquier intento de salir (con '..' o rutas "
+            "absolutas) se rechaza. Sin este flag NO hay sandbox (modo "
+            "back-compat: cualquier ruta absoluta del servidor es accesible). "
+            "Recomendado en despliegues compartidos.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "auth-db",
+            "Ruta al fichero SQLite con la tabla vm_users (usuarios, hashes "
+            "PBKDF2 y roles) en modo --server-mode. Sin este flag la "
+            "autenticacion esta desactivada y cualquier cliente puede invocar "
+            "cualquier comando (modo desarrollo).",
+            cxxopts::value<std::string>()->default_value(""))(
+            "admin-user",
+            "Nombre del usuario admin a crear automaticamente cuando la base "
+            "de datos --auth-db esta vacia. Default 'admin'.",
+            cxxopts::value<std::string>()->default_value("admin"))(
+            "admin-password",
+            "Contrasenya del usuario admin a crear automaticamente. Si se "
+            "omite y --auth-db apunta a una BD vacia, se genera una "
+            "contrasenya aleatoria de 24 caracteres y se imprime en stdout UNA "
+            "UNICA VEZ.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "no-repl",
+            "Desactivar el REPL interactivo local en modo --server-mode (modo "
+            "headless). Sin este flag, el operador local mantiene un prompt "
+            "vesta> que comparte el mismo runtime con los clientes remotos; "
+            "con el, el proceso solo escucha el socket TCP.")(
+            "vex-debug",
+            "Emitir comentarios `// @line N` en el .vel intermedio del "
+            "compilador Vex y, cuando se integre la pipeline completa de debug "
+            "section (Phase 2), embeber la tabla bytecode_offset -> (file, "
+            "line) en el .velb final.  Sin este flag, el .vel/.velb no "
+            "contienen info de debug -> el ejecutable es mas pequeno y el "
+            "frontend NO genera datos extra.  Con el flag, el cliente del "
+            "debugger puede setear breakpoints por linea Vex (`b file.vex:42`) "
+            "en lugar de solo por addr.")(
+            "port",
+            "Transpilar el IR a codigo fuente del lenguaje destino y escribir "
+            "a <output>.<ext> (e.g. .c).  Valores actuales: 'c'.  Futuro: "
+            "'java', 'js', 'rust'.  Con --port=c se genera codigo C99 portable "
+            "listo para compilar con gcc/clang -O3 -std=c11 SIN dependencias "
+            "de VestaVM (a menos que --port-gc=vesta).  Implica --vex (se "
+            "aplica al pipeline Vex post-optimizacion).",
+            cxxopts::value<std::string>())(
+            "port-gc",
+            "Modelo de memoria del codigo portado: none|vesta|boehm.  none "
+            "(default): malloc/free + sin GC.  Las IR ops de objetos GC "
+            "(NEWOBJ/strings) emiten stub.  vesta: enlazar contra "
+            "vesta_rt.lib.  boehm: enlazar contra libgc (placeholder).",
+            cxxopts::value<std::string>()->default_value("none"))(
+            "port-exc",
+            "Manejo de excepciones del codigo portado: none|setjmp|returncode. "
+            " none: throw -> abort.  setjmp (default): longjmp portable.  "
+            "returncode: codigo de retorno + propagacion explicita (no impl "
+            "v1).",
+            cxxopts::value<std::string>()->default_value("setjmp"))(
+            "port-types",
+            "Estilo de tipos del codigo portado: stdint (default) usa "
+            "int8_t/uint64_t/etc de stdint.h.  builtin usa char/int/long del C "
+            "clasico (menos portable).",
+            cxxopts::value<std::string>()->default_value("stdint"))(
+            "port-strings",
+            "Modelo de strings: raw (const char* solo literales) | managed "
+            "(default: VexString con tracking per-thread).",
+            cxxopts::value<std::string>()->default_value("managed"))(
+            "port-freestanding",
+            "Generar C freestanding (sin includes automaticos de "
+            "stdio/stdlib/math).  El usuario debe proveer vex_throw + "
+            "vex_panic_with_str.  Para bootloaders, kernels, firmware.")(
+            "port-stdlib-dir",
+            "Path al directorio stdlib/port/c con los snippets .v.c "
+            "(autodetect si vacio).",
+            cxxopts::value<std::string>()->default_value(""))(
+            "port-arch",
+            "Target CPU: '' (portable, default) | native | x86-64-v2 | "
+            "x86-64-v3 | x86-64-v4.  Emite #pragma GCC target con flags "
+            "agresivas (AVX2/FMA/BMI2 segun nivel).",
+            cxxopts::value<std::string>()->default_value(""))(
+            "port-no-aggressive",
+            "Desactivar atributos agresivos (const/cold/restrict/always_inline "
+            "+ __builtin_expect/unreachable).  Default: activado.")(
+            "instrument",
+            "Instrumentacion en el IR Vex (heredada por bytecode VM, JIT, port "
+            "C, port futuros): none (default) | trace (calls a "
+            "vex_trace:enter/exit por funcion) | profile (timing per-funcion).",
+            cxxopts::value<std::string>()->default_value("none"))
 #ifdef VESTA_HAS_PREPROCESSOR
-            ("preprocess-only", "Solo preprocesar un .vel y mostrar/guardar el resultado (debug)", cxxopts::value<std::string>())
+            ("preprocess-only",
+             "Solo preprocesar un .vel y mostrar/guardar el resultado (debug)",
+             cxxopts::value<std::string>())
 #endif
-            ("keep-labels", "Mantener los nombres de label en el .velb (por defecto se eliminan: el loader no los usa y reducen ~9% el tamano)")
-            ("emit-map", "Generar archivo .velb-map con info de simbolos y secciones (debug). Off por defecto: cuesta ~60% del tiempo del linker")
-            // Phase M.L28: firmas digitales del .velb.
-            ("sign-velb",   "Firmar un .velb con clave privada PEM. Uso: --sign-velb input.velb --sign-key priv.pem -o output.signed.velb", cxxopts::value<std::string>())
-            ("sign-key",    "Path al PEM con la clave privada para --sign-velb",                            cxxopts::value<std::string>())
-            ("verify-velb", "Verificar la firma digital de un .velb. Uso: --verify-velb file.velb --verify-key pub.pem", cxxopts::value<std::string>())
-            ("verify-key",  "Path al PEM con la clave publica para --verify-velb",                           cxxopts::value<std::string>())
-            ;
-
+                ("keep-labels",
+                 "Mantener los nombres de label en el .velb (por defecto se "
+                 "eliminan: el loader no los usa y reducen ~9% el tamano)")(
+                    "emit-map", "Generar archivo .velb-map con info de "
+                                "simbolos y secciones (debug). Off por "
+                                "defecto: cuesta ~60% del tiempo del linker")
+        // Phase M.L28: firmas digitales del .velb.
+        ("sign-velb",
+         "Firmar un .velb con clave privada PEM. Uso: --sign-velb input.velb "
+         "--sign-key priv.pem -o output.signed.velb",
+         cxxopts::value<std::string>())(
+            "sign-key", "Path al PEM con la clave privada para --sign-velb",
+            cxxopts::value<std::string>())(
+            "verify-velb",
+            "Verificar la firma digital de un .velb. Uso: --verify-velb "
+            "file.velb --verify-key pub.pem",
+            cxxopts::value<std::string>())(
+            "verify-key", "Path al PEM con la clave publica para --verify-velb",
+            cxxopts::value<std::string>());
 
     // BUG FIX: Args posicionales y allow_unrecognised DEBEN configurarse
     // ANTES de @c options.parse(...).  El bug anterior registraba el
@@ -394,23 +570,22 @@ int main(int argc, char *argv[]) {
     // ARGV del script quedaba con solo el path del script.  Se mueve
     // toda la configuracion arriba; esto es prerequisito de @c parse.
     options.add_options()("positional", "Argumentos posicionales",
-        cxxopts::value<std::vector<std::string>>());
+                          cxxopts::value<std::vector<std::string>>());
     options.parse_positional({"positional"});
     options.positional_help("[args...]");
-    options.allow_unrecognised_options();   // para flags sin que aun hay que parsear
+    options
+        .allow_unrecognised_options(); // para flags sin que aun hay que parsear
 
     auto result = options.parse(argc, argv);
 
-
-    // activar trazas de depuracion del subsistema distribuido si se paso --dist-debug
-    if (result.count("dist-debug"))
-        distrib::set_dist_debug(true);
+    // activar trazas de depuracion del subsistema distribuido si se paso
+    // --dist-debug
+    if (result.count("dist-debug")) distrib::set_dist_debug(true);
 
     // activar trazas del GC si se paso --gc-debug.  Tambien respeta env
     // VESTA_GC_DEBUG=1 (la inicializacion estatica corre antes de main,
     // no se pierde si el flag CLI esta o no).
-    if (result.count("gc-debug"))
-        gc::set_gc_debug(true);
+    if (result.count("gc-debug")) gc::set_gc_debug(true);
     // --gc-debug-buffered implica --gc-debug ademas de buffered mode.
     if (result.count("gc-debug-buffered")) {
         gc::set_gc_debug(true);
@@ -439,14 +614,17 @@ int main(int argc, char *argv[]) {
      * tarde para eager compile. */
     // Phase AOT: modo de compilacion nativa standalone (-m aot).  Se resuelve
     // aqui (junto al resto de modos) y se consume en el bloque --vex mas abajo.
-    bool       aot_mode         = false;
-    aot::Tier  aot_tier         = aot::Tier::BARE;
-    bool       aot_freestanding = result.count("freestanding") > 0;
+    bool aot_mode = false;
+    aot::Tier aot_tier = aot::Tier::BARE;
+    bool aot_freestanding = result.count("freestanding") > 0;
     {
         const std::string &tname = result["target"].as<std::string>();
-        if      (tname == "bare")  aot_tier = aot::Tier::BARE;
-        else if (tname == "embed") aot_tier = aot::Tier::EMBED;
-        else if (tname == "full")  aot_tier = aot::Tier::FULL;
+        if (tname == "bare")
+            aot_tier = aot::Tier::BARE;
+        else if (tname == "embed")
+            aot_tier = aot::Tier::EMBED;
+        else if (tname == "full")
+            aot_tier = aot::Tier::FULL;
         else {
             std::cerr << "[aot] --target invalido: '" << tname
                       << "' (usa bare|embed|full)\n";
@@ -523,9 +701,11 @@ int main(int argc, char *argv[]) {
     if (result.count("list-arch")) {
         const ArchSupport &archs = get_available_architectures();
         vesta::scout() << "Capstone supported architectures:\n";
-        for (auto &a: archs.capstone) vesta::scout() << "  " << a << "\n";
+        for (auto &a : archs.capstone)
+            vesta::scout() << "  " << a << "\n";
         vesta::scout() << "Keystone supported architectures:\n";
-        for (auto &a: archs.keystone) vesta::scout() << "  " << a << "\n";
+        for (auto &a : archs.keystone)
+            vesta::scout() << "  " << a << "\n";
         return 0;
     }
 
@@ -540,10 +720,13 @@ int main(int argc, char *argv[]) {
         }
         const std::string key_path = result["sign-key"].as<std::string>();
         const std::string out_path = result.count("output")
-            ? result["output"].as<std::string>()
-            : (in_path + ".signed");
+                                         ? result["output"].as<std::string>()
+                                         : (in_path + ".signed");
         std::ifstream f(in_path, std::ios::binary | std::ios::ate);
-        if (!f) { std::cerr << "error: no se puede abrir " << in_path << "\n"; return EXIT_FAILURE; }
+        if (!f) {
+            std::cerr << "error: no se puede abrir " << in_path << "\n";
+            return EXIT_FAILURE;
+        }
         const std::streamsize sz = f.tellg();
         f.seekg(0, std::ios::beg);
         std::vector<uint8_t> bytes(static_cast<size_t>(sz < 0 ? 0 : sz));
@@ -552,30 +735,37 @@ int main(int argc, char *argv[]) {
         std::vector<uint8_t> signed_bytes;
         std::string err;
         if (!vex::velb_sign(bytes, key_path, vex::VsigAlgo::RSA_SHA256,
-                              signed_bytes, err)) {
+                            signed_bytes, err)) {
             std::cerr << "error: " << err << "\n";
             return EXIT_FAILURE;
         }
         std::ofstream of(out_path, std::ios::binary);
-        if (!of) { std::cerr << "error: no se puede escribir " << out_path << "\n"; return EXIT_FAILURE; }
+        if (!of) {
+            std::cerr << "error: no se puede escribir " << out_path << "\n";
+            return EXIT_FAILURE;
+        }
         of.write(reinterpret_cast<const char *>(signed_bytes.data()),
-                  static_cast<std::streamsize>(signed_bytes.size()));
-        std::cerr << "[sign] " << in_path << " (" << bytes.size()
-                   << " B) -> " << out_path << " (" << signed_bytes.size()
-                   << " B, +" << (signed_bytes.size() - bytes.size())
-                   << " B footer VSIG)\n";
+                 static_cast<std::streamsize>(signed_bytes.size()));
+        std::cerr << "[sign] " << in_path << " (" << bytes.size() << " B) -> "
+                  << out_path << " (" << signed_bytes.size() << " B, +"
+                  << (signed_bytes.size() - bytes.size())
+                  << " B footer VSIG)\n";
         return EXIT_SUCCESS;
     }
 
     if (result.count("verify-velb")) {
         const std::string in_path = result["verify-velb"].as<std::string>();
         if (!result.count("verify-key")) {
-            std::cerr << "error: --verify-velb requiere --verify-key <pub.pem>\n";
+            std::cerr
+                << "error: --verify-velb requiere --verify-key <pub.pem>\n";
             return EXIT_FAILURE;
         }
         const std::string key_path = result["verify-key"].as<std::string>();
         std::ifstream f(in_path, std::ios::binary | std::ios::ate);
-        if (!f) { std::cerr << "error: no se puede abrir " << in_path << "\n"; return EXIT_FAILURE; }
+        if (!f) {
+            std::cerr << "error: no se puede abrir " << in_path << "\n";
+            return EXIT_FAILURE;
+        }
         const std::streamsize sz = f.tellg();
         f.seekg(0, std::ios::beg);
         std::vector<uint8_t> bytes(static_cast<size_t>(sz < 0 ? 0 : sz));
@@ -594,7 +784,8 @@ int main(int argc, char *argv[]) {
     // Solo preprocesar: expandir macros y directivas sin ensamblar
     // vm.exe --preprocess-only src/main.vel [-o salida.vel]
     if (result.count("preprocess-only")) {
-        const std::string& src_path = result["preprocess-only"].as<std::string>();
+        const std::string &src_path =
+            result["preprocess-only"].as<std::string>();
 
         // leer el archivo fuente
         std::ifstream ifs(src_path, std::ios::binary);
@@ -603,7 +794,7 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         std::string source((std::istreambuf_iterator<char>(ifs)),
-                            std::istreambuf_iterator<char>());
+                           std::istreambuf_iterator<char>());
 
         // configurar el preprocesador igual que run_worker
         vpp::Preprocessor pp;
@@ -611,9 +802,11 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(src_path).parent_path().string();
         if (source_dir.empty()) source_dir = ".";
         pp.options().include_paths.push_back(source_dir);
-        std::string exe_dir =
-            std::filesystem::path(fs::get_executable_path()).parent_path().string();
-        pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
+        std::string exe_dir = std::filesystem::path(fs::get_executable_path())
+                                  .parent_path()
+                                  .string();
+        pp.options().import_paths.push_back(exe_dir +
+                                            "/preprocessor/include_lib");
         pp.options().import_paths.push_back(exe_dir + "/include_lib");
         pp.options().import_paths.push_back(source_dir);
 #ifdef _WIN32
@@ -634,10 +827,11 @@ int main(int argc, char *argv[]) {
         std::string processed = pp.process(source, src_path);
 
         // imprimir todos los diagnosticos
-        for (const auto& d : pp.diagnostics().diagnostics()) {
-            std::cerr << d.loc.file << ":" << d.loc.line << ":"
-                      << d.loc.col  << ": "
-                      << (d.level >= vpp::DiagLevel::ERR ? "error: " : "warning: ")
+        for (const auto &d : pp.diagnostics().diagnostics()) {
+            std::cerr << d.loc.file << ":" << d.loc.line << ":" << d.loc.col
+                      << ": "
+                      << (d.level >= vpp::DiagLevel::ERR ? "error: "
+                                                         : "warning: ")
                       << d.message << "\n";
         }
         if (pp.diagnostics().has_errors()) return EXIT_FAILURE;
@@ -649,7 +843,8 @@ int main(int argc, char *argv[]) {
             if (out_file.find('.') == std::string::npos) out_file += ".vel";
             std::ofstream ofs(out_file);
             if (!ofs) {
-                std::cerr << "error: no se puede escribir: " << out_file << "\n";
+                std::cerr << "error: no se puede escribir: " << out_file
+                          << "\n";
                 return EXIT_FAILURE;
             }
             ofs << processed;
@@ -664,23 +859,27 @@ int main(int argc, char *argv[]) {
 
     // -----------------------------------------------------------------------
     // Modo servidor distribuido puro (sin ejecutar bytecode)
-    // vm.exe --dist-server --dist-port 7789 [--dist-discover] [--dist-name nodo1]
+    // vm.exe --dist-server --dist-port 7789 [--dist-discover] [--dist-name
+    // nodo1]
     //        [--dist-add-node 192.168.1.100:7789] [--dist-token secreto]
-    //        [--dist-tls --dist-cert cert.pem --dist-key key.pem --dist-ca ca.pem]
+    //        [--dist-tls --dist-cert cert.pem --dist-key key.pem --dist-ca
+    //        ca.pem]
     // -----------------------------------------------------------------------
     if (result.count("dist-server")) {
         try {
             runtime::ManageVM dist_mgr(nullptr, 0);
             runtime::VM *vm = dist_mgr.loader.create_vm_instance(1);
             if (!vm) {
-                std::cerr << "[dist-server] Error: no se pudo crear la instancia VM\n";
+                std::cerr << "[dist-server] Error: no se pudo crear la "
+                             "instancia VM\n";
                 return EXIT_FAILURE;
             }
 
             apply_dist_config(vm, result);
 
-            // activar modo persistente para que el scheduler no termine al no haber procesos;
-            // los procesos remotos llegan via rspawn despues del arranque
+            // activar modo persistente para que el scheduler no termine al no
+            // haber procesos; los procesos remotos llegan via rspawn despues
+            // del arranque
             vm->vm_persistent = true;
             vm->start();
 
@@ -722,18 +921,20 @@ int main(int argc, char *argv[]) {
             runtime::ManageVM mgr(nullptr, 0);
             runtime::VM *vm = mgr.loader.create_vm_instance(num_schedulers);
             if (!vm) {
-                std::cerr << "[server-mode] Error: no se pudo crear la instancia VM\n";
+                std::cerr << "[server-mode] Error: no se pudo crear la "
+                             "instancia VM\n";
                 return EXIT_FAILURE;
             }
 
-            // Aplicar configuracion distribuida si el usuario paso flags --dist-*
-            bool has_dist = result.count("dist-port")     > 0 ||
+            // Aplicar configuracion distribuida si el usuario paso flags
+            // --dist-*
+            bool has_dist = result.count("dist-port") > 0 ||
                             result.count("dist-discover") > 0 ||
                             result.count("dist-add-node") > 0 ||
-                            result.count("dist-tls")      > 0 ||
-                            result.count("dist-name")     > 0 ||
-                            result.count("dist-token")    > 0 ||
-                            result.count("dist-node-id")  > 0;
+                            result.count("dist-tls") > 0 ||
+                            result.count("dist-name") > 0 ||
+                            result.count("dist-token") > 0 ||
+                            result.count("dist-node-id") > 0;
             if (has_dist) apply_dist_config(vm, result);
 
             // Resolver puerto: --server-port > --debug-port > default 9229
@@ -756,9 +957,10 @@ int main(int argc, char *argv[]) {
             bool auth_enabled = !auth_db.empty();
             if (auth_enabled) {
                 if (!debug::AuthManager::instance().init(auth_db)) {
-                    std::cerr << "[server-mode] Error: "
-                              << debug::AuthManager::instance().last_init_error()
-                              << "\n";
+                    std::cerr
+                        << "[server-mode] Error: "
+                        << debug::AuthManager::instance().last_init_error()
+                        << "\n";
                     std::cerr << "[server-mode] Sugerencia: usa una ruta "
                                  "absoluta a un directorio escribible, "
                                  "p.ej. --auth-db \"C:\\Users\\TuUsuario\\"
@@ -767,20 +969,22 @@ int main(int argc, char *argv[]) {
                 }
                 // Bootstrap del admin si la BD esta vacia.
                 if (!debug::AuthManager::instance().has_any_user()) {
-                    std::string admin_user = result["admin-user"].as<std::string>();
-                    std::string admin_pass = result["admin-password"].as<std::string>();
+                    std::string admin_user =
+                        result["admin-user"].as<std::string>();
+                    std::string admin_pass =
+                        result["admin-password"].as<std::string>();
                     if (admin_pass.empty()) {
                         // Generar contrasenya aleatoria de 24 chars base64.
                         uint8_t raw[18];
                         if (RAND_bytes(raw, sizeof(raw)) != 1) {
-                            std::cerr << "[server-mode] Error: RAND_bytes "
-                                         "fallo al generar la contrasenya admin\n";
+                            std::cerr
+                                << "[server-mode] Error: RAND_bytes "
+                                   "fallo al generar la contrasenya admin\n";
                             return EXIT_FAILURE;
                         }
-                        static const char *alphabet =
-                            "ABCDEFGHJKLMNPQRSTUVWXYZ"
-                            "abcdefghijkmnpqrstuvwxyz"
-                            "23456789";
+                        static const char *alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+                                                      "abcdefghijkmnpqrstuvwxyz"
+                                                      "23456789";
                         admin_pass.reserve(24);
                         for (size_t i = 0; i < 24; ++i)
                             admin_pass.push_back(alphabet[raw[i % 18] % 62]);
@@ -789,13 +993,16 @@ int main(int argc, char *argv[]) {
                     if (!debug::AuthManager::instance().create_user(
                             admin_user, admin_pass, debug::Role::ADMIN, &e)) {
                         std::cerr << "[server-mode] Error: no se pudo crear "
-                                     "el admin: " << e << "\n";
+                                     "el admin: "
+                                  << e << "\n";
                         return EXIT_FAILURE;
                     }
                     vesta::scout() << "[server-mode] Usuario admin creado: '"
                                    << admin_user << "'\n";
-                    vesta::scout() << "[server-mode] Contrasenya admin (SOLO se "
-                                      "muestra una vez): " << admin_pass << "\n";
+                    vesta::scout()
+                        << "[server-mode] Contrasenya admin (SOLO se "
+                           "muestra una vez): "
+                        << admin_pass << "\n";
                 }
             }
 
@@ -805,8 +1012,8 @@ int main(int argc, char *argv[]) {
             dbg->set_auth_required(auth_enabled);
             if (!dbg->start(srv_port)) {
                 std::cerr << "[server-mode] Error: no se pudo iniciar el "
-                             "servidor de depuracion en puerto " << srv_port
-                          << "\n";
+                             "servidor de depuracion en puerto "
+                          << srv_port << "\n";
                 return EXIT_FAILURE;
             }
             vm->debugger = dbg.get();
@@ -825,19 +1032,21 @@ int main(int argc, char *argv[]) {
 
             vesta::scout() << "[server-mode] VM persistente activa.\n";
             vesta::scout() << "[server-mode] Debugger TCP escuchando en "
-                              "puerto " << srv_port << ".\n";
+                              "puerto "
+                           << srv_port << ".\n";
             vesta::scout() << "[server-mode] Schedulers: " << num_schedulers
                            << ".\n";
             if (!srv_root.empty()) {
-                vesta::scout() << "[server-mode] Sandbox de filesystem: "
-                               << srv_root << "\n";
+                vesta::scout()
+                    << "[server-mode] Sandbox de filesystem: " << srv_root
+                    << "\n";
             } else {
                 vesta::scout() << "[server-mode] Sin sandbox de filesystem "
                                   "(use --server-root para restringir).\n";
             }
             if (auth_enabled) {
-                vesta::scout() << "[server-mode] Auth: ACTIVO (BD: "
-                               << auth_db << ").  Los clientes deben "
+                vesta::scout() << "[server-mode] Auth: ACTIVO (BD: " << auth_db
+                               << ").  Los clientes deben "
                                   "invocar auth_login.\n";
             } else {
                 vesta::scout() << "[server-mode] Auth: DESACTIVADO (modo "
@@ -877,9 +1086,9 @@ int main(int argc, char *argv[]) {
                                   "'server_shutdown' del cliente.\n";
 
                 cli::Config cfg_srv;
-                cfg_srv.history_file  = "my_vm_history.txt";
-                cfg_srv.history_max   = 1000;
-                cfg_srv.prompt        = "vesta(server)> ";
+                cfg_srv.history_file = "my_vm_history.txt";
+                cfg_srv.history_max = 1000;
+                cfg_srv.prompt = "vesta(server)> ";
                 cfg_srv.multiline_end = ";;";
 
                 cli::VestaViewManager view_mgr(cfg_srv);
@@ -910,9 +1119,8 @@ int main(int argc, char *argv[]) {
                     // readline poll-loop chequea I.running cada ~50 ms,
                     // asi que view_mgr.stop() liberara el prompt en
                     // ~50 ms sin requerir entrada del operador.
-                    vesta::scout()
-                        << "\n[server-mode] Apagado recibido; "
-                           "cerrando REPL local.\n";
+                    vesta::scout() << "\n[server-mode] Apagado recibido; "
+                                      "cerrando REPL local.\n";
                     view_mgr.stop();
                 });
 
@@ -942,25 +1150,30 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
-    if (result.count("install") ||
-        result.count("uninstall") ||
-        result.count("repair"))
-    {
+    if (result.count("install") || result.count("uninstall") ||
+        result.count("repair")) {
         // Reconstruir argv "limpio" para el parser interno del instalador
         std::vector<std::string> args;
-        if (result.count("uninstall")) args.push_back("uninstall");
-        else if (result.count("repair")) args.push_back("repair");
-        else args.push_back("install");
+        if (result.count("uninstall"))
+            args.push_back("uninstall");
+        else if (result.count("repair"))
+            args.push_back("repair");
+        else
+            args.push_back("install");
 
-        if (result.count("silent"))      args.push_back("--silent");
-        if (result.count("per-user"))    args.push_back("--per-user");
+        if (result.count("silent")) args.push_back("--silent");
+        if (result.count("per-user")) args.push_back("--per-user");
         if (result.count("system-wide")) args.push_back("--system-wide");
-        if (result.count("prefix"))      args.push_back("--prefix=" + result["prefix"].as<std::string>());
-        if (result.count("manifest"))    args.push_back("--manifest=" + result["manifest"].as<std::string>());
+        if (result.count("prefix"))
+            args.push_back("--prefix=" + result["prefix"].as<std::string>());
+        if (result.count("manifest"))
+            args.push_back("--manifest=" +
+                           result["manifest"].as<std::string>());
 
-        std::vector<char*> argv2;
+        std::vector<char *> argv2;
         argv2.push_back(argv[0]);
-        for (auto& s : args) argv2.push_back(s.data());
+        for (auto &s : args)
+            argv2.push_back(s.data());
         return install::run_install_cli((int)argv2.size(), argv2.data());
     }
 
@@ -968,13 +1181,11 @@ int main(int argc, char *argv[]) {
     // vm.exe --worker src/main.vel -o main.velb
     if (result.count("worker")) {
         return asm_multi_process::run_worker(
-            result["worker"].as<std::string>(),
-            out_prefix,
+            result["worker"].as<std::string>(), out_prefix,
             /*skip_preprocessor=*/false,
             /*keep_labels=*/(result.count("keep-labels") > 0),
             /*ir_section_bytes=*/nullptr,
-            /*emit_map=*/(result.count("emit-map") > 0)
-        );
+            /*emit_map=*/(result.count("emit-map") > 0));
     }
 
     // Compilar un proyecto entero en paralelo
@@ -983,25 +1194,18 @@ int main(int argc, char *argv[]) {
     // vm.exe --driver src/ -j 0 -o program.velb
     if (result.count("driver")) {
         int threads = result["threads"].as<int>();
-        return asm_multi_process::run_driver(
-            result["driver"].as<std::string>(),
-            threads,
-            out_prefix
-        );
+        return asm_multi_process::run_driver(result["driver"].as<std::string>(),
+                                             threads, out_prefix);
     }
-
 
     bool save_output = result.count("save-output") > 0;
 
     // ensamblar un solo archivo (modo clásico)
     // vm.exe --asm-file src/main.asm --arch x86_64
     if (result.count("asm-file")) {
-        return assemble_file(
-                   result["asm-file"].as<std::string>(),
-                   result["arch"].as<std::string>(),
-                   save_output,
-                   out_prefix
-               )
+        return assemble_file(result["asm-file"].as<std::string>(),
+                             result["arch"].as<std::string>(), save_output,
+                             out_prefix)
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
     }
@@ -1011,12 +1215,9 @@ int main(int argc, char *argv[]) {
             std::cerr << "--arch es requerido para desensamblar\n";
             return EXIT_FAILURE;
         }
-        return disassemble_file(
-                   result["disasm-file"].as<std::string>(),
-                   result["arch"].as<std::string>(),
-                   save_output,
-                   out_prefix
-               )
+        return disassemble_file(result["disasm-file"].as<std::string>(),
+                                result["arch"].as<std::string>(), save_output,
+                                out_prefix)
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
     }
@@ -1035,13 +1236,13 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         std::string ir_text((std::istreambuf_iterator<char>(ifs)),
-                             std::istreambuf_iterator<char>());
+                            std::istreambuf_iterator<char>());
 
         // Emitir .vel
         ir::EmitOptions eopts;
-        eopts.opt_level     = ir::opt_level_from_int(opt_n);
+        eopts.opt_level = ir::opt_level_from_int(opt_n);
         eopts.emit_comments = true;
-        eopts.export_all    = true;
+        eopts.export_all = true;
 
         ir::EmitResult er = ir::ir_emit_text(ir_text, eopts);
         if (!er.ok) {
@@ -1050,7 +1251,8 @@ int main(int argc, char *argv[]) {
         }
 
         // Determinar nombre del archivo .vel de salida
-        std::string vel_path = out_prefix.empty() ? "out.vel" : out_prefix + ".vel";
+        std::string vel_path =
+            out_prefix.empty() ? "out.vel" : out_prefix + ".vel";
         {
             std::ofstream ofs(vel_path);
             if (!ofs.is_open()) {
@@ -1086,30 +1288,35 @@ int main(int argc, char *argv[]) {
     if (result.count("vex")) {
         const std::string &vex_path = result["vex"].as<std::string>();
         bool emit_only = result.count("vex-emit-only") > 0;
-        bool emit_ir   = result.count("vex-emit-ir")   > 0;
+        bool emit_ir = result.count("vex-emit-ir") > 0;
 
         // Flags de diagramas (Mermaid y/o Graphviz).  --diagram-all activa
         // los 4 diagramas; --diagram-format elige el formato de salida.
-        const bool diag_all      = result.count("diagram-all")     > 0;
-        const bool diag_vex      = diag_all || result.count("diagram-vex")    > 0;
-        const bool diag_ir_pre   = diag_all || result.count("diagram-ir")     > 0;
-        const bool diag_ir_post  = diag_all || result.count("diagram-ir-opt") > 0;
-        const bool diag_vel      = diag_all || result.count("diagram-vel")    > 0;
+        const bool diag_all = result.count("diagram-all") > 0;
+        const bool diag_vex = diag_all || result.count("diagram-vex") > 0;
+        const bool diag_ir_pre = diag_all || result.count("diagram-ir") > 0;
+        const bool diag_ir_post =
+            diag_all || result.count("diagram-ir-opt") > 0;
+        const bool diag_vel = diag_all || result.count("diagram-vel") > 0;
 
         // Parsear --diagram-format: mermaid | graphviz | both.
         // Lower-case para tolerar "Mermaid", "GraphViz", "BOTH", etc.
         std::string diag_fmt = result.count("diagram-format") > 0
-                                ? result["diagram-format"].as<std::string>()
-                                : std::string("mermaid");
-        for (auto &c : diag_fmt) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                                   ? result["diagram-format"].as<std::string>()
+                                   : std::string("mermaid");
+        for (auto &c : diag_fmt)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         // Formatos: mermaid | graphviz/dot | html | both (=mermaid+graphviz) |
         // all (=los tres).  "html" produce paginas interactivas autocontenidas.
-        bool emit_mermaid  = (diag_fmt == "mermaid"  || diag_fmt == "both" || diag_fmt == "all");
-        bool emit_graphviz = (diag_fmt == "graphviz" || diag_fmt == "dot"  || diag_fmt == "both" || diag_fmt == "all");
-        bool emit_html     = (diag_fmt == "html"     || diag_fmt == "all");
+        bool emit_mermaid =
+            (diag_fmt == "mermaid" || diag_fmt == "both" || diag_fmt == "all");
+        bool emit_graphviz = (diag_fmt == "graphviz" || diag_fmt == "dot" ||
+                              diag_fmt == "both" || diag_fmt == "all");
+        bool emit_html = (diag_fmt == "html" || diag_fmt == "all");
         if (!emit_mermaid && !emit_graphviz && !emit_html) {
             std::cerr << "[diagram] Formato desconocido: '" << diag_fmt
-                      << "' (usar mermaid | graphviz | html | both | all). Defaulting a mermaid.\n";
+                      << "' (usar mermaid | graphviz | html | both | all). "
+                         "Defaulting a mermaid.\n";
             emit_mermaid = true;
         }
 
@@ -1121,7 +1328,8 @@ int main(int argc, char *argv[]) {
         if (result.count("vex-base")) {
             const std::string &s = result["vex-base"].as<std::string>();
             try {
-                vex_base_addr = std::stoull(s, nullptr, 0); // base 0 = autodetect 0x prefix
+                vex_base_addr =
+                    std::stoull(s, nullptr, 0); // base 0 = autodetect 0x prefix
             } catch (...) {
                 std::cerr << "[vex] --vex-base invalido: " << s << "\n";
                 return EXIT_FAILURE;
@@ -1135,7 +1343,7 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
         std::string vex_source((std::istreambuf_iterator<char>(ifs)),
-                                std::istreambuf_iterator<char>());
+                               std::istreambuf_iterator<char>());
 
         // 2 Aplicar VPP (mismo pipeline que run_worker).  Esto es
         // best-effort: si una macro genera sintaxis no soportada por Vex,
@@ -1147,8 +1355,11 @@ int main(int argc, char *argv[]) {
                 std::filesystem::path(vex_path).parent_path().string();
             pp.options().include_paths.push_back(source_dir);
             std::string exe_dir =
-                std::filesystem::path(fs::get_executable_path()).parent_path().string();
-            pp.options().import_paths.push_back(exe_dir + "/preprocessor/include_lib");
+                std::filesystem::path(fs::get_executable_path())
+                    .parent_path()
+                    .string();
+            pp.options().import_paths.push_back(exe_dir +
+                                                "/preprocessor/include_lib");
             pp.options().import_paths.push_back(exe_dir + "/include_lib");
             pp.options().import_paths.push_back(source_dir);
 #ifdef _WIN32
@@ -1162,7 +1373,8 @@ int main(int argc, char *argv[]) {
             if (pp.diagnostics().has_errors()) {
                 for (const auto &d : pp.diagnostics().diagnostics()) {
                     std::cerr << d.loc.file << ":" << d.loc.line << ": "
-                              << (d.level == vpp::DiagLevel::ERR ? "error: " : "warning: ")
+                              << (d.level == vpp::DiagLevel::ERR ? "error: "
+                                                                 : "warning: ")
                               << d.message << "\n";
                 }
                 return EXIT_FAILURE;
@@ -1172,37 +1384,35 @@ int main(int argc, char *argv[]) {
 #endif
 
         // 3 Frontend Vex: source -> IR -> .vel.
-        // Sanitizar el nombre del modulo: el parser .vel rechaza identificadores
-        // que empiezan con digito o que contienen caracteres no [A-Za-z0-9_],
-        // pero los nombres de fichero pueden tener cualquier cosa.  Aplicamos
-        // dos transformaciones: (a) si empieza por digito, anteponer "m_";
-        // (b) sustituir cualquier byte no alfanumerico por '_'.
+        // Sanitizar el nombre del modulo: el parser .vel rechaza
+        // identificadores que empiezan con digito o que contienen caracteres no
+        // [A-Za-z0-9_], pero los nombres de fichero pueden tener cualquier
+        // cosa.  Aplicamos dos transformaciones: (a) si empieza por digito,
+        // anteponer "m_"; (b) sustituir cualquier byte no alfanumerico por '_'.
         std::string raw_name = std::filesystem::path(vex_path).stem().string();
-        std::string mod_name; mod_name.reserve(raw_name.size() + 2);
-        if (!raw_name.empty()
-         && (raw_name[0] >= '0' && raw_name[0] <= '9')) {
+        std::string mod_name;
+        mod_name.reserve(raw_name.size() + 2);
+        if (!raw_name.empty() && (raw_name[0] >= '0' && raw_name[0] <= '9')) {
             mod_name = "m_";
         }
         for (char c : raw_name) {
-            const bool ok = (c >= 'a' && c <= 'z')
-                         || (c >= 'A' && c <= 'Z')
-                         || (c >= '0' && c <= '9')
-                         || c == '_';
+            const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                            (c >= '0' && c <= '9') || c == '_';
             mod_name.push_back(ok ? c : '_');
         }
         if (mod_name.empty()) mod_name = "main";
 
         vex::CompileOptions copts;
         copts.module_name = mod_name;
-        copts.opt_level   = 2;
-        copts.dump_ir     = emit_ir;  // habilita CompileResult::ir_text
-        copts.native_poo  = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
+        copts.opt_level = 2;
+        copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
+        copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
         // Instrumentacion: aplica al IR independientemente del target
         // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.
         copts.instrument_mode = result["instrument"].as<std::string>();
-        if (copts.instrument_mode != "none"
-         && copts.instrument_mode != "trace"
-         && copts.instrument_mode != "profile") {
+        if (copts.instrument_mode != "none" &&
+            copts.instrument_mode != "trace" &&
+            copts.instrument_mode != "profile") {
             std::cerr << "[vex] --instrument invalido: "
                       << copts.instrument_mode
                       << " (valores: none|trace|profile)\n";
@@ -1211,27 +1421,27 @@ int main(int argc, char *argv[]) {
         // --vex-debug: emite `// @line N` en el .vel y genera la
         // seccion debug en el .velb final.  Por defecto OFF: el ejecutable
         // queda mas pequeno y la compilacion mas rapida.
-        copts.emit_debug  = (result.count("vex-debug") > 0);
+        copts.emit_debug = (result.count("vex-debug") > 0);
         // Flags de diagramas: cada uno habilita la generacion del diagrama
         // correspondiente en CompileResult, segun el formato elegido por
         // --diagram-format.  Se escriben a archivos al final del bloque.
-        copts.dump_mermaid_ast       = emit_mermaid  && diag_vex;
-        copts.dump_mermaid_ir_pre    = emit_mermaid  && diag_ir_pre;
-        copts.dump_mermaid_ir_post   = emit_mermaid  && diag_ir_post;
-        copts.dump_mermaid_vel       = emit_mermaid  && diag_vel;
-        copts.dump_graphviz_ast      = emit_graphviz && diag_vex;
-        copts.dump_graphviz_ir_pre   = emit_graphviz && diag_ir_pre;
-        copts.dump_graphviz_ir_post  = emit_graphviz && diag_ir_post;
-        copts.dump_graphviz_vel      = emit_graphviz && diag_vel;
-        copts.dump_html_ast          = emit_html     && diag_vex;
-        copts.dump_html_ir_pre       = emit_html     && diag_ir_pre;
-        copts.dump_html_ir_post      = emit_html     && diag_ir_post;
-        copts.dump_html_vel          = emit_html     && diag_vel;
+        copts.dump_mermaid_ast = emit_mermaid && diag_vex;
+        copts.dump_mermaid_ir_pre = emit_mermaid && diag_ir_pre;
+        copts.dump_mermaid_ir_post = emit_mermaid && diag_ir_post;
+        copts.dump_mermaid_vel = emit_mermaid && diag_vel;
+        copts.dump_graphviz_ast = emit_graphviz && diag_vex;
+        copts.dump_graphviz_ir_pre = emit_graphviz && diag_ir_pre;
+        copts.dump_graphviz_ir_post = emit_graphviz && diag_ir_post;
+        copts.dump_graphviz_vel = emit_graphviz && diag_vel;
+        copts.dump_html_ast = emit_html && diag_vex;
+        copts.dump_html_ir_pre = emit_html && diag_ir_pre;
+        copts.dump_html_ir_post = emit_html && diag_ir_post;
+        copts.dump_html_vel = emit_html && diag_vel;
 
-        // Flag --port=<lang>: si presente, configurar el transpiler IR -> codigo.
-        // El frontend Vex llama al port::Transpiler tras la fase de optimizacion
-        // del IR; el resultado queda en cr.port_text para que aqui lo escribamos
-        // a archivo con la extension correspondiente.
+        // Flag --port=<lang>: si presente, configurar el transpiler IR ->
+        // codigo. El frontend Vex llama al port::Transpiler tras la fase de
+        // optimizacion del IR; el resultado queda en cr.port_text para que aqui
+        // lo escribamos a archivo con la extension correspondiente.
         if (result.count("port")) {
             copts.port_target = result["port"].as<std::string>();
             // Validacion temprana del target: solo 'c' en v1.
@@ -1265,7 +1475,8 @@ int main(int argc, char *argv[]) {
                           << " (valores: stdint|builtin)\n";
                 return EXIT_FAILURE;
             }
-            copts.port_options.freestanding = result.count("port-freestanding") > 0;
+            copts.port_options.freestanding =
+                result.count("port-freestanding") > 0;
             copts.port_options.stdlib_port_c_dir =
                 result["port-stdlib-dir"].as<std::string>();
             copts.port_options.arch_target =
@@ -1297,7 +1508,8 @@ int main(int argc, char *argv[]) {
          * un key distinto y por tanto miss.  Sin sweeper automatico --
          * el usuario puede borrar `.cache/vex/` para limpiar manualmente.
          */
-        const uint8_t cache_format_version = 2;   /* Bump por MC.14 macro-scoped key */
+        const uint8_t cache_format_version =
+            2; /* Bump por MC.14 macro-scoped key */
 
         /* Phase MC.14: macro-scoped cache key.  Hashea SOLO los rangos
          * source que contienen declaraciones `@Macro` (incluyendo
@@ -1314,8 +1526,8 @@ int main(int argc, char *argv[]) {
          *
          * Si NO hay @Macros en el fuente, fallback a hash full-source
          * (el cache no se usa en ese caso de todos modos). */
-        const auto find_macro_ranges =
-            [](const std::string &src) -> std::vector<std::pair<size_t, size_t>> {
+        const auto find_macro_ranges = [](const std::string &src)
+            -> std::vector<std::pair<size_t, size_t>> {
             std::vector<std::pair<size_t, size_t>> ranges;
             size_t pos = 0;
             while ((pos = src.find("@Macro", pos)) != std::string::npos) {
@@ -1324,15 +1536,18 @@ int main(int argc, char *argv[]) {
                  * salta.  Mejorable; v1 acepta falsos positivos. */
                 /* Scan back al inicio de linea + lineas de anotacion. */
                 size_t line_start = pos;
-                while (line_start > 0 && src[line_start - 1] != '\n') --line_start;
+                while (line_start > 0 && src[line_start - 1] != '\n')
+                    --line_start;
                 /* Incluir anotaciones precedentes (@Pure, @Inline, etc.) */
                 while (line_start > 0) {
                     size_t prev_end = line_start - 1;
                     if (prev_end == 0 || src[prev_end] != '\n') break;
                     size_t prev_start = prev_end;
-                    while (prev_start > 0 && src[prev_start - 1] != '\n') --prev_start;
+                    while (prev_start > 0 && src[prev_start - 1] != '\n')
+                        --prev_start;
                     size_t k = prev_start;
-                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t')) ++k;
+                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t'))
+                        ++k;
                     if (k < prev_end && src[k] == '@') {
                         line_start = prev_start;
                     } else {
@@ -1357,11 +1572,14 @@ int main(int argc, char *argv[]) {
                         continue;
                     }
                     if (c == '/' && i + 1 < src.size() && src[i + 1] == '/') {
-                        while (i < src.size() && src[i] != '\n') ++i;
+                        while (i < src.size() && src[i] != '\n')
+                            ++i;
                         continue;
                     }
-                    if (c == '{') ++depth;
-                    else if (c == '}') --depth;
+                    if (c == '{')
+                        ++depth;
+                    else if (c == '}')
+                        --depth;
                     ++i;
                 }
                 ranges.emplace_back(line_start, i);
@@ -1378,21 +1596,23 @@ int main(int argc, char *argv[]) {
          * Foundational para true per-macro relink: cuando el linker
          * soporte compilacion incremental, esta info dira que macros
          * recompilar.  Por ahora solo diagnostico via VESTA_MC_VERBOSE. */
-        const auto find_macro_ranges_with_names =
-            [&](const std::string &src) ->
-            std::vector<std::tuple<std::string, size_t, size_t>> {
+        const auto find_macro_ranges_with_names = [&](const std::string &src)
+            -> std::vector<std::tuple<std::string, size_t, size_t>> {
             std::vector<std::tuple<std::string, size_t, size_t>> ranges;
             size_t pos = 0;
             while ((pos = src.find("@Macro", pos)) != std::string::npos) {
                 size_t line_start = pos;
-                while (line_start > 0 && src[line_start - 1] != '\n') --line_start;
+                while (line_start > 0 && src[line_start - 1] != '\n')
+                    --line_start;
                 while (line_start > 0) {
                     size_t prev_end = line_start - 1;
                     if (prev_end == 0 || src[prev_end] != '\n') break;
                     size_t prev_start = prev_end;
-                    while (prev_start > 0 && src[prev_start - 1] != '\n') --prev_start;
+                    while (prev_start > 0 && src[prev_start - 1] != '\n')
+                        --prev_start;
                     size_t k = prev_start;
-                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t')) ++k;
+                    while (k < prev_end && (src[k] == ' ' || src[k] == '\t'))
+                        ++k;
                     if (k < prev_end && src[k] == '@') {
                         line_start = prev_start;
                     } else {
@@ -1410,17 +1630,21 @@ int main(int argc, char *argv[]) {
                     if (paren != std::string::npos && paren < bs) {
                         size_t name_end = paren;
                         while (name_end > pos + 6 &&
-                               (src[name_end - 1] == ' ' || src[name_end - 1] == '\t' || src[name_end - 1] == '\n')) {
+                               (src[name_end - 1] == ' ' ||
+                                src[name_end - 1] == '\t' ||
+                                src[name_end - 1] == '\n')) {
                             --name_end;
                         }
                         size_t name_start = name_end;
                         while (name_start > pos + 6 &&
-                               (std::isalnum(static_cast<unsigned char>(src[name_start - 1])) ||
+                               (std::isalnum(static_cast<unsigned char>(
+                                    src[name_start - 1])) ||
                                 src[name_start - 1] == '_')) {
                             --name_start;
                         }
                         if (name_end > name_start) {
-                            macro_name = src.substr(name_start, name_end - name_start);
+                            macro_name =
+                                src.substr(name_start, name_end - name_start);
                         }
                     }
                 }
@@ -1440,11 +1664,14 @@ int main(int argc, char *argv[]) {
                         continue;
                     }
                     if (c == '/' && i + 1 < src.size() && src[i + 1] == '/') {
-                        while (i < src.size() && src[i] != '\n') ++i;
+                        while (i < src.size() && src[i] != '\n')
+                            ++i;
                         continue;
                     }
-                    if (c == '{') ++depth;
-                    else if (c == '}') --depth;
+                    if (c == '{')
+                        ++depth;
+                    else if (c == '}')
+                        --depth;
                     ++i;
                 }
                 ranges.emplace_back(std::move(macro_name), line_start, i);
@@ -1455,7 +1682,7 @@ int main(int argc, char *argv[]) {
 
         const uint64_t cache_key = [&]() -> uint64_t {
             constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
-            constexpr uint64_t FNV_PRIME  =     1099511628211ULL;
+            constexpr uint64_t FNV_PRIME = 1099511628211ULL;
             uint64_t h = FNV_OFFSET;
             h ^= cache_format_version;
             h *= FNV_PRIME;
@@ -1479,13 +1706,14 @@ int main(int argc, char *argv[]) {
             } else {
                 /* Hash solo los rangos macro + separadores. */
                 for (const auto &r : ranges) {
-                    const size_t end =
-                        (r.second < vex_source.size()) ? r.second : vex_source.size();
+                    const size_t end = (r.second < vex_source.size())
+                                           ? r.second
+                                           : vex_source.size();
                     for (size_t i = r.first; i < end; ++i) {
                         h ^= static_cast<uint8_t>(vex_source[i]);
                         h *= FNV_PRIME;
                     }
-                    h ^= 0xFEu;   /* separador entre macros distintos. */
+                    h ^= 0xFEu; /* separador entre macros distintos. */
                     h *= FNV_PRIME;
                 }
             }
@@ -1493,16 +1721,15 @@ int main(int argc, char *argv[]) {
         }();
         char cache_key_hex[17];
         std::snprintf(cache_key_hex, sizeof(cache_key_hex), "%016llx",
-                       static_cast<unsigned long long>(cache_key));
-        const std::string cache_dir    = ".cache/vex";
+                      static_cast<unsigned long long>(cache_key));
+        const std::string cache_dir = ".cache/vex";
         const std::string cache_prefix = cache_dir + "/" + cache_key_hex;
-        const std::string cache_path   = cache_prefix + ".velb";
+        const std::string cache_path = cache_prefix + ".velb";
         const bool cache_hit = std::filesystem::exists(cache_path);
         const bool user_already_set_prebuilt =
             (std::getenv("VESTA_MC_PREBUILT") != nullptr);
-        const bool verbose_mc =
-            (std::getenv("VESTA_MC_VERBOSE") != nullptr &&
-             std::getenv("VESTA_MC_VERBOSE")[0] == '1');
+        const bool verbose_mc = (std::getenv("VESTA_MC_VERBOSE") != nullptr &&
+                                 std::getenv("VESTA_MC_VERBOSE")[0] == '1');
 
         /* CACHE HIT path: setear env var ANTES del primer compile_vex_source.
          * Solo 1 invocacion de compile, con VM eval activo desde el inicio. */
@@ -1522,31 +1749,35 @@ int main(int argc, char *argv[]) {
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
         // link.  Desactivable via @c VEX_NO_PROJECT_CACHE=1.
-        const bool project_cache_enabled = [](){
+        const bool project_cache_enabled = []() {
             const char *v = std::getenv("VEX_NO_PROJECT_CACHE");
             return !(v && v[0] == '1');
         }();
-        const bool project_cache_verbose = [](){
+        const bool project_cache_verbose = []() {
             const char *v = std::getenv("VEX_VERBOSE_PROJECT_CACHE");
             return v && v[0] == '1';
         }();
         const bool has_imports = vex::vex_source_has_imports(vex_source);
 
         vex::ProjectCacheKey pck;
-        pck.opt_level       = copts.opt_level;
-        pck.emit_debug      = copts.emit_debug;
-        pck.vex_base        = 0;  // no usado por compile_vex_project; queda 0
+        pck.opt_level = copts.opt_level;
+        pck.emit_debug = copts.emit_debug;
+        pck.vex_base = 0; // no usado por compile_vex_project; queda 0
         pck.instrument_mode = copts.instrument_mode;
-        pck.port_target     = copts.port_target;
+        pck.port_target = copts.port_target;
         const uint32_t opts_hash = vex::project_cache_opts_hash(pck);
 
         // Path canonico del root para el cache key.
         std::string canonical_root;
         try {
-            canonical_root = std::filesystem::weakly_canonical(vex_path).string();
-        } catch (...) { canonical_root = vex_path; }
-        const std::string pc_dir   = vex::default_project_cache_dir();
-        const std::string pc_path  = vex::project_cache_path(canonical_root, pc_dir);
+            canonical_root =
+                std::filesystem::weakly_canonical(vex_path).string();
+        } catch (...) {
+            canonical_root = vex_path;
+        }
+        const std::string pc_dir = vex::default_project_cache_dir();
+        const std::string pc_path =
+            vex::project_cache_path(canonical_root, pc_dir);
 
         // Artefactos que SOLO se producen recorriendo el pipeline completo
         // (no estan en el .velb cacheado): diagramas (mmd/dot/html), dump de
@@ -1554,19 +1785,18 @@ int main(int argc, char *argv[]) {
         // saltamos el hit del project-cache para forzar la compilacion y que
         // se generen; de lo contrario el cache hit los omitiria en silencio.
         const bool wants_pipeline_artifacts =
-            diag_vex || diag_ir_pre || diag_ir_post || diag_vel
-            || emit_ir || !copts.port_target.empty();
+            diag_vex || diag_ir_pre || diag_ir_post || diag_vel || emit_ir ||
+            !copts.port_target.empty();
 
         if (project_cache_enabled && has_imports && !wants_pipeline_artifacts) {
             uint32_t cached_opts_hash = 0;
             std::vector<vex::ProjectCacheDep> cached_deps;
-            std::vector<uint8_t>              cached_velb;
-            if (vex::project_cache_load(pc_path, cached_opts_hash,
-                                          cached_deps, cached_velb)
-                && cached_opts_hash == opts_hash
-                && !cached_deps.empty()
-                && !cached_velb.empty()
-                && vex::project_cache_validate(cached_deps)) {
+            std::vector<uint8_t> cached_velb;
+            if (vex::project_cache_load(pc_path, cached_opts_hash, cached_deps,
+                                        cached_velb) &&
+                cached_opts_hash == opts_hash && !cached_deps.empty() &&
+                !cached_velb.empty() &&
+                vex::project_cache_validate(cached_deps)) {
                 // HIT: escribir el .velb cacheado al output y salir.
                 const std::string out_velb = out_prefix + ".velb";
                 std::ofstream f(out_velb, std::ios::binary);
@@ -1575,17 +1805,17 @@ int main(int argc, char *argv[]) {
                             static_cast<std::streamsize>(cached_velb.size()));
                     if (f.good()) {
                         if (project_cache_verbose) {
-                            std::cerr << "[vex-project-cache] hit: "
-                                       << pc_path << " -> " << out_velb
-                                       << " (" << cached_velb.size()
-                                       << " bytes)\n";
+                            std::cerr << "[vex-project-cache] hit: " << pc_path
+                                      << " -> " << out_velb << " ("
+                                      << cached_velb.size() << " bytes)\n";
                         }
                         return EXIT_SUCCESS;
                     }
                 }
                 // Si fallo escribir, caemos al compile normal (no es fatal).
                 if (project_cache_verbose) {
-                    std::cerr << "[vex-project-cache] hit pero write fallo, recompile\n";
+                    std::cerr << "[vex-project-cache] hit pero write fallo, "
+                                 "recompile\n";
                 }
             } else if (project_cache_verbose) {
                 std::cerr << "[vex-project-cache] miss: " << pc_path << "\n";
@@ -1597,9 +1827,8 @@ int main(int argc, char *argv[]) {
         // compila cada dep en topo order, inyecta .vexi, y mergea
         // todas las funciones en un solo .vel.
         vex::CompileResult cr =
-            has_imports
-                ? vex::compile_vex_project(vex_path, copts)
-                : vex::compile_vex_source(vex_source, vex_path, copts);
+            has_imports ? vex::compile_vex_project(vex_path, copts)
+                        : vex::compile_vex_source(vex_source, vex_path, copts);
 
         /* Phase MC.16+: diagnostico de macros que el lowering rechazo
          * por usar builtins comptime-only no aliasables (comptime_compile,
@@ -1608,8 +1837,8 @@ int main(int argc, char *argv[]) {
          * via VESTA_MC_VERBOSE para que el usuario sepa por que. */
         if (verbose_mc && cr.ok && !cr.macro_skip_reasons.empty()) {
             for (const auto &sk : cr.macro_skip_reasons) {
-                std::cerr << "[mc-lower] " << sk.first
-                          << ": AST-only (" << sk.second << ")\n";
+                std::cerr << "[mc-lower] " << sk.first << ": AST-only ("
+                          << sk.second << ")\n";
             }
         }
 
@@ -1638,42 +1867,47 @@ int main(int argc, char *argv[]) {
         // ------------------------------------------------------------------
         if (aot_mode) {
             aot::AotTarget tgt;
-            tgt.tier         = aot_tier;
+            tgt.tier = aot_tier;
             tgt.freestanding = aot_freestanding;
             // AOT.2.d: roles cubiertos por @AllocatorOverride / @PanicHandler
             // -> admiten su LIBC_MAPPED tambien en --freestanding.
             tgt.alloc_provided = !cr.aot_alloc_sym.empty();
-            tgt.free_provided  = !cr.aot_free_sym.empty();
+            tgt.free_provided = !cr.aot_free_sym.empty();
             tgt.panic_provided = !cr.aot_panic_sym.empty();
 
-            const char *tier_name =
-                (aot_tier == aot::Tier::BARE) ? "bare" :
-                (aot_tier == aot::Tier::EMBED) ? "embed" : "full";
+            const char *tier_name = (aot_tier == aot::Tier::BARE)    ? "bare"
+                                    : (aot_tier == aot::Tier::EMBED) ? "embed"
+                                                                     : "full";
 
             if (cr.ir_module_cache_bytes.empty()) {
-                std::cerr << "[aot] el modulo no produjo IR; nada que compilar a "
-                             "nativo.\n";
+                std::cerr
+                    << "[aot] el modulo no produjo IR; nada que compilar a "
+                       "nativo.\n";
                 return EXIT_FAILURE;
             }
 
-            // Modulo COMPLETO (functions + static_data + globals): el codegen AOT
-            // necesita el static_data para materializar los literales en .rodata.
+            // Modulo COMPLETO (functions + static_data + globals): el codegen
+            // AOT necesita el static_data para materializar los literales en
+            // .rodata.
             ir::IrModule aot_mod;
             if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, aot_mod)) {
-                std::cerr << "[aot] no se pudo deserializar el IR del modulo.\n";
+                std::cerr
+                    << "[aot] no se pudo deserializar el IR del modulo.\n";
                 return EXIT_FAILURE;
             }
 
             aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
             std::cout << "[aot] target=" << tier_name
-                      << (aot_freestanding ? " --freestanding" : "")
-                      << ": " << aot_mod.functions.size() << " funcion(es), "
-                      << rep.ok_functions.size() << " compilable(s) a nativo.\n";
+                      << (aot_freestanding ? " --freestanding" : "") << ": "
+                      << aot_mod.functions.size() << " funcion(es), "
+                      << rep.ok_functions.size()
+                      << " compilable(s) a nativo.\n";
 
             if (!rep.compatible) {
                 std::cerr << rep.render();
-                std::cerr << "[aot] modulo NO compilable a nativo en este target "
-                             "(ver incompatibilidades arriba).\n";
+                std::cerr
+                    << "[aot] modulo NO compilable a nativo en este target "
+                       "(ver incompatibilidades arriba).\n";
                 return EXIT_FAILURE;
             }
 
@@ -1682,17 +1916,19 @@ int main(int argc, char *argv[]) {
             // el linker -> el .o NO depende de libc).  Tras esto el selector ve
             // solo CALL.  Se ejecuta DESPUES del gate de analyze para que el
             // chequeo freestanding sobre RAW_ALLOC siga aplicando.
-            // AOT.2.d: nombres de simbolo segun @AllocatorOverride/@PanicHandler
-            // (vacio = convencion C malloc/free/abort).
+            // AOT.2.d: nombres de simbolo segun
+            // @AllocatorOverride/@PanicHandler (vacio = convencion C
+            // malloc/free/abort).
             aot::AotLowerConfig lcfg;
             if (!cr.aot_alloc_sym.empty()) {
-                lcfg.alloc_sym          = cr.aot_alloc_sym;
-                lcfg.has_alloc_override = true;  // __new calloc -> alloc_sym(size)
+                lcfg.alloc_sym = cr.aot_alloc_sym;
+                lcfg.has_alloc_override =
+                    true; // __new calloc -> alloc_sym(size)
             }
-            if (!cr.aot_free_sym.empty())  lcfg.free_sym  = cr.aot_free_sym;
+            if (!cr.aot_free_sym.empty()) lcfg.free_sym = cr.aot_free_sym;
             if (!cr.aot_panic_sym.empty()) {
-                lcfg.panic_sym       = cr.aot_panic_sym;
-                lcfg.panic_takes_msg = true;  // @PanicHandler(msg_addr, len)
+                lcfg.panic_sym = cr.aot_panic_sym;
+                lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
             }
             aot::aot_lower_runtime(aot_mod, lcfg);
 
@@ -1707,13 +1943,15 @@ int main(int argc, char *argv[]) {
             // ------------------------------------------------------------------
 
             // Arquitectura objetivo: x86-64 (default) o x86-32 (modo protegido,
-            // kernels): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3); subset
-            // entero de 32-bit (i32/u32/ptr32).
+            // kernels): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3);
+            // subset entero de 32-bit (i32/u32/ptr32).
             bool aot_mode32 = false;
             {
                 const std::string a = result["aot-arch"].as<std::string>();
-                if      (a == "x86-32" || a == "x86_32" || a == "i386") aot_mode32 = true;
-                else if (a == "x86-64" || a == "x86_64" || a == "amd64") aot_mode32 = false;
+                if (a == "x86-32" || a == "x86_32" || a == "i386")
+                    aot_mode32 = true;
+                else if (a == "x86-64" || a == "x86_64" || a == "amd64")
+                    aot_mode32 = false;
                 else {
                     std::cerr << "[aot] --aot-arch desconocido: '" << a
                               << "' (use x86-64 | x86-32).\n";
@@ -1732,8 +1970,10 @@ int main(int argc, char *argv[]) {
 #endif
             if (result.count("format")) {
                 const std::string f = result["format"].as<std::string>();
-                if      (f == "pe"  || f == "PE")  fmt = aot::ObjFormat::PE;
-                else if (f == "elf" || f == "ELF") fmt = aot::ObjFormat::ELF;
+                if (f == "pe" || f == "PE")
+                    fmt = aot::ObjFormat::PE;
+                else if (f == "elf" || f == "ELF")
+                    fmt = aot::ObjFormat::ELF;
                 else {
                     std::cerr << "[aot] --format desconocido: '" << f
                               << "' (use pe|elf).\n";
@@ -1747,18 +1987,24 @@ int main(int argc, char *argv[]) {
 
             // --emit exe|obj|shared.
             //   EXEC   : ejecutable standalone con _start (requiere main).
-            //   OBJECT : .o/.obj relocatable (sin _start; main global; relocs como
+            //   OBJECT : .o/.obj relocatable (sin _start; main global; relocs
+            //   como
             //            registros; linkable con ld/gcc/link).
-            //   SHARED : .so/.dll (sin _start; exporta TODAS las funciones; PIC).
+            //   SHARED : .so/.dll (sin _start; exporta TODAS las funciones;
+            //   PIC).
             bool emit_obj = false, emit_shared = false, emit_bin = false;
             if (result.count("emit")) {
                 const std::string em = result["emit"].as<std::string>();
-                if      (em == "exe" || em == "exec")   { }
-                else if (em == "obj" || em == "o")      emit_obj = true;
-                else if (em == "shared" || em == "dll" || em == "so") emit_shared = true;
-                else if (em == "bin" || em == "flat")   emit_bin = true;
+                if (em == "exe" || em == "exec") {
+                } else if (em == "obj" || em == "o")
+                    emit_obj = true;
+                else if (em == "shared" || em == "dll" || em == "so")
+                    emit_shared = true;
+                else if (em == "bin" || em == "flat")
+                    emit_bin = true;
                 else {
-                    std::cerr << "[aot] --emit desconocido: '" << em << "' (use exe|obj|shared|bin).\n";
+                    std::cerr << "[aot] --emit desconocido: '" << em
+                              << "' (use exe|obj|shared|bin).\n";
                     return EXIT_FAILURE;
                 }
             }
@@ -1768,39 +2014,50 @@ int main(int argc, char *argv[]) {
                              "compatible con .so.\n";
                 return EXIT_FAILURE;
             }
-            // base de carga del binario plano (.bin) -- solo afecta refs absolutas.
+            // base de carga del binario plano (.bin) -- solo afecta refs
+            // absolutas.
             uint64_t bin_base = 0;
             if (result.count("bin-base")) {
-                bin_base = std::strtoull(result["bin-base"].as<std::string>().c_str(),
-                                         nullptr, 0);
+                bin_base = std::strtoull(
+                    result["bin-base"].as<std::string>().c_str(), nullptr, 0);
             }
-            // OBJECT/SHARED/BIN no llevan _start (lo aporta el crt/host/loader).
+            // OBJECT/SHARED/BIN no llevan _start (lo aporta el
+            // crt/host/loader).
             const bool no_stub = emit_obj || emit_shared || emit_bin;
 
-            // x86-32: soporta --emit bin (flat, modo protegido) y --emit exe con
+            // x86-32: soporta --emit bin (flat, modo protegido) y --emit exe
+            // con
             // --format elf (ELF32 estatico, _start via int 0x80).  PE32 (.exe
             // Windows 32-bit) y .o32/.so32 son follow-ups.
             if (aot_mode32) {
-                const bool ok32 = emit_bin || (!no_stub /* EXEC: ELF32 o PE32 */);
+                const bool ok32 =
+                    emit_bin || (!no_stub /* EXEC: ELF32 o PE32 */);
                 if (!ok32) {
-                    std::cerr << "[aot] --aot-arch x86-32: soporta --emit bin o "
-                                 "--emit exe (ELF32 / PE32); .o/.so/.dll de 32-bit "
-                                 "son follow-ups.\n";
+                    std::cerr
+                        << "[aot] --aot-arch x86-32: soporta --emit bin o "
+                           "--emit exe (ELF32 / PE32); .o/.so/.dll de 32-bit "
+                           "son follow-ups.\n";
                     return EXIT_FAILURE;
                 }
             }
 
-            // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED (libreria).
+            // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED
+            // (libreria).
             const ir::IrFunction *main_fn = nullptr;
             for (const auto &fn : aot_mod.functions)
-                if (fn.name == "main") { main_fn = &fn; break; }
+                if (fn.name == "main") {
+                    main_fn = &fn;
+                    break;
+                }
             if (!main_fn && !emit_shared && !emit_bin) {
-                std::cerr << "[aot] no se encontro la funcion 'main' en el modulo.\n";
+                std::cerr
+                    << "[aot] no se encontro la funcion 'main' en el modulo.\n";
                 return EXIT_FAILURE;
             }
 
-            // _start (arch+formato): solo para EXEC.  OBJECT/SHARED/BIN no llevan
-            // _start (lo aporta el crt del linker / el host / el loader externo).
+            // _start (arch+formato): solo para EXEC.  OBJECT/SHARED/BIN no
+            // llevan _start (lo aporta el crt del linker / el host / el loader
+            // externo).
             aot::StartStub stub{};
             if (!no_stub) stub = aot::aot_make_start_stub(arch, fmt);
             if (!no_stub && !stub.ok) {
@@ -1810,37 +2067,44 @@ int main(int argc, char *argv[]) {
 
             // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
             std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
-            for (const auto &f : aot_mod.functions) fn_by_name[f.name] = &f;
+            for (const auto &f : aot_mod.functions)
+                fn_by_name[f.name] = &f;
 
             // Codigo compilado de cada funcion + sus relocations + su seccion.
             struct AotFn {
-                std::string              name;
-                std::vector<uint8_t>     bytes;
+                std::string name;
+                std::vector<uint8_t> bytes;
                 std::vector<jit::NativeReloc> relocs;
-                std::string              section;        // @section ("" = .text)
-                std::string              section_perms;  // "rwx" explicito ("" = convencion)
-                int64_t                  section_at    = -1;          // @at(N)
-                int32_t                  section_order = 0x7fffffff;  // @order(N)
+                std::string section;       // @section ("" = .text)
+                std::string section_perms; // "rwx" explicito ("" = convencion)
+                int64_t section_at = -1;   // @at(N)
+                int32_t section_order = 0x7fffffff; // @order(N)
             };
             std::vector<AotFn> compiled;
-            std::unordered_map<std::string, size_t> compiled_idx;  // name -> compiled[]
+            std::unordered_map<std::string, size_t>
+                compiled_idx; // name -> compiled[]
 
-            // BFS desde main: compila cada funcion alcanzada por un CALL.  Ademas
-            // se SIEMBRAN las funciones con @section explicito (el usuario las
-            // coloco a proposito; pueden referenciarse SOLO via section_start/end
-            // o asm, sin CALL directo -> no dead-strip).  En SHARED (.so) se
-            // siembran TODAS las funciones: la libreria las EXPORTA todas.
+            // BFS desde main: compila cada funcion alcanzada por un CALL.
+            // Ademas se SIEMBRAN las funciones con @section explicito (el
+            // usuario las coloco a proposito; pueden referenciarse SOLO via
+            // section_start/end o asm, sin CALL directo -> no dead-strip).  En
+            // SHARED (.so) se siembran TODAS las funciones: la libreria las
+            // EXPORTA todas.
             std::vector<std::string> work;
             std::unordered_map<std::string, bool> queued;
-            if (main_fn) { work.push_back("main"); queued["main"] = true; }
+            if (main_fn) {
+                work.push_back("main");
+                queued["main"] = true;
+            }
             for (const auto &fn : aot_mod.functions) {
-                if ((emit_shared || !fn.section.empty()) && !queued.count(fn.name)) {
+                if ((emit_shared || !fn.section.empty()) &&
+                    !queued.count(fn.name)) {
                     queued[fn.name] = true;
                     work.push_back(fn.name);
                 }
             }
-            // Sembrar las funciones referenciadas por bloques `bytes` (`dq foo`)
-            // para que se compilen aunque main no las alcance por CALL.
+            // Sembrar las funciones referenciadas por bloques `bytes` (`dq
+            // foo`) para que se compilen aunque main no las alcance por CALL.
             for (const auto &e : aot_mod.static_data.entries) {
                 for (const auto &sr : e.meta.sym_refs) {
                     if (fn_by_name.count(sr.sym) && !queued.count(sr.sym)) {
@@ -1862,18 +2126,19 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 AotFn af;
-                af.name          = nm;
-                af.section       = itf->second->section;
+                af.name = nm;
+                af.section = itf->second->section;
                 af.section_perms = itf->second->section_perms;
-                af.section_at    = itf->second->section_at;
+                af.section_at = itf->second->section_at;
                 af.section_order = itf->second->section_order;
-                af.bytes = jit::vreg_compile_native(*itf->second, {}, {}, {}, {},
-                                                    &af.relocs, aot_pic,
-                                                    /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                                                    /*mode32=*/aot_mode32);
+                af.bytes = jit::vreg_compile_native(
+                    *itf->second, {}, {}, {}, {}, &af.relocs, aot_pic,
+                    /*target_sysv=*/fmt == aot::ObjFormat::ELF,
+                    /*mode32=*/aot_mode32);
                 if (af.bytes.empty()) {
-                    std::cerr << "[aot] el selector vreg no soporta la funcion '"
-                              << nm << "' todavia (op fuera del subset nativo).\n";
+                    std::cerr
+                        << "[aot] el selector vreg no soporta la funcion '"
+                        << nm << "' todavia (op fuera del subset nativo).\n";
                     aot_codegen_ok = false;
                     break;
                 }
@@ -1886,7 +2151,7 @@ int main(int argc, char *argv[]) {
                 for (const jit::NativeReloc &r : compiled.back().relocs) {
                     if (r.kind != jit::NativeReloc::Kind::CALL_REL32) continue;
                     if (queued.count(r.symbol)) continue;
-                    if (!fn_by_name.count(r.symbol)) continue;  // externo
+                    if (!fn_by_name.count(r.symbol)) continue; // externo
                     queued[r.symbol] = true;
                     work.push_back(r.symbol);
                 }
@@ -1894,20 +2159,21 @@ int main(int argc, char *argv[]) {
             if (!aot_codegen_ok) return EXIT_FAILURE;
 
             // ------------------------------------------------------------------
-            // Layout MULTI-SECCION (2b, dev OS): el usuario decide en que seccion
-            // vive cada funcion (@section) / dato.  Construimos un buffer por
-            // seccion; .text (indice 0) es la de entrada (el _start stub va en su
-            // offset 0).  TODAS las refs (stub->main, llamadas, datos) se declaran
-            // al ObjectWriter, que las resuelve tras el layout (unica entidad que
-            // conoce la VA de cada seccion) -> CALL/JMP cross-seccion "just work".
+            // Layout MULTI-SECCION (2b, dev OS): el usuario decide en que
+            // seccion vive cada funcion (@section) / dato.  Construimos un
+            // buffer por seccion; .text (indice 0) es la de entrada (el _start
+            // stub va en su offset 0).  TODAS las refs (stub->main, llamadas,
+            // datos) se declaran al ObjectWriter, que las resuelve tras el
+            // layout (unica entidad que conoce la VA de cada seccion) ->
+            // CALL/JMP cross-seccion "just work".
             // ------------------------------------------------------------------
             struct SecAccum {
-                std::string          name;
-                bool                 is_code = true;
-                std::string          perms;   // "" = por convencion del nombre
+                std::string name;
+                bool is_code = true;
+                std::string perms; // "" = por convencion del nombre
                 std::vector<uint8_t> bytes;
-                int64_t              at    = -1;          // @at(N) (.bin)
-                int32_t              order = 0x7fffffff;  // @order(N) (.bin)
+                int64_t at = -1;            // @at(N) (.bin)
+                int32_t order = 0x7fffffff; // @order(N) (.bin)
             };
             std::vector<SecAccum> secs;
             std::unordered_map<std::string, int> sec_index;
@@ -1915,45 +2181,58 @@ int main(int argc, char *argv[]) {
             // El primer @at no-default gana; el menor @order gana.  Conflictos
             // de @at distintos en la misma seccion se reportan.
             auto get_sec = [&](const std::string &name, bool is_code,
-                               const std::string &perms,
-                               int64_t at = -1, int32_t order = 0x7fffffff) -> int {
+                               const std::string &perms, int64_t at = -1,
+                               int32_t order = 0x7fffffff) -> int {
                 auto it = sec_index.find(name);
                 if (it != sec_index.end()) {
                     SecAccum &s = secs[it->second];
                     if (!perms.empty() && s.perms.empty()) s.perms = perms;
                     if (at >= 0) {
                         if (s.at >= 0 && s.at != at)
-                            std::cerr << "[aot] @at en conflicto para la seccion '"
-                                      << name << "' (" << s.at << " vs " << at << ").\n";
-                        else s.at = at;
+                            std::cerr
+                                << "[aot] @at en conflicto para la seccion '"
+                                << name << "' (" << s.at << " vs " << at
+                                << ").\n";
+                        else
+                            s.at = at;
                     }
                     if (order < s.order) s.order = order;
                     return it->second;
                 }
                 const int idx = static_cast<int>(secs.size());
-                SecAccum s; s.name = name; s.is_code = is_code; s.perms = perms;
-                s.at = at; s.order = order;
+                SecAccum s;
+                s.name = name;
+                s.is_code = is_code;
+                s.perms = perms;
+                s.at = at;
+                s.order = order;
                 secs.push_back(std::move(s));
                 sec_index[name] = idx;
                 return idx;
             };
-            // .text es SIEMPRE la seccion 0 (entry); el stub arranca en su off 0.
+            // .text es SIEMPRE la seccion 0 (entry); el stub arranca en su off
+            // 0.
             const int text_sec = get_sec(".text", true, "");
             secs[text_sec].bytes = stub.bytes;
 
             // Colocar cada funcion en su seccion (default .text).  main primero
             // dentro de su seccion (determinismo).
-            struct FnLoc { int sec; uint32_t off; };
+            struct FnLoc {
+                int sec;
+                uint32_t off;
+            };
             std::unordered_map<std::string, FnLoc> fn_loc;
             auto place_fn = [&](size_t ci) {
                 AotFn &af = compiled[ci];
-                const std::string &fsec = af.section.empty() ? ".text" : af.section;
+                const std::string &fsec =
+                    af.section.empty() ? ".text" : af.section;
                 const int si = get_sec(fsec, /*is_code=*/true, af.section_perms,
                                        af.section_at, af.section_order);
-                const uint32_t off = static_cast<uint32_t>(secs[si].bytes.size());
+                const uint32_t off =
+                    static_cast<uint32_t>(secs[si].bytes.size());
                 fn_loc[af.name] = {si, off};
-                secs[si].bytes.insert(secs[si].bytes.end(),
-                                      af.bytes.begin(), af.bytes.end());
+                secs[si].bytes.insert(secs[si].bytes.end(), af.bytes.begin(),
+                                      af.bytes.end());
             };
             // main primero (si existe; en SHARED puede no haber).
             if (main_fn) place_fn(compiled_idx["main"]);
@@ -1971,10 +2250,14 @@ int main(int argc, char *argv[]) {
             // [rip+IAT], 6 bytes) -- y el `call <sym>` apunta al thunk (REL32
             // normal intra-.text).  El `FF 25` del thunk se parchea via el
             // mecanismo de imports (mismo que ExitProcess del _start).  El
-            // loader rellena la IAT con la direccion real -> el thunk salta ahi.
-            // Solo PE EXEC por ahora (ELF EXEC = PLT-GOT, slice 2; SHARED/.dll =
-            // follow-up; .o sigue emitiendo relocs externas que resuelve gcc/ld).
-            struct PeThunkImport { std::string dll, func; uint64_t off; };
+            // loader rellena la IAT con la direccion real -> el thunk salta
+            // ahi. Solo PE EXEC por ahora (ELF EXEC = PLT-GOT, slice 2;
+            // SHARED/.dll = follow-up; .o sigue emitiendo relocs externas que
+            // resuelve gcc/ld).
+            struct PeThunkImport {
+                std::string dll, func;
+                uint64_t off;
+            };
             std::vector<PeThunkImport> pe_thunk_imports;
             // EXEC (PE o ELF) que llama a externos -> thunks de import.  PE los
             // resuelve por IAT (slice 1); ELF por eager-GOT como PIE dinamico
@@ -1988,17 +2271,17 @@ int main(int argc, char *argv[]) {
                 std::unordered_set<std::string> ext_seen;
                 for (const AotFn &af : compiled)
                     for (const jit::NativeReloc &r : af.relocs)
-                        if (r.kind == jit::NativeReloc::Kind::CALL_REL32
-                         && !fn_by_name.count(r.symbol)
-                         && !ext_seen.count(r.symbol)) {
+                        if (r.kind == jit::NativeReloc::Kind::CALL_REL32 &&
+                            !fn_by_name.count(r.symbol) &&
+                            !ext_seen.count(r.symbol)) {
                             ext_seen.insert(r.symbol);
                             ext_syms.push_back(r.symbol);
                         }
                 // Mapa simbolo -> DLL.  PE: libc (MinGW/Windows) = msvcrt.dll;
-                // los FFI extern de DLL del usuario llegan como "sym" (el lib se
-                // perdio en el selector) -> default msvcrt.dll (follow-up:
-                // cablear el DLL real desde el CompileResult).  ELF: el campo se
-                // ignora (todo va a libc.so.6 via DT_NEEDED).
+                // los FFI extern de DLL del usuario llegan como "sym" (el lib
+                // se perdio en el selector) -> default msvcrt.dll (follow-up:
+                // cablear el DLL real desde el CompileResult).  ELF: el campo
+                // se ignora (todo va a libc.so.6 via DT_NEEDED).
                 const bool is_pe = (fmt == aot::ObjFormat::PE);
                 auto dll_for = [is_pe](const std::string &) -> std::string {
                     return is_pe ? "msvcrt.dll" : "libc.so.6";
@@ -2007,17 +2290,18 @@ int main(int argc, char *argv[]) {
                     const uint32_t toff =
                         static_cast<uint32_t>(secs[text_sec].bytes.size());
                     // FF 25 00 00 00 00 -> jmp [rip+disp32]; disp32 a parchear.
-                    const uint8_t thunk[6] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
+                    const uint8_t thunk[6] = {0xFF, 0x25, 0x00,
+                                              0x00, 0x00, 0x00};
                     secs[text_sec].bytes.insert(secs[text_sec].bytes.end(),
                                                 thunk, thunk + 6);
-                    fn_loc[sym] = {text_sec, toff};  // el call <sym> -> el thunk
+                    fn_loc[sym] = {text_sec, toff}; // el call <sym> -> el thunk
                     pe_thunk_imports.push_back({dll_for(sym), sym, toff});
                 }
             }
 
-            // PASADA 1: colocar (lazy, una vez por entry) los datos referenciados
-            // en su seccion (default .rodata) -> completa `secs` ANTES de crearlas
-            // en el writer.  Devuelve (sec, off) del entry N.
+            // PASADA 1: colocar (lazy, una vez por entry) los datos
+            // referenciados en su seccion (default .rodata) -> completa `secs`
+            // ANTES de crearlas en el writer.  Devuelve (sec, off) del entry N.
             const auto &sd = aot_mod.static_data;
             std::unordered_map<uint32_t, std::pair<int, uint64_t>> data_loc;
             auto place_data = [&](uint32_t N) -> std::pair<int, uint64_t> {
@@ -2025,9 +2309,11 @@ int main(int argc, char *argv[]) {
                 if (it != data_loc.end()) return it->second;
                 const auto &e = sd.entries[N];
                 const std::string dsec = e.meta.section_name.empty()
-                    ? ".rodata" : e.meta.section_name;
-                const int si = get_sec(dsec, /*is_code=*/false, e.meta.section_perms,
-                                       e.meta.section_at, e.meta.section_order);
+                                             ? ".rodata"
+                                             : e.meta.section_name;
+                const int si =
+                    get_sec(dsec, /*is_code=*/false, e.meta.section_perms,
+                            e.meta.section_at, e.meta.section_order);
                 const uint64_t off = secs[si].bytes.size();
                 const uint8_t *p = sd.bytes.data() + e.byte_offset;
                 secs[si].bytes.insert(secs[si].bytes.end(), p, p + e.byte_len);
@@ -2038,17 +2324,20 @@ int main(int argc, char *argv[]) {
             for (const AotFn &af : compiled) {
                 for (const jit::NativeReloc &r : af.relocs) {
                     if (r.kind == jit::NativeReloc::Kind::CALL_REL32) continue;
-                    if (r.symbol.rfind("secsym:", 0) == 0) continue;  // simbolo de seccion (pass 2)
+                    if (r.symbol.rfind("secsym:", 0) == 0)
+                        continue; // simbolo de seccion (pass 2)
                     if (r.symbol.rfind("rodata.", 0) != 0) {
-                        std::cerr << "[aot] reloc de dato con simbolo inesperado: '"
-                                  << r.symbol << "'.\n";
+                        std::cerr
+                            << "[aot] reloc de dato con simbolo inesperado: '"
+                            << r.symbol << "'.\n";
                         return EXIT_FAILURE;
                     }
                     const uint32_t N = static_cast<uint32_t>(
                         std::strtoul(r.symbol.c_str() + 7, nullptr, 10));
                     if (N >= sd.size()) {
-                        std::cerr << "[aot] reloc a static_data fuera de rango: N="
-                                  << N << ".\n";
+                        std::cerr
+                            << "[aot] reloc a static_data fuera de rango: N="
+                            << N << ".\n";
                         return EXIT_FAILURE;
                     }
                     place_data(N);
@@ -2062,43 +2351,55 @@ int main(int argc, char *argv[]) {
                     place_data(N);
             }
 
-            // Crear el writer + TODAS las secciones (writer idx == secs idx, mismo
-            // orden; `secs` ya esta completa tras la pasada 1).
+            // Crear el writer + TODAS las secciones (writer idx == secs idx,
+            // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
-            w.set_mode32(aot_mode32);  // x86-32 EXEC -> contenedor ELF32
+            w.set_mode32(aot_mode32); // x86-32 EXEC -> contenedor ELF32
             for (const SecAccum &s : secs) {
                 // Permisos: explicitos (@section(".x","rwx")), o por convencion
                 // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).
                 std::string p = s.perms;
                 if (p.empty()) {
-                    if      (s.name.rfind(".text", 0) == 0)   p = "rx";
-                    else if (s.name.rfind(".rodata", 0) == 0) p = "r";
-                    else if (s.name.rfind(".data", 0) == 0)   p = "rw";
-                    else if (s.name.rfind(".bss", 0) == 0)    p = "rw";
-                    else p = s.is_code ? "rx" : "r";
+                    if (s.name.rfind(".text", 0) == 0)
+                        p = "rx";
+                    else if (s.name.rfind(".rodata", 0) == 0)
+                        p = "r";
+                    else if (s.name.rfind(".data", 0) == 0)
+                        p = "rw";
+                    else if (s.name.rfind(".bss", 0) == 0)
+                        p = "rw";
+                    else
+                        p = s.is_code ? "rx" : "r";
                 }
                 uint32_t flags = 0;
-                if (p.find('r') != std::string::npos) flags |= aot::SecFlag::READ;
-                if (p.find('w') != std::string::npos) flags |= aot::SecFlag::WRITE;
+                if (p.find('r') != std::string::npos)
+                    flags |= aot::SecFlag::READ;
+                if (p.find('w') != std::string::npos)
+                    flags |= aot::SecFlag::WRITE;
                 const bool exec = (p.find('x') != std::string::npos);
-                if (exec) flags |= aot::SecFlag::EXEC | aot::SecFlag::CODE;
-                else      flags |= aot::SecFlag::DATA;
+                if (exec)
+                    flags |= aot::SecFlag::EXEC | aot::SecFlag::CODE;
+                else
+                    flags |= aot::SecFlag::DATA;
                 aot::WriterSection ws;
-                ws.name = s.name; ws.flags = flags; ws.data = s.bytes;
-                ws.at = s.at; ws.order = s.order;  // ubicacion/orden (.bin)
+                ws.name = s.name;
+                ws.flags = flags;
+                ws.data = s.bytes;
+                ws.at = s.at;
+                ws.order = s.order; // ubicacion/orden (.bin)
                 w.add_section(std::move(ws));
             }
             if (emit_shared) {
-                // Libreria compartida: exporta TODAS las funciones como simbolos
-                // globales (dlsym).  Sin _start ni entry.
+                // Libreria compartida: exporta TODAS las funciones como
+                // simbolos globales (dlsym).  Sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::SHARED);
                 for (const AotFn &af : compiled) {
                     const FnLoc &fl = fn_loc[af.name];
                     w.add_symbol(af.name, fl.sec, fl.off, /*is_func=*/true);
                 }
             } else if (emit_obj) {
-                // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el crt
-                // del linker externo); sin _start ni entry.
+                // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el
+                // crt del linker externo); sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::OBJECT);
                 const FnLoc &ml = fn_loc["main"];
                 w.add_symbol("main", ml.sec, ml.off, /*is_func=*/true);
@@ -2109,8 +2410,9 @@ int main(int argc, char *argv[]) {
                 w.set_output_kind(aot::OutputKind::FLAT_BIN);
                 w.set_flat_base(bin_base);
             } else {
-                w.set_entry(text_sec, 0);  // _start en .text offset 0
-                // stub->main: rel32 a la VA real de main (resuelta por el writer).
+                w.set_entry(text_sec, 0); // _start en .text offset 0
+                // stub->main: rel32 a la VA real de main (resuelta por el
+                // writer).
                 const FnLoc &ml = fn_loc["main"];
                 w.add_reloc(text_sec, stub.main_call_off,
                             aot::RelocTarget::addr(ml.sec, ml.off),
@@ -2123,25 +2425,32 @@ int main(int argc, char *argv[]) {
             for (const AotFn &af : compiled) {
                 const FnLoc &fl = fn_loc[af.name];
                 for (const jit::NativeReloc &r : af.relocs) {
-                    const uint64_t site = static_cast<uint64_t>(fl.off) + r.offset;
+                    const uint64_t site =
+                        static_cast<uint64_t>(fl.off) + r.offset;
                     if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
                         auto it = fn_loc.find(r.symbol);
                         if (it == fn_loc.end()) {
-                            // Simbolo EXTERNO (libc/runtime: malloc/free/abort...).
-                            // Solo en OBJECT (.o/.obj): el linker del sistema lo
-                            // resuelve.  EXEC/SHARED/BIN necesitarian IAT/PLT-GOT
+                            // Simbolo EXTERNO (libc/runtime:
+                            // malloc/free/abort...). Solo en OBJECT (.o/.obj):
+                            // el linker del sistema lo resuelve.
+                            // EXEC/SHARED/BIN necesitarian IAT/PLT-GOT
                             // (AOT.2.exec, futuro).
                             if (!emit_obj) {
-                                // PE EXEC ya resolvio sus externos via thunks de
-                                // IAT (el simbolo ESTA en fn_loc -> no llega aqui).
-                                // Quedan: ELF EXEC/SHARED (PLT-GOT, slice 2),
-                                // PE SHARED (.dll, follow-up) y .bin.
-                                std::cerr << "[aot] llamada a simbolo externo '" << r.symbol
-                                          << "' aun no soportada para este target ("
-                                          << (fmt == aot::ObjFormat::ELF ? "ELF EXEC/shared: "
-                                                 "PLT-GOT pendiente" : "PE shared/.bin")
-                                          << "); usa --emit obj (enlazar con gcc/ld) o, en "
-                                             "Windows, --emit exe (PE-IAT).\n";
+                                // PE EXEC ya resolvio sus externos via thunks
+                                // de IAT (el simbolo ESTA en fn_loc -> no llega
+                                // aqui). Quedan: ELF EXEC/SHARED (PLT-GOT,
+                                // slice 2), PE SHARED (.dll, follow-up) y .bin.
+                                std::cerr
+                                    << "[aot] llamada a simbolo externo '"
+                                    << r.symbol
+                                    << "' aun no soportada para este target ("
+                                    << (fmt == aot::ObjFormat::ELF
+                                            ? "ELF EXEC/shared: "
+                                              "PLT-GOT pendiente"
+                                            : "PE shared/.bin")
+                                    << "); usa --emit obj (enlazar con gcc/ld) "
+                                       "o, en "
+                                       "Windows, --emit exe (PE-IAT).\n";
                                 return EXIT_FAILURE;
                             }
                             w.add_reloc(fl.sec, site,
@@ -2161,24 +2470,34 @@ int main(int argc, char *argv[]) {
                         auto si = sec_index.find(sname);
                         if (si == sec_index.end()) {
                             std::cerr << "[aot] section_"
-                                      << (kc=='z'?"size":kc=='e'?"end":"start")
-                                      << "(\"" << sname << "\"): la seccion no existe "
+                                      << (kc == 'z'   ? "size"
+                                          : kc == 'e' ? "end"
+                                                      : "start")
+                                      << "(\"" << sname
+                                      << "\"): la seccion no existe "
                                          "(ningun codigo/dato la usa).\n";
                             return EXIT_FAILURE;
                         }
                         const int tsi = si->second;
-                        // REL32 si la ref fue RIP-relativa (DATA_REL32), ABS64 si
-                        // absoluta (--no-pie).  SIZE es siempre un inmediato (IMM64).
-                        const bool rel = (r.kind == jit::NativeReloc::Kind::DATA_REL32);
+                        // REL32 si la ref fue RIP-relativa (DATA_REL32), ABS64
+                        // si absoluta (--no-pie).  SIZE es siempre un inmediato
+                        // (IMM64).
+                        const bool rel =
+                            (r.kind == jit::NativeReloc::Kind::DATA_REL32);
                         if (kc == 'z') {
-                            w.add_reloc(fl.sec, site, aot::RelocTarget::size(tsi),
+                            w.add_reloc(fl.sec, site,
+                                        aot::RelocTarget::size(tsi),
                                         aot::RelocKind::IMM64);
                         } else if (kc == 'e') {
-                            w.add_reloc(fl.sec, site, aot::RelocTarget::end(tsi),
-                                        rel ? aot::RelocKind::REL32 : aot::RelocKind::ABS64);
+                            w.add_reloc(fl.sec, site,
+                                        aot::RelocTarget::end(tsi),
+                                        rel ? aot::RelocKind::REL32
+                                            : aot::RelocKind::ABS64);
                         } else {
-                            w.add_reloc(fl.sec, site, aot::RelocTarget::addr(tsi, 0),
-                                        rel ? aot::RelocKind::REL32 : aot::RelocKind::ABS64);
+                            w.add_reloc(fl.sec, site,
+                                        aot::RelocTarget::addr(tsi, 0),
+                                        rel ? aot::RelocKind::REL32
+                                            : aot::RelocKind::ABS64);
                         }
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
@@ -2186,54 +2505,59 @@ int main(int argc, char *argv[]) {
                         const std::pair<int, uint64_t> loc = place_data(N);
                         const aot::RelocKind k =
                             (r.kind == jit::NativeReloc::Kind::DATA_REL32)
-                            ? aot::RelocKind::REL32 : aot::RelocKind::ABS64;
-                        w.add_reloc(fl.sec, site,
-                                    aot::RelocTarget::addr(loc.first, loc.second), k);
+                                ? aot::RelocKind::REL32
+                                : aot::RelocKind::ABS64;
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::addr(loc.first, loc.second), k);
                     }
                 }
             }
 
             // Relocs de los bloques `bytes` con referencias a simbolos
             // (`dq main`): el campo (placeholder 0) se parchea con la direccion
-            // del simbolo.  Solo se resuelven contra FUNCIONES (fn_loc); una ref
-            // a otro dato/seccion es trabajo futuro.
+            // del simbolo.  Solo se resuelven contra FUNCIONES (fn_loc); una
+            // ref a otro dato/seccion es trabajo futuro.
             for (uint32_t N = 0; N < sd.size(); ++N) {
                 const auto &meta = sd.entries[N].meta;
                 if (meta.sym_refs.empty()) continue;
                 auto dit = data_loc.find(N);
-                if (dit == data_loc.end()) continue;  // no colocada (no deberia)
-                const int      dsec = dit->second.first;
+                if (dit == data_loc.end()) continue; // no colocada (no deberia)
+                const int dsec = dit->second.first;
                 const uint64_t doff = dit->second.second;
                 for (const auto &sr : meta.sym_refs) {
                     auto fit = fn_loc.find(sr.sym);
                     if (fit == fn_loc.end()) {
-                        std::cerr << "[aot] bytes: referencia a simbolo no resuelto '"
-                                  << sr.sym << "' (solo funciones soportadas).\n";
+                        std::cerr
+                            << "[aot] bytes: referencia a simbolo no resuelto '"
+                            << sr.sym << "' (solo funciones soportadas).\n";
                         return EXIT_FAILURE;
                     }
                     const aot::RelocKind k = sr.is_rel ? aot::RelocKind::REL32
                                                        : aot::RelocKind::ABS64;
                     w.add_reloc(dsec, doff + sr.offset,
                                 aot::RelocTarget::addr(fit->second.sec,
-                                                       fit->second.off), k);
+                                                       fit->second.off),
+                                k);
                 }
             }
 
             if (!no_stub && stub.has_import_call) {
-                w.add_import_call(aot::ImportCall{
-                    stub.import_dll, stub.import_func, text_sec, stub.import_call_off});
+                w.add_import_call(aot::ImportCall{stub.import_dll,
+                                                  stub.import_func, text_sec,
+                                                  stub.import_call_off});
             }
             // AOT.2.exec: registrar el import de cada thunk (FF 25 -> IAT).  Se
             // agrupan por DLL junto al ExitProcess (kernel32) en el emisor PE.
             for (const PeThunkImport &ti : pe_thunk_imports) {
-                w.add_import_call(aot::ImportCall{
-                    ti.dll, ti.func, text_sec, ti.off});
+                w.add_import_call(
+                    aot::ImportCall{ti.dll, ti.func, text_sec, ti.off});
             }
 
             std::string werr;
             if (!w.write(out_prefix, werr)) {
-                std::cerr << "[aot] error al escribir '" << out_prefix << "': "
-                          << werr << "\n";
+                std::cerr << "[aot] error al escribir '" << out_prefix
+                          << "': " << werr << "\n";
                 return EXIT_FAILURE;
             }
 
@@ -2241,33 +2565,37 @@ int main(int argc, char *argv[]) {
             if (emit_shared)
                 std::cout << "[aot] libreria compartida " << fmt_name
                           << (fmt == aot::ObjFormat::PE ? " (.dll)" : " (.so)")
-                          << " escrita en '" << out_prefix << "' (" << compiled.size()
-                          << " simbolo(s) exportado(s); "
-                          << (fmt == aot::ObjFormat::PE ? "LoadLibrary/GetProcAddress"
-                                                        : "dlopen/dlsym") << ").\n";
+                          << " escrita en '" << out_prefix << "' ("
+                          << compiled.size() << " simbolo(s) exportado(s); "
+                          << (fmt == aot::ObjFormat::PE
+                                  ? "LoadLibrary/GetProcAddress"
+                                  : "dlopen/dlsym")
+                          << ").\n";
             else if (emit_obj)
                 std::cout << "[aot] objeto relocatable " << fmt_name
                           << (fmt == aot::ObjFormat::PE ? " (.obj)" : " (.o)")
                           << " escrito en '" << out_prefix
                           << "' (main GLOBAL; linkable con "
-                          << (fmt == aot::ObjFormat::PE ? "link.exe/gcc-mingw" : "ld/gcc")
+                          << (fmt == aot::ObjFormat::PE ? "link.exe/gcc-mingw"
+                                                        : "ld/gcc")
                           << ").\n";
             else if (emit_bin)
-                std::cout << "[aot] binario plano (.bin) escrito en '" << out_prefix
-                          << "' (sin cabecera; entry en offset 0; base de carga 0x"
-                          << std::hex << bin_base << std::dec << ").\n";
+                std::cout
+                    << "[aot] binario plano (.bin) escrito en '" << out_prefix
+                    << "' (sin cabecera; entry en offset 0; base de carga 0x"
+                    << std::hex << bin_base << std::dec << ").\n";
             else
-                std::cout << "[aot] ejecutable nativo " << fmt_name << " escrito en '"
-                          << out_prefix << "' (entry _start -> main -> exit, return "
+                std::cout << "[aot] ejecutable nativo " << fmt_name
+                          << " escrito en '" << out_prefix
+                          << "' (entry _start -> main -> exit, return "
                              "de main como exit-code).\n";
             return EXIT_SUCCESS;
         }
 
         /* CACHE MISS + @Macros presentes: hacer two-phase y persistir
          * el resultado a `.cache/vex/<key>.velb` para futuras corridas. */
-        if (!cache_hit
-         && cr.has_lowerable_macros
-         && !user_already_set_prebuilt) {
+        if (!cache_hit && cr.has_lowerable_macros &&
+            !user_already_set_prebuilt) {
             std::error_code ec;
             std::filesystem::create_directories(cache_dir, ec);
 
@@ -2276,23 +2604,25 @@ int main(int argc, char *argv[]) {
              * anterior (si existe).  Reportamos via VESTA_MC_VERBOSE que
              * macros cambiaron -- foundation para futuro per-macro relink. */
             if (verbose_mc) {
-                const auto current_ranges = find_macro_ranges_with_names(vex_source);
+                const auto current_ranges =
+                    find_macro_ranges_with_names(vex_source);
                 std::vector<std::pair<std::string, std::string>> current_hashes;
                 current_hashes.reserve(current_ranges.size());
                 for (const auto &r : current_ranges) {
                     const std::string &mname = std::get<0>(r);
                     const size_t start = std::get<1>(r);
-                    const size_t end   = std::get<2>(r);
+                    const size_t end = std::get<2>(r);
                     constexpr uint64_t FNV_O = 14695981039346656037ULL;
                     constexpr uint64_t FNV_P = 1099511628211ULL;
                     uint64_t h = FNV_O;
-                    for (size_t i = start; i < end && i < vex_source.size(); ++i) {
+                    for (size_t i = start; i < end && i < vex_source.size();
+                         ++i) {
                         h ^= static_cast<uint8_t>(vex_source[i]);
                         h *= FNV_P;
                     }
                     char buf[17];
                     std::snprintf(buf, sizeof(buf), "%016llx",
-                                   static_cast<unsigned long long>(h));
+                                  static_cast<unsigned long long>(h));
                     current_hashes.emplace_back(mname, buf);
                 }
                 /* Cargar manifest anterior si existe (key viejo = el del
@@ -2302,20 +2632,22 @@ int main(int argc, char *argv[]) {
                 {
                     std::error_code sec;
                     for (const auto &entry :
-                            std::filesystem::directory_iterator(cache_dir, sec)) {
+                         std::filesystem::directory_iterator(cache_dir, sec)) {
                         if (!entry.is_regular_file()) continue;
                         const std::string p = entry.path().string();
-                        if (p.size() > 9 && p.substr(p.size() - 9) == ".manifest") {
+                        if (p.size() > 9 &&
+                            p.substr(p.size() - 9) == ".manifest") {
                             std::ifstream ifs(p);
                             std::string line;
                             while (std::getline(ifs, line)) {
                                 const auto tab = line.find('\t');
                                 if (tab != std::string::npos) {
-                                    previous[line.substr(0, tab)] = line.substr(tab + 1);
+                                    previous[line.substr(0, tab)] =
+                                        line.substr(tab + 1);
                                 }
                             }
                             had_previous = !previous.empty();
-                            break;  /* solo el primero, suficiente para diag */
+                            break; /* solo el primero, suficiente para diag */
                         }
                     }
                 }
@@ -2326,16 +2658,20 @@ int main(int argc, char *argv[]) {
                         seen.insert(cur.first);
                         auto it = previous.find(cur.first);
                         if (it == previous.end()) {
-                            std::cerr << "[mc-manifest] anyadido: " << cur.first << "\n";
+                            std::cerr << "[mc-manifest] anyadido: " << cur.first
+                                      << "\n";
                             ++added;
                         } else if (it->second != cur.second) {
-                            std::cerr << "[mc-manifest] cambio: " << cur.first << "\n";
+                            std::cerr << "[mc-manifest] cambio: " << cur.first
+                                      << "\n";
                             ++changed;
                         }
                     }
                     for (const auto &prev : previous) {
                         if (!seen.count(prev.first)) {
-                            std::cerr << "[mc-manifest] eliminado: " << prev.first << "\n";
+                            std::cerr
+                                << "[mc-manifest] eliminado: " << prev.first
+                                << "\n";
                         }
                     }
                     std::cerr << "[mc-manifest] total=" << current_hashes.size()
@@ -2369,15 +2705,16 @@ int main(int argc, char *argv[]) {
                 if (const char *e = std::getenv("VESTA_MC_CACHE_TTL_DAYS")) {
                     char *end = nullptr;
                     const unsigned long v = std::strtoul(e, &end, 10);
-                    if (end != e && v <= 3650) ttl_days = v;  /* cap 10 anyos */
+                    if (end != e && v <= 3650) ttl_days = v; /* cap 10 anyos */
                 }
                 if (ttl_days > 0) {
-                    const auto now_tp = std::filesystem::file_time_type::clock::now();
-                    const auto ttl    = std::chrono::hours(24 * ttl_days);
+                    const auto now_tp =
+                        std::filesystem::file_time_type::clock::now();
+                    const auto ttl = std::chrono::hours(24 * ttl_days);
                     size_t swept = 0;
                     std::error_code swec;
                     for (const auto &entry :
-                            std::filesystem::directory_iterator(cache_dir, swec)) {
+                         std::filesystem::directory_iterator(cache_dir, swec)) {
                         if (!entry.is_regular_file()) continue;
                         std::error_code mtec;
                         const auto mt = entry.last_write_time(mtec);
@@ -2389,9 +2726,10 @@ int main(int argc, char *argv[]) {
                         }
                     }
                     if (verbose_mc && swept > 0) {
-                        std::cerr << "[mc-cache] sweeper: " << swept
-                                  << " archivo(s) expirado(s) eliminado(s) (TTL "
-                                  << ttl_days << " dias)\n";
+                        std::cerr
+                            << "[mc-cache] sweeper: " << swept
+                            << " archivo(s) expirado(s) eliminado(s) (TTL "
+                            << ttl_days << " dias)\n";
                     }
                 }
             }
@@ -2435,8 +2773,8 @@ int main(int argc, char *argv[]) {
                     cr = std::move(cr2);
                 }
                 if (verbose_mc) {
-                    std::cerr << "[mc-cache] miss + populated: "
-                              << cache_path << "\n";
+                    std::cerr << "[mc-cache] miss + populated: " << cache_path
+                              << "\n";
                 }
                 /* Cleanup del .vel temporal y del .velb-map (no de cache_path,
                  * que es el archivo cacheado y debe persistir). */
@@ -2448,7 +2786,8 @@ int main(int argc, char *argv[]) {
 
         // Mostrar warnings (cr.ok no impide los warnings).
         for (const auto &d : cr.diagnostics.all()) {
-            if (d.level != vex::DiagLevel::ERR) vex::print_diagnostic(std::cerr, d);
+            if (d.level != vex::DiagLevel::ERR)
+                vex::print_diagnostic(std::cerr, d);
         }
 
         // si --vex-base fue especificado y es != 0, parchear el
@@ -2491,10 +2830,12 @@ int main(int argc, char *argv[]) {
                 std::snprintf(ipbuf, sizeof(ipbuf), "@InitPc(0x%llX)\n\n",
                               static_cast<unsigned long long>(vex_base_addr));
                 cr.vel_text.insert(mod_pos, ipbuf);
-                vesta::scout() << "[vex] @InitPc(0x" << std::hex << vex_base_addr
-                               << std::dec << ") insertado (start_pc = base address)\n";
+                vesta::scout()
+                    << "[vex] @InitPc(0x" << std::hex << vex_base_addr
+                    << std::dec << ") insertado (start_pc = base address)\n";
             } else {
-                std::cerr << "[vex] aviso: no se encontro @Module(...) para insertar @InitPc\n";
+                std::cerr << "[vex] aviso: no se encontro @Module(...) para "
+                             "insertar @InitPc\n";
             }
             // Convertir el `hlt` final del main del modulo en `ret` para que
             // sea LLAMABLE via callvm desde loadmod del caller.  Por defecto
@@ -2504,26 +2845,30 @@ int main(int argc, char *argv[]) {
             // El standalone execution del plugin no funciona tras esta
             // conversion (RET pop'ea garbage del stack).  Aceptamos esta
             // limitacion: los plugins no se ejecutan standalone.
-            const std::string main_ret_marker = "main_ret:\n    leave\n    hlt\n";
-            const std::string main_ret_repl   = "main_ret:\n    leave\n    ret\n";
+            const std::string main_ret_marker =
+                "main_ret:\n    leave\n    hlt\n";
+            const std::string main_ret_repl = "main_ret:\n    leave\n    ret\n";
             size_t hlt_pos = cr.vel_text.find(main_ret_marker);
             if (hlt_pos != std::string::npos) {
-                cr.vel_text.replace(hlt_pos, main_ret_marker.size(), main_ret_repl);
-                vesta::scout() << "[vex] main_ret hlt -> ret (modo plugin: callable via loadmod)\n";
+                cr.vel_text.replace(hlt_pos, main_ret_marker.size(),
+                                    main_ret_repl);
+                vesta::scout() << "[vex] main_ret hlt -> ret (modo plugin: "
+                                  "callable via loadmod)\n";
             } else {
-                std::cerr << "[vex] aviso: no se encontro 'main_ret: leave hlt' para convertir a ret\n";
+                std::cerr << "[vex] aviso: no se encontro 'main_ret: leave "
+                             "hlt' para convertir a ret\n";
             }
         }
 
         // Diagramas: cada flag activo produce un archivo .mmd o .dot segun
         // el formato escogido.  Mermaid reconocido por VS Code / GitHub /
-        // mermaid.live.  Graphviz se renderiza con `dot -Tsvg foo.dot -o foo.svg`.
+        // mermaid.live.  Graphviz se renderiza con `dot -Tsvg foo.dot -o
+        // foo.svg`.
         auto write_diagram = [&](const std::string &content,
-                                  const std::string &suffix) -> bool {
+                                 const std::string &suffix) -> bool {
             if (content.empty()) return true; // no se solicito; no es error
-            std::string base = out_prefix.empty()
-                                 ? copts.module_name
-                                 : out_prefix;
+            std::string base =
+                out_prefix.empty() ? copts.module_name : out_prefix;
             std::string path = base + suffix;
             std::ofstream ofs(path);
             if (!ofs.is_open()) {
@@ -2535,23 +2880,39 @@ int main(int argc, char *argv[]) {
             return true;
         };
         if (emit_mermaid) {
-            if (diag_vex     && !write_diagram(cr.mermaid_ast,      ".ast.mmd"))     return EXIT_FAILURE;
-            if (diag_ir_pre  && !write_diagram(cr.mermaid_ir_pre,   ".ir.pre.mmd"))  return EXIT_FAILURE;
-            if (diag_ir_post && !write_diagram(cr.mermaid_ir_post,  ".ir.post.mmd")) return EXIT_FAILURE;
-            if (diag_vel     && !write_diagram(cr.mermaid_vel,      ".vel.mmd"))     return EXIT_FAILURE;
+            if (diag_vex && !write_diagram(cr.mermaid_ast, ".ast.mmd"))
+                return EXIT_FAILURE;
+            if (diag_ir_pre && !write_diagram(cr.mermaid_ir_pre, ".ir.pre.mmd"))
+                return EXIT_FAILURE;
+            if (diag_ir_post &&
+                !write_diagram(cr.mermaid_ir_post, ".ir.post.mmd"))
+                return EXIT_FAILURE;
+            if (diag_vel && !write_diagram(cr.mermaid_vel, ".vel.mmd"))
+                return EXIT_FAILURE;
         }
         if (emit_graphviz) {
-            if (diag_vex     && !write_diagram(cr.graphviz_ast,     ".ast.dot"))     return EXIT_FAILURE;
-            if (diag_ir_pre  && !write_diagram(cr.graphviz_ir_pre,  ".ir.pre.dot"))  return EXIT_FAILURE;
-            if (diag_ir_post && !write_diagram(cr.graphviz_ir_post, ".ir.post.dot")) return EXIT_FAILURE;
-            if (diag_vel     && !write_diagram(cr.graphviz_vel,     ".vel.dot"))     return EXIT_FAILURE;
+            if (diag_vex && !write_diagram(cr.graphviz_ast, ".ast.dot"))
+                return EXIT_FAILURE;
+            if (diag_ir_pre &&
+                !write_diagram(cr.graphviz_ir_pre, ".ir.pre.dot"))
+                return EXIT_FAILURE;
+            if (diag_ir_post &&
+                !write_diagram(cr.graphviz_ir_post, ".ir.post.dot"))
+                return EXIT_FAILURE;
+            if (diag_vel && !write_diagram(cr.graphviz_vel, ".vel.dot"))
+                return EXIT_FAILURE;
         }
         if (emit_html) {
             // Paginas HTML interactivas autocontenidas: abrir en el navegador.
-            if (diag_vex     && !write_diagram(cr.html_ast,      ".ast.html"))     return EXIT_FAILURE;
-            if (diag_ir_pre  && !write_diagram(cr.html_ir_pre,   ".ir.pre.html"))  return EXIT_FAILURE;
-            if (diag_ir_post && !write_diagram(cr.html_ir_post,  ".ir.post.html")) return EXIT_FAILURE;
-            if (diag_vel     && !write_diagram(cr.html_vel,      ".vel.html"))     return EXIT_FAILURE;
+            if (diag_vex && !write_diagram(cr.html_ast, ".ast.html"))
+                return EXIT_FAILURE;
+            if (diag_ir_pre && !write_diagram(cr.html_ir_pre, ".ir.pre.html"))
+                return EXIT_FAILURE;
+            if (diag_ir_post &&
+                !write_diagram(cr.html_ir_post, ".ir.post.html"))
+                return EXIT_FAILURE;
+            if (diag_vel && !write_diagram(cr.html_vel, ".vel.html"))
+                return EXIT_FAILURE;
         }
 
         // Si --vex-emit-ir esta activo, escribir el dump del SSA IR
@@ -2560,8 +2921,8 @@ int main(int argc, char *argv[]) {
         // compila a .velb en este modo.
         if (emit_ir) {
             std::string ir_path = out_prefix.empty()
-                                    ? (copts.module_name + ".ir")
-                                    : (out_prefix + ".ir");
+                                      ? (copts.module_name + ".ir")
+                                      : (out_prefix + ".ir");
             std::ofstream ofs_ir(ir_path);
             if (!ofs_ir.is_open()) {
                 std::cerr << "[vex] No se puede escribir: " << ir_path << "\n";
@@ -2577,21 +2938,22 @@ int main(int argc, char *argv[]) {
         // toolchain nativa (gcc/clang/javac/node/etc).  La extension se
         // deriva del target.
         if (!copts.port_target.empty()) {
-            std::string ext = ".c";  // default; futuros: .java, .js
-            if (copts.port_target == "c")    ext = ".c";
+            std::string ext = ".c"; // default; futuros: .java, .js
+            if (copts.port_target == "c") ext = ".c";
             // (mas casos cuando agreguemos backends)
             std::string port_path = out_prefix.empty()
-                                      ? (copts.module_name + ext)
-                                      : (out_prefix + ext);
+                                        ? (copts.module_name + ext)
+                                        : (out_prefix + ext);
             std::ofstream ofs_port(port_path);
             if (!ofs_port.is_open()) {
-                std::cerr << "[port] No se puede escribir: " << port_path << "\n";
+                std::cerr << "[port] No se puede escribir: " << port_path
+                          << "\n";
                 return EXIT_FAILURE;
             }
             ofs_port << cr.port_text;
             vesta::scout() << "[port] " << copts.port_target
-                           << " generado: " << port_path
-                           << " (" << cr.port_text.size() << " bytes)\n";
+                           << " generado: " << port_path << " ("
+                           << cr.port_text.size() << " bytes)\n";
             for (const auto &w : cr.port_warnings) {
                 std::cerr << "[port] warning: " << w << "\n";
             }
@@ -2599,9 +2961,8 @@ int main(int argc, char *argv[]) {
         }
 
         // 5 Escribir el .vel intermedio.
-        std::string vel_path = out_prefix.empty()
-                                 ? (copts.module_name + ".vel")
-                                 : (out_prefix + ".vel");
+        std::string vel_path = out_prefix.empty() ? (copts.module_name + ".vel")
+                                                  : (out_prefix + ".vel");
         {
             std::ofstream ofs(vel_path);
             if (!ofs.is_open()) {
@@ -2634,10 +2995,8 @@ int main(int argc, char *argv[]) {
         // (a) el compile usa imports (compile_vex_project tiene
         // dep_paths populated), (b) el link fue exitoso, y (c) el cache
         // esta enabled.
-        if (rc == EXIT_SUCCESS
-         && project_cache_enabled
-         && has_imports
-         && !cr.dep_paths.empty()) {
+        if (rc == EXIT_SUCCESS && project_cache_enabled && has_imports &&
+            !cr.dep_paths.empty()) {
             const std::string velb_path = out_prefix + ".velb";
             std::ifstream vf(velb_path, std::ios::binary | std::ios::ate);
             if (vf.is_open()) {
@@ -2660,20 +3019,22 @@ int main(int argc, char *argv[]) {
                         std::vector<uint8_t> dbytes(
                             static_cast<size_t>(dsz < 0 ? 0 : dsz));
                         if (dsz > 0) {
-                            df.read(reinterpret_cast<char *>(dbytes.data()), dsz);
+                            df.read(reinterpret_cast<char *>(dbytes.data()),
+                                    dsz);
                         }
                         vex::ProjectCacheDep d;
-                        d.path        = p;
-                        d.source_hash = vex::fnv1a64_bytes(
-                            dbytes.data(), dbytes.size());
+                        d.path = p;
+                        d.source_hash =
+                            vex::fnv1a64_bytes(dbytes.data(), dbytes.size());
                         deps.push_back(std::move(d));
                     }
                     const bool saved = vex::project_cache_save(
                         pc_path, opts_hash, deps, velb_bytes);
                     if (project_cache_verbose) {
-                        std::cerr << "[vex-project-cache] " << (saved ? "saved" : "save_failed")
-                                   << ": " << pc_path << " (" << velb_bytes.size()
-                                   << " bytes, " << deps.size() << " deps)\n";
+                        std::cerr << "[vex-project-cache] "
+                                  << (saved ? "saved" : "save_failed") << ": "
+                                  << pc_path << " (" << velb_bytes.size()
+                                  << " bytes, " << deps.size() << " deps)\n";
                     }
                 }
             }
@@ -2696,18 +3057,20 @@ int main(int argc, char *argv[]) {
                         std::istreambuf_iterator<char>());
                     f.close();
                     vex::ComptimeRuntime ctr;
-                    const bool loaded = ctr.load_macros_from_bytes(std::move(bytes));
+                    const bool loaded =
+                        ctr.load_macros_from_bytes(std::move(bytes));
                     std::cerr << "[mc-probe] load_macros_from_bytes -> "
                               << (loaded ? "OK" : "FAIL") << "\n";
                     std::cerr << "[mc-probe] is_initialized -> "
-                              << (ctr.is_initialized() ? "true" : "false") << "\n";
+                              << (ctr.is_initialized() ? "true" : "false")
+                              << "\n";
                     std::cerr << "[mc-probe] registered_macro_count -> "
                               << ctr.registered_macro_count() << "\n";
                     /* Listar nombres + PCs para demo. */
                     auto names = ctr.list_registered_macros();
                     for (const auto &p : names) {
-                        std::cerr << "[mc-probe]   " << p.first
-                                  << " @ 0x" << std::hex << p.second << std::dec << "\n";
+                        std::cerr << "[mc-probe]   " << p.first << " @ 0x"
+                                  << std::hex << p.second << std::dec << "\n";
                     }
                     /* Phase MC.5: intentar invocar el PRIMER macro a
                      * nivel funcion (filtrar sufijos internos del
@@ -2716,9 +3079,8 @@ int main(int argc, char *argv[]) {
                     const std::pair<std::string, uint64_t> *first_fn = nullptr;
                     auto is_internal_label = [](const std::string &n) {
                         static const char *suffixes[] = {
-                            "_entry_", "_if_", "_ret", "_while_", "_for_",
-                            "_then_", "_else_", "_merge_", "_loop_"
-                        };
+                            "_entry_", "_if_",   "_ret",    "_while_", "_for_",
+                            "_then_",  "_else_", "_merge_", "_loop_"};
                         for (const char *suf : suffixes) {
                             if (n.find(suf) != std::string::npos) return true;
                         }
@@ -2726,15 +3088,17 @@ int main(int argc, char *argv[]) {
                     };
                     for (const auto &p : names) {
                         if (p.first.find("__macro_") != 0) continue;
-                        if (is_internal_label(p.first))  continue;
+                        if (is_internal_label(p.first)) continue;
                         if (!first_fn) first_fn = &p;
                     }
                     if (!first_fn) {
-                        std::cerr << "[mc-probe] no se encontro macro top-level invocable\n";
+                        std::cerr << "[mc-probe] no se encontro macro "
+                                     "top-level invocable\n";
                     } else {
-                        std::cerr << "[mc-probe] invoke target: " << first_fn->first
-                                  << " @ 0x" << std::hex << first_fn->second
-                                  << std::dec << "\n";
+                        std::cerr
+                            << "[mc-probe] invoke target: " << first_fn->first
+                            << " @ 0x" << std::hex << first_fn->second
+                            << std::dec << "\n";
                         /* MC.7: invocar el macro varias veces como
                          * @c string y mostrar el contenido devuelto. */
                         for (int iter = 1; iter <= 3; ++iter) {
@@ -2742,8 +3106,8 @@ int main(int argc, char *argv[]) {
                             const bool ok = ctr.invoke_string_macro(
                                 first_fn->first, /*args=*/{}, s_out);
                             std::cerr << "[mc-probe] invoke#" << iter << " -> "
-                                      << (ok ? "OK" : "FAIL")
-                                      << "  string=\"" << s_out << "\"\n";
+                                      << (ok ? "OK" : "FAIL") << "  string=\""
+                                      << s_out << "\"\n";
                         }
                         std::cerr << "[mc-probe] call_count -> "
                                   << ctr.call_count() << "\n";
@@ -2757,10 +3121,11 @@ int main(int argc, char *argv[]) {
                      * AST evaluator).  Cero coste si no hay expectacioes. */
                     if (!cr.macro_expectations.empty()) {
                         for (const auto &e : cr.macro_expectations) {
-                            ctr.record_expectation(
-                                e.macro_name, e.args, e.expected_str, e.src_loc);
+                            ctr.record_expectation(e.macro_name, e.args,
+                                                   e.expected_str, e.src_loc);
                         }
-                        std::vector<vex::ComptimeRuntime::ShadowMismatch> report;
+                        std::vector<vex::ComptimeRuntime::ShadowMismatch>
+                            report;
                         const size_t mismatches = ctr.shadow_validate(report);
                         std::cerr << "[mc-shadow] expectations="
                                   << cr.macro_expectations.size()
@@ -2778,7 +3143,8 @@ int main(int argc, char *argv[]) {
                             std::cerr << "\n";
                         }
                     } else {
-                        std::cerr << "[mc-shadow] sin expectaciones (no hay @Macros con args literales)\n";
+                        std::cerr << "[mc-shadow] sin expectaciones (no hay "
+                                     "@Macros con args literales)\n";
                     }
                 }
             }
@@ -2791,25 +3157,22 @@ int main(int argc, char *argv[]) {
     // vm.exe --build src/main.vel -o main.velb
     if (result.count("build")) {
         return asm_multi_process::run_worker(
-            result["build"].as<std::string>(),
-            out_prefix,
+            result["build"].as<std::string>(), out_prefix,
             /*skip_preprocessor=*/false,
             /*keep_labels=*/(result.count("keep-labels") > 0),
             /*ir_section_bytes=*/nullptr,
-            /*emit_map=*/(result.count("emit-map") > 0)
-        );
+            /*emit_map=*/(result.count("emit-map") > 0));
     }
 
     // Abrir el REPL interactivo VestaShell (--interprete)
     if (result.count("interprete")) {
         vsh::VshInterpreter interp;
         // ARGV vacio o con [""]
-        std::vector<std::string> empty_argv = { "" };
+        std::vector<std::string> empty_argv = {""};
         interp.set_argv(empty_argv);
         interp.run_interactive();
         return EXIT_SUCCESS;
     }
-
 
     // Ejecutar un fichero VestaShell directamente sin abrir el REPL
     // vm.exe --script mi_script.vsh [args extra para el script...]
@@ -2820,14 +3183,15 @@ int main(int argc, char *argv[]) {
         std::vector<std::string> script_args;
         script_args.push_back(vsh_path);
         if (result.count("positional")) {
-            for (const auto& a : result["positional"].as<std::vector<std::string>>()) {
+            for (const auto &a :
+                 result["positional"].as<std::vector<std::string>>()) {
                 script_args.push_back(a);
             }
         }
 
         try {
-            vsh::VshInterpreter interp;     // sin callback REPL
-            interp.set_argv(script_args);   // <--- AQUI lo importante
+            vsh::VshInterpreter interp;   // sin callback REPL
+            interp.set_argv(script_args); // <--- AQUI lo importante
             interp.exec_file(vsh_path);
         } catch (const vsh::VshRuntimeError &e) {
             std::cerr << "[script] Error en " << vsh_path;
@@ -2846,32 +3210,32 @@ int main(int argc, char *argv[]) {
         return EXIT_SUCCESS;
     }
 
-
     // Ejecutar un archivo .velb en la VM
     // vm.exe --run program.velb
     if (result.count("run")) {
-        const std::string &velb_path      = result["run"].as<std::string>();
-        size_t             num_schedulers = result["schedulers"].as<size_t>();
+        const std::string &velb_path = result["run"].as<std::string>();
+        size_t num_schedulers = result["schedulers"].as<size_t>();
 
         try {
             Timer t_total_run;
             Timer t_construct;
             runtime::ManageVM mgr(nullptr, 0);
-            runtime::VM *     vm = mgr.loader.create_vm_instance(num_schedulers);
+            runtime::VM *vm = mgr.loader.create_vm_instance(num_schedulers);
             if (!vm) {
                 std::cerr << "Error: no se pudo crear la instancia de VM\n";
                 return EXIT_FAILURE;
             }
             const long long ns_construct = t_construct.ns();
 
-            // aplicar configuracion distribuida si el usuario paso algun flag --dist-*
-            bool has_dist = result.count("dist-port")        > 0 ||
-                            result.count("dist-discover")    > 0 ||
-                            result.count("dist-add-node")    > 0 ||
-                            result.count("dist-tls")         > 0 ||
-                            result.count("dist-name")        > 0 ||
-                            result.count("dist-token")       > 0 ||
-                            result.count("dist-node-id")     > 0;
+            // aplicar configuracion distribuida si el usuario paso algun flag
+            // --dist-*
+            bool has_dist = result.count("dist-port") > 0 ||
+                            result.count("dist-discover") > 0 ||
+                            result.count("dist-add-node") > 0 ||
+                            result.count("dist-tls") > 0 ||
+                            result.count("dist-name") > 0 ||
+                            result.count("dist-token") > 0 ||
+                            result.count("dist-node-id") > 0;
             if (has_dist) apply_dist_config(vm, result);
 
             // Phase M.sandbox (orden critico): pre-activar `sandbox_active`
@@ -2889,7 +3253,8 @@ int main(int argc, char *argv[]) {
             }
 
             Timer t_load;
-            runtime::ProcessVM *proc = mgr.loader.load_executable(*vm, velb_path);
+            runtime::ProcessVM *proc =
+                mgr.loader.load_executable(*vm, velb_path);
             if (!proc) {
                 std::cerr << "Error: no se pudo cargar el ejecutable\n";
                 return EXIT_FAILURE;
@@ -2897,7 +3262,8 @@ int main(int argc, char *argv[]) {
             // Phase M.sandbox: aplicar @c --vex-caps al modulo cargado.
             // El primer Executable del pool es el que acabamos de cargar.
             if (result.count("vex-caps") && !mgr.loader.executables.empty()) {
-                const std::string caps_str = result["vex-caps"].as<std::string>();
+                const std::string caps_str =
+                    result["vex-caps"].as<std::string>();
                 if (!caps_str.empty()) {
                     auto &exe = *mgr.loader.executables.front();
                     exe.caps = ::loader::parse_caps(caps_str);
@@ -2944,8 +3310,8 @@ int main(int argc, char *argv[]) {
                 dbg = std::make_unique<debug::Debugger>(*vm);
                 if (!dbg->start(dbg_port)) {
                     std::cerr << "Warning: no se pudo iniciar el servidor "
-                                 "de depuracion en puerto " << dbg_port
-                              << "; continuando sin debugger.\n";
+                                 "de depuracion en puerto "
+                              << dbg_port << "; continuando sin debugger.\n";
                     dbg.reset();
                 } else {
                     vm->debugger = dbg.get();
@@ -2998,11 +3364,11 @@ int main(int argc, char *argv[]) {
                 long long elapsed_ms = elapsed_ns / 1'000'000;
                 long long elapsed_us = elapsed_ns / 1'000;
 
-                uint64_t total_instrs   = 0;
+                uint64_t total_instrs = 0;
                 uint64_t total_jit_instrs = 0;
                 uint64_t active_time_ns = 0;
                 uint64_t jit_time_ns = 0;
-                for (const auto &sched: vm->schedulers) {
+                for (const auto &sched : vm->schedulers) {
                     total_instrs += sched->profiler_instr_counter;
                     /* JIT instrs: cada metodo JIT-eated incrementa el contador
                      * con N IR-instrs al entrar (proxy de bytecode instrs).
@@ -3012,28 +3378,25 @@ int main(int argc, char *argv[]) {
                     jit_time_ns += sched->time_jit;
                 }
                 /* active_time incluye el JIT time tambien (solo cuenta cuando
-                 * el JIT-method retorna).  Si JIT corre durante interp dispatch,
-                 * el time_jit ya esta incluido en time_exec via el wrapper. */
+                 * el JIT-method retorna).  Si JIT corre durante interp
+                 * dispatch, el time_jit ya esta incluido en time_exec via el
+                 * wrapper. */
 
-
-                for (auto &sched: vm->schedulers) {
+                for (auto &sched : vm->schedulers) {
                     vesta::scout()
-                            << "[Scheduler " << sched->id_scheduler
-                            << "] Estados de procesos: " << sched->ready_queue.size()
-                            << " "
-                            << sched->processes.size()
-                            << " "
-                            << sched->is_waiting
-                            << " "
-                            << sched->should_kill // indica si la instancia debe morir.
-                            << std::endl;
+                        << "[Scheduler " << sched->id_scheduler
+                        << "] Estados de procesos: "
+                        << sched->ready_queue.size() << " "
+                        << sched->processes.size() << " " << sched->is_waiting
+                        << " " << sched->should_kill // indica si la instancia
+                                                     // debe morir.
+                        << std::endl;
                     vesta::scout() << sched->to_string() << std::endl;
-                    for (auto &p: sched->processes) {
-                        vesta::scout()
-                                << "\t[Process " << p->pid.local_pid
-                                << "] Estados de procesos: " << runtime::vm_state_to_str(p->state)
-                                << " "
-                                << std::endl;
+                    for (auto &p : sched->processes) {
+                        vesta::scout() << "\t[Process " << p->pid.local_pid
+                                       << "] Estados de procesos: "
+                                       << runtime::vm_state_to_str(p->state)
+                                       << " " << std::endl;
                         vesta::scout() << p->to_string() << std::endl;
                     }
                 }
@@ -3044,41 +3407,53 @@ int main(int argc, char *argv[]) {
                  * aplica).  El JIT counter se incrementa por N (IR instrs
                  * del metodo) al ENTRY de cada invocacion JIT-eated. */
                 const uint64_t total_combined = total_instrs + total_jit_instrs;
-                // sin hooks time_decode/time_exec son 0; usar wall time como base
-                uint64_t mips_base_ns = active_time_ns > 0 ? active_time_ns : (uint64_t) elapsed_ns;
-                double   mips         = total_combined > 0 && mips_base_ns > 0
+                // sin hooks time_decode/time_exec son 0; usar wall time como
+                // base
+                uint64_t mips_base_ns =
+                    active_time_ns > 0 ? active_time_ns : (uint64_t)elapsed_ns;
+                double mips = total_combined > 0 && mips_base_ns > 0
                                   ? (total_combined * 1000.0) / mips_base_ns
                                   : 0.0;
 
                 vesta::scout() << "\n=== RUN STATS ===\n";
-                vesta::scout() << "Wall time:     " << elapsed_ns << " ns  ("
-                        << elapsed_us << " us, " << elapsed_ms << " ms)\n";
+                vesta::scout()
+                    << "Wall time:     " << elapsed_ns << " ns  (" << elapsed_us
+                    << " us, " << elapsed_ms << " ms)\n";
                 if (active_time_ns > 0) {
-                    vesta::scout() << "Tiempo activo: " << active_time_ns << " ns  ("
-                            << active_time_ns / 1000 << " us, "
-                            << active_time_ns / 1'000'000 << " ms)\n";
+                    vesta::scout()
+                        << "Tiempo activo: " << active_time_ns << " ns  ("
+                        << active_time_ns / 1000 << " us, "
+                        << active_time_ns / 1'000'000 << " ms)\n";
                 }
                 vesta::scout() << "Instrucciones: " << total_combined
                                << "  (interp=" << total_instrs
                                << ", JIT=" << total_jit_instrs << ")\n";
                 if (jit_time_ns > 0) {
-                    vesta::scout() << "JIT time:      " << jit_time_ns << " ns  ("
-                            << jit_time_ns / 1000 << " us, "
-                            << jit_time_ns / 1'000'000 << " ms)\n";
+                    vesta::scout() << "JIT time:      " << jit_time_ns
+                                   << " ns  (" << jit_time_ns / 1000 << " us, "
+                                   << jit_time_ns / 1'000'000 << " ms)\n";
                     if (total_jit_instrs > 0) {
-                        const double jit_mips = (total_jit_instrs * 1000.0) / jit_time_ns;
+                        const double jit_mips =
+                            (total_jit_instrs * 1000.0) / jit_time_ns;
                         vesta::scout() << "JIT MIPS:      " << jit_mips << "\n";
                     }
                 }
-                vesta::scout() << "MIPS:          " << mips
-                        << (active_time_ns > 0 ? "" : "  (wall time)") << "\n";
+                vesta::scout()
+                    << "MIPS:          " << mips
+                    << (active_time_ns > 0 ? "" : "  (wall time)") << "\n";
                 vesta::scout() << "\n=== OVERHEAD BREAKDOWN ===\n";
-                vesta::scout() << "VM construct:    " << ns_construct/1000 << " us\n";
-                vesta::scout() << "load_executable: " << ns_load/1000 << " us\n";
-                vesta::scout() << "vm.start:        " << ns_start/1000 << " us  (lanzar threads)\n";
-                vesta::scout() << "wait until done: " << ns_poll/1000 << " us  (cv wait)\n";
-                vesta::scout() << "vm.stop:         " << ns_stop/1000 << " us  (join threads)\n";
-                vesta::scout() << "Total --run:     " << ns_total_run/1000 << " us\n";
+                vesta::scout()
+                    << "VM construct:    " << ns_construct / 1000 << " us\n";
+                vesta::scout()
+                    << "load_executable: " << ns_load / 1000 << " us\n";
+                vesta::scout() << "vm.start:        " << ns_start / 1000
+                               << " us  (lanzar threads)\n";
+                vesta::scout() << "wait until done: " << ns_poll / 1000
+                               << " us  (cv wait)\n";
+                vesta::scout() << "vm.stop:         " << ns_stop / 1000
+                               << " us  (join threads)\n";
+                vesta::scout()
+                    << "Total --run:     " << ns_total_run / 1000 << " us\n";
             }
 
             /* --jit-stats: imprimir contadores del JIT al final.
@@ -3089,16 +3464,17 @@ int main(int argc, char *argv[]) {
                 vesta::scout() << jit::get_jit_stats_summary() << "\n";
             }
         } catch (const std::exception &e) {
-            std::cerr << "Error al ejecutar " << velb_path << ": " << e.what() << "\n";
+            std::cerr << "Error al ejecutar " << velb_path << ": " << e.what()
+                      << "\n";
             return EXIT_FAILURE;
         }
         return EXIT_SUCCESS;
     }
 
     cli::Config cfg;
-    cfg.history_file  = "my_vm_history.txt";
-    cfg.history_max   = 1000;
-    cfg.prompt        = "vesta> ";
+    cfg.history_file = "my_vm_history.txt";
+    cfg.history_max = 1000;
+    cfg.prompt = "vesta> ";
     cfg.multiline_end = ";;";
 
     cli::VestaViewManager vm(cfg);
@@ -3116,7 +3492,6 @@ int main(int argc, char *argv[]) {
     });
 
     vm.run();
-
 
     return EXIT_SUCCESS;
 }

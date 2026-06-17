@@ -15,11 +15,12 @@
  * Cada proceso que usa msgsend/msgrecv tiene un Mailbox asociado.
  * El Mailbox es una cola FIFO thread-safe con bloqueo en recepcion.
  *
- * Mensajes locales: el proceso emisor escribe directamente en el mailbox del receptor.
- * Mensajes remotos: el DistRuntime recibe el paquete VDP_MSGSEND y lo deposita
- *   en el mailbox del proceso destino via Mailbox::push().
+ * Mensajes locales: el proceso emisor escribe directamente en el mailbox del
+ * receptor. Mensajes remotos: el DistRuntime recibe el paquete VDP_MSGSEND y lo
+ * deposita en el mailbox del proceso destino via Mailbox::push().
  *
- * Un proceso bloqueado en msgrecv es despertado por make_ready() al llegar un mensaje.
+ * Un proceso bloqueado en msgrecv es despertado por make_ready() al llegar un
+ * mensaje.
  */
 
 #ifndef MAILBOX_H
@@ -38,11 +39,12 @@ namespace distrib {
  * @brief Mensaje almacenado en el buzon.
  *
  * Contiene el PID codificado del emisor y los bytes del mensaje.
- * Los bytes se copian al construir el mensaje (el emisor puede liberar su buffer).
+ * Los bytes se copian al construir el mensaje (el emisor puede liberar su
+ * buffer).
  */
 struct MailboxMsg {
-    uint64_t             sender_pid; // PID codificado del emisor (local o remoto)
-    std::vector<uint8_t> data;       // copia de los bytes del mensaje
+    uint64_t sender_pid;       // PID codificado del emisor (local o remoto)
+    std::vector<uint8_t> data; // copia de los bytes del mensaje
 
     /**
      * @brief Construye un mensaje copiando los datos del buffer indicado.
@@ -57,13 +59,16 @@ struct MailboxMsg {
 /**
  * @brief Buzon de mensajes thread-safe para un ProcessVM.
  *
- * Usa un mutex + condicion para bloquear al receptor cuando el buzon esta vacio.
- * El tamano maximo evita que un proceso malintencionado llene la memoria.
+ * Usa un mutex + condicion para bloquear al receptor cuando el buzon esta
+ * vacio. El tamano maximo evita que un proceso malintencionado llene la
+ * memoria.
  */
 class Mailbox {
-public:
-    static constexpr size_t DEFAULT_MAX_MSGS = 1024; // limite de mensajes encolados
-    static constexpr size_t DEFAULT_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB total encolados
+  public:
+    static constexpr size_t DEFAULT_MAX_MSGS =
+        1024; // limite de mensajes encolados
+    static constexpr size_t DEFAULT_MAX_BYTES =
+        64 * 1024 * 1024; // 64 MiB total encolados
 
     /**
      * @brief Construye el buzon con los limites indicados.
@@ -89,8 +94,8 @@ public:
     /**
      * @brief Extrae el primer mensaje de la cola (no bloquea).
      *
-     * Si el buzon esta vacio retorna un MailboxMsg con sender_pid=0 y data vacia.
-     * El llamador debe verificar data.empty() para detectar buzon vacio.
+     * Si el buzon esta vacio retorna un MailboxMsg con sender_pid=0 y data
+     * vacia. El llamador debe verificar data.empty() para detectar buzon vacio.
      *
      * @return Primer mensaje de la cola, o mensaje vacio si no hay ninguno.
      */
@@ -114,12 +119,12 @@ public:
      */
     size_t bytes_used() const;
 
-private:
-    mutable std::mutex   mtx_;        // protege el acceso a queue_ y bytes_used_
-    std::deque<MailboxMsg> queue_;    // cola FIFO de mensajes
-    size_t               bytes_used_; // bytes totales de datos encolados
-    const size_t         max_msgs_;   // limite de mensajes
-    const size_t         max_bytes_;  // limite de bytes
+  private:
+    mutable std::mutex mtx_;       // protege el acceso a queue_ y bytes_used_
+    std::deque<MailboxMsg> queue_; // cola FIFO de mensajes
+    size_t bytes_used_;            // bytes totales de datos encolados
+    const size_t max_msgs_;        // limite de mensajes
+    const size_t max_bytes_;       // limite de bytes
 };
 
 } // namespace distrib

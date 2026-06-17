@@ -44,25 +44,22 @@ struct Cursor {
  * @brief Excepcion lanzada por ByteReader cuando una lectura excede el buffer.
  */
 class ByteReaderError : public std::exception {
-public:
+  public:
     /**
      * @brief Construye el error con el mensaje indicado.
      *
      * @param msg Descripcion del error de lectura.
      */
-    explicit ByteReaderError(std::string msg)
-        : message(std::move(msg)) {}
+    explicit ByteReaderError(std::string msg) : message(std::move(msg)) {}
 
     /**
      * @brief Devuelve el mensaje de error como cadena C.
      *
      * @return Puntero a la cadena de mensaje de error.
      */
-    const char *what() const noexcept override {
-        return message.c_str();
-    }
+    const char *what() const noexcept override { return message.c_str(); }
 
-private:
+  private:
     std::string message; ///< Mensaje descriptivo del error
 };
 
@@ -76,8 +73,10 @@ private:
  *   - Lecturas de 8, 16, 32, 40 y 64 bits en little-endian.
  *   - Lectura de bloques arbitrarios de bytes.
  *   - Salto (skip) y posicionamiento absoluto (seek).
- *   - Pila de cursores (push/pop/drop) para backtracking sin acoplamiento externo.
- *   - Creacion de sublectores (subreader) para parsear secciones de tamano conocido.
+ *   - Pila de cursores (push/pop/drop) para backtracking sin acoplamiento
+ * externo.
+ *   - Creacion de sublectores (subreader) para parsear secciones de tamano
+ * conocido.
  */
 typedef struct ByteReader {
     /**
@@ -89,7 +88,8 @@ typedef struct ByteReader {
     std::vector<Cursor> cursor_stack;
 
     /**
-     * @brief Referencia al buffer de entrada (bytecode, datos, ejecutables, etc.).
+     * @brief Referencia al buffer de entrada (bytecode, datos, ejecutables,
+     * etc.).
      */
     const std::vector<uint8_t> &input;
 
@@ -103,11 +103,11 @@ typedef struct ByteReader {
      *
      * @param data Referencia constante al vector de bytes de entrada.
      */
-    ByteReader(const std::vector<uint8_t> &data)
-        : input(data) {}
+    ByteReader(const std::vector<uint8_t> &data) : input(data) {}
 
     /**
-     * @brief Verifica que quedan al menos @p size bytes disponibles desde el offset actual.
+     * @brief Verifica que quedan al menos @p size bytes disponibles desde el
+     * offset actual.
      *
      * Lanza ByteReaderError si el buffer no tiene suficientes bytes.
      *
@@ -139,9 +139,8 @@ typedef struct ByteReader {
      */
     uint16_t read16() {
         require(2);
-        uint16_t v =
-                (uint16_t) input[offset] |          // byte bajo
-                ((uint16_t) input[offset + 1] << 8); // byte alto
+        uint16_t v = (uint16_t)input[offset] |           // byte bajo
+                     ((uint16_t)input[offset + 1] << 8); // byte alto
         offset += 2;
         return v;
     }
@@ -154,11 +153,10 @@ typedef struct ByteReader {
      */
     uint32_t read32() {
         require(4);
-        uint32_t v =
-                (uint32_t) input[offset] |
-                ((uint32_t) input[offset + 1] << 8) |
-                ((uint32_t) input[offset + 2] << 16) |
-                ((uint32_t) input[offset + 3] << 24);
+        uint32_t v = (uint32_t)input[offset] |
+                     ((uint32_t)input[offset + 1] << 8) |
+                     ((uint32_t)input[offset + 2] << 16) |
+                     ((uint32_t)input[offset + 3] << 24);
         offset += 4;
         return v;
     }
@@ -171,21 +169,21 @@ typedef struct ByteReader {
      */
     uint64_t read64() {
         require(8);
-        uint64_t v =
-                (uint64_t) input[offset] |
-                ((uint64_t) input[offset + 1] << 8) |
-                ((uint64_t) input[offset + 2] << 16) |
-                ((uint64_t) input[offset + 3] << 24) |
-                ((uint64_t) input[offset + 4] << 32) |
-                ((uint64_t) input[offset + 5] << 40) |
-                ((uint64_t) input[offset + 6] << 48) |
-                ((uint64_t) input[offset + 7] << 56);
+        uint64_t v = (uint64_t)input[offset] |
+                     ((uint64_t)input[offset + 1] << 8) |
+                     ((uint64_t)input[offset + 2] << 16) |
+                     ((uint64_t)input[offset + 3] << 24) |
+                     ((uint64_t)input[offset + 4] << 32) |
+                     ((uint64_t)input[offset + 5] << 40) |
+                     ((uint64_t)input[offset + 6] << 48) |
+                     ((uint64_t)input[offset + 7] << 56);
         offset += 8;
         return v;
     }
 
     /**
-     * @brief Lee exactamente 5 bytes (40 bits) en little-endian y avanza el offset en 5.
+     * @brief Lee exactamente 5 bytes (40 bits) en little-endian y avanza el
+     * offset en 5.
      *
      * Util para leer campos de 40 bits del formato .velb.
      *
@@ -194,12 +192,11 @@ typedef struct ByteReader {
      */
     uint64_t read40() {
         require(5);
-        uint64_t v =
-                (uint64_t) input[offset] |
-                ((uint64_t) input[offset + 1] << 8) |
-                ((uint64_t) input[offset + 2] << 16) |
-                ((uint64_t) input[offset + 3] << 24) |
-                ((uint64_t) input[offset + 4] << 32);
+        uint64_t v = (uint64_t)input[offset] |
+                     ((uint64_t)input[offset + 1] << 8) |
+                     ((uint64_t)input[offset + 2] << 16) |
+                     ((uint64_t)input[offset + 3] << 24) |
+                     ((uint64_t)input[offset + 4] << 32);
         offset += 5;
         return v;
     }
@@ -235,18 +232,14 @@ typedef struct ByteReader {
      *
      * @return true si offset >= input.size() (no quedan bytes por leer).
      */
-    bool eof() const {
-        return offset >= input.size();
-    }
+    bool eof() const { return offset >= input.size(); }
 
     /**
      * @brief Crea un cursor con el offset actual.
      *
      * @return Cursor apuntando a la posicion actual.
      */
-    Cursor save() const {
-        return Cursor{offset};
-    }
+    Cursor save() const { return Cursor{offset}; }
 
     /**
      * @brief Restaura el offset al valor almacenado en el cursor @p c.
@@ -271,7 +264,8 @@ typedef struct ByteReader {
     }
 
     /**
-     * @brief Restaura el offset al ultimo cursor guardado y lo elimina de la pila.
+     * @brief Restaura el offset al ultimo cursor guardado y lo elimina de la
+     * pila.
      *
      * @throws ByteReaderError si la pila esta vacia (pop sin push previo).
      */
@@ -286,7 +280,8 @@ typedef struct ByteReader {
     /**
      * @brief Descarta el ultimo cursor de la pila sin cambiar el offset actual.
      *
-     * Se usa cuando ya no se necesita volver atras pero se quiere limpiar la pila.
+     * Se usa cuando ya no se necesita volver atras pero se quiere limpiar la
+     * pila.
      *
      * @throws ByteReaderError si la pila esta vacia.
      */
@@ -311,16 +306,20 @@ typedef struct ByteReader {
     }
 
     /**
-     * @brief Crea un sublector que comparte el mismo buffer desde la posicion actual.
+     * @brief Crea un sublector que comparte el mismo buffer desde la posicion
+     * actual.
      *
-     * El sublector empieza en el offset del padre y tiene una ventana de @p size bytes.
-     * Usar seek() sobre el hijo para cambiar su posicion de inicio si es necesario.
+     * El sublector empieza en el offset del padre y tiene una ventana de @p
+     * size bytes. Usar seek() sobre el hijo para cambiar su posicion de inicio
+     * si es necesario.
      *
-     * Util para parsear secciones de tamano conocido sin consumir el offset del padre.
+     * Util para parsear secciones de tamano conocido sin consumir el offset del
+     * padre.
      *
      * @param size Numero de bytes de la ventana del sublector.
      * @return Nuevo ByteReader apuntando a la misma posicion del padre.
-     * @throws ByteReaderError si no hay @p size bytes disponibles desde el offset actual.
+     * @throws ByteReaderError si no hay @p size bytes disponibles desde el
+     * offset actual.
      */
     ByteReader subreader(size_t size) {
         require(size);

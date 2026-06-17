@@ -41,7 +41,7 @@
  */
 
 #ifndef VESTA_IO_DEBUG
-#  define VESTA_IO_DEBUG 0
+#define VESTA_IO_DEBUG 0
 #endif
 
 #include "../../../include/ffi/vesta_plugin.h"
@@ -57,10 +57,10 @@
  * ----------------------------------------------------------------------- */
 
 #if defined(_WIN32)
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 
 /* Mutex usando CRITICAL_SECTION: ~5 ns sin contencion, sin syscall. */
 typedef CRITICAL_SECTION vio_mutex_t;
@@ -78,14 +78,20 @@ static void vio_mutex_unlock(vio_mutex_t *m) {
 }
 
 #else
-#  include <unistd.h>
-#  include <pthread.h>
-#  include <errno.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <errno.h>
 
-   typedef pthread_mutex_t vio_mutex_t;
-   static void vio_mutex_init(vio_mutex_t *m)   { pthread_mutex_init(m, NULL); }
-   static void vio_mutex_lock(vio_mutex_t *m)   { pthread_mutex_lock(m); }
-   static void vio_mutex_unlock(vio_mutex_t *m) { pthread_mutex_unlock(m); }
+typedef pthread_mutex_t vio_mutex_t;
+static void vio_mutex_init(vio_mutex_t *m) {
+    pthread_mutex_init(m, NULL);
+}
+static void vio_mutex_lock(vio_mutex_t *m) {
+    pthread_mutex_lock(m);
+}
+static void vio_mutex_unlock(vio_mutex_t *m) {
+    pthread_mutex_unlock(m);
+}
 #endif
 
 /* -----------------------------------------------------------------------
@@ -105,16 +111,16 @@ static const VestaPluginAPI *g_api = NULL;
 /** @brief Tamano a partir del cual un write se hace directo (bypass buffer). */
 #define VIO_DIRECT_THRESHOLD (VIO_BUF_SIZE / 2u)
 
-static char        g_out_buf[VIO_BUF_SIZE];
-static size_t      g_out_len = 0;
+static char g_out_buf[VIO_BUF_SIZE];
+static size_t g_out_len = 0;
 static vio_mutex_t g_out_mtx;
-static int         g_init_done         = 0;
-static int         g_atexit_registered = 0;
+static int g_init_done = 0;
+static int g_atexit_registered = 0;
 
 #if defined(_WIN32)
-static HANDLE g_out_handle          = INVALID_HANDLE_VALUE;
-static int    g_is_console          = 0;
-static int    g_console_handle_init = 0;
+static HANDLE g_out_handle = INVALID_HANDLE_VALUE;
+static int g_is_console = 0;
+static int g_console_handle_init = 0;
 #endif
 
 /* -----------------------------------------------------------------------
@@ -133,8 +139,8 @@ static void vio_init_console_handle(void) {
     if (g_console_handle_init) return;
     g_out_handle = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD mode;
-    g_is_console = (g_out_handle != INVALID_HANDLE_VALUE)
-            && GetConsoleMode(g_out_handle, &mode);
+    g_is_console = (g_out_handle != INVALID_HANDLE_VALUE) &&
+                   GetConsoleMode(g_out_handle, &mode);
     g_console_handle_init = 1;
 }
 
@@ -153,24 +159,24 @@ static void vio_write_direct(const char *buf, size_t len) {
     if (g_is_console) {
         /* UTF-8 -> UTF-16 con buffer escalable.  Para entradas pequenas
          * (~256 wchars) usamos un buffer de pila para evitar malloc. */
-        wchar_t  stack_w[1024];
-        wchar_t *wide     = stack_w;
-        int      wide_cap = (int) (sizeof(stack_w) / sizeof(stack_w[0]));
+        wchar_t stack_w[1024];
+        wchar_t *wide = stack_w;
+        int wide_cap = (int)(sizeof(stack_w) / sizeof(stack_w[0]));
 
-        int needed = MultiByteToWideChar(CP_UTF8, 0, buf, (int) len, NULL, 0);
+        int needed = MultiByteToWideChar(CP_UTF8, 0, buf, (int)len, NULL, 0);
         if (needed <= 0) {
             /* MultiByteToWideChar fallo: caer a fwrite. */
             fwrite(buf, 1, len, stdout);
             return;
         }
         if (needed > wide_cap) {
-            wide = (wchar_t *) malloc((size_t) needed * sizeof(wchar_t));
+            wide = (wchar_t *)malloc((size_t)needed * sizeof(wchar_t));
             if (!wide) {
                 fwrite(buf, 1, len, stdout);
                 return;
             }
         }
-        int got = MultiByteToWideChar(CP_UTF8, 0, buf, (int) len, wide, needed);
+        int got = MultiByteToWideChar(CP_UTF8, 0, buf, (int)len, wide, needed);
         if (got <= 0) {
             if (wide != stack_w) free(wide);
             fwrite(buf, 1, len, stdout);
@@ -178,12 +184,12 @@ static void vio_write_direct(const char *buf, size_t len) {
         }
 
         /* WriteConsoleW: chunks de 16K wchars como limite practico. */
-        const DWORD    CHUNK     = 16u * 1024u;
-        DWORD          remaining = (DWORD) got;
-        const wchar_t *p         = wide;
+        const DWORD CHUNK = 16u * 1024u;
+        DWORD remaining = (DWORD)got;
+        const wchar_t *p = wide;
         while (remaining > 0) {
             DWORD to_write = remaining > CHUNK ? CHUNK : remaining;
-            DWORD written  = 0;
+            DWORD written = 0;
             if (!WriteConsoleW(g_out_handle, p, to_write, &written, NULL)) {
                 fwrite(buf, 1, len, stdout);
                 break;
@@ -196,13 +202,13 @@ static void vio_write_direct(const char *buf, size_t len) {
     } else {
         /* Pipe o redireccion: WriteFile directo, sin stdio. */
         DWORD written = 0;
-        if (!WriteFile(g_out_handle, buf, (DWORD) len, &written, NULL)) {
+        if (!WriteFile(g_out_handle, buf, (DWORD)len, &written, NULL)) {
             fwrite(buf, 1, len, stdout);
         }
     }
 }
 
-#else  /* POSIX */
+#else /* POSIX */
 
 /**
  * @brief Escribe @p len bytes a STDOUT_FILENO con bucle de reintento.
@@ -274,7 +280,10 @@ static void vio_buffer_append(const char *buf, size_t len) {
      * comparado con el WriteFile que se evitaba. */
     int has_nl = 0;
     for (size_t i = 0; i < len; i++) {
-        if (buf[i] == '\n') { has_nl = 1; break; }
+        if (buf[i] == '\n') {
+            has_nl = 1;
+            break;
+        }
     }
     if (has_nl || g_out_len >= VIO_FLUSH_THRESHOLD) {
         vio_flush_locked();
@@ -320,18 +329,19 @@ static size_t vio_i64_to_str(int64_t v, char *out) {
         out[0] = '0';
         return 1;
     }
-    char   tmp[24];
-    size_t n   = 0;
-    int    neg = (v < 0);
+    char tmp[24];
+    size_t n = 0;
+    int neg = (v < 0);
     /* Convertir a uint64_t para evitar overflow al negar INT64_MIN. */
-    uint64_t u = neg ? (uint64_t) (-(v + 1)) + 1u : (uint64_t) v;
+    uint64_t u = neg ? (uint64_t)(-(v + 1)) + 1u : (uint64_t)v;
     while (u > 0) {
-        tmp[n++] = (char) ('0' + (u % 10u));
+        tmp[n++] = (char)('0' + (u % 10u));
         u /= 10u;
     }
     size_t pos = 0;
     if (neg) out[pos++] = '-';
-    while (n > 0) out[pos++] = tmp[--n];
+    while (n > 0)
+        out[pos++] = tmp[--n];
     return pos;
 }
 
@@ -341,13 +351,14 @@ static size_t vio_u64_to_str(uint64_t v, char *out) {
         out[0] = '0';
         return 1;
     }
-    char   tmp[24];
+    char tmp[24];
     size_t n = 0;
     while (v > 0) {
-        tmp[n++] = (char) ('0' + (v % 10u));
+        tmp[n++] = (char)('0' + (v % 10u));
         v /= 10u;
     }
-    for (size_t i = 0; i < n; ++i) out[i] = tmp[n - 1 - i];
+    for (size_t i = 0; i < n; ++i)
+        out[i] = tmp[n - 1 - i];
     return n;
 }
 
@@ -359,8 +370,8 @@ static size_t vio_u64_to_str(uint64_t v, char *out) {
  */
 static size_t vio_u64_to_hex(uint64_t v, char *out) {
     static const char hex[] = "0123456789ABCDEF";
-    out[0]                  = '0';
-    out[1]                  = 'x';
+    out[0] = '0';
+    out[1] = 'x';
     for (int i = 15; i >= 0; --i) {
         out[2 + i] = hex[v & 0xFu];
         v >>= 4;
@@ -385,7 +396,8 @@ static size_t vio_u64_to_bin(uint64_t v, char *out) {
     /* Calcular el numero de bits significativos.  Mismo patron que
      * __builtin_clzll pero portable: encontrar el bit mas alto. */
     int high = 63;
-    while (high > 0 && ((v >> high) & 1u) == 0) --high;
+    while (high > 0 && ((v >> high) & 1u) == 0)
+        --high;
     size_t k = 2;
     for (int i = high; i >= 0; --i) {
         out[k++] = (char)('0' + ((v >> i) & 1u));
@@ -408,12 +420,13 @@ static size_t vio_u64_to_oct(uint64_t v, char *out) {
     }
     /* Generar de menos a mas significativo y luego invertir. */
     char rev[24];
-    int  n = 0;
+    int n = 0;
     while (v > 0) {
         rev[n++] = (char)('0' + (int)(v & 7u));
         v >>= 3;
     }
-    for (int i = 0; i < n; ++i) out[2 + i] = rev[n - 1 - i];
+    for (int i = 0; i < n; ++i)
+        out[2 + i] = rev[n - 1 - i];
     return (size_t)(2 + n);
 }
 
@@ -433,7 +446,8 @@ static size_t vio_u64_to_ptr(uint64_t v, char *out) {
         return 3;
     }
     int high = 15;
-    while (high > 0 && ((v >> (high * 4)) & 0xFu) == 0) --high;
+    while (high > 0 && ((v >> (high * 4)) & 0xFu) == 0)
+        --high;
     size_t k = 2;
     for (int i = high; i >= 0; --i) {
         out[k++] = hex[(v >> (i * 4)) & 0xFu];
@@ -459,13 +473,13 @@ static void vio_read_vm_and_emit(uint64_t proc_ptr, uint64_t vm_addr,
     if (len <= 4096u) {
         char stack_buf[4096];
         g_api->vm_read_bytes(proc_ptr, vm_addr, stack_buf, len);
-        vio_buffer_append(stack_buf, (size_t) len);
+        vio_buffer_append(stack_buf, (size_t)len);
         return;
     }
-    char *heap_buf = (char *) malloc((size_t) len);
+    char *heap_buf = (char *)malloc((size_t)len);
     if (!heap_buf) return;
     g_api->vm_read_bytes(proc_ptr, vm_addr, heap_buf, len);
-    vio_buffer_append(heap_buf, (size_t) len);
+    vio_buffer_append(heap_buf, (size_t)len);
     free(heap_buf);
 }
 
@@ -505,8 +519,7 @@ VESTA_PLUGIN_EXPORT void vesta_init(const VestaPluginAPI *api) {
  * Acceso buffer + WriteConsoleW/WriteFile.  Para strings largos (>=
  * VIO_DIRECT_THRESHOLD) bypass del buffer global hacia el backend.
  */
-VESTA_PLUGIN_EXPORT uint64_t vio_print(uint64_t proc_ptr,
-                                       uint64_t vm_addr,
+VESTA_PLUGIN_EXPORT uint64_t vio_print(uint64_t proc_ptr, uint64_t vm_addr,
                                        uint64_t len) {
     vio_read_vm_and_emit(proc_ptr, vm_addr, len);
     return 0;
@@ -532,69 +545,69 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print(uint64_t proc_ptr,
  * vm_write_bytes (que retraduciria el ptr como VM virtual y escribiria
  * en otra parte del vm_mem). */
 VESTA_PLUGIN_EXPORT uint64_t vio_int_to_vmbuf(uint64_t proc_ptr,
-                                               uint64_t dst_host,
-                                               uint64_t value) {
-    (void) proc_ptr;
-    char   tmp[32];
-    size_t k = vio_i64_to_str((int64_t) value, tmp);
-    memcpy((void *) (uintptr_t) dst_host, tmp, k);
-    return (uint64_t) k;
+                                              uint64_t dst_host,
+                                              uint64_t value) {
+    (void)proc_ptr;
+    char tmp[32];
+    size_t k = vio_i64_to_str((int64_t)value, tmp);
+    memcpy((void *)(uintptr_t)dst_host, tmp, k);
+    return (uint64_t)k;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_uint_to_vmbuf(uint64_t proc_ptr,
-                                                uint64_t dst_host,
-                                                uint64_t value) {
-    (void) proc_ptr;
-    char   tmp[32];
+                                               uint64_t dst_host,
+                                               uint64_t value) {
+    (void)proc_ptr;
+    char tmp[32];
     size_t k = vio_u64_to_str(value, tmp);
-    memcpy((void *) (uintptr_t) dst_host, tmp, k);
-    return (uint64_t) k;
+    memcpy((void *)(uintptr_t)dst_host, tmp, k);
+    return (uint64_t)k;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_hex_to_vmbuf(uint64_t proc_ptr,
-                                               uint64_t dst_host,
-                                               uint64_t value) {
-    (void) proc_ptr;
-    char   tmp[32];
+                                              uint64_t dst_host,
+                                              uint64_t value) {
+    (void)proc_ptr;
+    char tmp[32];
     size_t k = vio_u64_to_hex(value, tmp);
-    memcpy((void *) (uintptr_t) dst_host, tmp, k);
-    return (uint64_t) k;
+    memcpy((void *)(uintptr_t)dst_host, tmp, k);
+    return (uint64_t)k;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_bool_to_vmbuf(uint64_t proc_ptr,
-                                                uint64_t dst_host,
-                                                uint64_t value) {
-    (void) proc_ptr;
+                                               uint64_t dst_host,
+                                               uint64_t value) {
+    (void)proc_ptr;
     const char *s = value ? "true" : "false";
-    size_t      k = value ? 4u : 5u;
-    memcpy((void *) (uintptr_t) dst_host, s, k);
-    return (uint64_t) k;
+    size_t k = value ? 4u : 5u;
+    memcpy((void *)(uintptr_t)dst_host, s, k);
+    return (uint64_t)k;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_char_to_vmbuf(uint64_t proc_ptr,
-                                                uint64_t dst_host,
-                                                uint64_t codepoint) {
-    (void) proc_ptr;
-    char   tmp[8];
+                                               uint64_t dst_host,
+                                               uint64_t codepoint) {
+    (void)proc_ptr;
+    char tmp[8];
     size_t k = 0;
-    uint32_t cp = (uint32_t) codepoint;
+    uint32_t cp = (uint32_t)codepoint;
     if (cp < 0x80) {
-        tmp[k++] = (char) cp;
+        tmp[k++] = (char)cp;
     } else if (cp < 0x800) {
-        tmp[k++] = (char) (0xC0 | (cp >> 6));
-        tmp[k++] = (char) (0x80 | (cp & 0x3F));
+        tmp[k++] = (char)(0xC0 | (cp >> 6));
+        tmp[k++] = (char)(0x80 | (cp & 0x3F));
     } else if (cp < 0x10000) {
-        tmp[k++] = (char) (0xE0 | (cp >> 12));
-        tmp[k++] = (char) (0x80 | ((cp >> 6) & 0x3F));
-        tmp[k++] = (char) (0x80 | (cp & 0x3F));
+        tmp[k++] = (char)(0xE0 | (cp >> 12));
+        tmp[k++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        tmp[k++] = (char)(0x80 | (cp & 0x3F));
     } else {
-        tmp[k++] = (char) (0xF0 | (cp >> 18));
-        tmp[k++] = (char) (0x80 | ((cp >> 12) & 0x3F));
-        tmp[k++] = (char) (0x80 | ((cp >> 6) & 0x3F));
-        tmp[k++] = (char) (0x80 | (cp & 0x3F));
+        tmp[k++] = (char)(0xF0 | (cp >> 18));
+        tmp[k++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        tmp[k++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        tmp[k++] = (char)(0x80 | (cp & 0x3F));
     }
-    memcpy((void *) (uintptr_t) dst_host, tmp, k);
-    return (uint64_t) k;
+    memcpy((void *)(uintptr_t)dst_host, tmp, k);
+    return (uint64_t)k;
 }
 
 /* BugFix R7: stringify de f64 (bits IEEE 754) a buffer VM.
@@ -602,33 +615,32 @@ VESTA_PLUGIN_EXPORT uint64_t vio_char_to_vmbuf(uint64_t proc_ptr,
  * Format: hasta 6 digitos significativos (similar a %g).
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_float_to_vmbuf(uint64_t proc_ptr,
-                                                 uint64_t dst_host,
-                                                 uint64_t bits) {
-    (void) proc_ptr;
+                                                uint64_t dst_host,
+                                                uint64_t bits) {
+    (void)proc_ptr;
     double d;
     memcpy(&d, &bits, sizeof(d));
-    char   tmp[64];
-    int    n = snprintf(tmp, sizeof(tmp), "%g", d);
+    char tmp[64];
+    int n = snprintf(tmp, sizeof(tmp), "%g", d);
     if (n < 0) n = 0;
-    if ((size_t) n >= sizeof(tmp)) n = (int) sizeof(tmp) - 1;
-    memcpy((void *) (uintptr_t) dst_host, tmp, (size_t) n);
-    return (uint64_t) n;
+    if ((size_t)n >= sizeof(tmp)) n = (int)sizeof(tmp) - 1;
+    memcpy((void *)(uintptr_t)dst_host, tmp, (size_t)n);
+    return (uint64_t)n;
 }
 
 /* BugFix R7: stringify de GcHandle a buffer VM ("<gc:N>").
  * Para uso en interpolacion ${class_var} en contexto STRING.
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_gchandle_to_vmbuf(uint64_t proc_ptr,
-                                                    uint64_t dst_host,
-                                                    uint64_t handle) {
-    (void) proc_ptr;
-    char   tmp[32];
-    int    n = snprintf(tmp, sizeof(tmp), "<gc:%llu>",
-                        (unsigned long long) handle);
+                                                   uint64_t dst_host,
+                                                   uint64_t handle) {
+    (void)proc_ptr;
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "<gc:%llu>", (unsigned long long)handle);
     if (n < 0) n = 0;
-    if ((size_t) n >= sizeof(tmp)) n = (int) sizeof(tmp) - 1;
-    memcpy((void *) (uintptr_t) dst_host, tmp, (size_t) n);
-    return (uint64_t) n;
+    if ((size_t)n >= sizeof(tmp)) n = (int)sizeof(tmp) - 1;
+    memcpy((void *)(uintptr_t)dst_host, tmp, (size_t)n);
+    return (uint64_t)n;
 }
 
 /* -------------------------------------------------------------------------
@@ -667,18 +679,18 @@ VESTA_PLUGIN_EXPORT uint64_t vio_gensym(void) {
  * IMPORTANT: `src_host` es un puntero HOST (resultado de STRRAW); se
  * castea directamente a `const char*`.  `dst_addr` es VM address. */
 VESTA_PLUGIN_EXPORT uint64_t vstr_repeat_to_vmbuf(uint64_t proc_ptr,
-                                                   uint64_t dst_host,
-                                                   uint64_t src_host,
-                                                   uint64_t src_len,
-                                                   uint64_t n) {
-    (void) proc_ptr;
+                                                  uint64_t dst_host,
+                                                  uint64_t src_host,
+                                                  uint64_t src_len,
+                                                  uint64_t n) {
+    (void)proc_ptr;
     if (src_len == 0 || n == 0) return 0;
     if (n > 0 && src_len > (16u << 20) / n) return 0;
-    const char *src = (const char *) (uintptr_t) src_host;
-    char *dst = (char *) (uintptr_t) dst_host;
+    const char *src = (const char *)(uintptr_t)src_host;
+    char *dst = (char *)(uintptr_t)dst_host;
     uint64_t total = 0;
     for (uint64_t i = 0; i < n; ++i) {
-        memcpy(dst + total, src, (size_t) src_len);
+        memcpy(dst + total, src, (size_t)src_len);
         total += src_len;
     }
     return total;
@@ -687,18 +699,17 @@ VESTA_PLUGIN_EXPORT uint64_t vstr_repeat_to_vmbuf(uint64_t proc_ptr,
 /* Contains: lee hay y needle desde HOST pointers, devuelve 1 si needle
  * es substring de hay, 0 si no.  Cero-copy: trabaja directamente sobre
  * los buffers host. */
-VESTA_PLUGIN_EXPORT uint64_t vstr_contains(uint64_t proc_ptr,
-                                            uint64_t hay_host,
-                                            uint64_t hay_len,
-                                            uint64_t needle_host,
-                                            uint64_t needle_len) {
-    (void) proc_ptr;
+VESTA_PLUGIN_EXPORT uint64_t vstr_contains(uint64_t proc_ptr, uint64_t hay_host,
+                                           uint64_t hay_len,
+                                           uint64_t needle_host,
+                                           uint64_t needle_len) {
+    (void)proc_ptr;
     if (needle_len == 0) return 1;
     if (needle_len > hay_len) return 0;
-    const char *hay = (const char *) (uintptr_t) hay_host;
-    const char *nd  = (const char *) (uintptr_t) needle_host;
-    for (size_t i = 0; i + needle_len <= (size_t) hay_len; ++i) {
-        if (memcmp(hay + i, nd, (size_t) needle_len) == 0) return 1;
+    const char *hay = (const char *)(uintptr_t)hay_host;
+    const char *nd = (const char *)(uintptr_t)needle_host;
+    for (size_t i = 0; i + needle_len <= (size_t)hay_len; ++i) {
+        if (memcmp(hay + i, nd, (size_t)needle_len) == 0) return 1;
     }
     return 0;
 }
@@ -706,27 +717,23 @@ VESTA_PLUGIN_EXPORT uint64_t vstr_contains(uint64_t proc_ptr,
 /* Replace: lee `src`/`from`/`to` desde HOST pointers, reemplaza todas las
  * ocurrencias de `from` con `to`, escribe el resultado en VM addr
  * `dst_addr`.  Retorna la longitud total escrita (o 0 si error). */
-VESTA_PLUGIN_EXPORT uint64_t vstr_replace_to_vmbuf(uint64_t proc_ptr,
-                                                    uint64_t dst_host,
-                                                    uint64_t src_host,
-                                                    uint64_t src_len,
-                                                    uint64_t from_host,
-                                                    uint64_t from_len,
-                                                    uint64_t to_host,
-                                                    uint64_t to_len) {
-    (void) proc_ptr;
-    const char *src  = (const char *) (uintptr_t) src_host;
-    char *dst_h = (char *) (uintptr_t) dst_host;
+VESTA_PLUGIN_EXPORT uint64_t vstr_replace_to_vmbuf(
+    uint64_t proc_ptr, uint64_t dst_host, uint64_t src_host, uint64_t src_len,
+    uint64_t from_host, uint64_t from_len, uint64_t to_host, uint64_t to_len) {
+    (void)proc_ptr;
+    const char *src = (const char *)(uintptr_t)src_host;
+    char *dst_h = (char *)(uintptr_t)dst_host;
     if (from_len == 0) {
         if (src_len > 0) {
-            memcpy(dst_h, src, (size_t) src_len);
+            memcpy(dst_h, src, (size_t)src_len);
         }
         return src_len;
     }
-    if (src_len > (16u << 20) || from_len > (1u << 16) || to_len > (1u << 20)) return 0;
+    if (src_len > (16u << 20) || from_len > (1u << 16) || to_len > (1u << 20))
+        return 0;
 
-    const char *from = (const char *) (uintptr_t) from_host;
-    const char *to   = (const char *) (uintptr_t) to_host;
+    const char *from = (const char *)(uintptr_t)from_host;
+    const char *to = (const char *)(uintptr_t)to_host;
 
     /* Worst case: si src es todo from, out_len = src_len/from_len * to_len. */
     uint64_t worst_out;
@@ -740,57 +747,58 @@ VESTA_PLUGIN_EXPORT uint64_t vstr_replace_to_vmbuf(uint64_t proc_ptr,
     static char *out_buf = NULL;
     static size_t out_cap = 0;
     if (worst_out > out_cap) {
-        char *n = (char *) realloc(out_buf, (size_t) worst_out + 1024);
+        char *n = (char *)realloc(out_buf, (size_t)worst_out + 1024);
         if (!n) return 0;
-        out_buf = n; out_cap = (size_t) worst_out + 1024;
+        out_buf = n;
+        out_cap = (size_t)worst_out + 1024;
     }
 
     /* Walk src, look for from, replace.  Directo sobre host_ptrs. */
     size_t out_n = 0;
     size_t i = 0;
-    while (i < (size_t) src_len) {
-        if (i + (size_t) from_len <= (size_t) src_len
-         && memcmp(src + i, from, (size_t) from_len) == 0) {
-            memcpy(out_buf + out_n, to, (size_t) to_len);
-            out_n += (size_t) to_len;
-            i += (size_t) from_len;
+    while (i < (size_t)src_len) {
+        if (i + (size_t)from_len <= (size_t)src_len &&
+            memcmp(src + i, from, (size_t)from_len) == 0) {
+            memcpy(out_buf + out_n, to, (size_t)to_len);
+            out_n += (size_t)to_len;
+            i += (size_t)from_len;
         } else {
             out_buf[out_n++] = src[i++];
         }
     }
     memcpy(dst_h, out_buf, out_n);
-    return (uint64_t) out_n;
+    return (uint64_t)out_n;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_ptr_to_vmbuf(uint64_t proc_ptr,
-                                               uint64_t dst_host,
-                                               uint64_t addr) {
-    (void) proc_ptr;
-    char     tmp[32];
-    size_t   k    = 0;
-    tmp[k++]      = '0';
-    tmp[k++]      = 'x';
+                                              uint64_t dst_host,
+                                              uint64_t addr) {
+    (void)proc_ptr;
+    char tmp[32];
+    size_t k = 0;
+    tmp[k++] = '0';
+    tmp[k++] = 'x';
     if (addr == 0) {
         tmp[k++] = '0';
     } else {
-        char   rev[16];
+        char rev[16];
         size_t r = 0;
         while (addr > 0) {
             uint64_t d = addr & 0xFu;
-            rev[r++]   = (char) (d < 10 ? '0' + d : 'a' + (d - 10));
+            rev[r++] = (char)(d < 10 ? '0' + d : 'a' + (d - 10));
             addr >>= 4;
         }
-        while (r > 0) tmp[k++] = rev[--r];
+        while (r > 0)
+            tmp[k++] = rev[--r];
     }
-    memcpy((void *) (uintptr_t) dst_host, tmp, k);
-    return (uint64_t) k;
+    memcpy((void *)(uintptr_t)dst_host, tmp, k);
+    return (uint64_t)k;
 }
 
 /**
  * @brief Imprime una cadena de la memoria VM y agrega '\n'.
  */
-VESTA_PLUGIN_EXPORT uint64_t vio_println(uint64_t proc_ptr,
-                                         uint64_t vm_addr,
+VESTA_PLUGIN_EXPORT uint64_t vio_println(uint64_t proc_ptr, uint64_t vm_addr,
                                          uint64_t len) {
     vio_read_vm_and_emit(proc_ptr, vm_addr, len);
     vio_buffer_putc('\n');
@@ -805,29 +813,29 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println(uint64_t proc_ptr,
  * ----------------------------------------------------------------------- */
 
 VESTA_PLUGIN_EXPORT uint64_t vio_print_int(uint64_t n) {
-    char   tmp[24];
-    size_t k = vio_i64_to_str((int64_t) n, tmp);
+    char tmp[24];
+    size_t k = vio_i64_to_str((int64_t)n, tmp);
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_println_int(uint64_t n) {
-    char   tmp[24];
-    size_t k = vio_i64_to_str((int64_t) n, tmp);
+    char tmp[24];
+    size_t k = vio_i64_to_str((int64_t)n, tmp);
     tmp[k++] = '\n';
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_print_uint(uint64_t n) {
-    char   tmp[24];
+    char tmp[24];
     size_t k = vio_u64_to_str(n, tmp);
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_println_uint(uint64_t n) {
-    char   tmp[24];
+    char tmp[24];
     size_t k = vio_u64_to_str(n, tmp);
     tmp[k++] = '\n';
     vio_buffer_append(tmp, k);
@@ -835,14 +843,14 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_uint(uint64_t n) {
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_print_hex(uint64_t n) {
-    char   tmp[20];
+    char tmp[20];
     size_t k = vio_u64_to_hex(n, tmp);
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_println_hex(uint64_t n) {
-    char   tmp[20];
+    char tmp[20];
     size_t k = vio_u64_to_hex(n, tmp);
     tmp[k++] = '\n';
     vio_buffer_append(tmp, k);
@@ -856,14 +864,14 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_hex(uint64_t n) {
  * emite "0b0".  Util para depurar bitfields, masks, flags.
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_bin(uint64_t n) {
-    char   tmp[68]; /* 2 prefijo + 64 bits + margen */
+    char tmp[68]; /* 2 prefijo + 64 bits + margen */
     size_t k = vio_u64_to_bin(n, tmp);
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_println_bin(uint64_t n) {
-    char   tmp[68];
+    char tmp[68];
     size_t k = vio_u64_to_bin(n, tmp);
     tmp[k++] = '\n';
     vio_buffer_append(tmp, k);
@@ -876,14 +884,14 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_bin(uint64_t n) {
  * Para n=0 emite "0o0".  Maximo 24 chars (uint64_t = 22 digitos octales).
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_oct(uint64_t n) {
-    char   tmp[26];
+    char tmp[26];
     size_t k = vio_u64_to_oct(n, tmp);
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_println_oct(uint64_t n) {
-    char   tmp[26];
+    char tmp[26];
     size_t k = vio_u64_to_oct(n, tmp);
     tmp[k++] = '\n';
     vio_buffer_append(tmp, k);
@@ -897,14 +905,14 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_oct(uint64_t n) {
  * ancho fijo, usa @c vio_print_hex que siempre emite "0x" + 16 chars.
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_ptr(uint64_t addr) {
-    char   tmp[20];
+    char tmp[20];
     size_t k = vio_u64_to_ptr(addr, tmp);
     vio_buffer_append(tmp, k);
     return 0;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_println_ptr(uint64_t addr) {
-    char   tmp[20];
+    char tmp[20];
     size_t k = vio_u64_to_ptr(addr, tmp);
     tmp[k++] = '\n';
     vio_buffer_append(tmp, k);
@@ -924,20 +932,25 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_ptr(uint64_t addr) {
 VESTA_PLUGIN_EXPORT uint64_t vio_print_gchandle(uint64_t handle) {
     /* Formato: "<gc:" + decimal(32 bits) + ">" -> max 16 chars */
     char tmp[24];
-    tmp[0] = '<'; tmp[1] = 'g'; tmp[2] = 'c'; tmp[3] = ':';
+    tmp[0] = '<';
+    tmp[1] = 'g';
+    tmp[2] = 'c';
+    tmp[3] = ':';
     size_t k = 4;
-    /* itoa unsigned in-line (handle nunca > 2^32, pero usamos uint64 por ABI) */
+    /* itoa unsigned in-line (handle nunca > 2^32, pero usamos uint64 por ABI)
+     */
     uint64_t v = handle;
     if (v == 0) {
         tmp[k++] = '0';
     } else {
         char rev[24];
-        int  n = 0;
+        int n = 0;
         while (v > 0) {
             rev[n++] = (char)('0' + (int)(v % 10u));
             v /= 10u;
         }
-        for (int i = 0; i < n; ++i) tmp[k++] = rev[n - 1 - i];
+        for (int i = 0; i < n; ++i)
+            tmp[k++] = rev[n - 1 - i];
     }
     tmp[k++] = '>';
     vio_buffer_append(tmp, k);
@@ -968,7 +981,10 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_gchandle(uint64_t handle) {
  *        Misma logica que vio_print_char pero sin emitir.
  */
 static size_t vio_encode_utf8(uint64_t cp, char *buf) {
-    if (cp <= 0x7Fu) { buf[0] = (char)cp; return 1; }
+    if (cp <= 0x7Fu) {
+        buf[0] = (char)cp;
+        return 1;
+    }
     if (cp <= 0x7FFu) {
         buf[0] = (char)(0xC0u | (cp >> 6));
         buf[1] = (char)(0x80u | (cp & 0x3Fu));
@@ -1030,7 +1046,8 @@ static int vex_wcwidth_cp(uint32_t cp) {
         (cp >= 0xFE30 && cp <= 0xFE4F) || /* CJK Compat Forms */
         (cp >= 0xFF00 && cp <= 0xFF60) || /* Fullwidth Latin */
         (cp >= 0xFFE0 && cp <= 0xFFE6) || /* Fullwidth signs */
-        (cp >= 0x1F300 && cp <= 0x1F64F) || /* Misc Symbols & Pictographs + emoji */
+        (cp >= 0x1F300 &&
+         cp <= 0x1F64F) || /* Misc Symbols & Pictographs + emoji */
         (cp >= 0x1F680 && cp <= 0x1F6FF) || /* Transport & Map */
         (cp >= 0x1F900 && cp <= 0x1F9FF) || /* Supplemental Symbols */
         (cp >= 0x20000 && cp <= 0x2FFFD) || /* CJK Ext B-F */
@@ -1043,25 +1060,28 @@ static int vex_wcwidth_cp(uint32_t cp) {
  * consumidos (1..4) y escribe el codepoint en *out_cp.  Devuelve 0 si
  * la secuencia es invalida (entonces *out_cp = 0xFFFD replacement). */
 static size_t vex_utf8_decode(const char *p, size_t n, uint32_t *out_cp) {
-    if (n == 0) { *out_cp = 0; return 0; }
+    if (n == 0) {
+        *out_cp = 0;
+        return 0;
+    }
     unsigned char c = (unsigned char)p[0];
-    if (c < 0x80) { *out_cp = c; return 1; }
+    if (c < 0x80) {
+        *out_cp = c;
+        return 1;
+    }
     if ((c & 0xE0) == 0xC0 && n >= 2) {
-        *out_cp = ((uint32_t)(c & 0x1F) << 6)
-                | ((uint32_t)(p[1] & 0x3F));
+        *out_cp = ((uint32_t)(c & 0x1F) << 6) | ((uint32_t)(p[1] & 0x3F));
         return 2;
     }
     if ((c & 0xF0) == 0xE0 && n >= 3) {
-        *out_cp = ((uint32_t)(c & 0x0F) << 12)
-                | ((uint32_t)(p[1] & 0x3F) << 6)
-                | ((uint32_t)(p[2] & 0x3F));
+        *out_cp = ((uint32_t)(c & 0x0F) << 12) |
+                  ((uint32_t)(p[1] & 0x3F) << 6) | ((uint32_t)(p[2] & 0x3F));
         return 3;
     }
     if ((c & 0xF8) == 0xF0 && n >= 4) {
-        *out_cp = ((uint32_t)(c & 0x07) << 18)
-                | ((uint32_t)(p[1] & 0x3F) << 12)
-                | ((uint32_t)(p[2] & 0x3F) << 6)
-                | ((uint32_t)(p[3] & 0x3F));
+        *out_cp = ((uint32_t)(c & 0x07) << 18) |
+                  ((uint32_t)(p[1] & 0x3F) << 12) |
+                  ((uint32_t)(p[2] & 0x3F) << 6) | ((uint32_t)(p[3] & 0x3F));
         return 4;
     }
     *out_cp = 0xFFFD;
@@ -1106,82 +1126,114 @@ static size_t vex_utf8_cols(const char *p, size_t n) {
  *                 10 = HEX_COMPACT (0x + hex sin ceros lider, igual a PTR)
  * @param width   Ancho minimo deseado en bytes.  0 = sin padding.
  * @param fill_cp Codepoint Unicode para el fill.
- * @param align   0 = sin alineacion, 1 = LEFT (pad derecha), 2 = RIGHT (pad izq).
+ * @param align   0 = sin alineacion, 1 = LEFT (pad derecha), 2 = RIGHT (pad
+ * izq).
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_fmt(uint64_t value, uint64_t kind,
-                                            uint64_t width, uint64_t fill_cp,
-                                            uint64_t align) {
+                                           uint64_t width, uint64_t fill_cp,
+                                           uint64_t align) {
     /* Formatear primero a un buffer local, luego decidir el padding. */
     char tmp[80];
     size_t tmp_n = 0;
     switch ((unsigned)kind) {
-        case 0: { /* INT signed decimal */
-            int64_t s = (int64_t)value;
-            if (s == 0) { tmp[tmp_n++] = '0'; break; }
-            int neg = 0;
-            if (s < 0) {
-                neg = 1;
-                /* Convertir a positivo con cuidado por INT64_MIN. */
-                if (s == (int64_t)0x8000000000000000LL) {
-                    /* -9223372036854775808: hard-code el minimo. */
-                    const char *m = "-9223372036854775808";
-                    size_t k = 0; while (m[k]) ++k;
-                    memcpy(tmp + tmp_n, m, k); tmp_n += k;
-                    goto fmt_done;
-                }
-                s = -s;
+    case 0: { /* INT signed decimal */
+        int64_t s = (int64_t)value;
+        if (s == 0) {
+            tmp[tmp_n++] = '0';
+            break;
+        }
+        int neg = 0;
+        if (s < 0) {
+            neg = 1;
+            /* Convertir a positivo con cuidado por INT64_MIN. */
+            if (s == (int64_t)0x8000000000000000LL) {
+                /* -9223372036854775808: hard-code el minimo. */
+                const char *m = "-9223372036854775808";
+                size_t k = 0;
+                while (m[k])
+                    ++k;
+                memcpy(tmp + tmp_n, m, k);
+                tmp_n += k;
+                goto fmt_done;
             }
-            char rev[24]; int n = 0;
-            while (s > 0) { rev[n++] = (char)('0' + (int)(s % 10)); s /= 10; }
-            if (neg) tmp[tmp_n++] = '-';
-            for (int i = 0; i < n; ++i) tmp[tmp_n++] = rev[n - 1 - i];
-            break;
+            s = -s;
         }
-        case 1: { /* UINT decimal */
-            uint64_t u = value;
-            if (u == 0) { tmp[tmp_n++] = '0'; break; }
-            char rev[24]; int n = 0;
-            while (u > 0) { rev[n++] = (char)('0' + (int)(u % 10u)); u /= 10u; }
-            for (int i = 0; i < n; ++i) tmp[tmp_n++] = rev[n - 1 - i];
-            break;
+        char rev[24];
+        int n = 0;
+        while (s > 0) {
+            rev[n++] = (char)('0' + (int)(s % 10));
+            s /= 10;
         }
-        case 2: tmp_n = vio_u64_to_hex(value, tmp); break;
-        case 3: tmp_n = vio_u64_to_bin(value, tmp); break;
-        case 4: tmp_n = vio_u64_to_oct(value, tmp); break;
-        case 5: tmp_n = vio_u64_to_ptr(value, tmp); break;
-        case 6: { /* GC: "<gc:N>" */
-            tmp[tmp_n++] = '<'; tmp[tmp_n++] = 'g'; tmp[tmp_n++] = 'c';
-            tmp[tmp_n++] = ':';
-            uint64_t u = value;
-            if (u == 0) { tmp[tmp_n++] = '0'; }
-            else {
-                char rev[24]; int n = 0;
-                while (u > 0) { rev[n++] = (char)('0' + (int)(u % 10u)); u /= 10u; }
-                for (int i = 0; i < n; ++i) tmp[tmp_n++] = rev[n - 1 - i];
-            }
-            tmp[tmp_n++] = '>';
-            break;
-        }
-        case 7: { /* BOOL */
-            if (value & 1u) { memcpy(tmp + tmp_n, "true", 4); tmp_n += 4; }
-            else            { memcpy(tmp + tmp_n, "false", 5); tmp_n += 5; }
-            break;
-        }
-        case 8: { /* CHAR codepoint -> UTF-8 */
-            tmp_n = vio_encode_utf8(value, tmp);
-            break;
-        }
-        case 9: { /* FLOAT bits via %g */
-            double d; memcpy(&d, &value, sizeof(d));
-            int k = snprintf(tmp, sizeof(tmp), "%g", d);
-            if (k > 0) tmp_n = (size_t)k;
-            break;
-        }
-        default:
-            tmp_n = 0;
-            break;
+        if (neg) tmp[tmp_n++] = '-';
+        for (int i = 0; i < n; ++i)
+            tmp[tmp_n++] = rev[n - 1 - i];
+        break;
     }
-fmt_done: ; /* statement vacio para que la label valga en C estricto */
+    case 1: { /* UINT decimal */
+        uint64_t u = value;
+        if (u == 0) {
+            tmp[tmp_n++] = '0';
+            break;
+        }
+        char rev[24];
+        int n = 0;
+        while (u > 0) {
+            rev[n++] = (char)('0' + (int)(u % 10u));
+            u /= 10u;
+        }
+        for (int i = 0; i < n; ++i)
+            tmp[tmp_n++] = rev[n - 1 - i];
+        break;
+    }
+    case 2: tmp_n = vio_u64_to_hex(value, tmp); break;
+    case 3: tmp_n = vio_u64_to_bin(value, tmp); break;
+    case 4: tmp_n = vio_u64_to_oct(value, tmp); break;
+    case 5: tmp_n = vio_u64_to_ptr(value, tmp); break;
+    case 6: { /* GC: "<gc:N>" */
+        tmp[tmp_n++] = '<';
+        tmp[tmp_n++] = 'g';
+        tmp[tmp_n++] = 'c';
+        tmp[tmp_n++] = ':';
+        uint64_t u = value;
+        if (u == 0) {
+            tmp[tmp_n++] = '0';
+        } else {
+            char rev[24];
+            int n = 0;
+            while (u > 0) {
+                rev[n++] = (char)('0' + (int)(u % 10u));
+                u /= 10u;
+            }
+            for (int i = 0; i < n; ++i)
+                tmp[tmp_n++] = rev[n - 1 - i];
+        }
+        tmp[tmp_n++] = '>';
+        break;
+    }
+    case 7: { /* BOOL */
+        if (value & 1u) {
+            memcpy(tmp + tmp_n, "true", 4);
+            tmp_n += 4;
+        } else {
+            memcpy(tmp + tmp_n, "false", 5);
+            tmp_n += 5;
+        }
+        break;
+    }
+    case 8: { /* CHAR codepoint -> UTF-8 */
+        tmp_n = vio_encode_utf8(value, tmp);
+        break;
+    }
+    case 9: { /* FLOAT bits via %g */
+        double d;
+        memcpy(&d, &value, sizeof(d));
+        int k = snprintf(tmp, sizeof(tmp), "%g", d);
+        if (k > 0) tmp_n = (size_t)k;
+        break;
+    }
+    default: tmp_n = 0; break;
+    }
+fmt_done:; /* statement vacio para que la label valga en C estricto */
     /* Item 18: calcular padding usando COLUMNAS terminal (no bytes).
      * Para ASCII puro cols == bytes; para multi-byte UTF-8 (CJK, emoji)
      * cada codepoint puede ocupar 2 columnas o 0 (control). */
@@ -1237,7 +1289,8 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_pad(uint64_t fill_cp, uint64_t width) {
             vio_buffer_append(chunk, chunk_used);
             chunk_used = 0;
         }
-        for (size_t j = 0; j < enc_n; ++j) chunk[chunk_used++] = enc[j];
+        for (size_t j = 0; j < enc_n; ++j)
+            chunk[chunk_used++] = enc[j];
     }
     if (chunk_used > 0) vio_buffer_append(chunk, chunk_used);
     return 0;
@@ -1254,8 +1307,8 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_float(uint64_t bits) {
     double d;
     memcpy(&d, &bits, sizeof(d));
     char tmp[64];
-    int  k = snprintf(tmp, sizeof(tmp), "%g", d);
-    if (k > 0) vio_buffer_append(tmp, (size_t) k);
+    int k = snprintf(tmp, sizeof(tmp), "%g", d);
+    if (k > 0) vio_buffer_append(tmp, (size_t)k);
     return 0;
 }
 
@@ -1263,10 +1316,10 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_float(uint64_t bits) {
     double d;
     memcpy(&d, &bits, sizeof(d));
     char tmp[64];
-    int  k = snprintf(tmp, sizeof(tmp), "%g", d);
+    int k = snprintf(tmp, sizeof(tmp), "%g", d);
     if (k > 0) {
         tmp[k++] = '\n';
-        vio_buffer_append(tmp, (size_t) k);
+        vio_buffer_append(tmp, (size_t)k);
     }
     return 0;
 }
@@ -1279,8 +1332,10 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_float(uint64_t bits) {
  * @brief Imprime "true" o "false" segun el bit bajo de @p b.
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_bool(uint64_t b) {
-    if (b & 1u) vio_buffer_append("true", 4);
-    else vio_buffer_append("false", 5);
+    if (b & 1u)
+        vio_buffer_append("true", 4);
+    else
+        vio_buffer_append("false", 5);
     return 0;
 }
 
@@ -1293,24 +1348,24 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_bool(uint64_t b) {
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_char(uint64_t cp) {
     if (cp <= 0x7Fu) {
-        vio_buffer_putc((char) cp);
+        vio_buffer_putc((char)cp);
         return 0;
     }
-    char   buf[4];
+    char buf[4];
     size_t n = 0;
     if (cp <= 0x7FFu) {
-        buf[n++] = (char) (0xC0u | (cp >> 6));
-        buf[n++] = (char) (0x80u | (cp & 0x3Fu));
+        buf[n++] = (char)(0xC0u | (cp >> 6));
+        buf[n++] = (char)(0x80u | (cp & 0x3Fu));
     } else if (cp <= 0xFFFFu) {
         if (cp >= 0xD800u && cp <= 0xDFFFu) return 0; /* surrogate */
-        buf[n++] = (char) (0xE0u | (cp >> 12));
-        buf[n++] = (char) (0x80u | ((cp >> 6) & 0x3Fu));
-        buf[n++] = (char) (0x80u | (cp & 0x3Fu));
+        buf[n++] = (char)(0xE0u | (cp >> 12));
+        buf[n++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        buf[n++] = (char)(0x80u | (cp & 0x3Fu));
     } else if (cp <= 0x10FFFFu) {
-        buf[n++] = (char) (0xF0u | (cp >> 18));
-        buf[n++] = (char) (0x80u | ((cp >> 12) & 0x3Fu));
-        buf[n++] = (char) (0x80u | ((cp >> 6) & 0x3Fu));
-        buf[n++] = (char) (0x80u | (cp & 0x3Fu));
+        buf[n++] = (char)(0xF0u | (cp >> 18));
+        buf[n++] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+        buf[n++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        buf[n++] = (char)(0x80u | (cp & 0x3Fu));
     } else {
         return 0; /* fuera de rango Unicode */
     }
@@ -1331,8 +1386,8 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_color(uint64_t code) {
     char tmp[16];
     tmp[0] = 0x1b; /* ESC */
     tmp[1] = '[';
-    char   digits[8];
-    size_t k = vio_u64_to_str((uint64_t) (code & 0xFFu), digits);
+    char digits[8];
+    size_t k = vio_u64_to_str((uint64_t)(code & 0xFFu), digits);
     memcpy(tmp + 2, digits, k);
     tmp[2 + k] = 'm';
     vio_buffer_append(tmp, 3 + k);
@@ -1358,9 +1413,10 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_newline(void) {
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_cstr(uint64_t host_ptr) {
     if (host_ptr == 0) return 0;
-    const char *s = (const char *) (uintptr_t) host_ptr;
-    size_t      n = 0;
-    while (n < 65536u && s[n] != '\0') ++n;
+    const char *s = (const char *)(uintptr_t)host_ptr;
+    size_t n = 0;
+    while (n < 65536u && s[n] != '\0')
+        ++n;
     vio_buffer_append(s, n);
     return 0;
 }
@@ -1375,10 +1431,10 @@ VESTA_PLUGIN_EXPORT uint64_t vio_print_cstr(uint64_t host_ptr) {
 VESTA_PLUGIN_EXPORT uint64_t vio_print_buf(uint64_t host_ptr,
                                            uint64_t byte_len) {
     if (host_ptr == 0 || byte_len == 0) return 0;
-    const char *s = (const char *) (uintptr_t) host_ptr;
+    const char *s = (const char *)(uintptr_t)host_ptr;
     /* Cap defensivo a 64 MB para evitar crash por puntero corrupto. */
     if (byte_len > (1ull << 26)) byte_len = (1ull << 26);
-    vio_buffer_append(s, (size_t) byte_len);
+    vio_buffer_append(s, (size_t)byte_len);
     return 0;
 }
 
@@ -1405,14 +1461,12 @@ VESTA_PLUGIN_EXPORT uint64_t vio_flush(void) {
  *
  * @return @c dst_host (compatible API memcpy).
  */
-VESTA_PLUGIN_EXPORT uint64_t vio_memcpy(uint64_t dst_host,
-                                        uint64_t src_host,
+VESTA_PLUGIN_EXPORT uint64_t vio_memcpy(uint64_t dst_host, uint64_t src_host,
                                         uint64_t n) {
     if (dst_host == 0 || src_host == 0 || n == 0) return dst_host;
     if (n > (1ull << 30)) n = (1ull << 30);
-    memcpy((void *) (uintptr_t) dst_host,
-           (const void *) (uintptr_t) src_host,
-           (size_t) n);
+    memcpy((void *)(uintptr_t)dst_host, (const void *)(uintptr_t)src_host,
+           (size_t)n);
     return dst_host;
 }
 
@@ -1420,12 +1474,11 @@ VESTA_PLUGIN_EXPORT uint64_t vio_memcpy(uint64_t dst_host,
  * @brief memset host: rellena bytes con un valor.  Usado por el IR pass
  * cuando detecta loops de inicializacion `dst[i] = K`.
  */
-VESTA_PLUGIN_EXPORT uint64_t vio_memset(uint64_t dst_host,
-                                        uint64_t val,
+VESTA_PLUGIN_EXPORT uint64_t vio_memset(uint64_t dst_host, uint64_t val,
                                         uint64_t n) {
     if (dst_host == 0 || n == 0) return dst_host;
     if (n > (1ull << 30)) n = (1ull << 30);
-    memset((void *) (uintptr_t) dst_host, (int) (val & 0xFF), (size_t) n);
+    memset((void *)(uintptr_t)dst_host, (int)(val & 0xFF), (size_t)n);
     return dst_host;
 }
 
@@ -1440,25 +1493,24 @@ VESTA_PLUGIN_EXPORT uint64_t vio_memset(uint64_t dst_host,
  * Antes de leer hace @c flush para que cualquier prompt encolado en el
  * buffer salga a la consola y el usuario vea lo que se le pregunta.
  */
-VESTA_PLUGIN_EXPORT uint64_t vio_read_line(uint64_t proc_ptr,
-                                           uint64_t vm_addr,
+VESTA_PLUGIN_EXPORT uint64_t vio_read_line(uint64_t proc_ptr, uint64_t vm_addr,
                                            uint64_t max_bytes) {
     if (!g_api || max_bytes == 0) return 0;
 
     /* Sincronizar buffer con stdout antes de leer (prompt visible). */
     vio_flush_public();
 
-    char *host_buf = (char *) malloc((size_t) max_bytes);
+    char *host_buf = (char *)malloc((size_t)max_bytes);
     if (!host_buf) return 0;
 
-    if (!fgets(host_buf, (int) max_bytes, stdin)) {
+    if (!fgets(host_buf, (int)max_bytes, stdin)) {
         host_buf[0] = '\0';
         g_api->vm_write_bytes(proc_ptr, vm_addr, host_buf, 1);
         free(host_buf);
         return 0;
     }
 
-    uint64_t written = (uint64_t) strlen(host_buf);
+    uint64_t written = (uint64_t)strlen(host_buf);
     g_api->vm_write_bytes(proc_ptr, vm_addr, host_buf, written + 1);
     free(host_buf);
     return written;
@@ -1476,21 +1528,19 @@ VESTA_PLUGIN_EXPORT uint64_t vio_read_line(uint64_t proc_ptr,
  * Devuelve el FILE* como uint64_t opaco; usar con @c vio_fread / @c
  * vio_fwrite / @c vio_fclose.
  */
-VESTA_PLUGIN_EXPORT uint64_t vio_fopen(uint64_t proc_ptr,
-                                       uint64_t path_vm_addr,
-                                       uint64_t path_len,
-                                       uint64_t mode_vm_addr,
+VESTA_PLUGIN_EXPORT uint64_t vio_fopen(uint64_t proc_ptr, uint64_t path_vm_addr,
+                                       uint64_t path_len, uint64_t mode_vm_addr,
                                        uint64_t mode_len) {
     if (!g_api) return 0;
 
-    char  path_stack[512];
-    char  mode_stack[8];
+    char path_stack[512];
+    char mode_stack[8];
     char *path = (path_len < sizeof(path_stack))
                      ? path_stack
-                     : (char *) malloc((size_t) path_len + 1);
+                     : (char *)malloc((size_t)path_len + 1);
     char *mode = (mode_len < sizeof(mode_stack))
                      ? mode_stack
-                     : (char *) malloc((size_t) mode_len + 1);
+                     : (char *)malloc((size_t)mode_len + 1);
     if (!path || !mode) {
         if (path && path != path_stack) free(path);
         if (mode && mode != mode_stack) free(mode);
@@ -1504,38 +1554,34 @@ VESTA_PLUGIN_EXPORT uint64_t vio_fopen(uint64_t proc_ptr,
     FILE *f = fopen(path, mode);
     if (path != path_stack) free(path);
     if (mode != mode_stack) free(mode);
-    return (uint64_t) (uintptr_t) f;
+    return (uint64_t)(uintptr_t)f;
 }
 
 VESTA_PLUGIN_EXPORT uint64_t vio_fclose(uint64_t handle) {
-    if (!handle) return (uint64_t) -1;
-    return (uint64_t) fclose((FILE *) (uintptr_t) handle);
+    if (!handle) return (uint64_t)-1;
+    return (uint64_t)fclose((FILE *)(uintptr_t)handle);
 }
 
-VESTA_PLUGIN_EXPORT uint64_t vio_fread(uint64_t proc_ptr,
-                                       uint64_t vm_addr,
-                                       uint64_t size,
-                                       uint64_t handle) {
+VESTA_PLUGIN_EXPORT uint64_t vio_fread(uint64_t proc_ptr, uint64_t vm_addr,
+                                       uint64_t size, uint64_t handle) {
     if (!g_api || !handle || !size) return 0;
-    char *host_buf = (char *) malloc((size_t) size);
+    char *host_buf = (char *)malloc((size_t)size);
     if (!host_buf) return 0;
-    uint64_t n = (uint64_t) fread(host_buf, 1, (size_t) size,
-                                  (FILE *) (uintptr_t) handle);
+    uint64_t n =
+        (uint64_t)fread(host_buf, 1, (size_t)size, (FILE *)(uintptr_t)handle);
     if (n > 0) g_api->vm_write_bytes(proc_ptr, vm_addr, host_buf, n);
     free(host_buf);
     return n;
 }
 
-VESTA_PLUGIN_EXPORT uint64_t vio_fwrite(uint64_t proc_ptr,
-                                        uint64_t vm_addr,
-                                        uint64_t size,
-                                        uint64_t handle) {
+VESTA_PLUGIN_EXPORT uint64_t vio_fwrite(uint64_t proc_ptr, uint64_t vm_addr,
+                                        uint64_t size, uint64_t handle) {
     if (!g_api || !handle || !size) return 0;
-    char *host_buf = (char *) malloc((size_t) size);
+    char *host_buf = (char *)malloc((size_t)size);
     if (!host_buf) return 0;
     g_api->vm_read_bytes(proc_ptr, vm_addr, host_buf, size);
-    uint64_t n = (uint64_t) fwrite(host_buf, 1, (size_t) size,
-                                   (FILE *) (uintptr_t) handle);
+    uint64_t n =
+        (uint64_t)fwrite(host_buf, 1, (size_t)size, (FILE *)(uintptr_t)handle);
     free(host_buf);
     return n;
 }
@@ -1546,6 +1592,6 @@ VESTA_PLUGIN_EXPORT uint64_t vio_fwrite(uint64_t proc_ptr,
  *        buffer global de stdout usar @c vio_flush() en su lugar.
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_fflush(uint64_t handle) {
-    FILE *f = handle ? (FILE *) (uintptr_t) handle : NULL;
-    return (uint64_t) fflush(f);
+    FILE *f = handle ? (FILE *)(uintptr_t)handle : NULL;
+    return (uint64_t)fflush(f);
 }

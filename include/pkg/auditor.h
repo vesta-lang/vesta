@@ -23,38 +23,37 @@
 
 namespace pkg::audit {
 
-    enum class Severity { Info, Warning, Critical };
+enum class Severity { Info, Warning, Critical };
 
-    struct Finding {
-        Severity    severity;
-        std::string code;          ///< AUTHOR_CHANGED, SHA_CHANGED, etc.
-        std::string package_name;
-        std::string description;
-        std::string suggestion;
-    };
+struct Finding {
+    Severity severity;
+    std::string code; ///< AUTHOR_CHANGED, SHA_CHANGED, etc.
+    std::string package_name;
+    std::string description;
+    std::string suggestion;
+};
 
-    struct AuditReport {
-        std::vector<Finding> findings;
-        size_t       critical_count = 0;
-        size_t       warning_count  = 0;
-        size_t       info_count     = 0;
-    };
+struct AuditReport {
+    std::vector<Finding> findings;
+    size_t critical_count = 0;
+    size_t warning_count = 0;
+    size_t info_count = 0;
+};
 
-    /**
-     * @brief Audita un lockfile actual vs uno previo.
-     *
-     * @param current   lockfile recien resuelto
-     * @param previous  lockfile cacheado (puede estar vacio)
-     * @param pins      trust pins del usuario
-     */
-    AuditReport audit_lockfile(const Lockfile &current,
-                                const Lockfile &previous,
-                                const std::vector<signing::TrustPin> &pins);
+/**
+ * @brief Audita un lockfile actual vs uno previo.
+ *
+ * @param current   lockfile recien resuelto
+ * @param previous  lockfile cacheado (puede estar vacio)
+ * @param pins      trust pins del usuario
+ */
+AuditReport audit_lockfile(const Lockfile &current, const Lockfile &previous,
+                           const std::vector<signing::TrustPin> &pins);
 
-    /**
-     * @brief Pretty-print del reporte usando @c pkg::ui colores.
-     */
-    void print_report(const AuditReport &report);
+/**
+ * @brief Pretty-print del reporte usando @c pkg::ui colores.
+ */
+void print_report(const AuditReport &report);
 
 } // namespace pkg::audit
 

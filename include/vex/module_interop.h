@@ -17,7 +17,7 @@
 
 namespace vex {
 
-struct VexiModule;        // fwd decl, definido en vexi_format.h
+struct VexiModule; // fwd decl, definido en vexi_format.h
 
 /**
  * @brief Extrae los simbolos publicos del @c TypeChecker a un
@@ -32,10 +32,9 @@ struct VexiModule;        // fwd decl, definido en vexi_format.h
  *                     invalidacion incremental del cache).
  * @param out          @c VexiModule destino.  Se sobrescribe.
  */
-void export_typechecker_to_vexi(const TypeChecker &tc,
-                                  uint64_t source_hash,
-                                  VexiModule &out,
-                                  const std::string &strip_prefix = "");
+void export_typechecker_to_vexi(const TypeChecker &tc, uint64_t source_hash,
+                                VexiModule &out,
+                                const std::string &strip_prefix = "");
 
 /**
  * @brief Inyecta simbolos importados de un @c VexiModule en las tablas
@@ -51,9 +50,8 @@ void export_typechecker_to_vexi(const TypeChecker &tc,
  *                     Si vacio: no se inyecta nada.
  */
 void import_vexi_into_typechecker(
-        TypeChecker &tc,
-        const VexiModule &mod,
-        const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols);
+    TypeChecker &tc, const VexiModule &mod,
+    const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols);
 
 /**
  * @brief Variante que devuelve la lista de simbolos solicitados pero
@@ -62,9 +60,8 @@ void import_vexi_into_typechecker(
  * (Phase M6.a L.3).
  */
 std::vector<std::string> import_vexi_into_typechecker_with_missing(
-        TypeChecker &tc,
-        const VexiModule &mod,
-        const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols);
+    TypeChecker &tc, const VexiModule &mod,
+    const std::vector<TypeChecker::VexiOnlyEntry> &only_symbols);
 
 /**
  * @brief Phase M.7: registra un namespace para un @c "import \"lib\";"
@@ -79,11 +76,10 @@ std::vector<std::string> import_vexi_into_typechecker_with_missing(
  * Symbol::Namespace en el scope global del consumidor.  El usuario puede
  * acceder a sus simbolos con la sintaxis @c local_name.simbolo.
  */
-void register_namespace_for_import(
-        TypeChecker &tc,
-        const std::string &local_name,
-        const std::string &module_name,
-        const VexiModule &mod);
+void register_namespace_for_import(TypeChecker &tc,
+                                   const std::string &local_name,
+                                   const std::string &module_name,
+                                   const VexiModule &mod);
 
 } // namespace vex
 

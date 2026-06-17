@@ -35,10 +35,10 @@
 #include "runtime/runtime.h"
 #include "distrib/dist_runtime.h"
 #include "distrib/mailbox.h"
-#include "loader/loader.h"   // Loader::load_module_dynamic
-#include "debug/debugger.h"  // Debugger::on_message hook (tracing)
-#include <fstream>           // leer archivo .velb del filesystem
-#include <iterator>          // istreambuf_iterator
+#include "loader/loader.h"  // Loader::load_module_dynamic
+#include "debug/debugger.h" // Debugger::on_message hook (tracing)
+#include <fstream>          // leer archivo .velb del filesystem
+#include <iterator>         // istreambuf_iterator
 
 namespace runtime {
 
@@ -56,14 +56,18 @@ namespace runtime {
  * Si el nodo no esta conectado o la sesion no esta activa, R0 = 0xFFFFFFFF.
  *
  * @param vm    Proceso que ejecuta la instruccion.
- * @param instr reg1 = r_fn (dir virtual del bytecode), reg2 = r_node (indice en NodeRegistry).
+ * @param instr reg1 = r_fn (dir virtual del bytecode), reg2 = r_node (indice en
+ * NodeRegistry).
  */
 void exec_instr_rspawn(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_fn   = instr.data_instruction.reg_data.reg1; // registro con fn_addr
-    const uint8_t r_node = instr.data_instruction.reg_data.reg2; // registro con node_idx
+    const uint8_t r_fn =
+        instr.data_instruction.reg_data.reg1; // registro con fn_addr
+    const uint8_t r_node =
+        instr.data_instruction.reg_data.reg2; // registro con node_idx
 
-    const uint64_t fn_addr  = vm->registers.regs[r_fn].qword();
-    const uint32_t node_idx = static_cast<uint32_t>(vm->registers.regs[r_node].qword());
+    const uint64_t fn_addr = vm->registers.regs[r_fn].qword();
+    const uint32_t node_idx =
+        static_cast<uint32_t>(vm->registers.regs[r_node].qword());
 
     distrib::DistRuntime *dr = vm->scheduler.vm_reference.dist_runtime.get();
     if (!dr) {
@@ -72,7 +76,8 @@ void exec_instr_rspawn(ProcessVM *vm, const DecodedInstr &instr) {
     }
 
     uint32_t handle = dr->rspawn(vm, fn_addr, node_idx);
-    vm->registers.regs[0].qword(static_cast<uint64_t>(handle)); // R0 = GcHandle del future
+    vm->registers.regs[0].qword(
+        static_cast<uint64_t>(handle)); // R0 = GcHandle del future
 }
 
 // =========================================================================
@@ -98,10 +103,10 @@ void exec_instr_rspawn(ProcessVM *vm, const DecodedInstr &instr) {
  *              reg2 = registro con longitud en bytes del path.
  */
 void exec_instr_loadmod(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t  r_path_addr = instr.data_instruction.reg_data.reg1;
-    const uint8_t  r_path_len  = instr.data_instruction.reg_data.reg2;
-    const uint64_t path_addr   = vm->registers.regs[r_path_addr].qword();
-    const uint64_t path_len    = vm->registers.regs[r_path_len].qword();
+    const uint8_t r_path_addr = instr.data_instruction.reg_data.reg1;
+    const uint8_t r_path_len = instr.data_instruction.reg_data.reg2;
+    const uint64_t path_addr = vm->registers.regs[r_path_addr].qword();
+    const uint64_t path_len = vm->registers.regs[r_path_len].qword();
 
     // Validacion basica del path.  Limitamos a un tamano razonable para
     // evitar lecturas de buffer arbitrariamente grandes (PATH_MAX en
@@ -123,25 +128,22 @@ void exec_instr_loadmod(ProcessVM *vm, const DecodedInstr &instr) {
         vm->registers.regs[0].qword(0); // file not found
         return;
     }
-    std::vector<uint8_t> file_bytes(
-        (std::istreambuf_iterator<char>(file)),
-        std::istreambuf_iterator<char>()
-    );
+    std::vector<uint8_t> file_bytes((std::istreambuf_iterator<char>(file)),
+                                    std::istreambuf_iterator<char>());
     if (file_bytes.empty()) {
         vm->registers.regs[0].qword(0);
         return;
     }
 
     runtime::VM &vm_ref = vm->scheduler.vm_reference;
-    const uint64_t init_pc = vm_ref.loader_public.load_module_dynamic(
-        vm_ref, std::move(file_bytes));
+    const uint64_t init_pc =
+        vm_ref.loader_public.load_module_dynamic(vm_ref, std::move(file_bytes));
     // Tras un load exitoso, registrar el source_path en el Executable que
     // acaba de anadirse (sera el ultimo del pool).  Permite que
     // unloadmodule(path) lo localice por path mas tarde.  Si load fallo
     // (init_pc==0), no hay nada que patchar.
-    if (init_pc != 0
-        && !vm_ref.loader_public.executables.empty()
-        && vm_ref.loader_public.executables.back()) {
+    if (init_pc != 0 && !vm_ref.loader_public.executables.empty() &&
+        vm_ref.loader_public.executables.back()) {
         vm_ref.loader_public.executables.back()->source_path = path;
     }
 
@@ -167,14 +169,15 @@ void exec_instr_loadmod(ProcessVM *vm, const DecodedInstr &instr) {
     // findclass.  Dejamos R0 = init_pc como indicador de exito antes del
     // salto; el main cargado puede sobrescribirlo si quiere devolver algo
     // al caller.
-    const uint64_t ret_addr = vm->registers.rip.raw()
-                            + vm->decoded_ptr->flags_info.size_instr;
+    const uint64_t ret_addr =
+        vm->registers.rip.raw() + vm->decoded_ptr->flags_info.size_instr;
     const uint64_t new_sp = vm->registers.stack_pointer.qword() - 8;
     vm->registers.stack_pointer.qword(new_sp);
     vm->vm_mem.write_bytes(new_sp, &ret_addr, 8);
     vm->registers.rip.qword(init_pc);
     vm->decoded_ptr->flags_info.did_jump = true;
-    vm->registers.regs[0].qword(init_pc); // success indicator (puede ser sobrescrito)
+    vm->registers.regs[0].qword(
+        init_pc); // success indicator (puede ser sobrescrito)
     // BugFix M.dyn (2026-06-05): guardar init_pc en la pila de retorno.  El
     // __module_init del plugin clobbea R0 (su ultimo op deja un valor
     // arbitrario; en un reload, el defclass idempotente sobre una clase ya
@@ -205,14 +208,14 @@ void exec_instr_loadmod(ProcessVM *vm, const DecodedInstr &instr) {
  * vivas).  La memoria del bytecode SI se libera.  Para un "reload" efectivo
  * el usuario debe versionar el nombre de la clase (e.g. ExtV1 -> ExtV2).
  *
- * Encoding FIXED_4: [0x00][0x6D][regs][0x00] con regs=(r_path_len<<4)|r_path_addr
- * (mismo formato que loadmod).
+ * Encoding FIXED_4: [0x00][0x6D][regs][0x00] con
+ * regs=(r_path_len<<4)|r_path_addr (mismo formato que loadmod).
  */
 void exec_instr_unloadmod(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t  r_path_addr = instr.data_instruction.reg_data.reg1;
-    const uint8_t  r_path_len  = instr.data_instruction.reg_data.reg2;
-    const uint64_t path_addr   = vm->registers.regs[r_path_addr].qword();
-    const uint64_t path_len    = vm->registers.regs[r_path_len].qword();
+    const uint8_t r_path_addr = instr.data_instruction.reg_data.reg1;
+    const uint8_t r_path_len = instr.data_instruction.reg_data.reg2;
+    const uint64_t path_addr = vm->registers.regs[r_path_addr].qword();
+    const uint64_t path_len = vm->registers.regs[r_path_len].qword();
 
     if (path_len == 0 || path_len > 8192) {
         vm->registers.regs[0].qword(0);
@@ -246,19 +249,24 @@ void exec_instr_unloadmod(ProcessVM *vm, const DecodedInstr &instr) {
  * Encoding de r_pid:
  *   - Local:  bits 31-0 = local_pid (usa scheduler_id=0 para busqueda global)
  *   - Remoto: bit63=1, bits 62-32 = node_idx, bits 31-0 = remote_local_pid
- *             Construir con vdp_make_remote_pid(node_idx, local_pid) desde bytecode.
+ *             Construir con vdp_make_remote_pid(node_idx, local_pid) desde
+ * bytecode.
  *
  * @param vm    Proceso emisor.
- * @param instr mem_data.reg_base=r_pid, mem_data.reg_index=r_addr, mem_data.reg_final=r_len.
+ * @param instr mem_data.reg_base=r_pid, mem_data.reg_index=r_addr,
+ * mem_data.reg_final=r_len.
  */
 void exec_instr_msgsend(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_pid  = instr.data_instruction.mem_data.reg_base;  // PID del destino
-    const uint8_t r_addr = instr.data_instruction.mem_data.reg_index; // dir del buffer
-    const uint8_t r_len  = instr.data_instruction.mem_data.reg_final; // longitud en bytes
+    const uint8_t r_pid =
+        instr.data_instruction.mem_data.reg_base; // PID del destino
+    const uint8_t r_addr =
+        instr.data_instruction.mem_data.reg_index; // dir del buffer
+    const uint8_t r_len =
+        instr.data_instruction.mem_data.reg_final; // longitud en bytes
 
     const uint64_t target_pid = vm->registers.regs[r_pid].qword();
-    const uint64_t vm_addr    = vm->registers.regs[r_addr].qword();
-    const uint64_t len        = vm->registers.regs[r_len].qword();
+    const uint64_t vm_addr = vm->registers.regs[r_addr].qword();
+    const uint64_t len = vm->registers.regs[r_len].qword();
 
     distrib::DistRuntime *dr = vm->scheduler.vm_reference.dist_runtime.get();
     if (!dr) {
@@ -267,13 +275,14 @@ void exec_instr_msgsend(ProcessVM *vm, const DecodedInstr &instr) {
     }
 
     bool ok = dr->msgsend(vm, target_pid, vm_addr, len);
-    vm->registers.regs[0].qword(ok ? 1 : 0); // R0 = 1 si enviado/encolado, 0 si error
+    vm->registers.regs[0].qword(
+        ok ? 1 : 0); // R0 = 1 si enviado/encolado, 0 si error
     // Hook del debugger: tracing de mensajes (sin overhead si no hay tracing).
     if (vm->scheduler.vm_reference.debugger) {
         uint64_t payload64 = 0;
         if (len >= 8) vm->vm_mem.read_bytes(vm_addr, &payload64, 8);
-        vm->scheduler.vm_reference.debugger->on_message(
-            vm->pid.local_pid, true, target_pid, payload64);
+        vm->scheduler.vm_reference.debugger->on_message(vm->pid.local_pid, true,
+                                                        target_pid, payload64);
     }
 }
 
@@ -295,11 +304,12 @@ void exec_instr_msgsend(ProcessVM *vm, const DecodedInstr &instr) {
  * @param instr reg1 = r_buf (dir del buffer destino), reg2 = r_max_len.
  */
 void exec_instr_msgrecv(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_buf = instr.data_instruction.reg_data.reg1;     // buffer destino
-    const uint8_t r_max = instr.data_instruction.reg_data.reg2;     // tamano maximo
+    const uint8_t r_buf =
+        instr.data_instruction.reg_data.reg1; // buffer destino
+    const uint8_t r_max = instr.data_instruction.reg_data.reg2; // tamano maximo
 
     const uint64_t buf_addr = vm->registers.regs[r_buf].qword();
-    const uint64_t max_len  = vm->registers.regs[r_max].qword();
+    const uint64_t max_len = vm->registers.regs[r_max].qword();
 
     distrib::DistRuntime *dr = vm->scheduler.vm_reference.dist_runtime.get();
     if (!dr) {
@@ -312,8 +322,9 @@ void exec_instr_msgrecv(ProcessVM *vm, const DecodedInstr &instr) {
 
     if (mb->empty()) {
         // buzon vacio: bloquear el proceso en WAIT_IO para que sea despertado
-        // por msgsend cuando llegue un mensaje. El PC no avanza (blocking = true)
-        // hace que MSGRECV se re-ejecute en el proximo quantum de este proceso.
+        // por msgsend cuando llegue un mensaje. El PC no avanza (blocking =
+        // true) hace que MSGRECV se re-ejecute en el proximo quantum de este
+        // proceso.
         vm->decoded_ptr->flags_info.blocking = true;
         vm->scheduler.on_event(EVT_IO_WAIT); // transicion a WAIT_IO
         vm->registers.regs[0].qword(0);      // R0 = 0 mientras espera
@@ -326,16 +337,17 @@ void exec_instr_msgrecv(ProcessVM *vm, const DecodedInstr &instr) {
     if (vm->scheduler.vm_reference.debugger) {
         uint64_t payload64 = 0;
         if (bytes >= 8) vm->vm_mem.read_bytes(buf_addr, &payload64, 8);
-        vm->scheduler.vm_reference.debugger->on_message(
-            vm->pid.local_pid, false, 0, payload64);
+        vm->scheduler.vm_reference.debugger->on_message(vm->pid.local_pid,
+                                                        false, 0, payload64);
     }
-    // CRITICO: si la primera llamada a msgrecv (icache miss) seteo blocking=true
-    // por mailbox vacio, ese flag queda CACHEADO en la entrada del icache.
-    // En la re-ejecucion (post-wake) decode_instruction devuelve cache HIT con
-    // el blocking=true viejo; tras leer el mensaje DEBEMOS limpiar el flag
-    // para que execute_instruction devuelva EVT_EXEC_DONE y el scheduler
-    // continue al siguiente opcode (avanzando el PC).  Sin esto el proceso
-    // queda en bucle: msgrecv -> blocking=true sticky -> WAIT_IO de nuevo
+    // CRITICO: si la primera llamada a msgrecv (icache miss) seteo
+    // blocking=true por mailbox vacio, ese flag queda CACHEADO en la entrada
+    // del icache. En la re-ejecucion (post-wake) decode_instruction devuelve
+    // cache HIT con el blocking=true viejo; tras leer el mensaje DEBEMOS
+    // limpiar el flag para que execute_instruction devuelva EVT_EXEC_DONE y el
+    // scheduler continue al siguiente opcode (avanzando el PC).  Sin esto el
+    // proceso queda en bucle: msgrecv -> blocking=true sticky -> WAIT_IO de
+    // nuevo
     // -> nadie lo despierta -> deadlock.
     vm->decoded_ptr->flags_info.blocking = false;
 }
@@ -353,7 +365,8 @@ void exec_instr_msgrecv(ProcessVM *vm, const DecodedInstr &instr) {
  *
  * Algoritmo de deteccion de cambios (3 niveles):
  *   1. Adler-32: filtro rapido por pagina (~1 ns/pagina intacta)
- *   2. BLAKE2s-256: verificacion fuerte (solo para paginas con Adler-32 diferente)
+ *   2. BLAKE2s-256: verificacion fuerte (solo para paginas con Adler-32
+ * diferente)
  *   3. Transmision: solo las paginas donde BLAKE2s difiere del baseline
  *
  * En esta implementacion v1 la sincronizacion es siempre asincrona.

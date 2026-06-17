@@ -61,11 +61,11 @@
 
 // Declaraciones adelantadas para evitar dependencias circulares
 namespace runtime {
-    class VM;
-    class ProcessVM;
-}
+class VM;
+class ProcessVM;
+} // namespace runtime
 namespace loader {
-    struct FutureObject;
+struct FutureObject;
 }
 class TCPServer;
 
@@ -85,9 +85,11 @@ class DirtyTracker;
  * correlacionar el VDP_RSPAWN_ACK con el future local que debe resolverse.
  */
 struct PendingFuture {
-    uint64_t   future_id;    // ID opaco enviado en VDP_RSPAWN (indice en la tabla)
-    uint32_t   gc_handle;    // GcHandle del FutureObject en el GC del proceso solicitante
-    GlobalPID  requester;    // PID del proceso que ejecuto rspawn (para make_ready tras await)
+    uint64_t future_id; // ID opaco enviado en VDP_RSPAWN (indice en la tabla)
+    uint32_t
+        gc_handle; // GcHandle del FutureObject en el GC del proceso solicitante
+    GlobalPID requester; // PID del proceso que ejecuto rspawn (para make_ready
+                         // tras await)
 };
 
 // ---------------------------------------------------------------------------
@@ -101,13 +103,14 @@ struct PendingFuture {
  * VDP_MSGSEND_ACK.  Si no llega en retry_ms ms, reintenta.
  */
 struct PendingMsg {
-    uint32_t             seq_num;     // numero de secuencia del MSGSEND
-    uint32_t             node_idx;    // nodo al que se envio
-    std::vector<uint8_t> payload;     // payload completo del VDP_MSGSEND (para reintento)
-    uint64_t             sent_at_ms;  // marca de tiempo en ms del ultimo envio
-    uint32_t             retries;     // intentos realizados
-    static constexpr uint32_t MAX_RETRIES = 5;   // maximo de reintentos
-    static constexpr uint64_t RETRY_MS    = 2000; // ms entre reintentos
+    uint32_t seq_num;  // numero de secuencia del MSGSEND
+    uint32_t node_idx; // nodo al que se envio
+    std::vector<uint8_t>
+        payload;         // payload completo del VDP_MSGSEND (para reintento)
+    uint64_t sent_at_ms; // marca de tiempo en ms del ultimo envio
+    uint32_t retries;    // intentos realizados
+    static constexpr uint32_t MAX_RETRIES = 5; // maximo de reintentos
+    static constexpr uint64_t RETRY_MS = 2000; // ms entre reintentos
 };
 
 // ---------------------------------------------------------------------------
@@ -118,12 +121,14 @@ struct PendingMsg {
  * @brief Configuracion de arranque del DistRuntime.
  */
 struct DistRuntimeConfig {
-    uint64_t       local_node_id;    // ID de este nodo (0 = generar automaticamente)
-    char           local_node_name[32]; // nombre legible
-    uint16_t       vdp_listen_port;  // puerto del servidor VDP (0 = usar VDP_LISTEN_PORT)
-    uint16_t       discover_port;    // puerto UDP de descubrimiento (0 = usar VDP_DISCOVER_PORT)
-    bool           enable_discovery; // true = iniciar descubrimiento dinamico UDP
-    NodeAuthConfig server_auth;      // configuracion de autenticacion del servidor
+    uint64_t local_node_id;   // ID de este nodo (0 = generar automaticamente)
+    char local_node_name[32]; // nombre legible
+    uint16_t
+        vdp_listen_port; // puerto del servidor VDP (0 = usar VDP_LISTEN_PORT)
+    uint16_t discover_port;     // puerto UDP de descubrimiento (0 = usar
+                                // VDP_DISCOVER_PORT)
+    bool enable_discovery;      // true = iniciar descubrimiento dinamico UDP
+    NodeAuthConfig server_auth; // configuracion de autenticacion del servidor
 };
 
 // ---------------------------------------------------------------------------
@@ -137,7 +142,7 @@ struct DistRuntimeConfig {
  * distribuidas obtienen el DistRuntime via vm->scheduler.vm->dist_runtime.
  */
 class DistRuntime {
-public:
+  public:
     /**
      * @brief Construye el DistRuntime y lo asocia a la VM indicada.
      * @param vm     Instancia VM propietaria de este DistRuntime.
@@ -146,7 +151,8 @@ public:
     DistRuntime(runtime::VM &vm, const DistRuntimeConfig &config);
 
     /**
-     * @brief Destructor: detiene el servidor VDP, cierra sesiones y limpia recursos.
+     * @brief Destructor: detiene el servidor VDP, cierra sesiones y limpia
+     * recursos.
      */
     ~DistRuntime();
 
@@ -159,7 +165,8 @@ public:
     // ----------------------------------------------------------------
 
     /**
-     * @brief Inicia el servidor VDP y el descubrimiento dinamico si esta habilitado.
+     * @brief Inicia el servidor VDP y el descubrimiento dinamico si esta
+     * habilitado.
      *
      * Lanza el hilo del servidor TCP que acepta conexiones VDP entrantes.
      * Si enable_discovery==true, inicia el hilo de broadcast UDP.
@@ -169,7 +176,8 @@ public:
     bool start();
 
     /**
-     * @brief Detiene el servidor VDP, el descubrimiento y cierra todas las sesiones.
+     * @brief Detiene el servidor VDP, el descubrimiento y cierra todas las
+     * sesiones.
      */
     void stop();
 
@@ -188,8 +196,7 @@ public:
      * @param name  Nombre legible del nodo.
      * @return Indice del nodo en el registro.
      */
-    uint32_t add_node(const char *ip, uint16_t port,
-                      const NodeAuthConfig &auth,
+    uint32_t add_node(const char *ip, uint16_t port, const NodeAuthConfig &auth,
                       const char *name = "");
 
     /**
@@ -224,8 +231,7 @@ public:
      * @param node_idx Indice del nodo destino en NodeRegistry.
      * @return GcHandle del FutureObject creado (0xFFFFFFFF si error).
      */
-    uint32_t rspawn(runtime::ProcessVM *proc,
-                    uint64_t fn_addr,
+    uint32_t rspawn(runtime::ProcessVM *proc, uint64_t fn_addr,
                     uint32_t node_idx);
 
     /**
@@ -233,11 +239,12 @@ public:
      *
      * A diferencia de rspawn(), que lee bytecode ya resuelto de la memoria del
      * proceso, rspawn_velb() envia los bytes raw del fichero .velb para que el
-     * nodo remoto llame a load_executable() y resuelva sus propias importaciones.
-     * Esto permite que instrucciones calln funcionen en el remoto con las
-     * bibliotecas nativas instaladas en ese nodo.
+     * nodo remoto llame a load_executable() y resuelva sus propias
+     * importaciones. Esto permite que instrucciones calln funcionen en el
+     * remoto con las bibliotecas nativas instaladas en ese nodo.
      *
-     * @param proc       Proceso cuyo gc_heap albergara el FutureObject de resultado.
+     * @param proc       Proceso cuyo gc_heap albergara el FutureObject de
+     * resultado.
      * @param velb_bytes Contenido completo del fichero .velb.
      * @param node_idx   Indice del nodo destino en NodeRegistry.
      * @return GcHandle del FutureObject creado (0xFFFFFFFF si error).
@@ -247,11 +254,13 @@ public:
                          uint32_t node_idx);
 
     /**
-     * @brief Notifica al nodo origen que un proceso remoto (creado por rspawn) ha terminado.
+     * @brief Notifica al nodo origen que un proceso remoto (creado por rspawn)
+     * ha terminado.
      *
-     * Llamado por el scheduler cuando un proceso con rspawn_future_id != 0 alcanza
-     * el estado HALT o DEAD.  Envia VDP_FUTURE_FULFILL con r0 al nodo origen para
-     * que el await del proceso cliente se desbloquee con el valor real de retorno.
+     * Llamado por el scheduler cuando un proceso con rspawn_future_id != 0
+     * alcanza el estado HALT o DEAD.  Envia VDP_FUTURE_FULFILL con r0 al nodo
+     * origen para que el await del proceso cliente se desbloquee con el valor
+     * real de retorno.
      *
      * @param proc Proceso que termino; debe tener rspawn_future_id != 0.
      */
@@ -261,8 +270,8 @@ public:
      * @brief Implementa la logica de la instruccion msgsend.
      *
      * Si el PID es local: deposita el mensaje en el mailbox del proceso.
-     * Si el PID es remoto: envia VDP_MSGSEND y registra el mensaje como pendiente
-     *   de ACK para reintento at-least-once.
+     * Si el PID es remoto: envia VDP_MSGSEND y registra el mensaje como
+     * pendiente de ACK para reintento at-least-once.
      *
      * @param proc       Proceso que ejecuta la instruccion (emisor).
      * @param target_pid PID codificado del proceso destino (local o remoto).
@@ -270,10 +279,8 @@ public:
      * @param len        Longitud del mensaje en bytes.
      * @return true si el mensaje fue encolado o enviado.
      */
-    bool msgsend(runtime::ProcessVM *proc,
-                 uint64_t target_pid,
-                 uint64_t vm_addr,
-                 uint64_t len);
+    bool msgsend(runtime::ProcessVM *proc, uint64_t target_pid,
+                 uint64_t vm_addr, uint64_t len);
 
     /**
      * @brief Implementa la logica de la instruccion msgrecv.
@@ -287,21 +294,22 @@ public:
      * @param max_len   Tamano maximo del buffer en bytes.
      * @return Bytes copiados al buffer, o 0 si el proceso quedo bloqueado.
      */
-    uint64_t msgrecv(runtime::ProcessVM *proc,
-                     uint64_t buf_addr,
+    uint64_t msgrecv(runtime::ProcessVM *proc, uint64_t buf_addr,
                      uint64_t max_len);
 
     /**
      * @brief Implementa la logica de la instruccion memsync.
      *
-     * Lee MemsyncParams de VM memory, detecta paginas modificadas via DirtyTracker
-     * y sincroniza con el nodo remoto usando el protocolo MEMSYNC_HASH/DIFF/DATA/ACK.
+     * Lee MemsyncParams de VM memory, detecta paginas modificadas via
+     * DirtyTracker y sincroniza con el nodo remoto usando el protocolo
+     * MEMSYNC_HASH/DIFF/DATA/ACK.
      *
      * Si params.future_handle != 0: la sincronizacion es asincrona y resuelve
      *   el future cuando termine.  Si es 0: bloquea hasta completar.
      *
      * @param proc       Proceso que ejecuta la instruccion.
-     * @param params_addr Direccion virtual de la estructura MemsyncParams en VM memory.
+     * @param params_addr Direccion virtual de la estructura MemsyncParams en VM
+     * memory.
      */
     void memsync(runtime::ProcessVM *proc, uint64_t params_addr);
 
@@ -330,44 +338,43 @@ public:
      */
     void on_inbound_session_(VdpSession *sess);
 
-private:
-    runtime::VM            &vm_;         // VM propietaria de este DistRuntime
-    DistRuntimeConfig       config_;     // configuracion de arranque
-    NodeRegistry            registry_;   // tabla de nodos conocidos
+  private:
+    runtime::VM &vm_;          // VM propietaria de este DistRuntime
+    DistRuntimeConfig config_; // configuracion de arranque
+    NodeRegistry registry_;    // tabla de nodos conocidos
 
     // sesiones activas indexadas por node_idx
-    mutable std::mutex                            sessions_mtx_;
-    std::unordered_map<uint32_t, VdpSession *>    sessions_;  // node_idx -> sesion
+    mutable std::mutex sessions_mtx_;
+    std::unordered_map<uint32_t, VdpSession *> sessions_; // node_idx -> sesion
 
     // tabla de futuros pendientes de ACK de rspawn
-    mutable std::mutex                             futures_mtx_;
-    std::unordered_map<uint64_t, PendingFuture>   pending_futures_; // future_id -> entrada
-    std::atomic<uint64_t>                          next_future_id_{1};
+    mutable std::mutex futures_mtx_;
+    std::unordered_map<uint64_t, PendingFuture>
+        pending_futures_; // future_id -> entrada
+    std::atomic<uint64_t> next_future_id_{1};
 
     // tabla de mensajes pendientes de ACK (at-least-once)
-    mutable std::mutex                             msgs_mtx_;
-    std::unordered_map<uint32_t, PendingMsg>       pending_msgs_; // seq_num -> entrada
+    mutable std::mutex msgs_mtx_;
+    std::unordered_map<uint32_t, PendingMsg>
+        pending_msgs_; // seq_num -> entrada
 
     // hilo de reintentos de mensajes (at-least-once)
-    std::atomic<bool>  retry_running_{false};
-    std::thread        retry_thread_;
-    void               retry_loop_();
+    std::atomic<bool> retry_running_{false};
+    std::thread retry_thread_;
+    void retry_loop_();
 
     // servidor VDP de escucha (acepta conexiones entrantes)
-    TCPServer  *vdp_server_{nullptr};
+    TCPServer *vdp_server_{nullptr};
 
     // manejador de mensajes VDP entrantes
-    void on_vdp_msg_(const VdpHeader &hdr,
-                     const std::vector<uint8_t> &payload,
+    void on_vdp_msg_(const VdpHeader &hdr, const std::vector<uint8_t> &payload,
                      uint32_t node_idx);
 
     // manejadores por tipo de mensaje
     void handle_rspawn_ack_(const VdpPayloadRspawnAck &ack);
-    void handle_rspawn_(uint32_t node_idx,
-                        const VdpPayloadRspawn &req,
+    void handle_rspawn_(uint32_t node_idx, const VdpPayloadRspawn &req,
                         const uint8_t *code, size_t code_size);
-    void handle_msgsend_(uint32_t node_idx,
-                         const VdpPayloadMsgsend &req,
+    void handle_msgsend_(uint32_t node_idx, const VdpPayloadMsgsend &req,
                          const uint8_t *data, size_t data_size,
                          uint32_t seq_num);
     void handle_msgsend_ack_(const VdpPayloadMsgsendAck &ack);
@@ -384,7 +391,8 @@ private:
     void handle_future_reject_(uint32_t node_idx,
                                const VdpPayloadFutureReject &msg);
 
-    // resuelve un future local con el valor dado y despierta al proceso esperador
+    // resuelve un future local con el valor dado y despierta al proceso
+    // esperador
     void resolve_future_(uint64_t future_id, uint64_t result, bool rejected);
 
     // conecta de forma asincrona a un nodo nuevo descubierto

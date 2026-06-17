@@ -37,18 +37,19 @@
 #include <thread>
 #include <vector>
 
-static int g_tests_run    = 0;
+static int g_tests_run = 0;
 static int g_tests_passed = 0;
 
-#define CHECK(cond, msg) do {                                          \
-    ++g_tests_run;                                                      \
-    if (cond) {                                                         \
-        ++g_tests_passed;                                               \
-        std::printf("  [OK] %s\n", msg);                                \
-    } else {                                                            \
-        std::printf("  [FAIL] %s\n", msg);                              \
-    }                                                                   \
-} while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_tests_run;                                                         \
+        if (cond) {                                                            \
+            ++g_tests_passed;                                                  \
+            std::printf("  [OK] %s\n", msg);                                   \
+        } else {                                                               \
+            std::printf("  [FAIL] %s\n", msg);                                 \
+        }                                                                      \
+    } while (0)
 
 // ----------------------------------------------------------------------
 // Helpers: CAS-based monenter / monexit en linea (mismo algoritmo que
@@ -59,19 +60,17 @@ static int g_tests_passed = 0;
 /** @brief Intenta adquirir el monitor.  Devuelve true si exito. */
 static bool try_acquire(loader::ObjectHeader *hdr, uint32_t pid) {
     uint64_t expected = 0;
-    uint64_t desired  = loader::monitor_make(pid, 1);
-    if (hdr->monitor_word.compare_exchange_strong(
-            expected, desired,
-            std::memory_order_acquire,
-            std::memory_order_relaxed)) {
+    uint64_t desired = loader::monitor_make(pid, 1);
+    if (hdr->monitor_word.compare_exchange_strong(expected, desired,
+                                                  std::memory_order_acquire,
+                                                  std::memory_order_relaxed)) {
         return true; // monitor libre
     }
     if (loader::monitor_owner(expected) == pid) {
         // Reentrante: solo nosotros podemos tocar el word.
         uint32_t d = loader::monitor_depth(expected);
-        hdr->monitor_word.store(
-            loader::monitor_make(pid, d + 1),
-            std::memory_order_relaxed);
+        hdr->monitor_word.store(loader::monitor_make(pid, d + 1),
+                                std::memory_order_relaxed);
         return true;
     }
     return false; // ocupado por otro
@@ -83,9 +82,8 @@ static bool release(loader::ObjectHeader *hdr, uint32_t pid) {
     if (loader::monitor_owner(cur) != pid) return false; // no es nuestro
     uint32_t d = loader::monitor_depth(cur);
     if (d > 1) {
-        hdr->monitor_word.store(
-            loader::monitor_make(pid, d - 1),
-            std::memory_order_relaxed);
+        hdr->monitor_word.store(loader::monitor_make(pid, d - 1),
+                                std::memory_order_relaxed);
         return false; // todavia hay reentradas
     }
     hdr->monitor_word.store(0, std::memory_order_release);
@@ -127,7 +125,8 @@ static void test_single_thread_basic() {
 // ----------------------------------------------------------------------
 
 static void test_other_pid_blocked() {
-    std::printf("\n=== Test 2: otro pid no puede adquirir mientras owner != self ===\n");
+    std::printf("\n=== Test 2: otro pid no puede adquirir mientras owner != "
+                "self ===\n");
     loader::ObjectHeader hdr;
     hdr.monitor_word.store(0, std::memory_order_relaxed);
 
@@ -146,7 +145,8 @@ static void test_other_pid_blocked() {
 // ----------------------------------------------------------------------
 
 static void test_concurrent_mutex() {
-    std::printf("\n=== Test 3: 8 threads x 50K acquires/releases sobre el mismo monitor ===\n");
+    std::printf("\n=== Test 3: 8 threads x 50K acquires/releases sobre el "
+                "mismo monitor ===\n");
     loader::ObjectHeader hdr;
     hdr.monitor_word.store(0, std::memory_order_relaxed);
 
@@ -176,7 +176,8 @@ static void test_concurrent_mutex() {
             }
         });
     }
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
 
     CHECK(counter == (uint64_t)(THREADS * ITERS),
           "counter == THREADS * ITERS (sin perdida de updates)");
@@ -192,7 +193,8 @@ static void test_concurrent_mutex() {
 // ----------------------------------------------------------------------
 
 static void test_concurrent_reentrant() {
-    std::printf("\n=== Test 4: 4 threads x 10K acquires reentrantes profundos ===\n");
+    std::printf(
+        "\n=== Test 4: 4 threads x 10K acquires reentrantes profundos ===\n");
     loader::ObjectHeader hdr;
     hdr.monitor_word.store(0, std::memory_order_relaxed);
 
@@ -209,11 +211,13 @@ static void test_concurrent_reentrant() {
             uint32_t pid = (uint32_t)(t + 1);
             for (int i = 0; i < ITERS; ++i) {
                 // Acquire DEPTH veces (reentrante)
-                while (!try_acquire(&hdr, pid)) std::this_thread::yield();
+                while (!try_acquire(&hdr, pid))
+                    std::this_thread::yield();
                 for (int j = 1; j < DEPTH; ++j) {
                     bool ok = try_acquire(&hdr, pid);
                     if (!ok) {
-                        std::printf("  ERROR: reentrante fallo en thread %d iter %d depth %d\n",
+                        std::printf("  ERROR: reentrante fallo en thread %d "
+                                    "iter %d depth %d\n",
                                     t, i, j);
                         return;
                     }
@@ -226,7 +230,8 @@ static void test_concurrent_reentrant() {
             }
         });
     }
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
 
     CHECK(counter == (uint64_t)(THREADS * ITERS),
           "counter == THREADS * ITERS con reentrancia");
@@ -254,7 +259,7 @@ static void test_layout() {
 
     // Round-trip: empacar, desempacar, comparar
     uint64_t w2 = loader::monitor_make(loader::monitor_owner(w),
-                                         loader::monitor_depth(w));
+                                       loader::monitor_depth(w));
     CHECK(w == w2, "round-trip monitor_make(owner, depth) consistente");
 }
 

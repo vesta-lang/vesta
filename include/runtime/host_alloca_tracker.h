@@ -24,38 +24,38 @@
 #include "loader/oop_types.h"
 
 namespace runtime {
-    class ProcessVM;
+class ProcessVM;
 }
 
 namespace runtime {
 
-    /**
-     * @brief Registra @p ptr para cleanup al destruir @p frame.
-     *
-     * Lazy: aloca el vector solo cuando se registra al menos un ptr.
-     * Cero overhead para frames que NO contienen host_allocas (la
-     * mayoria, ya que el flag `host_alloca` viene del IR pass de
-     * auto-promote sobre ALLOCAs que fluyen a CALLN).
-     */
-    inline void host_alloca_track(loader::FrameHeader *frame, uint8_t *ptr) {
-        if (frame == nullptr || ptr == nullptr) return;
-        auto *list = static_cast<std::vector<uint8_t*> *>(frame->host_allocas);
-        if (list == nullptr) {
-            list = new std::vector<uint8_t*>();
-            frame->host_allocas = list;
-        }
-        list->push_back(ptr);
+/**
+ * @brief Registra @p ptr para cleanup al destruir @p frame.
+ *
+ * Lazy: aloca el vector solo cuando se registra al menos un ptr.
+ * Cero overhead para frames que NO contienen host_allocas (la
+ * mayoria, ya que el flag `host_alloca` viene del IR pass de
+ * auto-promote sobre ALLOCAs que fluyen a CALLN).
+ */
+inline void host_alloca_track(loader::FrameHeader *frame, uint8_t *ptr) {
+    if (frame == nullptr || ptr == nullptr) return;
+    auto *list = static_cast<std::vector<uint8_t *> *>(frame->host_allocas);
+    if (list == nullptr) {
+        list = new std::vector<uint8_t *>();
+        frame->host_allocas = list;
     }
+    list->push_back(ptr);
+}
 
-    /**
-     * @brief Libera todos los host_allocas registrados en @p frame con
-     * @c RawAllocator::free.  Idempotente: tras la primera invocacion el
-     * campo queda en nullptr y nuevas llamadas son no-op.
-     *
-     * Invocada por @c exec_instr_ret y @c do_throw (ANTES de devolver
-     * el frame al @c frame_pool).
-     */
-    void host_alloca_release_all(ProcessVM *vm, loader::FrameHeader *frame);
+/**
+ * @brief Libera todos los host_allocas registrados en @p frame con
+ * @c RawAllocator::free.  Idempotente: tras la primera invocacion el
+ * campo queda en nullptr y nuevas llamadas son no-op.
+ *
+ * Invocada por @c exec_instr_ret y @c do_throw (ANTES de devolver
+ * el frame al @c frame_pool).
+ */
+void host_alloca_release_all(ProcessVM *vm, loader::FrameHeader *frame);
 
 } // namespace runtime
 
