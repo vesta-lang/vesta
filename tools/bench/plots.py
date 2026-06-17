@@ -17,6 +17,7 @@ from typing import Optional
 LANG_COLORS = {
     "vex_interp": "#ff7f0e",   # naranja
     "vex_jit":    "#2ca02c",   # verde
+    "vex_aot":    "#8c564b",   # marron
     "c":          "#1f77b4",   # azul
     "cpp":        "#9467bd",   # violeta
     "python":     "#17becf",   # cyan
@@ -27,6 +28,7 @@ LANG_COLORS = {
 LANG_LABELS = {
     "vex_interp": "Vex interp",
     "vex_jit":    "Vex JIT",
+    "vex_aot":    "Vex AOT nativo",
     "c":          "C (gcc -O3)",
     "cpp":        "C++ (g++ -O3)",
     "python":     "Python",
