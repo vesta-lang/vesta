@@ -207,6 +207,12 @@ namespace aot {
         /// Fija el tipo de artefacto (EXEC por defecto, OBJECT relocatable).
         void set_output_kind(OutputKind k) { kind_ = k; }
 
+        /// AOT x86-32: emite ELF32 (ET_EXEC, EM_386) en lugar de ELF64 para el
+        /// EXEC.  El codegen (mode32) ya produjo bytes i386; esto solo cambia el
+        /// contenedor.  Solo afecta a ELF EXEC (los .bin son crudos; PE32/.o32
+        /// son follow-ups).
+        void set_mode32(bool m) { mode32_ = m; }
+
         /// Fija la base de carga de un binario plano (.bin); solo afecta a las
         /// relocs ABS64 (REL32 es invariante a la base).
         void set_flat_base(uint64_t base) { flat_base_ = base; }
@@ -261,6 +267,7 @@ namespace aot {
         OutputKind                 kind_ = OutputKind::EXEC;
         std::vector<ExportSym>     symbols_;
         uint64_t                   flat_base_ = 0;  ///< base de carga (.bin)
+        bool                       mode32_ = false; ///< AOT x86-32 -> ELF32 EXEC
     };
 
 } // namespace aot

@@ -75,6 +75,30 @@ namespace aot {
             return s;
         }
 
+        /**
+         * @brief @c _start x86-32 para ELF freestanding: llama a main y termina
+         *        via @c int @c 0x80 @c exit(1) con @c eax (regparm ret) como
+         *        codigo.  Sin libc -- valido para kernels/modo protegido.
+         *
+         *   E8 rel32           call main             ; main justo despues del stub
+         *   89 C3              mov  ebx, eax          ; codigo de salida en ebx
+         *   B8 01 00 00 00     mov  eax, 1            ; sys_exit (32-bit)
+         *   CD 80              int  0x80
+         */
+        StartStub start_x86_32_elf() {
+            StartStub s;
+            s.bytes = {
+                0xE8, 0x00, 0x00, 0x00, 0x00,        // call main (rel32@1)    (off 0)
+                0x89, 0xC3,                          // mov ebx, eax           (off 5)
+                0xB8, 0x01, 0x00, 0x00, 0x00,        // mov eax, 1 (sys_exit)  (off 7)
+                0xCD, 0x80                           // int 0x80               (off 12)
+            };
+            s.main_call_off = 1;
+            s.has_import_call = false;
+            s.ok = true;
+            return s;
+        }
+
     } // namespace
 
     StartStub aot_make_start_stub(AotArch arch, ObjFormat fmt) {
@@ -82,6 +106,10 @@ namespace aot {
             case AotArch::X86_64:
                 if (fmt == ObjFormat::PE)  return start_x86_64_pe();
                 if (fmt == ObjFormat::ELF) return start_x86_64_elf();
+                break;
+            case AotArch::X86_32:
+                /* v1: solo ELF (PE32 es follow-up). */
+                if (fmt == ObjFormat::ELF) return start_x86_32_elf();
                 break;
             default:
                 break;

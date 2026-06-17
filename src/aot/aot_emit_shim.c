@@ -503,6 +503,125 @@ static int ob_align(OBuf *o, size_t a) {
     return 1;
 }
 
+/* Escribe un u32 LE en p. */
+static void wr32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+/* =========================================================================
+ *  ELF32 EJECUTABLE ESTaTICO (ET_EXEC, EM_386) -- modo protegido / kernels.
+ *  Hand-rolled (sin structs Elf32: el orden de campos del phdr ELF32 difiere
+ *  del ELF64).  1 PT_LOAD R+X cubriendo ehdr+phdr+codigo; entry = _start;
+ *  salida via int 0x80 (el stub).  Freestanding: sin dynamic ni libc.  Solo
+ *  relocs PC-relativas (CALL_REL32, invariantes de la base) + inmediatos; el
+ *  x86-32 no tiene RIP-relativo -> refs a datos absolutas (ABS32) son follow-up.
+ * ========================================================================= */
+int aot_emit_elf32(const char *path, const AotLayoutCfg *cfg,
+                   const AotSection *secs, int num_secs,
+                   int entry_sec, uint64_t entry_off,
+                   const AotReloc *relocs, int num_relocs,
+                   char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "elf32: sin secciones"); return 0; }
+    if (entry_sec < 0 || entry_sec >= num_secs) {
+        set_err(err, err_cap, "elf32: entry_sec fuera de rango"); return 0; }
+
+    const uint32_t base = (cfg && cfg->image_base) ? (uint32_t)cfg->image_base
+                                                   : 0x08048000u;
+    const uint32_t EHDR = 52, PHDR = 32;
+
+    /* Layout: ehdr + phdr + secciones (vaddr = base + file offset). */
+    uint32_t *sec_va = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+    uint32_t *sec_fo = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+    uint8_t  *sec_seen = (uint8_t *)calloc((size_t)num_secs, sizeof(uint8_t));
+    uint32_t off = EHDR + PHDR;
+    for (int i = 0; i < num_secs; ++i) {
+        if ((secs[i].flags & AOT_SEC_BSS) || secs[i].size == 0) continue;
+        uint32_t a = secs[i].align ? (uint32_t)secs[i].align : 16u;
+        while (off % a) ++off;
+        sec_fo[i] = off; sec_va[i] = base + off; sec_seen[i] = 1;
+        off += (uint32_t)secs[i].size;
+    }
+    uint32_t total = off;
+    if (!sec_seen[entry_sec]) {
+        free(sec_va); free(sec_fo); free(sec_seen);
+        set_err(err, err_cap, "elf32: la seccion de entrada no tiene datos"); return 0; }
+    uint32_t entry_va = sec_va[entry_sec] + (uint32_t)entry_off;
+
+    uint8_t *img = (uint8_t *)calloc(1, total);
+    if (!img) { free(sec_va); free(sec_fo); free(sec_seen);
+        set_err(err, err_cap, "elf32: OOM"); return 0; }
+
+    /* Ehdr (52 bytes). */
+    img[0] = 0x7f; img[1] = 'E'; img[2] = 'L'; img[3] = 'F';
+    img[4] = 1 /*ELFCLASS32*/; img[5] = 1 /*LSB*/; img[6] = 1 /*EV_CURRENT*/;
+    img[16] = 2; img[17] = 0;          /* e_type = ET_EXEC */
+    img[18] = 3; img[19] = 0;          /* e_machine = EM_386 */
+    wr32(img + 20, 1);                 /* e_version */
+    wr32(img + 24, entry_va);          /* e_entry */
+    wr32(img + 28, EHDR);              /* e_phoff = 52 */
+    wr32(img + 32, 0);                 /* e_shoff */
+    wr32(img + 36, 0);                 /* e_flags */
+    img[40] = (uint8_t)EHDR; img[41] = 0;        /* e_ehsize */
+    img[42] = (uint8_t)PHDR; img[43] = 0;        /* e_phentsize */
+    img[44] = 1; img[45] = 0;                    /* e_phnum */
+    img[46] = 0; img[47] = 0;                    /* e_shentsize */
+    img[48] = 0; img[49] = 0;                    /* e_shnum */
+    img[50] = 0; img[51] = 0;                    /* e_shstrndx */
+
+    /* Phdr ELF32 (PT_LOAD R+X): type,offset,vaddr,paddr,filesz,memsz,flags,align. */
+    uint8_t *ph = img + EHDR;
+    wr32(ph + 0,  1);          /* p_type = PT_LOAD */
+    wr32(ph + 4,  0);          /* p_offset */
+    wr32(ph + 8,  base);       /* p_vaddr */
+    wr32(ph + 12, base);       /* p_paddr */
+    wr32(ph + 16, total);      /* p_filesz */
+    wr32(ph + 20, total);      /* p_memsz */
+    wr32(ph + 24, 5);          /* p_flags = R+X */
+    wr32(ph + 28, 0x1000);     /* p_align */
+
+    /* Datos de las secciones. */
+    for (int i = 0; i < num_secs; ++i)
+        if (sec_seen[i]) memcpy(img + sec_fo[i], secs[i].data, secs[i].size);
+
+    /* Relocs (solo PC-relativas + inmediatos en x86-32 v1). */
+    int ok = 1;
+    for (int r = 0; r < num_relocs && ok; ++r) {
+        const AotReloc *rl = &relocs[r];
+        if (rl->kind == AOT_RELOC_ABS64 || rl->kind == AOT_RELOC_IMM64) {
+            set_err(err, err_cap, "elf32: ABS64/IMM64 no aplica en 32-bit"); ok = 0; break;
+        }
+        if (rl->site_section < 0 || rl->site_section >= num_secs ||
+            !sec_seen[rl->site_section] ||
+            (!rl->target_is_size &&
+             (rl->target_section < 0 || rl->target_section >= num_secs ||
+              !sec_seen[rl->target_section]))) {
+            set_err(err, err_cap, "elf32: reloc con seccion invalida"); ok = 0; break;
+        }
+        uint64_t tv;
+        if (rl->target_is_size) tv = aot_sec_size(&secs[rl->target_section]);
+        else {
+            tv = sec_va[rl->target_section];
+            tv += rl->target_is_end ? aot_sec_size(&secs[rl->target_section]) : rl->target_off;
+        }
+        tv = (uint64_t)((int64_t)tv + rl->addend);
+        uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+        if (!apply_reloc(img + sec_fo[rl->site_section] + rl->site_off,
+                         site_va, tv, rl->kind)) {
+            set_err(err, err_cap, "elf32: reloc kind invalido"); ok = 0; break;
+        }
+    }
+
+    if (ok) {
+        FILE *f = fopen(path, "wb");
+        if (!f) { set_err(err, err_cap, "elf32: fopen fallo"); ok = 0; }
+        else { size_t w = fwrite(img, 1, total, f); fclose(f);
+               if (w != total) { set_err(err, err_cap, "elf32: escritura incompleta"); ok = 0; } }
+    }
+    free(img); free(sec_va); free(sec_fo); free(sec_seen);
+    return ok;
+}
+
 /* =========================================================================
  *  ELF64 EJECUTABLE DINaMICO (PIE ET_DYN) con imports libc via eager-GOT
  *  -- hand-rolled (sin tocar el submodulo).  AOT.2.exec slice 2.
