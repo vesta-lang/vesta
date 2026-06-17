@@ -178,13 +178,24 @@ namespace aot {
                 cimps[i].call_section = ic.call_section;
                 cimps[i].call_off     = ic.call_off;
             }
-            ok = aot_emit_pe(path.c_str(), &ccfg,
-                             csecs.data(), static_cast<int>(csecs.size()),
-                             entry_sec_, entry_off_,
-                             cimps.empty() ? nullptr : cimps.data(),
-                             static_cast<int>(cimps.size()),
-                             crel_ptr, crel_n,
-                             errbuf, sizeof(errbuf));
+            if (mode32_) {
+                // AOT x86-32: EXEC PE32 (i386) en lugar de PE32+.
+                ok = aot_emit_pe32(path.c_str(), &ccfg,
+                                   csecs.data(), static_cast<int>(csecs.size()),
+                                   entry_sec_, entry_off_,
+                                   cimps.empty() ? nullptr : cimps.data(),
+                                   static_cast<int>(cimps.size()),
+                                   crel_ptr, crel_n,
+                                   errbuf, sizeof(errbuf));
+            } else {
+                ok = aot_emit_pe(path.c_str(), &ccfg,
+                                 csecs.data(), static_cast<int>(csecs.size()),
+                                 entry_sec_, entry_off_,
+                                 cimps.empty() ? nullptr : cimps.data(),
+                                 static_cast<int>(cimps.size()),
+                                 crel_ptr, crel_n,
+                                 errbuf, sizeof(errbuf));
+            }
         } else if (!imports_.empty()) {
             // AOT.2.exec slice 2: ELF EXEC que importa libc -> ejecutable
             // dinamico (PIE) via eager-GOT.  Los imports = thunks FF 25 que el

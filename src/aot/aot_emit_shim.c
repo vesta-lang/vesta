@@ -509,6 +509,218 @@ static void wr32(uint8_t *p, uint32_t v) {
     p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
 
+/* Alinea x hacia arriba a un multiplo de a (potencia de 2). */
+static uint32_t aot_dyn_align_u32(uint32_t x, uint32_t a) {
+    return (x + (a - 1)) & ~(a - 1);
+}
+
+/* =========================================================================
+ *  PE32 EJECUTABLE (i386, .exe Windows 32-bit) -- hand-rolled.
+ *
+ *  Minimo: secciones de usuario (RVA por pagina) + .idata sintetizada con UN
+ *  import (kernel32!ExitProcess, el _start sale por ahi).  Parchea el `call
+ *  main` (REL32) + intra-imagen + el `FF 15` del stub (abs32 a la IAT).  v1:
+ *  EXEC self-contained (sin libc); llamadas a externos = follow-up (thunks 32b).
+ * ========================================================================= */
+int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
+                  const AotSection *secs, int num_secs,
+                  int entry_sec, uint64_t entry_off,
+                  const AotImport *imps, int num_imps,
+                  const AotReloc *relocs, int num_relocs,
+                  char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "pe32: sin secciones"); return 0; }
+    if (entry_sec < 0 || entry_sec >= num_secs) {
+        set_err(err, err_cap, "pe32: entry_sec fuera de rango"); return 0; }
+
+    const uint32_t IMGBASE = (cfg && cfg->image_base) ? (uint32_t)cfg->image_base
+                                                      : 0x00400000u;
+    const uint32_t SECALIGN = 0x1000u, FILEALIGN = 0x200u;
+    const uint32_t HDR_RVA = 0;   /* headers en RVA 0 */
+
+    /* Numero de secciones del PE = secciones de usuario con datos + .idata. */
+    int n_user = 0;
+    for (int i = 0; i < num_secs; ++i)
+        if (!(secs[i].flags & AOT_SEC_BSS) && secs[i].size > 0) ++n_user;
+    const int n_pe_sec = n_user + 1;  /* + .idata */
+
+    /* Tamano de cabeceras: DOS(0x40) + "PE\0\0"(4) + COFF(20) + OptHdr32(224)
+     * + section headers (40 c/u), alineado a FILEALIGN. */
+    const uint32_t opt_size = 224;  /* 96 estandar+win + 128 data dirs */
+    uint32_t hdr_raw = 0x40 + 4 + 20 + opt_size + (uint32_t)n_pe_sec * 40;
+    uint32_t size_headers = aot_dyn_align_u32(hdr_raw, FILEALIGN);
+
+    /* Layout de secciones: RVA por pagina (SECALIGN), file offset por FILEALIGN.
+     * sec_rva/sec_foff por seccion de usuario; luego .idata. */
+    uint32_t *sec_rva  = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+    uint32_t *sec_foff = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+    uint32_t *sec_vsz  = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+    uint8_t  *sec_seen = (uint8_t  *)calloc((size_t)num_secs, sizeof(uint8_t));
+    uint32_t rva = aot_dyn_align_u32(size_headers, SECALIGN);  /* primera secc */
+    uint32_t foff = size_headers;
+    for (int i = 0; i < num_secs; ++i) {
+        if ((secs[i].flags & AOT_SEC_BSS) || secs[i].size == 0) continue;
+        sec_rva[i] = rva; sec_foff[i] = foff; sec_vsz[i] = (uint32_t)secs[i].size;
+        sec_seen[i] = 1;
+        rva  = aot_dyn_align_u32(rva + (uint32_t)secs[i].size, SECALIGN);
+        foff = aot_dyn_align_u32(foff + (uint32_t)secs[i].size, FILEALIGN);
+    }
+    if (!sec_seen[entry_sec]) {
+        free(sec_rva); free(sec_foff); free(sec_vsz); free(sec_seen);
+        set_err(err, err_cap, "pe32: la seccion de entrada no tiene datos"); return 0; }
+
+    /* .idata: ImportDir(2*20) + ILT(8) + IAT(8) + hint/name + dllname. */
+    const char *func = "ExitProcess", *dll = "kernel32.dll";
+    uint32_t idata_rva = rva, idata_foff = foff;
+    uint32_t off_impdir = 0;                 /* +0  */
+    uint32_t off_ilt    = off_impdir + 40;   /* +40 */
+    uint32_t off_iat    = off_ilt + 8;       /* +48 */
+    uint32_t off_hint   = off_iat + 8;       /* +56 */
+    uint32_t hintlen    = 2 + (uint32_t)strlen(func) + 1;
+    if (hintlen & 1) ++hintlen;
+    uint32_t off_dll    = off_hint + hintlen;
+    uint32_t idata_size = off_dll + (uint32_t)strlen(dll) + 1;
+    uint32_t idata_vsz  = idata_size;
+    uint32_t idata_fsz  = aot_dyn_align_u32(idata_size, FILEALIGN);
+
+    uint32_t total = idata_foff + idata_fsz;
+    uint32_t size_image = aot_dyn_align_u32(idata_rva + idata_vsz, SECALIGN);
+
+    uint8_t *img = (uint8_t *)calloc(1, total);
+    if (!img) { free(sec_rva); free(sec_foff); free(sec_vsz); free(sec_seen);
+        set_err(err, err_cap, "pe32: OOM"); return 0; }
+
+    uint32_t entry_rva = sec_rva[entry_sec] + (uint32_t)entry_off;
+
+    /* DOS header. */
+    img[0] = 'M'; img[1] = 'Z';
+    wr32(img + 0x3C, 0x40);   /* e_lfanew */
+
+    /* PE signature + COFF header (en 0x40). */
+    uint8_t *pe = img + 0x40;
+    pe[0]='P'; pe[1]='E'; pe[2]=0; pe[3]=0;
+    uint8_t *coff = pe + 4;
+    coff[0]=0x4C; coff[1]=0x01;                     /* Machine = 0x14C (i386) */
+    coff[2]=(uint8_t)n_pe_sec; coff[3]=(uint8_t)(n_pe_sec>>8); /* NumberOfSections */
+    /* TimeDateStamp/PtrSym/NumSym = 0 (coff+4..15) */
+    coff[16]=(uint8_t)opt_size; coff[17]=(uint8_t)(opt_size>>8); /* SizeOfOptionalHeader */
+    /* Characteristics: EXECUTABLE_IMAGE(0x2) | 32BIT_MACHINE(0x100) | RELOCS_STRIPPED(0x1) */
+    uint16_t chars = 0x0002 | 0x0100 | 0x0001;
+    coff[18]=(uint8_t)chars; coff[19]=(uint8_t)(chars>>8);
+
+    /* Optional header PE32 (magic 0x10B). */
+    uint8_t *oh = coff + 20;
+    oh[0]=0x0B; oh[1]=0x01;                          /* Magic = 0x10B (PE32) */
+    oh[2]=1; oh[3]=0;                                /* Linker version */
+    wr32(oh + 16, entry_rva);                        /* AddressOfEntryPoint */
+    wr32(oh + 20, sec_rva[entry_sec]);               /* BaseOfCode */
+    wr32(oh + 24, idata_rva);                        /* BaseOfData (PE32-only) */
+    wr32(oh + 28, IMGBASE);                          /* ImageBase (32-bit) */
+    wr32(oh + 32, SECALIGN);                         /* SectionAlignment */
+    wr32(oh + 36, FILEALIGN);                        /* FileAlignment */
+    oh[40]=4; oh[41]=0; oh[44]=0; oh[45]=0;          /* OS ver 4.0 */
+    oh[48]=4; oh[49]=0;                              /* Subsystem ver 4.0 */
+    wr32(oh + 56, size_image);                       /* SizeOfImage */
+    wr32(oh + 60, size_headers);                     /* SizeOfHeaders */
+    oh[68]=3; oh[69]=0;                              /* Subsystem = CONSOLE(3) */
+    /* DllCharacteristics = 0 (sin DYNAMIC_BASE -> base fija; sin .reloc). */
+    wr32(oh + 72, 0x100000); wr32(oh + 76, 0x1000);  /* StackReserve/Commit */
+    wr32(oh + 80, 0x100000); wr32(oh + 84, 0x1000);  /* HeapReserve/Commit */
+    wr32(oh + 92, 16);                               /* NumberOfRvaAndSizes */
+    /* Data directories (offset 96), 16 * 8.  [1]=Import, [12]=IAT. */
+    uint8_t *dd = oh + 96;
+    wr32(dd + 1*8 + 0, idata_rva + off_impdir);      /* Import dir RVA */
+    wr32(dd + 1*8 + 4, 40);                           /* Import dir size */
+    wr32(dd + 12*8 + 0, idata_rva + off_iat);        /* IAT RVA */
+    wr32(dd + 12*8 + 4, 8);                           /* IAT size */
+
+    /* Section headers (tras el optional header). */
+    uint8_t *sh = oh + opt_size;
+    int shi = 0;
+    for (int i = 0; i < num_secs; ++i) {
+        if (!sec_seen[i]) continue;
+        uint8_t *e = sh + shi*40;
+        const char *nm = secs[i].name ? secs[i].name : ".text";
+        for (int j = 0; j < 8 && nm[j]; ++j) e[j] = (uint8_t)nm[j];
+        wr32(e + 8,  sec_vsz[i]);                    /* VirtualSize */
+        wr32(e + 12, sec_rva[i]);                    /* VirtualAddress */
+        wr32(e + 16, aot_dyn_align_u32(sec_vsz[i], FILEALIGN)); /* SizeOfRawData */
+        wr32(e + 20, sec_foff[i]);                   /* PointerToRawData */
+        uint32_t c = (secs[i].flags & AOT_SEC_EXEC) ? 0x60000020u : 0x40000040u;
+        if (secs[i].flags & AOT_SEC_WRITE) c |= 0x80000000u;
+        wr32(e + 36, c);                             /* Characteristics */
+        ++shi;
+    }
+    /* .idata section header. */
+    { uint8_t *e = sh + shi*40;
+      memcpy(e, ".idata", 6);
+      wr32(e + 8,  idata_vsz);
+      wr32(e + 12, idata_rva);
+      wr32(e + 16, idata_fsz);
+      wr32(e + 20, idata_foff);
+      wr32(e + 36, 0xC0000040u);                     /* INITIALIZED_DATA|READ|WRITE */
+    }
+
+    /* Datos de las secciones de usuario. */
+    for (int i = 0; i < num_secs; ++i)
+        if (sec_seen[i]) memcpy(img + sec_foff[i], secs[i].data, secs[i].size);
+
+    /* .idata: import dir + ILT + IAT + hint/name + dll. */
+    uint8_t *id = img + idata_foff;
+    wr32(id + off_impdir + 0,  idata_rva + off_ilt);   /* OriginalFirstThunk */
+    wr32(id + off_impdir + 12, idata_rva + off_dll);   /* Name (dll) */
+    wr32(id + off_impdir + 16, idata_rva + off_iat);   /* FirstThunk (IAT) */
+    /* segunda entrada del import dir = 0 (terminador) */
+    wr32(id + off_ilt, idata_rva + off_hint);          /* ILT[0] -> hint/name */
+    wr32(id + off_iat, idata_rva + off_hint);          /* IAT[0] (idem; el loader lo sobreescribe) */
+    /* hint(0) + nombre de la funcion */
+    memcpy(id + off_hint + 2, func, strlen(func));
+    memcpy(id + off_dll, dll, strlen(dll));
+
+    /* Relocs intra-imagen del driver (REL32 a funciones; ABS no en v1). */
+    int ok = 1;
+    for (int r = 0; r < num_relocs && ok; ++r) {
+        const AotReloc *rl = &relocs[r];
+        if (rl->kind != AOT_RELOC_REL32) {
+            set_err(err, err_cap, "pe32: solo REL32 intra-imagen en v1 (ABS32 follow-up)");
+            ok = 0; break;
+        }
+        if (rl->site_section < 0 || rl->site_section >= num_secs ||
+            !sec_seen[rl->site_section] ||
+            (!rl->target_is_size &&
+             (rl->target_section < 0 || rl->target_section >= num_secs ||
+              !sec_seen[rl->target_section]))) {
+            set_err(err, err_cap, "pe32: reloc con seccion invalida"); ok = 0; break;
+        }
+        uint64_t tv = IMGBASE + sec_rva[rl->target_section] + rl->target_off;
+        tv = (uint64_t)((int64_t)tv + rl->addend);
+        uint64_t site_va = IMGBASE + sec_rva[rl->site_section] + rl->site_off;
+        if (!apply_reloc(img + sec_foff[rl->site_section] + rl->site_off,
+                         site_va, tv, rl->kind)) {
+            set_err(err, err_cap, "pe32: reloc kind invalido"); ok = 0; break;
+        }
+    }
+
+    /* Parchear el `call [ExitProcess]` del stub (FF 15 disp32 = abs IAT entry).
+     * imps[*] trae (dll,func,call_section,call_off) del _start. */
+    for (int k = 0; k < num_imps && ok; ++k) {
+        int cs = imps[k].call_section;
+        if (cs < 0 || cs >= num_secs || !sec_seen[cs]) {
+            set_err(err, err_cap, "pe32: call_section del import invalido"); ok = 0; break;
+        }
+        uint32_t disp = IMGBASE + idata_rva + off_iat;   /* &IAT[ExitProcess] */
+        wr32(img + sec_foff[cs] + imps[k].call_off + 2, disp);
+    }
+
+    if (ok) {
+        FILE *f = fopen(path, "wb");
+        if (!f) { set_err(err, err_cap, "pe32: fopen fallo"); ok = 0; }
+        else { size_t w = fwrite(img, 1, total, f); fclose(f);
+               if (w != total) { set_err(err, err_cap, "pe32: escritura incompleta"); ok = 0; } }
+    }
+    free(img); free(sec_rva); free(sec_foff); free(sec_vsz); free(sec_seen);
+    return ok;
+}
+
 /* =========================================================================
  *  ELF32 EJECUTABLE ESTaTICO (ET_EXEC, EM_386) -- modo protegido / kernels.
  *  Hand-rolled (sin structs Elf32: el orden de campos del phdr ELF32 difiere
