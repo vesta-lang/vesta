@@ -581,8 +581,9 @@ enum class MOp : uint8_t {
     CVTTSS2SI =
         101,      ///< CVTTSS2SI r64,xmm (F3 REX.W 0F 2C) -- f32 -> int trunc
     XORPS = 102,  ///< XORPS xmm,xmm (0F 57) -- clear / neg-mask de f32/f64
+    ANDPS = 103,  ///< ANDPS xmm,xmm (0F 54) -- abs-mask de f32/f64 (FABS)
 
-    COUNT = 103
+    COUNT = 104
 };
 
 /* ===================================================================== */

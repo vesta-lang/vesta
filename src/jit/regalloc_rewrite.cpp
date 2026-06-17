@@ -654,13 +654,14 @@ struct Lowerer {
          *     mover src2 a fscr1 primero. */
         if (op == MOp::ADDSD || op == MOp::SUBSD || op == MOp::MULSD ||
             op == MOp::DIVSD || op == MOp::ADDSS || op == MOp::SUBSS ||
-            op == MOp::MULSS || op == MOp::DIVSS || op == MOp::XORPS) {
+            op == MOp::MULSS || op == MOp::DIVSS || op == MOp::XORPS ||
+            op == MOp::ANDPS) {
             const bool is_ss = (op == MOp::ADDSS || op == MOp::SUBSS ||
                                 op == MOp::MULSS || op == MOp::DIVSS);
             const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
             const bool commutative =
                 (op == MOp::ADDSD || op == MOp::MULSD || op == MOp::ADDSS ||
-                 op == MOp::MULSS || op == MOp::XORPS);
+                 op == MOp::MULSS || op == MOp::XORPS || op == MOp::ANDPS);
             const bool dst_spilled =
                 in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
             /* acumulador: el dst fisico si esta en XMM, o fscr0 si spilled. */

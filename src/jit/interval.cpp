@@ -140,6 +140,7 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::MULSS:
     case MOp::DIVSS:
     case MOp::XORPS:
+    case MOp::ANDPS:
         r.dst = R::DEF;
         r.src1 = R::USE;
         r.src2 = R::USE;
