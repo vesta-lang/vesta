@@ -126,18 +126,26 @@ InstrRoles operand_roles(MOp op) noexcept {
      * call-position. */
     case MOp::ALLOCA_VM: r.dst = R::DEF; break;
 
-    /* FP scalar (XMM).  En v1 los XMM son fisicos hardcodeados (no
-     * vregs), pero clasificamos por correccion para la fase FP. */
+    /* FP scalar (XMM).  Forma 3-op pre-legalization (dst def, srcs use):
+     * el rewrite legaliza a 2-address (mov dst,src1 + OP dst,src2).  XORPS
+     * comparte el patron (lo usa el selector para neg/clear). */
     case MOp::ADDSD:
     case MOp::SUBSD:
     case MOp::MULSD:
     case MOp::DIVSD:
     case MOp::MINSD:
     case MOp::MAXSD:
+    case MOp::ADDSS:
+    case MOp::SUBSS:
+    case MOp::MULSS:
+    case MOp::DIVSS:
+    case MOp::XORPS:
         r.dst = R::DEF;
         r.src1 = R::USE;
         r.src2 = R::USE;
         break;
+    /* Unarios FP (dst def, src1 use): conversiones, sqrt, MOVSD/MOVSS
+     * (movimiento de datos, incluido el spill/load FP). */
     case MOp::SQRTSD:
     case MOp::ROUNDSD:
     case MOp::CVTSI2SD:
@@ -146,8 +154,18 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::CVTSD2SS:
     case MOp::MOVQ_GP_XMM:
     case MOp::MOVQ_XMM_GP:
+    case MOp::MOVSD:
+    case MOp::MOVSS:
+    case MOp::SQRTSS:
+    case MOp::CVTSI2SS:
+    case MOp::CVTTSS2SI:
         r.dst = R::DEF;
         r.src1 = R::USE;
+        break;
+    /* UCOMISS: solo lee (setea flags), igual que UCOMISD/CMP. */
+    case MOp::UCOMISS:
+        r.src1 = R::USE;
+        r.src2 = R::USE;
         break;
 
     /* AOT MOV_SYM / LEA_RIP_SYM: dst = &simbolo (def); src1 es el

@@ -206,6 +206,12 @@ struct Lowerer {
     int32_t vm_rsp_save_off = 0;
     MReg scr0 = MReg::R10;
     MReg scr1 = MReg::R11;
+    /// FP-regalloc (Phase AOT C1 float): scratch XMM del rewrite
+    /// (materializar spills FP + two-address legalization de ADDSD/etc),
+    /// analogo a scr0/scr1 GP.  Por defecto XMM14/XMM15 (ver
+    /// @c target_x86_64_target); se sobreescriben desde @c tri.scratch[FP].
+    MReg fscr0 = MReg::XMM14;
+    MReg fscr1 = MReg::XMM15;
     /// Tamano de un slot de pila / push (= pointer_size del target):
     /// 8 en x86-64, 4 en x86-32.  El frame (callee-saved, spill slots,
     /// epilogue lea) se mide en estos slots; usar 8 fijo en x86-32
@@ -275,10 +281,19 @@ struct Lowerer {
         const auto &sc = tri.scratch[static_cast<size_t>(RegClass::GP)];
         if (sc.size() >= 1) scr0 = static_cast<MReg>(sc[0]);
         if (sc.size() >= 2) scr1 = static_cast<MReg>(sc[1]);
+        const auto &fsc = tri.scratch[static_cast<size_t>(RegClass::FP)];
+        if (fsc.size() >= 1) fscr0 = static_cast<MReg>(fsc[0]);
+        if (fsc.size() >= 2) fscr1 = static_cast<MReg>(fsc[1]);
     }
 
-    /// Argumentos pendientes (idx, ubicacion) de la proxima CALL.
-    std::vector<std::pair<uint8_t, MOperand>> pending_args;
+    /// Argumento pendiente de la proxima CALL: indice DENTRO DE SU CLASE,
+    /// ubicacion fisica resuelta, y si es de clase FP (-> XMM arg_reg, MOVSD).
+    struct PendingArg {
+        uint8_t idx;
+        MOperand loc;
+        bool is_fp;
+    };
+    std::vector<PendingArg> pending_args;
 
     /// Phase D.7 commit 6: intervalos (para stackmaps en CALLs) +
     /// posicion lineal del CALL actual + stackmaps acumulados.
@@ -363,6 +378,21 @@ struct Lowerer {
                                       o.width);
         return slot_mem(ra.slot_of(vid)); // spilled
     }
+
+    /** @brief True si @p o es un valor de coma flotante (vreg de clase FP o
+     *  un registro fisico XMM).  Lo usa @c lower() para enrutar los MOV de
+     *  un valor float al MOVSD/MOVSS (no al mov entero). */
+    static bool is_fp_operand(const MOperand &o) noexcept {
+        if (o.is_vreg()) return o.vreg_class() == RegClass::FP;
+        if (o.kind == MOperandKind::REG)
+            return is_xmm(static_cast<MReg>(o.reg));
+        return false;
+    }
+    /** @brief MOp de movimiento FP segun el ancho (8 -> MOVSD, 4 -> MOVSS). */
+    static MOp fp_mov_for_width(uint8_t w) noexcept {
+        return (w == 4) ? MOp::MOVSS : MOp::MOVSD;
+    }
+    static MOperand xmm(MReg r) { return MOperand::make_reg(r, 8); }
 
     static MOperand reg(MReg r) { return MOperand::make_reg(r, 8); }
     static MInstr push(MReg r) {
@@ -473,25 +503,110 @@ struct Lowerer {
                                  const std::vector<uint32_t> &params,
                                  std::vector<MInstr> &out) const {
         if (vm_abi || params.empty()) return 0;
-        std::vector<std::pair<MReg, MOperand>> reg_moves;
+        std::vector<std::pair<MReg, MOperand>> reg_moves;    // GP
+        std::vector<std::pair<MReg, MOperand>> freg_moves;   // FP (XMM)
         size_t n = 0;
-        /* Los MOV param-init son exactamente los lideres del bloque 0
-         * con dst vreg y src registro fisico (arg_reg). */
+        /* Los MOV param-init son exactamente los lideres del bloque 0 con
+         * dst vreg y src registro fisico (arg_reg).  Para los params FLOAT,
+         * el src es un XMM arg-reg (el selector contó el indice float aparte
+         * del entero) -> se enrutan a un parallel-move FP via MOVSD. */
         while (n < instrs.size() && n < params.size() &&
                instrs[n].op == MOp::MOV && instrs[n].dst.is_vreg() &&
                instrs[n].src1.is_reg()) {
+            const bool fp = is_fp_operand(instrs[n].dst) ||
+                            is_fp_operand(instrs[n].src1);
             const MOperand dst = resolve(instrs[n].dst);
-            if (dst.is_reg())
-                reg_moves.emplace_back(static_cast<MReg>(dst.reg),
-                                       instrs[n].src1);
-            else // param spilled: escribir el arg_reg al slot ya mismo
-                out.push_back(
-                    MInstr::make_unary(MOp::MOV, dst, instrs[n].src1));
+            if (dst.is_reg()) {
+                if (fp)
+                    freg_moves.emplace_back(static_cast<MReg>(dst.reg),
+                                            instrs[n].src1);
+                else
+                    reg_moves.emplace_back(static_cast<MReg>(dst.reg),
+                                           instrs[n].src1);
+            } else {
+                /* param spilled: escribir el arg_reg al slot ya mismo (lee
+                 * el arg_reg pristino antes de cualquier move de registro). */
+                out.push_back(MInstr::make_unary(
+                    fp ? MOp::MOVSD : MOp::MOV, dst, instrs[n].src1));
+            }
             ++n;
         }
         if (!reg_moves.empty())
             emit_parallel_moves(std::move(reg_moves), scr1, out);
+        if (!freg_moves.empty())
+            emit_parallel_moves_fp(std::move(freg_moves), fscr1, out);
         return n;
+    }
+
+    /** @brief PARALLEL MOVE para registros XMM (param-load FP): identico a
+     *  @c emit_parallel_moves pero emitiendo MOVSD y rompiendo ciclos con un
+     *  scratch XMM.  Las fuentes son siempre XMM arg-regs (no memoria). */
+    void emit_parallel_moves_fp(std::vector<std::pair<MReg, MOperand>> moves,
+                                MReg scratch, std::vector<MInstr> &out) const {
+        const size_t n = moves.size();
+        std::vector<bool> done(n, false);
+        size_t remaining = n;
+        auto reads_dst = [&](size_t i) -> bool {
+            for (size_t j = 0; j < n; ++j) {
+                if (done[j] || j == i) continue;
+                if (moves[j].second.kind == MOperandKind::REG &&
+                    moves[j].second.reg == reg_id(moves[i].first))
+                    return true;
+            }
+            return false;
+        };
+        while (remaining > 0) {
+            bool progress = false;
+            for (size_t i = 0; i < n; ++i) {
+                if (done[i] || reads_dst(i)) continue;
+                out.push_back(MInstr::make_unary(MOp::MOVSD, xmm(moves[i].first),
+                                                 moves[i].second));
+                done[i] = true;
+                --remaining;
+                progress = true;
+            }
+            if (progress) continue;
+            for (size_t i = 0; i < n; ++i) {
+                if (done[i]) continue;
+                const MReg d = moves[i].first;
+                out.push_back(
+                    MInstr::make_unary(MOp::MOVSD, xmm(scratch), xmm(d)));
+                for (size_t j = 0; j < n; ++j)
+                    if (!done[j] && moves[j].second.kind == MOperandKind::REG &&
+                        moves[j].second.reg == reg_id(d))
+                        moves[j].second = xmm(scratch);
+                out.push_back(MInstr::make_unary(MOp::MOVSD, xmm(d),
+                                                 moves[i].second));
+                done[i] = true;
+                --remaining;
+                break;
+            }
+        }
+    }
+
+    /** @brief Marshala @c pending_args a los arg_regs del ABI host: los
+     *  enteros (GP) con un parallel-move via MOV (scr1 rompe ciclos), los
+     *  floats (FP) con un parallel-move via MOVSD a los XMM arg_regs (fscr1).
+     *  Cada arg lleva su indice DENTRO DE SU CLASE.  Limpia @c pending_args. */
+    void marshal_args(std::vector<MInstr> &out) {
+        const auto &gareg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
+        const auto &fareg = tri.arg_regs[static_cast<size_t>(RegClass::FP)];
+        std::vector<std::pair<MReg, MOperand>> gmoves, fmoves;
+        for (const auto &pa : pending_args) {
+            if (pa.is_fp) {
+                if (pa.idx < fareg.size())
+                    fmoves.emplace_back(static_cast<MReg>(fareg[pa.idx]),
+                                        pa.loc);
+            } else {
+                if (pa.idx < gareg.size())
+                    gmoves.emplace_back(static_cast<MReg>(gareg[pa.idx]),
+                                        pa.loc);
+            }
+        }
+        if (!gmoves.empty()) emit_parallel_moves(std::move(gmoves), scr1, out);
+        if (!fmoves.empty())
+            emit_parallel_moves_fp(std::move(fmoves), fscr1, out);
+        pending_args.clear();
     }
 
     /** @brief Reescribe una instr vreg a 0+ instrs fisicas. */
@@ -499,24 +614,230 @@ struct Lowerer {
         const MOp op = in.op;
 
         if (op == MOp::ARG) {
-            /* Acumular: (indice, ubicacion fisica del vreg arg). */
-            pending_args.emplace_back(in.variant, resolve(in.src1));
+            /* Acumular: (indice-de-clase, ubicacion fisica, es_fp).  El
+             * selector ya numera el indice por clase; la clase se toma del
+             * operando vreg (in.src1.vreg_class) o, si ya es un reg fisico,
+             * de si es XMM. */
+            pending_args.push_back(
+                {in.variant, resolve(in.src1), is_fp_operand(in.src1)});
+            return;
+        }
+
+        /* ===== FP-regalloc (Phase AOT C1 float) ===== */
+
+        /* FP MOV (dst/src de clase float): movimiento de un escalar f64/f32.
+         * El selector emite @c MOp::MOV para copias FP, el param-init
+         * (@c MOV vr_fp, XMM_arg) y el RET (@c MOV XMM0, vr_fp); aqui se
+         * enruta al MOVSD/MOVSS.  Ambos pueden estar en XMM o en un slot de
+         * pila (spilled).  x86 no tiene mov mem,mem -> si AMBOS son MEM se
+         * pasa por el scratch XMM. */
+        if (op == MOp::MOV && (is_fp_operand(in.dst) || is_fp_operand(in.src1))) {
+            const MOp mv =
+                fp_mov_for_width(in.dst.width ? in.dst.width : in.src1.width);
+            MOperand d = resolve(in.dst);
+            MOperand s = resolve(in.src1);
+            if (d.kind == MOperandKind::MEM && s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr0), s));
+                out.push_back(MInstr::make_unary(mv, d, xmm(fscr0)));
+            } else {
+                out.push_back(MInstr::make_unary(mv, d, s));
+            }
+            return;
+        }
+
+        /* FP arith binaria (3-op pre-legalization): ADDSD/SUBSD/MULSD/DIVSD
+         * + variantes SS + XORPS.  Legalizacion 2-address: el dst debe ser un
+         * XMM y contener src1 antes de la op (dst = src1 OP src2).  Casos:
+         *   - dst spilled -> usar fscr0 como acumulador, store al final.
+         *   - src1/src2 spilled -> materializar a XMM (fscr0/fscr1) antes.
+         *   - anti-dependencia (dst==src2 reg): para no-conmutativas (SUB/DIV)
+         *     mover src2 a fscr1 primero. */
+        if (op == MOp::ADDSD || op == MOp::SUBSD || op == MOp::MULSD ||
+            op == MOp::DIVSD || op == MOp::ADDSS || op == MOp::SUBSS ||
+            op == MOp::MULSS || op == MOp::DIVSS || op == MOp::XORPS) {
+            const bool is_ss = (op == MOp::ADDSS || op == MOp::SUBSS ||
+                                op == MOp::MULSS || op == MOp::DIVSS);
+            const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
+            const bool commutative =
+                (op == MOp::ADDSD || op == MOp::MULSD || op == MOp::ADDSS ||
+                 op == MOp::MULSS || op == MOp::XORPS);
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            /* acumulador: el dst fisico si esta en XMM, o fscr0 si spilled. */
+            const MOperand acc = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s1 = resolve(in.src1);
+            MOperand s2 = resolve(in.src2);
+            auto same_reg = [](const MOperand &a, const MOperand &b) {
+                return a.kind == MOperandKind::REG &&
+                       b.kind == MOperandKind::REG && a.reg == b.reg;
+            };
+            /* La op SSE 2-address es `OP dst, src` (dst = dst OP src), el
+             * encoder lee dst + src1.  Hay que dejar src1 (s1) en acc y
+             * aplicar OP acc, s2.  Cuidado con las anti-dependencias:
+             *   - s2 == acc (s2 ya esta en el dst): si es CONMUTATIVA basta
+             *     `OP acc, s1` (acc tiene s2; acc = s2 OP s1 = s1 OP s2).  Si
+             *     NO es conmutativa (SUB/DIV) hay que salvar s2 a fscr1 antes
+             *     de pisar acc con s1.
+             *   - en otro caso: `mov acc, s1` (si difieren) y luego materializar
+             *     s2 a XMM si esta spilled. */
+            if (same_reg(s2, acc)) {
+                if (commutative) {
+                    /* acc ya = s2; aplicar OP acc, s1 (s1 a XMM si MEM). */
+                    if (s1.kind == MOperandKind::MEM) {
+                        out.push_back(MInstr::make_unary(mv, xmm(fscr1), s1));
+                        s1 = xmm(fscr1);
+                    }
+                    out.push_back(MInstr::make_unary(op, acc, s1));
+                } else {
+                    /* salvar s2 (en acc) a fscr1, poner s1 en acc, OP acc,fscr1. */
+                    out.push_back(MInstr::make_unary(mv, xmm(fscr1), s2));
+                    if (!same_reg(acc, s1))
+                        out.push_back(MInstr::make_unary(mv, acc, s1));
+                    out.push_back(MInstr::make_unary(op, acc, xmm(fscr1)));
+                }
+            } else {
+                /* acc = s1 (si difieren). */
+                if (!same_reg(acc, s1))
+                    out.push_back(MInstr::make_unary(mv, acc, s1));
+                /* s2 debe estar en XMM (reg-reg only). */
+                if (s2.kind == MOperandKind::MEM) {
+                    out.push_back(MInstr::make_unary(mv, xmm(fscr1), s2));
+                    s2 = xmm(fscr1);
+                }
+                out.push_back(MInstr::make_unary(op, acc, s2));
+            }
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    mv, slot_mem(ra.slot_of(in.dst.vreg_id())), acc));
+            return;
+        }
+
+        /* FP unaria con dst XMM (SQRTSD/SQRTSS): dst = sqrt(src).  src puede
+         * estar spilled -> materializar a fscr1; dst spilled -> fscr0. */
+        if (op == MOp::SQRTSD || op == MOp::SQRTSS) {
+            const MOp mv = (op == MOp::SQRTSS) ? MOp::MOVSS : MOp::MOVSD;
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s = resolve(in.src1);
+            if (s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr1), s));
+                s = xmm(fscr1);
+            }
+            out.push_back(MInstr::make_unary(op, pdst, s));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+            return;
+        }
+
+        /* UCOMISD/UCOMISS: comparacion FP (setea flags).  Ambos operandos
+         * deben estar en XMM (reg-reg only).  Spilled -> fscr0/fscr1. */
+        if (op == MOp::UCOMISD || op == MOp::UCOMISS) {
+            const MOp mv = (op == MOp::UCOMISS) ? MOp::MOVSS : MOp::MOVSD;
+            MOperand a = resolve(in.dst); // operando A (UCOMISD a, b)
+            MOperand b = resolve(in.src1);
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr0), a));
+                a = xmm(fscr0);
+            }
+            if (b.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr1), b));
+                b = xmm(fscr1);
+            }
+            out.push_back(MInstr::make_unary(op, a, b));
+            return;
+        }
+
+        /* Conversiones int<->float.  CVTSI2SD/CVTSI2SS: dst XMM <- src GP.
+         * CVTTSD2SI/CVTTSS2SI: dst GP <- src XMM.  CVTSS2SD/CVTSD2SS: XMM<-XMM.
+         * El operando GP/XMM fuente puede estar spilled (MEM) -> a scratch. */
+        if (op == MOp::CVTSI2SD || op == MOp::CVTSI2SS) {
+            const MOp mv = (op == MOp::CVTSI2SS) ? MOp::MOVSS : MOp::MOVSD;
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s = resolve(in.src1); // GP source
+            if (s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), s));
+                s = reg(scr0);
+            }
+            out.push_back(MInstr::make_unary(op, pdst, s));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+            return;
+        }
+        if (op == MOp::CVTTSD2SI || op == MOp::CVTTSS2SI) {
+            const MOp mv = (op == MOp::CVTTSS2SI) ? MOp::MOVSS : MOp::MOVSD;
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
+            MOperand s = resolve(in.src1); // XMM source
+            if (s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr1), s));
+                s = xmm(fscr1);
+            }
+            out.push_back(MInstr::make_unary(op, pdst, s));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+            return;
+        }
+        if (op == MOp::CVTSS2SD || op == MOp::CVTSD2SS) {
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s = resolve(in.src1); // XMM source
+            if (s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOVSD, xmm(fscr1), s));
+                s = xmm(fscr1);
+            }
+            out.push_back(MInstr::make_unary(op, pdst, s));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    MOp::MOVSD, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+            return;
+        }
+
+        /* MOVQ_GP_XMM (dst XMM <- src GP) / MOVQ_XMM_GP (dst GP <- src XMM):
+         * bitcast de bits IEEE entre bancos (float CONST, BITCAST).  El
+         * operando fuente puede estar spilled.  El dst spilled tambien. */
+        if (op == MOp::MOVQ_GP_XMM) {
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s = resolve(in.src1); // GP source
+            if (s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), s));
+                s = reg(scr0);
+            }
+            out.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM, pdst, s));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    MOp::MOVSD, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
+            return;
+        }
+        if (op == MOp::MOVQ_XMM_GP) {
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
+            MOperand s = resolve(in.src1); // XMM source
+            if (s.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOVSD, xmm(fscr1), s));
+                s = xmm(fscr1);
+            }
+            out.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP, pdst, s));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
             return;
         }
 
         if (op == MOp::CALL_ABS) {
-            /* Parallel-move de los args a los registros de argumento
-             * del ABI host, luego mov scratch,addr + call scratch. */
-            const auto &areg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
-            std::vector<std::pair<MReg, MOperand>> moves;
-            for (const auto &pa : pending_args) {
-                if (pa.first < areg.size())
-                    moves.emplace_back(static_cast<MReg>(areg[pa.first]),
-                                       pa.second);
-                /* args >12 / en stack: no soportado v1 (raro). */
-            }
-            emit_parallel_moves(std::move(moves), scr1, out);
-            pending_args.clear();
+            /* Parallel-move de los args (GP + FP) a sus arg_regs, luego
+             * mov scratch,addr + call scratch. */
+            marshal_args(out);
             /* Cargar la direccion (imm64 del pool) en scratch y llamar. */
             out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), in.src1));
             MInstr call;
@@ -557,15 +878,7 @@ struct Lowerer {
              * rel32 (no via scratch): el encoder deja un placeholder +
              * MReloc{CALL_REL32} con el sym_idx que viaja en src1.  En
              * HOST_LEAF/BARE no hay GC -> sin stackmap. */
-            const auto &areg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
-            std::vector<std::pair<MReg, MOperand>> moves;
-            for (const auto &pa : pending_args) {
-                if (pa.first < areg.size())
-                    moves.emplace_back(static_cast<MReg>(areg[pa.first]),
-                                       pa.second);
-            }
-            emit_parallel_moves(std::move(moves), scr1, out);
-            pending_args.clear();
+            marshal_args(out);
             MInstr call;
             call.op = MOp::CALL_SYM;
             call.src1 = in.src1;
@@ -609,15 +922,7 @@ struct Lowerer {
             if (!pending_args.empty()) {
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
                 tgt = reg(scr0);
-                const auto &areg =
-                    tri.arg_regs[static_cast<size_t>(RegClass::GP)];
-                std::vector<std::pair<MReg, MOperand>> moves;
-                for (const auto &pa : pending_args)
-                    if (pa.first < areg.size())
-                        moves.emplace_back(static_cast<MReg>(areg[pa.first]),
-                                           pa.second);
-                emit_parallel_moves(std::move(moves), scr1, out);
-                pending_args.clear();
+                marshal_args(out);
             } else if (tgt.kind == MOperandKind::MEM) {
                 /* target spilled -> cargar a scratch antes del call. */
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
@@ -657,15 +962,7 @@ struct Lowerer {
              * monta su propio frame y su RET retorna al caller original ->
              * pila O(1).  Sin GC en BARE -> sin stackmap. */
             if (!vm_abi && in.src2.kind == MOperandKind::IMM32) {
-                const auto &areg2 =
-                    tri.arg_regs[static_cast<size_t>(RegClass::GP)];
-                std::vector<std::pair<MReg, MOperand>> moves;
-                for (const auto &pa : pending_args)
-                    if (pa.first < areg2.size())
-                        moves.emplace_back(static_cast<MReg>(areg2[pa.first]),
-                                           pa.second);
-                emit_parallel_moves(std::move(moves), scr1, out);
-                pending_args.clear();
+                marshal_args(out);
                 emit_epilogue(out);
                 MInstr j;
                 j.op = MOp::JMP_SYM;

@@ -401,6 +401,160 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xa & 7, xb & 7));
         return true;
     }
+
+    /* ---- FP-regalloc (Phase AOT C1 float): MOVSD/MOVSS con memoria ---- */
+    case MOp::MOVSD:
+    case MOp::MOVSS: {
+        /* MOVSD/MOVSS mueve un escalar f64/f32 entre XMM<->XMM o XMM<->mem.
+         *   prefijo: F2 (MOVSD) / F3 (MOVSS).
+         *   xmm <- xmm/mem : 0F 10  (reg = dst xmm, r/m = src)
+         *   mem <- xmm     : 0F 11  (reg = src xmm, r/m = dst mem)
+         * El reg-reg se codifica con 0F 10 (dst=reg field, src=r/m). */
+        const uint8_t pfx = (mi.op == MOp::MOVSD) ? 0xF2 : 0xF3;
+        const bool dst_xmm = (mi.dst.kind == MOperandKind::REG);
+        const bool src_xmm = (mi.src1.kind == MOperandKind::REG);
+        if (dst_xmm && src_xmm) {
+            /* xmm <- xmm : 0F 10, reg=dst, rm=src. */
+            const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+            const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            put8(out, pfx);
+            const uint8_t rex = rex_byte(false, xd, xs);
+            if (rex) put8(out, rex);
+            put8(out, 0x0F);
+            put8(out, 0x10);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
+        if (dst_xmm && mi.src1.kind == MOperandKind::MEM) {
+            /* xmm <- [mem] : 0F 10, reg=dst xmm, r/m = mem. */
+            const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+            const MReg base = mi.src1.mem_base();
+            const MReg idx = mi.src1.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            put8(out, pfx);
+            const uint8_t rex = rex_byte(false, xd, reg_id(base),
+                                         has_index ? reg_id(idx) : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0x0F);
+            put8(out, 0x10);
+            emit_modrm_mem(mi.src1, xd & 7, out);
+            return true;
+        }
+        if (mi.dst.kind == MOperandKind::MEM && src_xmm) {
+            /* [mem] <- xmm : 0F 11, reg=src xmm, r/m = mem. */
+            const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            const MReg base = mi.dst.mem_base();
+            const MReg idx = mi.dst.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            put8(out, pfx);
+            const uint8_t rex = rex_byte(false, xs, reg_id(base),
+                                         has_index ? reg_id(idx) : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0x0F);
+            put8(out, 0x11);
+            emit_modrm_mem(mi.dst, xs & 7, out);
+            return true;
+        }
+        put8(out, 0xCC); /* combinacion no soportada (mem<-mem, imm, ...) */
+        return true;
+    }
+
+    case MOp::ADDSS:
+    case MOp::SUBSS:
+    case MOp::MULSS:
+    case MOp::DIVSS:
+    case MOp::SQRTSS: {
+        /* f32 arith/sqrt: F3 + (REX) + 0F + <op> + ModR/M(11, dst, src).
+         *   ADDSS=0x58, SUBSS=0x5C, MULSS=0x59, DIVSS=0x5E, SQRTSS=0x51. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF3);
+        const uint8_t rex = rex_byte(false, xd, xs);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        const uint8_t opcode = (mi.op == MOp::ADDSS)   ? 0x58
+                               : (mi.op == MOp::SUBSS) ? 0x5C
+                               : (mi.op == MOp::MULSS) ? 0x59
+                               : (mi.op == MOp::DIVSS) ? 0x5E
+                                                       : 0x51; /* SQRTSS */
+        put8(out, opcode);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+    case MOp::UCOMISS: {
+        /* UCOMISS xmm_a, xmm_b: (REX) + 0F + 2E + ModR/M.  SIN prefijo
+         * 66 (esa es UCOMISD); compara dos f32 y setea ZF/PF/CF. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xa = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xb = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t rex = rex_byte(false, xa, xb);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x2E);
+        put8(out, modrm(3, xa & 7, xb & 7));
+        return true;
+    }
+    case MOp::CVTSI2SS: {
+        /* CVTSI2SS xmm, r64: F3 + REX.W + 0F + 2A + ModR/M(11, xmm, gp). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        put8(out, 0xF3);
+        put_rex(out, true, xd, gp);
+        put8(out, 0x0F);
+        put8(out, 0x2A);
+        put8(out, modrm(3, xd & 7, gp & 7));
+        return true;
+    }
+    case MOp::CVTTSS2SI: {
+        /* CVTTSS2SI r64, xmm: F3 + REX.W + 0F + 2C + ModR/M.  f32 -> int
+         * truncado hacia cero. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0xF3);
+        put_rex(out, true, gp, xs);
+        put8(out, 0x0F);
+        put8(out, 0x2C);
+        put8(out, modrm(3, gp & 7, xs & 7));
+        return true;
+    }
+    case MOp::XORPS: {
+        /* XORPS xmm_dst, xmm_src: (REX) + 0F + 57 + ModR/M.  Sin prefijo
+         * (paquete f32).  Lo usa el selector para clear (xorps x,x -> 0.0)
+         * y para construir la mascara de neg/abs. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t rex = rex_byte(false, xd, xs);
+        if (rex) put8(out, rex);
+        put8(out, 0x0F);
+        put8(out, 0x57);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+
     case MOp::IDIV: {
         /* IDIV r/m64: REX.W + F7 /7 con divisor en src1.reg. */
         if (mi.src1.kind != MOperandKind::REG) {

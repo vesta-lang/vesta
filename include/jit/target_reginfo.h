@@ -155,7 +155,16 @@ inline TargetRegInfo build_x86_64_target(bool sysv) {
                              t.callee_saved[GP].end());
     t.ret_reg[GP] = id(MReg::RAX);
 
-    for (int i = 16; i <= 31; ++i) {
+    /* FP-regalloc (Phase AOT C1 float): XMM14/XMM15 RESERVADOS como scratch
+     * del rewrite (materializar spills FP + two-address legalization de
+     * ADDSD/etc), analogo a R10/R11 en GP.  Asignables: XMM0..XMM13.
+     * En SysV todos los XMM son caller-saved (volatiles).  En Win64 XMM6-15
+     * son callee-saved; el codegen FP v1 (HOST_LEAF) los marca caller-saved
+     * por simplicidad: las funciones leaf float no mantienen un XMM vivo a
+     * traves de un CALL todavia (cuando lo hagan, habra que salvarlos -- TODO
+     * cross-call FP). */
+    t.scratch[FP] = {id(MReg::XMM14), id(MReg::XMM15)};
+    for (int i = 16; i <= 29; ++i) { /* XMM0..XMM13 asignables */
         t.allocatable[FP].push_back(static_cast<uint8_t>(i));
         t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
     }

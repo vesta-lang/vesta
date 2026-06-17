@@ -558,7 +558,31 @@ enum class MOp : uint8_t {
             ///< AOT).  dst = reg/vreg, src1 = IMM32(sym_idx).  El
             ///< encoder emite 48 8D 05 + disp32=0 + MReloc{DATA_REL32}.
 
-    COUNT = 91
+    /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
+     * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
+     * float CONST).  A diferencia de ADDSD/etc (reg-reg only), MOVSD/MOVSS
+     * aceptan un operando de memoria -> el rewrite los usa para materializar
+     * spills FP y el two-address legalization (mov dst,src antes de la op).
+     * El encoder distingue la direccion por el kind de dst/src: xmm<-xmm o
+     * xmm<-mem (F2/F3 0F 10), mem<-xmm (F2/F3 0F 11). */
+    MOVSD = 92, ///< MOVSD dst, src (f64): F2 0F 10 (load) / F2 0F 11 (store)
+    MOVSS = 93, ///< MOVSS dst, src (f32): F3 0F 10 / F3 0F 11
+
+    /* FP arith scalar f32 (SSE, prefijo F3).  Mismo patron 2-address que
+     * sus contrapartes f64 (ADDSD/...): el selector emite forma 3-op y el
+     * rewrite la legaliza.  Reg-reg only (igual que ADDSD). */
+    ADDSS = 94,     ///< ADDSS xmm,xmm (F3 0F 58)
+    SUBSS = 95,     ///< SUBSS xmm,xmm (F3 0F 5C)
+    MULSS = 96,     ///< MULSS xmm,xmm (F3 0F 59)
+    DIVSS = 97,     ///< DIVSS xmm,xmm (F3 0F 5E)
+    SQRTSS = 98,    ///< SQRTSS xmm,xmm (F3 0F 51)
+    UCOMISS = 99,   ///< UCOMISS xmm,xmm (0F 2E) -- f32 compare (sin 66)
+    CVTSI2SS = 100, ///< CVTSI2SS xmm,r64 (F3 REX.W 0F 2A) -- int -> f32
+    CVTTSS2SI =
+        101,      ///< CVTTSS2SI r64,xmm (F3 REX.W 0F 2C) -- f32 -> int trunc
+    XORPS = 102,  ///< XORPS xmm,xmm (0F 57) -- clear / neg-mask de f32/f64
+
+    COUNT = 103
 };
 
 /* ===================================================================== */
