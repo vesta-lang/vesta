@@ -38,7 +38,9 @@ extern bool g_dist_debug;
  * @brief Cambia el estado del flag de depuracion distribuida.
  * @param v true para activar; false para desactivar.
  */
-inline void set_dist_debug(bool v) { g_dist_debug = v; }
+inline void set_dist_debug(bool v) {
+    g_dist_debug = v;
+}
 
 } // namespace distrib
 
@@ -48,12 +50,12 @@ inline void set_dist_debug(bool v) { g_dist_debug = v; }
  * Solo tiene efecto cuando distrib::g_dist_debug == true.
  * El formato es: "[DIST] <mensaje>\n"
  */
-#define DIST_DBG(fmt, ...) \
-    do { \
-        if (distrib::g_dist_debug) { \
-            std::fprintf(stderr, "[DIST] " fmt "\n", ##__VA_ARGS__); \
-            std::fflush(stderr); \
-        } \
+#define DIST_DBG(fmt, ...)                                                     \
+    do {                                                                       \
+        if (distrib::g_dist_debug) {                                           \
+            std::fprintf(stderr, "[DIST] " fmt "\n", ##__VA_ARGS__);           \
+            std::fflush(stderr);                                               \
+        }                                                                      \
     } while (0)
 
 #endif // DIST_DEBUG_H

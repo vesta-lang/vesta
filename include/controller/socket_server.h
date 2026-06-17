@@ -12,10 +12,12 @@
 
 /**
  * @file socket_server.h
- * @brief Marcador de inclusion para el modulo de servidor de sockets (pendiente de implementacion).
+ * @brief Marcador de inclusion para el modulo de servidor de sockets (pendiente
+ * de implementacion).
  *
- * Este fichero reserva el espacio para la futura clase SocketServer que actuara como
- * capa de abstraccion del servidor TCP/TLS antes del enrutamiento de peticiones.
+ * Este fichero reserva el espacio para la futura clase SocketServer que actuara
+ * como capa de abstraccion del servidor TCP/TLS antes del enrutamiento de
+ * peticiones.
  *
  * Arquitectura del controlador:
  * @verbatim

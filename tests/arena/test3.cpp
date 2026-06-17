@@ -1,12 +1,12 @@
 /*
  * VestaVM - Máquina Virtual Distribuida
- * 
+ *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
@@ -16,7 +16,6 @@
 #include "arena/arena.h"
 #include "arena/TLB.h"
 
-
 int main() {
     tlb::LazyHybridTLB lazy{};
     for (uint64_t i = 0x1000; i < 0xfffffff; i += 0x10000 + (i % 0x1000)) {
@@ -25,8 +24,7 @@ int main() {
 
         lazy.translate(i, vm::MAPPED_PTR_VM, pm);
 
-        std::cout << lazy.get_entry(i)->to_string()
-                << std::endl;
+        std::cout << lazy.get_entry(i)->to_string() << std::endl;
 
         lazy.dump_stats();
     }

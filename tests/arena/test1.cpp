@@ -1,12 +1,12 @@
 /*
  * VestaVM - Máquina Virtual Distribuida
- * 
+ *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 #include "arena/arena.h"
@@ -17,7 +17,8 @@ int main() {
     const size_t PAGE_SIZE = 4096;
 
     // Test 1: Reservar memoria RW
-    void *mem_rw = vm::allocate_memory(PAGE_SIZE, vm::MemPerm::READ | vm::MemPerm::WRITE);
+    void *mem_rw =
+        vm::allocate_memory(PAGE_SIZE, vm::MemPerm::READ | vm::MemPerm::WRITE);
     assert(mem_rw != nullptr);
 
     // Escribir datos
@@ -35,7 +36,8 @@ int main() {
     std::cout << "[Arena Test] Memoria RW OK\n";
 
     // Test 2: Reservar memoria RWE
-    void *mem_rwe = allocate_memory(PAGE_SIZE, vm::MemPerm::READ | vm::MemPerm::WRITE | vm::MemPerm::EXEC);
+    void *mem_rwe = allocate_memory(
+        PAGE_SIZE, vm::MemPerm::READ | vm::MemPerm::WRITE | vm::MemPerm::EXEC);
     assert(mem_rwe != nullptr);
 
     // Escribir datos

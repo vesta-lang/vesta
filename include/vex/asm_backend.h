@@ -39,42 +39,42 @@
 
 namespace vex {
 
-    /// Arquitectura destino del ensamblado.
-    enum class AsmArch { X86_64, X86_32, X86_16, ARM64, ARM32 };
+/// Arquitectura destino del ensamblado.
+enum class AsmArch { X86_64, X86_32, X86_16, ARM64, ARM32 };
 
-    /// Resultado de ensamblar un fragmento de asm.
-    struct AsmAssembleResult {
-        bool                 ok = false;     ///< true si ensamblo sin errores
-        std::vector<uint8_t> bytes;          ///< bytes maquina (inc.5 JIT)
-        std::string          error;          ///< mensaje si @c ok==false
-        size_t               error_offset = 0; ///< offset aprox en el body del fallo
-    };
+/// Resultado de ensamblar un fragmento de asm.
+struct AsmAssembleResult {
+    bool ok = false;            ///< true si ensamblo sin errores
+    std::vector<uint8_t> bytes; ///< bytes maquina (inc.5 JIT)
+    std::string error;          ///< mensaje si @c ok==false
+    size_t error_offset = 0;    ///< offset aprox en el body del fallo
+};
 
+/**
+ * @brief Interfaz pura: ensambla texto NASM Intel a bytes maquina.
+ *
+ * Impl1 = @c KeystoneAsmBackend (src/jit/keystone_asm_backend.cpp).  Impl2
+ * futuro = encoder hand-rolled del JIT.  La inferencia de clobbers NO usa
+ * esta interfaz (vive en asm_effects.{h,cpp}).
+ */
+struct AsmBackend {
+    virtual ~AsmBackend() = default;
     /**
-     * @brief Interfaz pura: ensambla texto NASM Intel a bytes maquina.
-     *
-     * Impl1 = @c KeystoneAsmBackend (src/jit/keystone_asm_backend.cpp).  Impl2
-     * futuro = encoder hand-rolled del JIT.  La inferencia de clobbers NO usa
-     * esta interfaz (vive en asm_effects.{h,cpp}).
+     * @brief Ensambla @p nasm (sintaxis Intel/NASM) para @p arch.
+     * @return Bytes + ok, o ok=false + error si la sintaxis es invalida.
      */
-    struct AsmBackend {
-        virtual ~AsmBackend() = default;
-        /**
-         * @brief Ensambla @p nasm (sintaxis Intel/NASM) para @p arch.
-         * @return Bytes + ok, o ok=false + error si la sintaxis es invalida.
-         */
-        virtual AsmAssembleResult assemble(const std::string &nasm,
-                                           AsmArch arch) = 0;
-    };
+    virtual AsmAssembleResult assemble(const std::string &nasm,
+                                       AsmArch arch) = 0;
+};
 
-    /**
-     * @brief Backend de ensamblado activo (registrado por el ejecutable que
-     *        enlaza Keystone).  @c nullptr si no hay backend disponible (e.g.
-     *        tests que invocan el compilador sin pasar por main.cpp); en ese
-     *        caso la validacion de sintaxis en compile-time se omite y GCC
-     *        valida al compilar el .c (port-C).
-     */
-    extern AsmBackend *g_asm_backend;
+/**
+ * @brief Backend de ensamblado activo (registrado por el ejecutable que
+ *        enlaza Keystone).  @c nullptr si no hay backend disponible (e.g.
+ *        tests que invocan el compilador sin pasar por main.cpp); en ese
+ *        caso la validacion de sintaxis en compile-time se omite y GCC
+ *        valida al compilar el .c (port-C).
+ */
+extern AsmBackend *g_asm_backend;
 
 } // namespace vex
 

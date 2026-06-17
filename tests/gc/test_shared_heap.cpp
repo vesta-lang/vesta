@@ -28,18 +28,19 @@
 #include <unordered_set>
 #include <vector>
 
-static int g_tests_run    = 0;
+static int g_tests_run = 0;
 static int g_tests_passed = 0;
 
-#define CHECK(cond, msg) do {                                          \
-    ++g_tests_run;                                                      \
-    if (cond) {                                                         \
-        ++g_tests_passed;                                               \
-        std::printf("  [OK] %s\n", msg);                                \
-    } else {                                                            \
-        std::printf("  [FAIL] %s\n", msg);                              \
-    }                                                                   \
-} while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_tests_run;                                                         \
+        if (cond) {                                                            \
+            ++g_tests_passed;                                                  \
+            std::printf("  [OK] %s\n", msg);                                   \
+        } else {                                                               \
+            std::printf("  [FAIL] %s\n", msg);                                 \
+        }                                                                      \
+    } while (0)
 
 // =====================================================================
 // Test 1: alloc/free single-thread basico
@@ -56,7 +57,8 @@ static void test_single_thread_basic() {
         uint8_t *p = heap.alloc(sz);
         CHECK(p != nullptr, "alloc no nulo");
         CHECK(heap.contains(p), "contains() reconoce el ptr alocado");
-        CHECK(heap.size_class_of(p) == static_cast<int>(cls), "size_class correcto");
+        CHECK(heap.size_class_of(p) == static_cast<int>(cls),
+              "size_class correcto");
 
         // Escribir y leer datos para verificar que el slot es usable
         std::memset(p, 0xAB, sz);
@@ -147,16 +149,17 @@ static void test_class_exhaustion() {
     CHECK(ps.size() == initial * 2,
           "growth dinamico: alocados 2x slots iniciales sin OOM");
     // Verificar que se alocaron al menos 2 chunks.
-    uint32_t chunks_now = heap.slab(11).chunks_count.load(std::memory_order_acquire);
-    CHECK(chunks_now >= 2,
-          "slab tiene >= 2 chunks tras growth");
+    uint32_t chunks_now =
+        heap.slab(11).chunks_count.load(std::memory_order_acquire);
+    CHECK(chunks_now >= 2, "slab tiene >= 2 chunks tras growth");
     // Liberar uno y reintentar: debe reusar slot del free list.
     heap.free(ps.back());
     ps.pop_back();
     uint8_t *recov = heap.alloc(32768);
     CHECK(recov != nullptr, "tras free, alloc vuelve a tener slot");
     heap.free(recov);
-    for (auto *p : ps) heap.free(p);
+    for (auto *p : ps)
+        heap.free(p);
 }
 
 // =====================================================================
@@ -190,7 +193,8 @@ static void test_stats_single_thread() {
     // 128 B = clase 3 -> 10 slots vivos = 10 * 128 = 1280 bytes
     CHECK(heap.total_allocated_bytes() == 1280,
           "total_allocated_bytes == 10 * 128");
-    for (auto *p : ps) heap.free(p);
+    for (auto *p : ps)
+        heap.free(p);
     CHECK(heap.free_count(3) == 10, "free_count == 10 tras liberar");
     CHECK(heap.total_allocated_bytes() == 0, "total_allocated_bytes == 0");
 }
@@ -200,7 +204,8 @@ static void test_stats_single_thread() {
 // =====================================================================
 
 static void test_concurrent_alloc() {
-    std::printf("\n=== Test 8: alloc concurrente (8 threads x 1000 allocs) ===\n");
+    std::printf(
+        "\n=== Test 8: alloc concurrente (8 threads x 1000 allocs) ===\n");
     gc::SharedHeap heap;
     constexpr int THREADS = 8;
     constexpr int ALLOCS_PER_THREAD = 1000;
@@ -219,7 +224,8 @@ static void test_concurrent_alloc() {
             }
         });
     }
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
 
     // Verificar que TODOS los ptrs son unicos (no double-alloc)
     std::unordered_set<uint8_t *> all_ptrs;
@@ -237,7 +243,8 @@ static void test_concurrent_alloc() {
 
     // Cleanup
     for (int t = 0; t < THREADS; ++t) {
-        for (auto *p : per_thread[t]) heap.free(p);
+        for (auto *p : per_thread[t])
+            heap.free(p);
     }
 }
 
@@ -246,7 +253,8 @@ static void test_concurrent_alloc() {
 // =====================================================================
 
 static void test_concurrent_alloc_free_stress() {
-    std::printf("\n=== Test 9: stress alloc+free concurrente (8 threads x 10K ops) ===\n");
+    std::printf("\n=== Test 9: stress alloc+free concurrente (8 threads x 10K "
+                "ops) ===\n");
     gc::SharedHeap heap;
     constexpr int THREADS = 8;
     constexpr int OPS_PER_THREAD = 10000;
@@ -264,8 +272,9 @@ static void test_concurrent_alloc_free_stress() {
                     // free uno al azar (deterministico via i)
                     size_t idx = (size_t)i % local_ptrs.size();
                     uint8_t *p = local_ptrs[idx];
-                    // verificar: escribir un patron antes y leerlo tras free es solo
-                    // valido SI no hubo race; aqui solo verificamos no-crash.
+                    // verificar: escribir un patron antes y leerlo tras free es
+                    // solo valido SI no hubo race; aqui solo verificamos
+                    // no-crash.
                     heap.free(p);
                     local_ptrs[idx] = local_ptrs.back();
                     local_ptrs.pop_back();
@@ -282,10 +291,12 @@ static void test_concurrent_alloc_free_stress() {
                 }
             }
             // cleanup
-            for (auto *p : local_ptrs) heap.free(p);
+            for (auto *p : local_ptrs)
+                heap.free(p);
         });
     }
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
     CHECK(errors.load() == 0, "0 errores en stress alloc/free concurrente");
 }
 
@@ -324,16 +335,17 @@ static void test_aba_safety() {
     // Dejar correr 100 ms minimo
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     stop.store(true);
-    for (auto &th : threads) th.join();
+    for (auto &th : threads)
+        th.join();
 
     // No hay forma directa de verificar ABA-correctness sin asserts internos.
     // El hecho de que no hay crashes ni asserts de stack-overflow indica que
     // el tag funciono.  alloc_count == free_count (todo balanced).
     uint64_t allocs = heap.alloc_count(2);
-    uint64_t frees  = heap.free_count(2);
+    uint64_t frees = heap.free_count(2);
     CHECK(allocs == frees, "alloc_count == free_count tras stress (balanced)");
-    std::printf("  (info) allocs=%llu frees=%llu\n",
-                (unsigned long long)allocs, (unsigned long long)frees);
+    std::printf("  (info) allocs=%llu frees=%llu\n", (unsigned long long)allocs,
+                (unsigned long long)frees);
 }
 
 // =====================================================================

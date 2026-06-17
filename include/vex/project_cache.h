@@ -39,19 +39,19 @@ namespace vex {
 /// Phase M5.B: opciones que afectan el output del compile.  Cualquier
 /// cambio en estos campos invalida el cache (se incluye en opts_hash).
 struct ProjectCacheKey {
-    int          opt_level     = 1;
-    bool         emit_debug    = false;
-    uint64_t     vex_base      = 0;
-    std::string  instrument_mode;     ///< "none", "trace", "coverage", etc.
-    std::string  port_target;         ///< "" si no es port; "c", "java", etc.
+    int opt_level = 1;
+    bool emit_debug = false;
+    uint64_t vex_base = 0;
+    std::string instrument_mode; ///< "none", "trace", "coverage", etc.
+    std::string port_target;     ///< "" si no es port; "c", "java", etc.
 };
 
 /// Phase M5.B: entrada por modulo en el cache file.  Tras un compile
 /// exitoso, el caller persiste @c path + @c source_hash de cada modulo
 /// participante (root + deps recursivos).
 struct ProjectCacheDep {
-    std::string path;          ///< Path canonico (absoluto + normalizado).
-    uint64_t    source_hash;   ///< FNV-1a 64 del source crudo.
+    std::string path;     ///< Path canonico (absoluto + normalizado).
+    uint64_t source_hash; ///< FNV-1a 64 del source crudo.
 };
 
 /// Phase M5.B: API publica.
@@ -61,7 +61,7 @@ struct ProjectCacheDep {
 /// @param cache_dir  Directorio del cache global (puede ser una funcion
 ///                   centralizada en @c $VEX_HOME o @c ./.vex_cache ).
 std::string project_cache_path(const std::string &root_path,
-                                const std::string &cache_dir);
+                               const std::string &cache_dir);
 
 /// @brief Computa el directorio default del cache de proyectos.
 /// Por defecto: @c $VEX_HOME/cache/projects o @c ./.vex_cache/projects .
@@ -71,18 +71,16 @@ std::string default_project_cache_dir();
 /// @return @c true si el archivo existe, magic + version validos.
 ///         Los campos out_* se llenan en caso OK.  En miss/error,
 ///         devuelve @c false y los out_* quedan vacios.
-bool project_cache_load(const std::string &cache_path,
-                         uint32_t &out_opts_hash,
-                         std::vector<ProjectCacheDep> &out_deps,
-                         std::vector<uint8_t> &out_velb);
+bool project_cache_load(const std::string &cache_path, uint32_t &out_opts_hash,
+                        std::vector<ProjectCacheDep> &out_deps,
+                        std::vector<uint8_t> &out_velb);
 
 /// @brief Escribe un cache file con los contenidos dados.  Usa atomic
 /// rename (igual que @c write_file_atomic_ del compiler_project).
 /// @return @c true si exito.
-bool project_cache_save(const std::string &cache_path,
-                         uint32_t opts_hash,
-                         const std::vector<ProjectCacheDep> &deps,
-                         const std::vector<uint8_t> &velb);
+bool project_cache_save(const std::string &cache_path, uint32_t opts_hash,
+                        const std::vector<ProjectCacheDep> &deps,
+                        const std::vector<uint8_t> &velb);
 
 /// @brief Computa el @c opts_hash sobre la @c ProjectCacheKey .
 /// FNV-1a 32 sobre los campos concatenados.

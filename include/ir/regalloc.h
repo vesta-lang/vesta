@@ -37,14 +37,15 @@ namespace ir {
 /** @brief Numero de registros VM disponibles para asignacion (r0-r12). */
 static constexpr int ALLOC_REGS = 13;
 
-/** @brief Registro scratch primario del emisor (no asignado por el allocator). */
-static constexpr int SCRATCH_REG  = 14; // r14
+/** @brief Registro scratch primario del emisor (no asignado por el allocator).
+ */
+static constexpr int SCRATCH_REG = 14; // r14
 
 /** @brief Registro scratch secundario para derrames de segundo operando. */
 static constexpr int SCRATCH2_REG = 13; // r13 (reservado junto con r14)
 
 /** @brief Registro reservado para argc en llamadas. */
-static constexpr int ARGC_REG = 15;    // r15
+static constexpr int ARGC_REG = 15; // r15
 
 /**
  * @brief Resultado de la asignacion de registros para una funcion.
@@ -54,11 +55,12 @@ static constexpr int ARGC_REG = 15;    // r15
  * reservar en el prologo de la funcion (cada slot = 8 bytes).
  */
 struct AllocResult {
-    std::unordered_map<IrValueId, int>      reg_map;    ///< valor -> registro VM (0-13)
-    std::unordered_map<IrValueId, uint32_t> spill_map;  ///< valor -> indice de slot pila
-    uint32_t                                 spill_count; ///< numero de slots usados
-    bool                                     ok;          ///< false si hay error irrecuperable
-    std::string                              error;       ///< descripcion del error si !ok
+    std::unordered_map<IrValueId, int> reg_map; ///< valor -> registro VM (0-13)
+    std::unordered_map<IrValueId, uint32_t>
+        spill_map;        ///< valor -> indice de slot pila
+    uint32_t spill_count; ///< numero de slots usados
+    bool ok;              ///< false si hay error irrecuperable
+    std::string error;    ///< descripcion del error si !ok
 };
 
 /**

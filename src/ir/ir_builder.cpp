@@ -47,8 +47,8 @@ namespace ir {
  */
 IrBlockId IrBuilder::new_block(const std::string &name) {
     const IrBlockId id = static_cast<IrBlockId>(fn_.blocks.size());
-    IrBlock         bb;
-    bb.id   = id;
+    IrBlock bb;
+    bb.id = id;
     bb.name = name.empty() ? ("bb_" + std::to_string(id)) : name;
     fn_.blocks.push_back(std::move(bb));
     return id;
@@ -87,88 +87,88 @@ IrValueId IrBuilder::param(IrType type, const std::string &name) {
 
 IrValueId IrBuilder::const_i32(int32_t v) {
     const IrValueId id = new_value(IrType::I32);
-    fn_.values[id].is_const  = true;
+    fn_.values[id].is_const = true;
     // Reinterpretamos como uint64 preservando el patron de bits (sign-extend
     // primero a int64 para garantizar que -1 se serializa como 0xFFF...FF
     // y no como 0x...FF cubierto de ceros, que cambiaria el valor).
     fn_.values[id].const_val = static_cast<uint64_t>(static_cast<int64_t>(v));
     IrInstr ins{};
-    ins.op   = IrOp::CONST;
+    ins.op = IrOp::CONST;
     ins.type = IrType::I32;
-    ins.dst  = id;
-    ins.imm  = static_cast<uint64_t>(static_cast<int64_t>(v));
+    ins.dst = id;
+    ins.imm = static_cast<uint64_t>(static_cast<int64_t>(v));
     append(std::move(ins));
     return id;
 }
 
 IrValueId IrBuilder::const_i64(int64_t v) {
     const IrValueId id = new_value(IrType::I64);
-    fn_.values[id].is_const  = true;
+    fn_.values[id].is_const = true;
     fn_.values[id].const_val = static_cast<uint64_t>(v);
     IrInstr ins{};
-    ins.op   = IrOp::CONST;
+    ins.op = IrOp::CONST;
     ins.type = IrType::I64;
-    ins.dst  = id;
-    ins.imm  = static_cast<uint64_t>(v);
+    ins.dst = id;
+    ins.imm = static_cast<uint64_t>(v);
     append(std::move(ins));
     return id;
 }
 
 IrValueId IrBuilder::const_u32(uint32_t v) {
     const IrValueId id = new_value(IrType::U32);
-    fn_.values[id].is_const  = true;
+    fn_.values[id].is_const = true;
     // u32 a u64 es zero-extend natural en C++: el cast widening no toca
     // los bits altos.  No hay diferencia con i32 en el codegen, pero el
     // tipo del SSA value es importante para reglas de signed/unsigned
     // en comparaciones y divisiones aguas abajo.
     fn_.values[id].const_val = v;
     IrInstr ins{};
-    ins.op   = IrOp::CONST;
+    ins.op = IrOp::CONST;
     ins.type = IrType::U32;
-    ins.dst  = id;
-    ins.imm  = v;
+    ins.dst = id;
+    ins.imm = v;
     append(std::move(ins));
     return id;
 }
 
 IrValueId IrBuilder::const_u64(uint64_t v) {
     const IrValueId id = new_value(IrType::U64);
-    fn_.values[id].is_const  = true;
+    fn_.values[id].is_const = true;
     fn_.values[id].const_val = v;
     IrInstr ins{};
-    ins.op   = IrOp::CONST;
+    ins.op = IrOp::CONST;
     ins.type = IrType::U64;
-    ins.dst  = id;
-    ins.imm  = v;
+    ins.dst = id;
+    ins.imm = v;
     append(std::move(ins));
     return id;
 }
 
 IrValueId IrBuilder::const_bool(bool v) {
     const IrValueId id = new_value(IrType::BOOL);
-    fn_.values[id].is_const  = true;
+    fn_.values[id].is_const = true;
     // Convencion VestaVM: BOOL = i8 con valores {0, 1}.  No usamos otros
     // valores para "true" (a diferencia de C donde cualquier no-cero lo
     // es) porque el bytecode @c setcc y @c jmp.j* esperan 0/1 estrictos.
     fn_.values[id].const_val = v ? 1u : 0u;
     IrInstr ins{};
-    ins.op   = IrOp::CONST;
+    ins.op = IrOp::CONST;
     ins.type = IrType::BOOL;
-    ins.dst  = id;
-    ins.imm  = v ? 1u : 0u;
+    ins.dst = id;
+    ins.imm = v ? 1u : 0u;
     append(std::move(ins));
     return id;
 }
 
 IrValueId IrBuilder::const_ptr(uint64_t addr) {
     const IrValueId id = new_value(IrType::PTR);
-    fn_.values[id].is_const  = true;
+    fn_.values[id].is_const = true;
     fn_.values[id].const_val = addr;
     IrInstr ins{};
-    ins.op   = IrOp::CONST;
+    ins.op = IrOp::CONST;
     ins.type = IrType::PTR;
-    ins.dst  = id;
-    ins.imm  = addr;
+    ins.dst = id;
+    ins.imm = addr;
     append(std::move(ins));
     return id;
 }
@@ -194,9 +194,9 @@ IrValueId IrBuilder::const_ptr(uint64_t addr) {
 IrValueId IrBuilder::binop(IrOp op, IrValueId a, IrValueId b, IrType type) {
     const IrValueId id = new_value(type);
     IrInstr ins{};
-    ins.op       = op;
-    ins.type     = type;
-    ins.dst      = id;
+    ins.op = op;
+    ins.type = type;
+    ins.dst = id;
     // SSA two-address: ambos operandos son SSA values fijos; el destino
     // es un valor fresco.  El emisor decide despues si emite ADD reg-reg
     // (dst=src1) tras coalescing o variante 3-operandos @c adds3.
@@ -210,26 +210,52 @@ IrValueId IrBuilder::binop(IrOp op, IrValueId a, IrValueId b, IrType type) {
 // en la enum.  La distincion sdiv/udiv y smod/umod actualmente comparten
 // el mismo IrOp (DIV/MOD); el tipo del operando (I32 vs U32) determina
 // signed vs unsigned en el emisor.
-IrValueId IrBuilder::add (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::ADD, a, b, t); }
-IrValueId IrBuilder::sub (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::SUB, a, b, t); }
-IrValueId IrBuilder::mul (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::MUL, a, b, t); }
-IrValueId IrBuilder::sdiv(IrValueId a, IrValueId b, IrType t) { return binop(IrOp::DIV, a, b, t); }
-IrValueId IrBuilder::udiv(IrValueId a, IrValueId b, IrType t) { return binop(IrOp::DIV, a, b, t); }
-IrValueId IrBuilder::smod(IrValueId a, IrValueId b, IrType t) { return binop(IrOp::MOD, a, b, t); }
-IrValueId IrBuilder::umod(IrValueId a, IrValueId b, IrType t) { return binop(IrOp::MOD, a, b, t); }
+IrValueId IrBuilder::add(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::ADD, a, b, t);
+}
+IrValueId IrBuilder::sub(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::SUB, a, b, t);
+}
+IrValueId IrBuilder::mul(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::MUL, a, b, t);
+}
+IrValueId IrBuilder::sdiv(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::DIV, a, b, t);
+}
+IrValueId IrBuilder::udiv(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::DIV, a, b, t);
+}
+IrValueId IrBuilder::smod(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::MOD, a, b, t);
+}
+IrValueId IrBuilder::umod(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::MOD, a, b, t);
+}
 
-IrValueId IrBuilder::and_(IrValueId a, IrValueId b, IrType t) { return binop(IrOp::AND, a, b, t); }
-IrValueId IrBuilder::or_ (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::OR,  a, b, t); }
-IrValueId IrBuilder::xor_(IrValueId a, IrValueId b, IrType t) { return binop(IrOp::XOR, a, b, t); }
+IrValueId IrBuilder::and_(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::AND, a, b, t);
+}
+IrValueId IrBuilder::or_(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::OR, a, b, t);
+}
+IrValueId IrBuilder::xor_(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::XOR, a, b, t);
+}
 // Distincion SHL/SHR/SAR:
 //   - SHL: shift logico izquierda (rellena con 0).
 //   - SHR: shift logico derecha (rellena con 0; usar para unsigned).
 //   - SAR: shift aritmetico derecha (rellena con el bit de signo; signed).
 // El frontend debe escoger correctamente segun el tipo del operando: para
 // i32 firmado, un @c >> debe bajar a SAR; para u32 debe bajar a SHR.
-IrValueId IrBuilder::shl (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::SHL, a, b, t); }
-IrValueId IrBuilder::shr (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::SHR, a, b, t); }
-IrValueId IrBuilder::sar (IrValueId a, IrValueId b, IrType t) { return binop(IrOp::SAR, a, b, t); }
+IrValueId IrBuilder::shl(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::SHL, a, b, t);
+}
+IrValueId IrBuilder::shr(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::SHR, a, b, t);
+}
+IrValueId IrBuilder::sar(IrValueId a, IrValueId b, IrType t) {
+    return binop(IrOp::SAR, a, b, t);
+}
 
 // =========================================================================
 //  Operaciones unarias
@@ -241,9 +267,9 @@ IrValueId IrBuilder::sar (IrValueId a, IrValueId b, IrType t) { return binop(IrO
 IrValueId IrBuilder::unop(IrOp op, IrValueId v, IrType type) {
     const IrValueId id = new_value(type);
     IrInstr ins{};
-    ins.op       = op;
-    ins.type     = type;
-    ins.dst      = id;
+    ins.op = op;
+    ins.type = type;
+    ins.dst = id;
     ins.operands = {v};
     append(std::move(ins));
     return id;
@@ -251,8 +277,12 @@ IrValueId IrBuilder::unop(IrOp op, IrValueId v, IrType type) {
 
 // neg = negacion aritmetica (0 - v); not_ = complemento bitwise (~v).
 // El sufijo @c _ en @c not_ evita colision con el operador C++ @c not.
-IrValueId IrBuilder::neg (IrValueId v, IrType t) { return unop(IrOp::NEG, v, t); }
-IrValueId IrBuilder::not_(IrValueId v, IrType t) { return unop(IrOp::NOT, v, t); }
+IrValueId IrBuilder::neg(IrValueId v, IrType t) {
+    return unop(IrOp::NEG, v, t);
+}
+IrValueId IrBuilder::not_(IrValueId v, IrType t) {
+    return unop(IrOp::NOT, v, t);
+}
 
 // =========================================================================
 //  Comparaciones
@@ -270,9 +300,9 @@ IrValueId IrBuilder::not_(IrValueId v, IrType t) { return unop(IrOp::NOT, v, t);
 IrValueId IrBuilder::cmpop(IrOp op, IrValueId a, IrValueId b) {
     const IrValueId id = new_value(IrType::BOOL);
     IrInstr ins{};
-    ins.op       = op;
-    ins.type     = IrType::BOOL;
-    ins.dst      = id;
+    ins.op = op;
+    ins.type = IrType::BOOL;
+    ins.dst = id;
     ins.operands = {a, b};
     append(std::move(ins));
     return id;
@@ -281,16 +311,36 @@ IrValueId IrBuilder::cmpop(IrOp op, IrValueId a, IrValueId b) {
 // Comparaciones signed (LT/LE/GT/GE) y unsigned (ULT/ULE/UGT/UGE).  EQ y
 // NE no tienen variantes signed/unsigned: la igualdad bitwise es la misma
 // para ambos casos.
-IrValueId IrBuilder::cmp_eq (IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_EQ,  a, b); }
-IrValueId IrBuilder::cmp_ne (IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_NE,  a, b); }
-IrValueId IrBuilder::cmp_lt (IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_LT,  a, b); }
-IrValueId IrBuilder::cmp_le (IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_LE,  a, b); }
-IrValueId IrBuilder::cmp_gt (IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_GT,  a, b); }
-IrValueId IrBuilder::cmp_ge (IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_GE,  a, b); }
-IrValueId IrBuilder::cmp_ult(IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_ULT, a, b); }
-IrValueId IrBuilder::cmp_ule(IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_ULE, a, b); }
-IrValueId IrBuilder::cmp_ugt(IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_UGT, a, b); }
-IrValueId IrBuilder::cmp_uge(IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_UGE, a, b); }
+IrValueId IrBuilder::cmp_eq(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_EQ, a, b);
+}
+IrValueId IrBuilder::cmp_ne(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_NE, a, b);
+}
+IrValueId IrBuilder::cmp_lt(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_LT, a, b);
+}
+IrValueId IrBuilder::cmp_le(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_LE, a, b);
+}
+IrValueId IrBuilder::cmp_gt(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_GT, a, b);
+}
+IrValueId IrBuilder::cmp_ge(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_GE, a, b);
+}
+IrValueId IrBuilder::cmp_ult(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_ULT, a, b);
+}
+IrValueId IrBuilder::cmp_ule(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_ULE, a, b);
+}
+IrValueId IrBuilder::cmp_ugt(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_UGT, a, b);
+}
+IrValueId IrBuilder::cmp_uge(IrValueId a, IrValueId b) {
+    return cmpop(IrOp::CMP_UGE, a, b);
+}
 
 // =========================================================================
 //  Casts entre tipos
@@ -313,18 +363,26 @@ IrValueId IrBuilder::cmp_uge(IrValueId a, IrValueId b) { return cmpop(IrOp::CMP_
 IrValueId IrBuilder::castop(IrOp op, IrValueId v, IrType to) {
     const IrValueId id = new_value(to);
     IrInstr ins{};
-    ins.op       = op;
-    ins.type     = to;
-    ins.dst      = id;
+    ins.op = op;
+    ins.type = to;
+    ins.dst = id;
     ins.operands = {v};
     append(std::move(ins));
     return id;
 }
 
-IrValueId IrBuilder::sext   (IrValueId v, IrType t) { return castop(IrOp::SEXT,    v, t); }
-IrValueId IrBuilder::zext   (IrValueId v, IrType t) { return castop(IrOp::ZEXT,    v, t); }
-IrValueId IrBuilder::trunc  (IrValueId v, IrType t) { return castop(IrOp::TRUNC,   v, t); }
-IrValueId IrBuilder::bitcast(IrValueId v, IrType t) { return castop(IrOp::BITCAST, v, t); }
+IrValueId IrBuilder::sext(IrValueId v, IrType t) {
+    return castop(IrOp::SEXT, v, t);
+}
+IrValueId IrBuilder::zext(IrValueId v, IrType t) {
+    return castop(IrOp::ZEXT, v, t);
+}
+IrValueId IrBuilder::trunc(IrValueId v, IrType t) {
+    return castop(IrOp::TRUNC, v, t);
+}
+IrValueId IrBuilder::bitcast(IrValueId v, IrType t) {
+    return castop(IrOp::BITCAST, v, t);
+}
 
 // =========================================================================
 //  Memoria
@@ -351,10 +409,11 @@ IrValueId IrBuilder::bitcast(IrValueId v, IrType t) { return castop(IrOp::BITCAS
 IrValueId IrBuilder::alloca_bytes(uint32_t size_bytes) {
     const IrValueId id = new_value(IrType::PTR);
     IrInstr ins{};
-    ins.op   = IrOp::ALLOCA;
-    ins.type = IrType::I8;  // El tipo del slot es opaco; usamos I8 como sentinela.
-    ins.dst  = id;
-    ins.imm  = size_bytes;
+    ins.op = IrOp::ALLOCA;
+    ins.type =
+        IrType::I8; // El tipo del slot es opaco; usamos I8 como sentinela.
+    ins.dst = id;
+    ins.imm = size_bytes;
     append(std::move(ins));
     return id;
 }
@@ -371,9 +430,9 @@ IrValueId IrBuilder::raw_alloc(IrValueId size_bytes) {
     const IrValueId id = new_value(IrType::PTR);
     fn_.values[id].is_host_ptr = true;
     IrInstr ins{};
-    ins.op       = IrOp::RAW_ALLOC;
-    ins.type     = IrType::PTR;
-    ins.dst      = id;
+    ins.op = IrOp::RAW_ALLOC;
+    ins.type = IrType::PTR;
+    ins.dst = id;
     ins.operands = {size_bytes};
     append(std::move(ins));
     return id;
@@ -388,8 +447,8 @@ IrValueId IrBuilder::raw_alloc(IrValueId size_bytes) {
  */
 void IrBuilder::raw_free(IrValueId ptr) {
     IrInstr ins{};
-    ins.op       = IrOp::RAW_FREE;
-    ins.type     = IrType::VOID;
+    ins.op = IrOp::RAW_FREE;
+    ins.type = IrType::VOID;
     ins.operands = {ptr};
     append(std::move(ins));
 }
@@ -404,9 +463,9 @@ void IrBuilder::raw_free(IrValueId ptr) {
 IrValueId IrBuilder::load(IrValueId ptr, IrType type) {
     const IrValueId id = new_value(type);
     IrInstr ins{};
-    ins.op       = IrOp::LOAD;
-    ins.type     = type;
-    ins.dst      = id;
+    ins.op = IrOp::LOAD;
+    ins.type = type;
+    ins.dst = id;
     ins.operands = {ptr};
     append(std::move(ins));
     return id;
@@ -422,8 +481,8 @@ IrValueId IrBuilder::load(IrValueId ptr, IrType type) {
  */
 void IrBuilder::store(IrValueId value, IrValueId ptr, IrType type) {
     IrInstr ins{};
-    ins.op       = IrOp::STORE;
-    ins.type     = type;
+    ins.op = IrOp::STORE;
+    ins.type = type;
     ins.operands = {value, ptr};
     append(std::move(ins));
 }
@@ -441,8 +500,8 @@ void IrBuilder::store(IrValueId value, IrValueId ptr, IrType type) {
  */
 void IrBuilder::br(IrBlockId target) {
     IrInstr ins{};
-    ins.op           = IrOp::BR;
-    ins.type         = IrType::VOID;
+    ins.op = IrOp::BR;
+    ins.type = IrType::VOID;
     ins.target_block = target;
     append(std::move(ins));
 }
@@ -457,11 +516,11 @@ void IrBuilder::br(IrBlockId target) {
  */
 void IrBuilder::br_cond(IrValueId cond, IrBlockId t, IrBlockId f) {
     IrInstr ins{};
-    ins.op           = IrOp::BR_COND;
-    ins.type         = IrType::VOID;
-    ins.operands     = {cond};
+    ins.op = IrOp::BR_COND;
+    ins.type = IrType::VOID;
+    ins.operands = {cond};
     ins.target_block = t;
-    ins.false_block  = f;
+    ins.false_block = f;
     append(std::move(ins));
 }
 
@@ -470,7 +529,7 @@ void IrBuilder::br_cond(IrValueId cond, IrBlockId t, IrBlockId f) {
  */
 void IrBuilder::ret_void() {
     IrInstr ins{};
-    ins.op   = IrOp::RET;
+    ins.op = IrOp::RET;
     ins.type = IrType::VOID;
     append(std::move(ins));
 }
@@ -485,8 +544,9 @@ void IrBuilder::ret_void() {
  */
 void IrBuilder::ret(IrValueId value) {
     IrInstr ins{};
-    ins.op       = IrOp::RET;
-    ins.type     = (value < fn_.values.size()) ? fn_.values[value].type : IrType::I64;
+    ins.op = IrOp::RET;
+    ins.type =
+        (value < fn_.values.size()) ? fn_.values[value].type : IrType::I64;
     ins.operands = {value};
     append(std::move(ins));
 }
@@ -504,13 +564,14 @@ void IrBuilder::ret(IrValueId value) {
  *              tiene que igualar @c preds.size() del bloque o el emisor
  *              dejara registros sin inicializar.
  */
-IrValueId IrBuilder::phi(IrType type,
-                          const std::vector<std::pair<IrBlockId, IrValueId>> &pairs) {
+IrValueId
+IrBuilder::phi(IrType type,
+               const std::vector<std::pair<IrBlockId, IrValueId>> &pairs) {
     const IrValueId id = new_value(type);
     IrInstr ins{};
-    ins.op   = IrOp::PHI;
+    ins.op = IrOp::PHI;
     ins.type = type;
-    ins.dst  = id;
+    ins.dst = id;
     ins.phi_args.reserve(pairs.size());
     for (const auto &p : pairs) {
         IrPhiArg pa;
@@ -543,19 +604,18 @@ IrValueId IrBuilder::phi(IrType type,
  * linker reportara unresolved symbol al final.
  */
 IrValueId IrBuilder::call(const std::string &fn_name,
-                           const std::vector<IrValueId> &args,
-                           IrType ret_type) {
+                          const std::vector<IrValueId> &args, IrType ret_type) {
     // Si el callee no devuelve nada, no reservamos SSA value (dst queda
     // como IR_NO_VALUE).  Asi el DCE no intenta mantener viva una
     // "variable" sin definicion conceptual.
-    const IrValueId id = (ret_type == IrType::VOID) ? IR_NO_VALUE
-                                                    : new_value(ret_type);
+    const IrValueId id =
+        (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);
     IrInstr ins{};
-    ins.op        = IrOp::CALL;
-    ins.type      = ret_type;
-    ins.dst       = id;
+    ins.op = IrOp::CALL;
+    ins.type = ret_type;
+    ins.dst = id;
     ins.func_name = fn_name;
-    ins.operands  = args;
+    ins.operands = args;
     append(std::move(ins));
     return id;
 }
@@ -568,12 +628,12 @@ IrValueId IrBuilder::call(const std::string &fn_name,
  * del frontend cuando se ejecuta una funcion por sus efectos laterales.
  */
 void IrBuilder::call_void(const std::string &fn_name,
-                           const std::vector<IrValueId> &args) {
+                          const std::vector<IrValueId> &args) {
     IrInstr ins{};
-    ins.op        = IrOp::CALL;
-    ins.type      = IrType::VOID;
+    ins.op = IrOp::CALL;
+    ins.type = IrType::VOID;
     ins.func_name = fn_name;
-    ins.operands  = args;
+    ins.operands = args;
     append(std::move(ins));
 }
 
@@ -586,17 +646,17 @@ void IrBuilder::call_void(const std::string &fn_name,
  * por simplicidad; el frontend Vex tiene helpers especializados).
  */
 IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
-                                    const std::vector<IrValueId> &args,
-                                    IrType ret_type) {
-    const IrValueId id = (ret_type == IrType::VOID) ? IR_NO_VALUE
-                                                    : new_value(ret_type);
+                                   const std::vector<IrValueId> &args,
+                                   IrType ret_type) {
+    const IrValueId id =
+        (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);
     IrInstr ins{};
-    ins.op       = IrOp::CALLIND;
-    ins.type     = ret_type;
-    ins.dst      = id;
-    ins.func_ptr = fn_ptr;  // SSA value, no @c operands[0]: para que el
-                            // DCE / liveness lo trate como un campo distinto
-                            // de los argumentos posicionales.
+    ins.op = IrOp::CALLIND;
+    ins.type = ret_type;
+    ins.dst = id;
+    ins.func_ptr = fn_ptr; // SSA value, no @c operands[0]: para que el
+                           // DCE / liveness lo trate como un campo distinto
+                           // de los argumentos posicionales.
     ins.operands = args;
     append(std::move(ins));
     return id;
@@ -610,16 +670,16 @@ IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
  * via @c dlsym / @c GetProcAddress al cargar el modulo nativo.
  */
 IrValueId IrBuilder::call_native(const std::string &lib_func,
-                                  const std::vector<IrValueId> &args,
-                                  IrType ret_type) {
-    const IrValueId id = (ret_type == IrType::VOID) ? IR_NO_VALUE
-                                                    : new_value(ret_type);
+                                 const std::vector<IrValueId> &args,
+                                 IrType ret_type) {
+    const IrValueId id =
+        (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);
     IrInstr ins{};
-    ins.op        = IrOp::CALLN;
-    ins.type      = ret_type;
-    ins.dst       = id;
-    ins.func_name = lib_func;  // formato lib:funcion
-    ins.operands  = args;
+    ins.op = IrOp::CALLN;
+    ins.type = ret_type;
+    ins.dst = id;
+    ins.func_name = lib_func; // formato lib:funcion
+    ins.operands = args;
     append(std::move(ins));
     return id;
 }
@@ -639,9 +699,8 @@ IrValueId IrBuilder::call_native(const std::string &lib_func,
  * tiene exactamente una definicion).
  */
 void IrBuilder::append(IrInstr ins) {
-    if (current_block_ == IR_NO_BLOCK
-     || current_block_ >= fn_.blocks.size()) {
-        return;  // no-op: el frontend olvido set_insert_point
+    if (current_block_ == IR_NO_BLOCK || current_block_ >= fn_.blocks.size()) {
+        return; // no-op: el frontend olvido set_insert_point
     }
     fn_.blocks[current_block_].instrs.push_back(std::move(ins));
 }
@@ -662,12 +721,19 @@ void IrBuilder::append(IrInstr ins) {
 IrValueId IrBuilder::alloca_init(IrValueId initial, IrType type) {
     uint32_t bytes = 8;
     switch (type) {
-        case IrType::I8:  case IrType::U8:  case IrType::BOOL: bytes = 1; break;
-        case IrType::I16: case IrType::U16:                    bytes = 2; break;
-        case IrType::I32: case IrType::U32: case IrType::F32:  bytes = 4; break;
-        case IrType::I64: case IrType::U64: case IrType::F64:
-        case IrType::PTR:                                       bytes = 8; break;
-        default: bytes = 8; break;
+    case IrType::I8:
+    case IrType::U8:
+    case IrType::BOOL: bytes = 1; break;
+    case IrType::I16:
+    case IrType::U16: bytes = 2; break;
+    case IrType::I32:
+    case IrType::U32:
+    case IrType::F32: bytes = 4; break;
+    case IrType::I64:
+    case IrType::U64:
+    case IrType::F64:
+    case IrType::PTR: bytes = 8; break;
+    default: bytes = 8; break;
     }
     // Redondear al alto a 8 bytes: cualquier slot tiene capacidad de
     // qword, lo que permite alocacion uniforme + reuso entre tipos.
@@ -689,7 +755,7 @@ IrValueId IrBuilder::alloca_init(IrValueId initial, IrType type) {
 IrValueId IrBuilder::new_value(IrType type, const std::string &name) {
     const IrValueId id = static_cast<IrValueId>(fn_.values.size());
     IrValue v;
-    v.id   = id;
+    v.id = id;
     v.type = type;
     v.name = name.empty() ? ("%" + std::to_string(id)) : name;
     fn_.values.push_back(std::move(v));

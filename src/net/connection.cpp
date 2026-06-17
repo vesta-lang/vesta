@@ -1,22 +1,24 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * 
+ *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
 /**
  * @file connection.cpp
- * @brief Implementacion de la clase base @c Connection para sockets TCP en VestaVM.
+ * @brief Implementacion de la clase base @c Connection para sockets TCP en
+ * VestaVM.
  *
  * Implementa el ciclo de vida basico: constructor con descriptor de socket,
  * destructor que llama a @c stop(), y los metodos @c start() y @c stop().
- * Las subclases (@c TLSConnection) sobreescriben @c read_data() y @c write_data().
+ * Las subclases (@c TLSConnection) sobreescriben @c read_data() y @c
+ * write_data().
  */
 #include "net/connection.h"
 #include <iostream>
@@ -68,17 +70,21 @@ void Connection::handle() {
 
 int Connection::read_data(std::vector<uint8_t> &buffer) {
 #ifdef _WIN32
-    return recv(socket_fd, reinterpret_cast<char *>(buffer.data()), static_cast<int>(buffer.size()), 0);
+    return recv(socket_fd, reinterpret_cast<char *>(buffer.data()),
+                static_cast<int>(buffer.size()), 0);
 #else
-    return recv(socket_fd, reinterpret_cast<char*>(buffer.data()), buffer.size(), 0);
+    return recv(socket_fd, reinterpret_cast<char *>(buffer.data()),
+                buffer.size(), 0);
 #endif
 }
 
 int Connection::write_data(const std::vector<uint8_t> &buffer) {
 #ifdef _WIN32
-    return send(socket_fd, reinterpret_cast<const char *>(buffer.data()), static_cast<int>(buffer.size()), 0);
+    return send(socket_fd, reinterpret_cast<const char *>(buffer.data()),
+                static_cast<int>(buffer.size()), 0);
 #else
-    return send(socket_fd, reinterpret_cast<const char*>(buffer.data()), buffer.size(), 0);
+    return send(socket_fd, reinterpret_cast<const char *>(buffer.data()),
+                buffer.size(), 0);
 #endif
 }
 
@@ -86,7 +92,7 @@ void Connection::process_request(const std::vector<uint8_t> &data) {
     std::string msg(data.begin(), data.end());
     std::cout << "[Connection] received: " << msg << std::endl;
 
-    std::string          response = "OK\n";
+    std::string response = "OK\n";
     std::vector<uint8_t> resp_bytes(response.begin(), response.end());
     write_data(resp_bytes);
 }

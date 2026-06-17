@@ -44,32 +44,30 @@
 
 namespace ffi {
 
-    /**
-     * @brief Registra una funcion virtual bajo el par @c (lib, name).
-     *
-     * Si ya existe una entrada con el mismo par, se sobreescribe.
-     * Threadsafe (registracion concurrente OK; el caller no necesita
-     * sincronizar).
-     *
-     * @param lib  Nombre de la "lib virtual" (e.g. "vesta_comptime").
-     * @param name Nombre de la funcion (e.g. "static_assert").
-     * @param ptr  Puntero a la implementacion C (typename `uint64_t(*)(...)`).
-     */
-    void register_virtual_fn(const std::string &lib,
-                              const std::string &name,
-                              void              *ptr);
+/**
+ * @brief Registra una funcion virtual bajo el par @c (lib, name).
+ *
+ * Si ya existe una entrada con el mismo par, se sobreescribe.
+ * Threadsafe (registracion concurrente OK; el caller no necesita
+ * sincronizar).
+ *
+ * @param lib  Nombre de la "lib virtual" (e.g. "vesta_comptime").
+ * @param name Nombre de la funcion (e.g. "static_assert").
+ * @param ptr  Puntero a la implementacion C (typename `uint64_t(*)(...)`).
+ */
+void register_virtual_fn(const std::string &lib, const std::string &name,
+                         void *ptr);
 
-    /**
-     * @brief Busca una funcion virtual registrada.
-     *
-     * Lookup O(1) amortizado en hash map global.  Threadsafe.
-     *
-     * @param lib  Nombre de la "lib virtual".
-     * @param name Nombre de la funcion.
-     * @return     Puntero a la fn o @c nullptr si no existe.
-     */
-    void *lookup_virtual_fn(const std::string &lib,
-                             const std::string &name);
+/**
+ * @brief Busca una funcion virtual registrada.
+ *
+ * Lookup O(1) amortizado en hash map global.  Threadsafe.
+ *
+ * @param lib  Nombre de la "lib virtual".
+ * @param name Nombre de la funcion.
+ * @return     Puntero a la fn o @c nullptr si no existe.
+ */
+void *lookup_virtual_fn(const std::string &lib, const std::string &name);
 
 } // namespace ffi
 

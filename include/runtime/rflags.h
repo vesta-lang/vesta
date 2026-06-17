@@ -10,14 +10,15 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
-/**
- * @file rflags.h
- * @brief Registro de flags de la maquina virtual de VestaVM.
- *
- * Define @c RFlags: union que expone los flags SF, ZF, CF, OF, DM
- * tanto como bits individuales (a traves de un bitfield) como valor
- * completo de 64 bits.
- */#ifndef RFLAGS_H
+/**                                                                            \
+ * @file rflags.h                                                              \
+ * @brief Registro de flags de la maquina virtual de VestaVM.                  \
+ *                                                                             \
+ * Define @c RFlags: union que expone los flags SF, ZF, CF, OF, DM             \
+ * tanto como bits individuales (a traves de un bitfield) como valor           \
+ * completo de 64 bits.                                                        \
+ */                                                                            \
+#ifndef RFLAGS_H
 #define RFLAGS_H
 
 #include <cstdint>
@@ -37,20 +38,24 @@
 typedef struct RFlags_t {
     union {
         struct {
-            uint8_t SF: 1; ///< Bandera de signo: 1 si el resultado es negativo
-            uint8_t ZF: 1; ///< Bandera de cero: 1 si el resultado es cero
-            uint8_t CF: 1; ///< Bandera de acarreo: 1 si hubo carry o borrow
-            uint8_t OF: 1; ///< Bandera de desbordamiento: 1 si hubo overflow con signo
-            uint8_t DM: 1; ///< Bandera de modo distribuido: 1 activa semantica distribuida
-        } bits; ///< Acceso individual a cada bandera
+            uint8_t SF : 1; ///< Bandera de signo: 1 si el resultado es negativo
+            uint8_t ZF : 1; ///< Bandera de cero: 1 si el resultado es cero
+            uint8_t CF : 1; ///< Bandera de acarreo: 1 si hubo carry o borrow
+            uint8_t OF : 1; ///< Bandera de desbordamiento: 1 si hubo overflow
+                            ///< con signo
+            uint8_t DM : 1; ///< Bandera de modo distribuido: 1 activa semantica
+                            ///< distribuida
+        } bits;             ///< Acceso individual a cada bandera
 
-        uint64_t raw; ///< Acceso directo al valor entero de 64 bits de todas las banderas
+        uint64_t raw; ///< Acceso directo al valor entero de 64 bits de todas
+                      ///< las banderas
     };
 } RFlags_t;
 
 /**
  * @defgroup COND_macros Macros de condicion sobre RFlags_t
- * @brief Evaluan combinaciones de banderas para implementar ramas condicionales.
+ * @brief Evaluan combinaciones de banderas para implementar ramas
+ * condicionales.
  *
  * Cada macro recibe el campo bits del RFlags_t y devuelve una expresion
  * booleana que refleja la condicion aritmetica correspondiente.

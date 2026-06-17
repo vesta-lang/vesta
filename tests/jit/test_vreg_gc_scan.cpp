@@ -40,13 +40,18 @@
 using namespace jit;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(cond, msg)                                                    \
-    do { ++g_checks; if (!(cond)) { ++g_fails;                              \
-        std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__); } } while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fails;                                                         \
+            std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
+    } while (0)
 
 /* Resultados del scan. */
 struct ScanResults {
-    std::vector<uint64_t>       values;
+    std::vector<uint64_t> values;
     std::vector<StackmapGcKind> kinds;
 };
 extern "C" void scan_cb(void *ctx, uint64_t value, StackmapGcKind kind,
@@ -57,13 +62,21 @@ extern "C" void scan_cb(void *ctx, uint64_t value, StackmapGcKind kind,
 }
 
 /* Helpers IR. */
-static ir::IrInstr bin(ir::IrOp op, ir::IrValueId d, ir::IrValueId a, ir::IrValueId b) {
-    ir::IrInstr i; i.op = op; i.type = ir::IrType::I64; i.dst = d;
-    i.operands = { a, b }; return i;
+static ir::IrInstr bin(ir::IrOp op, ir::IrValueId d, ir::IrValueId a,
+                       ir::IrValueId b) {
+    ir::IrInstr i;
+    i.op = op;
+    i.type = ir::IrType::I64;
+    i.dst = d;
+    i.operands = {a, b};
+    return i;
 }
 static ir::IrInstr ret1(ir::IrValueId v) {
-    ir::IrInstr i; i.op = ir::IrOp::RET; i.type = ir::IrType::I64;
-    i.operands = { v }; return i;
+    ir::IrInstr i;
+    i.op = ir::IrOp::RET;
+    i.type = ir::IrType::I64;
+    i.operands = {v};
+    return i;
 }
 
 /* ===================================================================== */
@@ -75,25 +88,30 @@ static void test_gc_root_found_by_scan() {
     /* 1. gcf(this_gc, x) = g() + this.  `this` (GC host_ptr) vive a traves
      *    del call -> el allocator lo spillea + emite stackmap. */
     ir::IrFunction fn;
-    fn.name = "gcf"; fn.ret_type = ir::IrType::I64;
+    fn.name = "gcf";
+    fn.ret_type = ir::IrType::I64;
     auto I64 = ir::IrType::I64;
     ir::IrValueId thisp = fn.new_value(ir::IrType::PTR);
-    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64), sum = fn.new_value(I64);
+    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64),
+                  sum = fn.new_value(I64);
     fn.values[thisp].is_gc_object = true;
-    fn.values[thisp].is_host_ptr  = true;   // -> HOSTPTR
-    fn.params = { thisp, x };
+    fn.values[thisp].is_host_ptr = true; // -> HOSTPTR
+    fn.params = {thisp, x};
     ir::IrBlockId bb = fn.new_block("e");
     {
-        ir::IrInstr c; c.op = ir::IrOp::CALL; c.type = I64; c.dst = r;
+        ir::IrInstr c;
+        c.op = ir::IrOp::CALL;
+        c.type = I64;
+        c.dst = r;
         c.func_name = "g";
         fn.append(bb, c);
     }
-    fn.append(bb, bin(ir::IrOp::ADD, sum, r, thisp));  // this vivo a traves
+    fn.append(bb, bin(ir::IrOp::ADD, sum, r, thisp)); // this vivo a traves
     fn.append(bb, ret1(sum));
 
     /* Resolver dummy: el codigo NO se ejecuta (solo simulamos su frame). */
     CallResolver resolver = [](const std::string &n) -> uint64_t {
-        return n == "g" ? 0x100000ULL : 0;   // direccion ficticia
+        return n == "g" ? 0x100000ULL : 0; // direccion ficticia
     };
 
     /* 2. Pipeline -> pf con stackmaps reales. */
@@ -119,18 +137,20 @@ static void test_gc_root_found_by_scan() {
     if (pf.stackmaps.size() != 1) return;
     CHECK(pf.stackmaps[0].slots.size() == 1, "1 GC root en el stackmap");
     if (pf.stackmaps[0].slots.size() != 1) return;
-    const int16_t       gc_off = pf.stackmaps[0].slots[0].rbp_offset;
-    const StackmapGcKind kind  = pf.stackmaps[0].slots[0].gc_kind;
-    const uint32_t       pc_off = pf.stackmaps[0].pc_offset;
+    const int16_t gc_off = pf.stackmaps[0].slots[0].rbp_offset;
+    const StackmapGcKind kind = pf.stackmaps[0].slots[0].gc_kind;
+    const uint32_t pc_off = pf.stackmaps[0].pc_offset;
     CHECK(kind == StackmapGcKind::HOSTPTR, "kind HOSTPTR");
     CHECK(pc_off > 0 && pc_off < bytes.size(), "pc_offset dentro del codigo");
 
     /* 5. Registrar la funcion en el JitRegistry (rango + stackmaps). */
     JitRegistry &reg = JitRegistry::instance();
     reg.clear();
-    std::vector<Stackmap> sms = pf.stackmaps;   // copia (register_function la mueve)
+    std::vector<Stackmap> sms =
+        pf.stackmaps; // copia (register_function la mueve)
     reg.register_function(code, code + bytes.size(), std::move(sms),
-                          static_cast<uint32_t>(8u * ra.num_spill_slots), "gcf");
+                          static_cast<uint32_t>(8u * ra.num_spill_slots),
+                          "gcf");
 
     /* 6. Simular el frame de gcf en el stack.  Layout (memoria del test):
      *      [rbp + gc_off]  <- el GC root (gc_off negativo)
@@ -142,16 +162,16 @@ static void test_gc_root_found_by_scan() {
     alignas(16) uint64_t stackbuf[64];
     std::memset(stackbuf, 0, sizeof(stackbuf));
     uint8_t *base = reinterpret_cast<uint8_t *>(stackbuf);
-    uint8_t *rbp  = base + 8 * 48;              // RBP alto en el buffer
-    *reinterpret_cast<uint64_t *>(rbp)       = 0ULL;   // saved RBP -> termina
-    *reinterpret_cast<uint64_t *>(rbp + 8)   =
-        reinterpret_cast<uintptr_t>(code + pc_off + 1);  // return RIP
+    uint8_t *rbp = base + 8 * 48;              // RBP alto en el buffer
+    *reinterpret_cast<uint64_t *>(rbp) = 0ULL; // saved RBP -> termina
+    *reinterpret_cast<uint64_t *>(rbp + 8) =
+        reinterpret_cast<uintptr_t>(code + pc_off + 1); // return RIP
     /* El GC root EN EL OFFSET que el commit 6 dijo. */
     *reinterpret_cast<uint64_t *>(rbp + gc_off) = GC_VALUE;
 
     /* 7. Ejecutar el walker (lo que el GC real hace). */
     ScanResults results;
-    const uint8_t *low  = base;
+    const uint8_t *low = base;
     const uint8_t *high = base + sizeof(stackbuf);
     JitScanStats stats = scan_jit_frames(scan_cb, &results, rbp, low, high);
 
@@ -160,20 +180,23 @@ static void test_gc_root_found_by_scan() {
     CHECK(results.values.size() == 1, "1 GC root escaneado");
     if (results.values.size() == 1) {
         CHECK(results.values[0] == GC_VALUE,
-              "el GC leyo el host_ptr correcto del slot (offset del stackmap OK)");
-        CHECK(results.kinds[0] == StackmapGcKind::HOSTPTR, "kind HOSTPTR en el scan");
+              "el GC leyo el host_ptr correcto del slot (offset del stackmap "
+              "OK)");
+        CHECK(results.kinds[0] == StackmapGcKind::HOSTPTR,
+              "kind HOSTPTR en el scan");
         if (results.values[0] != GC_VALUE)
             std::printf("    leyo 0x%llx, esperado 0x%llx (gc_off=%d)\n",
                         (unsigned long long)results.values[0],
                         (unsigned long long)GC_VALUE, (int)gc_off);
     }
-    asm volatile("" : : "r"(&cc) : "memory");  // cc viva
+    asm volatile("" : : "r"(&cc) : "memory"); // cc viva
     reg.clear();
 }
 
 int main() {
     std::setbuf(stdout, nullptr);
-    std::printf("=== test_vreg_gc_scan (Phase D.7 commit 6: stackmap <-> GC) ===\n");
+    std::printf(
+        "=== test_vreg_gc_scan (Phase D.7 commit 6: stackmap <-> GC) ===\n");
     test_gc_root_found_by_scan();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

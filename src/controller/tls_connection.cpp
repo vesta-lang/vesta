@@ -1,12 +1,12 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * 
+ *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
@@ -39,7 +39,7 @@ void TLSConnection::stop() {
     running.store(false);
 
     if (tls_enabled && ssl) {
-        SSL_shutdown(ssl);  // cierra TLS correctamente
+        SSL_shutdown(ssl); // cierra TLS correctamente
         SSL_free(ssl);
         ssl = nullptr;
     }
@@ -51,13 +51,15 @@ void TLSConnection::stop() {
 int TLSConnection::read_data(std::vector<uint8_t> &buffer) {
     size_t total = 0;
     while (total < buffer.size()) {
-        int n = SSL_read(ssl, buffer.data() + total, static_cast<int>(buffer.size() - total));
+        int n = SSL_read(ssl, buffer.data() + total,
+                         static_cast<int>(buffer.size() - total));
         if (n <= 0) {
             int err = SSL_get_error(ssl, n);
             if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
                 continue; // espera mas datos
             }
-            return total > 0 ? static_cast<int>(total) : -1; // error o conexion cerrada
+            return total > 0 ? static_cast<int>(total)
+                             : -1; // error o conexion cerrada
         }
         total += n;
     }
@@ -68,7 +70,8 @@ int TLSConnection::read_data(std::vector<uint8_t> &buffer) {
 int TLSConnection::write_data(const std::vector<uint8_t> &buffer) {
     size_t total = 0;
     while (total < buffer.size()) {
-        int n = SSL_write(ssl, buffer.data() + total, static_cast<int>(buffer.size() - total));
+        int n = SSL_write(ssl, buffer.data() + total,
+                          static_cast<int>(buffer.size() - total));
         if (n <= 0) {
             int err = SSL_get_error(ssl, n);
             if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {

@@ -1,5 +1,5 @@
 /*
-* VestaVM - Maquina Virtual Distribuida
+ * VestaVM - Maquina Virtual Distribuida
  *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
@@ -31,9 +31,7 @@ ThreadPool::ThreadPool(size_t n) {
     workers_.reserve(n);
     /* lanzar cada hilo worker apuntando a worker_loop() */
     for (size_t i = 0; i < n; ++i) {
-        workers_.emplace_back([this] {
-            this->worker_loop();
-        });
+        workers_.emplace_back([this] { this->worker_loop(); });
     }
 }
 
@@ -50,7 +48,7 @@ void ThreadPool::shutdown() {
     wake_flag_.store(1, std::memory_order_release);
 
 #ifdef WIN32
-    WakeByAddressAll(&wake_flag_);      /* Windows: despertar todos */
+    WakeByAddressAll(&wake_flag_); /* Windows: despertar todos */
 #else
     futex_wake(&wake_flag_, workers_.size()); /* Linux: despertar N hilos */
 #endif
@@ -77,8 +75,10 @@ void ThreadPool::worker_loop() {
             /* comprobar cola SIN dormir, con mutex */
             {
                 std::lock_guard lk(tasks_m_);
-                if (!tasks_.empty()) break;    /* hay tarea: salir del bucle interno */
-                if (stopping_.load()) return;  /* pool parando: terminar el hilo */
+                if (!tasks_.empty())
+                    break; /* hay tarea: salir del bucle interno */
+                if (stopping_.load())
+                    return; /* pool parando: terminar el hilo */
             }
 
             /* resetear flag antes de dormir para no perder señales */
@@ -100,6 +100,8 @@ void ThreadPool::worker_loop() {
             }
         }
 
-        if (task) task(); /* ejecutar la tarea; las excepciones se capturan si usa packaged_task */
+        if (task)
+            task(); /* ejecutar la tarea; las excepciones se capturan si usa
+                       packaged_task */
     }
 }

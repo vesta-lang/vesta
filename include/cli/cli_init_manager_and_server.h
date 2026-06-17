@@ -16,8 +16,9 @@
  *
  * Define:
  *   - ManageVMSnapshot: vista ligera (copiable) del estado de un ManageVM.
- *   - ManagerOfManagersAndServer: contenedor thread-safe de instancias ManageVM con
- *     operaciones de alta nivel para crear, consultar, modificar y eliminar gestores.
+ *   - ManagerOfManagersAndServer: contenedor thread-safe de instancias ManageVM
+ * con operaciones de alta nivel para crear, consultar, modificar y eliminar
+ * gestores.
  */
 
 #ifndef CLI_INIT_MANAGER_AND_SERVER_H
@@ -40,20 +41,23 @@
  */
 struct ManageVMSnapshot {
     std::string name_manager; ///< Nombre identificativo del gestor
-    size_t      vm_count;     ///< Numero de instancias VM activas en el momento de la instantanea
-    bool        has_listener; ///< true si el gestor tiene un listener TCP activo
+    size_t vm_count;   ///< Numero de instancias VM activas en el momento de la
+                       ///< instantanea
+    bool has_listener; ///< true si el gestor tiene un listener TCP activo
 };
 
 /**
  * @brief Contenedor thread-safe de instancias ManageVM gestionadas por la CLI.
  *
- * Permite a la CLI crear, consultar, modificar y eliminar gestores ManageVM de forma
- * concurrente.  Cada gestor recibe un ID unico monotonamente creciente.  El acceso
- * al mapa interno esta protegido por un mutex para evitar carreras de datos.
+ * Permite a la CLI crear, consultar, modificar y eliminar gestores ManageVM de
+ * forma concurrente.  Cada gestor recibe un ID unico monotonamente creciente.
+ * El acceso al mapa interno esta protegido por un mutex para evitar carreras de
+ * datos.
  *
  * Operaciones publicas seguras para llamadas concurrentes:
  *   - add_manager()       : crea un nuevo gestor y devuelve su puntero.
- *   - snapshot()          : devuelve una lista de (id, ManageVMSnapshot) copiable.
+ *   - snapshot()          : devuelve una lista de (id, ManageVMSnapshot)
+ * copiable.
  *   - size_managers()     : devuelve el numero de gestores actuales.
  *   - list_ids()          : devuelve los IDs activos.
  *   - remove_manager()    : elimina un gestor por ID.
@@ -66,22 +70,24 @@ class ManagerOfManagersAndServer {
     /**
      * @brief Mutex que protege 'managers_map'.
      *
-     * La CLI puede invocar operaciones desde multiples hilos (worker de comandos,
-     * callbacks de red, etc.) por lo que el acceso al mapa debe serializar.
+     * La CLI puede invocar operaciones desde multiples hilos (worker de
+     * comandos, callbacks de red, etc.) por lo que el acceso al mapa debe
+     * serializar.
      */
     mutable std::mutex mtx;
 
     /// Mapa de ID a instancia ManageVM (propiedad exclusiva via unique_ptr)
-    std::unordered_map<size_t, std::unique_ptr<runtime::ManageVM> > managers_map;
+    std::unordered_map<size_t, std::unique_ptr<runtime::ManageVM>> managers_map;
 
     /// Contador atomico para asignar IDs unicos sin necesidad del mutex
     std::atomic<size_t> next_id{1};
 
     /// No copiable ni movible: contiene mutex y unique_ptr
     ManagerOfManagersAndServer(const ManagerOfManagersAndServer &) = delete;
-    ManagerOfManagersAndServer &operator=(const ManagerOfManagersAndServer &) = delete;
+    ManagerOfManagersAndServer &
+    operator=(const ManagerOfManagersAndServer &) = delete;
 
-public:
+  public:
     /**
      * @brief Construye el contenedor vacio.
      */
@@ -93,27 +99,33 @@ public:
     ~ManagerOfManagersAndServer() = default;
 
     /**
-     * @brief Crea un nuevo ManageVM con el nombre y listener indicados y lo registra.
+     * @brief Crea un nuevo ManageVM con el nombre y listener indicados y lo
+     * registra.
      *
-     * Construye internamente el unique_ptr<ManageVM>, le asigna un ID unico y lo
-     * inserta en el mapa.  Devuelve un puntero directo al objeto para uso inmediato;
-     * la propiedad permanece en el contenedor.
+     * Construye internamente el unique_ptr<ManageVM>, le asigna un ID unico y
+     * lo inserta en el mapa.  Devuelve un puntero directo al objeto para uso
+     * inmediato; la propiedad permanece en el contenedor.
      *
-     * @param name     Nombre identificativo del gestor (para logs y diagnostico).
-     * @param listener Listener TCP opcional (puede ser nullptr para modo local).
-     * @return Puntero al ManageVM recien creado (valido mientras no se elimine del contenedor).
+     * @param name     Nombre identificativo del gestor (para logs y
+     * diagnostico).
+     * @param listener Listener TCP opcional (puede ser nullptr para modo
+     * local).
+     * @return Puntero al ManageVM recien creado (valido mientras no se elimine
+     * del contenedor).
      */
-    runtime::ManageVM* add_manager(const std::string& name, runtime::ManagerTCPListener *listener);
+    runtime::ManageVM *add_manager(const std::string &name,
+                                   runtime::ManagerTCPListener *listener);
 
     /**
      * @brief Devuelve una lista de instantaneas de todos los gestores activos.
      *
-     * Las instantaneas son copias ligeras (ManageVMSnapshot) seguras para devolver
-     * fuera del mutex.
+     * Las instantaneas son copias ligeras (ManageVMSnapshot) seguras para
+     * devolver fuera del mutex.
      *
-     * @return Vector de pares (id, ManageVMSnapshot) con el estado actual de cada gestor.
+     * @return Vector de pares (id, ManageVMSnapshot) con el estado actual de
+     * cada gestor.
      */
-    std::vector<std::pair<size_t, ManageVMSnapshot> > snapshot();
+    std::vector<std::pair<size_t, ManageVMSnapshot>> snapshot();
 
     /**
      * @brief Devuelve el numero de gestores actualmente registrados.
@@ -159,21 +171,22 @@ public:
     bool replace_manager(size_t id, std::unique_ptr<runtime::ManageVM> vm);
 
     /**
-     * @brief Ejecuta una funcion sobre el gestor identificado por @p id bajo el mutex.
+     * @brief Ejecuta una funcion sobre el gestor identificado por @p id bajo el
+     * mutex.
      *
      * Permite modificar el estado interno de un ManageVM de forma thread-safe.
      * La funcion recibe una referencia directa al objeto almacenado en el mapa.
      *
-     * @warning El callable se ejecuta con el mutex adquirido: debe ser rapido y no
-     *          realizar operaciones bloqueantes externas para evitar deadlocks.
+     * @warning El callable se ejecuta con el mutex adquirido: debe ser rapido y
+     * no realizar operaciones bloqueantes externas para evitar deadlocks.
      *
      * @tparam Func Callable con la firma: void(runtime::ManageVM&)
      * @param id ID del gestor a modificar.
      * @param fn Funcion que recibe la referencia al gestor y puede modificarlo.
-     * @return true si el gestor existia y la funcion fue ejecutada; false en caso contrario.
+     * @return true si el gestor existia y la funcion fue ejecutada; false en
+     * caso contrario.
      */
-    template<typename Func>
-    bool modify_manager(size_t id, Func &&fn) {
+    template <typename Func> bool modify_manager(size_t id, Func &&fn) {
         std::lock_guard lk(mtx);
         auto it = managers_map.find(id);
         if (it == managers_map.end()) return false;
@@ -182,28 +195,30 @@ public:
     }
 
     /**
-     * @brief Busca el primer gestor que cumpla el predicado y devuelve su ID y una instantanea.
+     * @brief Busca el primer gestor que cumpla el predicado y devuelve su ID y
+     * una instantanea.
      *
-     * Itera el mapa bajo el mutex evaluando @p pred sobre cada ManageVM.  Al encontrar
-     * uno que cumpla el predicado construye una ManageVMSnapshot copiable y retorna.
+     * Itera el mapa bajo el mutex evaluando @p pred sobre cada ManageVM.  Al
+     * encontrar uno que cumpla el predicado construye una ManageVMSnapshot
+     * copiable y retorna.
      *
-     * @tparam Pred Callable con la firma: bool(const std::unique_ptr<runtime::ManageVM>&)
+     * @tparam Pred Callable con la firma: bool(const
+     * std::unique_ptr<runtime::ManageVM>&)
      * @param pred Predicado de busqueda.
-     * @return std::optional con (id, ManageVMSnapshot); std::nullopt si ningun gestor cumple.
+     * @return std::optional con (id, ManageVMSnapshot); std::nullopt si ningun
+     * gestor cumple.
      */
-    template<typename Pred>
-    std::optional<std::pair<size_t, ManageVMSnapshot> >
+    template <typename Pred>
+    std::optional<std::pair<size_t, ManageVMSnapshot>>
     find_if(Pred &&pred) const {
         std::lock_guard<std::mutex> lk(mtx);
 
-        for (const auto &[id, mgr]: managers_map) {
+        for (const auto &[id, mgr] : managers_map) {
             if (pred(mgr)) {
-                // construir instantanea ligera sin exponer la referencia interna
-                ManageVMSnapshot snap{
-                    mgr->name_manager,
-                    mgr->vm_count(),
-                    mgr->listener != nullptr
-                };
+                // construir instantanea ligera sin exponer la referencia
+                // interna
+                ManageVMSnapshot snap{mgr->name_manager, mgr->vm_count(),
+                                      mgr->listener != nullptr};
                 return std::make_pair(id, std::move(snap));
             }
         }

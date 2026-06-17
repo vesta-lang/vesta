@@ -47,28 +47,36 @@ namespace ast = vex::ast;
 static int g_passed = 0;
 static int g_failed = 0;
 
-#define VEX_ASSERT(cond, msg) do {                                          \
-    if (!(cond)) {                                                          \
-        std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__, msg); \
-        ++g_failed;                                                         \
-    } else { ++g_passed; }                                                  \
-} while (0)
+#define VEX_ASSERT(cond, msg)                                                  \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
+                         msg);                                                 \
+            ++g_failed;                                                        \
+        } else {                                                               \
+            ++g_passed;                                                        \
+        }                                                                      \
+    } while (0)
 
-#define VEX_ASSERT_EQ(a, b, msg) do {                                                       \
-    auto av = (a); auto bv = (b);                                                           \
-    if (!(av == bv)) {                                                                      \
-        std::fprintf(stderr, "FAIL [%s:%d] %s (got %lld, expected %lld)\n",                 \
-                     __FILE__, __LINE__, msg,                                               \
-                     (long long)av, (long long)bv);                                         \
-        ++g_failed;                                                                         \
-    } else { ++g_passed; }                                                                  \
-} while (0)
+#define VEX_ASSERT_EQ(a, b, msg)                                               \
+    do {                                                                       \
+        auto av = (a);                                                         \
+        auto bv = (b);                                                         \
+        if (!(av == bv)) {                                                     \
+            std::fprintf(                                                      \
+                stderr, "FAIL [%s:%d] %s (got %lld, expected %lld)\n",         \
+                __FILE__, __LINE__, msg, (long long)av, (long long)bv);        \
+            ++g_failed;                                                        \
+        } else {                                                               \
+            ++g_passed;                                                        \
+        }                                                                      \
+    } while (0)
 
 struct LowerOut {
     Diagnostics diags;
     std::unique_ptr<ast::ModuleNode> mod;
     ir::IrModule irmod;
-    bool         ok = false;
+    bool ok = false;
 };
 
 static LowerOut compile_to_ir(const std::string &src) {
@@ -101,23 +109,26 @@ static void test_minimal_main_lowers() {
     const auto &b = fn.blocks[0];
     // El nombre del bloque incluye un sufijo "_<id>" garantizado unico
     // (necesario por el bug de etiquetas duplicadas en loops anidados).
-    VEX_ASSERT(b.name.compare(0, 5, "entry") == 0, "bloque entry (con sufijo unico)");
+    VEX_ASSERT(b.name.compare(0, 5, "entry") == 0,
+               "bloque entry (con sufijo unico)");
     VEX_ASSERT(b.instrs.size() >= (size_t)2, "al menos CONST y RET");
     // El ultimo instr debe ser RET.
     VEX_ASSERT(b.instrs.back().op == ir::IrOp::RET, "termina en RET");
 }
 
 static void test_add_function_lowers() {
-    auto out = compile_to_ir(
-        "i32 add(i32 a, i32 b) { return a + b; }\n"
-        "i32 main() { return add(40, 2); }\n");
+    auto out = compile_to_ir("i32 add(i32 a, i32 b) { return a + b; }\n"
+                             "i32 main() { return add(40, 2); }\n");
     VEX_ASSERT(out.ok, "add+main lower ok");
     VEX_ASSERT_EQ(out.irmod.functions.size(), (size_t)2, "dos funciones");
 
     // Buscar la funcion 'add'.
     const ir::IrFunction *add = nullptr;
     for (const auto &f : out.irmod.functions) {
-        if (f.name == "add") { add = &f; break; }
+        if (f.name == "add") {
+            add = &f;
+            break;
+        }
     }
     VEX_ASSERT(add != nullptr, "encontrada add");
     VEX_ASSERT_EQ(add->params.size(), (size_t)2, "add tiene 2 params");
@@ -135,7 +146,10 @@ static void test_add_function_lowers() {
     // main debe tener una instruccion CALL a 'add'.
     const ir::IrFunction *m = nullptr;
     for (const auto &f : out.irmod.functions) {
-        if (f.name == "main") { m = &f; break; }
+        if (f.name == "main") {
+            m = &f;
+            break;
+        }
     }
     VEX_ASSERT(m != nullptr, "encontrada main");
     bool found_call = false;
@@ -143,7 +157,8 @@ static void test_add_function_lowers() {
         for (const auto &ins : b.instrs) {
             if (ins.op == ir::IrOp::CALL && ins.func_name == "add") {
                 found_call = true;
-                VEX_ASSERT_EQ(ins.operands.size(), (size_t)2, "call con 2 args");
+                VEX_ASSERT_EQ(ins.operands.size(), (size_t)2,
+                              "call con 2 args");
             }
         }
     }
@@ -151,11 +166,10 @@ static void test_add_function_lowers() {
 }
 
 static void test_if_else_cfg() {
-    auto out = compile_to_ir(
-        "i32 absval(i32 x) {\n"
-        "    if (x < 0) return 0 - x;\n"
-        "    else       return x;\n"
-        "}\n");
+    auto out = compile_to_ir("i32 absval(i32 x) {\n"
+                             "    if (x < 0) return 0 - x;\n"
+                             "    else       return x;\n"
+                             "}\n");
     VEX_ASSERT(out.ok, "absval lower ok");
     const auto &fn = out.irmod.functions[0];
 
@@ -167,23 +181,27 @@ static void test_if_else_cfg() {
     };
     bool has_then = false, has_else = false, has_merge = false;
     for (const auto &b : fn.blocks) {
-        if (has_prefix(b.name, "if_then"))  has_then  = true;
-        if (has_prefix(b.name, "if_else"))  has_else  = true;
+        if (has_prefix(b.name, "if_then")) has_then = true;
+        if (has_prefix(b.name, "if_else")) has_else = true;
         if (has_prefix(b.name, "if_merge")) has_merge = true;
     }
-    VEX_ASSERT(has_then,  "bloque if_then presente");
-    VEX_ASSERT(has_else,  "bloque if_else presente");
+    VEX_ASSERT(has_then, "bloque if_then presente");
+    VEX_ASSERT(has_else, "bloque if_else presente");
     VEX_ASSERT(has_merge, "bloque if_merge presente");
 
     // El bloque entry debe terminar con BR_COND.
     const auto &entry = fn.blocks[0];
     VEX_ASSERT(has_prefix(entry.name, "entry"), "entry block primero");
-    VEX_ASSERT(!entry.instrs.empty() && entry.instrs.back().op == ir::IrOp::BR_COND,
+    VEX_ASSERT(!entry.instrs.empty() &&
+                   entry.instrs.back().op == ir::IrOp::BR_COND,
                "entry termina con BR_COND");
     // Debe haber un CMP_LT antes del BR_COND.
     bool found_cmp = false;
     for (const auto &ins : entry.instrs) {
-        if (ins.op == ir::IrOp::CMP_LT) { found_cmp = true; break; }
+        if (ins.op == ir::IrOp::CMP_LT) {
+            found_cmp = true;
+            break;
+        }
     }
     VEX_ASSERT(found_cmp, "CMP_LT presente en entry");
 }
@@ -200,7 +218,10 @@ static void test_recursion() {
     // Buscar la llamada recursiva fact->fact.
     const ir::IrFunction *fact = nullptr;
     for (const auto &f : out.irmod.functions) {
-        if (f.name == "fact") { fact = &f; break; }
+        if (f.name == "fact") {
+            fact = &f;
+            break;
+        }
     }
     VEX_ASSERT(fact != nullptr, "encontrada fact");
 
@@ -217,10 +238,9 @@ static void test_recursion() {
 
 static void test_multiple_types_aliases() {
     // Dos aliases para u32: uint32_t y u32, deben generar el mismo IrType.
-    auto out = compile_to_ir(
-        "uint32_t f1() { return 1; }\n"
-        "u32 f2() { return 2; }\n"
-        "u32 main() { return f1() + f2(); }\n");
+    auto out = compile_to_ir("uint32_t f1() { return 1; }\n"
+                             "u32 f2() { return 2; }\n"
+                             "u32 main() { return f1() + f2(); }\n");
     VEX_ASSERT(out.ok, "aliases lower ok");
     for (const auto &f : out.irmod.functions) {
         VEX_ASSERT(f.ret_type == ir::IrType::U32, "ret_type U32 para todas");
@@ -229,12 +249,11 @@ static void test_multiple_types_aliases() {
 
 static void test_while_supported_a2() {
     // Desde A.2 el while se baja con phi-construction Braun-style.
-    auto out = compile_to_ir(
-        "i32 main() {\n"
-        "    i32 i = 0;\n"
-        "    while (i < 3) { i = i + 1; }\n"
-        "    return i;\n"
-        "}\n");
+    auto out = compile_to_ir("i32 main() {\n"
+                             "    i32 i = 0;\n"
+                             "    while (i < 3) { i = i + 1; }\n"
+                             "    return i;\n"
+                             "}\n");
     VEX_ASSERT(out.ok, "while soportado en A.2");
 
     // Verificar que se genero al menos un PHI node.
@@ -242,7 +261,10 @@ static void test_while_supported_a2() {
     for (const auto &fn : out.irmod.functions) {
         for (const auto &b : fn.blocks) {
             for (const auto &ins : b.instrs) {
-                if (ins.op == ir::IrOp::PHI) { has_phi = true; break; }
+                if (ins.op == ir::IrOp::PHI) {
+                    has_phi = true;
+                    break;
+                }
             }
         }
     }
@@ -251,12 +273,12 @@ static void test_while_supported_a2() {
 
 static void test_for_supported_a2() {
     // for(init; cond; step) body desazucara internamente a while.
-    auto out = compile_to_ir(
-        "i32 main() {\n"
-        "    i32 sum = 0;\n"
-        "    for (i32 i = 0; i < 5; i++) { sum = sum + i; }\n"
-        "    return sum;\n"
-        "}\n");
+    auto out =
+        compile_to_ir("i32 main() {\n"
+                      "    i32 sum = 0;\n"
+                      "    for (i32 i = 0; i < 5; i++) { sum = sum + i; }\n"
+                      "    return sum;\n"
+                      "}\n");
     VEX_ASSERT(out.ok, "for soportado en A.2");
 }
 
@@ -265,26 +287,24 @@ static void test_assignment_supported_a2() {
     // baja correctamente; el lowering Braun-style anota el nuevo IrValueId
     // como "current value de x" en el scope.  Un return posterior leera ese
     // ultimo valor automaticamente.
-    auto out = compile_to_ir(
-        "i32 main() {\n"
-        "    i32 x = 1;\n"
-        "    x = 2;\n"
-        "    return x;\n"
-        "}\n");
+    auto out = compile_to_ir("i32 main() {\n"
+                             "    i32 x = 1;\n"
+                             "    x = 2;\n"
+                             "    return x;\n"
+                             "}\n");
     VEX_ASSERT(out.ok, "asignacion soportada en A.2");
 }
 
 static void test_compound_assign_supported_a2() {
     // Las asignaciones compuestas (+=, -=, etc.) se reescriben como
     // x = x op rhs y reusan el mismo emisor binop que lower_binary.
-    auto out = compile_to_ir(
-        "i32 main() {\n"
-        "    i32 acc = 1;\n"
-        "    acc += 2;\n"
-        "    acc *= 3;\n"
-        "    acc -= 1;\n"
-        "    return acc;\n"
-        "}\n");
+    auto out = compile_to_ir("i32 main() {\n"
+                             "    i32 acc = 1;\n"
+                             "    acc += 2;\n"
+                             "    acc *= 3;\n"
+                             "    acc -= 1;\n"
+                             "    return acc;\n"
+                             "}\n");
     VEX_ASSERT(out.ok, "compound assigns soportados en A.2");
 }
 
@@ -292,14 +312,13 @@ static void test_increment_supported_a2() {
     // ++ / -- requieren leer la variable, sumar/restar 1 y reescribir.
     // En A.2 solo se acepta cuando el operando es un IdentExpr; punteros
     // y campos llegan en hitos posteriores.
-    auto out = compile_to_ir(
-        "i32 main() {\n"
-        "    i32 x = 5;\n"
-        "    x++;\n"
-        "    ++x;\n"
-        "    x--;\n"
-        "    return x;\n"
-        "}\n");
+    auto out = compile_to_ir("i32 main() {\n"
+                             "    i32 x = 5;\n"
+                             "    x++;\n"
+                             "    ++x;\n"
+                             "    x--;\n"
+                             "    return x;\n"
+                             "}\n");
     VEX_ASSERT(out.ok, "++/-- soportados en A.2");
 }
 

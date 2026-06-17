@@ -23,15 +23,17 @@
  *  6. Crear un @c ProcessVM con el PC inicializado y los labels cargados.
  *
  * Macros de error:
- *  - @c LOADER_THROW(kind, msg)          : lanza un @c LoaderError directamente.
- *  - @c LOADER_THROW_AT(kind, msg, rdr)  : incluye el offset del reader en el mensaje.
+ *  - @c LOADER_THROW(kind, msg)          : lanza un @c LoaderError
+ * directamente.
+ *  - @c LOADER_THROW_AT(kind, msg, rdr)  : incluye el offset del reader en el
+ * mensaje.
  *
  * Flujo tipico:
  * @code
  *   runtime::ManageVM mgr;
  *   loader::Loader ldr(mgr);
- *   runtime::ProcessVM *proc = ldr.load_executable(vm_instance, "program.velb");
- *   vm_instance.make_ready(proc->pid);
+ *   runtime::ProcessVM *proc = ldr.load_executable(vm_instance,
+ * "program.velb"); vm_instance.make_ready(proc->pid);
  * @endcode
  */
 
@@ -40,12 +42,12 @@
 
 #include "runtime/vm_address_space.h"
 #include "loader/oop_types.h"
-#include "loader/sandbox.h"     // loader::Caps + parse_caps + caps_to_string
+#include "loader/sandbox.h" // loader::Caps + parse_caps + caps_to_string
 #include "debug/debug_info.h"
 #include "ir/ssa_ir.h"
 
-#include <cstdint>   // uint8_t, uint32_t
-#include <cstddef>   // size_t
+#include <cstdint> // uint8_t, uint32_t
+#include <cstddef> // size_t
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -60,650 +62,661 @@
 #include "runtime/runtime.h"
 
 namespace runtime {
-    class ManageVM;
+class ManageVM;
 }
 
 #define LOADER_THROW(kind, msg) throw loader::LoaderError(kind, msg)
-#define LOADER_THROW_AT(kind, msg, reader) \
-throw loader::LoaderError(kind, \
-    std::string(msg) + " (offset=" + std::to_string(reader.offset) + ")")
-
+#define LOADER_THROW_AT(kind, msg, reader)                                     \
+    throw loader::LoaderError(kind, std::string(msg) + " (offset=" +           \
+                                        std::to_string(reader.offset) + ")")
 
 namespace loader {
-    using namespace Assembly::Bytecode;
+using namespace Assembly::Bytecode;
 
-    enum class ErrorKind {
-        TruncatedHeader,
-        InvalidFormat,
-        InvalidMagic,
-        InvalidVersion,
-        CorruptedExecutable,
-        NotFoundSpacesAddress
-    };
+enum class ErrorKind {
+    TruncatedHeader,
+    InvalidFormat,
+    InvalidMagic,
+    InvalidVersion,
+    CorruptedExecutable,
+    NotFoundSpacesAddress
+};
 
-    class LoaderError : public std::exception {
-    public:
-        LoaderError(ErrorKind kind, std::string msg)
-            : kind(kind), message(std::move(msg)) {}
+class LoaderError : public std::exception {
+  public:
+    LoaderError(ErrorKind kind, std::string msg)
+        : kind(kind), message(std::move(msg)) {}
 
-        const char *what() const noexcept override {
-            return message.c_str();
-        }
+    const char *what() const noexcept override { return message.c_str(); }
 
-        ErrorKind   kind;
-        std::string message;
-    };
+    ErrorKind kind;
+    std::string message;
+};
 
-    [[noreturn]]
-    inline void throw_error(ErrorKind kind, const std::string &msg) {
-        throw LoaderError(kind, msg);
-    }
+[[noreturn]]
+inline void throw_error(ErrorKind kind, const std::string &msg) {
+    throw LoaderError(kind, msg);
+}
 
-    [[noreturn]]
-    inline void throw_error_at(ErrorKind kind, const std::string &msg, const ByteReader &reader) {
-        throw LoaderError(
-            kind,
-            msg + " (offset=" + std::to_string(reader.offset) + ")"
-        );
-    }
+[[noreturn]]
+inline void throw_error_at(ErrorKind kind, const std::string &msg,
+                           const ByteReader &reader) {
+    throw LoaderError(kind,
+                      msg + " (offset=" + std::to_string(reader.offset) + ")");
+}
 
-    // ClassInfo, MethodInfo, FieldInfo, HandlerException, FrameHeader, ObjectHeader,
-    // stringx, FieldAccess, FieldKind y constantes OBJ_FLAG_*/CLASS_FLAG_*/METHOD_FLAG_*
-    // estan definidos en oop_types.h (incluido arriba), dentro de namespace loader.
+// ClassInfo, MethodInfo, FieldInfo, HandlerException, FrameHeader,
+// ObjectHeader, stringx, FieldAccess, FieldKind y constantes
+// OBJ_FLAG_*/CLASS_FLAG_*/METHOD_FLAG_* estan definidos en oop_types.h
+// (incluido arriba), dentro de namespace loader.
+
+/**
+ * @struct Executable
+ * @brief Representa un ejecutable VELB completamente enlazado y listo para
+ * cargar en la VM.
+ *
+ * Esta estructura es el resultado final del linker y la entrada principal del
+ * loader. Contiene toda la informacion necesaria para:
+ *  - reservar espacios de memoria
+ *  - copiar secciones ensambladas
+ *  - resolver simbolos y labels
+ *  - inicializar el PC
+ *  - cargar metadatos y relocaciones
+ *
+ * Es equivalente a un "ELF ejecutable" pero adaptado al formato VELB.
+ */
+typedef struct Executable {
+    /**
+     * @brief Identificador del formato del ejecutable.
+     *
+     * Siempre debe ser `"velb"`. Permite validar que el archivo cargado
+     * corresponde al formato correcto.
+     */
+    std::string format = "velb";
 
     /**
-     * @struct Executable
-     * @brief Representa un ejecutable VELB completamente enlazado y listo para cargar en la VM.
+     * @brief Version del formato VELB.
      *
-     * Esta estructura es el resultado final del linker y la entrada principal del loader.
-     * Contiene toda la informacion necesaria para:
-     *  - reservar espacios de memoria
-     *  - copiar secciones ensambladas
-     *  - resolver simbolos y labels
-     *  - inicializar el PC
-     *  - cargar metadatos y relocaciones
-     *
-     * Es equivalente a un "ELF ejecutable" pero adaptado al formato VELB.
+     * Permite compatibilidad futura entre versiones del loader y del linker.
      */
-    typedef struct Executable {
-        /**
-         * @brief Identificador del formato del ejecutable.
-         *
-         * Siempre debe ser `"velb"`. Permite validar que el archivo cargado
-         * corresponde al formato correcto.
-         */
-        std::string format = "velb";
+    velb_version_format version = 1;
 
-        /**
-         * @brief Version del formato VELB.
-         *
-         * Permite compatibilidad futura entre versiones del loader y del linker.
-         */
-        velb_version_format version = 1;
+    /**
+     * @brief Espacios de direcciones definidos en el ejecutable.
+     *
+     * Cada `Space` representa un rango de direcciones virtuales:
+     *  - `anonymous`
+     *  - `stack`
+     *  - `heap`
+     *  - `data`
+     *  - etc.
+     *
+     * El loader debe reservar memoria para cada uno. Se puede indicar si
+     * reservar el rango completo o realizar reserva lazy.
+     */
+    std::vector<Space> spaces{};
 
-        /**
-         * @brief Espacios de direcciones definidos en el ejecutable.
-         *
-         * Cada `Space` representa un rango de direcciones virtuales:
-         *  - `anonymous`
-         *  - `stack`
-         *  - `heap`
-         *  - `data`
-         *  - etc.
-         *
-         * El loader debe reservar memoria para cada uno. Se puede indicar si reservar el rango completo o
-         * realizar reserva lazy.
-         */
-        std::vector<Space> spaces{};
+    /**
+     * @brief Secciones ensambladas del ejecutable.
+     *
+     * Cada `Section` contiene bytecode ya resuelto y listo para copiarse
+     * en el espacio correspondiente. Equivalente a `.text`, `.data`, `.rodata`
+     * en ELF.
+     */
+    std::vector<Section *> sections{};
 
-        /**
-         * @brief Secciones ensambladas del ejecutable.
-         *
-         * Cada `Section` contiene bytecode ya resuelto y listo para copiarse
-         * en el espacio correspondiente. Equivalente a `.text`, `.data`, `.rodata` en ELF.
-         */
-        std::vector<Section *> sections{};
+    /**
+     * @brief Simbolos globales con direccion absoluta.
+     *
+     * Cada `Label` contiene:
+     *  - nombre del simbolo
+     *  - direccion absoluta final tras el linking
+     *
+     * El loader los registra en la tabla de simbolos de la VM.
+     */
+    std::vector<Label *> labels{};
 
-        /**
-         * @brief Simbolos globales con direccion absoluta.
-         *
-         * Cada `Label` contiene:
-         *  - nombre del simbolo
-         *  - direccion absoluta final tras el linking
-         *
-         * El loader los registra en la tabla de simbolos de la VM.
-         */
-        std::vector<Label *> labels{};
+    /**
+     * @brief Bytecode cargado con header y demas datos incluidos.
+     *
+     */
+    std::vector<uint8_t> bytecode{};
 
-        /**
-         * @brief Bytecode cargado con header y demas datos incluidos.
-         *
-         */
-        std::vector<uint8_t> bytecode{};
+    /**
+     * Offset al bytecode real dentro del archivo, este campo
+     * se puede usar junto a "vector<uint8_t> bytecode" para
+     * obtener el bytecode real
+     */
+    size_t offset_real_bytecode = 0;
 
-        /**
-         * Offset al bytecode real dentro del archivo, este campo
-         * se puede usar junto a "vector<uint8_t> bytecode" para
-         * obtener el bytecode real
-         */
-        size_t offset_real_bytecode = 0;
+    /**
+     * @brief Direccion inicial del PC.
+     *
+     * Determinada por la directiva `@InitPc` o por el linker.
+     * El loader debe asignarla al registro PC de la VM.
+     */
+    uint64_t init_pc = 0;
 
-        /**
-         * @brief Direccion inicial del PC.
-         *
-         * Determinada por la directiva `@InitPc` o por el linker.
-         * El loader debe asignarla al registro PC de la VM.
-         */
-        uint64_t init_pc = 0;
+    /**
+     * @brief Cabecera del ejecutable VELB.
+     *
+     * Contiene informacion adicional como:
+     *  - tamano del ejecutable
+     *  - checksum
+     *  - flags
+     *  - version del linker
+     *  - punto de entrada
+     *
+     * Es redundante con algunos campos, pero util para validacion.
+     */
+    HeaderVELB header{};
 
-        /**
-         * @brief Cabecera del ejecutable VELB.
-         *
-         * Contiene informacion adicional como:
-         *  - tamano del ejecutable
-         *  - checksum
-         *  - flags
-         *  - version del linker
-         *  - punto de entrada
-         *
-         * Es redundante con algunos campos, pero util para validacion.
-         */
-        HeaderVELB header{};
+    /**
+     * @brief Relocaciones aplicadas durante el linking.
+     *
+     * Normalmente solo se usa para debugging o herramientas de analisis.
+     * El ejecutable final ya tiene todas las direcciones resueltas. En teoria,
+     * aunque se puede llamar al linker dinamico.
+     */
+    std::vector<Assembly::Bytecode::Relocation> relocations{};
 
-        /**
-         * @brief Relocaciones aplicadas durante el linking.
-         *
-         * Normalmente solo se usa para debugging o herramientas de analisis.
-         * El ejecutable final ya tiene todas las direcciones resueltas. En teoria, aunque
-         * se puede llamar al linker dinamico.
-         */
-        std::vector<Assembly::Bytecode::Relocation> relocations{};
+    /**
+     * @brief tabla de relocations leida del .velb tras el link.
+     *
+     * Cada entry contiene el offset DENTRO del bytecode (no del archivo)
+     * y el target_value original.  Permite al loader hacer rebase
+     * preciso cuando carga el modulo en una VA distinta de la original
+     * (`load_module_dynamic`).  Vacia si el .velb no tiene tabla de
+     * relocations (formato viejo o sin relocations resolubles).
+     */
+    std::vector<entry_relocation_table> velb_relocations{};
 
-        /**
-         * @brief tabla de relocations leida del .velb tras el link.
-         *
-         * Cada entry contiene el offset DENTRO del bytecode (no del archivo)
-         * y el target_value original.  Permite al loader hacer rebase
-         * preciso cuando carga el modulo en una VA distinta de la original
-         * (`load_module_dynamic`).  Vacia si el .velb no tiene tabla de
-         * relocations (formato viejo o sin relocations resolubles).
-         */
-        std::vector<entry_relocation_table> velb_relocations{};
+    /**
+     * @brief Informacion de depuracion bytecode -> source line.
+     *
+     * Construida cuando el .velb tiene la seccion DVBG (compilado
+     * con --vex-debug).  Permite al debugger resolver `b file.vex:42`
+     * al offset de bytecode correcto via DebugInfo::lookup_offset_for_line,
+     * y mostrar `file:line` del PC actual via DebugInfo::lookup_line.
+     * nullptr si el .velb no tiene info de debug (caso comun).
+     */
+    std::unique_ptr<debug::DebugInfo> debug_info;
 
-        /**
-         * @brief Informacion de depuracion bytecode -> source line.
-         *
-         * Construida cuando el .velb tiene la seccion DVBG (compilado
-         * con --vex-debug).  Permite al debugger resolver `b file.vex:42`
-         * al offset de bytecode correcto via DebugInfo::lookup_offset_for_line,
-         * y mostrar `file:line` del PC actual via DebugInfo::lookup_line.
-         * nullptr si el .velb no tiene info de debug (caso comun).
-         */
-        std::unique_ptr<debug::DebugInfo> debug_info;
+    /**
+     * @brief Path del archivo .velb desde el filesystem (si fue cargado
+     *        dinamicamente via load_module_dynamic).
+     *
+     * Vacio para el ejecutable principal cargado al inicio.  Usado por
+     * `unload_module_dynamic(path)` para localizar el Executable y
+     * removerlo del pool sin afectar otros modulos.
+     */
+    std::string source_path;
 
-        /**
-         * @brief Path del archivo .velb desde el filesystem (si fue cargado
-         *        dinamicamente via load_module_dynamic).
-         *
-         * Vacio para el ejecutable principal cargado al inicio.  Usado por
-         * `unload_module_dynamic(path)` para localizar el Executable y
-         * removerlo del pool sin afectar otros modulos.
-         */
-        std::string source_path;
+    /**
+     * @brief Opcion W: funciones IR deserializadas desde la seccion
+     *        @c @ir del `.velb` v3.  Llenado por @c parse_velb si
+     *        @c header.offset_ir_section != 0; vacio para `.velb` v2
+     *        o si la seccion no se pudo parsear.
+     *
+     * Habilitan auto-JIT (Phase D.3-C+ del roadmap): cuando una
+     * funcion del bytecode se invoca repetidamente (counter >=
+     * threshold), el runtime busca su @c IrFunction aqui via nombre
+     * (la entrada del map @c ir_lookup) y la pasa a @c JitCompiler.
+     * El resultado se asigna a @c MethodInfo::jit_code y futuras
+     * invocaciones via @c exec_instr_callvirt despachan directo al
+     * codigo nativo.
+     */
+    std::vector<ir::IrFunction> ir_functions;
 
-        /**
-         * @brief Opcion W: funciones IR deserializadas desde la seccion
-         *        @c @ir del `.velb` v3.  Llenado por @c parse_velb si
-         *        @c header.offset_ir_section != 0; vacio para `.velb` v2
-         *        o si la seccion no se pudo parsear.
-         *
-         * Habilitan auto-JIT (Phase D.3-C+ del roadmap): cuando una
-         * funcion del bytecode se invoca repetidamente (counter >=
-         * threshold), el runtime busca su @c IrFunction aqui via nombre
-         * (la entrada del map @c ir_lookup) y la pasa a @c JitCompiler.
-         * El resultado se asigna a @c MethodInfo::jit_code y futuras
-         * invocaciones via @c exec_instr_callvirt despachan directo al
-         * codigo nativo.
-         */
-        std::vector<ir::IrFunction> ir_functions;
+    /**
+     * @brief Lookup acelerado por nombre (@c IrFunction::name -> indice
+     *        en @c ir_functions).  Construido junto con @c ir_functions
+     *        durante @c parse_velb para que el dispatch JIT no haga
+     *        busqueda lineal en cada invocacion.
+     */
+    std::unordered_map<std::string, size_t> ir_lookup;
 
-        /**
-         * @brief Lookup acelerado por nombre (@c IrFunction::name -> indice
-         *        en @c ir_functions).  Construido junto con @c ir_functions
-         *        durante @c parse_velb para que el dispatch JIT no haga
-         *        busqueda lineal en cada invocacion.
-         */
-        std::unordered_map<std::string, size_t> ir_lookup;
+    /**
+     * @brief symbol table resuelta del linker.
+     *
+     * Mapa nombre completo de label (e.g. "code.s_0", "code.s_3") a
+     * direccion VM absoluta resuelta por el linker.  Usado por el
+     * JIT mini-parser para resolver `@Absolute("code.X")` referencias
+     * en raw_asm sin tener que delegar al interp.
+     *
+     * Layout en el `.velb`: appendeado RIGHT AFTER la seccion @c @ir
+     * con magic "VSYM" + version + count + entries.  Backward
+     * compatible: archivos sin VSYM tras @ir simplemente dejan este
+     * mapa vacio.
+     */
+    std::unordered_map<std::string, uint64_t> symbol_table;
 
-        /**
-         * @brief symbol table resuelta del linker.
-         *
-         * Mapa nombre completo de label (e.g. "code.s_0", "code.s_3") a
-         * direccion VM absoluta resuelta por el linker.  Usado por el
-         * JIT mini-parser para resolver `@Absolute("code.X")` referencias
-         * en raw_asm sin tener que delegar al interp.
-         *
-         * Layout en el `.velb`: appendeado RIGHT AFTER la seccion @c @ir
-         * con magic "VSYM" + version + count + entries.  Backward
-         * compatible: archivos sin VSYM tras @ir simplemente dejan este
-         * mapa vacio.
-         */
-        std::unordered_map<std::string, uint64_t> symbol_table;
+    /**
+     * @brief Metadatos arbitrarios en formato JSON.
+     *
+     * Puede incluir:
+     *  - autor
+     *  - timestamp
+     *  - flags de compilacion
+     *  - informacion de build
+     *  - dependencias
+     */
+    // Sqlite::json metadata;
 
-        /**
-         * @brief Metadatos arbitrarios en formato JSON.
-         *
-         * Puede incluir:
-         *  - autor
-         *  - timestamp
-         *  - flags de compilacion
-         *  - informacion de build
-         *  - dependencias
-         */
-        //Sqlite::json metadata;
+    /**
+     * @brief Capabilities concedidas a este modulo + whitelists granulares.
+     *
+     * Default ALL granted + sin whitelists -> @c caps.unrestricted() == true ->
+     * cero overhead (los chequeos colapsan a un branch predicho).
+     *
+     * Configurable por modulo via CLI @c --vex-caps (modulo principal) o
+     * por @c loadmodule(path, caps_str) (modulo dinamico).
+     */
+    loader::Caps caps{};
 
-        /**
-         * @brief Capabilities concedidas a este modulo + whitelists granulares.
-         *
-         * Default ALL granted + sin whitelists -> @c caps.unrestricted() == true ->
-         * cero overhead (los chequeos colapsan a un branch predicho).
-         *
-         * Configurable por modulo via CLI @c --vex-caps (modulo principal) o
-         * por @c loadmodule(path, caps_str) (modulo dinamico).
-         */
-        loader::Caps caps{};
+    // Opciones del linker
+    // Assembly::Bytecode::Linker::LinkerOptions options; ///< Opciones usadas
+    // para generar este ejecutable
+} Executable;
 
-        // Opciones del linker
-        // Assembly::Bytecode::Linker::LinkerOptions options; ///< Opciones usadas para generar este ejecutable
-    } Executable;
+class Loader {
+  public:
+    /**
+     * Tabla de simbolos a funciones nativas.
+     */
+    ffi::FFI ffi_loader;
 
+    /**
+     * Vector de ejecutables cargados alguna vez.
+     *
+     * Se almacenan como std::unique_ptr<Executable> por varias razones:
+     *
+     * 1. Evita copias grandes:
+     *    Un Executable puede contener tablas, bytecode y estructuras pesadas.
+     *    Guardarlo como unique_ptr evita copiar todo_ el objeto al hacer
+     * push_back.
+     *
+     * 2. Estabilidad de direcciones:
+     *    Aunque el vector se realoque internamente, los punteros siguen siendo
+     * validos. Esto permite devolver referencias a Executable sin riesgo de que
+     * queden invalidas.
+     *
+     * 3. Propiedad clara:
+     *    El Loader es el dueno exclusivo de cada Executable.
+     *    No hay aliasing, no hay referencias compartidas, no hay riesgo de
+     * doble free.
+     *
+     * 4. Seguridad en multihilo:
+     *    Con un mutex protegiendo el vector, las referencias a los Executable
+     *    permanecen estables incluso si el vector crece.
+     *
+     * En resumen: unique_ptr permite almacenar ejecutables grandes de forma
+     * eficiente, segura y con direcciones estables, algo que un
+     * std::vector<Executable> no garantiza.
+     */
+    std::vector<std::unique_ptr<Executable>> executables;
 
-    class Loader {
-    public:
-        /**
-         * Tabla de simbolos a funciones nativas.
-         */
-        ffi::FFI ffi_loader;
+    /**
+     * @brief Proximo VA libre para asignar a modulos cargados
+     * dinamicamente via @c load_module_dynamic.  Empieza en 0x80000000
+     * (2 GiB).  Por debajo de eso se reservan las stacks de proceso
+     * (esquema en exec_instr_spawn: stack_base = 0x10000000 +
+     * (local_pid % 0x1000) * 0x100000 -> hasta 0x10FFF00000 con 4096
+     * procesos a 1 MiB cada uno).  Fijar la base de plugins a 2 GiB
+     * elimina cualquier solapamiento entre stacks de proceso, code
+     * section del caller (en VA 0x0..N) y los plugins cargados
+     * dinamicamente.  La carga dinamica solo usa este contador si
+     * detecta solapamiento entre la VA original del modulo y otros
+     * executables ya cargados.
+     */
+    uint64_t next_dyn_base = 0x80000000ULL;
 
-        /**
-         * Vector de ejecutables cargados alguna vez.
-         *
-         * Se almacenan como std::unique_ptr<Executable> por varias razones:
-         *
-         * 1. Evita copias grandes:
-         *    Un Executable puede contener tablas, bytecode y estructuras pesadas.
-         *    Guardarlo como unique_ptr evita copiar todo_ el objeto al hacer push_back.
-         *
-         * 2. Estabilidad de direcciones:
-         *    Aunque el vector se realoque internamente, los punteros siguen siendo validos.
-         *    Esto permite devolver referencias a Executable sin riesgo de que queden invalidas.
-         *
-         * 3. Propiedad clara:
-         *    El Loader es el dueno exclusivo de cada Executable.
-         *    No hay aliasing, no hay referencias compartidas, no hay riesgo de doble free.
-         *
-         * 4. Seguridad en multihilo:
-         *    Con un mutex protegiendo el vector, las referencias a los Executable
-         *    permanecen estables incluso si el vector crece.
-         *
-         * En resumen: unique_ptr permite almacenar ejecutables grandes de forma eficiente,
-         * segura y con direcciones estables, algo que un std::vector<Executable> no garantiza.
-         */
-        std::vector<std::unique_ptr<Executable> > executables;
+    /**
+     * @brief Phase M.sandbox: flag global "hay algun modulo sandboxed".
+     *
+     * Default @c false (sin sandbox).  Se pone a @c true cuando se aplica
+     * un conjunto de caps restringido a algun Executable (via --vex-caps
+     * o loadmodule con caps).  Permite que @c check_cap_at_pc retorne de
+     * inmediato (1 branch predicho) en el caso comun sin sandbox, en lugar
+     * de iterar @c executables en cada CALLN/dlopen/spawn/etc.  Resultado:
+     * el sandbox es CERO-overhead cuando no se usa.
+     */
+    bool sandbox_active = false;
 
-        /**
-         * @brief Proximo VA libre para asignar a modulos cargados
-         * dinamicamente via @c load_module_dynamic.  Empieza en 0x80000000
-         * (2 GiB).  Por debajo de eso se reservan las stacks de proceso
-         * (esquema en exec_instr_spawn: stack_base = 0x10000000 +
-         * (local_pid % 0x1000) * 0x100000 -> hasta 0x10FFF00000 con 4096
-         * procesos a 1 MiB cada uno).  Fijar la base de plugins a 2 GiB
-         * elimina cualquier solapamiento entre stacks de proceso, code
-         * section del caller (en VA 0x0..N) y los plugins cargados
-         * dinamicamente.  La carga dinamica solo usa este contador si
-         * detecta solapamiento entre la VA original del modulo y otros
-         * executables ya cargados.
-         */
-        uint64_t next_dyn_base = 0x80000000ULL;
+    /**
+     * referencia al manager de instancias de VM
+     */
+    runtime::ManageVM &instance_manager;
 
-        /**
-         * @brief Phase M.sandbox: flag global "hay algun modulo sandboxed".
-         *
-         * Default @c false (sin sandbox).  Se pone a @c true cuando se aplica
-         * un conjunto de caps restringido a algun Executable (via --vex-caps
-         * o loadmodule con caps).  Permite que @c check_cap_at_pc retorne de
-         * inmediato (1 branch predicho) en el caso comun sin sandbox, en lugar
-         * de iterar @c executables en cada CALLN/dlopen/spawn/etc.  Resultado:
-         * el sandbox es CERO-overhead cuando no se usa.
-         */
-        bool sandbox_active = false;
+    /**
+     * Tabla de callbacks de la API expuesta a los plugins nativos.
+     * Debe vivir al menos tanto como los modulos cargados que guarden g_api.
+     */
+    VestaPluginAPI plugin_api;
 
+    explicit Loader(runtime::ManageVM &instance_manager);
 
-        /**
-         * referencia al manager de instancias de VM
-         */
-        runtime::ManageVM &instance_manager;
+    /**
+     * @brief Copia el bytecode de TODOS los executables cargados al
+     *        @c vm_mem del proceso destino.
+     *
+     * Replica la copia que hace @c load_executable, pero sobre un proceso
+     * que ya existe (caso: hijos creados con @c spawn que comparten codigo
+     * pero tienen vm_mem privado vacio).  Para cada Executable iterado en
+     * @c executables, recorre sus secciones y emite un
+     * @c vm_to_host_memcpy con el rango (address_init, exe->bytecode.size()).
+     *
+     * Coste O(numero_executables * secciones * tamano_bytecode).  En
+     * spawn se llama una sola vez por hijo.
+     *
+     * @param dest Proceso destino que recibira la copia del codigo.
+     * @param parent Proceso padre del que copiar el estado actual de
+     *               @c vm_mem (no el bytecode crudo). Si es @c nullptr,
+     *               copia desde @c exe->bytecode original. Para spawn
+     *               se debe pasar el padre para heredar el state de
+     *               @c __module_init (cache slots de @c ClassInfo*, etc.).
+     */
+    void copy_executables_to(runtime::ProcessVM &dest,
+                             runtime::ProcessVM *parent = nullptr);
 
-        /**
-         * Tabla de callbacks de la API expuesta a los plugins nativos.
-         * Debe vivir al menos tanto como los modulos cargados que guarden g_api.
-         */
-        VestaPluginAPI plugin_api;
+    /**
+     * Permite obtener una cadena de la seccion strings, en base a su offset
+     * @param blob contenido de la seccion de cadena que leer.
+     * @param offset offset de la cadena a leer.
+     * @return cadena encontrada en el offset indicado.
+     */
+    std::string read_string_at(const std::vector<uint8_t> &blob,
+                               uint64_t offset);
 
-        explicit Loader(
-            runtime::ManageVM &instance_manager);
+    /**
+     * Permite obtener un string en base a un offset string a traves de un
+     * reader. El reader no se modificara pero indicara los limites de lectura y
+     * el contenido del que se puede leer.
+     * @param reader reader que usar para obtener un string
+     * @param offset offset string que usar para obtener una cadena valida.
+     * @return cadena obtenida a traves del offset
+     */
+    std::string read_string_at(ByteReader &reader, uint64_t offset);
 
-        /**
-         * @brief Copia el bytecode de TODOS los executables cargados al
-         *        @c vm_mem del proceso destino.
-         *
-         * Replica la copia que hace @c load_executable, pero sobre un proceso
-         * que ya existe (caso: hijos creados con @c spawn que comparten codigo
-         * pero tienen vm_mem privado vacio).  Para cada Executable iterado en
-         * @c executables, recorre sus secciones y emite un
-         * @c vm_to_host_memcpy con el rango (address_init, exe->bytecode.size()).
-         *
-         * Coste O(numero_executables * secciones * tamano_bytecode).  En
-         * spawn se llama una sola vez por hijo.
-         *
-         * @param dest Proceso destino que recibira la copia del codigo.
-         * @param parent Proceso padre del que copiar el estado actual de
-         *               @c vm_mem (no el bytecode crudo). Si es @c nullptr,
-         *               copia desde @c exe->bytecode original. Para spawn
-         *               se debe pasar el padre para heredar el state de
-         *               @c __module_init (cache slots de @c ClassInfo*, etc.).
-         */
-        void copy_executables_to(runtime::ProcessVM &dest,
-                                  runtime::ProcessVM *parent = nullptr);
+    /**
+     * Permite obtener una tabla de cadenas generada de la seccion de la tabla
+     * de strings.
+     * @param blob contenido entero de la seccion de cadenas a cargar
+     * @return tabla de cadenas.
+     */
+    std::vector<std::string> read_all_strings(const std::vector<uint8_t> &blob);
 
-        /**
-         * Permite obtener una cadena de la seccion strings, en base a su offset
-         * @param blob contenido de la seccion de cadena que leer.
-         * @param offset offset de la cadena a leer.
-         * @return cadena encontrada en el offset indicado.
-         */
-        std::string read_string_at(const std::vector<uint8_t> &blob, uint64_t offset);
+    void parse_velb_header(Executable &exe, ByteReader &reader);
 
-        /**
-         * Permite obtener un string en base a un offset string a traves de un reader.
-         * El reader no se modificara pero indicara los limites de lectura y el contenido del que
-         * se puede leer.
-         * @param reader reader que usar para obtener un string
-         * @param offset offset string que usar para obtener una cadena valida.
-         * @return cadena obtenida a traves del offset
-         */
-        std::string read_string_at(ByteReader &reader, uint64_t offset);
+    void parse_table_spaces(Executable &exe, ByteReader &reader);
 
-        /**
-         * Permite obtener una tabla de cadenas generada de la seccion de la tabla de strings.
-         * @param blob contenido entero de la seccion de cadenas a cargar
-         * @return tabla de cadenas.
-         */
-        std::vector<std::string> read_all_strings(const std::vector<uint8_t> &blob);
+    /**
+     * Permite buscar a que espacio pertenece una seccion del ejecutable, debe
+     * haberse analizado la tabla de espacios de direcciones previamente para
+     * poder hacer esto.
+     * @param exe datos del ejecutable
+     * @param sec seccion que se quiere usar para buscar el espacio de
+     * direcciones
+     * @return espacio de direcciones al que pertenece la seccion
+     */
+    Space *find_space_for_section(Executable &exe, const Section &sec);
 
-        void parse_velb_header(Executable &exe, ByteReader &reader);
+    /**
+     * parsea la tabla de secciones sin modificar el reader. Crea un punto de
+     * control del reader.
+     * @param exe Datos del ejecutable, debe haberse analizado antes el header,
+     * o haberse indicado el offset a la tabla de secciones
+     * @param reader reader padre del que realiazar un punto de control
+     */
+    void parser_table_sections(Executable &exe, ByteReader &reader);
 
-        void parse_table_spaces(Executable &exe, ByteReader &reader);
+    /**
+     * Permite obtener la tabla de importacion del archivo si es que tiene
+     */
+    void parser_import_table(Executable &exe, ByteReader &reader);
 
-        /**
-         * Permite buscar a que espacio pertenece una seccion del ejecutable, debe
-         * haberse analizado la tabla de espacios de direcciones previamente para poder
-         * hacer esto.
-         * @param exe datos del ejecutable
-         * @param sec seccion que se quiere usar para buscar el espacio de direcciones
-         * @return espacio de direcciones al que pertenece la seccion
-         */
-        Space *find_space_for_section(Executable &exe, const Section &sec);
+    std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
 
-        /**
-         * parsea la tabla de secciones sin modificar el reader. Crea un punto de control
-         * del reader.
-         * @param exe Datos del ejecutable, debe haberse analizado antes el header, o haberse indicado
-         * el offset a la tabla de secciones
-         * @param reader reader padre del que realiazar un punto de control
-         */
-        void parser_table_sections(Executable &exe, ByteReader &reader);
+    /**
+     * Permite crear un proceso en una VM cargado su codigo en este proceso.
+     * La VM debe haber sido inicializada usando el metodo `start`
+     * @param vm instancia virtual inicializada donde crear el nuevo proceso
+     * @param path path al ejecutable VELB a ejecutuar.
+     * @return devuelve un proceso creado en la maquina virtual dada.
+     */
+    runtime::ProcessVM *load_executable(runtime::VM &vm, std::string path);
 
-        /**
-         * Permite obtener la tabla de importacion del archivo si es que tiene
-         */
-        void parser_import_table(Executable &exe, ByteReader &reader);
+    /**
+     * Permite crear un proceso en una VM cargado su codigo en este proceso.
+     * La VM debe haber sido inicializada usando el metodo `start`
+     * @param vm instancia virtual inicializada donde crear el nuevo proceso
+     * @param raw_bytecode_file bytecocde a cargar
+     * @return proceso creado en la maquina virtual
+     */
+    runtime::ProcessVM *load_executable(runtime::VM &vm,
+                                        std::vector<uint8_t> raw_bytecode_file);
 
-        std::unique_ptr<Executable> parse_velb(std::vector<uint8_t> bytecode);
+    /**
+     * @brief carga DINAMICA de un .velb adicional en una VM ya corriendo.
+     *
+     * Diferencias clave con @c load_executable:
+     *   - NO crea un proceso nuevo: el modulo se anade al pool de
+     *     `executables` y su bytecode se copia al `vm_mem` de TODOS los
+     *     procesos vivos para que cualquiera pueda saltar a su codigo.
+     *   - Devuelve el `init_pc` del modulo cargado (entry point del main
+     *     del nuevo modulo) para que el caller pueda ejecutarlo via
+     *     `callvmr` y que el prologo de su `main` invoque `__module_init`
+     *     (registrando clases en el ClassRegistry global).
+     *
+     * El caller tipico es la instruccion bytecode @c loadmod, que reusa
+     * la convencion CALLVM (push de return addr + jump al init_pc) para
+     * ejecutar el modulo cargado de forma sincrona.
+     *
+     * @param vm Instancia VM activa donde cargar el modulo.
+     * @param raw_bytecode_file Bytes del archivo .velb a cargar.
+     * @return @c init_pc (entry point) del modulo cargado, o 0 si el
+     *         parse falla o el archivo esta vacio.
+     */
+    uint64_t load_module_dynamic(runtime::VM &vm,
+                                 std::vector<uint8_t> raw_bytecode_file);
 
-        /**
-         * Permite crear un proceso en una VM cargado su codigo en este proceso.
-         * La VM debe haber sido inicializada usando el metodo `start`
-         * @param vm instancia virtual inicializada donde crear el nuevo proceso
-         * @param path path al ejecutable VELB a ejecutuar.
-         * @return devuelve un proceso creado en la maquina virtual dada.
-         */
-        runtime::ProcessVM *load_executable(runtime::VM &vm, std::string path);
+    /**
+     * @brief Phase M.sandbox: comprueba si el codigo en @p pc tiene
+     *        concedida la capability @p required.
+     *
+     * Localiza el @c Executable cuya seccion de codigo contiene @p pc y
+     * consulta sus @c caps.  Si ese modulo esta sin restringir (default
+     * ALL granted) o @p pc no pertenece a ningun modulo sandboxed,
+     * devuelve @c true (permitir).  Solo deniega cuando el modulo
+     * propietario del @p pc tiene un sandbox activo que NO concede la
+     * cap requerida.
+     *
+     * Fast path: si @c executables esta vacio o ninguno esta restringido
+     * el bucle sale en O(N_modulos) con @c caps.unrestricted() (1 branch
+     * predicho por modulo) -> coste despreciable cuando no hay sandbox.
+     *
+     * @param pc       Direccion VM de la instruccion que solicita la cap.
+     * @param required Bitmask de @c loader::Caps (p.ej. @c Caps::FFI_CALL).
+     * @return @c true si la operacion esta permitida; @c false si el
+     *         modulo propietario del @p pc tiene el sandbox y le falta la
+     *         cap.
+     */
+    [[nodiscard]] bool check_cap_at_pc(uint64_t pc,
+                                       uint32_t required) const noexcept;
 
-        /**
-         * Permite crear un proceso en una VM cargado su codigo en este proceso.
-         * La VM debe haber sido inicializada usando el metodo `start`
-         * @param vm instancia virtual inicializada donde crear el nuevo proceso
-         * @param raw_bytecode_file bytecocde a cargar
-         * @return proceso creado en la maquina virtual
-         */
-        runtime::ProcessVM *load_executable(runtime::VM &vm, std::vector<uint8_t> raw_bytecode_file);
+    /**
+     * @brief Variante de load_module_dynamic que registra source_path.
+     *
+     * Equivalente a load_module_dynamic pero ademas asocia el path
+     * fuente al Executable resultante para que pueda ser localizado
+     * por unload_module_dynamic(path).
+     *
+     * @param vm                  Instancia VM activa.
+     * @param raw_bytecode_file   Bytes del archivo .velb.
+     * @param source_path         Path original del archivo (para unload).
+     * @return init_pc del modulo cargado, o 0 en error.
+     */
+    uint64_t
+    load_module_dynamic_with_path(runtime::VM &vm,
+                                  std::vector<uint8_t> raw_bytecode_file,
+                                  const std::string &source_path);
 
-        /**
-         * @brief carga DINAMICA de un .velb adicional en una VM ya corriendo.
-         *
-         * Diferencias clave con @c load_executable:
-         *   - NO crea un proceso nuevo: el modulo se anade al pool de
-         *     `executables` y su bytecode se copia al `vm_mem` de TODOS los
-         *     procesos vivos para que cualquiera pueda saltar a su codigo.
-         *   - Devuelve el `init_pc` del modulo cargado (entry point del main
-         *     del nuevo modulo) para que el caller pueda ejecutarlo via
-         *     `callvmr` y que el prologo de su `main` invoque `__module_init`
-         *     (registrando clases en el ClassRegistry global).
-         *
-         * El caller tipico es la instruccion bytecode @c loadmod, que reusa
-         * la convencion CALLVM (push de return addr + jump al init_pc) para
-         * ejecutar el modulo cargado de forma sincrona.
-         *
-         * @param vm Instancia VM activa donde cargar el modulo.
-         * @param raw_bytecode_file Bytes del archivo .velb a cargar.
-         * @return @c init_pc (entry point) del modulo cargado, o 0 si el
-         *         parse falla o el archivo esta vacio.
-         */
-        uint64_t load_module_dynamic(runtime::VM &vm,
-                                      std::vector<uint8_t> raw_bytecode_file);
+    /**
+     * @brief Descarga un modulo previamente cargado dinamicamente.
+     *
+     * Localiza el Executable cuyo source_path coincide con @p path y lo
+     * elimina del pool `executables`.  Si era el ultimo modulo cargado
+     * en `next_dyn_base`, retrocede el contador para reutilizar la VA.
+     *
+     * IMPORTANTE: las clases que el modulo registro en ClassRegistry NO
+     * se eliminan automaticamente (los ClassInfo* podrian estar referenciados
+     * por instancias vivas).  Si el usuario quiere "reload" debe versionar
+     * los nombres de las clases (ExtSyntaxV1 -> ExtSyntaxV2) o aceptar
+     * que la 2a load no redefine la clase.  La memoria del bytecode SI
+     * se libera (Executable se destruye), reduciendo el footprint.
+     *
+     * @param vm   Instancia VM cuyos procesos no deben referenciar mas
+     *             el bytecode descargado (no se valida; responsabilidad
+     *             del llamador).
+     * @param path Path al .velb tal como fue pasado a loadmodule().
+     * @return true si se encontro y descargo, false si no existe.
+     */
+    bool unload_module_dynamic(runtime::VM &vm, const std::string &path);
 
-        /**
-         * @brief Phase M.sandbox: comprueba si el codigo en @p pc tiene
-         *        concedida la capability @p required.
-         *
-         * Localiza el @c Executable cuya seccion de codigo contiene @p pc y
-         * consulta sus @c caps.  Si ese modulo esta sin restringir (default
-         * ALL granted) o @p pc no pertenece a ningun modulo sandboxed,
-         * devuelve @c true (permitir).  Solo deniega cuando el modulo
-         * propietario del @p pc tiene un sandbox activo que NO concede la
-         * cap requerida.
-         *
-         * Fast path: si @c executables esta vacio o ninguno esta restringido
-         * el bucle sale en O(N_modulos) con @c caps.unrestricted() (1 branch
-         * predicho por modulo) -> coste despreciable cuando no hay sandbox.
-         *
-         * @param pc       Direccion VM de la instruccion que solicita la cap.
-         * @param required Bitmask de @c loader::Caps (p.ej. @c Caps::FFI_CALL).
-         * @return @c true si la operacion esta permitida; @c false si el
-         *         modulo propietario del @p pc tiene el sandbox y le falta la
-         *         cap.
-         */
-        [[nodiscard]] bool check_cap_at_pc(uint64_t pc,
-                                           uint32_t required) const noexcept;
+    void resolve_labels(Assembly::Bytecode::Section &section);
 
-        /**
-         * @brief Variante de load_module_dynamic que registra source_path.
-         *
-         * Equivalente a load_module_dynamic pero ademas asocia el path
-         * fuente al Executable resultante para que pueda ser localizado
-         * por unload_module_dynamic(path).
-         *
-         * @param vm                  Instancia VM activa.
-         * @param raw_bytecode_file   Bytes del archivo .velb.
-         * @param source_path         Path original del archivo (para unload).
-         * @return init_pc del modulo cargado, o 0 en error.
-         */
-        uint64_t load_module_dynamic_with_path(runtime::VM &vm,
-                                                std::vector<uint8_t> raw_bytecode_file,
-                                                const std::string &source_path);
+    void load_sections(Assembly::Bytecode::Label &label);
 
-        /**
-         * @brief Descarga un modulo previamente cargado dinamicamente.
-         *
-         * Localiza el Executable cuyo source_path coincide con @p path y lo
-         * elimina del pool `executables`.  Si era el ultimo modulo cargado
-         * en `next_dyn_base`, retrocede el contador para reutilizar la VA.
-         *
-         * IMPORTANTE: las clases que el modulo registro en ClassRegistry NO
-         * se eliminan automaticamente (los ClassInfo* podrian estar referenciados
-         * por instancias vivas).  Si el usuario quiere "reload" debe versionar
-         * los nombres de las clases (ExtSyntaxV1 -> ExtSyntaxV2) o aceptar
-         * que la 2a load no redefine la clase.  La memoria del bytecode SI
-         * se libera (Executable se destruye), reduciendo el footprint.
-         *
-         * @param vm   Instancia VM cuyos procesos no deben referenciar mas
-         *             el bytecode descargado (no se valida; responsabilidad
-         *             del llamador).
-         * @param path Path al .velb tal como fue pasado a loadmodule().
-         * @return true si se encontro y descargo, false si no existe.
-         */
-        bool unload_module_dynamic(runtime::VM &vm, const std::string &path);
+    void load_spaces(Assembly::Bytecode::Space &space);
 
-        void resolve_labels(Assembly::Bytecode::Section &section);
+    void build_runtime_context();
 
-        void load_sections(Assembly::Bytecode::Label &label);
+    /**
+     * Permite obtener el ultimo ejecutable agregado al loader.
+     *
+     * @warning Esta funcion NO es thread?safe. Debe llamarse bajo el mutex
+     * externo.
+     *
+     * @return referencia al ultimo ejecutable anadido.
+     */
+    Executable &get_last_instance_unlocked();
 
-        void load_spaces(Assembly::Bytecode::Space &space);
+    /**
+     * Esta es la version thread?safe de get_last_instance_unlocked, usa un
+     * mutex interno.
+     * @return referencia al ultimo ejecutable anadido.
+     */
+    Executable &get_last_instance();
 
-        void build_runtime_context();
+    /**
+     * Permite crear una instancia de maquina virtual en un manager dado, la
+     * instancia no a sido aun inicializada a traves del metodo start, por lo
+     * que el usuario debera hacerlo antes de crear un proceso en esta
+     * instancia.
+     * @param num_schedulers numeros de hilos nativos que puede usar la
+     * instancia para ejecutar procesos virtuales.
+     * @return instancia no inicializada.
+     */
+    runtime::VM *create_vm_instance(size_t num_schedulers);
 
-        /**
-         * Permite obtener el ultimo ejecutable agregado al loader.
-         *
-         * @warning Esta funcion NO es thread?safe. Debe llamarse bajo el mutex externo.
-         *
-         * @return referencia al ultimo ejecutable anadido.
-         */
-        Executable &get_last_instance_unlocked();
+    /**
+     * @brief Instancia una clase generica con tipos concretos (monomorphization
+     * runtime).
+     *
+     * Busca en generic_cache_ la clave "ClassName<T1,T2,...>".  Si ya existe,
+     * devuelve el ClassInfo* cacheado.  Si no, clona el ClassInfo de @p generic
+     * y sustituye los type_params por los tipos concretos proporcionados.
+     *
+     * @param generic    ClassInfo de la clase generica (CLASS_FLAG_GENERIC).
+     * @param type_args  Array de ClassInfo* de tipos concretos.
+     * @param count      Numero de tipos (debe coincidir con type_param_count).
+     * @return Puntero a la especializacion (cacheada o recien creada).
+     */
+    loader::ClassInfo *specialize_class(loader::ClassInfo *generic,
+                                        loader::ClassInfo **type_args,
+                                        size_t count);
 
-        /**
-         * Esta es la version thread?safe de get_last_instance_unlocked, usa un mutex
-         * interno.
-         * @return referencia al ultimo ejecutable anadido.
-         */
-        Executable &get_last_instance();
+    /**
+     * @brief Acceso al registro global de clases definidas en runtime.
+     *
+     * El @c ClassRegistry mantiene la tabla nombre -> ClassInfo* y la
+     * propiedad de toda la memoria asociada (FieldInfo[], MethodInfo[],
+     * tablas hash de lookup, advices, strings).  Consultar
+     * @c class_registry.h para la API de definicion y busqueda.
+     */
+    ClassRegistry &class_registry() noexcept { return class_registry_; }
+    const ClassRegistry &class_registry() const noexcept {
+        return class_registry_;
+    }
 
-        /**
-         * Permite crear una instancia de maquina virtual en un manager dado, la instancia
-         * no a sido aun inicializada a traves del metodo start, por lo que el usuario debera
-         * hacerlo antes de crear un proceso en esta instancia.
-         * @param num_schedulers numeros de hilos nativos que puede usar la instancia
-         * para ejecutar procesos virtuales.
-         * @return instancia no inicializada.
-         */
-        runtime::VM *create_vm_instance(size_t num_schedulers);
+  private:
+    /**
+     * @brief Registro de clases dinamicas.
+     *
+     * Vive como miembro del Loader para que su vida coincida con la
+     * de la VM.  Las instrucciones VM @c defclass / @c defmethod /
+     * @c deffield invocan este registry indirectamente via el VM
+     * que conoce su Loader.
+     */
+    ClassRegistry class_registry_;
 
-        /**
-         * @brief Instancia una clase generica con tipos concretos (monomorphization runtime).
-         *
-         * Busca en generic_cache_ la clave "ClassName<T1,T2,...>".  Si ya existe,
-         * devuelve el ClassInfo* cacheado.  Si no, clona el ClassInfo de @p generic y
-         * sustituye los type_params por los tipos concretos proporcionados.
-         *
-         * @param generic    ClassInfo de la clase generica (CLASS_FLAG_GENERIC).
-         * @param type_args  Array de ClassInfo* de tipos concretos.
-         * @param count      Numero de tipos (debe coincidir con type_param_count).
-         * @return Puntero a la especializacion (cacheada o recien creada).
-         */
-        loader::ClassInfo *specialize_class(loader::ClassInfo *generic,
-                                            loader::ClassInfo **type_args,
-                                            size_t count);
+    /**
+     * Un mutex en el loader para evitar problemas en el
+     * caso de usar multihilo
+     */
+    std::mutex loader_mutex;
 
-        /**
-         * @brief Acceso al registro global de clases definidas en runtime.
-         *
-         * El @c ClassRegistry mantiene la tabla nombre -> ClassInfo* y la
-         * propiedad de toda la memoria asociada (FieldInfo[], MethodInfo[],
-         * tablas hash de lookup, advices, strings).  Consultar
-         * @c class_registry.h para la API de definicion y busqueda.
-         */
-        ClassRegistry &class_registry() noexcept { return class_registry_; }
-        const ClassRegistry &class_registry() const noexcept { return class_registry_; }
+    /**
+     * @brief Cache de especializaciones de clases genericas.
+     *
+     * Clave: nombre calificado de la especializacion, e.g. "List<int>".
+     * Valor: puntero al ClassInfo clonado para esa especializacion concreta.
+     *
+     * Protegido por loader_mutex en specialize_class().
+     */
+    std::unordered_map<std::string, loader::ClassInfo *> generic_cache_;
 
-    private:
-        /**
-         * @brief Registro de clases dinamicas.
-         *
-         * Vive como miembro del Loader para que su vida coincida con la
-         * de la VM.  Las instrucciones VM @c defclass / @c defmethod /
-         * @c deffield invocan este registry indirectamente via el VM
-         * que conoce su Loader.
-         */
-        ClassRegistry class_registry_;
+    /**
+     * @brief Almacen de ClassInfo clonados para especializaciones genericas.
+     *
+     * Los punteros en generic_cache_ apuntan a ClassInfo almacenados aqui.
+     * Se usa unique_ptr para la gestion automatica del ciclo de vida.
+     */
+    std::vector<std::unique_ptr<loader::ClassInfo>> generic_store_;
 
-        /**
-         * Un mutex en el loader para evitar problemas en el
-         * caso de usar multihilo
-         */
-        std::mutex loader_mutex;
+    /**
+     * @brief Almacen de nombres calificados de especializaciones.
+     *
+     * Cada entrada es el buffer de caracteres del nombre "List<int>" u
+     * otro nombre especializado.  Se gestiona con unique_ptr<char[]> para
+     * liberar automaticamente al destruir el Loader.
+     */
+    std::vector<std::unique_ptr<char[]>> generic_store_names_;
 
-        /**
-         * @brief Cache de especializaciones de clases genericas.
-         *
-         * Clave: nombre calificado de la especializacion, e.g. "List<int>".
-         * Valor: puntero al ClassInfo clonado para esa especializacion concreta.
-         *
-         * Protegido por loader_mutex en specialize_class().
-         */
-        std::unordered_map<std::string, loader::ClassInfo *> generic_cache_;
+    /**
+     * @brief Almacen de arrays GenericParam[] clonados para especializaciones.
+     *
+     * Cada especializacion clona el array de parametros de tipo para poder
+     * sustituir concrete sin modificar la plantilla original.
+     */
+    std::vector<std::unique_ptr<loader::GenericParam[]>> generic_store_params_;
 
-        /**
-         * @brief Almacen de ClassInfo clonados para especializaciones genericas.
-         *
-         * Los punteros en generic_cache_ apuntan a ClassInfo almacenados aqui.
-         * Se usa unique_ptr para la gestion automatica del ciclo de vida.
-         */
-        std::vector<std::unique_ptr<loader::ClassInfo>> generic_store_;
+    /**
+     * @brief Almacen de arrays FieldInfo[] clonados para especializaciones.
+     *
+     * Incluye campos de instancia y arrays de argumentos de metodos clonados
+     * durante la resolucion de tipos concretos en specialize_class().
+     */
+    std::vector<std::unique_ptr<loader::FieldInfo[]>> generic_store_fields_;
 
-        /**
-         * @brief Almacen de nombres calificados de especializaciones.
-         *
-         * Cada entrada es el buffer de caracteres del nombre "List<int>" u
-         * otro nombre especializado.  Se gestiona con unique_ptr<char[]> para
-         * liberar automaticamente al destruir el Loader.
-         */
-        std::vector<std::unique_ptr<char[]>> generic_store_names_;
-
-        /**
-         * @brief Almacen de arrays GenericParam[] clonados para especializaciones.
-         *
-         * Cada especializacion clona el array de parametros de tipo para poder
-         * sustituir concrete sin modificar la plantilla original.
-         */
-        std::vector<std::unique_ptr<loader::GenericParam[]>> generic_store_params_;
-
-        /**
-         * @brief Almacen de arrays FieldInfo[] clonados para especializaciones.
-         *
-         * Incluye campos de instancia y arrays de argumentos de metodos clonados
-         * durante la resolucion de tipos concretos en specialize_class().
-         */
-        std::vector<std::unique_ptr<loader::FieldInfo[]>> generic_store_fields_;
-
-        /**
-         * @brief Almacen de arrays MethodInfo[] clonados para especializaciones.
-         *
-         * Copia superficial de la tabla de metodos del ClassInfo generico con
-         * los tipos de argumentos y retorno ya resueltos a concretos.
-         */
-        std::vector<std::unique_ptr<loader::MethodInfo[]>> generic_store_methods_;
-    };
-}
+    /**
+     * @brief Almacen de arrays MethodInfo[] clonados para especializaciones.
+     *
+     * Copia superficial de la tabla de metodos del ClassInfo generico con
+     * los tipos de argumentos y retorno ya resueltos a concretos.
+     */
+    std::vector<std::unique_ptr<loader::MethodInfo[]>> generic_store_methods_;
+};
+} // namespace loader
 
 #endif

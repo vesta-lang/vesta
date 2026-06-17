@@ -20,10 +20,15 @@ using ir::IrModule;
 static int checks_ok = 0;
 static int checks_fail = 0;
 
-#define CHECK(cond) do { \
-    if (cond) { ++checks_ok; } \
-    else { ++checks_fail; std::printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); } \
-} while (0)
+#define CHECK(cond)                                                            \
+    do {                                                                       \
+        if (cond) {                                                            \
+            ++checks_ok;                                                       \
+        } else {                                                               \
+            ++checks_fail;                                                     \
+            std::printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond);        \
+        }                                                                      \
+    } while (0)
 
 static void test_basico_vacio() {
     IrModule m;
@@ -52,18 +57,18 @@ static void test_roundtrip_simple() {
     auto [p1, n1] = m.static_data.bytes_at(1);
     CHECK(std::memcmp(p1, s2.data(), n1) == 0);
     // Offset 1 mayor que offset 0 + len 0 (con padding entre medio).
-    CHECK(m.static_data.entries[1].byte_offset
-        >= m.static_data.entries[0].byte_offset + s1.size());
+    CHECK(m.static_data.entries[1].byte_offset >=
+          m.static_data.entries[0].byte_offset + s1.size());
 }
 
 static void test_alignment_local_mayor() {
     IrModule m;
-    m.intern_static_data(std::vector<uint8_t>{'A', 'B'});           // idx 0
+    m.intern_static_data(std::vector<uint8_t>{'A', 'B'}); // idx 0
     // Forzar alignment 32 al idx 1 ANTES del push para que el push_back
     // de la entry 1 vea el meta.alignment (TODO: extender API push_back
     // para aceptar meta inicial).  Por ahora simulamos cambiando meta
     // post-push y verificamos que el dedup post-merge re-alinea.
-    m.intern_static_data(std::vector<uint8_t>(32, 0xFF));            // idx 1: 32 bytes
+    m.intern_static_data(std::vector<uint8_t>(32, 0xFF)); // idx 1: 32 bytes
     // Cambiamos meta.alignment manualmente.
     m.static_data.meta_at(1).alignment = 32;
     // Verificamos que el meta refleja el alignment pedido.
@@ -73,8 +78,8 @@ static void test_alignment_local_mayor() {
 static void test_meta_propagated() {
     IrModule m;
     m.intern_static_data(std::vector<uint8_t>{1, 2, 3, 4});
-    m.static_data.meta_at(0).flags = IrModule::SD_FLAG_IMMUTABLE
-                                   | IrModule::SD_FLAG_HOT;
+    m.static_data.meta_at(0).flags =
+        IrModule::SD_FLAG_IMMUTABLE | IrModule::SD_FLAG_HOT;
     m.static_data.meta_at(0).section_name = ".rodata.hot";
 
     CHECK((m.static_data.meta_at(0).flags & IrModule::SD_FLAG_IMMUTABLE) != 0);
@@ -116,7 +121,7 @@ static void test_pool_unificado_layout() {
         auto [p, n] = m.static_data.bytes_at(i);
         // El puntero esta dentro del pool.
         const uint8_t *pool_begin = m.static_data.bytes.data();
-        const uint8_t *pool_end   = pool_begin + m.static_data.bytes.size();
+        const uint8_t *pool_end = pool_begin + m.static_data.bytes.size();
         CHECK(p >= pool_begin);
         CHECK(p + n <= pool_end);
     }
@@ -160,6 +165,7 @@ int main() {
     test_dedup_intern();
     test_pool_unificado_layout();
     test_append_raw_entries();
-    std::printf("test_static_data_pool: ok=%d fail=%d\n", checks_ok, checks_fail);
+    std::printf("test_static_data_pool: ok=%d fail=%d\n", checks_ok,
+                checks_fail);
     return checks_fail == 0 ? 0 : 1;
 }

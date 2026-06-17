@@ -1,5 +1,5 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Máquina Virtual Distribuida
  *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
@@ -16,8 +16,8 @@
  *
  * Este ejemplo usa run_command_sync para ejecutar comandos de la VM de forma
  * síncrona desde el hilo worker del VestaViewManager. La salida se imprime
- * protegida por un mutex global (vesta::cout_mutex) para evitar mezclas de texto
- * cuando varios hilos escriben a la consola.
+ * protegida por un mutex global (vesta::cout_mutex) para evitar mezclas de
+ * texto cuando varios hilos escriben a la consola.
  *
  * Comportamiento:
  * - El REPL encola comandos.
@@ -39,7 +39,8 @@
 #include <exception>
 
 int main() {
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+#if defined(WIN32) || defined(_WIN32) ||                                       \
+    defined(__WIN32) && !defined(__CYGWIN__)
     system("chcp 65001");
 #endif
     // Inicializar runtime con 4 hilos (pool interno del runtime)
@@ -75,7 +76,8 @@ int main() {
         } catch (const std::exception &e) {
             // Imprimir error de forma segura
             std::lock_guard lk(vesta::cout_mutex);
-            std::cerr << "Error en ejecucion sincrona: " << e.what() << std::endl;
+            std::cerr << "Error en ejecucion sincrona: " << e.what()
+                      << std::endl;
         } catch (...) {
             std::lock_guard lk(vesta::cout_mutex);
             std::cerr << "Error desconocido en ejecucion sincrona" << std::endl;

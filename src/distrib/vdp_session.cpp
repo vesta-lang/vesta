@@ -32,18 +32,18 @@
 #include <openssl/ssl.h>
 
 #ifdef _WIN32
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 typedef SOCKET raw_sock_t;
-#  define CLOSE_SOCK(s) closesocket(s)
+#define CLOSE_SOCK(s) closesocket(s)
 #else
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <arpa/inet.h>
-#  include <netdb.h>
-#  include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
 typedef int raw_sock_t;
-#  define CLOSE_SOCK(s) ::close(s)
+#define CLOSE_SOCK(s) ::close(s)
 #endif
 
 namespace distrib {
@@ -52,23 +52,14 @@ namespace distrib {
 // Constructor / Destructor
 // ---------------------------------------------------------------------------
 
-VdpSession::VdpSession(vdp_sock_t fd, SSL *ssl, uint32_t node_idx, uint64_t local_id)
-    : fd_(fd)
-    , ssl_(ssl)
-    , node_idx_(node_idx)
-    , local_id_(local_id)
-    , remote_node_id_(0)
-    , session_id_(0)
-{}
+VdpSession::VdpSession(vdp_sock_t fd, SSL *ssl, uint32_t node_idx,
+                       uint64_t local_id)
+    : fd_(fd), ssl_(ssl), node_idx_(node_idx), local_id_(local_id),
+      remote_node_id_(0), session_id_(0) {}
 
 VdpSession::VdpSession(uint32_t node_idx, uint64_t local_id)
-    : fd_(static_cast<vdp_sock_t>(-1))
-    , ssl_(nullptr)
-    , node_idx_(node_idx)
-    , local_id_(local_id)
-    , remote_node_id_(0)
-    , session_id_(0)
-{}
+    : fd_(static_cast<vdp_sock_t>(-1)), ssl_(nullptr), node_idx_(node_idx),
+      local_id_(local_id), remote_node_id_(0), session_id_(0) {}
 
 VdpSession::~VdpSession() {
     close();
@@ -100,7 +91,7 @@ bool VdpSession::write_exact_(const uint8_t *data, size_t len) {
         }
         if (n <= 0) return false; // error o conexion cerrada
         data += static_cast<size_t>(n);
-        len  -= static_cast<size_t>(n);
+        len -= static_cast<size_t>(n);
     }
     return true;
 }
@@ -112,12 +103,11 @@ bool VdpSession::read_exact_(uint8_t *data, size_t len) {
             n = SSL_read(ssl_, data, static_cast<int>(len));
         } else {
             n = recv(static_cast<raw_sock_t>(fd_),
-                     reinterpret_cast<char *>(data),
-                     static_cast<int>(len), 0);
+                     reinterpret_cast<char *>(data), static_cast<int>(len), 0);
         }
         if (n <= 0) return false; // error o conexion cerrada
         data += static_cast<size_t>(n);
-        len  -= static_cast<size_t>(n);
+        len -= static_cast<size_t>(n);
     }
     return true;
 }
@@ -126,38 +116,41 @@ bool VdpSession::read_exact_(uint8_t *data, size_t len) {
 // Envio de mensajes
 // ---------------------------------------------------------------------------
 
-bool VdpSession::send_raw(VdpMsgType msg_type,
-                           const uint8_t *data, size_t len,
-                           uint32_t seq_num) {
+bool VdpSession::send_raw(VdpMsgType msg_type, const uint8_t *data, size_t len,
+                          uint32_t seq_num) {
     std::lock_guard<std::mutex> lk(send_mtx_);
 
-    if (!send_header_(msg_type, static_cast<uint32_t>(len), seq_num)) return false;
+    if (!send_header_(msg_type, static_cast<uint32_t>(len), seq_num))
+        return false;
     if (len == 0) return true;
 
     return write_exact_(data, len); // enviar el payload en crudo
 }
 
 bool VdpSession::send_msg(VdpMsgType msg_type,
-                           const std::vector<uint8_t> &payload,
-                           uint32_t seq_num) {
-    return send_raw(msg_type,
-                    payload.empty() ? nullptr : payload.data(),
-                    payload.size(),
-                    seq_num);
+                          const std::vector<uint8_t> &payload,
+                          uint32_t seq_num) {
+    return send_raw(msg_type, payload.empty() ? nullptr : payload.data(),
+                    payload.size(), seq_num);
 }
 
-bool VdpSession::send_header_(VdpMsgType msg_type, uint32_t payload_len, uint32_t seq_num) {
+bool VdpSession::send_header_(VdpMsgType msg_type, uint32_t payload_len,
+                              uint32_t seq_num) {
     VdpHeader hdr{};
-    hdr.magic[0] = 'V'; hdr.magic[1] = 'D';
-    hdr.magic[2] = 'P'; hdr.magic[3] = '\0';
-    hdr.version     = VDP_VERSION;
-    hdr.flags       = 0; // el emisor no conoce los flags del receptor; se usan 0 en el envio
-    hdr.msg_type    = static_cast<uint16_t>(msg_type);
-    hdr.session_id  = session_id_;
-    hdr.seq_num     = seq_num;
+    hdr.magic[0] = 'V';
+    hdr.magic[1] = 'D';
+    hdr.magic[2] = 'P';
+    hdr.magic[3] = '\0';
+    hdr.version = VDP_VERSION;
+    hdr.flags =
+        0; // el emisor no conoce los flags del receptor; se usan 0 en el envio
+    hdr.msg_type = static_cast<uint16_t>(msg_type);
+    hdr.session_id = session_id_;
+    hdr.seq_num = seq_num;
     hdr.payload_len = payload_len;
 
-    return write_exact_(reinterpret_cast<const uint8_t *>(&hdr), sizeof(VdpHeader));
+    return write_exact_(reinterpret_cast<const uint8_t *>(&hdr),
+                        sizeof(VdpHeader));
 }
 
 // ---------------------------------------------------------------------------
@@ -166,15 +159,18 @@ bool VdpSession::send_header_(VdpMsgType msg_type, uint32_t payload_len, uint32_
 
 bool VdpSession::read_packet_(VdpHeader &hdr, std::vector<uint8_t> &payload) {
     // leer la cabecera fija de 24 bytes
-    if (!read_exact_(reinterpret_cast<uint8_t *>(&hdr), sizeof(VdpHeader))) return false;
+    if (!read_exact_(reinterpret_cast<uint8_t *>(&hdr), sizeof(VdpHeader)))
+        return false;
 
     // validar magic "VDP\0"
-    if (hdr.magic[0] != 'V' || hdr.magic[1] != 'D' ||
-        hdr.magic[2] != 'P' || hdr.magic[3] != '\0') return false;
+    if (hdr.magic[0] != 'V' || hdr.magic[1] != 'D' || hdr.magic[2] != 'P' ||
+        hdr.magic[3] != '\0')
+        return false;
 
     // leer el payload si hay alguno
     if (hdr.payload_len > 0) {
-        if (hdr.payload_len > VDP_MAX_PAYLOAD) return false; // proteccion contra payloads gigantes
+        if (hdr.payload_len > VDP_MAX_PAYLOAD)
+            return false; // proteccion contra payloads gigantes
         payload.resize(hdr.payload_len);
         if (!read_exact_(payload.data(), hdr.payload_len)) return false;
     } else {
@@ -189,15 +185,15 @@ bool VdpSession::read_packet_(VdpHeader &hdr, std::vector<uint8_t> &payload) {
 // ---------------------------------------------------------------------------
 
 bool VdpSession::connect_to(const char *ip, uint16_t port,
-                              const NodeAuthConfig &auth,
-                              const char *local_name) {
+                            const NodeAuthConfig &auth,
+                            const char *local_name) {
     state_.store(SessionState::CONNECTING);
 
     // resolver el host y conectar el socket TCP
     raw_sock_t fd;
     {
         struct addrinfo hints{}, *res = nullptr;
-        hints.ai_family   = AF_UNSPEC;
+        hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
         char port_str[8];
         std::snprintf(port_str, sizeof(port_str), "%u", port);
@@ -224,7 +220,7 @@ bool VdpSession::connect_to(const char *ip, uint16_t port,
     }
 
     // configurar el socket (TLS o TCP plano segun configuracion)
-    fd_  = static_cast<vdp_sock_t>(fd);
+    fd_ = static_cast<vdp_sock_t>(fd);
     ssl_ = nullptr;
 
     if (auth.use_tls) {
@@ -238,15 +234,18 @@ bool VdpSession::connect_to(const char *ip, uint16_t port,
 
         // cargar certificado y clave si se requiere mTLS del cliente
         if (auth.cert_path[0]) {
-            SSL_CTX_use_certificate_file(ssl_ctx, auth.cert_path, SSL_FILETYPE_PEM);
-            SSL_CTX_use_PrivateKey_file(ssl_ctx,  auth.key_path,  SSL_FILETYPE_PEM);
+            SSL_CTX_use_certificate_file(ssl_ctx, auth.cert_path,
+                                         SSL_FILETYPE_PEM);
+            SSL_CTX_use_PrivateKey_file(ssl_ctx, auth.key_path,
+                                        SSL_FILETYPE_PEM);
         }
         // cargar CA para verificar el servidor
         if (auth.ca_path[0])
             SSL_CTX_load_verify_locations(ssl_ctx, auth.ca_path, nullptr);
 
         ssl_ = SSL_new(ssl_ctx);
-        SSL_CTX_free(ssl_ctx); // ssl_ mantiene una referencia interna; liberamos el contexto
+        SSL_CTX_free(ssl_ctx); // ssl_ mantiene una referencia interna;
+                               // liberamos el contexto
         SSL_set_fd(ssl_, static_cast<int>(fd));
         SSL_set_tlsext_host_name(ssl_, ip); // SNI para el servidor
 
@@ -262,17 +261,18 @@ bool VdpSession::connect_to(const char *ip, uint16_t port,
 
     // enviar VDP_HELLO
     VdpPayloadHello hello{};
-    hello.node_id     = local_id_;
+    hello.node_id = local_id_;
     hello.vdp_version = VDP_VERSION;
     hello.listen_port = 0; // se rellena si el cliente tambien sirve
-    hello.auth_flags  = auth.use_token ? VDP_AUTH_TOKEN : VDP_AUTH_NONE;
-    if (auth.use_tls && auth.require_client_cert) hello.auth_flags |= VDP_AUTH_CERT;
+    hello.auth_flags = auth.use_token ? VDP_AUTH_TOKEN : VDP_AUTH_NONE;
+    if (auth.use_tls && auth.require_client_cert)
+        hello.auth_flags |= VDP_AUTH_CERT;
     std::snprintf(hello.node_name, sizeof(hello.node_name), "%s",
                   local_name ? local_name : "vesta-node");
 
     state_.store(SessionState::HELLO_SENT);
-    if (!send_raw(VdpMsgType::HELLO,
-                  reinterpret_cast<const uint8_t *>(&hello), sizeof(hello))) {
+    if (!send_raw(VdpMsgType::HELLO, reinterpret_cast<const uint8_t *>(&hello),
+                  sizeof(hello))) {
         state_.store(SessionState::SESSION_ERROR);
         return false;
     }
@@ -280,17 +280,23 @@ bool VdpSession::connect_to(const char *ip, uint16_t port,
     // esperar VDP_HELLO_ACK
     VdpHeader hdr{};
     std::vector<uint8_t> payload;
-    if (!read_packet_(hdr, payload)) { state_.store(SessionState::SESSION_ERROR); return false; }
+    if (!read_packet_(hdr, payload)) {
+        state_.store(SessionState::SESSION_ERROR);
+        return false;
+    }
     if (static_cast<VdpMsgType>(hdr.msg_type) != VdpMsgType::HELLO_ACK) {
         state_.store(SessionState::SESSION_ERROR);
         return false;
     }
-    if (payload.size() < sizeof(VdpPayloadHelloAck)) { state_.store(SessionState::SESSION_ERROR); return false; }
+    if (payload.size() < sizeof(VdpPayloadHelloAck)) {
+        state_.store(SessionState::SESSION_ERROR);
+        return false;
+    }
 
     const VdpPayloadHelloAck *ack =
         reinterpret_cast<const VdpPayloadHelloAck *>(payload.data());
-    session_id_      = ack->session_id;
-    remote_node_id_  = ack->server_node_id;
+    session_id_ = ack->session_id;
+    remote_node_id_ = ack->server_node_id;
 
     // si se requiere autenticacion por token, enviar respuesta CRAM
     if (auth.use_token) {
@@ -308,7 +314,10 @@ bool VdpSession::connect_to(const char *ip, uint16_t port,
         }
 
         // esperar AUTH_OK o AUTH_FAIL
-        if (!read_packet_(hdr, payload)) { state_.store(SessionState::SESSION_ERROR); return false; }
+        if (!read_packet_(hdr, payload)) {
+            state_.store(SessionState::SESSION_ERROR);
+            return false;
+        }
         if (static_cast<VdpMsgType>(hdr.msg_type) == VdpMsgType::AUTH_FAIL) {
             state_.store(SessionState::SESSION_ERROR);
             return false;
@@ -318,8 +327,12 @@ bool VdpSession::connect_to(const char *ip, uint16_t port,
             return false;
         }
     } else {
-        // sin token: esperar AUTH_OK del servidor (el servidor decide si acepta sin token)
-        if (!read_packet_(hdr, payload)) { state_.store(SessionState::SESSION_ERROR); return false; }
+        // sin token: esperar AUTH_OK del servidor (el servidor decide si acepta
+        // sin token)
+        if (!read_packet_(hdr, payload)) {
+            state_.store(SessionState::SESSION_ERROR);
+            return false;
+        }
         if (static_cast<VdpMsgType>(hdr.msg_type) != VdpMsgType::AUTH_OK) {
             state_.store(SessionState::SESSION_ERROR);
             return false;
@@ -338,12 +351,18 @@ bool VdpSession::server_handshake(const NodeAuthConfig &auth_config) {
     // esperar VDP_HELLO del cliente
     VdpHeader hdr{};
     std::vector<uint8_t> payload;
-    if (!read_packet_(hdr, payload)) { state_.store(SessionState::SESSION_ERROR); return false; }
+    if (!read_packet_(hdr, payload)) {
+        state_.store(SessionState::SESSION_ERROR);
+        return false;
+    }
     if (static_cast<VdpMsgType>(hdr.msg_type) != VdpMsgType::HELLO) {
         state_.store(SessionState::SESSION_ERROR);
         return false;
     }
-    if (payload.size() < sizeof(VdpPayloadHello)) { state_.store(SessionState::SESSION_ERROR); return false; }
+    if (payload.size() < sizeof(VdpPayloadHello)) {
+        state_.store(SessionState::SESSION_ERROR);
+        return false;
+    }
 
     const VdpPayloadHello *client_hello =
         reinterpret_cast<const VdpPayloadHello *>(payload.data());
@@ -351,7 +370,10 @@ bool VdpSession::server_handshake(const NodeAuthConfig &auth_config) {
 
     // generar nonce y session_id aleatorios
     uint8_t nonce[32] = {};
-    if (!gen_random_(nonce, 32)) { state_.store(SessionState::SESSION_ERROR); return false; }
+    if (!gen_random_(nonce, 32)) {
+        state_.store(SessionState::SESSION_ERROR);
+        return false;
+    }
     if (!gen_random_(reinterpret_cast<uint8_t *>(&session_id_), 8)) {
         state_.store(SessionState::SESSION_ERROR);
         return false;
@@ -359,22 +381,26 @@ bool VdpSession::server_handshake(const NodeAuthConfig &auth_config) {
 
     // enviar VDP_HELLO_ACK con el nonce
     VdpPayloadHelloAck hello_ack{};
-    hello_ack.session_id     = session_id_;
+    hello_ack.session_id = session_id_;
     hello_ack.server_node_id = local_id_;
     std::memcpy(hello_ack.nonce, nonce, 32);
 
     if (!send_raw(VdpMsgType::HELLO_ACK,
-                  reinterpret_cast<const uint8_t *>(&hello_ack), sizeof(hello_ack))) {
+                  reinterpret_cast<const uint8_t *>(&hello_ack),
+                  sizeof(hello_ack))) {
         state_.store(SessionState::SESSION_ERROR);
         return false;
     }
 
     // si se requiere token: verificar respuesta CRAM del cliente
     bool token_required = auth_config.use_token;
-    bool token_ok       = !token_required; // si no se requiere, es ok por defecto
+    bool token_ok = !token_required; // si no se requiere, es ok por defecto
 
     if (token_required) {
-        if (!read_packet_(hdr, payload)) { state_.store(SessionState::SESSION_ERROR); return false; }
+        if (!read_packet_(hdr, payload)) {
+            state_.store(SessionState::SESSION_ERROR);
+            return false;
+        }
         if (static_cast<VdpMsgType>(hdr.msg_type) != VdpMsgType::AUTH_TOKEN) {
             // cliente no envio el token requerido
             send_raw(VdpMsgType::AUTH_FAIL, nullptr, 0);
@@ -417,10 +443,11 @@ bool VdpSession::server_handshake(const NodeAuthConfig &auth_config) {
 
     // enviar AUTH_OK
     VdpPayloadAuthOk ok_payload{};
-    ok_payload.session_id  = session_id_;
+    ok_payload.session_id = session_id_;
     ok_payload.server_caps = 0;
     if (!send_raw(VdpMsgType::AUTH_OK,
-                  reinterpret_cast<const uint8_t *>(&ok_payload), sizeof(ok_payload))) {
+                  reinterpret_cast<const uint8_t *>(&ok_payload),
+                  sizeof(ok_payload))) {
         state_.store(SessionState::SESSION_ERROR);
         return false;
     }
@@ -433,19 +460,20 @@ bool VdpSession::server_handshake(const NodeAuthConfig &auth_config) {
 // Hilo lector
 // ---------------------------------------------------------------------------
 
-void VdpSession::start_reader(VdpMsgHandler handler, VdpDisconnectHandler on_disconnect) {
+void VdpSession::start_reader(VdpMsgHandler handler,
+                              VdpDisconnectHandler on_disconnect) {
     reader_running_.store(true);
-    reader_thread_ = std::thread([this,
-                                  handler       = std::move(handler),
+    reader_thread_ = std::thread([this, handler = std::move(handler),
                                   on_disconnect = std::move(on_disconnect)]() {
         reader_loop_(handler, on_disconnect);
     });
 }
 
-void VdpSession::reader_loop_(VdpMsgHandler handler, VdpDisconnectHandler on_disconnect) {
+void VdpSession::reader_loop_(VdpMsgHandler handler,
+                              VdpDisconnectHandler on_disconnect) {
     while (reader_running_.load() && state_.load() == SessionState::ACTIVE) {
-        VdpHeader             hdr{};
-        std::vector<uint8_t>  payload;
+        VdpHeader hdr{};
+        std::vector<uint8_t> payload;
 
         if (!read_packet_(hdr, payload)) break; // conexion cerrada o error
 
@@ -454,14 +482,16 @@ void VdpSession::reader_loop_(VdpMsgHandler handler, VdpDisconnectHandler on_dis
     state_.store(SessionState::CLOSED);
     reader_running_.store(false);
 
-    // notificar al DistRuntime para que actualice el registro y elimine la sesion
+    // notificar al DistRuntime para que actualice el registro y elimine la
+    // sesion
     if (on_disconnect) on_disconnect(node_idx_);
 }
 
 void VdpSession::close() {
     state_.store(SessionState::CLOSED);
     reader_running_.store(false);
-    // cerrar el socket para que el hilo lector salga del recv/SSL_read bloqueante
+    // cerrar el socket para que el hilo lector salga del recv/SSL_read
+    // bloqueante
     if (fd_ != static_cast<vdp_sock_t>(-1)) {
 #ifdef _WIN32
         shutdown(fd_, SD_BOTH);
@@ -477,18 +507,19 @@ void VdpSession::close() {
 // ---------------------------------------------------------------------------
 
 bool VdpSession::compute_cram_(const uint8_t token_hash[32],
-                                const uint8_t nonce[32],
-                                uint8_t out[32]) {
+                               const uint8_t nonce[32], uint8_t out[32]) {
     // CRAM: SHA256(token_hash_hex || ":" || nonce_hex)
-    // Representar token_hash y nonce como cadenas hexadecimales de 64 chars cada una
+    // Representar token_hash y nonce como cadenas hexadecimales de 64 chars
+    // cada una
     char token_hex[65] = {};
     char nonce_hex[65] = {};
     for (int i = 0; i < 32; ++i) {
         std::snprintf(token_hex + i * 2, 3, "%02x", token_hash[i]);
-        std::snprintf(nonce_hex  + i * 2, 3, "%02x", nonce[i]);
+        std::snprintf(nonce_hex + i * 2, 3, "%02x", nonce[i]);
     }
 
-    // mensaje = token_hex + ":" + nonce_hex (131 bytes total: 64 + 1 + 64 + nul)
+    // mensaje = token_hex + ":" + nonce_hex (131 bytes total: 64 + 1 + 64 +
+    // nul)
     char msg[131] = {};
     std::snprintf(msg, sizeof(msg), "%s:%s", token_hex, nonce_hex);
 

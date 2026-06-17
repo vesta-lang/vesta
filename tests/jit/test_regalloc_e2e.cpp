@@ -32,12 +32,21 @@
 using namespace jit;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(cond, msg)                                                    \
-    do { ++g_checks; if (!(cond)) { ++g_fails;                              \
-        std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__); } } while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fails;                                                         \
+            std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
+    } while (0)
 
-static MOperand imm(int32_t v) { return MOperand::make_imm32(v); }
-static MOperand pr(MReg r)     { return MOperand::make_reg(r, 8); }
+static MOperand imm(int32_t v) {
+    return MOperand::make_imm32(v);
+}
+static MOperand pr(MReg r) {
+    return MOperand::make_reg(r, 8);
+}
 
 /** @brief Compila una MFunction FISICA a nativo y devuelve el puntero. */
 static uint8_t *compile(CodeCache &cc, MFunction &pf) {
@@ -58,10 +67,12 @@ static TargetRegInfo small_target() {
     t.pointer_size = 8;
     t.is_two_address = true;
     const size_t GP = static_cast<size_t>(RegClass::GP);
-    t.caller_saved[GP] = { reg_id(MReg::RAX), reg_id(MReg::RCX), reg_id(MReg::RDX) };
+    t.caller_saved[GP] = {reg_id(MReg::RAX), reg_id(MReg::RCX),
+                          reg_id(MReg::RDX)};
     t.callee_saved[GP] = {};
-    t.allocatable[GP]  = { reg_id(MReg::RAX), reg_id(MReg::RCX), reg_id(MReg::RDX) };
-    t.scratch[GP]      = { reg_id(MReg::R10), reg_id(MReg::R11) };
+    t.allocatable[GP] = {reg_id(MReg::RAX), reg_id(MReg::RCX),
+                         reg_id(MReg::RDX)};
+    t.scratch[GP] = {reg_id(MReg::R10), reg_id(MReg::R11)};
     t.ret_reg[GP] = reg_id(MReg::RAX);
     return t;
 }
@@ -72,12 +83,13 @@ static void test_no_spill() {
     MFunction mf;
     MOperand v0 = mf.new_vreg(RegClass::GP);
     MOperand v1 = mf.new_vreg(RegClass::GP);
-    MOperand t  = mf.new_vreg(RegClass::GP);
+    MOperand t = mf.new_vreg(RegClass::GP);
     MBlock b;
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v0, imm(40)));
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v1, imm(2)));
-    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t, v0, v1));   // t = 40+2
-    b.instrs.push_back(MInstr::make_unary(MOp::MOV, pr(MReg::RAX), t)); // ret value
+    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t, v0, v1)); // t = 40+2
+    b.instrs.push_back(
+        MInstr::make_unary(MOp::MOV, pr(MReg::RAX), t)); // ret value
     b.instrs.push_back(MInstr::make_ret());
     mf.blocks.push_back(std::move(b));
 
@@ -99,7 +111,8 @@ static void test_no_spill() {
 
 /* ---- Test B: CON spill (target diminuto) ------------------------------ *
  * v0..v3 = 10,20,30,40 ; t0=v0+v1 ; t1=v2+v3 ; t2=t0+t1 ; t3=t2-v0
- * resultado = (10+20)+(30+40) - 10 = 100 - 10 = 90.  4 vivos / 3 regs -> spill. */
+ * resultado = (10+20)+(30+40) - 10 = 100 - 10 = 90.  4 vivos / 3 regs -> spill.
+ */
 static void test_with_spill() {
     std::printf("[e2e] con spill -> 90\n");
     MFunction mf;
@@ -116,10 +129,10 @@ static void test_with_spill() {
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v1, imm(20)));
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v2, imm(30)));
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, v3, imm(40)));
-    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t0, v0, v1));  // 30
-    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t1, v2, v3));  // 70
-    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t2, t0, t1));  // 100
-    b.instrs.push_back(MInstr::make_binary(MOp::SUB, t3, t2, v0));  // 100-10=90
+    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t0, v0, v1)); // 30
+    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t1, v2, v3)); // 70
+    b.instrs.push_back(MInstr::make_binary(MOp::ADD, t2, t0, t1)); // 100
+    b.instrs.push_back(MInstr::make_binary(MOp::SUB, t3, t2, v0)); // 100-10=90
     b.instrs.push_back(MInstr::make_unary(MOp::MOV, pr(MReg::RAX), t3));
     b.instrs.push_back(MInstr::make_ret());
     mf.blocks.push_back(std::move(b));

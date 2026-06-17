@@ -45,738 +45,755 @@
 
 namespace ir {
 
-    /* ===================================================================== */
-    /* IrValue                                                                */
-    /* ===================================================================== */
+/* ===================================================================== */
+/* IrValue                                                                */
+/* ===================================================================== */
 
-    namespace {
+namespace {
 
-        // Bits del byte flags por IrValue.  Compactamos 5 bools en un byte
-        // en lugar de un byte por flag (ahorra ~5 bytes por SSA value).
-        // El orden es estable -- NO reordenar entre versiones del formato
-        // sin bump del version field, porque los .velb antiguos quedarian
-        // ininterpretables.
-        constexpr uint8_t IRVAL_FLAG_PARAM            = 1 << 0; ///< Parametro formal de la funcion
-        constexpr uint8_t IRVAL_FLAG_CONST            = 1 << 1; ///< Constante compile-time (const_val valido)
-        constexpr uint8_t IRVAL_FLAG_HOST_PTR         = 1 << 2; ///< Puntero a memoria host (no VM)
-        constexpr uint8_t IRVAL_FLAG_POINTEE_HOST_PTR = 1 << 3; ///< Puntero VM cuyo contenido apunta a host
-        constexpr uint8_t IRVAL_FLAG_GC_OBJECT        = 1 << 4; ///< Host_ptr a objeto GC-managed
+// Bits del byte flags por IrValue.  Compactamos 5 bools en un byte
+// en lugar de un byte por flag (ahorra ~5 bytes por SSA value).
+// El orden es estable -- NO reordenar entre versiones del formato
+// sin bump del version field, porque los .velb antiguos quedarian
+// ininterpretables.
+constexpr uint8_t IRVAL_FLAG_PARAM = 1 << 0; ///< Parametro formal de la funcion
+constexpr uint8_t IRVAL_FLAG_CONST =
+    1 << 1; ///< Constante compile-time (const_val valido)
+constexpr uint8_t IRVAL_FLAG_HOST_PTR =
+    1 << 2; ///< Puntero a memoria host (no VM)
+constexpr uint8_t IRVAL_FLAG_POINTEE_HOST_PTR =
+    1 << 3; ///< Puntero VM cuyo contenido apunta a host
+constexpr uint8_t IRVAL_FLAG_GC_OBJECT = 1
+                                         << 4; ///< Host_ptr a objeto GC-managed
 
-        // Bits del byte flags por IrInstr.  Solo 2 bits usados: el resto
-        // queda para extensiones futuras sin cambio de formato.
-        constexpr uint8_t INSTR_FLAG_PRESERVE      = 1 << 0; ///< No eliminar aunque dst este muerto (side-effect implicito)
-        constexpr uint8_t INSTR_FLAG_IS_CALL_SITE  = 1 << 1; ///< Marca instruccion como call site (para stackmaps)
-        constexpr uint8_t INSTR_FLAG_HOST_ALLOCA   = 1 << 2; ///< ALLOCA auto-promovida a host stack (Phase D.jit-mem-model)
-        constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE = 1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
+// Bits del byte flags por IrInstr.  Solo 2 bits usados: el resto
+// queda para extensiones futuras sin cambio de formato.
+constexpr uint8_t INSTR_FLAG_PRESERVE =
+    1 << 0; ///< No eliminar aunque dst este muerto (side-effect implicito)
+constexpr uint8_t INSTR_FLAG_IS_CALL_SITE =
+    1 << 1; ///< Marca instruccion como call site (para stackmaps)
+constexpr uint8_t INSTR_FLAG_HOST_ALLOCA =
+    1 << 2; ///< ALLOCA auto-promovida a host stack (Phase D.jit-mem-model)
+constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE =
+    1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
 
-        // Bits del byte flags por IrFunction.
-        constexpr uint8_t FN_FLAG_NATIVE   = 1 << 0; ///< Funcion FFI (sin body IR; solo declaracion)
-        constexpr uint8_t FN_FLAG_VARIADIC = 1 << 1; ///< Acepta nargs variable (R15 contiene el count)
+// Bits del byte flags por IrFunction.
+constexpr uint8_t FN_FLAG_NATIVE =
+    1 << 0; ///< Funcion FFI (sin body IR; solo declaracion)
+constexpr uint8_t FN_FLAG_VARIADIC =
+    1 << 1; ///< Acepta nargs variable (R15 contiene el count)
 
-        /**
-         * @brief Serializa un @c IrValue al stream binario.
-         *
-         * Layout: @c [u8 type][u8 flags][u64 const_val if is_const].
-         * El @c id NO se serializa porque se recupera del indice en
-         * @c IrFunction::values[].  Total: 2 bytes para values normales,
-         * 10 bytes para constantes (el @c const_val solo se emite si
-         * @c is_const, ahorrando 8 bytes por value no-constante; en una
-         * funcion tipica >70% de los values no son constantes, asi que
-         * el ahorro acumulado es significativo).
-         */
-        void write_value(std::vector<uint8_t> &o, const IrValue &v) {
-            write_u8(o, static_cast<uint8_t>(v.type));
-            // Compactar los 5 bools en un byte para minimizar el footprint
-            // del IR serializado (los values son la mayoria del .velb IR).
-            uint8_t flags = 0;
-            if (v.is_param)            flags |= IRVAL_FLAG_PARAM;
-            if (v.is_const)            flags |= IRVAL_FLAG_CONST;
-            if (v.is_host_ptr)         flags |= IRVAL_FLAG_HOST_PTR;
-            if (v.pointee_is_host_ptr) flags |= IRVAL_FLAG_POINTEE_HOST_PTR;
-            if (v.is_gc_object)        flags |= IRVAL_FLAG_GC_OBJECT;
-            write_u8(o, flags);
-            // Optimizacion: const_val solo ocupa espacio si el value es
-            // realmente una constante.  Una funcion tipica tiene ~30%
-            // constantes, el resto son SSA values normales que no necesitan
-            // const_val.  El deserializer respeta el flag.
-            if (v.is_const) {
-                write_u64(o, v.const_val);
-            }
-        }
+/**
+ * @brief Serializa un @c IrValue al stream binario.
+ *
+ * Layout: @c [u8 type][u8 flags][u64 const_val if is_const].
+ * El @c id NO se serializa porque se recupera del indice en
+ * @c IrFunction::values[].  Total: 2 bytes para values normales,
+ * 10 bytes para constantes (el @c const_val solo se emite si
+ * @c is_const, ahorrando 8 bytes por value no-constante; en una
+ * funcion tipica >70% de los values no son constantes, asi que
+ * el ahorro acumulado es significativo).
+ */
+void write_value(std::vector<uint8_t> &o, const IrValue &v) {
+    write_u8(o, static_cast<uint8_t>(v.type));
+    // Compactar los 5 bools en un byte para minimizar el footprint
+    // del IR serializado (los values son la mayoria del .velb IR).
+    uint8_t flags = 0;
+    if (v.is_param) flags |= IRVAL_FLAG_PARAM;
+    if (v.is_const) flags |= IRVAL_FLAG_CONST;
+    if (v.is_host_ptr) flags |= IRVAL_FLAG_HOST_PTR;
+    if (v.pointee_is_host_ptr) flags |= IRVAL_FLAG_POINTEE_HOST_PTR;
+    if (v.is_gc_object) flags |= IRVAL_FLAG_GC_OBJECT;
+    write_u8(o, flags);
+    // Optimizacion: const_val solo ocupa espacio si el value es
+    // realmente una constante.  Una funcion tipica tiene ~30%
+    // constantes, el resto son SSA values normales que no necesitan
+    // const_val.  El deserializer respeta el flag.
+    if (v.is_const) {
+        write_u64(o, v.const_val);
+    }
+}
 
-        /**
-         * @brief Deserializa un @c IrValue desde el stream binario.
-         *
-         * Inverso exacto de @c write_value.  Los @c read_u8 / @c read_u64
-         * devuelven false si no hay suficientes bytes restantes; cualquier
-         * fallo propaga inmediatamente.  Si el bit @c is_const no esta
-         * activo, @c const_val queda en 0 (valor default del IrValue
-         * recien construido).
-         */
-        bool read_value(const std::vector<uint8_t> &in, size_t &off, IrValue &v) {
-            uint8_t type_byte = 0, flags = 0;
-            // Lecturas defensivas: si el buffer se acaba, abort temprano.
-            if (!read_u8(in, off, type_byte)) return false;
-            if (!read_u8(in, off, flags))     return false;
-            v.type      = static_cast<IrType>(type_byte);
-            // Decodificacion explicita de cada bit a su bool correspondiente.
-            // El compilador idealmente lo colapsa a operaciones bitwise + cmovs.
-            v.is_param            = (flags & IRVAL_FLAG_PARAM)            != 0;
-            v.is_const            = (flags & IRVAL_FLAG_CONST)            != 0;
-            v.is_host_ptr         = (flags & IRVAL_FLAG_HOST_PTR)         != 0;
-            v.pointee_is_host_ptr = (flags & IRVAL_FLAG_POINTEE_HOST_PTR) != 0;
-            v.is_gc_object        = (flags & IRVAL_FLAG_GC_OBJECT)        != 0;
-            // const_val solo se leyo si el writer la emitio; sin el flag
-            // queda en su valor default (0).  Mismo principio que write_value.
-            if (v.is_const) {
-                if (!read_u64(in, off, v.const_val)) return false;
-            }
-            return true;
-        }
+/**
+ * @brief Deserializa un @c IrValue desde el stream binario.
+ *
+ * Inverso exacto de @c write_value.  Los @c read_u8 / @c read_u64
+ * devuelven false si no hay suficientes bytes restantes; cualquier
+ * fallo propaga inmediatamente.  Si el bit @c is_const no esta
+ * activo, @c const_val queda en 0 (valor default del IrValue
+ * recien construido).
+ */
+bool read_value(const std::vector<uint8_t> &in, size_t &off, IrValue &v) {
+    uint8_t type_byte = 0, flags = 0;
+    // Lecturas defensivas: si el buffer se acaba, abort temprano.
+    if (!read_u8(in, off, type_byte)) return false;
+    if (!read_u8(in, off, flags)) return false;
+    v.type = static_cast<IrType>(type_byte);
+    // Decodificacion explicita de cada bit a su bool correspondiente.
+    // El compilador idealmente lo colapsa a operaciones bitwise + cmovs.
+    v.is_param = (flags & IRVAL_FLAG_PARAM) != 0;
+    v.is_const = (flags & IRVAL_FLAG_CONST) != 0;
+    v.is_host_ptr = (flags & IRVAL_FLAG_HOST_PTR) != 0;
+    v.pointee_is_host_ptr = (flags & IRVAL_FLAG_POINTEE_HOST_PTR) != 0;
+    v.is_gc_object = (flags & IRVAL_FLAG_GC_OBJECT) != 0;
+    // const_val solo se leyo si el writer la emitio; sin el flag
+    // queda en su valor default (0).  Mismo principio que write_value.
+    if (v.is_const) {
+        if (!read_u64(in, off, v.const_val)) return false;
+    }
+    return true;
+}
 
-        /**
-         * @brief Serializa un @c IrInstr completo al stream binario.
-         *
-         * Tamano por instr: ~30 bytes minimo + 4 por operando + tamano
-         * del func_name + 8 por phi_arg.  En IR tipico (~200 instrs por
-         * funcion) -> ~10-15 KB por funcion serializada.
-         *
-         * Schema fijo: emitimos TODOS los campos aunque la op especifica
-         * no los use.  Ejemplo: @c IrOp::ADD no usa @c target_block ni
-         * @c phi_args pero igual los emitimos como 0 / vacio.  Esto
-         * sacrifica espacio por simplificar el formato y permite que el
-         * deserializer use un solo path sin tener que conocer el set de
-         * campos por op.
-         */
-        void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
-            // op va en u16 porque el set de opcodes ya pasa los 200 (no
-            // cabe en u8) y queremos espacio para crecer sin cambio de
-            // formato.
-            write_u16(o, static_cast<uint16_t>(i.op));
-            write_u8(o,  static_cast<uint8_t>(i.type));
-            // dst es IrValueId (u32 en el storage).  IR_NO_VALUE (UINT32_MAX)
-            // indica "esta op no produce valor" (e.g. STORE, RET void).
-            write_u32(o, static_cast<uint32_t>(i.dst));
-            uint8_t flags = 0;
-            if (i.preserve)     flags |= INSTR_FLAG_PRESERVE;
-            if (i.is_call_site) flags |= INSTR_FLAG_IS_CALL_SITE;
-            if (i.host_alloca)  flags |= INSTR_FLAG_HOST_ALLOCA;
-            if (i.host_alloca_explicit_free) flags |= INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE;
-            write_u8(o, flags);
-            // source_line: util para diagnosticos y stack traces.  0 si
-            // el frontend no aporto info de linea.
-            write_u32(o, i.source_line);
-            // imm: campo polivalente.  Para CONST contiene el valor; para
-            // CALL contiene flags/args adicionales; para ops sin imm es 0.
-            write_u64(o, i.imm);
-            // operands: lista de IrValueId.  Maximo 255 por op (suficiente
-            // para cualquier op concebible; CALL con mas args es raro pero
-            // tampoco esperamos > 255 args reales en codigo Vex normal).
-            const size_t opc = i.operands.size();
-            write_u8(o, opc > 255 ? 255 : static_cast<uint8_t>(opc));
-            for (size_t k = 0; k < opc && k < 255; ++k) {
-                write_u32(o, static_cast<uint32_t>(i.operands[k]));
-            }
-            // func_name: solo significativo para CALL/CALLN/CALLIND.
-            // Para otras ops queda como cadena vacia (write_str emite
-            // un u32=0 length sin payload).
-            write_str(o, i.func_name);
-            // func_ptr (puntero a funcion para CALLIND/CALLCLOSURE) +
-            // target_block y false_block (para BR/BR_COND).  Cero si la
-            // op no los usa.
-            write_u32(o, static_cast<uint32_t>(i.func_ptr));
-            write_u32(o, static_cast<uint32_t>(i.target_block));
-            write_u32(o, static_cast<uint32_t>(i.false_block));
-            // phi_args: lista de (block, value) para PHI nodes.  Vacio
-            // para ops no-PHI.  Mismo limite de 255 por simetria con
-            // operands.
-            const size_t pc = i.phi_args.size();
-            write_u8(o, pc > 255 ? 255 : static_cast<uint8_t>(pc));
-            for (size_t k = 0; k < pc && k < 255; ++k) {
-                write_u32(o, static_cast<uint32_t>(i.phi_args[k].value));
-                write_u32(o, static_cast<uint32_t>(i.phi_args[k].block));
-            }
-        }
+/**
+ * @brief Serializa un @c IrInstr completo al stream binario.
+ *
+ * Tamano por instr: ~30 bytes minimo + 4 por operando + tamano
+ * del func_name + 8 por phi_arg.  En IR tipico (~200 instrs por
+ * funcion) -> ~10-15 KB por funcion serializada.
+ *
+ * Schema fijo: emitimos TODOS los campos aunque la op especifica
+ * no los use.  Ejemplo: @c IrOp::ADD no usa @c target_block ni
+ * @c phi_args pero igual los emitimos como 0 / vacio.  Esto
+ * sacrifica espacio por simplificar el formato y permite que el
+ * deserializer use un solo path sin tener que conocer el set de
+ * campos por op.
+ */
+void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
+    // op va en u16 porque el set de opcodes ya pasa los 200 (no
+    // cabe en u8) y queremos espacio para crecer sin cambio de
+    // formato.
+    write_u16(o, static_cast<uint16_t>(i.op));
+    write_u8(o, static_cast<uint8_t>(i.type));
+    // dst es IrValueId (u32 en el storage).  IR_NO_VALUE (UINT32_MAX)
+    // indica "esta op no produce valor" (e.g. STORE, RET void).
+    write_u32(o, static_cast<uint32_t>(i.dst));
+    uint8_t flags = 0;
+    if (i.preserve) flags |= INSTR_FLAG_PRESERVE;
+    if (i.is_call_site) flags |= INSTR_FLAG_IS_CALL_SITE;
+    if (i.host_alloca) flags |= INSTR_FLAG_HOST_ALLOCA;
+    if (i.host_alloca_explicit_free)
+        flags |= INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE;
+    write_u8(o, flags);
+    // source_line: util para diagnosticos y stack traces.  0 si
+    // el frontend no aporto info de linea.
+    write_u32(o, i.source_line);
+    // imm: campo polivalente.  Para CONST contiene el valor; para
+    // CALL contiene flags/args adicionales; para ops sin imm es 0.
+    write_u64(o, i.imm);
+    // operands: lista de IrValueId.  Maximo 255 por op (suficiente
+    // para cualquier op concebible; CALL con mas args es raro pero
+    // tampoco esperamos > 255 args reales en codigo Vex normal).
+    const size_t opc = i.operands.size();
+    write_u8(o, opc > 255 ? 255 : static_cast<uint8_t>(opc));
+    for (size_t k = 0; k < opc && k < 255; ++k) {
+        write_u32(o, static_cast<uint32_t>(i.operands[k]));
+    }
+    // func_name: solo significativo para CALL/CALLN/CALLIND.
+    // Para otras ops queda como cadena vacia (write_str emite
+    // un u32=0 length sin payload).
+    write_str(o, i.func_name);
+    // func_ptr (puntero a funcion para CALLIND/CALLCLOSURE) +
+    // target_block y false_block (para BR/BR_COND).  Cero si la
+    // op no los usa.
+    write_u32(o, static_cast<uint32_t>(i.func_ptr));
+    write_u32(o, static_cast<uint32_t>(i.target_block));
+    write_u32(o, static_cast<uint32_t>(i.false_block));
+    // phi_args: lista de (block, value) para PHI nodes.  Vacio
+    // para ops no-PHI.  Mismo limite de 255 por simetria con
+    // operands.
+    const size_t pc = i.phi_args.size();
+    write_u8(o, pc > 255 ? 255 : static_cast<uint8_t>(pc));
+    for (size_t k = 0; k < pc && k < 255; ++k) {
+        write_u32(o, static_cast<uint32_t>(i.phi_args[k].value));
+        write_u32(o, static_cast<uint32_t>(i.phi_args[k].block));
+    }
+}
 
-        /**
-         * @brief Deserializa un @c IrInstr completo desde el stream.
-         *
-         * Inverso exacto de @c write_instr.  Cualquier @c read_* que
-         * falle (buffer truncado) propaga inmediatamente con false.
-         *
-         * Garantia post-condicion: si retorna true, todos los campos de
-         * @c i estan poblados con valores consistentes.  Los vectors
-         * (@c operands, @c phi_args) fueron clear+reserve+push para
-         * evitar fragmentacion del heap incluso en programas con muchas
-         * funciones.
-         */
-        bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
-            uint16_t op_v = 0;
-            uint8_t  type_v = 0, flags = 0;
-            uint32_t dst_v = 0, source_line = 0;
-            uint64_t imm = 0;
-            // Lecturas en exactamente el mismo orden que el writer; los
-            // fallos cortan toda la operacion (NO intentamos recovery
-            // parcial: una IR malformada no es util incluso si recuperamos
-            // la primera mitad).
-            if (!read_u16(in, off, op_v))         return false;
-            if (!read_u8 (in, off, type_v))       return false;
-            if (!read_u32(in, off, dst_v))        return false;
-            if (!read_u8 (in, off, flags))        return false;
-            if (!read_u32(in, off, source_line))  return false;
-            if (!read_u64(in, off, imm))          return false;
-            i.op            = static_cast<IrOp>(op_v);
-            i.type          = static_cast<IrType>(type_v);
-            i.dst           = static_cast<IrValueId>(dst_v);
-            i.preserve      = (flags & INSTR_FLAG_PRESERVE)      != 0;
-            i.is_call_site  = (flags & INSTR_FLAG_IS_CALL_SITE)  != 0;
-            i.host_alloca   = (flags & INSTR_FLAG_HOST_ALLOCA)   != 0;
-            i.host_alloca_explicit_free = (flags & INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE) != 0;
-            i.source_line   = source_line;
-            i.imm           = imm;
-            /* operands */
-            uint8_t opc = 0;
-            if (!read_u8(in, off, opc)) return false;
-            i.operands.clear();
-            i.operands.reserve(opc);
-            for (uint8_t k = 0; k < opc; ++k) {
-                uint32_t v = 0;
-                if (!read_u32(in, off, v)) return false;
-                i.operands.push_back(static_cast<IrValueId>(v));
-            }
-            /* func_name */
-            if (!read_str(in, off, i.func_name)) return false;
-            /* func_ptr / target_block / false_block */
-            uint32_t fp = 0, tb = 0, fb = 0;
-            if (!read_u32(in, off, fp)) return false;
-            if (!read_u32(in, off, tb)) return false;
-            if (!read_u32(in, off, fb)) return false;
-            i.func_ptr     = static_cast<IrValueId>(fp);
-            i.target_block = static_cast<IrBlockId>(tb);
-            i.false_block  = static_cast<IrBlockId>(fb);
-            /* phi_args */
-            uint8_t pc = 0;
-            if (!read_u8(in, off, pc)) return false;
-            i.phi_args.clear();
-            i.phi_args.reserve(pc);
-            for (uint8_t k = 0; k < pc; ++k) {
-                uint32_t v = 0, b = 0;
-                if (!read_u32(in, off, v)) return false;
-                if (!read_u32(in, off, b)) return false;
-                IrPhiArg a{static_cast<IrValueId>(v),
-                           static_cast<IrBlockId>(b)};
-                i.phi_args.push_back(a);
-            }
-            return true;
-        }
+/**
+ * @brief Deserializa un @c IrInstr completo desde el stream.
+ *
+ * Inverso exacto de @c write_instr.  Cualquier @c read_* que
+ * falle (buffer truncado) propaga inmediatamente con false.
+ *
+ * Garantia post-condicion: si retorna true, todos los campos de
+ * @c i estan poblados con valores consistentes.  Los vectors
+ * (@c operands, @c phi_args) fueron clear+reserve+push para
+ * evitar fragmentacion del heap incluso en programas con muchas
+ * funciones.
+ */
+bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
+    uint16_t op_v = 0;
+    uint8_t type_v = 0, flags = 0;
+    uint32_t dst_v = 0, source_line = 0;
+    uint64_t imm = 0;
+    // Lecturas en exactamente el mismo orden que el writer; los
+    // fallos cortan toda la operacion (NO intentamos recovery
+    // parcial: una IR malformada no es util incluso si recuperamos
+    // la primera mitad).
+    if (!read_u16(in, off, op_v)) return false;
+    if (!read_u8(in, off, type_v)) return false;
+    if (!read_u32(in, off, dst_v)) return false;
+    if (!read_u8(in, off, flags)) return false;
+    if (!read_u32(in, off, source_line)) return false;
+    if (!read_u64(in, off, imm)) return false;
+    i.op = static_cast<IrOp>(op_v);
+    i.type = static_cast<IrType>(type_v);
+    i.dst = static_cast<IrValueId>(dst_v);
+    i.preserve = (flags & INSTR_FLAG_PRESERVE) != 0;
+    i.is_call_site = (flags & INSTR_FLAG_IS_CALL_SITE) != 0;
+    i.host_alloca = (flags & INSTR_FLAG_HOST_ALLOCA) != 0;
+    i.host_alloca_explicit_free =
+        (flags & INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE) != 0;
+    i.source_line = source_line;
+    i.imm = imm;
+    /* operands */
+    uint8_t opc = 0;
+    if (!read_u8(in, off, opc)) return false;
+    i.operands.clear();
+    i.operands.reserve(opc);
+    for (uint8_t k = 0; k < opc; ++k) {
+        uint32_t v = 0;
+        if (!read_u32(in, off, v)) return false;
+        i.operands.push_back(static_cast<IrValueId>(v));
+    }
+    /* func_name */
+    if (!read_str(in, off, i.func_name)) return false;
+    /* func_ptr / target_block / false_block */
+    uint32_t fp = 0, tb = 0, fb = 0;
+    if (!read_u32(in, off, fp)) return false;
+    if (!read_u32(in, off, tb)) return false;
+    if (!read_u32(in, off, fb)) return false;
+    i.func_ptr = static_cast<IrValueId>(fp);
+    i.target_block = static_cast<IrBlockId>(tb);
+    i.false_block = static_cast<IrBlockId>(fb);
+    /* phi_args */
+    uint8_t pc = 0;
+    if (!read_u8(in, off, pc)) return false;
+    i.phi_args.clear();
+    i.phi_args.reserve(pc);
+    for (uint8_t k = 0; k < pc; ++k) {
+        uint32_t v = 0, b = 0;
+        if (!read_u32(in, off, v)) return false;
+        if (!read_u32(in, off, b)) return false;
+        IrPhiArg a{static_cast<IrValueId>(v), static_cast<IrBlockId>(b)};
+        i.phi_args.push_back(a);
+    }
+    return true;
+}
 
-        void write_block(std::vector<uint8_t> &o, const IrBlock &b) {
-            write_str(o, b.name);
-            write_u32(o, static_cast<uint32_t>(b.instrs.size()));
-            for (const auto &i : b.instrs) write_instr(o, i);
-            write_u32(o, static_cast<uint32_t>(b.preds.size()));
-            for (auto p : b.preds) write_u32(o, static_cast<uint32_t>(p));
-            write_u32(o, static_cast<uint32_t>(b.succs.size()));
-            for (auto s : b.succs) write_u32(o, static_cast<uint32_t>(s));
-        }
+void write_block(std::vector<uint8_t> &o, const IrBlock &b) {
+    write_str(o, b.name);
+    write_u32(o, static_cast<uint32_t>(b.instrs.size()));
+    for (const auto &i : b.instrs)
+        write_instr(o, i);
+    write_u32(o, static_cast<uint32_t>(b.preds.size()));
+    for (auto p : b.preds)
+        write_u32(o, static_cast<uint32_t>(p));
+    write_u32(o, static_cast<uint32_t>(b.succs.size()));
+    for (auto s : b.succs)
+        write_u32(o, static_cast<uint32_t>(s));
+}
 
-        bool read_block(const std::vector<uint8_t> &in, size_t &off, IrBlock &b) {
-            if (!read_str(in, off, b.name)) return false;
-            uint32_t n_instrs = 0;
-            if (!read_u32(in, off, n_instrs)) return false;
-            b.instrs.clear();
-            b.instrs.reserve(n_instrs);
-            for (uint32_t k = 0; k < n_instrs; ++k) {
-                IrInstr i;
-                if (!read_instr(in, off, i)) return false;
-                b.instrs.push_back(std::move(i));
-            }
-            uint32_t n_preds = 0;
-            if (!read_u32(in, off, n_preds)) return false;
-            b.preds.clear();
-            b.preds.reserve(n_preds);
-            for (uint32_t k = 0; k < n_preds; ++k) {
-                uint32_t v = 0;
-                if (!read_u32(in, off, v)) return false;
-                b.preds.push_back(static_cast<IrBlockId>(v));
-            }
-            uint32_t n_succs = 0;
-            if (!read_u32(in, off, n_succs)) return false;
-            b.succs.clear();
-            b.succs.reserve(n_succs);
-            for (uint32_t k = 0; k < n_succs; ++k) {
-                uint32_t v = 0;
-                if (!read_u32(in, off, v)) return false;
-                b.succs.push_back(static_cast<IrBlockId>(v));
-            }
-            return true;
-        }
+bool read_block(const std::vector<uint8_t> &in, size_t &off, IrBlock &b) {
+    if (!read_str(in, off, b.name)) return false;
+    uint32_t n_instrs = 0;
+    if (!read_u32(in, off, n_instrs)) return false;
+    b.instrs.clear();
+    b.instrs.reserve(n_instrs);
+    for (uint32_t k = 0; k < n_instrs; ++k) {
+        IrInstr i;
+        if (!read_instr(in, off, i)) return false;
+        b.instrs.push_back(std::move(i));
+    }
+    uint32_t n_preds = 0;
+    if (!read_u32(in, off, n_preds)) return false;
+    b.preds.clear();
+    b.preds.reserve(n_preds);
+    for (uint32_t k = 0; k < n_preds; ++k) {
+        uint32_t v = 0;
+        if (!read_u32(in, off, v)) return false;
+        b.preds.push_back(static_cast<IrBlockId>(v));
+    }
+    uint32_t n_succs = 0;
+    if (!read_u32(in, off, n_succs)) return false;
+    b.succs.clear();
+    b.succs.reserve(n_succs);
+    for (uint32_t k = 0; k < n_succs; ++k) {
+        uint32_t v = 0;
+        if (!read_u32(in, off, v)) return false;
+        b.succs.push_back(static_cast<IrBlockId>(v));
+    }
+    return true;
+}
 
-    } // namespace anonymous
+} // namespace
 
-    /* ===================================================================== */
-    /* serialize_function / deserialize_function                              */
-    /* ===================================================================== */
+/* ===================================================================== */
+/* serialize_function / deserialize_function                              */
+/* ===================================================================== */
 
-    /**
-     * @brief Serializa una @c IrFunction completa.
-     *
-     * @return Numero de bytes que se escribieron en @c out (la posicion
-     *         final menos la inicial).  Util si el caller quiere saber
-     *         el tamano de esta funcion concreta sin recalcular.
-     *
-     * Orden de campos en el stream:
-     *   1. name (string)
-     *   2. ret_type (u8) + fn_flags (u8: native, variadic)
-     *   3. params: count u32 + IrValueId[count]
-     *   4. values: count u32 + IrValue[count]  (cada uno con su layout)
-     *   5. blocks: count u32 + IrBlock[count]
-     *   6. metadata de generics: template_name + n type_args + type_args[]
-     */
-    size_t serialize_function(const IrFunction &fn,
-                              std::vector<uint8_t> &out) {
-        const size_t start = out.size();
+/**
+ * @brief Serializa una @c IrFunction completa.
+ *
+ * @return Numero de bytes que se escribieron en @c out (la posicion
+ *         final menos la inicial).  Util si el caller quiere saber
+ *         el tamano de esta funcion concreta sin recalcular.
+ *
+ * Orden de campos en el stream:
+ *   1. name (string)
+ *   2. ret_type (u8) + fn_flags (u8: native, variadic)
+ *   3. params: count u32 + IrValueId[count]
+ *   4. values: count u32 + IrValue[count]  (cada uno con su layout)
+ *   5. blocks: count u32 + IrBlock[count]
+ *   6. metadata de generics: template_name + n type_args + type_args[]
+ */
+size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
+    const size_t start = out.size();
 
-        write_str(out, fn.name);
-        write_u8(out, static_cast<uint8_t>(fn.ret_type));
-        // Empaquetar los 2 bools de la funcion en un solo byte (mismo
-        // patron que en values).
-        uint8_t fn_flags = 0;
-        if (fn.is_native)   fn_flags |= FN_FLAG_NATIVE;
-        if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
-        write_u8(out, fn_flags);
+    write_str(out, fn.name);
+    write_u8(out, static_cast<uint8_t>(fn.ret_type));
+    // Empaquetar los 2 bools de la funcion en un solo byte (mismo
+    // patron que en values).
+    uint8_t fn_flags = 0;
+    if (fn.is_native) fn_flags |= FN_FLAG_NATIVE;
+    if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
+    write_u8(out, fn_flags);
 
-        // Params: lista de IrValueId que apuntan a entries en values[]
-        // que tienen is_param=true.  Duplicacion intencional para que el
-        // lookup "i-esimo parametro" sea O(1) sin filtrar values[].
-        write_u32(out, static_cast<uint32_t>(fn.params.size()));
-        for (auto p : fn.params) write_u32(out, static_cast<uint32_t>(p));
+    // Params: lista de IrValueId que apuntan a entries en values[]
+    // que tienen is_param=true.  Duplicacion intencional para que el
+    // lookup "i-esimo parametro" sea O(1) sin filtrar values[].
+    write_u32(out, static_cast<uint32_t>(fn.params.size()));
+    for (auto p : fn.params)
+        write_u32(out, static_cast<uint32_t>(p));
 
-        // Values: TODOS los SSA values de la funcion.  El indice en este
-        // array ES el IrValueId (los ids son densos 0..N-1).
-        write_u32(out, static_cast<uint32_t>(fn.values.size()));
-        for (const auto &v : fn.values) write_value(out, v);
+    // Values: TODOS los SSA values de la funcion.  El indice en este
+    // array ES el IrValueId (los ids son densos 0..N-1).
+    write_u32(out, static_cast<uint32_t>(fn.values.size()));
+    for (const auto &v : fn.values)
+        write_value(out, v);
 
-        // Blocks: cada uno incluye sus propias instrs + preds + succs.
-        // El indice en este array ES el IrBlockId.
-        write_u32(out, static_cast<uint32_t>(fn.blocks.size()));
-        for (const auto &b : fn.blocks) write_block(out, b);
+    // Blocks: cada uno incluye sus propias instrs + preds + succs.
+    // El indice en este array ES el IrBlockId.
+    write_u32(out, static_cast<uint32_t>(fn.blocks.size()));
+    for (const auto &b : fn.blocks)
+        write_block(out, b);
 
-        // Metadata para generics monomorphizados: el frontend Vex setea
-        // template_name (e.g. "List") y type_args (e.g. ["i32"]) al
-        // monomorphizar @c List<i32>.  Util para tools que quieran
-        // mostrar el template original en stack traces; el JIT no lo usa.
-        write_str(out, fn.generic_template_name);
-        write_u32(out, static_cast<uint32_t>(fn.generic_type_args.size()));
-        for (const auto &s : fn.generic_type_args) write_str(out, s);
+    // Metadata para generics monomorphizados: el frontend Vex setea
+    // template_name (e.g. "List") y type_args (e.g. ["i32"]) al
+    // monomorphizar @c List<i32>.  Util para tools que quieran
+    // mostrar el template original en stack traces; el JIT no lo usa.
+    write_str(out, fn.generic_template_name);
+    write_u32(out, static_cast<uint32_t>(fn.generic_type_args.size()));
+    for (const auto &s : fn.generic_type_args)
+        write_str(out, s);
 
-        // Phase AS inc.5: bindings register() + clobber-lists del inline-asm.
-        // Necesarios para que el JIT (que compila desde el @ir del .velb)
-        // reconstruya el pin de registros del INLINE_ASM.  La mayoria de
-        // funciones tienen ambos vacios (8 bytes: dos counts a 0).
-        write_u32(out, static_cast<uint32_t>(fn.asm_reg_bindings.size()));
-        for (const auto &b : fn.asm_reg_bindings) {
-            write_u32(out, static_cast<uint32_t>(b.alloca_value));
-            write_str(out, b.reg);
-            write_u8(out, static_cast<uint8_t>(b.type));
-            write_u8(out, b.is_vector ? 1u : 0u);
-            write_str(out, b.name);
-        }
-        write_u32(out, static_cast<uint32_t>(fn.asm_clobber_lists.size()));
-        for (const auto &lst : fn.asm_clobber_lists) {
-            write_u32(out, static_cast<uint32_t>(lst.size()));
-            for (const auto &s : lst) write_str(out, s);
-        }
-
-        // AOT 2b: seccion de salida del codigo + permisos (dev OS).
-        write_str(out, fn.section);
-        write_str(out, fn.section_perms);
-        // AOT: ubicacion fija (@at) + orden (@order) de la seccion.
-        write_u64(out, (uint64_t)fn.section_at);
-        write_u32(out, (uint32_t)fn.section_order);
-
-        return out.size() - start;
+    // Phase AS inc.5: bindings register() + clobber-lists del inline-asm.
+    // Necesarios para que el JIT (que compila desde el @ir del .velb)
+    // reconstruya el pin de registros del INLINE_ASM.  La mayoria de
+    // funciones tienen ambos vacios (8 bytes: dos counts a 0).
+    write_u32(out, static_cast<uint32_t>(fn.asm_reg_bindings.size()));
+    for (const auto &b : fn.asm_reg_bindings) {
+        write_u32(out, static_cast<uint32_t>(b.alloca_value));
+        write_str(out, b.reg);
+        write_u8(out, static_cast<uint8_t>(b.type));
+        write_u8(out, b.is_vector ? 1u : 0u);
+        write_str(out, b.name);
+    }
+    write_u32(out, static_cast<uint32_t>(fn.asm_clobber_lists.size()));
+    for (const auto &lst : fn.asm_clobber_lists) {
+        write_u32(out, static_cast<uint32_t>(lst.size()));
+        for (const auto &s : lst)
+            write_str(out, s);
     }
 
-    bool deserialize_function(const std::vector<uint8_t> &in,
-                              size_t &off,
-                              IrFunction &out) {
-        out = IrFunction{};
+    // AOT 2b: seccion de salida del codigo + permisos (dev OS).
+    write_str(out, fn.section);
+    write_str(out, fn.section_perms);
+    // AOT: ubicacion fija (@at) + orden (@order) de la seccion.
+    write_u64(out, (uint64_t)fn.section_at);
+    write_u32(out, (uint32_t)fn.section_order);
 
-        if (!read_str(in, off, out.name)) return false;
-        uint8_t ret_type_b = 0, fn_flags = 0;
-        if (!read_u8(in, off, ret_type_b)) return false;
-        if (!read_u8(in, off, fn_flags))   return false;
-        out.ret_type    = static_cast<IrType>(ret_type_b);
-        out.is_native   = (fn_flags & FN_FLAG_NATIVE)   != 0;
-        out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
+    return out.size() - start;
+}
 
-        /* params */
-        uint32_t n_params = 0;
-        if (!read_u32(in, off, n_params)) return false;
-        out.params.clear();
-        out.params.reserve(n_params);
-        for (uint32_t k = 0; k < n_params; ++k) {
-            uint32_t v = 0;
-            if (!read_u32(in, off, v)) return false;
-            out.params.push_back(static_cast<IrValueId>(v));
-        }
+bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
+                          IrFunction &out) {
+    out = IrFunction{};
 
-        /* values */
-        uint32_t n_values = 0;
-        if (!read_u32(in, off, n_values)) return false;
-        out.values.clear();
-        out.values.reserve(n_values);
-        for (uint32_t k = 0; k < n_values; ++k) {
-            IrValue v;
-            v.id = static_cast<IrValueId>(k);  /* id es el indice en el vector */
-            if (!read_value(in, off, v)) return false;
-            out.values.push_back(std::move(v));
-        }
+    if (!read_str(in, off, out.name)) return false;
+    uint8_t ret_type_b = 0, fn_flags = 0;
+    if (!read_u8(in, off, ret_type_b)) return false;
+    if (!read_u8(in, off, fn_flags)) return false;
+    out.ret_type = static_cast<IrType>(ret_type_b);
+    out.is_native = (fn_flags & FN_FLAG_NATIVE) != 0;
+    out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
 
-        /* blocks */
-        uint32_t n_blocks = 0;
-        if (!read_u32(in, off, n_blocks)) return false;
-        out.blocks.clear();
-        out.blocks.reserve(n_blocks);
-        for (uint32_t k = 0; k < n_blocks; ++k) {
-            IrBlock b;
-            b.id = static_cast<IrBlockId>(k);  /* id es el indice */
-            if (!read_block(in, off, b)) return false;
-            out.blocks.push_back(std::move(b));
-        }
+    /* params */
+    uint32_t n_params = 0;
+    if (!read_u32(in, off, n_params)) return false;
+    out.params.clear();
+    out.params.reserve(n_params);
+    for (uint32_t k = 0; k < n_params; ++k) {
+        uint32_t v = 0;
+        if (!read_u32(in, off, v)) return false;
+        out.params.push_back(static_cast<IrValueId>(v));
+    }
 
-        /* metadata */
-        if (!read_str(in, off, out.generic_template_name)) return false;
-        uint32_t n_args = 0;
-        if (!read_u32(in, off, n_args)) return false;
-        out.generic_type_args.clear();
-        out.generic_type_args.reserve(n_args);
-        for (uint32_t k = 0; k < n_args; ++k) {
+    /* values */
+    uint32_t n_values = 0;
+    if (!read_u32(in, off, n_values)) return false;
+    out.values.clear();
+    out.values.reserve(n_values);
+    for (uint32_t k = 0; k < n_values; ++k) {
+        IrValue v;
+        v.id = static_cast<IrValueId>(k); /* id es el indice en el vector */
+        if (!read_value(in, off, v)) return false;
+        out.values.push_back(std::move(v));
+    }
+
+    /* blocks */
+    uint32_t n_blocks = 0;
+    if (!read_u32(in, off, n_blocks)) return false;
+    out.blocks.clear();
+    out.blocks.reserve(n_blocks);
+    for (uint32_t k = 0; k < n_blocks; ++k) {
+        IrBlock b;
+        b.id = static_cast<IrBlockId>(k); /* id es el indice */
+        if (!read_block(in, off, b)) return false;
+        out.blocks.push_back(std::move(b));
+    }
+
+    /* metadata */
+    if (!read_str(in, off, out.generic_template_name)) return false;
+    uint32_t n_args = 0;
+    if (!read_u32(in, off, n_args)) return false;
+    out.generic_type_args.clear();
+    out.generic_type_args.reserve(n_args);
+    for (uint32_t k = 0; k < n_args; ++k) {
+        std::string s;
+        if (!read_str(in, off, s)) return false;
+        out.generic_type_args.push_back(std::move(s));
+    }
+
+    /* Phase AS inc.5: bindings register() + clobber-lists del inline-asm. */
+    uint32_t n_bind = 0;
+    if (!read_u32(in, off, n_bind)) return false;
+    out.asm_reg_bindings.clear();
+    out.asm_reg_bindings.reserve(n_bind);
+    for (uint32_t k = 0; k < n_bind; ++k) {
+        AsmRegBinding b;
+        uint32_t av = 0;
+        uint8_t ty = 0, vec = 0;
+        if (!read_u32(in, off, av)) return false;
+        b.alloca_value = static_cast<IrValueId>(av);
+        if (!read_str(in, off, b.reg)) return false;
+        if (!read_u8(in, off, ty)) return false;
+        b.type = static_cast<IrType>(ty);
+        if (!read_u8(in, off, vec)) return false;
+        b.is_vector = (vec != 0);
+        if (!read_str(in, off, b.name)) return false;
+        out.asm_reg_bindings.push_back(std::move(b));
+    }
+    uint32_t n_clob = 0;
+    if (!read_u32(in, off, n_clob)) return false;
+    out.asm_clobber_lists.clear();
+    out.asm_clobber_lists.reserve(n_clob);
+    for (uint32_t k = 0; k < n_clob; ++k) {
+        uint32_t n_s = 0;
+        if (!read_u32(in, off, n_s)) return false;
+        std::vector<std::string> lst;
+        lst.reserve(n_s);
+        for (uint32_t j = 0; j < n_s; ++j) {
             std::string s;
             if (!read_str(in, off, s)) return false;
-            out.generic_type_args.push_back(std::move(s));
+            lst.push_back(std::move(s));
         }
+        out.asm_clobber_lists.push_back(std::move(lst));
+    }
+    // AOT 2b: seccion de salida del codigo + permisos.
+    if (!read_str(in, off, out.section)) return false;
+    if (!read_str(in, off, out.section_perms)) return false;
+    // AOT: ubicacion fija (@at) + orden (@order).
+    uint64_t at_u = 0;
+    uint32_t ord_u = 0;
+    if (!read_u64(in, off, at_u)) return false;
+    if (!read_u32(in, off, ord_u)) return false;
+    out.section_at = (int64_t)at_u;
+    out.section_order = (int32_t)ord_u;
+    return true;
+}
 
-        /* Phase AS inc.5: bindings register() + clobber-lists del inline-asm. */
-        uint32_t n_bind = 0;
-        if (!read_u32(in, off, n_bind)) return false;
-        out.asm_reg_bindings.clear();
-        out.asm_reg_bindings.reserve(n_bind);
-        for (uint32_t k = 0; k < n_bind; ++k) {
-            AsmRegBinding b;
-            uint32_t av = 0; uint8_t ty = 0, vec = 0;
-            if (!read_u32(in, off, av)) return false;
-            b.alloca_value = static_cast<IrValueId>(av);
-            if (!read_str(in, off, b.reg)) return false;
-            if (!read_u8(in, off, ty)) return false;
-            b.type = static_cast<IrType>(ty);
-            if (!read_u8(in, off, vec)) return false;
-            b.is_vector = (vec != 0);
-            if (!read_str(in, off, b.name)) return false;
-            out.asm_reg_bindings.push_back(std::move(b));
-        }
-        uint32_t n_clob = 0;
-        if (!read_u32(in, off, n_clob)) return false;
-        out.asm_clobber_lists.clear();
-        out.asm_clobber_lists.reserve(n_clob);
-        for (uint32_t k = 0; k < n_clob; ++k) {
-            uint32_t n_s = 0;
-            if (!read_u32(in, off, n_s)) return false;
-            std::vector<std::string> lst;
-            lst.reserve(n_s);
-            for (uint32_t j = 0; j < n_s; ++j) {
-                std::string s;
-                if (!read_str(in, off, s)) return false;
-                lst.push_back(std::move(s));
-            }
-            out.asm_clobber_lists.push_back(std::move(lst));
-        }
-        // AOT 2b: seccion de salida del codigo + permisos.
-        if (!read_str(in, off, out.section))        return false;
-        if (!read_str(in, off, out.section_perms))  return false;
-        // AOT: ubicacion fija (@at) + orden (@order).
-        uint64_t at_u = 0; uint32_t ord_u = 0;
-        if (!read_u64(in, off, at_u))  return false;
-        if (!read_u32(in, off, ord_u)) return false;
-        out.section_at    = (int64_t)at_u;
-        out.section_order = (int32_t)ord_u;
-        return true;
+/* ===================================================================== */
+/* emit_ir_section / parse_ir_section                                     */
+/* ===================================================================== */
+
+/**
+ * @brief Emite la seccion @c @ir completa para el .velb.
+ *
+ * Layout de la seccion:
+ *   - Header (12 bytes):
+ *     - u32 magic (@c VEIR)
+ *     - u16 version
+ *     - u16 reserved (0 para alineamiento, futuras flags)
+ *     - u32 fn_count
+ *   - fn_count funciones concatenadas (cada una serializada por
+ *     @c serialize_function).
+ *
+ * El caller (linker .velb) toma el resultado y lo escribe en una
+ * seccion dedicada del binario.  El loader, al detectar la seccion,
+ * llama a @c parse_ir_section para reconstruir el vector de IrFunctions.
+ */
+std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions) {
+    std::vector<uint8_t> out;
+    // Pre-reserva: header (~16 B) + funcion tipica (~512 B).  Un
+    // sobreestimador modesto evita realocaciones del vector durante
+    // la serializacion sin desperdiciar memoria.
+    out.reserve(64 + functions.size() * 512);
+
+    // Header: identifica la seccion + version para validacion del
+    // loader y permite future-proofing si cambiamos el schema.
+    write_u32(out, IR_SECTION_MAGIC);
+    write_u16(out, IR_SECTION_VERSION);
+    write_u16(out, 0); // reserved (siempre 0 en v1; lo verifica el reader)
+    write_u32(out, static_cast<uint32_t>(functions.size()));
+
+    // Funciones concatenadas back-to-back.  No hay padding entre
+    // ellas: el parser usa el size de cada funcion (implicito en
+    // los campos) para avanzar al siguiente.
+    for (const auto &fn : functions) {
+        (void)serialize_function(fn, out); // ignoramos el retorno aqui
     }
 
-    /* ===================================================================== */
-    /* emit_ir_section / parse_ir_section                                     */
-    /* ===================================================================== */
+    return out;
+}
 
-    /**
-     * @brief Emite la seccion @c @ir completa para el .velb.
-     *
-     * Layout de la seccion:
-     *   - Header (12 bytes):
-     *     - u32 magic (@c VEIR)
-     *     - u16 version
-     *     - u16 reserved (0 para alineamiento, futuras flags)
-     *     - u32 fn_count
-     *   - fn_count funciones concatenadas (cada una serializada por
-     *     @c serialize_function).
-     *
-     * El caller (linker .velb) toma el resultado y lo escribe en una
-     * seccion dedicada del binario.  El loader, al detectar la seccion,
-     * llama a @c parse_ir_section para reconstruir el vector de IrFunctions.
-     */
-    std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions) {
-        std::vector<uint8_t> out;
-        // Pre-reserva: header (~16 B) + funcion tipica (~512 B).  Un
-        // sobreestimador modesto evita realocaciones del vector durante
-        // la serializacion sin desperdiciar memoria.
-        out.reserve(64 + functions.size() * 512);
+/**
+ * @brief Parsea la seccion @c @ir desde un buffer (tipicamente el
+ *        mmap del .velb).
+ *
+ * @param data         Buffer completo del .velb (lectura solo).
+ * @param offset       Offset dentro de @c data donde empieza @c VEIR.
+ * @param section_size Tamano de la seccion (segun el header del .velb).
+ * @param functions    Vector que rellenamos.  Se @c clear primero, asi
+ *                     llamar repetidamente sobre el mismo vector funciona.
+ * @return @c true si el parseo fue exitoso; @c false en cualquier error
+ *         (magic incorrecto, version no soportada, buffer truncado,
+ *         fn_count sospechosamente grande).
+ *
+ * Politica de seguridad: este parser puede leer bytes que vienen de
+ * un .velb potencialmente corrupto o malicioso.  Por eso validamos:
+ *   - Magic correcto (VEIR).
+ *   - Version exacta (rechazamos versiones futuras desconocidas; un
+ *     v2 podria tener layout incompatible).
+ *   - fn_count <= 100000 (hard cap defensivo).
+ *   - Cada deserializacion individual no excede @c section_end.
+ */
+bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
+                      size_t section_size, std::vector<IrFunction> &functions) {
+    functions.clear();
 
-        // Header: identifica la seccion + version para validacion del
-        // loader y permite future-proofing si cambiamos el schema.
-        write_u32(out, IR_SECTION_MAGIC);
-        write_u16(out, IR_SECTION_VERSION);
-        write_u16(out, 0);  // reserved (siempre 0 en v1; lo verifica el reader)
-        write_u32(out, static_cast<uint32_t>(functions.size()));
+    // Validar el tamano minimo (al menos el header completo de 12 bytes:
+    // magic 4 + version 2 + reserved 2 + fn_count 4) y que la seccion
+    // no se salga del buffer.
+    if (section_size < 12) return false;
+    if (offset + section_size > data.size()) return false;
 
-        // Funciones concatenadas back-to-back.  No hay padding entre
-        // ellas: el parser usa el size de cada funcion (implicito en
-        // los campos) para avanzar al siguiente.
-        for (const auto &fn : functions) {
-            (void)serialize_function(fn, out);  // ignoramos el retorno aqui
-        }
+    size_t off = offset;
+    uint32_t magic = 0;
+    if (!read_u32(data, off, magic)) return false;
+    // Magic check: si no es VEIR, el caller paso un offset
+    // equivocado o la seccion esta corrupta.  Abortar antes de
+    // intentar parsear nada interpretable.
+    if (magic != IR_SECTION_MAGIC) return false;
 
-        return out;
+    uint16_t version = 0;
+    uint16_t reserved = 0;
+    if (!read_u16(data, off, version)) return false;
+    if (!read_u16(data, off, reserved)) return false;
+    // Version exact match: si fuera un .velb v2 con un schema
+    // distinto, parsearlo como v1 daria garbage.  Mejor rechazar
+    // explicitamente y forzar al usuario a usar el loader correcto.
+    if (version != IR_SECTION_VERSION) return false;
+
+    uint32_t fn_count = 0;
+    if (!read_u32(data, off, fn_count)) return false;
+
+    // Hard cap defensivo: programas con >100000 funciones IR son
+    // imposibles en la practica (incluso un programa enorme tendria
+    // ~5000 funciones).  Sin este cap, un .velb malicioso con un
+    // fn_count enorme (UINT32_MAX) forzaria a @c functions.reserve a
+    // intentar alocar TBs de memoria, crasheando con OOM.
+    if (fn_count > 100000) return false;
+
+    functions.reserve(fn_count);
+    const size_t section_end = offset + section_size;
+    // Loop de deserializacion: cada funcion avanza @c off por su
+    // propio tamano.  Verificamos antes (off >= end -> truncada) y
+    // despues (off > end -> overflow de la seccion).
+    for (uint32_t i = 0; i < fn_count; ++i) {
+        // Si ya pasamos el fin de la seccion antes de empezar a leer
+        // esta funcion, el fn_count es inconsistente con section_size.
+        if (off >= section_end) return false;
+        IrFunction fn;
+        if (!deserialize_function(data, off, fn)) return false;
+        // Validacion post-deserialize: la funcion no debe haberse
+        // "comido" mas bytes de los que pertenecen a la seccion.
+        if (off > section_end) return false;
+        functions.push_back(std::move(fn));
     }
+    return true;
+}
 
-    /**
-     * @brief Parsea la seccion @c @ir desde un buffer (tipicamente el
-     *        mmap del .velb).
-     *
-     * @param data         Buffer completo del .velb (lectura solo).
-     * @param offset       Offset dentro de @c data donde empieza @c VEIR.
-     * @param section_size Tamano de la seccion (segun el header del .velb).
-     * @param functions    Vector que rellenamos.  Se @c clear primero, asi
-     *                     llamar repetidamente sobre el mismo vector funciona.
-     * @return @c true si el parseo fue exitoso; @c false en cualquier error
-     *         (magic incorrecto, version no soportada, buffer truncado,
-     *         fn_count sospechosamente grande).
-     *
-     * Politica de seguridad: este parser puede leer bytes que vienen de
-     * un .velb potencialmente corrupto o malicioso.  Por eso validamos:
-     *   - Magic correcto (VEIR).
-     *   - Version exacta (rechazamos versiones futuras desconocidas; un
-     *     v2 podria tener layout incompatible).
-     *   - fn_count <= 100000 (hard cap defensivo).
-     *   - Cada deserializacion individual no excede @c section_end.
-     */
-    bool parse_ir_section(const std::vector<uint8_t> &data,
-                          size_t offset,
-                          size_t section_size,
-                          std::vector<IrFunction> &functions) {
-        functions.clear();
+/* ===================================================================== */
+/* emit_ir_module_cache / parse_ir_module_cache  (.vexir)                 */
+/* ===================================================================== */
 
-        // Validar el tamano minimo (al menos el header completo de 12 bytes:
-        // magic 4 + version 2 + reserved 2 + fn_count 4) y que la seccion
-        // no se salga del buffer.
-        if (section_size < 12) return false;
-        if (offset + section_size > data.size()) return false;
-
-        size_t off = offset;
-        uint32_t magic = 0;
-        if (!read_u32(data, off, magic)) return false;
-        // Magic check: si no es VEIR, el caller paso un offset
-        // equivocado o la seccion esta corrupta.  Abortar antes de
-        // intentar parsear nada interpretable.
-        if (magic != IR_SECTION_MAGIC) return false;
-
-        uint16_t version = 0;
-        uint16_t reserved = 0;
-        if (!read_u16(data, off, version)) return false;
-        if (!read_u16(data, off, reserved)) return false;
-        // Version exact match: si fuera un .velb v2 con un schema
-        // distinto, parsearlo como v1 daria garbage.  Mejor rechazar
-        // explicitamente y forzar al usuario a usar el loader correcto.
-        if (version != IR_SECTION_VERSION) return false;
-
-        uint32_t fn_count = 0;
-        if (!read_u32(data, off, fn_count)) return false;
-
-        // Hard cap defensivo: programas con >100000 funciones IR son
-        // imposibles en la practica (incluso un programa enorme tendria
-        // ~5000 funciones).  Sin este cap, un .velb malicioso con un
-        // fn_count enorme (UINT32_MAX) forzaria a @c functions.reserve a
-        // intentar alocar TBs de memoria, crasheando con OOM.
-        if (fn_count > 100000) return false;
-
-        functions.reserve(fn_count);
-        const size_t section_end = offset + section_size;
-        // Loop de deserializacion: cada funcion avanza @c off por su
-        // propio tamano.  Verificamos antes (off >= end -> truncada) y
-        // despues (off > end -> overflow de la seccion).
-        for (uint32_t i = 0; i < fn_count; ++i) {
-            // Si ya pasamos el fin de la seccion antes de empezar a leer
-            // esta funcion, el fn_count es inconsistente con section_size.
-            if (off >= section_end) return false;
-            IrFunction fn;
-            if (!deserialize_function(data, off, fn)) return false;
-            // Validacion post-deserialize: la funcion no debe haberse
-            // "comido" mas bytes de los que pertenecen a la seccion.
-            if (off > section_end) return false;
-            functions.push_back(std::move(fn));
-        }
-        return true;
-    }
-
-    /* ===================================================================== */
-    /* emit_ir_module_cache / parse_ir_module_cache  (.vexir)                 */
-    /* ===================================================================== */
-
-    /**
-     * @brief Serializa una @c StaticDataStore verbatim (pool + entries + meta).
-     *
-     * Se persiste el pool de bytes y los @c byte_offset/@c byte_len tal cual
-     * para que la reconstruccion sea byte-exacta (el merge cross-module
-     * depende de offsets estables dentro del pool del dep).
-     */
-    static void serialize_static_data(const IrModule::StaticDataStore &sd,
-                                      std::vector<uint8_t> &out) {
-        write_u8(out, sd.alignment_default);
-        // Pool de bytes contiguo.
-        write_u32(out, static_cast<uint32_t>(sd.bytes.size()));
-        out.insert(out.end(), sd.bytes.begin(), sd.bytes.end());
-        // Entries (rangos + meta).
-        write_u32(out, static_cast<uint32_t>(sd.entries.size()));
-        for (const auto &e : sd.entries) {
-            write_u32(out, e.byte_offset);
-            write_u32(out, e.byte_len);
-            write_u64(out, e.meta.content_hash);
-            write_u16(out, e.meta.alignment);
-            write_u8 (out, e.meta.flags);
-            write_u16(out, e.meta.source_module_idx);
-            write_str(out, e.meta.section_name);
-            write_str(out, e.meta.section_perms);  // AOT 2b
-            write_u64(out, (uint64_t)e.meta.section_at);     // AOT @at
-            write_u32(out, (uint32_t)e.meta.section_order);  // AOT @order
-            // AOT Inc 3: referencias a simbolos en bloques `bytes` (dq main).
-            write_u32(out, static_cast<uint32_t>(e.meta.sym_refs.size()));
-            for (const auto &sr : e.meta.sym_refs) {
-                write_u32(out, sr.offset);
-                write_u8 (out, sr.width);
-                write_u8 (out, sr.is_rel);
-                write_str(out, sr.sym);
-            }
+/**
+ * @brief Serializa una @c StaticDataStore verbatim (pool + entries + meta).
+ *
+ * Se persiste el pool de bytes y los @c byte_offset/@c byte_len tal cual
+ * para que la reconstruccion sea byte-exacta (el merge cross-module
+ * depende de offsets estables dentro del pool del dep).
+ */
+static void serialize_static_data(const IrModule::StaticDataStore &sd,
+                                  std::vector<uint8_t> &out) {
+    write_u8(out, sd.alignment_default);
+    // Pool de bytes contiguo.
+    write_u32(out, static_cast<uint32_t>(sd.bytes.size()));
+    out.insert(out.end(), sd.bytes.begin(), sd.bytes.end());
+    // Entries (rangos + meta).
+    write_u32(out, static_cast<uint32_t>(sd.entries.size()));
+    for (const auto &e : sd.entries) {
+        write_u32(out, e.byte_offset);
+        write_u32(out, e.byte_len);
+        write_u64(out, e.meta.content_hash);
+        write_u16(out, e.meta.alignment);
+        write_u8(out, e.meta.flags);
+        write_u16(out, e.meta.source_module_idx);
+        write_str(out, e.meta.section_name);
+        write_str(out, e.meta.section_perms);           // AOT 2b
+        write_u64(out, (uint64_t)e.meta.section_at);    // AOT @at
+        write_u32(out, (uint32_t)e.meta.section_order); // AOT @order
+        // AOT Inc 3: referencias a simbolos en bloques `bytes` (dq main).
+        write_u32(out, static_cast<uint32_t>(e.meta.sym_refs.size()));
+        for (const auto &sr : e.meta.sym_refs) {
+            write_u32(out, sr.offset);
+            write_u8(out, sr.width);
+            write_u8(out, sr.is_rel);
+            write_str(out, sr.sym);
         }
     }
+}
 
-    static bool deserialize_static_data(const std::vector<uint8_t> &in,
-                                        size_t &off,
-                                        IrModule::StaticDataStore &sd) {
-        sd.clear();
-        if (!read_u8(in, off, sd.alignment_default)) return false;
-        uint32_t pool_len = 0;
-        if (!read_u32(in, off, pool_len)) return false;
-        if (off + pool_len > in.size()) return false;
-        sd.bytes.assign(in.begin() + off, in.begin() + off + pool_len);
-        off += pool_len;
-        uint32_t entry_count = 0;
-        if (!read_u32(in, off, entry_count)) return false;
-        // Cap defensivo: un dep real tiene a lo sumo unos pocos miles de slots.
-        if (entry_count > 2000000u) return false;
-        sd.entries.reserve(entry_count);
-        for (uint32_t i = 0; i < entry_count; ++i) {
-            IrModule::StaticDataStore::Entry e{};
-            if (!read_u32(in, off, e.byte_offset)) return false;
-            if (!read_u32(in, off, e.byte_len))    return false;
-            if (!read_u64(in, off, e.meta.content_hash)) return false;
-            if (!read_u16(in, off, e.meta.alignment))    return false;
-            if (!read_u8 (in, off, e.meta.flags))        return false;
-            if (!read_u16(in, off, e.meta.source_module_idx)) return false;
-            if (!read_str(in, off, e.meta.section_name)) return false;
-            if (!read_str(in, off, e.meta.section_perms)) return false;  // AOT 2b
-            uint64_t sat_u = 0; uint32_t sord_u = 0;
-            if (!read_u64(in, off, sat_u))  return false;   // AOT @at
-            if (!read_u32(in, off, sord_u)) return false;   // AOT @order
-            e.meta.section_at    = (int64_t)sat_u;
-            e.meta.section_order = (int32_t)sord_u;
-            // AOT Inc 3: referencias a simbolos.
-            uint32_t nrefs = 0;
-            if (!read_u32(in, off, nrefs)) return false;
-            if (nrefs > 1000000u) return false;  // cap defensivo
-            e.meta.sym_refs.reserve(nrefs);
-            for (uint32_t k = 0; k < nrefs; ++k) {
-                IrModule::StaticDataMeta::SymRef sr;
-                if (!read_u32(in, off, sr.offset)) return false;
-                if (!read_u8 (in, off, sr.width))  return false;
-                if (!read_u8 (in, off, sr.is_rel)) return false;
-                if (!read_str(in, off, sr.sym))    return false;
-                e.meta.sym_refs.push_back(std::move(sr));
-            }
-            // Validar que el rango cae dentro del pool.
-            if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
-                return false;
-            sd.entries.push_back(std::move(e));
+static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
+                                    IrModule::StaticDataStore &sd) {
+    sd.clear();
+    if (!read_u8(in, off, sd.alignment_default)) return false;
+    uint32_t pool_len = 0;
+    if (!read_u32(in, off, pool_len)) return false;
+    if (off + pool_len > in.size()) return false;
+    sd.bytes.assign(in.begin() + off, in.begin() + off + pool_len);
+    off += pool_len;
+    uint32_t entry_count = 0;
+    if (!read_u32(in, off, entry_count)) return false;
+    // Cap defensivo: un dep real tiene a lo sumo unos pocos miles de slots.
+    if (entry_count > 2000000u) return false;
+    sd.entries.reserve(entry_count);
+    for (uint32_t i = 0; i < entry_count; ++i) {
+        IrModule::StaticDataStore::Entry e{};
+        if (!read_u32(in, off, e.byte_offset)) return false;
+        if (!read_u32(in, off, e.byte_len)) return false;
+        if (!read_u64(in, off, e.meta.content_hash)) return false;
+        if (!read_u16(in, off, e.meta.alignment)) return false;
+        if (!read_u8(in, off, e.meta.flags)) return false;
+        if (!read_u16(in, off, e.meta.source_module_idx)) return false;
+        if (!read_str(in, off, e.meta.section_name)) return false;
+        if (!read_str(in, off, e.meta.section_perms)) return false; // AOT 2b
+        uint64_t sat_u = 0;
+        uint32_t sord_u = 0;
+        if (!read_u64(in, off, sat_u)) return false;  // AOT @at
+        if (!read_u32(in, off, sord_u)) return false; // AOT @order
+        e.meta.section_at = (int64_t)sat_u;
+        e.meta.section_order = (int32_t)sord_u;
+        // AOT Inc 3: referencias a simbolos.
+        uint32_t nrefs = 0;
+        if (!read_u32(in, off, nrefs)) return false;
+        if (nrefs > 1000000u) return false; // cap defensivo
+        e.meta.sym_refs.reserve(nrefs);
+        for (uint32_t k = 0; k < nrefs; ++k) {
+            IrModule::StaticDataMeta::SymRef sr;
+            if (!read_u32(in, off, sr.offset)) return false;
+            if (!read_u8(in, off, sr.width)) return false;
+            if (!read_u8(in, off, sr.is_rel)) return false;
+            if (!read_str(in, off, sr.sym)) return false;
+            e.meta.sym_refs.push_back(std::move(sr));
         }
-        return true;
+        // Validar que el rango cae dentro del pool.
+        if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
+            return false;
+        sd.entries.push_back(std::move(e));
     }
+    return true;
+}
 
-    std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
-        std::vector<uint8_t> out;
-        write_u32(out, IR_MODULE_CACHE_MAGIC);
-        write_u16(out, IR_MODULE_CACHE_VERSION);
-        write_u16(out, 0); // reserved
+std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
+    std::vector<uint8_t> out;
+    write_u32(out, IR_MODULE_CACHE_MAGIC);
+    write_u16(out, IR_MODULE_CACHE_VERSION);
+    write_u16(out, 0); // reserved
 
-        // 1) Funciones: reusa el formato @ir (con su header VEIR propio).
-        //    Guardamos su longitud para poder delimitar la sub-seccion al leer.
-        std::vector<uint8_t> fn_bytes = emit_ir_section(mod.functions);
-        write_u32(out, static_cast<uint32_t>(fn_bytes.size()));
-        out.insert(out.end(), fn_bytes.begin(), fn_bytes.end());
+    // 1) Funciones: reusa el formato @ir (con su header VEIR propio).
+    //    Guardamos su longitud para poder delimitar la sub-seccion al leer.
+    std::vector<uint8_t> fn_bytes = emit_ir_section(mod.functions);
+    write_u32(out, static_cast<uint32_t>(fn_bytes.size()));
+    out.insert(out.end(), fn_bytes.begin(), fn_bytes.end());
 
-        // 2) static_data (lo que faltaba: la causa del bug code.s_* colgante).
-        serialize_static_data(mod.static_data, out);
+    // 2) static_data (lo que faltaba: la causa del bug code.s_* colgante).
+    serialize_static_data(mod.static_data, out);
 
-        // 3) globals (nombre -> IrValueId).
-        write_u32(out, static_cast<uint32_t>(mod.globals.size()));
-        for (const auto &g : mod.globals) {
-            write_str(out, g.first);
-            write_u32(out, static_cast<uint32_t>(g.second));
-        }
-        return out;
+    // 3) globals (nombre -> IrValueId).
+    write_u32(out, static_cast<uint32_t>(mod.globals.size()));
+    for (const auto &g : mod.globals) {
+        write_str(out, g.first);
+        write_u32(out, static_cast<uint32_t>(g.second));
     }
+    return out;
+}
 
-    bool parse_ir_module_cache(const std::vector<uint8_t> &data,
-                               IrModule &out) {
-        size_t off = 0;
-        uint32_t magic = 0;
-        if (!read_u32(data, off, magic)) return false;
-        if (magic != IR_MODULE_CACHE_MAGIC) return false; // formato viejo -> recompilar
-        uint16_t version = 0, reserved = 0;
-        if (!read_u16(data, off, version)) return false;
-        if (!read_u16(data, off, reserved)) return false;
-        if (version != IR_MODULE_CACHE_VERSION) return false;
+bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
+    size_t off = 0;
+    uint32_t magic = 0;
+    if (!read_u32(data, off, magic)) return false;
+    if (magic != IR_MODULE_CACHE_MAGIC)
+        return false; // formato viejo -> recompilar
+    uint16_t version = 0, reserved = 0;
+    if (!read_u16(data, off, version)) return false;
+    if (!read_u16(data, off, reserved)) return false;
+    if (version != IR_MODULE_CACHE_VERSION) return false;
 
-        // 1) Funciones.
-        uint32_t fn_len = 0;
-        if (!read_u32(data, off, fn_len)) return false;
-        if (off + fn_len > data.size()) return false;
-        if (!parse_ir_section(data, off, fn_len, out.functions)) return false;
-        off += fn_len;
+    // 1) Funciones.
+    uint32_t fn_len = 0;
+    if (!read_u32(data, off, fn_len)) return false;
+    if (off + fn_len > data.size()) return false;
+    if (!parse_ir_section(data, off, fn_len, out.functions)) return false;
+    off += fn_len;
 
-        // 2) static_data.
-        if (!deserialize_static_data(data, off, out.static_data)) return false;
+    // 2) static_data.
+    if (!deserialize_static_data(data, off, out.static_data)) return false;
 
-        // 3) globals.
-        out.globals.clear();
-        uint32_t gcount = 0;
-        if (!read_u32(data, off, gcount)) return false;
-        if (gcount > 2000000u) return false;
-        for (uint32_t i = 0; i < gcount; ++i) {
-            std::string name;
-            uint32_t vid = 0;
-            if (!read_str(data, off, name)) return false;
-            if (!read_u32(data, off, vid)) return false;
-            out.globals.emplace(std::move(name), static_cast<IrValueId>(vid));
-        }
-        return true;
+    // 3) globals.
+    out.globals.clear();
+    uint32_t gcount = 0;
+    if (!read_u32(data, off, gcount)) return false;
+    if (gcount > 2000000u) return false;
+    for (uint32_t i = 0; i < gcount; ++i) {
+        std::string name;
+        uint32_t vid = 0;
+        if (!read_str(data, off, name)) return false;
+        if (!read_u32(data, off, vid)) return false;
+        out.globals.emplace(std::move(name), static_cast<IrValueId>(vid));
     }
+    return true;
+}
 
 } // namespace ir

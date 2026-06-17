@@ -52,23 +52,24 @@
  *   0x51  STRGETBYTES r_dst, r_src  -> byte_len
  *   0x52  STRGETKIND  r_dst, r_src  -> kind (0=FLAT 1=ROPE 2=SLICE)
  *   0x53  STRRESERVE  r_dst, r_cap  -> GcHandle de FLAT con capacidad reservada
- *         Crea un FLAT vacio con byte_len=0 pero capacidad interna = r_cap bytes.
- *         El programa escribe en el buffer via STRRAW + instrucciones nativas.
+ *         Crea un FLAT vacio con byte_len=0 pero capacidad interna = r_cap
+ * bytes. El programa escribe en el buffer via STRRAW + instrucciones nativas.
  *         Tras escribir, usa STRFINALIZE para establecer la longitud final.
- *   0x54  STRFINALIZE r_dst, r_newlen -> actualiza byte_len+length+hash de un FLAT mutable
+ *   0x54  STRFINALIZE r_dst, r_newlen -> actualiza byte_len+length+hash de un
+ * FLAT mutable
  */
 
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
-#include "runtime/runtime.h"           // para acceder a vm->scheduler.vm_reference.script_args
+#include "runtime/runtime.h" // para acceder a vm->scheduler.vm_reference.script_args
 #include "runtime/scheduler.h"
 #include "runtime/string_intern.h"
-#include "runtime/string_runtime.h"    // Phase MC.13: API publica make_string_flat
+#include "runtime/string_runtime.h" // Phase MC.13: API publica make_string_flat
 #include "gc/gc_heap.h"
 #include "loader/oop_types.h"
 #include "loader/string_object.h"
 
-#include <cstring>   // memcpy, memcmp
+#include <cstring> // memcpy, memcmp
 #include <vector>
 #include <string>
 #include <algorithm> // std::min
@@ -80,7 +81,9 @@ namespace runtime {
 // =========================================================================
 
 static gc::GcHandle flatten_string(ProcessVM *vm, gc::GcHandle h);
-static gc::GcHandle auto_intern(ProcessVM *vm, gc::GcHandle h, const uint8_t *data, uint32_t byte_len, loader::StringEncoding enc);
+static gc::GcHandle auto_intern(ProcessVM *vm, gc::GcHandle h,
+                                const uint8_t *data, uint32_t byte_len,
+                                loader::StringEncoding enc);
 
 // =========================================================================
 // Helper: obtener o crear el pool de interning del proceso
@@ -112,9 +115,12 @@ static StringInternPool &get_intern_pool(ProcessVM *vm) {
  * @param enc       Codificacion del string.
  * @return          Clave std::string (bytes del string + byte de encoding).
  */
-static std::string make_intern_key(const uint8_t *data, uint32_t byte_len, loader::StringEncoding enc) {
-    std::string key(reinterpret_cast<const char *>(data), byte_len); // raw bytes
-    key += static_cast<char>(static_cast<uint8_t>(enc));             // byte de codificacion al final
+static std::string make_intern_key(const uint8_t *data, uint32_t byte_len,
+                                   loader::StringEncoding enc) {
+    std::string key(reinterpret_cast<const char *>(data),
+                    byte_len); // raw bytes
+    key += static_cast<char>(
+        static_cast<uint8_t>(enc)); // byte de codificacion al final
     return key;
 }
 
@@ -148,16 +154,15 @@ static std::string make_intern_key(const uint8_t *data, uint32_t byte_len, loade
  * para TODOS los strings (no solo cortos como antes).  Coste pequeno
  * vs ahorro grande en STRCMP fast-reject.
  */
-static gc::GcHandle alloc_flat(ProcessVM *vm,
-                                const uint8_t *src_data,
-                                uint32_t byte_len,
-                                uint32_t length,
-                                loader::StringEncoding enc,
-                                uint32_t capacity = 0,
-                                uint64_t precomputed_hash = 0)
-{
-    uint32_t buf_size = (capacity > byte_len) ? capacity : byte_len; // usar el mayor
-    size_t total = sizeof(loader::StringObject) + buf_size + 1;      // +1 para nulo Win32
+static gc::GcHandle alloc_flat(ProcessVM *vm, const uint8_t *src_data,
+                               uint32_t byte_len, uint32_t length,
+                               loader::StringEncoding enc,
+                               uint32_t capacity = 0,
+                               uint64_t precomputed_hash = 0) {
+    uint32_t buf_size =
+        (capacity > byte_len) ? capacity : byte_len; // usar el mayor
+    size_t total =
+        sizeof(loader::StringObject) + buf_size + 1; // +1 para nulo Win32
 
     // alloc_pinned: aloca directo en OldGen (non-moving).  Necesario porque
     // STRRAW exporta el host_ptr al buffer y este se preserva via push/pop a
@@ -172,15 +177,15 @@ static gc::GcHandle alloc_flat(ProcessVM *vm,
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
 
     // inicializar cabecera ObjectHeader (todos los campos en una pasada)
-    s->header.class_ptr  = nullptr;
-    s->header.flags      = loader::OBJ_FLAG_GC_OWNED;
-    s->header.hash_code  = static_cast<uint32_t>(h);
+    s->header.class_ptr = nullptr;
+    s->header.flags = loader::OBJ_FLAG_GC_OWNED;
+    s->header.hash_code = static_cast<uint32_t>(h);
     s->header.monitor_word.store(0, std::memory_order_relaxed);
 
     s->encoding = static_cast<uint8_t>(enc);
-    s->kind     = static_cast<uint8_t>(loader::StringKind::FLAT);
-    s->_pad[0]  = s->_pad[1] = 0;
-    s->length   = length;
+    s->kind = static_cast<uint8_t>(loader::StringKind::FLAT);
+    s->_pad[0] = s->_pad[1] = 0;
+    s->length = length;
     s->byte_len = byte_len;
     // Sprint string-perf-3 fix: precomputed_hash YA es FNV-1a 32-bit
     // puro (mismo algoritmo que str_hash_compute fallback).  Solo
@@ -222,14 +227,10 @@ static gc::GcHandle alloc_flat(ProcessVM *vm,
  * @param enc    Codificacion del rope (hereda del hijo izquierdo).
  * @return       GcHandle del nuevo nodo ROPE.
  */
-static gc::GcHandle alloc_rope(ProcessVM *vm,
-                                gc::GcHandle left,
-                                gc::GcHandle right,
-                                uint32_t total_length,
-                                uint32_t total_byte_len,
-                                loader::StringEncoding enc,
-                                uint32_t depth)
-{
+static gc::GcHandle alloc_rope(ProcessVM *vm, gc::GcHandle left,
+                               gc::GcHandle right, uint32_t total_length,
+                               uint32_t total_byte_len,
+                               loader::StringEncoding enc, uint32_t depth) {
     size_t total = sizeof(loader::StringObject) + sizeof(loader::RopeData);
     // Vease nota en alloc_flat: alloc_pinned -> OldGen non-moving para que el
     // host_ptr exportado via STRRAW no quede dangling tras un GC menor.
@@ -241,24 +242,24 @@ static gc::GcHandle alloc_rope(ProcessVM *vm,
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
 
-    s->header.class_ptr  = nullptr;
-    s->header.flags      = loader::OBJ_FLAG_GC_OWNED;
-    s->header.hash_code  = static_cast<uint32_t>(h);
+    s->header.class_ptr = nullptr;
+    s->header.flags = loader::OBJ_FLAG_GC_OWNED;
+    s->header.hash_code = static_cast<uint32_t>(h);
     // monitor_word empaqueta owner + lock_depth; cero = unlocked.
     s->header.monitor_word.store(0, std::memory_order_relaxed);
 
     s->encoding = static_cast<uint8_t>(enc);
-    s->kind     = static_cast<uint8_t>(loader::StringKind::ROPE);
-    s->_pad[0]  = s->_pad[1] = 0;
-    s->length   = total_length;
+    s->kind = static_cast<uint8_t>(loader::StringKind::ROPE);
+    s->_pad[0] = s->_pad[1] = 0;
+    s->length = total_length;
     s->byte_len = total_byte_len;
     s->str_hash = 0;
 
     auto *rd = loader::str_rope(s);
-    rd->left_handle  = left;
+    rd->left_handle = left;
     rd->right_handle = right;
-    rd->depth        = depth;
-    rd->_pad         = 0;
+    rd->depth = depth;
+    rd->_pad = 0;
 
     return h;
 }
@@ -276,13 +277,9 @@ static gc::GcHandle alloc_rope(ProcessVM *vm,
  * @param enc         Codificacion (heredada del padre).
  * @return            GcHandle del nuevo nodo SLICE.
  */
-static gc::GcHandle alloc_slice(ProcessVM *vm,
-                                 gc::GcHandle parent,
-                                 uint32_t byte_offset,
-                                 uint32_t byte_len,
-                                 uint32_t length,
-                                 loader::StringEncoding enc)
-{
+static gc::GcHandle alloc_slice(ProcessVM *vm, gc::GcHandle parent,
+                                uint32_t byte_offset, uint32_t byte_len,
+                                uint32_t length, loader::StringEncoding enc) {
     size_t total = sizeof(loader::StringObject) + sizeof(loader::SliceData);
     // Vease nota en alloc_flat: alloc_pinned -> OldGen non-moving.
     gc::GcHandle h = vm->gc_heap.alloc_pinned(total);
@@ -293,22 +290,22 @@ static gc::GcHandle alloc_slice(ProcessVM *vm,
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
 
-    s->header.class_ptr  = nullptr;
-    s->header.flags      = loader::OBJ_FLAG_GC_OWNED;
-    s->header.hash_code  = static_cast<uint32_t>(h);
+    s->header.class_ptr = nullptr;
+    s->header.flags = loader::OBJ_FLAG_GC_OWNED;
+    s->header.hash_code = static_cast<uint32_t>(h);
     // monitor_word empaqueta owner + lock_depth; cero = unlocked.
     s->header.monitor_word.store(0, std::memory_order_relaxed);
 
     s->encoding = static_cast<uint8_t>(enc);
-    s->kind     = static_cast<uint8_t>(loader::StringKind::SLICE);
-    s->_pad[0]  = s->_pad[1] = 0;
-    s->length   = length;
+    s->kind = static_cast<uint8_t>(loader::StringKind::SLICE);
+    s->_pad[0] = s->_pad[1] = 0;
+    s->length = length;
     s->byte_len = byte_len;
     s->str_hash = 0;
 
     auto *sd = loader::str_slice(s);
     sd->parent_handle = parent;
-    sd->byte_offset   = byte_offset;
+    sd->byte_offset = byte_offset;
 
     return h;
 }
@@ -331,15 +328,15 @@ static gc::GcHandle alloc_slice(ProcessVM *vm,
  * @return         GcHandle canonico (puede ser h u otro preexistente).
  */
 static gc::GcHandle auto_intern(ProcessVM *vm, gc::GcHandle h,
-                                 const uint8_t *data, uint32_t byte_len,
-                                 loader::StringEncoding enc)
-{
-    if (byte_len > loader::STR_INTERN_THRESHOLD) return h; // demasiado largo para internar
+                                const uint8_t *data, uint32_t byte_len,
+                                loader::StringEncoding enc) {
+    if (byte_len > loader::STR_INTERN_THRESHOLD)
+        return h; // demasiado largo para internar
 
     StringInternPool &pool = get_intern_pool(vm);
-    std::string key        = make_intern_key(data, byte_len, enc);
+    std::string key = make_intern_key(data, byte_len, enc);
 
-    gc::GcHandle canonical = pool.intern(key, h);    // buscar o insertar
+    gc::GcHandle canonical = pool.intern(key, h); // buscar o insertar
 
     if (canonical == h) {
         // recien insertado: marcar el objeto como internado
@@ -366,7 +363,8 @@ static gc::GcHandle auto_intern(ProcessVM *vm, gc::GcHandle h,
  * @param out   Vector de salida donde se acumulan los bytes.
  * @return      true si la recoleccion tuvo exito.
  */
-static bool collect_bytes(ProcessVM *vm, gc::GcHandle h, std::vector<uint8_t> &out) {
+static bool collect_bytes(ProcessVM *vm, gc::GcHandle h,
+                          std::vector<uint8_t> &out) {
     if (h == gc::GC_NULL_HANDLE) return false;
 
     uint8_t *payload = vm->gc_heap.deref(h);
@@ -376,32 +374,35 @@ static bool collect_bytes(ProcessVM *vm, gc::GcHandle h, std::vector<uint8_t> &o
     using loader::StringKind;
 
     switch (loader::str_kind(s)) {
-        case StringKind::FLAT: {
-            const uint8_t *d = loader::str_data(s);
-            out.insert(out.end(), d, d + s->byte_len); // copiar bytes del flat
-            return true;
-        }
-        case StringKind::ROPE: {
-            auto *rd = loader::str_rope(s);
-            if (!collect_bytes(vm, rd->left_handle, out))  return false; // hijo izquierdo
-            if (!collect_bytes(vm, rd->right_handle, out)) return false; // hijo derecho
-            return true;
-        }
-        case StringKind::SLICE: {
-            // re-deref necesario porque collect_bytes puede haber hecho allocs internos
-            payload = vm->gc_heap.deref(h);
-            if (!payload) return false;
-            s  = reinterpret_cast<loader::StringObject *>(payload);
-            auto *sd = loader::str_slice(s);
+    case StringKind::FLAT: {
+        const uint8_t *d = loader::str_data(s);
+        out.insert(out.end(), d, d + s->byte_len); // copiar bytes del flat
+        return true;
+    }
+    case StringKind::ROPE: {
+        auto *rd = loader::str_rope(s);
+        if (!collect_bytes(vm, rd->left_handle, out))
+            return false; // hijo izquierdo
+        if (!collect_bytes(vm, rd->right_handle, out))
+            return false; // hijo derecho
+        return true;
+    }
+    case StringKind::SLICE: {
+        // re-deref necesario porque collect_bytes puede haber hecho allocs
+        // internos
+        payload = vm->gc_heap.deref(h);
+        if (!payload) return false;
+        s = reinterpret_cast<loader::StringObject *>(payload);
+        auto *sd = loader::str_slice(s);
 
-            uint8_t *pp = vm->gc_heap.deref(sd->parent_handle);
-            if (!pp) return false;
-            auto *parent = reinterpret_cast<loader::StringObject *>(pp);
+        uint8_t *pp = vm->gc_heap.deref(sd->parent_handle);
+        if (!pp) return false;
+        auto *parent = reinterpret_cast<loader::StringObject *>(pp);
 
-            const uint8_t *d = loader::str_data(parent) + sd->byte_offset;
-            out.insert(out.end(), d, d + s->byte_len); // copiar segmento del padre
-            return true;
-        }
+        const uint8_t *d = loader::str_data(parent) + sd->byte_offset;
+        out.insert(out.end(), d, d + s->byte_len); // copiar segmento del padre
+        return true;
+    }
     }
     return false;
 }
@@ -426,7 +427,8 @@ static gc::GcHandle flatten_string(ProcessVM *vm, gc::GcHandle h) {
     if (!payload) return gc::GC_NULL_HANDLE;
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
-    if (loader::str_kind(s) == loader::StringKind::FLAT) return h; // ya es plano
+    if (loader::str_kind(s) == loader::StringKind::FLAT)
+        return h; // ya es plano
 
     // recolectar todos los bytes en un vector
     std::vector<uint8_t> buf;
@@ -437,11 +439,13 @@ static gc::GcHandle flatten_string(ProcessVM *vm, gc::GcHandle h) {
     uint32_t length = s->length; // preservar el numero de code points
 
     // crear el nuevo FLAT
-    gc::GcHandle flat = alloc_flat(vm, buf.data(), static_cast<uint32_t>(buf.size()), length, enc);
+    gc::GcHandle flat = alloc_flat(
+        vm, buf.data(), static_cast<uint32_t>(buf.size()), length, enc);
     if (flat == gc::GC_NULL_HANDLE) return flat;
 
     // internado automatico del nuevo flat
-    flat = auto_intern(vm, flat, buf.data(), static_cast<uint32_t>(buf.size()), enc);
+    flat = auto_intern(vm, flat, buf.data(), static_cast<uint32_t>(buf.size()),
+                       enc);
 
     return flat;
 }
@@ -451,10 +455,12 @@ static gc::GcHandle flatten_string(ProcessVM *vm, gc::GcHandle h) {
 // =========================================================================
 
 /**
- * @brief Detecta si un buffer puede representarse en una codificacion mas compacta.
+ * @brief Detecta si un buffer puede representarse en una codificacion mas
+ * compacta.
  *
  * Reglas:
- *   - UTF-8  con todos los bytes <= 0x7F -> ASCII (ahorra mem, mismo puntero Win32)
+ *   - UTF-8  con todos los bytes <= 0x7F -> ASCII (ahorra mem, mismo puntero
+ * Win32)
  *   - UTF-16 con todos los code units <= 0x7F -> ASCII
  *   - UTF-16 con todos los code units <= 0xFF -> ANSI
  *
@@ -462,41 +468,48 @@ static gc::GcHandle flatten_string(ProcessVM *vm, gc::GcHandle h) {
  * @param byte_len  Longitud en bytes.
  * @param enc       Codificacion de entrada.
  * @param[out] new_enc  Codificacion mas compacta posible.
- * @param[out] new_data Buffer recodificado (solo rellenado si cambia codificacion).
+ * @param[out] new_data Buffer recodificado (solo rellenado si cambia
+ * codificacion).
  * @param[out] new_len  Longitud del buffer recodificado.
  * @return  true si se puede compactar.
  */
 static bool try_compact(const uint8_t *data, uint32_t byte_len,
                         loader::StringEncoding enc,
                         loader::StringEncoding &new_enc,
-                        std::vector<uint8_t> &new_data,
-                        uint32_t &new_len)
-{
+                        std::vector<uint8_t> &new_data, uint32_t &new_len) {
     if (enc == loader::StringEncoding::UTF8) {
         bool all_ascii = true;
         for (uint32_t i = 0; i < byte_len; ++i)
-            if (data[i] > 0x7F) { all_ascii = false; break; }
+            if (data[i] > 0x7F) {
+                all_ascii = false;
+                break;
+            }
         if (all_ascii) {
-            new_enc  = loader::StringEncoding::ASCII; // compactar UTF-8 a ASCII
+            new_enc = loader::StringEncoding::ASCII; // compactar UTF-8 a ASCII
             new_data = std::vector<uint8_t>(data, data + byte_len);
-            new_len  = byte_len;
+            new_len = byte_len;
             return true;
         }
     } else if (enc == loader::StringEncoding::UTF16) {
         if (byte_len % 2 != 0) return false; // longitud invalida para UTF-16
-        bool all_ansi  = true;
+        bool all_ansi = true;
         bool all_ascii = true;
         const uint16_t *u = reinterpret_cast<const uint16_t *>(data);
-        uint32_t count    = byte_len / 2;
+        uint32_t count = byte_len / 2;
         for (uint32_t i = 0; i < count; ++i) {
-            if (u[i] > 0xFF) { all_ansi  = false; break; }
-            if (u[i] > 0x7F)   all_ascii = false;
+            if (u[i] > 0xFF) {
+                all_ansi = false;
+                break;
+            }
+            if (u[i] > 0x7F) all_ascii = false;
         }
         if (all_ansi) {
-            new_enc = all_ascii ? loader::StringEncoding::ASCII : loader::StringEncoding::ANSI;
+            new_enc = all_ascii ? loader::StringEncoding::ASCII
+                                : loader::StringEncoding::ANSI;
             new_data.resize(count);
             for (uint32_t i = 0; i < count; ++i)
-                new_data[i] = static_cast<uint8_t>(u[i] & 0xFF); // extraer byte bajo
+                new_data[i] =
+                    static_cast<uint8_t>(u[i] & 0xFF); // extraer byte bajo
             new_len = count;
             return true;
         }
@@ -517,27 +530,33 @@ static bool try_compact(const uint8_t *data, uint32_t byte_len,
  * @return          Numero de code points.
  */
 static uint32_t count_codepoints(const uint8_t *data, uint32_t byte_len,
-                                  loader::StringEncoding enc)
-{
+                                 loader::StringEncoding enc) {
     switch (enc) {
-        case loader::StringEncoding::ASCII:
-        case loader::StringEncoding::ANSI:
-            return byte_len; // 1 byte por caracter
-        case loader::StringEncoding::UTF8: {
-            uint32_t count = 0;
-            for (uint32_t i = 0; i < byte_len; ) {
-                uint8_t b = data[i];
-                if      ((b & 0x80) == 0)    { ++count; i += 1; }
-                else if ((b & 0xE0) == 0xC0) { ++count; i += 2; }
-                else if ((b & 0xF0) == 0xE0) { ++count; i += 3; }
-                else                         { ++count; i += 4; }
+    case loader::StringEncoding::ASCII:
+    case loader::StringEncoding::ANSI: return byte_len; // 1 byte por caracter
+    case loader::StringEncoding::UTF8: {
+        uint32_t count = 0;
+        for (uint32_t i = 0; i < byte_len;) {
+            uint8_t b = data[i];
+            if ((b & 0x80) == 0) {
+                ++count;
+                i += 1;
+            } else if ((b & 0xE0) == 0xC0) {
+                ++count;
+                i += 2;
+            } else if ((b & 0xF0) == 0xE0) {
+                ++count;
+                i += 3;
+            } else {
+                ++count;
+                i += 4;
             }
-            return count;
         }
-        case loader::StringEncoding::UTF16:
-            return byte_len / 2; // aproximado (ignora surrogates)
-        case loader::StringEncoding::UTF32:
-            return byte_len / 4;
+        return count;
+    }
+    case loader::StringEncoding::UTF16:
+        return byte_len / 2; // aproximado (ignora surrogates)
+    case loader::StringEncoding::UTF32: return byte_len / 4;
     }
     return byte_len;
 }
@@ -554,9 +573,8 @@ static uint32_t count_codepoints(const uint8_t *data, uint32_t byte_len,
  * @c exec_instr_strmake (interp) y @c vrt_str_make (JIT).  Fast path con
  * stack buf + FNV-1a 64-bit + intern lookup-first.
  */
-gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
-                                      uint64_t vm_addr,
-                                      uint32_t byte_len) noexcept {
+gc::GcHandle make_string_from_vm_mem(ProcessVM *vm, uint64_t vm_addr,
+                                     uint32_t byte_len) noexcept {
     constexpr uint32_t SMALL_LIMIT = 256;
     if (byte_len <= SMALL_LIMIT) {
         uint8_t stack_buf[SMALL_LIMIT];
@@ -568,21 +586,29 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
         bool all_ascii = true;
         uint32_t cp_count = 0;
         uint64_t fnv64 = 1469598103934665603ULL;
-        for (uint32_t i = 0; i < byte_len; ) {
+        for (uint32_t i = 0; i < byte_len;) {
             uint8_t b = stack_buf[i];
             fnv64 ^= b;
             fnv64 *= 1099511628211ULL;
-            if ((b & 0x80) == 0) { ++cp_count; i += 1; }
-            else {
+            if ((b & 0x80) == 0) {
+                ++cp_count;
+                i += 1;
+            } else {
                 all_ascii = false;
-                if      ((b & 0xE0) == 0xC0) { ++cp_count; i += 2; }
-                else if ((b & 0xF0) == 0xE0) { ++cp_count; i += 3; }
-                else                         { ++cp_count; i += 4; }
+                if ((b & 0xE0) == 0xC0) {
+                    ++cp_count;
+                    i += 2;
+                } else if ((b & 0xF0) == 0xE0) {
+                    ++cp_count;
+                    i += 3;
+                } else {
+                    ++cp_count;
+                    i += 4;
+                }
             }
         }
-        const auto final_enc = all_ascii
-            ? loader::StringEncoding::ASCII
-            : loader::StringEncoding::UTF8;
+        const auto final_enc = all_ascii ? loader::StringEncoding::ASCII
+                                         : loader::StringEncoding::UTF8;
         // str_hash := low 32 bits of fnv64 (paridad con str_hash_compute).
         // cache key := fnv64 con encoding mixed (distinto enc no colisiona).
         const uint32_t str_hash32 = static_cast<uint32_t>(fnv64 & 0xFFFFFFFFu);
@@ -601,9 +627,10 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
                 uint8_t *cp = vm->gc_heap.deref(cached);
                 if (cp) {
                     auto *cs = reinterpret_cast<loader::StringObject *>(cp);
-                    if (cs->byte_len == byte_len
-                     && cs->encoding == static_cast<uint8_t>(final_enc)
-                     && std::memcmp(loader::str_data(cs), stack_buf, byte_len) == 0) {
+                    if (cs->byte_len == byte_len &&
+                        cs->encoding == static_cast<uint8_t>(final_enc) &&
+                        std::memcmp(loader::str_data(cs), stack_buf,
+                                    byte_len) == 0) {
                         // Cache hit + bytes match: cero alloc, retorno directo.
                         return cached;
                     }
@@ -611,9 +638,9 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
             }
         }
 
-        gc::GcHandle h = alloc_flat(vm, stack_buf, byte_len, cp_count,
-                                    final_enc, /*capacity=*/0,
-                                    /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
+        gc::GcHandle h = alloc_flat(
+            vm, stack_buf, byte_len, cp_count, final_enc, /*capacity=*/0,
+            /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
         if (__builtin_expect(h == gc::GC_NULL_HANDLE, 0)) {
             return gc::GC_NULL_HANDLE;
         }
@@ -640,15 +667,17 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
     vm->vm_mem.read_bytes(vm_addr, buf.data(), byte_len);
 
     loader::StringEncoding final_enc = enc;
-    std::vector<uint8_t>   compact_buf;
+    std::vector<uint8_t> compact_buf;
     uint32_t compact_len = byte_len;
-    bool compacted = try_compact(buf.data(), byte_len, enc, final_enc, compact_buf, compact_len);
+    bool compacted = try_compact(buf.data(), byte_len, enc, final_enc,
+                                 compact_buf, compact_len);
     const uint8_t *final_data = compacted ? compact_buf.data() : buf.data();
-    uint32_t final_byte_len   = compacted ? compact_len         : byte_len;
+    uint32_t final_byte_len = compacted ? compact_len : byte_len;
 
     uint32_t length = count_codepoints(final_data, final_byte_len, final_enc);
 
-    gc::GcHandle h = alloc_flat(vm, final_data, final_byte_len, length, final_enc);
+    gc::GcHandle h =
+        alloc_flat(vm, final_data, final_byte_len, length, final_enc);
     if (h == gc::GC_NULL_HANDLE) {
         return gc::GC_NULL_HANDLE;
     }
@@ -665,11 +694,12 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm,
  */
 void exec_instr_strmake(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
     const uint8_t r_len = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
 
-    uint64_t vm_addr  = vm->registers.regs[r_src].qword();
-    uint32_t byte_len = static_cast<uint32_t>(vm->registers.regs[r_len].qword());
+    uint64_t vm_addr = vm->registers.regs[r_src].qword();
+    uint32_t byte_len =
+        static_cast<uint32_t>(vm->registers.regs[r_len].qword());
 
     gc::GcHandle h = make_string_from_vm_mem(vm, vm_addr, byte_len);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
@@ -692,32 +722,41 @@ void exec_instr_strmake(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
     const uint8_t r_len = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
 
     uint64_t host_addr = vm->registers.regs[r_src].qword();
-    uint32_t byte_len  = static_cast<uint32_t>(vm->registers.regs[r_len].qword());
+    uint32_t byte_len =
+        static_cast<uint32_t>(vm->registers.regs[r_len].qword());
     const uint8_t *src = reinterpret_cast<const uint8_t *>(host_addr);
 
     // Sprint string-perf-3: FNV-1a 64-bit consistente con todos los paths.
     bool all_ascii = true;
     uint32_t cp_count = 0;
     uint64_t fnv64 = 1469598103934665603ULL;
-    for (uint32_t i = 0; i < byte_len; ) {
+    for (uint32_t i = 0; i < byte_len;) {
         uint8_t b = src[i];
         fnv64 ^= b;
         fnv64 *= 1099511628211ULL;
-        if ((b & 0x80) == 0) { ++cp_count; i += 1; }
-        else {
+        if ((b & 0x80) == 0) {
+            ++cp_count;
+            i += 1;
+        } else {
             all_ascii = false;
-            if      ((b & 0xE0) == 0xC0) { ++cp_count; i += 2; }
-            else if ((b & 0xF0) == 0xE0) { ++cp_count; i += 3; }
-            else                         { ++cp_count; i += 4; }
+            if ((b & 0xE0) == 0xC0) {
+                ++cp_count;
+                i += 2;
+            } else if ((b & 0xF0) == 0xE0) {
+                ++cp_count;
+                i += 3;
+            } else {
+                ++cp_count;
+                i += 4;
+            }
         }
     }
-    const auto final_enc = all_ascii
-        ? loader::StringEncoding::ASCII
-        : loader::StringEncoding::UTF8;
+    const auto final_enc = all_ascii ? loader::StringEncoding::ASCII
+                                     : loader::StringEncoding::UTF8;
     const uint32_t str_hash32 = static_cast<uint32_t>(fnv64 & 0xFFFFFFFFu);
     uint64_t fnv = fnv64;
     fnv ^= static_cast<uint8_t>(final_enc);
@@ -731,26 +770,29 @@ void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
             uint8_t *cp = vm->gc_heap.deref(cached);
             if (cp) {
                 auto *cs = reinterpret_cast<loader::StringObject *>(cp);
-                if (cs->byte_len == byte_len
-                 && cs->encoding == static_cast<uint8_t>(final_enc)
-                 && std::memcmp(loader::str_data(cs), src, byte_len) == 0) {
-                    vm->registers.regs[r_dst].qword(static_cast<uint64_t>(cached));
+                if (cs->byte_len == byte_len &&
+                    cs->encoding == static_cast<uint8_t>(final_enc) &&
+                    std::memcmp(loader::str_data(cs), src, byte_len) == 0) {
+                    vm->registers.regs[r_dst].qword(
+                        static_cast<uint64_t>(cached));
                     return;
                 }
             }
         }
     }
 
-    gc::GcHandle h = alloc_flat(vm, src, byte_len, cp_count, final_enc,
-                                 /*capacity=*/0,
-                                 /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
+    gc::GcHandle h =
+        alloc_flat(vm, src, byte_len, cp_count, final_enc,
+                   /*capacity=*/0,
+                   /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
     if (__builtin_expect(h == gc::GC_NULL_HANDLE, 0)) {
-        vm->registers.regs[r_dst].qword(static_cast<uint64_t>(gc::GC_NULL_HANDLE));
+        vm->registers.regs[r_dst].qword(
+            static_cast<uint64_t>(gc::GC_NULL_HANDLE));
         return;
     }
     if (byte_len > 0 && byte_len <= loader::STR_INTERN_THRESHOLD) {
         get_intern_pool(vm).insert_by_hash(fnv, h);
-        vm->gc_heap.gc_addref(h);  // pin como GC root (idem fix STRMAKE)
+        vm->gc_heap.gc_addref(h); // pin como GC root (idem fix STRMAKE)
     }
     h = auto_intern(vm, h, src, byte_len, final_enc);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
@@ -763,14 +805,19 @@ void exec_instr_strmake_h(ProcessVM *vm, const DecodedInstr &instr) {
 /** @brief Ejecuta STRLEN: devuelve el numero de code points del string. */
 void exec_instr_strlen(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h   = static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
+    gc::GcHandle h =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(0); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(0);
+        return;
+    }
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
-    vm->registers.regs[r_dst].qword(static_cast<uint64_t>(s->length)); // valido para FLAT/ROPE/SLICE
+    vm->registers.regs[r_dst].qword(
+        static_cast<uint64_t>(s->length)); // valido para FLAT/ROPE/SLICE
 }
 
 // =========================================================================
@@ -783,22 +830,27 @@ void exec_instr_strlen(ProcessVM *vm, const DecodedInstr &instr) {
  *
  * Si uno de los operandos es un string vacio, devuelve el otro directamente
  * sin crear un nodo rope (optimizacion de identidad).
- * Si la concatenacion resultaria en un rope de profundidad > STR_ROPE_MAX_DEPTH,
- * materializa inmediatamente a FLAT para evitar degradacion de rendimiento.
+ * Si la concatenacion resultaria en un rope de profundidad >
+ * STR_ROPE_MAX_DEPTH, materializa inmediatamente a FLAT para evitar degradacion
+ * de rendimiento.
  */
 void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_a   =  instr.data_instruction.reg_data.reg1       & 0xF;
-    const uint8_t r_b   = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF; // nibble alto (emit_instr_three_reg)
+    const uint8_t r_a = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t r_b = (instr.data_instruction.reg_data.reg2 >> 4) &
+                        0xF; // nibble alto (emit_instr_three_reg)
 
-    gc::GcHandle ha = static_cast<gc::GcHandle>(vm->registers.regs[r_a].qword());
-    gc::GcHandle hb = static_cast<gc::GcHandle>(vm->registers.regs[r_b].qword());
+    gc::GcHandle ha =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_a].qword());
+    gc::GcHandle hb =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_b].qword());
 
     uint8_t *pa = vm->gc_heap.deref(ha);
     uint8_t *pb = vm->gc_heap.deref(hb);
 
     if (!pa || !pb) {
-        vm->registers.regs[r_dst].qword(static_cast<uint64_t>(gc::GC_NULL_HANDLE));
+        vm->registers.regs[r_dst].qword(
+            static_cast<uint64_t>(gc::GC_NULL_HANDLE));
         return;
     }
 
@@ -806,16 +858,24 @@ void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr) {
     auto *sb = reinterpret_cast<loader::StringObject *>(pb);
 
     // optimizacion de identidad: concatenar con string vacio devuelve el otro
-    if (sa->byte_len == 0) { vm->registers.regs[r_dst].qword(hb); return; }
-    if (sb->byte_len == 0) { vm->registers.regs[r_dst].qword(ha); return; }
+    if (sa->byte_len == 0) {
+        vm->registers.regs[r_dst].qword(hb);
+        return;
+    }
+    if (sb->byte_len == 0) {
+        vm->registers.regs[r_dst].qword(ha);
+        return;
+    }
 
     // calcular profundidad del nuevo rope
     uint32_t depth_a = 0, depth_b = 0;
-    if (loader::str_kind(sa) == loader::StringKind::ROPE) depth_a = loader::str_rope(sa)->depth;
-    if (loader::str_kind(sb) == loader::StringKind::ROPE) depth_b = loader::str_rope(sb)->depth;
+    if (loader::str_kind(sa) == loader::StringKind::ROPE)
+        depth_a = loader::str_rope(sa)->depth;
+    if (loader::str_kind(sb) == loader::StringKind::ROPE)
+        depth_b = loader::str_rope(sb)->depth;
     uint32_t new_depth = std::max(depth_a, depth_b) + 1;
 
-    uint32_t total_len      = sa->length   + sb->length;
+    uint32_t total_len = sa->length + sb->length;
     uint32_t total_byte_len = sa->byte_len + sb->byte_len;
     auto enc = loader::str_encoding(sa); // hereda encoding del hijo izquierdo
 
@@ -830,13 +890,14 @@ void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr) {
     //   - Hash precomputable en alloc_flat para strings cortos.
     // Para strings grandes o ROPE recursivos, mantener el ROPE perezoso.
     constexpr uint32_t SMALL_CONCAT_LIMIT = 256;
-    if (loader::str_kind(sa) == loader::StringKind::FLAT
-     && loader::str_kind(sb) == loader::StringKind::FLAT
-     && loader::str_encoding(sa) == loader::str_encoding(sb)
-     && total_byte_len <= SMALL_CONCAT_LIMIT) {
+    if (loader::str_kind(sa) == loader::StringKind::FLAT &&
+        loader::str_kind(sb) == loader::StringKind::FLAT &&
+        loader::str_encoding(sa) == loader::str_encoding(sb) &&
+        total_byte_len <= SMALL_CONCAT_LIMIT) {
         uint8_t stack_buf[SMALL_CONCAT_LIMIT];
         std::memcpy(stack_buf, loader::str_data(sa), sa->byte_len);
-        std::memcpy(stack_buf + sa->byte_len, loader::str_data(sb), sb->byte_len);
+        std::memcpy(stack_buf + sa->byte_len, loader::str_data(sb),
+                    sb->byte_len);
 
         // Sprint string-perf-3: FNV-1a 64-bit identico a str_hash_compute
         // y a STRMAKE.  str_hash = low 32 bits; cache key = full 64 + enc mix.
@@ -857,48 +918,60 @@ void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr) {
                 uint8_t *cp = vm->gc_heap.deref(cached);
                 if (cp) {
                     auto *cs = reinterpret_cast<loader::StringObject *>(cp);
-                    if (cs->byte_len == total_byte_len
-                     && cs->encoding == static_cast<uint8_t>(enc)
-                     && std::memcmp(loader::str_data(cs), stack_buf, total_byte_len) == 0) {
-                        vm->registers.regs[r_dst].qword(static_cast<uint64_t>(cached));
+                    if (cs->byte_len == total_byte_len &&
+                        cs->encoding == static_cast<uint8_t>(enc) &&
+                        std::memcmp(loader::str_data(cs), stack_buf,
+                                    total_byte_len) == 0) {
+                        vm->registers.regs[r_dst].qword(
+                            static_cast<uint64_t>(cached));
                         return;
                     }
                 }
             }
         }
 
-        result = alloc_flat(vm, stack_buf, total_byte_len, total_len, enc,
-                             /*capacity=*/0,
-                             /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
+        result =
+            alloc_flat(vm, stack_buf, total_byte_len, total_len, enc,
+                       /*capacity=*/0,
+                       /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
         if (__builtin_expect(result == gc::GC_NULL_HANDLE, 0)) {
-            vm->registers.regs[r_dst].qword(static_cast<uint64_t>(gc::GC_NULL_HANDLE));
+            vm->registers.regs[r_dst].qword(
+                static_cast<uint64_t>(gc::GC_NULL_HANDLE));
             return;
         }
-        if (total_byte_len > 0 && total_byte_len <= loader::STR_INTERN_THRESHOLD) {
+        if (total_byte_len > 0 &&
+            total_byte_len <= loader::STR_INTERN_THRESHOLD) {
             get_intern_pool(vm).insert_by_hash(fnv, result);
-            vm->gc_heap.gc_addref(result);  // pin como GC root
+            vm->gc_heap.gc_addref(result); // pin como GC root
         }
         result = auto_intern(vm, result, stack_buf, total_byte_len, enc);
     } else if (new_depth > loader::STR_ROPE_MAX_DEPTH) {
         // arbol demasiado profundo: materializar de inmediato
         gc::GcHandle fa = flatten_string(vm, ha);
         gc::GcHandle fb = flatten_string(vm, hb);
-        uint8_t *pfa    = vm->gc_heap.deref(fa);
-        uint8_t *pfb    = vm->gc_heap.deref(fb);
-        if (!pfa || !pfb) { vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE); return; }
+        uint8_t *pfa = vm->gc_heap.deref(fa);
+        uint8_t *pfb = vm->gc_heap.deref(fb);
+        if (!pfa || !pfb) {
+            vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE);
+            return;
+        }
 
         auto *sfa = reinterpret_cast<loader::StringObject *>(pfa);
         auto *sfb = reinterpret_cast<loader::StringObject *>(pfb);
 
         std::vector<uint8_t> buf(sfa->byte_len + sfb->byte_len);
         std::memcpy(buf.data(), loader::str_data(sfa), sfa->byte_len);
-        std::memcpy(buf.data() + sfa->byte_len, loader::str_data(sfb), sfb->byte_len);
+        std::memcpy(buf.data() + sfa->byte_len, loader::str_data(sfb),
+                    sfb->byte_len);
 
-        result = alloc_flat(vm, buf.data(), static_cast<uint32_t>(buf.size()), total_len, enc);
-        result = auto_intern(vm, result, buf.data(), static_cast<uint32_t>(buf.size()), enc);
+        result = alloc_flat(vm, buf.data(), static_cast<uint32_t>(buf.size()),
+                            total_len, enc);
+        result = auto_intern(vm, result, buf.data(),
+                             static_cast<uint32_t>(buf.size()), enc);
     } else {
         // crear nodo ROPE perezoso (concat de ropes grandes)
-        result = alloc_rope(vm, ha, hb, total_len, total_byte_len, enc, new_depth);
+        result =
+            alloc_rope(vm, ha, hb, total_len, total_byte_len, enc, new_depth);
     }
 
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(result));
@@ -917,11 +990,13 @@ void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_a   =  instr.data_instruction.reg_data.reg1       & 0xF;
-    const uint8_t r_b   = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
+    const uint8_t r_a = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t r_b = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
 
-    gc::GcHandle ha_in = static_cast<gc::GcHandle>(vm->registers.regs[r_a].qword());
-    gc::GcHandle hb_in = static_cast<gc::GcHandle>(vm->registers.regs[r_b].qword());
+    gc::GcHandle ha_in =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_a].qword());
+    gc::GcHandle hb_in =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_b].qword());
 
     // Sprint string-perf (2026-06-02): fast path identity.  Si los
     // handles son identicos (e.g. ambos son el mismo string internado),
@@ -941,14 +1016,14 @@ void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr) {
     uint8_t *pa_raw = vm->gc_heap.deref(ha_in);
     uint8_t *pb_raw = vm->gc_heap.deref(hb_in);
     gc::GcHandle ha, hb;
-    if (pa_raw && reinterpret_cast<loader::StringObject *>(pa_raw)->kind
-                  == static_cast<uint8_t>(loader::StringKind::FLAT)) {
+    if (pa_raw && reinterpret_cast<loader::StringObject *>(pa_raw)->kind ==
+                      static_cast<uint8_t>(loader::StringKind::FLAT)) {
         ha = ha_in;
     } else {
         ha = flatten_string(vm, ha_in);
     }
-    if (pb_raw && reinterpret_cast<loader::StringObject *>(pb_raw)->kind
-                  == static_cast<uint8_t>(loader::StringKind::FLAT)) {
+    if (pb_raw && reinterpret_cast<loader::StringObject *>(pb_raw)->kind ==
+                      static_cast<uint8_t>(loader::StringKind::FLAT)) {
         hb = hb_in;
     } else {
         hb = flatten_string(vm, hb_in);
@@ -968,7 +1043,8 @@ void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr) {
     auto *sb = reinterpret_cast<loader::StringObject *>(pb);
 
     // comparacion rapida por hash si ambos estan calculados
-    if (sa->str_hash != 0 && sb->str_hash != 0 && sa->str_hash != sb->str_hash) {
+    if (sa->str_hash != 0 && sb->str_hash != 0 &&
+        sa->str_hash != sb->str_hash) {
         int64_t result = -1LL; // hashes distintos => no iguales; asumir a < b
         vm->registers.regs[r_dst].qword(static_cast<uint64_t>(result));
         vm->registers.flags.bits.ZF = 0;
@@ -979,8 +1055,10 @@ void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr) {
     uint32_t min_len = std::min(sa->byte_len, sb->byte_len);
     int cmp = std::memcmp(loader::str_data(sa), loader::str_data(sb), min_len);
     if (cmp == 0) {
-        if      (sa->byte_len < sb->byte_len) cmp = -1;
-        else if (sa->byte_len > sb->byte_len) cmp =  1;
+        if (sa->byte_len < sb->byte_len)
+            cmp = -1;
+        else if (sa->byte_len > sb->byte_len)
+            cmp = 1;
     }
 
     int64_t result = (cmp < 0) ? -1LL : (cmp > 0) ? 1LL : 0LL;
@@ -1001,26 +1079,35 @@ void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr) {
  * Materializa ROPE/SLICE antes de convertir.
  */
 void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_dst    = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src    =  instr.data_instruction.reg_data.reg1       & 0xF;
-    const uint8_t enc_bits = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF; // nibble alto (emit_strconv)
+    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t enc_bits = (instr.data_instruction.reg_data.reg2 >> 4) &
+                             0xF; // nibble alto (emit_strconv)
 
     auto new_enc = static_cast<loader::StringEncoding>(enc_bits);
-    gc::GcHandle hs = flatten_string(vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+    gc::GcHandle hs = flatten_string(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
 
     uint8_t *payload = vm->gc_heap.deref(hs);
-    if (!payload) { vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE);
+        return;
+    }
 
     auto *src_str = reinterpret_cast<loader::StringObject *>(payload);
-    auto src_enc  = loader::str_encoding(src_str);
+    auto src_enc = loader::str_encoding(src_str);
 
-    if (src_enc == new_enc) { vm->registers.regs[r_dst].qword(hs); return; } // sin cambio
+    if (src_enc == new_enc) {
+        vm->registers.regs[r_dst].qword(hs);
+        return;
+    } // sin cambio
 
     const uint8_t *src_data = loader::str_data(src_str);
     uint32_t src_len = src_str->byte_len;
     gc::GcHandle result;
 
-    if (src_enc == loader::StringEncoding::UTF8 && new_enc == loader::StringEncoding::UTF16) {
+    if (src_enc == loader::StringEncoding::UTF8 &&
+        new_enc == loader::StringEncoding::UTF16) {
         // UTF-8 -> UTF-16LE
         std::vector<uint16_t> out;
         out.reserve(src_len);
@@ -1028,13 +1115,21 @@ void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
         while (i < src_len) {
             uint32_t cp = 0;
             uint8_t b = src_data[i];
-            if      ((b & 0x80) == 0)    { cp = b;                        i += 1; }
-            else if ((b & 0xE0) == 0xC0) { cp = (b & 0x1F) << 6 | (src_data[i+1] & 0x3F); i += 2; }
-            else if ((b & 0xF0) == 0xE0) { cp = (b & 0x0F) << 12 | (src_data[i+1] & 0x3F) << 6
-                                               | (src_data[i+2] & 0x3F); i += 3; }
-            else                         { cp = (b & 0x07) << 18 | (src_data[i+1] & 0x3F) << 12
-                                               | (src_data[i+2] & 0x3F) << 6
-                                               | (src_data[i+3] & 0x3F); i += 4; }
+            if ((b & 0x80) == 0) {
+                cp = b;
+                i += 1;
+            } else if ((b & 0xE0) == 0xC0) {
+                cp = (b & 0x1F) << 6 | (src_data[i + 1] & 0x3F);
+                i += 2;
+            } else if ((b & 0xF0) == 0xE0) {
+                cp = (b & 0x0F) << 12 | (src_data[i + 1] & 0x3F) << 6 |
+                     (src_data[i + 2] & 0x3F);
+                i += 3;
+            } else {
+                cp = (b & 0x07) << 18 | (src_data[i + 1] & 0x3F) << 12 |
+                     (src_data[i + 2] & 0x3F) << 6 | (src_data[i + 3] & 0x3F);
+                i += 4;
+            }
             if (cp < 0x10000) {
                 out.push_back(static_cast<uint16_t>(cp));
             } else {
@@ -1044,8 +1139,10 @@ void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
             }
         }
         uint32_t nb = static_cast<uint32_t>(out.size() * 2);
-        result = alloc_flat(vm, reinterpret_cast<const uint8_t *>(out.data()), nb, src_str->length, loader::StringEncoding::UTF16);
-    } else if (src_enc == loader::StringEncoding::UTF16 && new_enc == loader::StringEncoding::UTF8) {
+        result = alloc_flat(vm, reinterpret_cast<const uint8_t *>(out.data()),
+                            nb, src_str->length, loader::StringEncoding::UTF16);
+    } else if (src_enc == loader::StringEncoding::UTF16 &&
+               new_enc == loader::StringEncoding::UTF8) {
         // UTF-16LE -> UTF-8
         std::vector<uint8_t> out;
         out.reserve(src_len);
@@ -1074,7 +1171,8 @@ void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
             }
         }
         uint32_t nb = static_cast<uint32_t>(out.size());
-        result = alloc_flat(vm, out.data(), nb, src_str->length, loader::StringEncoding::UTF8);
+        result = alloc_flat(vm, out.data(), nb, src_str->length,
+                            loader::StringEncoding::UTF8);
     } else {
         // conversion generica: mismos bytes, nueva etiqueta
         result = alloc_flat(vm, src_data, src_len, src_str->length, new_enc);
@@ -1084,7 +1182,8 @@ void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
         uint8_t *rp = vm->gc_heap.deref(result);
         if (rp) {
             auto *rs = reinterpret_cast<loader::StringObject *>(rp);
-            result = auto_intern(vm, result, loader::str_data(rs), rs->byte_len, loader::str_encoding(rs));
+            result = auto_intern(vm, result, loader::str_data(rs), rs->byte_len,
+                                 loader::str_encoding(rs));
         }
     }
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(result));
@@ -1102,15 +1201,20 @@ void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strraw(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h = flatten_string(vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+    gc::GcHandle h = flatten_string(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
 
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(0); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(0);
+        return;
+    }
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
-    vm->registers.regs[r_dst].qword(reinterpret_cast<uint64_t>(loader::str_data(s))); // puntero host al buffer
+    vm->registers.regs[r_dst].qword(reinterpret_cast<uint64_t>(
+        loader::str_data(s))); // puntero host al buffer
 }
 
 // =========================================================================
@@ -1123,25 +1227,30 @@ void exec_instr_strraw(ProcessVM *vm, const DecodedInstr &instr) {
  * @brief Ejecuta STRSLICE: crea una vista SLICE sin copia sobre un string.
  *
  * r_range = (cp_start << 32) | cp_len (ambos en code points).
- * Si el padre es ROPE, se materializa primero (el slice solo puede apuntar a FLAT).
- * Si r_start + r_len > length del padre, se recorta al maximo valido.
+ * Si el padre es ROPE, se materializa primero (el slice solo puede apuntar a
+ * FLAT). Si r_start + r_len > length del padre, se recorta al maximo valido.
  */
 void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_dst   = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src   =  instr.data_instruction.reg_data.reg1       & 0xF;
-    const uint8_t r_range = (instr.data_instruction.reg_data.reg2 >> 4)  & 0xF; // nibble alto (emit_instr_three_reg)
+    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t r_range = (instr.data_instruction.reg_data.reg2 >> 4) &
+                            0xF; // nibble alto (emit_instr_three_reg)
 
-    gc::GcHandle parent_h = flatten_string(vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+    gc::GcHandle parent_h = flatten_string(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
 
     uint8_t *payload = vm->gc_heap.deref(parent_h);
-    if (!payload) { vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE);
+        return;
+    }
 
     auto *parent = reinterpret_cast<loader::StringObject *>(payload);
     auto enc = loader::str_encoding(parent);
 
-    uint64_t range  = vm->registers.regs[r_range].qword();
+    uint64_t range = vm->registers.regs[r_range].qword();
     uint32_t cp_start = static_cast<uint32_t>(range >> 32);
-    uint32_t cp_len   = static_cast<uint32_t>(range & 0xFFFFFFFFu);
+    uint32_t cp_len = static_cast<uint32_t>(range & 0xFFFFFFFFu);
 
     // clamp a los limites del padre
     if (cp_start >= parent->length) cp_start = parent->length;
@@ -1149,48 +1258,58 @@ void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
 
     // calcular byte_offset y byte_len segun la codificacion
     uint32_t byte_offset = 0;
-    uint32_t byte_len    = 0;
-    const uint8_t *data  = loader::str_data(parent);
+    uint32_t byte_len = 0;
+    const uint8_t *data = loader::str_data(parent);
 
     switch (enc) {
-        case loader::StringEncoding::ASCII:
-        case loader::StringEncoding::ANSI:
-            byte_offset = cp_start;
-            byte_len    = cp_len;
-            break;
-        case loader::StringEncoding::UTF32:
-            byte_offset = cp_start * 4;
-            byte_len    = cp_len   * 4;
-            break;
-        case loader::StringEncoding::UTF16:
-            byte_offset = cp_start * 2; // aproximado, ignora surrogates
-            byte_len    = cp_len   * 2;
-            break;
-        case loader::StringEncoding::UTF8: {
-            // para UTF-8 hay que contar bytes recorriendo
-            uint32_t i = 0, cp = 0;
-            while (cp < cp_start && i < parent->byte_len) {
-                uint8_t b = data[i];
-                if      ((b & 0x80) == 0)    { i += 1; }
-                else if ((b & 0xE0) == 0xC0) { i += 2; }
-                else if ((b & 0xF0) == 0xE0) { i += 3; }
-                else                         { i += 4; }
-                ++cp;
+    case loader::StringEncoding::ASCII:
+    case loader::StringEncoding::ANSI:
+        byte_offset = cp_start;
+        byte_len = cp_len;
+        break;
+    case loader::StringEncoding::UTF32:
+        byte_offset = cp_start * 4;
+        byte_len = cp_len * 4;
+        break;
+    case loader::StringEncoding::UTF16:
+        byte_offset = cp_start * 2; // aproximado, ignora surrogates
+        byte_len = cp_len * 2;
+        break;
+    case loader::StringEncoding::UTF8: {
+        // para UTF-8 hay que contar bytes recorriendo
+        uint32_t i = 0, cp = 0;
+        while (cp < cp_start && i < parent->byte_len) {
+            uint8_t b = data[i];
+            if ((b & 0x80) == 0) {
+                i += 1;
+            } else if ((b & 0xE0) == 0xC0) {
+                i += 2;
+            } else if ((b & 0xF0) == 0xE0) {
+                i += 3;
+            } else {
+                i += 4;
             }
-            byte_offset = i;
-            uint32_t j = i;
-            cp = 0;
-            while (cp < cp_len && j < parent->byte_len) {
-                uint8_t b = data[j];
-                if      ((b & 0x80) == 0)    { j += 1; }
-                else if ((b & 0xE0) == 0xC0) { j += 2; }
-                else if ((b & 0xF0) == 0xE0) { j += 3; }
-                else                         { j += 4; }
-                ++cp;
-            }
-            byte_len = j - i;
-            break;
+            ++cp;
         }
+        byte_offset = i;
+        uint32_t j = i;
+        cp = 0;
+        while (cp < cp_len && j < parent->byte_len) {
+            uint8_t b = data[j];
+            if ((b & 0x80) == 0) {
+                j += 1;
+            } else if ((b & 0xE0) == 0xC0) {
+                j += 2;
+            } else if ((b & 0xF0) == 0xE0) {
+                j += 3;
+            } else {
+                j += 4;
+            }
+            ++cp;
+        }
+        byte_len = j - i;
+        break;
+    }
     }
 
     // si el slice es todo el padre, devolver el padre directamente
@@ -1199,7 +1318,8 @@ void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
         return;
     }
 
-    gc::GcHandle h = alloc_slice(vm, parent_h, byte_offset, byte_len, cp_len, enc);
+    gc::GcHandle h =
+        alloc_slice(vm, parent_h, byte_offset, byte_len, cp_len, enc);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 
@@ -1215,9 +1335,10 @@ void exec_instr_strslice(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strflat(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h = flatten_string(vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+    gc::GcHandle h = flatten_string(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 
@@ -1233,14 +1354,18 @@ void exec_instr_strflat(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strhash(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h = flatten_string(vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+    gc::GcHandle h = flatten_string(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
 
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(0); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(0);
+        return;
+    }
 
-    auto *s  = reinterpret_cast<loader::StringObject *>(payload);
+    auto *s = reinterpret_cast<loader::StringObject *>(payload);
     uint32_t hv = loader::str_hash_compute(s); // calcula y cachea si necesario
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(hv));
 }
@@ -1258,18 +1383,23 @@ void exec_instr_strhash(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strintern(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h = flatten_string(vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+    gc::GcHandle h = flatten_string(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
 
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE);
+        return;
+    }
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
     auto enc = loader::str_encoding(s);
     const uint8_t *data = loader::str_data(s);
 
-    h = auto_intern(vm, h, data, s->byte_len, enc); // interna y devuelve canonico
+    h = auto_intern(vm, h, data, s->byte_len,
+                    enc); // interna y devuelve canonico
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 
@@ -1280,11 +1410,15 @@ void exec_instr_strintern(ProcessVM *vm, const DecodedInstr &instr) {
 /** @brief Ejecuta STRGETENC: devuelve el byte de codificacion del string. */
 void exec_instr_strgetenc(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h   = static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
+    gc::GcHandle h =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(0); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(0);
+        return;
+    }
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(s->encoding));
@@ -1297,11 +1431,15 @@ void exec_instr_strgetenc(ProcessVM *vm, const DecodedInstr &instr) {
 /** @brief Ejecuta STRGETBYTES: devuelve el byte_len del string. */
 void exec_instr_strgetbytes(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h   = static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
+    gc::GcHandle h =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(0); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(0);
+        return;
+    }
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(s->byte_len));
@@ -1311,17 +1449,23 @@ void exec_instr_strgetbytes(ProcessVM *vm, const DecodedInstr &instr) {
 // 0x52  STRGETKIND r_dst, r_src
 // =========================================================================
 
-/** @brief Ejecuta STRGETKIND: devuelve el kind del string (0=FLAT 1=ROPE 2=SLICE). */
+/** @brief Ejecuta STRGETKIND: devuelve el kind del string (0=FLAT 1=ROPE
+ * 2=SLICE). */
 void exec_instr_strgetkind(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h   = static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
+    gc::GcHandle h =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword());
     uint8_t *payload = vm->gc_heap.deref(h);
-    if (!payload) { vm->registers.regs[r_dst].qword(0); return; }
+    if (!payload) {
+        vm->registers.regs[r_dst].qword(0);
+        return;
+    }
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
-    vm->registers.regs[r_dst].qword(static_cast<uint64_t>(s->kind & loader::STR_KIND_MASK));
+    vm->registers.regs[r_dst].qword(
+        static_cast<uint64_t>(s->kind & loader::STR_KIND_MASK));
 }
 
 // =========================================================================
@@ -1340,12 +1484,14 @@ void exec_instr_strgetkind(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_strreserve(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_cap =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_cap = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    uint32_t capacity = static_cast<uint32_t>(vm->registers.regs[r_cap].qword());
+    uint32_t capacity =
+        static_cast<uint32_t>(vm->registers.regs[r_cap].qword());
 
     // string vacio con capacidad reservada; encoding ASCII por defecto
-    gc::GcHandle h = alloc_flat(vm, nullptr, 0, 0, loader::StringEncoding::ASCII, capacity);
+    gc::GcHandle h =
+        alloc_flat(vm, nullptr, 0, 0, loader::StringEncoding::ASCII, capacity);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 
@@ -1355,30 +1501,34 @@ void exec_instr_strreserve(ProcessVM *vm, const DecodedInstr &instr) {
 // =========================================================================
 
 /**
- * @brief Ejecuta STRFINALIZE: actualiza byte_len, length y hash de un FLAT mutable.
+ * @brief Ejecuta STRFINALIZE: actualiza byte_len, length y hash de un FLAT
+ * mutable.
  *
  * Debe usarse despues de STRRESERVE + escritura directa en el buffer para
  * registrar la longitud real del contenido.  El hash se recalcula.
  * Solo valido para strings FLAT; no opera sobre ROPE/SLICE.
  */
 void exec_instr_strfinalize(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_dst    = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_newlen =  instr.data_instruction.reg_data.reg1       & 0xF;
+    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
+    const uint8_t r_newlen = instr.data_instruction.reg_data.reg1 & 0xF;
 
-    gc::GcHandle h   = static_cast<gc::GcHandle>(vm->registers.regs[r_dst].qword());
+    gc::GcHandle h =
+        static_cast<gc::GcHandle>(vm->registers.regs[r_dst].qword());
     uint8_t *payload = vm->gc_heap.deref(h);
     if (!payload) return;
 
     auto *s = reinterpret_cast<loader::StringObject *>(payload);
-    if (loader::str_kind(s) != loader::StringKind::FLAT) return; // solo para FLAT
+    if (loader::str_kind(s) != loader::StringKind::FLAT)
+        return; // solo para FLAT
 
-    uint32_t new_byte_len = static_cast<uint32_t>(vm->registers.regs[r_newlen].qword());
+    uint32_t new_byte_len =
+        static_cast<uint32_t>(vm->registers.regs[r_newlen].qword());
     auto enc = loader::str_encoding(s);
 
-    s->byte_len  = new_byte_len;
-    s->length    = count_codepoints(loader::str_data(s), new_byte_len, enc);
-    s->str_hash  = 0;              // invalida el cache para que se recalcule
-    loader::str_hash_compute(s);   // calcular inmediatamente
+    s->byte_len = new_byte_len;
+    s->length = count_codepoints(loader::str_data(s), new_byte_len, enc);
+    s->str_hash = 0;             // invalida el cache para que se recalcule
+    loader::str_hash_compute(s); // calcular inmediatamente
     // garantizar terminador nulo tras el nuevo contenido
     loader::str_data(s)[new_byte_len] = 0;
 }
@@ -1402,7 +1552,7 @@ void exec_instr_strfinalize(ProcessVM *vm, const DecodedInstr &instr) {
  */
 void exec_instr_getargc(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = instr.data_instruction.reg_data.reg1;
-    const auto&   args  = vm->scheduler.vm_reference.script_args;
+    const auto &args = vm->scheduler.vm_reference.script_args;
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(args.size()));
 }
 
@@ -1419,29 +1569,34 @@ void exec_instr_getargc(ProcessVM *vm, const DecodedInstr &instr) {
 void exec_instr_getmethat(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_cls = instr.data_instruction.reg_data.reg1;
     const uint8_t r_idx = instr.data_instruction.reg_data.reg2;
-    auto *cls = reinterpret_cast<loader::ClassInfo *>(vm->registers.regs[r_cls].qword());
+    auto *cls = reinterpret_cast<loader::ClassInfo *>(
+        vm->registers.regs[r_cls].qword());
     const uint64_t idx = vm->registers.regs[r_idx].qword();
     if (cls == nullptr || idx >= cls->method_count) {
         vm->registers.regs[R00].qword(0);
         return;
     }
-    vm->registers.regs[R00].qword(reinterpret_cast<uint64_t>(&cls->methods[idx]));
+    vm->registers.regs[R00].qword(
+        reinterpret_cast<uint64_t>(&cls->methods[idx]));
 }
 
 void exec_instr_getfldat(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_cls = instr.data_instruction.reg_data.reg1;
     const uint8_t r_idx = instr.data_instruction.reg_data.reg2;
-    auto *cls = reinterpret_cast<loader::ClassInfo *>(vm->registers.regs[r_cls].qword());
+    auto *cls = reinterpret_cast<loader::ClassInfo *>(
+        vm->registers.regs[r_cls].qword());
     const uint64_t idx = vm->registers.regs[r_idx].qword();
     if (cls == nullptr || idx >= cls->field_count) {
         vm->registers.regs[R00].qword(0);
         return;
     }
-    vm->registers.regs[R00].qword(reinterpret_cast<uint64_t>(&cls->fields[idx]));
+    vm->registers.regs[R00].qword(
+        reinterpret_cast<uint64_t>(&cls->fields[idx]));
 }
 
 /**
- * @brief Ejecuta GETARG: aloca un StringObject con el contenido del arg i-esimo.
+ * @brief Ejecuta GETARG: aloca un StringObject con el contenido del arg
+ * i-esimo.
  *
  * Lee el indice de `r_idx`, valida rango, y aloca un StringObject FLAT
  * en el GcHeap (via alloc_pinned) con los bytes del arg correspondiente.
@@ -1458,24 +1613,24 @@ void exec_instr_getfldat(ProcessVM *vm, const DecodedInstr &instr) {
 void exec_instr_getarg(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t r_dst = instr.data_instruction.reg_data.reg1;
     const uint8_t r_idx = instr.data_instruction.reg_data.reg2;
-    const auto&   args  = vm->scheduler.vm_reference.script_args;
-    const uint64_t idx  = vm->registers.regs[r_idx].qword();
+    const auto &args = vm->scheduler.vm_reference.script_args;
+    const uint64_t idx = vm->registers.regs[r_idx].qword();
 
     if (idx >= args.size()) {
-        vm->registers.regs[r_dst].qword(0);  // GC_NULL_HANDLE
+        vm->registers.regs[r_dst].qword(0); // GC_NULL_HANDLE
         return;
     }
 
-    const std::string& s = args[idx];
+    const std::string &s = args[idx];
     // Conteo de code points UTF-8.  Para ASCII puro coincide con byte_len;
     // para UTF-8 multi-byte lo recalcula la helper count_codepoints.
-    const auto* data = reinterpret_cast<const uint8_t*>(s.data());
+    const auto *data = reinterpret_cast<const uint8_t *>(s.data());
     uint32_t byte_len = static_cast<uint32_t>(s.size());
-    uint32_t length   = count_codepoints(data, byte_len,
-                                         loader::StringEncoding::UTF8);
+    uint32_t length =
+        count_codepoints(data, byte_len, loader::StringEncoding::UTF8);
 
-    gc::GcHandle h = alloc_flat(vm, data, byte_len, length,
-                                loader::StringEncoding::UTF8);
+    gc::GcHandle h =
+        alloc_flat(vm, data, byte_len, length, loader::StringEncoding::UTF8);
     vm->registers.regs[r_dst].qword(static_cast<uint64_t>(h));
 }
 
@@ -1490,11 +1645,9 @@ void exec_instr_getarg(ProcessVM *vm, const DecodedInstr &instr) {
  * compile-time al VM antes de invocar @Macros lowered.
  * =========================================================================
  */
-gc::GcHandle make_string_flat(ProcessVM *vm,
-                               const uint8_t *data,
-                               uint32_t byte_len,
-                               uint32_t length,
-                               loader::StringEncoding enc) noexcept {
+gc::GcHandle make_string_flat(ProcessVM *vm, const uint8_t *data,
+                              uint32_t byte_len, uint32_t length,
+                              loader::StringEncoding enc) noexcept {
     if (!vm) return gc::GC_NULL_HANDLE;
     /* Si el caller no proveio length (UINT32_MAX sentinela), asumimos
      * ASCII puro y usamos byte_len.  Para UTF-8 multi-byte el caller
@@ -1519,9 +1672,8 @@ gc::GcHandle flatten_string_public(ProcessVM *vm, gc::GcHandle h) noexcept {
     return flatten_string(vm, h);
 }
 
-gc::GcHandle strcat_public(ProcessVM *vm,
-                            gc::GcHandle a,
-                            gc::GcHandle b) noexcept {
+gc::GcHandle strcat_public(ProcessVM *vm, gc::GcHandle a,
+                           gc::GcHandle b) noexcept {
     if (!vm) return gc::GC_NULL_HANDLE;
     uint8_t *pa = vm->gc_heap.deref(a);
     uint8_t *pb = vm->gc_heap.deref(b);
@@ -1532,9 +1684,11 @@ gc::GcHandle strcat_public(ProcessVM *vm,
     if (sb->byte_len == 0) return a;
     const uint32_t total_len = sa->length + sb->length;
     const uint32_t total_bytes = sa->byte_len + sb->byte_len;
-    const auto enc = (sa->encoding == static_cast<uint8_t>(loader::StringEncoding::ASCII)
-                   && sb->encoding == static_cast<uint8_t>(loader::StringEncoding::ASCII))
-        ? loader::StringEncoding::ASCII : loader::StringEncoding::UTF8;
+    const auto enc =
+        (sa->encoding == static_cast<uint8_t>(loader::StringEncoding::ASCII) &&
+         sb->encoding == static_cast<uint8_t>(loader::StringEncoding::ASCII))
+            ? loader::StringEncoding::ASCII
+            : loader::StringEncoding::UTF8;
 
     // Sprint string-perf-3 bug fix (2026-06-02): mismo fast path FLAT-FLAT
     // que exec_instr_strcat.  Sin esto el JIT (via vrt_str_cat ->
@@ -1543,13 +1697,14 @@ gc::GcHandle strcat_public(ProcessVM *vm,
     // ambos paths producen FLAT identico cuando son operands son FLAT
     // pequenos, y el intern hash cache los unifica al canonical handle.
     constexpr uint32_t SMALL_CONCAT_LIMIT = 256;
-    if (loader::str_kind(sa) == loader::StringKind::FLAT
-     && loader::str_kind(sb) == loader::StringKind::FLAT
-     && loader::str_encoding(sa) == loader::str_encoding(sb)
-     && total_bytes <= SMALL_CONCAT_LIMIT) {
+    if (loader::str_kind(sa) == loader::StringKind::FLAT &&
+        loader::str_kind(sb) == loader::StringKind::FLAT &&
+        loader::str_encoding(sa) == loader::str_encoding(sb) &&
+        total_bytes <= SMALL_CONCAT_LIMIT) {
         uint8_t stack_buf[SMALL_CONCAT_LIMIT];
         std::memcpy(stack_buf, loader::str_data(sa), sa->byte_len);
-        std::memcpy(stack_buf + sa->byte_len, loader::str_data(sb), sb->byte_len);
+        std::memcpy(stack_buf + sa->byte_len, loader::str_data(sb),
+                    sb->byte_len);
 
         uint64_t fnv64 = 1469598103934665603ULL;
         for (uint32_t i = 0; i < total_bytes; ++i) {
@@ -1568,18 +1723,20 @@ gc::GcHandle strcat_public(ProcessVM *vm,
                 uint8_t *cp = vm->gc_heap.deref(cached);
                 if (cp) {
                     auto *cs = reinterpret_cast<loader::StringObject *>(cp);
-                    if (cs->byte_len == total_bytes
-                     && cs->encoding == static_cast<uint8_t>(enc)
-                     && std::memcmp(loader::str_data(cs), stack_buf, total_bytes) == 0) {
+                    if (cs->byte_len == total_bytes &&
+                        cs->encoding == static_cast<uint8_t>(enc) &&
+                        std::memcmp(loader::str_data(cs), stack_buf,
+                                    total_bytes) == 0) {
                         return cached;
                     }
                 }
             }
         }
 
-        gc::GcHandle result = alloc_flat(vm, stack_buf, total_bytes, total_len, enc,
-                                         /*capacity=*/0,
-                                         /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
+        gc::GcHandle result =
+            alloc_flat(vm, stack_buf, total_bytes, total_len, enc,
+                       /*capacity=*/0,
+                       /*precomputed_hash=*/static_cast<uint64_t>(str_hash32));
         if (result == gc::GC_NULL_HANDLE) return gc::GC_NULL_HANDLE;
         if (total_bytes <= loader::STR_INTERN_THRESHOLD) {
             get_intern_pool(vm).insert_by_hash(fnv, result);
@@ -1591,9 +1748,7 @@ gc::GcHandle strcat_public(ProcessVM *vm,
     return alloc_rope(vm, a, b, total_len, total_bytes, enc, /*depth=*/0);
 }
 
-int64_t strcmp_public(ProcessVM *vm,
-                       gc::GcHandle a,
-                       gc::GcHandle b) noexcept {
+int64_t strcmp_public(ProcessVM *vm, gc::GcHandle a, gc::GcHandle b) noexcept {
     if (!vm) return -1;
     gc::GcHandle fa = flatten_string(vm, a);
     gc::GcHandle fb = flatten_string(vm, b);
@@ -1602,7 +1757,8 @@ int64_t strcmp_public(ProcessVM *vm,
     if (!pa || !pb) return -1;
     auto *sa = reinterpret_cast<loader::StringObject *>(pa);
     auto *sb = reinterpret_cast<loader::StringObject *>(pb);
-    const uint8_t *da = reinterpret_cast<const uint8_t *>(sa) + 40;  // data offset
+    const uint8_t *da =
+        reinterpret_cast<const uint8_t *>(sa) + 40; // data offset
     const uint8_t *db = reinterpret_cast<const uint8_t *>(sb) + 40;
     const uint32_t la = sa->byte_len;
     const uint32_t lb = sb->byte_len;

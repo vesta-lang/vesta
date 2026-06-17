@@ -13,36 +13,36 @@
 
 namespace pkg::hash {
 
-    /**
-     * @brief Calcula SHA-256 de un buffer completo en memoria.
-     * @return Hex string de 64 chars (lowercase) o cadena vacia en error.
-     */
-    std::string sha256_bytes(const uint8_t *data, size_t len);
+/**
+ * @brief Calcula SHA-256 de un buffer completo en memoria.
+ * @return Hex string de 64 chars (lowercase) o cadena vacia en error.
+ */
+std::string sha256_bytes(const uint8_t *data, size_t len);
 
-    /**
-     * @brief Calcula SHA-256 de un archivo via streaming.
-     * @return Hex string de 64 chars o cadena vacia si no se puede abrir.
-     */
-    std::string sha256_file(const std::string &path);
+/**
+ * @brief Calcula SHA-256 de un archivo via streaming.
+ * @return Hex string de 64 chars o cadena vacia si no se puede abrir.
+ */
+std::string sha256_file(const std::string &path);
 
-    /**
-     * @brief Calcula SHA-256 recursivo de un directorio (tree-hash).
-     *
-     * Algoritmo:
-     *   - Listar archivos recursivamente, ordenados lexicograficamente
-     *     por path relativo (asegura determinismo).
-     *   - Por cada archivo emite: relpath + "\n" + content_sha256 + "\n"
-     *     al hasher principal.
-     *
-     * Permite hashear el codigo fuente de un paquete sin comprimirlo.
-     */
-    std::string sha256_tree(const std::string &dir_path);
+/**
+ * @brief Calcula SHA-256 recursivo de un directorio (tree-hash).
+ *
+ * Algoritmo:
+ *   - Listar archivos recursivamente, ordenados lexicograficamente
+ *     por path relativo (asegura determinismo).
+ *   - Por cada archivo emite: relpath + "\n" + content_sha256 + "\n"
+ *     al hasher principal.
+ *
+ * Permite hashear el codigo fuente de un paquete sin comprimirlo.
+ */
+std::string sha256_tree(const std::string &dir_path);
 
-    /**
-     * @brief Comparacion case-insensitive de dos hashes hex en tiempo
-     *        constante (evita timing attacks).
-     */
-    bool hash_equal_ct(const std::string &a, const std::string &b);
+/**
+ * @brief Comparacion case-insensitive de dos hashes hex en tiempo
+ *        constante (evita timing attacks).
+ */
+bool hash_equal_ct(const std::string &a, const std::string &b);
 
 } // namespace pkg::hash
 

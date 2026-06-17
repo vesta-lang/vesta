@@ -56,72 +56,74 @@
 #include "jit/runtime_entries.h"
 #include "jit/selector.h"
 
-namespace ir { struct IrFunction; }
+namespace ir {
+struct IrFunction;
+}
 
 namespace jit {
 
+/**
+ * @struct CompileResult
+ * @brief Resultado de una compilacion JIT.
+ */
+struct CompileResult {
+    JitFn fn = nullptr;       ///< Puntero al codigo nativo (null si fallo)
+    size_t code_size = 0;     ///< Bytes emitidos
+    size_t instr_count = 0;   ///< MInstrs emitidos
+    bool unsupported = false; ///< IR contenia op no soportada
+    const uint8_t *code_start = nullptr; ///< Para unregister + invalidate
+};
+
+/**
+ * @class JitCompiler
+ * @brief Compila IrFunctions a codigo nativo.
+ */
+class JitCompiler {
+  public:
     /**
-     * @struct CompileResult
-     * @brief Resultado de una compilacion JIT.
+     * @param cache     code cache donde se aloca el codigo.  Reuse
+     *                  cross-funcion.
+     * @param rt        runtime entries (usado por safepoint handler addr).
      */
-    struct CompileResult {
-        JitFn       fn          = nullptr;  ///< Puntero al codigo nativo (null si fallo)
-        size_t      code_size   = 0;        ///< Bytes emitidos
-        size_t      instr_count = 0;        ///< MInstrs emitidos
-        bool        unsupported = false;    ///< IR contenia op no soportada
-        const uint8_t *code_start = nullptr; ///< Para unregister + invalidate
-    };
+    JitCompiler(CodeCache &cache, const RuntimeEntries &rt) noexcept
+        : cache_(cache), rt_(rt) {}
 
     /**
-     * @class JitCompiler
-     * @brief Compila IrFunctions a codigo nativo.
+     * @brief Compila @p ir_fn a codigo nativo.
+     * @param mode  convencion de llamada (NATIVE_ABI para tests,
+     *              VM_ABI para integracion runtime).
+     * @return CompileResult con el puntero ejecutable + stats.
+     *         Si compile fallo, @c fn = nullptr; @c unsupported
+     *         indica si fue por IR ops no soportadas.
+     *
+     * La funcion compilada queda registrada en @c JitRegistry para
+     * que el GC pueda hacer precise scan de sus frames.
      */
-    class JitCompiler {
-    public:
-        /**
-         * @param cache     code cache donde se aloca el codigo.  Reuse
-         *                  cross-funcion.
-         * @param rt        runtime entries (usado por safepoint handler addr).
-         */
-        JitCompiler(CodeCache &cache, const RuntimeEntries &rt) noexcept
-            : cache_(cache), rt_(rt) {}
+    CompileResult compile(const ir::IrFunction &ir_fn,
+                          SelectorMode mode = SelectorMode::VM_ABI) noexcept;
 
-        /**
-         * @brief Compila @p ir_fn a codigo nativo.
-         * @param mode  convencion de llamada (NATIVE_ABI para tests,
-         *              VM_ABI para integracion runtime).
-         * @return CompileResult con el puntero ejecutable + stats.
-         *         Si compile fallo, @c fn = nullptr; @c unsupported
-         *         indica si fue por IR ops no soportadas.
-         *
-         * La funcion compilada queda registrada en @c JitRegistry para
-         * que el GC pueda hacer precise scan de sus frames.
-         */
-        CompileResult compile(const ir::IrFunction &ir_fn,
-                              SelectorMode mode = SelectorMode::VM_ABI) noexcept;
+    /**
+     * @brief Compila con opciones explicitas de Selector.
+     *
+     * Util para casos avanzados como eager-compile con resolver de
+     * user-fn.  El mode + runtime + safepoint_handler de
+     * @p opts se respetan tal cual.
+     */
+    CompileResult compile_with_opts(const ir::IrFunction &ir_fn,
+                                    SelectorOptions opts) noexcept;
 
-        /**
-         * @brief Compila con opciones explicitas de Selector.
-         *
-         * Util para casos avanzados como eager-compile con resolver de
-         * user-fn.  El mode + runtime + safepoint_handler de
-         * @p opts se respetan tal cual.
-         */
-        CompileResult compile_with_opts(const ir::IrFunction &ir_fn,
-                                        SelectorOptions opts) noexcept;
+    /**
+     * @brief Invalida una funcion JIT previamente compilada.
+     *
+     * Rellena su codigo con INT3 (cualquier llamada futura crashea
+     * controladamente) y la elimina del JitRegistry.
+     */
+    void invalidate(const CompileResult &res) noexcept;
 
-        /**
-         * @brief Invalida una funcion JIT previamente compilada.
-         *
-         * Rellena su codigo con INT3 (cualquier llamada futura crashea
-         * controladamente) y la elimina del JitRegistry.
-         */
-        void invalidate(const CompileResult &res) noexcept;
-
-    private:
-        CodeCache            &cache_;
-        const RuntimeEntries &rt_;
-    };
+  private:
+    CodeCache &cache_;
+    const RuntimeEntries &rt_;
+};
 
 } // namespace jit
 

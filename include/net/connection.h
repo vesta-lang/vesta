@@ -14,9 +14,9 @@
  * @file connection.h
  * @brief Clase base abstracta para conexiones de red de VestaVM.
  *
- * Connection define la interfaz comun para cualquier tipo de conexion (TCP plana,
- * TLS, etc.).  Las subclases sobreescriben los metodos virtuales para implementar
- * el protocolo especifico de cada tipo de conexion.
+ * Connection define la interfaz comun para cualquier tipo de conexion (TCP
+ * plana, TLS, etc.).  Las subclases sobreescriben los metodos virtuales para
+ * implementar el protocolo especifico de cada tipo de conexion.
  *
  * Tambien define el tipo socket_t de forma compatible con Windows (SOCKET) y
  * sistemas POSIX (int), y la constante SOCKET_INVALID para el valor centinela.
@@ -38,19 +38,20 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "Ws2_32.lib")
-typedef SOCKET socket_t;       ///< Tipo de descriptor de socket en Windows
+typedef SOCKET socket_t; ///< Tipo de descriptor de socket en Windows
 #else
 #include <sys/socket.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-typedef int socket_t;          ///< Tipo de descriptor de socket en POSIX
+typedef int socket_t; ///< Tipo de descriptor de socket en POSIX
 #endif
 
 #ifdef _WIN32
 #include <winsock2.h>
-#define SOCKET_INVALID INVALID_SOCKET  ///< Valor centinela de socket invalido (Windows)
+#define SOCKET_INVALID                                                         \
+    INVALID_SOCKET ///< Valor centinela de socket invalido (Windows)
 #else
-#define SOCKET_INVALID -1              ///< Valor centinela de socket invalido (POSIX)
+#define SOCKET_INVALID -1 ///< Valor centinela de socket invalido (POSIX)
 #endif
 
 /**
@@ -61,11 +62,11 @@ typedef int socket_t;          ///< Tipo de descriptor de socket en POSIX
  * comunicacion y read_data() / write_data() para el transporte especifico.
  */
 class Connection {
-protected:
-    socket_t          socket_fd; ///< Descriptor de socket del cliente conectado
-    std::atomic<bool> running;   ///< true mientras la conexion esta activa
+  protected:
+    socket_t socket_fd;        ///< Descriptor de socket del cliente conectado
+    std::atomic<bool> running; ///< true mientras la conexion esta activa
 
-public:
+  public:
     /**
      * @brief Construye la conexion con el descriptor de socket indicado.
      *
@@ -83,8 +84,9 @@ public:
     /**
      * @brief Inicia la sesion de la conexion.
      *
-     * Implementacion por defecto: invoca handle() en un bucle mientras running sea true.
-     * Las subclases pueden sobreescribir este metodo para implementar protocolos especificos.
+     * Implementacion por defecto: invoca handle() en un bucle mientras running
+     * sea true. Las subclases pueden sobreescribir este metodo para implementar
+     * protocolos especificos.
      */
     virtual void start();
 
@@ -93,12 +95,14 @@ public:
      */
     virtual void stop();
 
-protected:
+  protected:
     /**
-     * @brief Bucle de procesamiento: lee datos y los procesa hasta que la conexion cierra.
+     * @brief Bucle de procesamiento: lee datos y los procesa hasta que la
+     * conexion cierra.
      *
-     * Implementacion por defecto: lee con read_data() y pasa los datos a process_request().
-     * Las subclases pueden sobreescribir este metodo para control mas fino del bucle.
+     * Implementacion por defecto: lee con read_data() y pasa los datos a
+     * process_request(). Las subclases pueden sobreescribir este metodo para
+     * control mas fino del bucle.
      */
     virtual void handle();
 
@@ -109,7 +113,8 @@ protected:
      * Las subclases TLS sobreescriben este metodo para usar SSL_read().
      *
      * @param buffer Vector donde se almacenan los bytes recibidos.
-     * @return Numero de bytes leidos; 0 si la conexion cerro; negativo en error.
+     * @return Numero de bytes leidos; 0 si la conexion cerro; negativo en
+     * error.
      */
     virtual int read_data(std::vector<uint8_t> &buffer);
 
@@ -135,7 +140,8 @@ protected:
     virtual void process_request(const std::vector<uint8_t> &data);
 
     /**
-     * @brief Cierra el descriptor de socket de forma compatible con la plataforma.
+     * @brief Cierra el descriptor de socket de forma compatible con la
+     * plataforma.
      *
      * Usa closesocket() en Windows y close() en POSIX.
      */

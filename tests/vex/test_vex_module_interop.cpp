@@ -43,7 +43,7 @@ int g_fail = 0;
             std::cout << "  PASS  " << label << "\n";                          \
         } else {                                                               \
             ++g_fail;                                                          \
-            std::cout << "  FAIL  " << label << "  (" << __FILE__ << ":"      \
+            std::cout << "  FAIL  " << label << "  (" << __FILE__ << ":"       \
                       << __LINE__ << ")\n";                                    \
         }                                                                      \
     } while (0)
@@ -51,13 +51,13 @@ int g_fail = 0;
 // Compila una fuente y devuelve un TypeChecker poblado.  Util para
 // preparar el "modulo lib" del test.
 struct CompiledModule {
-    vex::Diagnostics                   diags;
+    vex::Diagnostics diags;
     std::unique_ptr<vex::ast::ModuleNode> ast;
-    std::unique_ptr<vex::TypeChecker>  tc;
+    std::unique_ptr<vex::TypeChecker> tc;
 };
 
-std::unique_ptr<CompiledModule> compile_to_typechecker(const std::string &source,
-                                                         const std::string &filename) {
+std::unique_ptr<CompiledModule>
+compile_to_typechecker(const std::string &source, const std::string &filename) {
     auto m = std::make_unique<CompiledModule>();
     vex::Lexer lex(source, filename, m->diags);
     vex::Parser parser(lex, m->diags);
@@ -76,11 +76,10 @@ void test_typedef_roundtrip() {
     std::cout << "\n[Test] round-trip typedef new (lib -> .vexi -> main)\n";
 
     // 1. Compilar el modulo lib con un typedef new.
-    auto lib = compile_to_typechecker(
-        "typedef u64 user_id new;\n"
-        "typedef u32 port_num new;\n"
-        "i32 fn_lib(i32 x) { return x + 1; }\n",
-        "lib.vex");
+    auto lib = compile_to_typechecker("typedef u64 user_id new;\n"
+                                      "typedef u32 port_num new;\n"
+                                      "i32 fn_lib(i32 x) { return x + 1; }\n",
+                                      "lib.vex");
 
     CHECK(lib->tc != nullptr, "lib compila");
     CHECK(!lib->diags.has_errors(), "lib sin errores");
@@ -105,14 +104,15 @@ void test_typedef_roundtrip() {
     if (!parsed.ok) return;
 
     // 3. Compilar un main vacio + inyectar simbolos.
-    auto mainmod = compile_to_typechecker("i32 main() { return 42; }\n", "main.vex");
+    auto mainmod =
+        compile_to_typechecker("i32 main() { return 42; }\n", "main.vex");
     CHECK(mainmod->tc != nullptr, "main compila");
     if (mainmod->tc == nullptr) return;
 
     // 4. Inyectar SOLO user_id y fn_lib (no port_num).
     std::vector<vex::TypeChecker::VexiOnlyEntry> only;
     only.push_back({"user_id", ""});
-    only.push_back({"fn_lib",  ""});
+    only.push_back({"fn_lib", ""});
     vex::import_vexi_into_typechecker(*mainmod->tc, parsed.module_, only);
 
     // 5. Verificar que main ahora conoce user_id pero NO port_num.
@@ -127,7 +127,8 @@ void test_typedef_roundtrip() {
         const auto &fns = mainmod->tc->function_names();
         bool has_fn = fns.find("fn_lib") != fns.end();
         CHECK(has_fn, "main conoce fn_lib tras import");
-        const vex::FunctionSig *sig = mainmod->tc->function_sig_by_name("fn_lib");
+        const vex::FunctionSig *sig =
+            mainmod->tc->function_sig_by_name("fn_lib");
         CHECK(sig != nullptr, "function_sig_by_name devuelve fn_lib");
         if (sig) {
             CHECK(sig->return_type.kind == vex::PrimitiveKind::I32,
@@ -147,10 +148,9 @@ void test_typedef_roundtrip() {
 void test_struct_roundtrip() {
     std::cout << "\n[Test] round-trip struct (lib -> .vexi -> main)\n";
 
-    auto lib = compile_to_typechecker(
-        "struct Point { f64 x; f64 y; }\n"
-        "i32 main() { return 0; }\n",
-        "lib2.vex");
+    auto lib = compile_to_typechecker("struct Point { f64 x; f64 y; }\n"
+                                      "i32 main() { return 0; }\n",
+                                      "lib2.vex");
     CHECK(lib->tc != nullptr, "lib compila");
     if (!lib->tc) return;
 
@@ -161,7 +161,8 @@ void test_struct_roundtrip() {
     auto parsed = vex::vexi_parse(bytes.data(), bytes.size());
     CHECK(parsed.ok, "parse OK");
 
-    auto mainmod = compile_to_typechecker("i32 main() { return 0; }\n", "main2.vex");
+    auto mainmod =
+        compile_to_typechecker("i32 main() { return 0; }\n", "main2.vex");
     std::vector<vex::TypeChecker::VexiOnlyEntry> only = {{"Point", ""}};
     vex::import_vexi_into_typechecker(*mainmod->tc, parsed.module_, only);
 
@@ -185,10 +186,9 @@ void test_struct_roundtrip() {
 void test_only_rename() {
     std::cout << "\n[Test] only con rename\n";
 
-    auto lib = compile_to_typechecker(
-        "typedef u64 fd new;\n"
-        "i32 main() { return 0; }\n",
-        "lib3.vex");
+    auto lib = compile_to_typechecker("typedef u64 fd new;\n"
+                                      "i32 main() { return 0; }\n",
+                                      "lib3.vex");
     if (!lib->tc) return;
 
     vex::VexiModule vm;
@@ -196,7 +196,8 @@ void test_only_rename() {
     auto bytes = vex::vexi_emit(vm);
     auto parsed = vex::vexi_parse(bytes.data(), bytes.size());
 
-    auto mainmod = compile_to_typechecker("i32 main() { return 0; }\n", "main3.vex");
+    auto mainmod =
+        compile_to_typechecker("i32 main() { return 0; }\n", "main3.vex");
     std::vector<vex::TypeChecker::VexiOnlyEntry> only = {{"fd", "FileDesc"}};
     vex::import_vexi_into_typechecker(*mainmod->tc, parsed.module_, only);
 
@@ -213,10 +214,9 @@ void test_only_rename() {
 void test_empty_only_no_inject() {
     std::cout << "\n[Test] only vacio no inyecta nada (M2 MVP)\n";
 
-    auto lib = compile_to_typechecker(
-        "typedef u64 X new;\n"
-        "i32 main() { return 0; }\n",
-        "lib4.vex");
+    auto lib = compile_to_typechecker("typedef u64 X new;\n"
+                                      "i32 main() { return 0; }\n",
+                                      "lib4.vex");
     if (!lib->tc) return;
 
     vex::VexiModule vm;
@@ -224,7 +224,8 @@ void test_empty_only_no_inject() {
     auto bytes = vex::vexi_emit(vm);
     auto parsed = vex::vexi_parse(bytes.data(), bytes.size());
 
-    auto mainmod = compile_to_typechecker("i32 main() { return 0; }\n", "main4.vex");
+    auto mainmod =
+        compile_to_typechecker("i32 main() { return 0; }\n", "main4.vex");
     const size_t before = mainmod->tc->type_aliases().size();
 
     // only vacio.
@@ -243,7 +244,7 @@ int main() {
     test_struct_roundtrip();
     test_only_rename();
     test_empty_only_no_inject();
-    std::cout << "\n=== Resultado: " << g_pass << " PASS, "
-              << g_fail << " FAIL ===\n";
+    std::cout << "\n=== Resultado: " << g_pass << " PASS, " << g_fail
+              << " FAIL ===\n";
     return (g_fail == 0) ? 0 : 1;
 }

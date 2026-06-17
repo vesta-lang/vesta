@@ -36,11 +36,16 @@ static int g_pass = 0;
 static int g_fail = 0;
 
 #define SECTION(name) printf("\n=== %s ===\n", name)
-#define EXPECT(cond, msg) \
-    do { \
-        ++g_run; \
-        if (cond) { ++g_pass; printf("  OK   %s\n", msg); } \
-        else      { ++g_fail; printf("  FAIL %s  (linea %d)\n", msg, __LINE__); } \
+#define EXPECT(cond, msg)                                                      \
+    do {                                                                       \
+        ++g_run;                                                               \
+        if (cond) {                                                            \
+            ++g_pass;                                                          \
+            printf("  OK   %s\n", msg);                                        \
+        } else {                                                               \
+            ++g_fail;                                                          \
+            printf("  FAIL %s  (linea %d)\n", msg, __LINE__);                  \
+        }                                                                      \
     } while (0)
 
 // ---------------------------------------------------------------------------
@@ -57,9 +62,9 @@ static void stress_alloc_free_fijo() {
     vm::ArenaManager mgr;
     gc::GcHeap heap(mgr, 8 * 1024, 256 * 1024 * 1024);
 
-    constexpr size_t N_OBJ      = 100;
-    constexpr size_t SIZE       = 128; // payload, total = 136 -> class 7 (192)
-    constexpr size_t N_CYCLES   = 50;
+    constexpr size_t N_OBJ = 100;
+    constexpr size_t SIZE = 128; // payload, total = 136 -> class 7 (192)
+    constexpr size_t N_CYCLES = 50;
 
     // Primer ciclo establece el "watermark": alocamos N objetos, los
     // promovemos a OldGen, registramos el reserved.  Los siguientes
@@ -73,7 +78,8 @@ static void stress_alloc_free_fijo() {
             handles.push_back(heap.alloc(SIZE));
         }
         heap.minor_gc(); // promueve a OldGen
-        for (gc::GcHandle h : handles) heap.drop(h);
+        for (gc::GcHandle h : handles)
+            heap.drop(h);
         heap.major_gc(); // libera y reconstruye free lists
     };
 
@@ -92,11 +98,12 @@ static void stress_alloc_free_fijo() {
            "reserved no crece tras 50 ciclos (slots reusados, no leak)");
 
     // La gran mayoria de allocs en OldGen deberian haber salido de free list.
-    const uint64_t fl  = heap.stats().old_alloc_freelist;
-    const uint64_t bp  = heap.stats().old_alloc_bump;
-    const uint64_t nb  = heap.stats().old_alloc_newblock;
+    const uint64_t fl = heap.stats().old_alloc_freelist;
+    const uint64_t bp = heap.stats().old_alloc_bump;
+    const uint64_t nb = heap.stats().old_alloc_newblock;
     printf("  alloc breakdown: freelist=%llu  bump=%llu  newblock=%llu\n",
-           (unsigned long long)fl, (unsigned long long)bp, (unsigned long long)nb);
+           (unsigned long long)fl, (unsigned long long)bp,
+           (unsigned long long)nb);
     EXPECT(fl > bp + nb,
            "mayoria de allocs OldGen via free list (reuso eficiente)");
 }
@@ -116,9 +123,9 @@ static void stress_multi_size_frag_acotada() {
     vm::ArenaManager mgr;
     gc::GcHeap heap(mgr, 8 * 1024, 256 * 1024 * 1024);
 
-    constexpr size_t SIZES[] = { 32, 100, 250, 700 };
+    constexpr size_t SIZES[] = {32, 100, 250, 700};
     constexpr size_t N_PER_SIZE = 50;
-    constexpr size_t N_CYCLES   = 20;
+    constexpr size_t N_CYCLES = 20;
 
     std::vector<gc::GcHandle> handles;
     auto cycle = [&]() {
@@ -130,15 +137,17 @@ static void stress_multi_size_frag_acotada() {
             }
         }
         heap.minor_gc();
-        for (gc::GcHandle h : handles) heap.drop(h);
+        for (gc::GcHandle h : handles)
+            heap.drop(h);
         heap.major_gc();
     };
 
-    for (size_t c = 0; c < N_CYCLES; ++c) cycle();
+    for (size_t c = 0; c < N_CYCLES; ++c)
+        cycle();
 
     const size_t reserved = heap.stats().old_reserved_bytes;
     const size_t freelist = heap.stats().old_freelist_bytes;
-    const size_t live     = heap.old_used();
+    const size_t live = heap.old_used();
     printf("  tras %zu ciclos: reserved=%zu  live=%zu  freelist=%zu\n",
            (size_t)N_CYCLES, reserved, live, freelist);
     // Tras drop+major_gc, live debe ser ~0.  freelist debe ser ~ reserved.
@@ -167,26 +176,28 @@ static void stress_large_freelist() {
     gc::GcHeap heap(mgr, 8 * 1024, 256 * 1024 * 1024);
 
     constexpr size_t SIZE = 16 * 1024; // 16 KB payload
-    constexpr size_t N    = 10;
+    constexpr size_t N = 10;
 
     std::vector<gc::GcHandle> handles;
-    for (size_t i = 0; i < N; ++i) handles.push_back(heap.alloc(SIZE));
+    for (size_t i = 0; i < N; ++i)
+        handles.push_back(heap.alloc(SIZE));
     heap.minor_gc();
     const size_t reserved_pre = heap.stats().old_reserved_bytes;
 
-    for (gc::GcHandle h : handles) heap.drop(h);
+    for (gc::GcHandle h : handles)
+        heap.drop(h);
     heap.major_gc();
 
     const uint64_t fl_pre = heap.stats().old_alloc_freelist;
     handles.clear();
-    for (size_t i = 0; i < N; ++i) handles.push_back(heap.alloc(SIZE));
+    for (size_t i = 0; i < N; ++i)
+        handles.push_back(heap.alloc(SIZE));
     heap.minor_gc();
     const size_t reserved_post = heap.stats().old_reserved_bytes;
     const uint64_t fl_post = heap.stats().old_alloc_freelist;
 
-    printf("  reserved pre/post: %zu / %zu  (delta=%zd)\n",
-           reserved_pre, reserved_post,
-           (ptrdiff_t)reserved_post - (ptrdiff_t)reserved_pre);
+    printf("  reserved pre/post: %zu / %zu  (delta=%zd)\n", reserved_pre,
+           reserved_post, (ptrdiff_t)reserved_post - (ptrdiff_t)reserved_pre);
     printf("  alloc_freelist incremento: %llu\n",
            (unsigned long long)(fl_post - fl_pre));
 

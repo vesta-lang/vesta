@@ -208,8 +208,8 @@ void vrt_monitor_exit(vrt_proc *proc, vrt_handle obj);
  * @brief Suspende el proceso liberando el monitor por completo.
  *
  * Equivalente a Object.wait() de Java.  El proceso queda en WAIT_IO
- * hasta que otro hilo invoque @c vrt_monitor_notify o @c vrt_monitor_notify_all.
- * Tras el wake debe re-adquirir el monitor.
+ * hasta que otro hilo invoque @c vrt_monitor_notify o @c
+ * vrt_monitor_notify_all. Tras el wake debe re-adquirir el monitor.
  */
 void vrt_monitor_wait(vrt_proc *proc, vrt_handle obj);
 
@@ -266,7 +266,8 @@ void vrt_tryleave(vrt_proc *proc);
  *   - R0 contiene el GcHandle de la excepcion (replicado por do_throw).
  *
  * @param proc proceso actual.
- * @param exc_handle handle (uint32 zero-extendido a uint64) del objeto excepcion.
+ * @param exc_handle handle (uint32 zero-extendido a uint64) del objeto
+ * excepcion.
  */
 void vrt_throw_user(vrt_proc *proc, uint64_t exc_handle);
 
@@ -328,7 +329,8 @@ uint64_t vrt_invoke_native(void *fn, uint64_t argc, vrt_proc *proc);
  * @param obj_payload host_ptr al payload del objeto receiver.
  * @param vtbl_idx indice del slot en @c ClassInfo::vtable.
  * @return valor de retorno del metodo (leido de @c proc->registers.regs[0]).
- *         O 0 si fallo el dispatch (e.g. obj nulo, clase nula, idx fuera de rango).
+ *         O 0 si fallo el dispatch (e.g. obj nulo, clase nula, idx fuera de
+ * rango).
  *
  * Throws @c FATAL_NULL_POINTER si @c obj_payload es nullptr, o
  * @c FATAL_ILLEGAL_INSTRUCTION si vtbl_idx es invalido / metodo abstracto.
@@ -350,7 +352,7 @@ uint64_t vrt_callvirt(vrt_proc *proc, uint8_t *obj_payload, uint32_t vtbl_idx);
  * yendo por miss path.
  */
 uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
-                          uint32_t vtbl_idx, uint64_t ic_slot_addr);
+                         uint32_t vtbl_idx, uint64_t ic_slot_addr);
 
 /**
  * @brief Dispatch dinamico via MethodInfo* (CALLM desde JIT).
@@ -378,8 +380,9 @@ uint64_t vrt_callm(vrt_proc *proc, uint8_t *obj_payload, void *method);
  * de la interfaz, el nombre del metodo, su indice y el numero de metodos;
  * resuelve la interfaz (find_class) y el @c MethodInfo* concreto via la itable
  * lazy de la clase del receptor (@c ClassRegistry::resolve_itable_method), y
- * despacha (si el metodo tiene @c jit_code -> @c enter_jit; si no -> mini-interp
- * sincronico).  Es el SLOW PATH/fallback del inline de CALLITF en el JIT.
+ * despacha (si el metodo tiene @c jit_code -> @c enter_jit; si no ->
+ * mini-interp sincronico).  Es el SLOW PATH/fallback del inline de CALLITF en
+ * el JIT.
  *
  * Calling convention identica a CALLVIRT/CALLM: el caller staged R1=this,
  * R2..=args, R15=argc+1 en @c proc->registers antes de invocar.
@@ -411,7 +414,8 @@ uint64_t vrt_callitf(vrt_proc *proc, uint8_t *obj_payload, uint64_t params_addr,
 uint64_t vrt_callclosure(vrt_proc *proc, uint64_t fn_addr, uint64_t env_addr);
 
 /**
- * @brief Trampoline JIT->interp para llamar a una funcion bytecode user-defined.
+ * @brief Trampoline JIT->interp para llamar a una funcion bytecode
+ * user-defined.
  *
  * Cuando codigo JIT necesita invocar una funcion cuyo IR no se pudo
  * JIT-compilar (raw_asm complejo, monenter, synchronized, float arith no
@@ -501,10 +505,10 @@ void vrt_vm_write_u64(vrt_proc *proc, uint64_t vaddr, uint64_t value);
 /** @brief Variantes por tamano (necesarias para LOAD/STORE de i8/i16/i32). */
 uint32_t vrt_vm_read_u32(vrt_proc *proc, uint64_t vaddr);
 uint16_t vrt_vm_read_u16(vrt_proc *proc, uint64_t vaddr);
-uint8_t  vrt_vm_read_u8 (vrt_proc *proc, uint64_t vaddr);
-void     vrt_vm_write_u32(vrt_proc *proc, uint64_t vaddr, uint32_t value);
-void     vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value);
-void     vrt_vm_write_u8 (vrt_proc *proc, uint64_t vaddr, uint8_t  value);
+uint8_t vrt_vm_read_u8(vrt_proc *proc, uint64_t vaddr);
+void vrt_vm_write_u32(vrt_proc *proc, uint64_t vaddr, uint32_t value);
+void vrt_vm_write_u16(vrt_proc *proc, uint64_t vaddr, uint16_t value);
+void vrt_vm_write_u8(vrt_proc *proc, uint64_t vaddr, uint8_t value);
 
 /**
  * @brief Traduce una VM-addr a host_ptr via vm_mem.
@@ -615,7 +619,8 @@ uint32_t vrt_defmethod(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr);
  *
  * @return 1 si OK, 0 si fallo.
  */
-int32_t vrt_addadvice(vrt_proc *proc, void *target_method, void *advice_method, uint8_t kind);
+int32_t vrt_addadvice(vrt_proc *proc, void *target_method, void *advice_method,
+                      uint8_t kind);
 
 /**
  * @brief Lookup de metodo por nombre dentro de clase (findmethod).

@@ -80,7 +80,8 @@
  * ## Equivalencias en otros entornos
  *
  *   - Java: @c java.lang.SecurityManager con permisos similares.
- *   - .NET: Code Access Security (modelo deprecado pero conceptualmente equivalente).
+ *   - .NET: Code Access Security (modelo deprecado pero conceptualmente
+ * equivalente).
  *   - WASI: capabilities entregadas como handles (file descriptors, etc.).
  *   - Deno: flags `--allow-net=host`, `--allow-read=path`, etc.
  *
@@ -164,7 +165,10 @@ struct CapWhitelists {
      * @struct MemRange
      * @brief Rango cerrado-abierto @c [start, end) de host pointers.
      */
-    struct MemRange { uint64_t start; uint64_t end; };
+    struct MemRange {
+        uint64_t start;
+        uint64_t end;
+    };
 
     /**
      * @brief Rangos de host pointers permitidos para LOAD/STORE.
@@ -188,8 +192,8 @@ struct CapWhitelists {
      * modo "sin sandbox" con cero overhead.
      */
     [[nodiscard]] bool empty() const noexcept {
-        return dll_whitelist.empty() && path_whitelist.empty()
-            && host_whitelist.empty() && mem_ranges.empty();
+        return dll_whitelist.empty() && path_whitelist.empty() &&
+               host_whitelist.empty() && mem_ranges.empty();
     }
 };
 
@@ -219,19 +223,19 @@ struct Caps {
      * el valor por defecto de @c bits.
      */
     enum : uint32_t {
-        FS_READ   = 1u << 0,  ///< Lectura del filesystem.
-        FS_WRITE  = 1u << 1,  ///< Escritura del filesystem.
-        NET       = 1u << 2,  ///< Sockets y conexiones de red.
-        FFI_CALL  = 1u << 3,  ///< Invocación de funciones nativas ya cargadas.
-        FFI_OPEN  = 1u << 4,  ///< Carga de librerías dinámicas.
-        SPAWN     = 1u << 5,  ///< Creación de procesos VM.
-        DISTRIB   = 1u << 6,  ///< IPC con nodos remotos.
-        CLASSREG  = 1u << 7,  ///< Hook AOP cross-módulo (addadvice).
-        MEM_HOST  = 1u << 8,  ///< Acceso directo a host pointers.
-        LOADMOD   = 1u << 9,  ///< Carga dinámica de módulos.
+        FS_READ = 1u << 0,  ///< Lectura del filesystem.
+        FS_WRITE = 1u << 1, ///< Escritura del filesystem.
+        NET = 1u << 2,      ///< Sockets y conexiones de red.
+        FFI_CALL = 1u << 3, ///< Invocación de funciones nativas ya cargadas.
+        FFI_OPEN = 1u << 4, ///< Carga de librerías dinámicas.
+        SPAWN = 1u << 5,    ///< Creación de procesos VM.
+        DISTRIB = 1u << 6,  ///< IPC con nodos remotos.
+        CLASSREG = 1u << 7, ///< Hook AOP cross-módulo (addadvice).
+        MEM_HOST = 1u << 8, ///< Acceso directo a host pointers.
+        LOADMOD = 1u << 9,  ///< Carga dinámica de módulos.
 
         /// Todas las capabilities concedidas. Default para @c bits.
-        ALL  = 0xFFFFFFFFu,
+        ALL = 0xFFFFFFFFu,
 
         /// Ninguna capability concedida. Sandbox total.
         NONE = 0u,
@@ -310,10 +314,12 @@ struct Caps {
      * @return @c true si la whitelist está vacía, coincide exactamente
      *         o coincide solo en el host (cuando la entry no tiene port).
      */
-    [[nodiscard]] bool host_allowed(const std::string &host_port) const noexcept;
+    [[nodiscard]] bool
+    host_allowed(const std::string &host_port) const noexcept;
 
     /**
-     * @brief Comprueba si una dirección host_ptr cae en algún rango whitelisted.
+     * @brief Comprueba si una dirección host_ptr cae en algún rango
+     * whitelisted.
      *
      * Solo se invoca cuando MEM_HOST está denegada. Si MEM_HOST está
      * concedida, este chequeo se omite y todos los pointers pasan.
@@ -390,6 +396,6 @@ std::string caps_to_string(const Caps &caps) noexcept;
  */
 const char *cap_name(uint32_t single_cap) noexcept;
 
-}  // namespace loader
+} // namespace loader
 
-#endif  // VESTA_LOADER_SANDBOX_H
+#endif // VESTA_LOADER_SANDBOX_H

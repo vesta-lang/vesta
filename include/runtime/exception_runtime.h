@@ -47,216 +47,214 @@
 
 // Forward declarations para evitar dependencias circulares.
 namespace loader {
-    class Loader;
+class Loader;
 }
 namespace runtime {
-    class ProcessVM;
+class ProcessVM;
 }
 
 namespace runtime {
 
-    /**
-     * @brief Codigos numericos para el campo @c FatalError.kind.
-     *
-     * Coinciden con @c state_err_thread (@c proceso_runtime.h) para que
-     * el usuario pueda comparar facilmente: @c if (e.kind == 1) -> NPE.
-     * Documentar en la API de Vex como constantes.
-     */
-    enum FatalKind : uint32_t {
-        FATAL_NULL_POINTER       = 1,   ///< deref de puntero null o handle invalido
-        FATAL_DIVISION_BY_ZERO   = 2,   ///< div / mod entre cero (signed o unsigned)
-        FATAL_STACK_OVERFLOW     = 3,   ///< RSP supero el limite de pila
-        FATAL_STACK_UNDERFLOW    = 4,   ///< POP / RET con RSP en frontera
-        FATAL_ILLEGAL_INSTRUCTION= 5,   ///< opcode invalido o operando malformado
-        FATAL_INVALID_SYSCALL    = 6,   ///< calln a simbolo no resuelto
-        FATAL_SEGMENTATION_FAULT = 7,   ///< acceso a VA fuera de cualquier mapeo
-        FATAL_NATIVE_CRASH       = 8,   ///< plugin nativo crasheo (SEH/SIGSEGV)
-        FATAL_NATIVE_EXCEPTION   = 9,   ///< plugin nativo lanzo C++ exception
-        FATAL_OUT_OF_MEMORY      = 10,  ///< alloc fallo (raw o GC)
-        FATAL_USER_ABORT         = 11,  ///< builtin Vex @c panic("...")
-    };
+/**
+ * @brief Codigos numericos para el campo @c FatalError.kind.
+ *
+ * Coinciden con @c state_err_thread (@c proceso_runtime.h) para que
+ * el usuario pueda comparar facilmente: @c if (e.kind == 1) -> NPE.
+ * Documentar en la API de Vex como constantes.
+ */
+enum FatalKind : uint32_t {
+    FATAL_NULL_POINTER = 1,        ///< deref de puntero null o handle invalido
+    FATAL_DIVISION_BY_ZERO = 2,    ///< div / mod entre cero (signed o unsigned)
+    FATAL_STACK_OVERFLOW = 3,      ///< RSP supero el limite de pila
+    FATAL_STACK_UNDERFLOW = 4,     ///< POP / RET con RSP en frontera
+    FATAL_ILLEGAL_INSTRUCTION = 5, ///< opcode invalido o operando malformado
+    FATAL_INVALID_SYSCALL = 6,     ///< calln a simbolo no resuelto
+    FATAL_SEGMENTATION_FAULT = 7,  ///< acceso a VA fuera de cualquier mapeo
+    FATAL_NATIVE_CRASH = 8,        ///< plugin nativo crasheo (SEH/SIGSEGV)
+    FATAL_NATIVE_EXCEPTION = 9,    ///< plugin nativo lanzo C++ exception
+    FATAL_OUT_OF_MEMORY = 10,      ///< alloc fallo (raw o GC)
+    FATAL_USER_ABORT = 11,         ///< builtin Vex @c panic("...")
+};
 
-    /**
-     * @brief Class info global de @c FatalError.  Inicializada por
-     *        @c init_exception_classes() al construir la primera VM.
-     *
-     * Acceso lock-free tras el init: la inicializacion ocurre antes de
-     * que cualquier proceso este corriendo.  En multi-thread la primera
-     * VM hace el define_class y las posteriores lo encuentran via
-     * @c by_name_ del registry sin re-crear.
-     */
-    extern loader::ClassInfo *g_fatal_error_class;
+/**
+ * @brief Class info global de @c FatalError.  Inicializada por
+ *        @c init_exception_classes() al construir la primera VM.
+ *
+ * Acceso lock-free tras el init: la inicializacion ocurre antes de
+ * que cualquier proceso este corriendo.  En multi-thread la primera
+ * VM hace el define_class y las posteriores lo encuentran via
+ * @c by_name_ del registry sin re-crear.
+ */
+extern loader::ClassInfo *g_fatal_error_class;
 
-    /**
-     * @brief Registra la clase @c FatalError en el ClassRegistry del
-     *        loader publico si aun no existe.  Idempotente.
-     *
-     * Llamado desde el constructor de @c VM tras inicializar el loader
-     * privado.  No falla: si el registry ya tiene FatalError simplemente
-     * actualiza @c g_fatal_error_class al puntero existente.
-     *
-     * @param loader Loader publico del manager (donde vive el registry).
-     */
-    void init_exception_classes(loader::Loader &loader);
+/**
+ * @brief Registra la clase @c FatalError en el ClassRegistry del
+ *        loader publico si aun no existe.  Idempotente.
+ *
+ * Llamado desde el constructor de @c VM tras inicializar el loader
+ * privado.  No falla: si el registry ya tiene FatalError simplemente
+ * actualiza @c g_fatal_error_class al puntero existente.
+ *
+ * @param loader Loader publico del manager (donde vive el registry).
+ */
+void init_exception_classes(loader::Loader &loader);
 
-    /**
-     * @brief Lanza un @c FatalError capturable desde el opcode actual.
-     *
-     * Patron de uso desde @c exec_instruction_*.cpp:
-     *
-     * @code
-     *   if (deref_target == 0) {
-     *       runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
-     *           "deref de puntero null en GETFIELD");
-     *       return;
-     *   }
-     * @endcode
-     *
-     * Comportamiento:
-     *   - Si @c vm->exc_frame_stack != nullptr (handler activo): aloca
-     *     o reutiliza el slot @c vm->fatal_slot, llena la instancia
-     *     con kind/pc/message + stack trace formateado, e invoca
-     *     @c do_throw para que se atrape como excepcion normal.
-     *   - Si no hay handler: ruta antigua (set @c err_thread + emit
-     *     @c EVT_ERROR).  El proceso muere igual que antes pero la VM
-     *     y los demas procesos siguen vivos (que ya era el comportamiento
-     *     pre.
-     *
-     * Coste cuando NO hay handler activo: 1 lectura + 1 branch +
-     * 2 stores (fast path).  Cuando SI hay: ~50 ns por la alocacion
-     * lazy del slot + memcpy del message.
-     *
-     * @param vm        Proceso donde se origina el error.
-     * @param kind      Codigo @c FatalKind del error.
-     * @param message   String C nul-terminado con descripcion legible.
-     */
-    void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message);
+/**
+ * @brief Lanza un @c FatalError capturable desde el opcode actual.
+ *
+ * Patron de uso desde @c exec_instruction_*.cpp:
+ *
+ * @code
+ *   if (deref_target == 0) {
+ *       runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
+ *           "deref de puntero null en GETFIELD");
+ *       return;
+ *   }
+ * @endcode
+ *
+ * Comportamiento:
+ *   - Si @c vm->exc_frame_stack != nullptr (handler activo): aloca
+ *     o reutiliza el slot @c vm->fatal_slot, llena la instancia
+ *     con kind/pc/message + stack trace formateado, e invoca
+ *     @c do_throw para que se atrape como excepcion normal.
+ *   - Si no hay handler: ruta antigua (set @c err_thread + emit
+ *     @c EVT_ERROR).  El proceso muere igual que antes pero la VM
+ *     y los demas procesos siguen vivos (que ya era el comportamiento
+ *     pre.
+ *
+ * Coste cuando NO hay handler activo: 1 lectura + 1 branch +
+ * 2 stores (fast path).  Cuando SI hay: ~50 ns por la alocacion
+ * lazy del slot + memcpy del message.
+ *
+ * @param vm        Proceso donde se origina el error.
+ * @param kind      Codigo @c FatalKind del error.
+ * @param message   String C nul-terminado con descripcion legible.
+ */
+void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message);
 
-    /**
-     * @brief Variante de @c throw_fatal con mensaje formateado tipo printf.
-     *
-     * Util cuando el mensaje incluye valores dinamicos (offsets, registros,
-     * nombres de clase).  Limita a 512 bytes; trunca con "..." si excede.
-     */
-    void throw_fatalf(ProcessVM *vm, uint32_t kind,
-                      const char *fmt, ...);
+/**
+ * @brief Variante de @c throw_fatal con mensaje formateado tipo printf.
+ *
+ * Util cuando el mensaje incluye valores dinamicos (offsets, registros,
+ * nombres de clase).  Limita a 512 bytes; trunca con "..." si excede.
+ */
+void throw_fatalf(ProcessVM *vm, uint32_t kind, const char *fmt, ...);
 
-    /**
-     * @brief Metadata de debug por metodo.  Se rellena durante
-     *        @c __module_init via el opcode @c setmethdbg que el frontend
-     *        Vex emite tras cada @c defmethod con la info del .vex source.
-     *
-     * Layout muy compacto: nombre de archivo (compartido entre todos los
-     * metodos del modulo) + linea de inicio del metodo en el source.
-     * Suficiente para que el stack trace muestre "(myfile.vex:42)" en
-     * cada frame.  Opcionalmente extensible a tabla pc -> line para
-     * precision instruction-level (no implementado en MVP).
-     */
-    struct MethodDebug {
-        std::string source_file;   ///< nombre del .vex source (e.g. "foo.vex")
-        uint32_t    start_line;    ///< linea 1-based del inicio del metodo
-    };
+/**
+ * @brief Metadata de debug por metodo.  Se rellena durante
+ *        @c __module_init via el opcode @c setmethdbg que el frontend
+ *        Vex emite tras cada @c defmethod con la info del .vex source.
+ *
+ * Layout muy compacto: nombre de archivo (compartido entre todos los
+ * metodos del modulo) + linea de inicio del metodo en el source.
+ * Suficiente para que el stack trace muestre "(myfile.vex:42)" en
+ * cada frame.  Opcionalmente extensible a tabla pc -> line para
+ * precision instruction-level (no implementado en MVP).
+ */
+struct MethodDebug {
+    std::string source_file; ///< nombre del .vex source (e.g. "foo.vex")
+    uint32_t start_line;     ///< linea 1-based del inicio del metodo
+};
 
-    /**
-     * @brief Registra metadata de debug para un MethodInfo.  Idempotente:
-     *        si la entrada ya existe, la sobreescribe.  Llamado por el
-     *        opcode @c setmethdbg desde @c __module_init.
-     */
-    void register_method_debug(loader::MethodInfo *method,
-                                const char *file, size_t file_len,
-                                uint32_t line);
+/**
+ * @brief Registra metadata de debug para un MethodInfo.  Idempotente:
+ *        si la entrada ya existe, la sobreescribe.  Llamado por el
+ *        opcode @c setmethdbg desde @c __module_init.
+ */
+void register_method_debug(loader::MethodInfo *method, const char *file,
+                           size_t file_len, uint32_t line);
 
-    /**
-     * @brief Lookup de metadata de debug para un MethodInfo.
-     * @return puntero a la entrada, o @c nullptr si no esta registrada.
-     */
-    const MethodDebug *lookup_method_debug(loader::MethodInfo *method);
+/**
+ * @brief Lookup de metadata de debug para un MethodInfo.
+ * @return puntero a la entrada, o @c nullptr si no esta registrada.
+ */
+const MethodDebug *lookup_method_debug(loader::MethodInfo *method);
 
-    /**
-     * @brief Construye un stack trace estilo Java para el proceso actual.
-     *
-     * Formato de cada linea: "  at <ClassName>.<methodName>(line:<n>)"
-     * cuando la metadata esta disponible; "  at <pc=0xADDR>" como
-     * fallback para frames sin metodo (e.g. CALLN nativo).
-     *
-     * El primer frame siempre es donde ocurrio el error (PC actual);
-     * los siguientes recorren @c frame_stack hasta el origen del proceso.
-     *
-     * El buffer @p out se trunca a @p out_size bytes incluido el nul
-     * terminador.  Devuelve la longitud escrita sin contar el nul.
-     *
-     * @param vm        Proceso a inspeccionar.
-     * @param out       Buffer destino.
-     * @param out_size  Tamano de @p out (debe ser >= 64 para mensajes utiles).
-     * @return          Numero de bytes escritos en @p out (sin nul).
-     */
-    size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size);
+/**
+ * @brief Construye un stack trace estilo Java para el proceso actual.
+ *
+ * Formato de cada linea: "  at <ClassName>.<methodName>(line:<n>)"
+ * cuando la metadata esta disponible; "  at <pc=0xADDR>" como
+ * fallback para frames sin metodo (e.g. CALLN nativo).
+ *
+ * El primer frame siempre es donde ocurrio el error (PC actual);
+ * los siguientes recorren @c frame_stack hasta el origen del proceso.
+ *
+ * El buffer @p out se trunca a @p out_size bytes incluido el nul
+ * terminador.  Devuelve la longitud escrita sin contar el nul.
+ *
+ * @param vm        Proceso a inspeccionar.
+ * @param out       Buffer destino.
+ * @param out_size  Tamano de @p out (debe ser >= 64 para mensajes utiles).
+ * @return          Numero de bytes escritos en @p out (sin nul).
+ */
+size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size);
 
-    // ---------------------------------------------------------------------
-    // OS-level access violation -> FatalError capturable.
-    //
-    // Cuando el bytecode dereferencia un puntero host invalido (el caso
-    // mas comun: `*null_host_ptr`, deref de un host_ptr stale tras free,
-    // o aritmetica que sale del bloque malloc'eado), el OS dispara un
-    // EXCEPTION_ACCESS_VIOLATION (Windows) o SIGSEGV (POSIX).  Sin la
-    // infraestructura de abajo, la VM entera crashea sin que el `try`
-    // del usuario lo atrape.
-    //
-    // El plan:
-    //   - install_host_av_handler() registra UN VEH global (Windows) /
-    //     SIGSEGV handler (POSIX) la primera vez que se llama.  Idempotente.
-    //   - El scheduler hace setjmp(proc->av_recovery_jmpbuf) antes de
-    //     cada batch de instrucciones y marca av_recovery_active=true.
-    //   - Define el thread-local @c g_executing_proc al inicio del batch.
-    //   - Si ocurre un AV durante la ejecucion: el handler lee el TLS,
-    //     verifica av_recovery_active y exc_frame_stack, guarda la
-    //     direccion del AV en proc->pending_av_addr, y dispara longjmp
-    //     (POSIX directamente; Windows via redireccion de RIP a un stub
-    //     que llama longjmp).
-    //   - Tras el longjmp, el scheduler llama throw_fatal con
-    //     FATAL_SEGMENTATION_FAULT.  El flujo normal de do_throw saltara
-    //     al handler `catch (FatalError e)` del usuario.
-    // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// OS-level access violation -> FatalError capturable.
+//
+// Cuando el bytecode dereferencia un puntero host invalido (el caso
+// mas comun: `*null_host_ptr`, deref de un host_ptr stale tras free,
+// o aritmetica que sale del bloque malloc'eado), el OS dispara un
+// EXCEPTION_ACCESS_VIOLATION (Windows) o SIGSEGV (POSIX).  Sin la
+// infraestructura de abajo, la VM entera crashea sin que el `try`
+// del usuario lo atrape.
+//
+// El plan:
+//   - install_host_av_handler() registra UN VEH global (Windows) /
+//     SIGSEGV handler (POSIX) la primera vez que se llama.  Idempotente.
+//   - El scheduler hace setjmp(proc->av_recovery_jmpbuf) antes de
+//     cada batch de instrucciones y marca av_recovery_active=true.
+//   - Define el thread-local @c g_executing_proc al inicio del batch.
+//   - Si ocurre un AV durante la ejecucion: el handler lee el TLS,
+//     verifica av_recovery_active y exc_frame_stack, guarda la
+//     direccion del AV en proc->pending_av_addr, y dispara longjmp
+//     (POSIX directamente; Windows via redireccion de RIP a un stub
+//     que llama longjmp).
+//   - Tras el longjmp, el scheduler llama throw_fatal con
+//     FATAL_SEGMENTATION_FAULT.  El flujo normal de do_throw saltara
+//     al handler `catch (FatalError e)` del usuario.
+// ---------------------------------------------------------------------
 
-    /**
-     * @brief Instala el handler global de access violations.  Idempotente
-     *        (registra solo la primera llamada via std::once).
-     *
-     * Se llama desde el constructor de VM, tras init_exception_classes.
-     */
-    void install_host_av_handler() noexcept;
+/**
+ * @brief Instala el handler global de access violations.  Idempotente
+ *        (registra solo la primera llamada via std::once).
+ *
+ * Se llama desde el constructor de VM, tras init_exception_classes.
+ */
+void install_host_av_handler() noexcept;
 
-    /**
-     * @brief Setea (o limpia con nullptr) el ProcessVM cuyo bytecode
-     *        esta corriendo en el thread actual.  Lo llama el scheduler
-     *        antes y despues de cada batch de instrucciones.
-     *
-     * El handler de AV consulta este TLS para identificar a quien
-     * enviar el longjmp.  Si esta a nullptr cuando ocurre un AV, el
-     * handler delega a la cadena de SEH normal (la VM crashea como
-     * antes).
-     */
-    void set_current_executing_process(ProcessVM *proc) noexcept;
+/**
+ * @brief Setea (o limpia con nullptr) el ProcessVM cuyo bytecode
+ *        esta corriendo en el thread actual.  Lo llama el scheduler
+ *        antes y despues de cada batch de instrucciones.
+ *
+ * El handler de AV consulta este TLS para identificar a quien
+ * enviar el longjmp.  Si esta a nullptr cuando ocurre un AV, el
+ * handler delega a la cadena de SEH normal (la VM crashea como
+ * antes).
+ */
+void set_current_executing_process(ProcessVM *proc) noexcept;
 
-    /**
-     * @brief Devuelve el ProcessVM actualmente en ejecucion en este
-     *        thread, o nullptr si no hay ninguno.
-     */
-    ProcessVM *get_current_executing_process() noexcept;
+/**
+ * @brief Devuelve el ProcessVM actualmente en ejecucion en este
+ *        thread, o nullptr si no hay ninguno.
+ */
+ProcessVM *get_current_executing_process() noexcept;
 
 #if defined(_WIN32)
-    /**
-     * @brief Indice TLS dedicado (Win64) para que el thunk del JIT
-     *        lea @c ProcessVM* directamente desde @c gs:[0x1480+idx*8]
-     *        sin llamar a @c get_current_executing_process.  Reserva el
-     *        slot via @c TlsAlloc() lazy en la primera invocacion.
-     *
-     * El offset 0x1480 corresponde a TlsSlots[0] del TEB en Win64.  Si
-     * @c TLS_OUT_OF_INDEXES (alocacion fallo), el thunk cae al call.
-     * @c TLS_MINIMUM_AVAILABLE = 64 garantiza idx < 64 en la mayoria
-     * de procesos (el thunk solo soporta los primeros 64 slots).
-     */
-    unsigned long jit_proc_tls_index() noexcept;
+/**
+ * @brief Indice TLS dedicado (Win64) para que el thunk del JIT
+ *        lea @c ProcessVM* directamente desde @c gs:[0x1480+idx*8]
+ *        sin llamar a @c get_current_executing_process.  Reserva el
+ *        slot via @c TlsAlloc() lazy en la primera invocacion.
+ *
+ * El offset 0x1480 corresponde a TlsSlots[0] del TEB en Win64.  Si
+ * @c TLS_OUT_OF_INDEXES (alocacion fallo), el thunk cae al call.
+ * @c TLS_MINIMUM_AVAILABLE = 64 garantiza idx < 64 en la mayoria
+ * de procesos (el thunk solo soporta los primeros 64 slots).
+ */
+unsigned long jit_proc_tls_index() noexcept;
 #endif
 
 } // namespace runtime

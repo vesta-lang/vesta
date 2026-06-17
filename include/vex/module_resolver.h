@@ -1,6 +1,7 @@
 /**
  * @file module_resolver.h
- * @brief Resolver de paths + dep graph para el sistema de modulos Vex (Phase M).
+ * @brief Resolver de paths + dep graph para el sistema de modulos Vex (Phase
+ * M).
  *
  * Multi-plataforma (Windows + POSIX), multi-arquitectura.  Aprovecha
  * caracteristicas del hardware: hashing FNV-1a 64-bit en tiempo lineal
@@ -41,9 +42,9 @@
 namespace vex {
 
 namespace ast {
-    struct ModuleNode;
-    struct ImportDecl;
-}
+struct ModuleNode;
+struct ImportDecl;
+} // namespace ast
 
 /**
  * @brief Estado de un nodo del dep graph durante DFS.  WHITE = no visitado,
@@ -61,23 +62,23 @@ enum class ResolveColor : uint8_t { WHITE = 0, GRAY = 1, BLACK = 2 };
  */
 struct ResolvedModule {
     /// Identificador interno (indice en @c ModuleGraph::modules_).
-    uint32_t                          module_id = 0;
+    uint32_t module_id = 0;
     /// Ruta canonica absoluta (forward slashes, sin `..`).
-    std::string                       canonical_path;
+    std::string canonical_path;
     /// Hash FNV-1a 64 del @c canonical_path (key para cache lookups).
-    uint64_t                          path_hash = 0;
+    uint64_t path_hash = 0;
     /// Nombre logico del modulo (ultimo segmento sin extension).
     /// E.g. @c "buffer" para @c "/home/x/editor/buffer.vex".
-    std::string                       module_name;
+    std::string module_name;
     /// AST parseado (lazy: nullptr hasta primer parse).
-    std::unique_ptr<ast::ModuleNode>  parsed_ast;
+    std::unique_ptr<ast::ModuleNode> parsed_ast;
     /// Hash FNV-1a 64 del source crudo.  Usado para invalidacion incremental.
-    uint64_t                          source_hash = 0;
+    uint64_t source_hash = 0;
     /// Dependencias (module_ids de los modulos importados).  Vacio hasta
     /// que se procesa el AST.
-    std::vector<uint32_t>             dependencies;
+    std::vector<uint32_t> dependencies;
     /// Estado DFS durante la deteccion de ciclos / topo sort.
-    ResolveColor                      color = ResolveColor::WHITE;
+    ResolveColor color = ResolveColor::WHITE;
 };
 
 /**
@@ -85,16 +86,16 @@ struct ResolvedModule {
  */
 struct ResolveResult {
     enum class Status : uint8_t {
-        OK = 0,                ///< Modulo encontrado y cargado.
-        NOT_FOUND = 1,         ///< Ningun candidato existe en disco.
-        CYCLE = 2,             ///< Detectado ciclo en la cadena de imports.
-        PARSE_ERROR = 3,       ///< El fichero existe pero su parse fallo.
-        IO_ERROR = 4,          ///< Error de I/O leyendo el fichero.
+        OK = 0,          ///< Modulo encontrado y cargado.
+        NOT_FOUND = 1,   ///< Ningun candidato existe en disco.
+        CYCLE = 2,       ///< Detectado ciclo en la cadena de imports.
+        PARSE_ERROR = 3, ///< El fichero existe pero su parse fallo.
+        IO_ERROR = 4,    ///< Error de I/O leyendo el fichero.
     };
-    Status      status = Status::OK;
-    uint32_t    module_id = 0;          ///< Valido solo si status == OK.
-    std::string error_message;          ///< Mensaje detallado si status != OK.
-    std::vector<std::string> tried_paths;  ///< Para diagnostico de NOT_FOUND.
+    Status status = Status::OK;
+    uint32_t module_id = 0;    ///< Valido solo si status == OK.
+    std::string error_message; ///< Mensaje detallado si status != OK.
+    std::vector<std::string> tried_paths; ///< Para diagnostico de NOT_FOUND.
 };
 
 /**
@@ -114,7 +115,7 @@ struct ResolveResult {
  * dependencias se resuelven ANTES de despachar workers.
  */
 class ModuleGraph {
-public:
+  public:
     /// @brief Construye un graph vacio.
     /// @param diags Sink para emitir errores con localizacion.
     explicit ModuleGraph(Diagnostics &diags);
@@ -192,7 +193,7 @@ public:
     /// @brief @c true si se detecto al menos un ciclo durante el build.
     bool has_cycle() const noexcept { return cycle_detected_; }
 
-private:
+  private:
     /// Carga el fichero, calcula hash, parsea AST, registra dependencias.
     /// Devuelve module_id del nuevo modulo o UINT32_MAX si error.
     uint32_t load_and_parse_(const std::string &canonical_path);
@@ -205,7 +206,7 @@ private:
     /// relativos contra @c base_dir si no es absoluto.  Devuelve la
     /// ruta canonica.
     std::string normalize_path_(const std::string &raw,
-                                 const std::string &base_dir) const;
+                                const std::string &base_dir) const;
 
     /// @c true si @p path es absoluto en el OS actual (drive letter
     /// Windows o `/` POSIX).
@@ -221,12 +222,12 @@ private:
     static bool file_exists_(const std::string &path) noexcept;
 
     // ---- Datos miembro ----
-    Diagnostics                                              &diags_;
-    std::vector<std::unique_ptr<ResolvedModule>>              modules_;
-    std::unordered_map<uint64_t, uint32_t>                    by_path_hash_;
-    std::vector<std::string>                                  search_paths_;
-    std::string                                               stdlib_dir_;
-    bool                                                      cycle_detected_ = false;
+    Diagnostics &diags_;
+    std::vector<std::unique_ptr<ResolvedModule>> modules_;
+    std::unordered_map<uint64_t, uint32_t> by_path_hash_;
+    std::vector<std::string> search_paths_;
+    std::string stdlib_dir_;
+    bool cycle_detected_ = false;
 };
 
 } // namespace vex

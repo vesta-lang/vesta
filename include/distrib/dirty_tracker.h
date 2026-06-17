@@ -17,12 +17,15 @@
  *   1. Adler-32 (muy rapido, ~1 instruccion por byte): primer filtro.
  *      Si el Adler-32 no cambio, la pagina esta intacta con alta probabilidad.
  *   2. BLAKE2s-256 (rapido y criptograficamente seguro): filtro definitivo.
- *      Solo se computa si el Adler-32 cambio.  Evita falsos positivos del nivel 1.
- *   3. Transmision: solo se envian las paginas donde el BLAKE2s difiere del baseline.
+ *      Solo se computa si el Adler-32 cambio.  Evita falsos positivos del
+ * nivel 1.
+ *   3. Transmision: solo se envian las paginas donde el BLAKE2s difiere del
+ * baseline.
  *
  * El baseline se actualiza tras cada memsync exitoso.
- * No se necesitan write barriers; el coste de deteccion es O(tamano_region) pero
- * amortizado: la mayoria de paginas pasan el filtro Adler-32 en nanosegundos.
+ * No se necesitan write barriers; el coste de deteccion es O(tamano_region)
+ * pero amortizado: la mayoria de paginas pasan el filtro Adler-32 en
+ * nanosegundos.
  *
  * BLAKE2s-256 se computa via OpenSSL 3.x (EVP_blake2s256).
  */
@@ -36,7 +39,8 @@
 
 namespace distrib {
 
-static constexpr uint32_t DT_PAGE_SIZE = 4096; // tamano de pagina del tracker (igual que VM)
+static constexpr uint32_t DT_PAGE_SIZE =
+    4096; // tamano de pagina del tracker (igual que VM)
 static constexpr uint32_t DT_BLAKE2S_LEN = 32; // bytes de salida de BLAKE2s-256
 
 /**
@@ -46,20 +50,23 @@ static constexpr uint32_t DT_BLAKE2S_LEN = 32; // bytes de salida de BLAKE2s-256
  * Si adler32 == 0 y blake2s es todo ceros, la pagina no tiene baseline aun.
  */
 struct PageBaseline {
-    uint32_t adler32;           // hash Adler-32 del contenido en el ultimo memsync
-    uint8_t  blake2s[DT_BLAKE2S_LEN]; // hash BLAKE2s-256 del contenido en el ultimo memsync
+    uint32_t adler32; // hash Adler-32 del contenido en el ultimo memsync
+    uint8_t blake2s[DT_BLAKE2S_LEN]; // hash BLAKE2s-256 del contenido en el
+                                     // ultimo memsync
 };
 
 /**
  * @brief Pagina marcada como modificada durante una pasada de deteccion.
  */
 struct DirtyPage {
-    uint32_t page_idx;          // indice de pagina (0-based desde la dir base de la region)
-    uint8_t  blake2s[DT_BLAKE2S_LEN]; // nuevo hash BLAKE2s-256 de esta pagina
+    uint32_t
+        page_idx; // indice de pagina (0-based desde la dir base de la region)
+    uint8_t blake2s[DT_BLAKE2S_LEN]; // nuevo hash BLAKE2s-256 de esta pagina
 };
 
 /**
- * @brief Gestor de deteccion de paginas modificadas para una region de VM memory.
+ * @brief Gestor de deteccion de paginas modificadas para una region de VM
+ * memory.
  *
  * Cada instancia cubre una region de memoria virtual de tamano fijo.
  * El Loader o la instruccion memsync crea instancias de DirtyTracker segun
@@ -78,7 +85,7 @@ struct DirtyPage {
  * @endcode
  */
 class DirtyTracker {
-public:
+  public:
     /**
      * @brief Construye el tracker para la region indicada.
      *
@@ -98,25 +105,27 @@ public:
      * computa Adler-32 por pagina, y si cambio computa BLAKE2s-256.
      * Retorna solo las paginas cuyo BLAKE2s difiere del baseline almacenado.
      *
-     * @param mem_read  Funcion de lectura de VM memory: (vm_addr, out_buf, len).
-     *                  Firma: void(uint64_t addr, uint8_t *buf, size_t len).
+     * @param mem_read  Funcion de lectura de VM memory: (vm_addr, out_buf,
+     * len). Firma: void(uint64_t addr, uint8_t *buf, size_t len).
      * @return Vector de paginas modificadas con sus nuevos hashes BLAKE2s.
      */
-    template<typename MemReadFn>
+    template <typename MemReadFn>
     std::vector<DirtyPage> detect(MemReadFn &&mem_read);
 
     /**
      * @brief Actualiza el baseline para las paginas indicadas.
      *
-     * Debe llamarse tras confirmar que las paginas fueron entregadas al destino.
-     * Las paginas no incluidas en @p pages mantienen su baseline anterior.
+     * Debe llamarse tras confirmar que las paginas fueron entregadas al
+     * destino. Las paginas no incluidas en @p pages mantienen su baseline
+     * anterior.
      *
      * @param pages Vector de paginas con los nuevos hashes a almacenar.
      */
     void update_baseline(const std::vector<DirtyPage> &pages);
 
     /**
-     * @brief Invalida todo el baseline (todas las paginas se marcan como cambiadas).
+     * @brief Invalida todo el baseline (todas las paginas se marcan como
+     * cambiadas).
      *
      * Util al inicio o tras un reinicio de sincronizacion.
      */
@@ -161,12 +170,13 @@ public:
      * @param out  Buffer de salida de exactamente DT_BLAKE2S_LEN bytes.
      * @return     true si el calculo fue exitoso; false si OpenSSL fallo.
      */
-    static bool blake2s_256(const uint8_t *buf, size_t len, uint8_t out[DT_BLAKE2S_LEN]);
+    static bool blake2s_256(const uint8_t *buf, size_t len,
+                            uint8_t out[DT_BLAKE2S_LEN]);
 
-private:
-    uint64_t                  base_addr_;   // dir virtual base de la region
-    uint64_t                  region_size_; // tamano de la region en bytes
-    std::vector<PageBaseline> baselines_;   // una entrada por pagina
+  private:
+    uint64_t base_addr_;                  // dir virtual base de la region
+    uint64_t region_size_;                // tamano de la region en bytes
+    std::vector<PageBaseline> baselines_; // una entrada por pagina
 
     // buffer temporal para leer una pagina (evita malloc en detect())
     static constexpr size_t PAGE_BUF_SIZE = DT_PAGE_SIZE;
@@ -176,17 +186,21 @@ private:
 // ---------------------------------------------------------------------------
 // Implementacion inline de detect() (template, debe estar en el header)
 // ---------------------------------------------------------------------------
-template<typename MemReadFn>
+template <typename MemReadFn>
 std::vector<DirtyPage> DirtyTracker::detect(MemReadFn &&mem_read) {
     std::vector<DirtyPage> dirty;
 
     const size_t n_pages = baselines_.size();
     for (size_t i = 0; i < n_pages; ++i) {
-        uint64_t page_addr = base_addr_ + static_cast<uint64_t>(i) * DT_PAGE_SIZE;
+        uint64_t page_addr =
+            base_addr_ + static_cast<uint64_t>(i) * DT_PAGE_SIZE;
 
         // leer la pagina completa en el buffer temporal
-        uint64_t remaining = region_size_ - static_cast<uint64_t>(i) * DT_PAGE_SIZE;
-        size_t   read_len  = (remaining >= DT_PAGE_SIZE) ? DT_PAGE_SIZE : static_cast<size_t>(remaining);
+        uint64_t remaining =
+            region_size_ - static_cast<uint64_t>(i) * DT_PAGE_SIZE;
+        size_t read_len = (remaining >= DT_PAGE_SIZE)
+                              ? DT_PAGE_SIZE
+                              : static_cast<size_t>(remaining);
 
         mem_read(page_addr, page_buf_, read_len);
         if (read_len < DT_PAGE_SIZE) {
@@ -208,9 +222,11 @@ std::vector<DirtyPage> DirtyTracker::detect(MemReadFn &&mem_read) {
         }
 
         // comparar con el baseline
-        if (__builtin_memcmp(dp.blake2s, baselines_[i].blake2s, DT_BLAKE2S_LEN) == 0) {
+        if (__builtin_memcmp(dp.blake2s, baselines_[i].blake2s,
+                             DT_BLAKE2S_LEN) == 0) {
             // BLAKE2s coincide: el Adler-32 tenia una colision (muy raro)
-            baselines_[i].adler32 = a32; // actualizar Adler-32 para evitar recalcular BLAKE2s la proxima vez
+            baselines_[i].adler32 = a32; // actualizar Adler-32 para evitar
+                                         // recalcular BLAKE2s la proxima vez
             continue;
         }
 

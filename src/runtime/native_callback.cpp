@@ -65,30 +65,28 @@ extern "C" uint64_t vex_get_native_thunk(uint64_t fn_pc, uint64_t /*argc*/) {
  * objeto (no es referenciado desde main).  `__attribute__((constructor))`
  * fuerza ejecucion antes de main, garantizado por GCC/Clang. */
 #if defined(__GNUC__) || defined(__clang__)
-__attribute__((used, constructor))
-static void vex_callback_register_virtual_fn() {
-    ffi::register_virtual_fn(
-        "vesta_runtime", "vex_get_native_thunk",
-        reinterpret_cast<void *>(&::vex_get_native_thunk));
+__attribute__((used, constructor)) static void
+vex_callback_register_virtual_fn() {
+    ffi::register_virtual_fn("vesta_runtime", "vex_get_native_thunk",
+                             reinterpret_cast<void *>(&::vex_get_native_thunk));
 }
 #else
 namespace {
-    struct VexCallbackAutoRegister {
-        VexCallbackAutoRegister() {
-            ffi::register_virtual_fn(
-                "vesta_runtime", "vex_get_native_thunk",
-                reinterpret_cast<void *>(&::vex_get_native_thunk));
-        }
-    };
-    static VexCallbackAutoRegister _vex_callback_auto_register;
-}
+struct VexCallbackAutoRegister {
+    VexCallbackAutoRegister() {
+        ffi::register_virtual_fn(
+            "vesta_runtime", "vex_get_native_thunk",
+            reinterpret_cast<void *>(&::vex_get_native_thunk));
+    }
+};
+static VexCallbackAutoRegister _vex_callback_auto_register;
+} // namespace
 #endif
 
 /* Helper que el main.cpp puede llamar explicitamente para forzar el
  * registro (defense-in-depth si el constructor no se ejecuta por algun
  * motivo de linking). */
 extern "C" void runtime_ensure_vex_callback_registered(void) {
-    ffi::register_virtual_fn(
-        "vesta_runtime", "vex_get_native_thunk",
-        reinterpret_cast<void *>(&::vex_get_native_thunk));
+    ffi::register_virtual_fn("vesta_runtime", "vex_get_native_thunk",
+                             reinterpret_cast<void *>(&::vex_get_native_thunk));
 }

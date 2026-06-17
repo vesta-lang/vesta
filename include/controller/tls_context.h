@@ -41,18 +41,20 @@
  * El objeto SSL_CTX interno se libera en el destructor.
  */
 class TLSContext {
-private:
+  private:
     SSL_CTX *ctx; ///< Contexto SSL de OpenSSL gestionado por este objeto
 
-public:
+  public:
     /**
-     * @brief Construye el contexto TLS cargando el certificado y la clave privada indicados.
+     * @brief Construye el contexto TLS cargando el certificado y la clave
+     * privada indicados.
      *
      * Crea un SSL_CTX con TLS_server_method() y carga los ficheros mediante
      * SSL_CTX_use_certificate_file() y SSL_CTX_use_PrivateKey_file().
      * Lanza una excepcion std::runtime_error si algun paso falla.
      *
-     * @param cert_file Ruta al fichero de certificado del servidor en formato PEM.
+     * @param cert_file Ruta al fichero de certificado del servidor en formato
+     * PEM.
      * @param key_file  Ruta al fichero de clave privada en formato PEM.
      */
     TLSContext(const std::string &cert_file, const std::string &key_file);
@@ -65,18 +67,18 @@ public:
     /**
      * @brief Devuelve el puntero al SSL_CTX interno.
      *
-     * @return Puntero al contexto SSL de OpenSSL; nunca nullptr si el constructor tuvo exito.
+     * @return Puntero al contexto SSL de OpenSSL; nunca nullptr si el
+     * constructor tuvo exito.
      */
-    SSL_CTX *get() const {
-        return ctx;
-    }
+    SSL_CTX *get() const { return ctx; }
 
     /**
      * @brief Inicializa la biblioteca OpenSSL.
      *
      * Debe llamarse una sola vez al inicio del programa, antes de crear
      * cualquier TLSContext o TLSConnection.
-     * Invoca SSL_library_init(), SSL_load_error_strings() y OpenSSL_add_all_algorithms().
+     * Invoca SSL_library_init(), SSL_load_error_strings() y
+     * OpenSSL_add_all_algorithms().
      */
     static void initialize();
 

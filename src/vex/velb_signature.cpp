@@ -40,10 +40,10 @@ bool write_u32_le_(std::vector<uint8_t> &out, uint32_t v) {
 
 uint32_t read_u32_le_at_(const std::vector<uint8_t> &b, size_t off) {
     if (off + 4 > b.size()) return 0;
-    return static_cast<uint32_t>(b[off])
-         | (static_cast<uint32_t>(b[off + 1]) << 8)
-         | (static_cast<uint32_t>(b[off + 2]) << 16)
-         | (static_cast<uint32_t>(b[off + 3]) << 24);
+    return static_cast<uint32_t>(b[off]) |
+           (static_cast<uint32_t>(b[off + 1]) << 8) |
+           (static_cast<uint32_t>(b[off + 2]) << 16) |
+           (static_cast<uint32_t>(b[off + 3]) << 24);
 }
 
 } // namespace
@@ -54,10 +54,8 @@ bool velb_has_signature(const std::vector<uint8_t> &velb) noexcept {
 }
 
 bool velb_sign(const std::vector<uint8_t> &velb_in,
-                const std::string &privkey_path,
-                VsigAlgo algo,
-                std::vector<uint8_t> &out_signed,
-                std::string &err) {
+               const std::string &privkey_path, VsigAlgo algo,
+               std::vector<uint8_t> &out_signed, std::string &err) {
     // 1. Cargar private key via BIO (evita issue OPENSSL_Applink en Windows
     // cuando se mezcla FILE* de MSVC OpenSSL con CRT de MinGW).
     std::ifstream pkf(privkey_path, std::ios::binary | std::ios::ate);
@@ -91,8 +89,8 @@ bool velb_sign(const std::vector<uint8_t> &velb_in,
     }
     bool ok = false;
     do {
-        if (EVP_DigestSignInit(ctx, nullptr, EVP_sha256(),
-                                nullptr, pkey) != 1) {
+        if (EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, pkey) !=
+            1) {
             err = "EVP_DigestSignInit: " + openssl_last_error_();
             break;
         }
@@ -126,12 +124,13 @@ bool velb_sign(const std::vector<uint8_t> &velb_in,
     return ok;
 }
 
-VsigVerifyResult velb_verify_signature(const std::vector<uint8_t> &velb_with_sig,
-                                        const std::string &pubkey_path) {
+VsigVerifyResult
+velb_verify_signature(const std::vector<uint8_t> &velb_with_sig,
+                      const std::string &pubkey_path) {
     VsigVerifyResult r;
     if (!velb_has_signature(velb_with_sig)) {
         r.signed_ = false;
-        r.error   = "archivo no firmado (sin footer VSIG)";
+        r.error = "archivo no firmado (sin footer VSIG)";
         return r;
     }
     r.signed_ = true;
@@ -139,7 +138,8 @@ VsigVerifyResult velb_verify_signature(const std::vector<uint8_t> &velb_with_sig
     // Parse footer: <sig> <sig_size> <algo> <magic>
     const size_t total = velb_with_sig.size();
     const uint32_t sig_size = read_u32_le_at_(velb_with_sig, total - 12);
-    // const uint32_t algo  = read_u32_le_at_(velb_with_sig, total - 8); // futuro
+    // const uint32_t algo  = read_u32_le_at_(velb_with_sig, total - 8); //
+    // futuro
     if (sig_size == 0 || sig_size > 4096) {
         r.error = "sig_size invalido (corrupcion del footer)";
         return r;
@@ -150,7 +150,7 @@ VsigVerifyResult velb_verify_signature(const std::vector<uint8_t> &velb_with_sig
         return r;
     }
     const uint8_t *body = velb_with_sig.data();
-    const uint8_t *sig  = body + body_size;
+    const uint8_t *sig = body + body_size;
 
     // Cargar public key via BIO (mismo motivo que en velb_sign).
     std::ifstream pkf(pubkey_path, std::ios::binary | std::ios::ate);
@@ -182,8 +182,8 @@ VsigVerifyResult velb_verify_signature(const std::vector<uint8_t> &velb_with_sig
         return r;
     }
     do {
-        if (EVP_DigestVerifyInit(ctx, nullptr, EVP_sha256(),
-                                  nullptr, pkey) != 1) {
+        if (EVP_DigestVerifyInit(ctx, nullptr, EVP_sha256(), nullptr, pkey) !=
+            1) {
             r.error = "EVP_DigestVerifyInit: " + openssl_last_error_();
             break;
         }

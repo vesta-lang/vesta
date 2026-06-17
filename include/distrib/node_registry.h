@@ -10,14 +10,16 @@
 
 /**
  * @file node_registry.h
- * @brief Registro de nodos VestaVM conocidos (estaticos y dinamicamente descubiertos).
+ * @brief Registro de nodos VestaVM conocidos (estaticos y dinamicamente
+ * descubiertos).
  *
  * NodeRegistry mantiene la tabla de todos los nodos VDP con los que puede
  * comunicarse esta instancia.  Soporta dos modos de descubrimiento:
  *
- *   - Estatico: lista de nodos en el archivo de configuracion (IP + puerto + token).
- *   - Dinamico: broadcast UDP en VDP_DISCOVER_PORT para descubrir pares en la LAN.
- *     Los nodos responden con NODE_ANNOUNCE y se agregan automaticamente.
+ *   - Estatico: lista de nodos en el archivo de configuracion (IP + puerto +
+ * token).
+ *   - Dinamico: broadcast UDP en VDP_DISCOVER_PORT para descubrir pares en la
+ * LAN. Los nodos responden con NODE_ANNOUNCE y se agregan automaticamente.
  *
  * La clase es thread-safe: puede leerse y modificarse desde el hilo de red
  * y desde los hilos de proceso simultaneamente.
@@ -51,24 +53,28 @@ namespace distrib {
  * Para token, el campo @p token_hash contiene SHA-256(plaintext_token).
  */
 struct NodeAuthConfig {
-    bool    use_tls;            // true = usar TLS sobre la conexion TCP
-    bool    require_client_cert;// true = mutual TLS (verificar el certificado del servidor)
-    bool    use_token;          // true = realizar CRAM de token sobre la sesion VDP
-    uint8_t token_hash[32];     // SHA-256(plaintext_token); solo valido si use_token == true
-    char    cert_path[256];     // ruta al certificado local (PEM); vacio si no se usa TLS
-    char    key_path[256];      // ruta a la clave privada (PEM); vacio si no se usa TLS
-    char    ca_path[256];       // ruta al CA bundle para verificar el servidor; vacio = sin verificar
+    bool use_tls;             // true = usar TLS sobre la conexion TCP
+    bool require_client_cert; // true = mutual TLS (verificar el certificado del
+                              // servidor)
+    bool use_token;         // true = realizar CRAM de token sobre la sesion VDP
+    uint8_t token_hash[32]; // SHA-256(plaintext_token); solo valido si
+                            // use_token == true
+    char cert_path[256]; // ruta al certificado local (PEM); vacio si no se usa
+                         // TLS
+    char key_path[256]; // ruta a la clave privada (PEM); vacio si no se usa TLS
+    char ca_path[256];  // ruta al CA bundle para verificar el servidor; vacio =
+                        // sin verificar
 };
 
 // ---------------------------------------------------------------------------
 // Estado de conexion de un nodo
 // ---------------------------------------------------------------------------
 enum class NodeState {
-    UNKNOWN      = 0, // nodo conocido pero sin sesion establecida
-    CONNECTING   = 1, // handshake en progreso
-    AUTHENTICATED= 2, // sesion activa y autenticada
-    DISCONNECTED = 3, // sesion cerrada o perdida
-    BANNED       = 4, // nodo rechazado por fallo de autenticacion repetido
+    UNKNOWN = 0,       // nodo conocido pero sin sesion establecida
+    CONNECTING = 1,    // handshake en progreso
+    AUTHENTICATED = 2, // sesion activa y autenticada
+    DISCONNECTED = 3,  // sesion cerrada o perdida
+    BANNED = 4,        // nodo rechazado por fallo de autenticacion repetido
 };
 
 // ---------------------------------------------------------------------------
@@ -86,16 +92,17 @@ enum class NodeState {
  * Es nullptr si el nodo no tiene sesion establecida.
  */
 struct NodeInfo {
-    uint32_t       idx;          // indice de este nodo en el vector del registro (inmutable)
-    uint64_t       node_id;      // identificador unico de 64 bits del nodo
-    char           ip[64];       // direccion IP o nombre de host (IPv4 o IPv6)
-    uint16_t       port;         // puerto TCP del servidor VDP del nodo
-    char           name[32];     // nombre legible del nodo (para logs)
-    bool           is_static;    // true si fue configurado estaticamente; false si es dinamico
-    NodeState      state;        // estado actual de la conexion
-    NodeAuthConfig auth;         // configuracion de autenticacion para este nodo
-    void          *session;      // puntero a VdpSession activa (nullptr si desconectado)
-    uint32_t       auth_failures;// intentos de autenticacion fallidos consecutivos
+    uint32_t idx; // indice de este nodo en el vector del registro (inmutable)
+    uint64_t node_id;    // identificador unico de 64 bits del nodo
+    char ip[64];         // direccion IP o nombre de host (IPv4 o IPv6)
+    uint16_t port;       // puerto TCP del servidor VDP del nodo
+    char name[32];       // nombre legible del nodo (para logs)
+    bool is_static;      // true si fue configurado estaticamente; false si es
+                         // dinamico
+    NodeState state;     // estado actual de la conexion
+    NodeAuthConfig auth; // configuracion de autenticacion para este nodo
+    void *session; // puntero a VdpSession activa (nullptr si desconectado)
+    uint32_t auth_failures; // intentos de autenticacion fallidos consecutivos
 };
 
 // ---------------------------------------------------------------------------
@@ -119,12 +126,13 @@ struct NodeInfo {
  *   DistRuntime pueda iniciar la conexion y autenticacion.
  */
 class NodeRegistry {
-public:
+  public:
     using NewNodeCallback = std::function<void(const NodeInfo &)>;
 
     /**
      * @brief Construye el registro con el ID de nodo local indicado.
-     * @param local_node_id ID de este nodo (para incluirlo en los mensajes de descubrimiento).
+     * @param local_node_id ID de este nodo (para incluirlo en los mensajes de
+     * descubrimiento).
      * @param local_port    Puerto TCP del servidor VDP local.
      */
     NodeRegistry(uint64_t local_node_id, uint16_t local_port);
@@ -146,8 +154,7 @@ public:
      * @return Indice del nodo en el registro.
      */
     uint32_t add_static(const char *ip, uint16_t port,
-                        const NodeAuthConfig &auth,
-                        const char *name = "");
+                        const NodeAuthConfig &auth, const char *name = "");
 
     /**
      * @brief Agrega un nodo descubierto dinamicamente.
@@ -159,9 +166,11 @@ public:
      * @param ip      Direccion IP del anunciante.
      * @param port    Puerto TCP del servidor VDP.
      * @param name    Nombre del nodo.
-     * @return Indice del nodo en el registro, o VDP_MAX_NODES si el registro esta lleno.
+     * @return Indice del nodo en el registro, o VDP_MAX_NODES si el registro
+     * esta lleno.
      */
-    uint32_t add_dynamic(uint64_t node_id, const char *ip, uint16_t port, const char *name);
+    uint32_t add_dynamic(uint64_t node_id, const char *ip, uint16_t port,
+                         const char *name);
 
     /**
      * @brief Obtiene un nodo por su indice.
@@ -192,7 +201,8 @@ public:
     /**
      * @brief Asocia una sesion VdpSession a un nodo.
      * @param idx     Indice del nodo.
-     * @param session Puntero a la sesion activa (puede ser nullptr para desconectar).
+     * @param session Puntero a la sesion activa (puede ser nullptr para
+     * desconectar).
      */
     void set_session(uint32_t idx, void *session);
 
@@ -209,7 +219,8 @@ public:
      * respuestas NODE_ANNOUNCE para agregar nodos nuevos al registro.
      * No hace nada si el descubrimiento ya esta activo.
      *
-     * @param discover_port Puerto UDP para descubrimiento (default VDP_DISCOVER_PORT).
+     * @param discover_port Puerto UDP para descubrimiento (default
+     * VDP_DISCOVER_PORT).
      */
     void start_discovery(uint16_t discover_port = VDP_DISCOVER_PORT);
 
@@ -223,16 +234,17 @@ public:
      */
     void broadcast_discover();
 
-private:
-    mutable std::mutex     mtx_;        // protege nodes_
-    std::vector<NodeInfo>  nodes_;      // tabla de nodos (indice = idx del nodo)
-    uint64_t               local_id_;   // ID de este nodo (no se registra en la tabla)
-    uint16_t               local_port_; // puerto TCP local del servidor VDP
+  private:
+    mutable std::mutex mtx_;      // protege nodes_
+    std::vector<NodeInfo> nodes_; // tabla de nodos (indice = idx del nodo)
+    uint64_t local_id_;   // ID de este nodo (no se registra en la tabla)
+    uint16_t local_port_; // puerto TCP local del servidor VDP
 
-    NewNodeCallback        new_node_cb_; // callback al descubrir un nodo nuevo
+    NewNodeCallback new_node_cb_; // callback al descubrir un nodo nuevo
 
-    std::atomic<bool>      disc_running_{false}; // true si el hilo de descubrimiento esta activo
-    std::thread            disc_thread_;          // hilo de descubrimiento UDP
+    std::atomic<bool> disc_running_{
+        false};               // true si el hilo de descubrimiento esta activo
+    std::thread disc_thread_; // hilo de descubrimiento UDP
 
     // bucle del hilo de descubrimiento
     void discovery_loop_(uint16_t discover_port);

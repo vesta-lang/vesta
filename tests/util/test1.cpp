@@ -1,5 +1,5 @@
 /*
-* VestaVM - Máquina Virtual Distribuida
+ * VestaVM - Máquina Virtual Distribuida
  *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
@@ -9,7 +9,6 @@
  *
  * Descargo: Autor no responsable por modificaciones.
  */
-
 
 /**
  * @file test_threadpool.cpp
@@ -39,7 +38,8 @@ static void print_header(const char *title) {
 }
 
 int main() {
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+#if defined(WIN32) || defined(_WIN32) ||                                       \
+    defined(__WIN32) && !defined(__CYGWIN__)
     system("chcp 65001");
 #endif
 
@@ -49,7 +49,7 @@ int main() {
     print_header("TEST 1: submit y obtener resultados");
     try {
         ThreadPool pool(4);
-        std::vector<std::future<int> > futs;
+        std::vector<std::future<int>> futs;
         for (int i = 0; i < 8; ++i) {
             futs.push_back(pool.submit([i]() {
                 // simular trabajo
@@ -59,7 +59,7 @@ int main() {
         }
 
         bool ok = true;
-        for (int i = 0; i < (int) futs.size(); ++i) {
+        for (int i = 0; i < (int)futs.size(); ++i) {
             int r = futs[i].get();
             std::cout << "task " << i << " -> " << r << "\n";
             if (r != i * 2) ok = false;
@@ -94,7 +94,7 @@ int main() {
 
         try {
             std::string s2 = fut_err.get();
-            (void) s2;
+            (void)s2;
             std::cout << "ERROR: fut_err no lanzó excepción\n";
             ok = false;
         } catch (const std::exception &e) {
@@ -117,7 +117,7 @@ int main() {
         ThreadPool pool(4);
         std::atomic<int> counter{0};
         const int N = 200;
-        std::vector<std::future<void> > futs;
+        std::vector<std::future<void>> futs;
         for (int i = 0; i < N; ++i) {
             futs.push_back(pool.submit([&counter]() {
                 // trabajo variable
@@ -125,9 +125,11 @@ int main() {
                 counter.fetch_add(1, std::memory_order_relaxed);
             }));
         }
-        for (auto &f: futs) f.get();
+        for (auto &f : futs)
+            f.get();
         bool ok = (counter.load() == N);
-        std::cout << "counter = " << counter.load() << " (expected " << N << ")\n";
+        std::cout << "counter = " << counter.load() << " (expected " << N
+                  << ")\n";
         std::cout << (ok ? "TEST 3 PASS\n" : "TEST 3 FAIL\n");
         all_ok &= ok;
         pool.shutdown();
@@ -155,7 +157,8 @@ int main() {
             int r = fut.get();
             std::cout << "tarea en curso completada -> " << r << "\n";
         } catch (const std::exception &e) {
-            std::cout << "ERROR: tarea en curso lanzó excepción: " << e.what() << "\n";
+            std::cout << "ERROR: tarea en curso lanzó excepción: " << e.what()
+                      << "\n";
             ok = false;
         }
 
@@ -163,7 +166,7 @@ int main() {
         bool threw = false;
         try {
             auto fut2 = pool.submit([]() { return 1; });
-            (void) fut2;
+            (void)fut2;
             std::cout << "ERROR: submit después de shutdown no lanzó\n";
             ok = false;
         } catch (const std::exception &e) {

@@ -12,16 +12,21 @@
 
 /**
  * @file jit_call.h
- * @brief Estructuras basicas para la generacion JIT de shellcode y llamadas a funciones nativas.
+ * @brief Estructuras basicas para la generacion JIT de shellcode y llamadas a
+ * funciones nativas.
  *
  * Define:
  *  - @c err_shellcode : codigos de error del generador de shellcode JIT.
- *  - @c shellcode_t   : buffer dinamico de bytes con funciones de emision y expansion.
- *  - @c PendingCall_t : descriptor de una llamada nativa pendiente de ejecucion asincrona.
+ *  - @c shellcode_t   : buffer dinamico de bytes con funciones de emision y
+ * expansion.
+ *  - @c PendingCall_t : descriptor de una llamada nativa pendiente de ejecucion
+ * asincrona.
  *
- * El modulo JIT genera secuencias de bytes x86_64 que llaman a funciones del host
- * desde codigo VM, usando @c shellcode_t como buffer de construccion incremental.
- * @c PendingCall_t permite encolar esas llamadas para ejecutarlas en un hilo dedicado.
+ * El modulo JIT genera secuencias de bytes x86_64 que llaman a funciones del
+ * host desde codigo VM, usando @c shellcode_t como buffer de construccion
+ * incremental.
+ * @c PendingCall_t permite encolar esas llamadas para ejecutarlas en un hilo
+ * dedicado.
  *
  * @note Este modulo esta en desarrollo activo; la interfaz puede cambiar.
  */
@@ -37,32 +42,44 @@
  * @brief Codigos de error del generador de shellcode JIT.
  *
  * Valores:
- *  - @c NO_ERROR_SC                             : operacion completada sin error.
- *  - @c REALLOC_ERROR                           : fallo al reasignar el buffer del shellcode.
- *  - @c EmitIndirect_ERROR                      : error al emitir una referencia indirecta.
- *  - @c EmitIndirectByteDisplaced_ERROR         : error con desplazamiento de 1 byte.
- *  - @c EmitIndirectDisplaced_ERROR             : error con desplazamiento de 4 bytes.
- *  - @c EmitIndirectIndexed_ERROR               : error con direccionamiento indexado.
- *  - @c EmitIndirectIndexedDisplaced_ERROR      : error con indexado mas desplazamiento de 4 bytes.
- *  - @c EmitIndirectIndexedByteDisplaced_ERROR  : error con indexado mas desplazamiento de 1 byte.
+ *  - @c NO_ERROR_SC                             : operacion completada sin
+ * error.
+ *  - @c REALLOC_ERROR                           : fallo al reasignar el buffer
+ * del shellcode.
+ *  - @c EmitIndirect_ERROR                      : error al emitir una
+ * referencia indirecta.
+ *  - @c EmitIndirectByteDisplaced_ERROR         : error con desplazamiento de 1
+ * byte.
+ *  - @c EmitIndirectDisplaced_ERROR             : error con desplazamiento de 4
+ * bytes.
+ *  - @c EmitIndirectIndexed_ERROR               : error con direccionamiento
+ * indexado.
+ *  - @c EmitIndirectIndexedDisplaced_ERROR      : error con indexado mas
+ * desplazamiento de 4 bytes.
+ *  - @c EmitIndirectIndexedByteDisplaced_ERROR  : error con indexado mas
+ * desplazamiento de 1 byte.
  */
 typedef enum err_shellcode {
-    NO_ERROR_SC,                              ///< Sin error.
-    REALLOC_ERROR,                            ///< Fallo al expandir el buffer.
-    EmitIndirect_ERROR,                       ///< Error en emision indirecta basica.
-    EmitIndirectByteDisplaced_ERROR,          ///< Error en emision indirecta con disp8.
-    EmitIndirectDisplaced_ERROR,              ///< Error en emision indirecta con disp32.
-    EmitIndirectIndexed_ERROR,                ///< Error en emision indexada.
-    EmitIndirectIndexedDisplaced_ERROR,       ///< Error en emision indexada con disp32.
-    EmitIndirectIndexedByteDisplaced_ERROR    ///< Error en emision indexada con disp8.
+    NO_ERROR_SC,                     ///< Sin error.
+    REALLOC_ERROR,                   ///< Fallo al expandir el buffer.
+    EmitIndirect_ERROR,              ///< Error en emision indirecta basica.
+    EmitIndirectByteDisplaced_ERROR, ///< Error en emision indirecta con disp8.
+    EmitIndirectDisplaced_ERROR,     ///< Error en emision indirecta con disp32.
+    EmitIndirectIndexed_ERROR,       ///< Error en emision indexada.
+    EmitIndirectIndexedDisplaced_ERROR,    ///< Error en emision indexada con
+                                           ///< disp32.
+    EmitIndirectIndexedByteDisplaced_ERROR ///< Error en emision indexada con
+                                           ///< disp8.
 } err_shellcode;
 
 /**
  * @struct shellcode_t
- * @brief Buffer dinamico de bytes para la construccion incremental de shellcode JIT.
+ * @brief Buffer dinamico de bytes para la construccion incremental de shellcode
+ * JIT.
  *
  * Actua como un vector de bytes con capacidad dinamica y funciones de emision
- * accesibles mediante punteros de funcion.  Cada llamada a @c Emit8, @c Emit32 o
+ * accesibles mediante punteros de funcion.  Cada llamada a @c Emit8, @c Emit32
+ * o
  * @c Emit64 agrega bytes al buffer; si la capacidad se agota, @c expand duplica
  * el tamano del buffer mediante @c realloc.
  *
@@ -83,8 +100,9 @@ typedef struct shellcode_t {
     size_t capacity; ///< Capacidad actual en bytes del buffer @c code.
     size_t size;     ///< Numero de bytes escritos hasta ahora en @c code.
 
-    uint8_t *     code; ///< Puntero al buffer de bytes del shellcode.
-    err_shellcode err;  ///< Primer error ocurrido (NO_ERROR_SC si todo fue bien).
+    uint8_t *code; ///< Puntero al buffer de bytes del shellcode.
+    err_shellcode
+        err; ///< Primer error ocurrido (NO_ERROR_SC si todo fue bien).
 
     /**
      * @brief Emite un byte al buffer.
@@ -131,7 +149,8 @@ typedef struct shellcode_t {
 
 /**
  * @struct PendingCall_t
- * @brief Descriptor de una llamada a funcion nativa pendiente de ejecucion asincrona.
+ * @brief Descriptor de una llamada a funcion nativa pendiente de ejecucion
+ * asincrona.
  *
  * Permite encolar llamadas a funciones del host para que un hilo dedicado las
  * ejecute de forma ordenada.  El llamante crea un @c PendingCall_t, lo encola y
@@ -148,8 +167,9 @@ typedef struct shellcode_t {
 typedef struct PendingCall_t {
     void *(*func)(void *arg); ///< Puntero a la funcion nativa que se invocara.
     shellcode_t *arg;         ///< Shellcode con los argumentos empaquetados.
-    void *       result;      ///< Valor de retorno de la funcion (valido cuando finished==true).
-    bool         finished;    ///< true una vez que la funcion termino de ejecutarse.
+    void *result;             ///< Valor de retorno de la funcion (valido cuando
+                              ///< finished==true).
+    bool finished; ///< true una vez que la funcion termino de ejecutarse.
 
     pthread_mutex_t lock; ///< Mutex que protege el acceso a finished y result.
 } PendingCall_t;
