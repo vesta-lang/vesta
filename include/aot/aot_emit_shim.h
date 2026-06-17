@@ -188,6 +188,22 @@ int aot_emit_elf32(const char *path, const AotLayoutCfg *cfg,
                    char *err, size_t err_cap);
 
 /**
+ * @brief Emite un EJECUTABLE PE32 (i386, .exe Windows 32-bit) -- hand-rolled.
+ *        Minimo: secciones de usuario + .idata con UN import (kernel32!
+ *        ExitProcess, el _start sale por ahi).  @p imps trae ese import (para
+ *        parchear el @c FF @c 15 del stub).  Aplica relocs REL32 intra-imagen.
+ *        v1: EXEC self-contained (sin libc); externos = follow-up.  @c image_base
+ *        default 0x00400000.
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
+                  const AotSection *secs, int num_secs,
+                  int entry_sec, uint64_t entry_off,
+                  const AotImport *imps, int num_imps,
+                  const AotReloc *relocs, int num_relocs,
+                  char *err, size_t err_cap);
+
+/**
  * @brief Emite un EJECUTABLE ELF64 DINaMICO (PIE ET_DYN) que importa simbolos
  *        externos (libc malloc/free/abort...) via eager-GOT.  AOT.2.exec slice 2.
  *

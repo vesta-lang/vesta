@@ -1781,12 +1781,11 @@ int main(int argc, char *argv[]) {
             // --format elf (ELF32 estatico, _start via int 0x80).  PE32 (.exe
             // Windows 32-bit) y .o32/.so32 son follow-ups.
             if (aot_mode32) {
-                const bool ok32 = emit_bin
-                                || (!no_stub && fmt == aot::ObjFormat::ELF);
+                const bool ok32 = emit_bin || (!no_stub /* EXEC: ELF32 o PE32 */);
                 if (!ok32) {
                     std::cerr << "[aot] --aot-arch x86-32: soporta --emit bin o "
-                                 "--emit exe --format elf (ELF32); PE32 y .o/.so "
-                                 "de 32-bit son follow-ups.\n";
+                                 "--emit exe (ELF32 / PE32); .o/.so/.dll de 32-bit "
+                                 "son follow-ups.\n";
                     return EXIT_FAILURE;
                 }
             }

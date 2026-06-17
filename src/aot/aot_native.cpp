@@ -99,6 +99,32 @@ namespace aot {
             return s;
         }
 
+        /**
+         * @brief @c _start x86-32 para PE: llama a main y termina via
+         *        @c kernel32!ExitProcess(eax) por la IAT (stdcall: push arg).
+         *
+         *   E8 rel32           call main             ; main (rel32 a parchear)
+         *   50                 push eax               ; codigo de salida (stdcall)
+         *   FF 15 disp32       call [ExitProcess]     ; IAT abs32 (a parchear)
+         *   CC                 int3                   ; inalcanzable
+         */
+        StartStub start_x86_32_pe() {
+            StartStub s;
+            s.bytes = {
+                0xE8, 0x00, 0x00, 0x00, 0x00,        // call main (rel32@1)   (off 0)
+                0x50,                                // push eax              (off 5)
+                0xFF, 0x15, 0x00, 0x00, 0x00, 0x00,  // call [abs32] (off 6, disp@8)
+                0xCC                                 // int3                  (off 12)
+            };
+            s.main_call_off = 1;
+            s.has_import_call = true;
+            s.import_call_off = 6;             // offset del FF 15
+            s.import_dll  = "kernel32.dll";
+            s.import_func = "ExitProcess";
+            s.ok = true;
+            return s;
+        }
+
     } // namespace
 
     StartStub aot_make_start_stub(AotArch arch, ObjFormat fmt) {
@@ -108,8 +134,8 @@ namespace aot {
                 if (fmt == ObjFormat::ELF) return start_x86_64_elf();
                 break;
             case AotArch::X86_32:
-                /* v1: solo ELF (PE32 es follow-up). */
                 if (fmt == ObjFormat::ELF) return start_x86_32_elf();
+                if (fmt == ObjFormat::PE)  return start_x86_32_pe();
                 break;
             default:
                 break;
