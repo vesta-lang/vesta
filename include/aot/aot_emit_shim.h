@@ -226,6 +226,22 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
                          char *err, size_t err_cap);
 
 /**
+ * @brief Variante x86-32 de @c aot_emit_elf_dynexec: EJECUTABLE ELF32 DINaMICO
+ *        (PIE ET_DYN, EM_386) que importa libc.so.6 (i386) via eager-GOT.
+ *        PT_INTERP -> /lib/ld-linux.so.2; .rel.dyn con R_386_GLOB_DAT (Elf32_Rel
+ *        SIN addend); .dynamic con DT_REL/RELSZ/RELENT + DF_BIND_NOW.  Cada
+ *        thunk @c FF @c 25 @c disp32 lleva la direccion ABSOLUTA de su GOT entry
+ *        (i386 no tiene RIP-rel; PIE base 0 -> vaddr == file offset).
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
+                           const AotSection *secs, int num_secs,
+                           int entry_sec, uint64_t entry_off,
+                           const AotReloc *relocs, int num_relocs,
+                           const AotImport *imps, int num_imps,
+                           char *err, size_t err_cap);
+
+/**
  * @brief Un simbolo GLOBAL exportado en un objeto relocatable.
  */
 typedef struct {

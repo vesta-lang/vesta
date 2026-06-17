@@ -347,12 +347,6 @@ con `runs_individual`, `stats` p50/p95/min/max/stddev por lenguaje, y
 El runner genera un dashboard completo en `bench_plots/index.html` con
 9 vistas distintas. Las más representativas:
 
-**Dashboard global** (`01_dashboard.png`): cuatro paneles con wall time
-absoluto por lenguaje, comparativa vs C nativo, ranking por bench y
-speedup JIT vs intérprete:
-
-![Dashboard global](./bench_plots/01_dashboard.png)
-
 **Resumen geomean vs C** (`08_geomean_summary.png`): media geométrica
 del slowdown vs C nativo por lenguaje. Vex JIT compite directamente
 con HotSpot C2 y los supera ligeramente en promedio:
@@ -369,12 +363,7 @@ de slowdown contra C para cada bench, agrupado por lenguaje:
 
 ![Ratio vs C](./bench_plots/07_grouped_ratio.png)
 
-**Variabilidad de mediciones** (`04_boxplot_variability.png`): boxplots
-de min/p50/p95/max por lenguaje × bench. Vex JIT tiene la varianza más
-baja entre las VMs (interp también), demostrando determinismo del
-dispatcher:
 
-![Variabilidad](./bench_plots/04_boxplot_variability.png)
 
 Vistas adicionales disponibles en `bench_plots/`:
 [`00_system_info.png`](./bench_plots/00_system_info.png) (hardware +
