@@ -1935,15 +1935,25 @@ def main() -> int:
         rows.append(row)
 
         # Imprimir fila parcial.
+        # Cada columna usa ANCHO FIJO para que las etiquetas (vex_jit=, c=, ...)
+        # queden alineadas verticalmente en todas las filas.  El padding se
+        # aplica sobre el texto VISIBLE (sin contar los codigos de color ANSI),
+        # por eso se construye primero la celda en crudo y se pad-ea con ljust
+        # antes de envolverla en color.
         line = f"  [{idx:>3}/{len(benches)}] {C.BOLD}{b.name:<22}{C.RESET}"
         for ln in active_langs:
             v = row.get(ln)
+            # Ancho fijo de la columna: etiqueta (p.ej. "vex_interp=") mas hasta
+            # 6 digitos de ms y el sufijo "ms".  Caben N/A, FAIL y TIMEOUT.
+            col_w = len(ln) + 1 + 6 + 2  # "<ln>=" + 6 digitos + "ms"
             if v is None:
-                line += f"  {C.GREY}N/A{C.RESET}"
+                text, color = "N/A", C.GREY
             elif v < 0:
-                line += f"  {C.RED}FAIL{C.RESET}"
+                text, color = "FAIL", C.RED
             else:
-                line += f"  {tc[ln].color}{ln}={v:.0f}ms{C.RESET}"
+                text, color = f"{ln}={v:.0f}ms", tc[ln].color
+            # Pad-ear el texto visible a ancho fijo y luego aplicar color.
+            line += f"  {color}{text.ljust(col_w)}{C.RESET}"
         print(line)
 
     elapsed = time.perf_counter() - started_at
