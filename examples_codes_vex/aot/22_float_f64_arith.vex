@@ -1,0 +1,30 @@
+// AOT float SSE2: aritmetica f64 escalar (leaf, FP-regalloc en XMM).
+// Recursion para que el optimizador NO constant-foldee el calculo float:
+// asi el codegen FADD/FSUB/FMUL/FDIV se ejerce de verdad en runtime.
+// main devuelve un i32 derivado por cast para verificar el exit-code.
+
+// Suma recursiva: parte de acc, le suma 'step' n veces (FADD sobre params).
+f64 fsum(i64 n, f64 acc, f64 step) {
+    if (n == 0) { return acc; }
+    return fsum(n - 1, acc + step, step);
+}
+
+// Producto recursivo: multiplica acc por 'factor' n veces (FMUL sobre params).
+f64 fpow(i64 n, f64 acc, f64 factor) {
+    if (n == 0) { return acc; }
+    return fpow(n - 1, acc * factor, factor);
+}
+
+// Resta y division directas sobre params (no se foldean por la recursion
+// previa que produce valores runtime).
+f64 fsub(f64 a, f64 b) { return a - b; }
+f64 fdiv(f64 a, f64 b) { return a / b; }
+
+i32 main() {
+    f64 s = fsum(4, 0.0, 2.5);    // 0 + 2.5*4 = 10.0
+    f64 p = fpow(3, 1.0, 2.0);    // 1 * 2^3 = 8.0
+    f64 d = fsub(s, p);            // 10.0 - 8.0 = 2.0
+    f64 q = fdiv(s, d);            // 10.0 / 2.0 = 5.0
+    // s + p + d + q = 10 + 8 + 2 + 5 = 25
+    return (i32) (s + p + d + q);
+}
