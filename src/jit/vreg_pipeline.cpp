@@ -111,14 +111,15 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     const VregEntries &ent, const CallResolver &resolve_native,
                     const CallResolver &resolve_symbol,
                     std::vector<NativeReloc> *relocs_out, bool pic,
-                    bool target_sysv, bool mode32) {
+                    bool target_sysv, bool mode32, FloatIsa fisa) {
     if (relocs_out) relocs_out->clear();
     /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
      *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
      *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
     MFunction mf;
     if (!vreg_select(fn, mf, AbiKind::HOST_LEAF, resolve_call, ent,
-                     resolve_native, resolve_symbol, pic, target_sysv, mode32))
+                     resolve_native, resolve_symbol, pic, target_sysv, mode32,
+                     fisa))
         return {};
 
     /* Descriptor del target.  x86-64: ABI del TARGET (no del host) -- SysV

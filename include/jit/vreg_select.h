@@ -40,6 +40,20 @@ struct IrFunction;
 namespace jit {
 
 /**
+ * @brief Backend de punto flotante para el codegen (AOT, seleccionable por el
+ *        usuario con @c --float-isa).  La mayoria de CPUs modernas tienen AVX
+ *        pero NO AVX512F, por eso son modos distintos.  @c AUTO emite varias
+ *        variantes + un dispatch por CPUID al arranque (portabilidad).
+ */
+enum class FloatIsa : uint8_t {
+    X87 = 0,     ///< FPU x87 (todo x86 incluso 386; pila ST, sin XMM).
+    SSE2 = 1,    ///< SSE2 (baseline x86-64; XMM, ADDSD/MULSD).  Default.
+    AVX = 2,     ///< AVX (VEX, 3-operandos VADDSD; mayoria de CPUs modernas).
+    AVX512F = 3, ///< AVX-512 Foundation (EVEX; server/HEDT recientes).
+    AUTO = 4,    ///< deteccion en runtime via CPUID -> la mejor disponible.
+};
+
+/**
  * @brief Resolver de @c CALL: dado el nombre de la funcion destino,
  *        devuelve su direccion nativa (0 si no resoluble -> fallback).
  */
@@ -124,7 +138,7 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                      true
 #endif
                  ,
-                 bool mode32 = false);
+                 bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2);
 
 } // namespace jit
 
