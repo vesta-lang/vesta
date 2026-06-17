@@ -1174,6 +1174,263 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
 }
 
 /* =========================================================================
+ *  ELF32 EJECUTABLE DINaMICO (PIE ET_DYN, EM_386) con imports libc via
+ *  eager-GOT -- hand-rolled.  Variante 32-bit de aot_emit_elf_dynexec:
+ *  enlaza contra libc.so.6 de i386.  Difs 32-bit: Ehdr 52B, Phdr 32B (orden
+ *  distinto), Elf32_Sym 16B (info/other/shndx AL FINAL), Elf32_Rel 8B SIN
+ *  addend (R_386_GLOB_DAT=6, .rel.dyn -> DT_REL/RELSZ/RELENT), Elf32_Dyn 8B,
+ *  interp /lib/ld-linux.so.2, GOT 4B, thunk FF25 disp32 ABSOLUTO (i386 sin
+ *  rip-rel; PIE base 0 -> vaddr==file off).
+ * ========================================================================= */
+#ifndef R_386_GLOB_DAT
+#define R_386_GLOB_DAT 6
+#endif
+#define AOT_ELF32_ST_INFO(b, t) (((b) << 4) | ((t) & 0xf))
+#define AOT_ELF32_R_INFO(s, t)  (((uint32_t)(s) << 8) | ((t) & 0xff))
+
+int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
+                           const AotSection *secs, int num_secs,
+                           int entry_sec, uint64_t entry_off,
+                           const AotReloc *relocs, int num_relocs,
+                           const AotImport *imps, int num_imps,
+                           char *err, size_t err_cap) {
+    if (num_secs <= 0) { set_err(err, err_cap, "elf32_dynexec: sin secciones"); return 0; }
+    if (entry_sec < 0 || entry_sec >= num_secs) {
+        set_err(err, err_cap, "elf32_dynexec: entry_sec fuera de rango"); return 0; }
+    if (num_imps <= 0) { set_err(err, err_cap, "elf32_dynexec: sin imports"); return 0; }
+
+    const uint32_t PAGE = (uint32_t)AOT_ELF_PAGE;
+    const int      NPH  = 6;
+    const int      nsym = 1 + num_imps;
+    const char     interp[] = "/lib/ld-linux.so.2";
+    const uint32_t interp_len = (uint32_t)sizeof(interp);
+
+    const uint32_t EHDR32 = 52, PHDR32 = 32, SYM32 = 16, REL32SZ = 8, DYN32 = 8;
+    /* x86-32 NO tiene rip-relativo -> el thunk usa direccionamiento ABSOLUTO.
+     * Un PIE (ET_DYN) se carga en base aleatoria -> el absoluto fallaria.  Por
+     * eso este es un ET_EXEC con BASE FIJA (modelo clasico de 32-bit dinamico):
+     * vaddr = BASE + file_offset.  Los offsets en disco siguen siendo file
+     * offsets (indexan img); las VADDR (e_entry, p_vaddr, DT_*, r_offset, el
+     * disp32 del thunk) llevan +BASE. */
+    const uint32_t BASE = (cfg && cfg->image_base) ? (uint32_t)cfg->image_base
+                                                   : 0x08048000u;
+
+    OBuf dynstr; memset(&dynstr, 0, sizeof(dynstr));
+    { uint8_t z = 0; ob_put(&dynstr, &z, 1); }
+    uint32_t *name_off = (uint32_t *)calloc((size_t)num_imps, sizeof(uint32_t));
+    for (int i = 0; i < num_imps; ++i) {
+        name_off[i] = (uint32_t)dynstr.len;
+        ob_put(&dynstr, imps[i].func, strlen(imps[i].func) + 1);
+    }
+    uint32_t libc_off = (uint32_t)dynstr.len;
+    ob_put(&dynstr, "libc.so.6", 10);
+
+    uint32_t nbucket = (uint32_t)(nsym < 1 ? 1 : nsym);
+    uint32_t nchain  = (uint32_t)nsym;
+    uint32_t *bucket = (uint32_t *)calloc(nbucket, sizeof(uint32_t));
+    uint32_t *chain  = (uint32_t *)calloc(nchain, sizeof(uint32_t));
+    for (int i = 0; i < num_imps; ++i) {
+        uint32_t si = (uint32_t)(1 + i);
+        uint32_t b = (uint32_t)(aot_elf_hash(imps[i].func) % nbucket);
+        chain[si] = bucket[b];
+        bucket[b] = si;
+    }
+    uint32_t hash_size = (uint32_t)(2 + nbucket + nchain) * 4u;
+
+    uint32_t off = 0;
+    uint32_t ehdr_off = off;          off += EHDR32;
+    uint32_t phdr_off = off;          off += (uint32_t)NPH * PHDR32;
+    uint32_t interp_off = off;        off += interp_len;
+    off = aot_dyn_align_u32(off, 4);
+    uint32_t dynsym_off = off;        off += (uint32_t)nsym * SYM32;
+    uint32_t dynstr_off = off;        off += (uint32_t)dynstr.len;
+    off = aot_dyn_align_u32(off, 4);
+    uint32_t hash_off = off;          off += hash_size;
+    off = aot_dyn_align_u32(off, 4);
+    uint32_t rel_off = off;           off += (uint32_t)num_imps * REL32SZ;
+    off = aot_dyn_align_u32(off, 16);
+
+    uint32_t *sec_va = (uint32_t *)calloc((size_t)num_secs, sizeof(uint32_t));
+    uint8_t  *sec_seen = (uint8_t *)calloc((size_t)num_secs, sizeof(uint8_t));
+    for (int i = 0; i < num_secs; ++i) {
+        if ((secs[i].flags & AOT_SEC_WRITE) || (secs[i].flags & AOT_SEC_BSS)) continue;
+        if (secs[i].size == 0) continue;
+        uint32_t a = secs[i].align ? (uint32_t)secs[i].align : 16u;
+        off = aot_dyn_align_u32(off, a);
+        sec_va[i] = off; sec_seen[i] = 1; off += (uint32_t)secs[i].size;
+    }
+    uint32_t region1_end = off;
+    off = aot_dyn_align_u32(off, PAGE);
+    uint32_t region2_start = off;
+
+    uint32_t got_off = off;           off += (uint32_t)num_imps * 4u;
+
+    for (int i = 0; i < num_secs; ++i) {
+        if (!(secs[i].flags & AOT_SEC_WRITE)) continue;
+        if (secs[i].flags & AOT_SEC_BSS) continue;
+        if (secs[i].size == 0) continue;
+        uint32_t a = secs[i].align ? (uint32_t)secs[i].align : 8u;
+        off = aot_dyn_align_u32(off, a);
+        sec_va[i] = off; sec_seen[i] = 1; off += (uint32_t)secs[i].size;
+    }
+    off = aot_dyn_align_u32(off, 4);
+    uint32_t dynamic_off = off;
+    const int ndyn = 13;
+    off += (uint32_t)ndyn * DYN32;
+    uint32_t region2_end = off;
+    uint32_t total = off;
+
+    uint32_t entry_vaddr = sec_va[entry_sec] + (uint32_t)entry_off;
+
+    uint8_t *img = (uint8_t *)calloc(1, (size_t)total);
+    if (!img) { set_err(err, err_cap, "elf32_dynexec: OOM");
+        free(name_off); free(bucket); free(chain); free(dynstr.p);
+        free(sec_va); free(sec_seen); return 0; }
+
+    img[ehdr_off + 0] = 0x7f; img[ehdr_off + 1] = 'E';
+    img[ehdr_off + 2] = 'L';  img[ehdr_off + 3] = 'F';
+    img[ehdr_off + 4] = 1; img[ehdr_off + 5] = 1; img[ehdr_off + 6] = 1;
+    img[ehdr_off + 16] = 2; img[ehdr_off + 17] = 0;        /* e_type = ET_EXEC */
+    img[ehdr_off + 18] = 3; img[ehdr_off + 19] = 0;        /* e_machine = EM_386 */
+    wr32(img + ehdr_off + 20, 1);
+    wr32(img + ehdr_off + 24, BASE + entry_vaddr);
+    wr32(img + ehdr_off + 28, phdr_off);
+    wr32(img + ehdr_off + 32, 0);
+    wr32(img + ehdr_off + 36, 0);
+    img[ehdr_off + 40] = (uint8_t)EHDR32; img[ehdr_off + 41] = 0;
+    img[ehdr_off + 42] = (uint8_t)PHDR32; img[ehdr_off + 43] = 0;
+    img[ehdr_off + 44] = (uint8_t)NPH; img[ehdr_off + 45] = 0;
+    img[ehdr_off + 46] = 0; img[ehdr_off + 47] = 0;
+    img[ehdr_off + 48] = 0; img[ehdr_off + 49] = 0;
+    img[ehdr_off + 50] = 0; img[ehdr_off + 51] = 0;
+
+    {
+        uint8_t *ph;
+        ph = img + phdr_off + 0 * PHDR32;
+        wr32(ph + 0, 6); wr32(ph + 4, phdr_off);
+        wr32(ph + 8, BASE + phdr_off); wr32(ph + 12, BASE + phdr_off);
+        wr32(ph + 16, (uint32_t)NPH * PHDR32); wr32(ph + 20, (uint32_t)NPH * PHDR32);
+        wr32(ph + 24, PF_R); wr32(ph + 28, 4);
+        ph = img + phdr_off + 1 * PHDR32;
+        wr32(ph + 0, 3); wr32(ph + 4, interp_off);
+        wr32(ph + 8, BASE + interp_off); wr32(ph + 12, BASE + interp_off);
+        wr32(ph + 16, interp_len); wr32(ph + 20, interp_len);
+        wr32(ph + 24, PF_R); wr32(ph + 28, 1);
+        ph = img + phdr_off + 2 * PHDR32;
+        wr32(ph + 0, 1); wr32(ph + 4, 0);
+        wr32(ph + 8, BASE + 0); wr32(ph + 12, BASE + 0);
+        wr32(ph + 16, region1_end); wr32(ph + 20, region1_end);
+        wr32(ph + 24, PF_R | PF_X); wr32(ph + 28, PAGE);
+        ph = img + phdr_off + 3 * PHDR32;
+        wr32(ph + 0, 1); wr32(ph + 4, region2_start);
+        wr32(ph + 8, BASE + region2_start); wr32(ph + 12, BASE + region2_start);
+        wr32(ph + 16, region2_end - region2_start);
+        wr32(ph + 20, region2_end - region2_start);
+        wr32(ph + 24, PF_R | PF_W); wr32(ph + 28, PAGE);
+        ph = img + phdr_off + 4 * PHDR32;
+        wr32(ph + 0, 2); wr32(ph + 4, dynamic_off);
+        wr32(ph + 8, BASE + dynamic_off); wr32(ph + 12, BASE + dynamic_off);
+        wr32(ph + 16, (uint32_t)ndyn * DYN32); wr32(ph + 20, (uint32_t)ndyn * DYN32);
+        wr32(ph + 24, PF_R | PF_W); wr32(ph + 28, 4);
+        ph = img + phdr_off + 5 * PHDR32;
+        wr32(ph + 0, 0x6474e551u); wr32(ph + 4, 0);
+        wr32(ph + 8, 0); wr32(ph + 12, 0);
+        wr32(ph + 16, 0); wr32(ph + 20, 0);
+        wr32(ph + 24, PF_R | PF_W); wr32(ph + 28, 0x10);
+    }
+
+    memcpy(img + interp_off, interp, interp_len);
+
+    for (int i = 0; i < num_imps; ++i) {
+        uint8_t *s = img + dynsym_off + (uint32_t)(1 + i) * SYM32;
+        wr32(s + 0, name_off[i]);
+        wr32(s + 4, 0);
+        wr32(s + 8, 0);
+        s[12] = (uint8_t)AOT_ELF32_ST_INFO(STB_GLOBAL, STT_NOTYPE);
+        s[13] = 0;
+        s[14] = (uint8_t)SHN_UNDEF; s[15] = 0;
+    }
+    memcpy(img + dynstr_off, dynstr.p, dynstr.len);
+    { uint8_t *h = img + hash_off;
+      wr32(h + 0, nbucket); wr32(h + 4, nchain);
+      for (uint32_t i = 0; i < nbucket; ++i) wr32(h + 8 + i * 4, bucket[i]);
+      for (uint32_t i = 0; i < nchain;  ++i) wr32(h + 8 + (nbucket + i) * 4, chain[i]); }
+    for (int i = 0; i < num_imps; ++i) {
+        uint8_t *re = img + rel_off + (uint32_t)i * REL32SZ;
+        wr32(re + 0, BASE + got_off + (uint32_t)i * 4u);  /* r_offset = vaddr GOT */
+        wr32(re + 4, AOT_ELF32_R_INFO((uint32_t)(1 + i), R_386_GLOB_DAT));
+    }
+    for (int i = 0; i < num_secs; ++i)
+        if (sec_seen[i]) memcpy(img + sec_va[i], secs[i].data, secs[i].size);
+
+    { uint8_t *d = img + dynamic_off; int k = 0;
+      wr32(d + k*DYN32 + 0, DT_NEEDED);  wr32(d + k*DYN32 + 4, libc_off);                     ++k;
+      wr32(d + k*DYN32 + 0, DT_HASH);    wr32(d + k*DYN32 + 4, BASE + hash_off);              ++k;
+      wr32(d + k*DYN32 + 0, DT_STRTAB);  wr32(d + k*DYN32 + 4, BASE + dynstr_off);            ++k;
+      wr32(d + k*DYN32 + 0, DT_SYMTAB);  wr32(d + k*DYN32 + 4, BASE + dynsym_off);            ++k;
+      wr32(d + k*DYN32 + 0, DT_STRSZ);   wr32(d + k*DYN32 + 4, (uint32_t)dynstr.len);         ++k;
+      wr32(d + k*DYN32 + 0, DT_SYMENT);  wr32(d + k*DYN32 + 4, SYM32);                        ++k;
+      wr32(d + k*DYN32 + 0, DT_REL);     wr32(d + k*DYN32 + 4, BASE + rel_off);               ++k;
+      wr32(d + k*DYN32 + 0, DT_RELSZ);   wr32(d + k*DYN32 + 4, (uint32_t)num_imps * REL32SZ); ++k;
+      wr32(d + k*DYN32 + 0, DT_RELENT);  wr32(d + k*DYN32 + 4, REL32SZ);                      ++k;
+      wr32(d + k*DYN32 + 0, DT_FLAGS);   wr32(d + k*DYN32 + 4, (uint32_t)DF_BIND_NOW);        ++k;
+      wr32(d + k*DYN32 + 0, (uint32_t)DT_FLAGS_1); wr32(d + k*DYN32 + 4, (uint32_t)DF_1_NOW); ++k;
+      wr32(d + k*DYN32 + 0, DT_NULL);    wr32(d + k*DYN32 + 4, 0);                            ++k;
+      wr32(d + k*DYN32 + 0, DT_NULL);    wr32(d + k*DYN32 + 4, 0);                            ++k; }
+
+    int ok = 1;
+    for (int r = 0; r < num_relocs && ok; ++r) {
+        const AotReloc *rl = &relocs[r];
+        if (rl->kind == AOT_RELOC_ABS64 || rl->kind == AOT_RELOC_IMM64) {
+            set_err(err, err_cap, "elf32_dynexec: ABS64/IMM64 no aplica en 32-bit");
+            ok = 0; break;
+        }
+        if (rl->site_section < 0 || rl->site_section >= num_secs ||
+            !sec_seen[rl->site_section] ||
+            (!rl->target_is_size &&
+             (rl->target_section < 0 || rl->target_section >= num_secs ||
+              !sec_seen[rl->target_section]))) {
+            set_err(err, err_cap, "elf32_dynexec: reloc con seccion invalida"); ok = 0; break;
+        }
+        uint64_t tv;
+        if (rl->target_is_size) tv = aot_sec_size(&secs[rl->target_section]);
+        else {
+            tv = sec_va[rl->target_section];
+            tv += rl->target_is_end ? aot_sec_size(&secs[rl->target_section]) : rl->target_off;
+        }
+        tv = (uint64_t)((int64_t)tv + rl->addend);
+        uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+        if (!apply_reloc(img + site_va, site_va, tv, rl->kind)) {
+            set_err(err, err_cap, "elf32_dynexec: reloc kind invalido"); ok = 0; break;
+        }
+    }
+
+    for (int i = 0; i < num_imps && ok; ++i) {
+        int cs = imps[i].call_section;
+        if (cs < 0 || cs >= num_secs || !sec_seen[cs]) {
+            set_err(err, err_cap, "elf32_dynexec: call_section del thunk invalido"); ok = 0; break;
+        }
+        uint32_t thunk_fo = sec_va[cs] + (uint32_t)imps[i].call_off;  /* file off */
+        uint32_t got_va   = BASE + got_off + (uint32_t)i * 4u;        /* vaddr GOT */
+        wr32(img + thunk_fo + 2, got_va);    /* disp32 absoluto (base fija) */
+    }
+
+    if (ok) {
+        FILE *f = fopen(path, "wb");
+        if (!f) { set_err(err, err_cap, "elf32_dynexec: fopen fallo"); ok = 0; }
+        else {
+            size_t w = fwrite(img, 1, (size_t)total, f);
+            fclose(f);
+            if (w != total) { set_err(err, err_cap, "elf32_dynexec: escritura incompleta"); ok = 0; }
+        }
+    }
+
+    free(img); free(name_off); free(bucket); free(chain); free(dynstr.p);
+    free(sec_va); free(sec_seen);
+    return ok;
+}
+
+/* =========================================================================
  *  ELF64 RELOCATABLE (.o, ET_REL) -- hand-rolled (sin _start ni phdrs)
  * ========================================================================= */
 

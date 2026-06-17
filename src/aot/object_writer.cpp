@@ -196,10 +196,28 @@ namespace aot {
                                  crel_ptr, crel_n,
                                  errbuf, sizeof(errbuf));
             }
+        } else if (mode32_ && !imports_.empty()) {
+            // AOT x86-32 dinamico: ELF32 PIE (ET_DYN, EM_386) que importa
+            // libc.so.6 (i386) via eager-GOT.  Mismo mecanismo de thunks FF 25
+            // que el driver emitio, pero el disp32 es ABSOLUTO (i386 sin
+            // rip-relativo) y las estructuras dinamicas son de 32-bit.
+            std::vector<AotImport> cimps(imports_.size());
+            for (size_t i = 0; i < imports_.size(); ++i) {
+                const ImportCall &ic = imports_[i];
+                cimps[i].dll          = ic.dll.c_str();
+                cimps[i].func         = ic.func.c_str();
+                cimps[i].call_section = ic.call_section;
+                cimps[i].call_off     = ic.call_off;
+            }
+            ok = aot_emit_elf32_dynexec(path.c_str(), &ccfg,
+                                        csecs.data(), static_cast<int>(csecs.size()),
+                                        entry_sec_, entry_off_,
+                                        crel_ptr, crel_n,
+                                        cimps.data(), static_cast<int>(cimps.size()),
+                                        errbuf, sizeof(errbuf));
         } else if (!imports_.empty()) {
-            // AOT.2.exec slice 2: ELF EXEC que importa libc -> ejecutable
-            // dinamico (PIE) via eager-GOT.  Los imports = thunks FF 25 que el
-            // driver emitio (mismo mecanismo que PE-IAT).
+            // AOT.2.exec slice 2: ELF EXEC (64-bit) que importa libc -> PIE
+            // dinamico via eager-GOT.  (el caso 32-bit lo cubre la rama de arriba)
             std::vector<AotImport> cimps(imports_.size());
             for (size_t i = 0; i < imports_.size(); ++i) {
                 const ImportCall &ic = imports_[i];
