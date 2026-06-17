@@ -368,6 +368,11 @@ int main(int argc, char *argv[]) {
             "protegido, kernels: 8 GP eax-edi, regparm(3), subset entero de "
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
+            "float-isa",
+            "AOT: backend de punto flotante: sse2 (default) | x87 | avx | "
+            "avx512f | auto (deteccion en runtime por CPUID). La mayoria de CPUs "
+            "modernas tienen avx pero no avx512f.",
+            cxxopts::value<std::string>()->default_value("sse2"))(
             "vex-base",
             "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
             "plugins cargados via loadmodule, evita solapamiento con el caller "
@@ -1961,6 +1966,29 @@ int main(int argc, char *argv[]) {
             const aot::AotArch arch =
                 aot_mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64;
 
+            // Backend de punto flotante (--float-isa).  Hoy el codegen float
+            // (FP-regalloc en XMM, packing-ready) esta en construccion; el flag
+            // queda cableado para que el selector elija el backend cuando llegue.
+            jit::FloatIsa aot_fisa = jit::FloatIsa::SSE2;
+            {
+                const std::string f = result["float-isa"].as<std::string>();
+                if (f == "sse2" || f == "sse")
+                    aot_fisa = jit::FloatIsa::SSE2;
+                else if (f == "x87" || f == "fpu")
+                    aot_fisa = jit::FloatIsa::X87;
+                else if (f == "avx")
+                    aot_fisa = jit::FloatIsa::AVX;
+                else if (f == "avx512f" || f == "avx512")
+                    aot_fisa = jit::FloatIsa::AVX512F;
+                else if (f == "auto")
+                    aot_fisa = jit::FloatIsa::AUTO;
+                else {
+                    std::cerr << "[aot] --float-isa desconocido: '" << f
+                              << "' (use sse2 | x87 | avx | avx512f | auto).\n";
+                    return EXIT_FAILURE;
+                }
+            }
+
             // Formato de salida: --format pe|elf, o default por host.
             aot::ObjFormat fmt =
 #if defined(_WIN32)
@@ -2134,7 +2162,7 @@ int main(int argc, char *argv[]) {
                 af.bytes = jit::vreg_compile_native(
                     *itf->second, {}, {}, {}, {}, &af.relocs, aot_pic,
                     /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                    /*mode32=*/aot_mode32);
+                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa);
                 if (af.bytes.empty()) {
                     std::cerr
                         << "[aot] el selector vreg no soporta la funcion '"

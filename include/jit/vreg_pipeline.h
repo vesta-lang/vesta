@@ -129,7 +129,7 @@ std::vector<uint8_t> vreg_compile_native(
         true
 #endif
     ,
-    bool mode32 = false);
+    bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2);
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

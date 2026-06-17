@@ -236,7 +236,10 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_call, const VregEntries &ent,
                  const CallResolver &resolve_native,
                  const CallResolver &resolve_symbol, bool pic, bool target_sysv,
-                 bool mode32) {
+                 bool mode32, FloatIsa fisa) {
+    /* x86-32 v1: float aun no soportado (el banco XMM via MOVQ asume regs de
+     * 64-bit; el codegen 32-bit es entero).  x87 sera el backend de 32-bit. */
+    (void)fisa;
     /* HOST_LEAF (AOT): arg_regs del ABI del TARGET (SysV para ELF, Win64 para
      * PE), NO del host -> permite cross-target (ELF en Windows, PE en Linux).
      * x86-32 (mode32): regparm(3) (EAX/EDX/ECX).  En VM_ABI (JIT en proceso)
