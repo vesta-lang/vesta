@@ -203,6 +203,14 @@ namespace aot {
                                       crel_ptr, crel_n,
                                       cimps.data(), static_cast<int>(cimps.size()),
                                       errbuf, sizeof(errbuf));
+        } else if (mode32_) {
+            // AOT x86-32: EXEC ELF32 estatico (ET_EXEC, EM_386).  El codegen ya
+            // produjo bytes i386; el stub _start sale via int 0x80.
+            ok = aot_emit_elf32(path.c_str(), &ccfg,
+                                csecs.data(), static_cast<int>(csecs.size()),
+                                entry_sec_, entry_off_,
+                                crel_ptr, crel_n,
+                                errbuf, sizeof(errbuf));
         } else {
             ok = aot_emit_elf(path.c_str(), &ccfg,
                               csecs.data(), static_cast<int>(csecs.size()),

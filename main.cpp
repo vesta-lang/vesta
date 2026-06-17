@@ -1706,9 +1706,22 @@ int main(int argc, char *argv[]) {
             // (TargetRegInfo + selector + encoder), portable a otras arch.
             // ------------------------------------------------------------------
 
-            // Arquitectura objetivo.  Hoy solo x86-64; el enum AotArch reserva
-            // las demas (x86-32/16, ARM, RISC-V) como extensiones futuras.
-            const aot::AotArch arch = aot::AotArch::X86_64;
+            // Arquitectura objetivo: x86-64 (default) o x86-32 (modo protegido,
+            // kernels): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3); subset
+            // entero de 32-bit (i32/u32/ptr32).
+            bool aot_mode32 = false;
+            {
+                const std::string a = result["aot-arch"].as<std::string>();
+                if      (a == "x86-32" || a == "x86_32" || a == "i386") aot_mode32 = true;
+                else if (a == "x86-64" || a == "x86_64" || a == "amd64") aot_mode32 = false;
+                else {
+                    std::cerr << "[aot] --aot-arch desconocido: '" << a
+                              << "' (use x86-64 | x86-32).\n";
+                    return EXIT_FAILURE;
+                }
+            }
+            const aot::AotArch arch =
+                aot_mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64;
 
             // Formato de salida: --format pe|elf, o default por host.
             aot::ObjFormat fmt =
@@ -1731,23 +1744,6 @@ int main(int argc, char *argv[]) {
             // Referencias a datos: PIC (RIP-relativo, default) vs absoluto
             // (--no-pie, requiere base de imagen fija).  Analogo gcc/clang.
             const bool aot_pic = (result.count("no-pie") == 0);
-
-            // Arquitectura objetivo: x86-64 (default) o x86-32 (modo protegido).
-            // x86-32 (mode32): 8 GP eax-edi, sin REX, operando 32-bit, regparm(3);
-            // subset entero de 32-bit (i32/u32/ptr32).  Hito v1: --emit bin
-            // (flat, sin stub/cabecera) -> kernels/protegido.  EXEC/obj/shared
-            // 32-bit (ELF32/PE32 + stub 32-bit) son follow-ups.
-            bool aot_mode32 = false;
-            {
-                const std::string a = result["aot-arch"].as<std::string>();
-                if      (a == "x86-32" || a == "x86_32" || a == "i386") aot_mode32 = true;
-                else if (a == "x86-64" || a == "x86_64" || a == "amd64") aot_mode32 = false;
-                else {
-                    std::cerr << "[aot] --arch desconocido: '" << a
-                              << "' (use x86-64 | x86-32).\n";
-                    return EXIT_FAILURE;
-                }
-            }
 
             // --emit exe|obj|shared.
             //   EXEC   : ejecutable standalone con _start (requiere main).
@@ -1781,15 +1777,18 @@ int main(int argc, char *argv[]) {
             // OBJECT/SHARED/BIN no llevan _start (lo aporta el crt/host/loader).
             const bool no_stub = emit_obj || emit_shared || emit_bin;
 
-            // x86-32 v1: solo --emit bin (codigo plano para modo protegido).  El
-            // _start de EXEC y los emisores .o/.so/.exe son ELFCLASS64/PE64; un
-            // ELF32/PE32 + stub 32-bit son follow-ups.  El .bin es bytes crudos
-            // (sin cabecera) -> sirve tal cual al codegen 32-bit.
-            if (aot_mode32 && !emit_bin) {
-                std::cerr << "[aot] --arch x86-32 v1 solo soporta --emit bin "
-                             "(binario plano para modo protegido/kernels); "
-                             "ELF32/PE32 + _start 32-bit llegan en un follow-up.\n";
-                return EXIT_FAILURE;
+            // x86-32: soporta --emit bin (flat, modo protegido) y --emit exe con
+            // --format elf (ELF32 estatico, _start via int 0x80).  PE32 (.exe
+            // Windows 32-bit) y .o32/.so32 son follow-ups.
+            if (aot_mode32) {
+                const bool ok32 = emit_bin
+                                || (!no_stub && fmt == aot::ObjFormat::ELF);
+                if (!ok32) {
+                    std::cerr << "[aot] --aot-arch x86-32: soporta --emit bin o "
+                                 "--emit exe --format elf (ELF32); PE32 y .o/.so "
+                                 "de 32-bit son follow-ups.\n";
+                    return EXIT_FAILURE;
+                }
             }
 
             // main: requerido para EXEC y OBJECT; OPCIONAL para SHARED (libreria).
@@ -2067,6 +2066,7 @@ int main(int argc, char *argv[]) {
             // Crear el writer + TODAS las secciones (writer idx == secs idx, mismo
             // orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
+            w.set_mode32(aot_mode32);  // x86-32 EXEC -> contenedor ELF32
             for (const SecAccum &s : secs) {
                 // Permisos: explicitos (@section(".x","rwx")), o por convencion
                 // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).

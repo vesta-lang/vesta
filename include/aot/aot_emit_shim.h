@@ -174,6 +174,20 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                  char *err, size_t err_cap);
 
 /**
+ * @brief Emite un EJECUTABLE ELF32 estatico (ET_EXEC, EM_386) -- modo
+ *        protegido / kernels.  1 PT_LOAD R+X, entry = _start, salida via
+ *        @c int @c 0x80 (el stub).  Freestanding (sin dynamic/libc).  Solo
+ *        relocs PC-relativas (x86-32 no tiene RIP-relativo; refs a datos
+ *        absolutas ABS32 son follow-up).  @c image_base default 0x08048000.
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf32(const char *path, const AotLayoutCfg *cfg,
+                   const AotSection *secs, int num_secs,
+                   int entry_sec, uint64_t entry_off,
+                   const AotReloc *relocs, int num_relocs,
+                   char *err, size_t err_cap);
+
+/**
  * @brief Emite un EJECUTABLE ELF64 DINaMICO (PIE ET_DYN) que importa simbolos
  *        externos (libc malloc/free/abort...) via eager-GOT.  AOT.2.exec slice 2.
  *

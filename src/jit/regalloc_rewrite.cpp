@@ -203,6 +203,11 @@ namespace jit {
             int32_t  vm_rsp_save_off = 0;
             MReg     scr0 = MReg::R10;
             MReg     scr1 = MReg::R11;
+            /// Tamano de un slot de pila / push (= pointer_size del target):
+            /// 8 en x86-64, 4 en x86-32.  El frame (callee-saved, spill slots,
+            /// epilogue lea) se mide en estos slots; usar 8 fijo en x86-32
+            /// desalineaba el `lea esp,[ebp-N]` -> el ret leia basura.
+            uint32_t SZ = 8;
             /// MFunction destino: necesario para crear labels intra-expansion
             /// (LOAD_VM/STORE_VM page-cache) via @c pf->new_label().  Se asigna
             /// en @c rewrite_to_physical tras construir pf.
@@ -212,6 +217,7 @@ namespace jit {
                     bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in)
                 : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
                   has_vm_alloca(has_vm_alloca_in) {
+                SZ = t.pointer_size ? t.pointer_size : 8u;
                 k = static_cast<uint32_t>(ra.callee_saved_used.size());
                 total_saved = k + (vm_abi ? 1u : 0u);  // +1 por el push rbx
                 /* Hoja frameless: una funcion sin CALLs que no spillea ni
@@ -230,9 +236,9 @@ namespace jit {
                            && !jit_osr_count();  /* el trigger (1b) anyade un
                               call -> necesita frame con rsp 16-alineado. */
                 /* Las allocas viven debajo de los spill slots. */
-                alloca_base = 8u * total_saved + 8u * ra.num_spill_slots;
+                alloca_base = SZ * total_saved + SZ * ra.num_spill_slots;
                 spill_bytes = static_cast<int32_t>(
-                    8u * ra.num_spill_slots + alloca_total);
+                    SZ * ra.num_spill_slots + alloca_total);
                 /* Fase 2: reservar un qword para el VM-RSP salvado, debajo del
                  * area de allocas host y por encima del shadow space.  El
                  * offset es fijo desde RBP (independiente del shadow/align que
@@ -252,11 +258,14 @@ namespace jit {
 #else
                     (void)has_calls;
 #endif
-                    /* Alinear (8*total_saved + spill_bytes) a 16 para mantener
-                     * el stack 16-aligned en CALLs internos. */
-                    if (((8u * total_saved) +
-                         static_cast<uint32_t>(spill_bytes)) % 16u != 0u)
-                        spill_bytes += 8;
+                    /* Alinear (SZ*total_saved + spill_bytes) a 16 para mantener
+                     * el stack 16-aligned en CALLs internos.  Con slots de 4
+                     * (x86-32) el desalineo puede ser 4/8/12 -> padding exacto. */
+                    {
+                        const uint32_t cur = SZ * total_saved
+                                           + static_cast<uint32_t>(spill_bytes);
+                        spill_bytes += static_cast<int32_t>((16u - (cur % 16u)) % 16u);
+                    }
                 }
                 /* Frameless: spill_bytes queda en 0 (no hay spills ni allocas) y
                  * no se alinea a 16 ni se reserva shadow space porque no hay
@@ -331,7 +340,7 @@ namespace jit {
 
             /** @brief Offset desde RBP del spill slot @p slot. */
             int32_t slot_off(uint32_t slot) const noexcept {
-                return -static_cast<int32_t>(8u * total_saved + 8u * (slot + 1u));
+                return -static_cast<int32_t>(SZ * total_saved + SZ * (slot + 1u));
             }
 
             /** @brief Operando de memoria del spill slot @p slot: [rbp+off]. */
@@ -412,12 +421,12 @@ namespace jit {
                             VESTA_PROC_STACK_POINTER_OFFSET),
                         reg(scr0)));
                 }
-                /* lea rsp, [rbp - 8*total_saved] -> deshace el sub del frame y
-                 * apunta rsp al ultimo registro salvado. */
+                /* lea rsp, [rbp - SZ*total_saved] -> deshace el sub del frame y
+                 * apunta rsp al ultimo registro salvado (SZ = 4 en x86-32). */
                 out.push_back(MInstr::make_unary(
                     MOp::LEA, reg(MReg::RSP),
                     MOperand::make_mem(MReg::RBP,
-                        -static_cast<int32_t>(8u * total_saved))));
+                        -static_cast<int32_t>(SZ * total_saved))));
                 /* pop callee en orden inverso. */
                 for (size_t i = ra.callee_saved_used.size(); i-- > 0;)
                     out.push_back(pop(static_cast<MReg>(ra.callee_saved_used[i])));
