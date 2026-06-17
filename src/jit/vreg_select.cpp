@@ -2048,13 +2048,41 @@ namespace jit {
                          * ya se han inline-ado arriba sin tocar esta rama. */
                         if (abi == AbiKind::HOST_LEAF) {
                             const size_t nargs = in.operands.size();
+                            std::string sym = in.func_name;
+                            const size_t colon = sym.rfind(':');
+                            if (colon != std::string::npos) sym = sym.substr(colon + 1);
+                            if (mode32) {
+                                /* x86-32: un CALLN a un extern (libc/FFI) es CDECL
+                                 * (args en la PILA, retorno en eax, caller limpia).
+                                 * Las funciones internas usan regparm, pero el ABI
+                                 * de libc es cdecl -> aqui marshalamos a pila.
+                                 * Staging por eax (caller-saved, lo clobbea el call)
+                                 * -> evita PUSH de un vreg. */
+                                for (size_t a = nargs; a-- > 0;) {
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        MOperand::make_reg(MReg::RAX, 4),
+                                        vr(in.operands[a])));
+                                    MInstr p; p.op = MOp::PUSH;
+                                    p.src1 = MOperand::make_reg(MReg::RAX, 4);
+                                    O.push_back(p);
+                                }
+                                O.push_back(MInstr::make_call_sym(
+                                    out.intern_reloc_symbol(sym)));
+                                if (nargs)
+                                    O.push_back(MInstr::make_binary(MOp::ADD,
+                                        MOperand::make_reg(MReg::RSP, 4),
+                                        MOperand::make_reg(MReg::RSP, 4),
+                                        MOperand::make_imm32(
+                                            static_cast<int32_t>(nargs * 4))));
+                                if (in.dst != ir::IR_NO_VALUE)
+                                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                        vr(in.dst), MOperand::make_reg(MReg::RAX, 4)));
+                                break;
+                            }
                             if (nargs > host_leaf_nmax) {
                                 vreg_dbg(fn.name.c_str(), "calln(host-leaf-args)");
                                 return false;
                             }
-                            std::string sym = in.func_name;
-                            const size_t colon = sym.rfind(':');
-                            if (colon != std::string::npos) sym = sym.substr(colon + 1);
                             for (size_t a = 0; a < nargs; ++a)
                                 O.push_back(MInstr::make_arg(
                                     static_cast<uint8_t>(a), vr(in.operands[a])));

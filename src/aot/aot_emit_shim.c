@@ -522,6 +522,83 @@ static uint32_t aot_dyn_align_u32(uint32_t x, uint32_t a) {
  *  main` (REL32) + intra-imagen + el `FF 15` del stub (abs32 a la IAT).  v1:
  *  EXEC self-contained (sin libc); llamadas a externos = follow-up (thunks 32b).
  * ========================================================================= */
+/* Construye la seccion .idata de un PE32 con N imports agrupados por DLL.
+ * @p idata_rva: RVA donde vivira .idata (para los RVAs internos).
+ * Devuelve buffer malloc'd (caller libera) + *size_out.  Rellena
+ * @p iat_off_out[k] = offset DENTRO de .idata de la entrada IAT del import k
+ * (para parchear su thunk: abs = ImageBase + idata_rva + iat_off_out[k]).
+ * *impdir_size_out, *iat_rva0_out, *iat_total_out para los DataDirectory. */
+static uint8_t *build_idata32(const AotImport *imps, int n, uint32_t idata_rva,
+                              uint32_t *size_out, uint32_t *impdir_size_out,
+                              uint32_t *iat_rva0_out, uint32_t *iat_total_out,
+                              uint32_t *iat_off_out) {
+    /* DLLs unicas (orden de aparicion) + funcs por DLL. */
+    const char **dlls = (const char **)calloc((size_t)n, sizeof(char *));
+    int *fcount = (int *)calloc((size_t)n, sizeof(int));
+    /* func[d] = lista de nombres (punteros) por DLL d. */
+    const char ***funcs = (const char ***)calloc((size_t)n, sizeof(char **));
+    int ndll = 0;
+    for (int k = 0; k < n; ++k) {
+        int d = -1;
+        for (int j = 0; j < ndll; ++j) if (strcmp(dlls[j], imps[k].dll) == 0) { d = j; break; }
+        if (d < 0) { d = ndll++; dlls[d] = imps[k].dll;
+                     funcs[d] = (const char **)calloc((size_t)n, sizeof(char *)); }
+        int dup = 0;
+        for (int j = 0; j < fcount[d]; ++j) if (strcmp(funcs[d][j], imps[k].func)==0){dup=1;break;}
+        if (!dup) funcs[d][fcount[d]++] = imps[k].func;
+    }
+    /* Layout. */
+    uint32_t impdir = 0, impdir_sz = (uint32_t)(ndll + 1) * 20;
+    uint32_t *ilt_off = (uint32_t *)calloc((size_t)ndll, sizeof(uint32_t));
+    uint32_t *iat_off = (uint32_t *)calloc((size_t)ndll, sizeof(uint32_t));
+    uint32_t cur = impdir + impdir_sz;
+    for (int d = 0; d < ndll; ++d) { ilt_off[d] = cur; cur += (uint32_t)(fcount[d]+1)*4; }
+    for (int d = 0; d < ndll; ++d) { iat_off[d] = cur; cur += (uint32_t)(fcount[d]+1)*4; }
+    /* hint/name por (dll,func) unica + dll names; recordar offsets. */
+    uint32_t **hint_off = (uint32_t **)calloc((size_t)ndll, sizeof(uint32_t *));
+    for (int d = 0; d < ndll; ++d) hint_off[d] = (uint32_t *)calloc((size_t)fcount[d], sizeof(uint32_t));
+    for (int d = 0; d < ndll; ++d)
+        for (int i = 0; i < fcount[d]; ++i) {
+            hint_off[d][i] = cur;
+            uint32_t hl = 2 + (uint32_t)strlen(funcs[d][i]) + 1;
+            if (hl & 1) ++hl;
+            cur += hl;
+        }
+    uint32_t *dll_off = (uint32_t *)calloc((size_t)ndll, sizeof(uint32_t));
+    for (int d = 0; d < ndll; ++d) { dll_off[d] = cur; cur += (uint32_t)strlen(dlls[d]) + 1; }
+    uint32_t size = cur;
+
+    uint8_t *buf = (uint8_t *)calloc(1, size);
+    for (int d = 0; d < ndll; ++d) {
+        uint8_t *e = buf + impdir + (uint32_t)d*20;
+        wr32(e + 0,  idata_rva + ilt_off[d]);   /* OriginalFirstThunk */
+        wr32(e + 12, idata_rva + dll_off[d]);   /* Name */
+        wr32(e + 16, idata_rva + iat_off[d]);   /* FirstThunk (IAT) */
+        for (int i = 0; i < fcount[d]; ++i) {
+            wr32(buf + ilt_off[d] + (uint32_t)i*4, idata_rva + hint_off[d][i]);
+            wr32(buf + iat_off[d] + (uint32_t)i*4, idata_rva + hint_off[d][i]);
+            memcpy(buf + hint_off[d][i] + 2, funcs[d][i], strlen(funcs[d][i]));
+        }
+        memcpy(buf + dll_off[d], dlls[d], strlen(dlls[d]));
+    }
+    /* iat_off_out[k] para cada import original. */
+    for (int k = 0; k < n; ++k) {
+        int d = -1; for (int j = 0; j < ndll; ++j) if (strcmp(dlls[j], imps[k].dll)==0){d=j;break;}
+        int fi = 0; for (int i = 0; i < fcount[d]; ++i) if (strcmp(funcs[d][i],imps[k].func)==0){fi=i;break;}
+        iat_off_out[k] = iat_off[d] + (uint32_t)fi*4;
+    }
+    *size_out = size; *impdir_size_out = impdir_sz;
+    *iat_rva0_out = idata_rva + iat_off[0];
+    *iat_total_out = (uint32_t)(cur > 0 ? 0 : 0);  /* no usado finamente */
+    /* IAT total range: desde iat_off[0] hasta fin del ultimo IAT. */
+    *iat_total_out = (iat_off[ndll-1] + (uint32_t)(fcount[ndll-1]+1)*4) - iat_off[0];
+
+    for (int d = 0; d < ndll; ++d) { free(funcs[d]); free(hint_off[d]); }
+    free(dlls); free(fcount); free(funcs); free(ilt_off); free(iat_off);
+    free(hint_off); free(dll_off);
+    return buf;
+}
+
 int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
                   const AotSection *secs, int num_secs,
                   int entry_sec, uint64_t entry_off,
@@ -529,6 +606,7 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
                   const AotReloc *relocs, int num_relocs,
                   char *err, size_t err_cap) {
     if (num_secs <= 0) { set_err(err, err_cap, "pe32: sin secciones"); return 0; }
+    if (num_imps <= 0) { set_err(err, err_cap, "pe32: sin imports (falta el _start)"); return 0; }
     if (entry_sec < 0 || entry_sec >= num_secs) {
         set_err(err, err_cap, "pe32: entry_sec fuera de rango"); return 0; }
 
@@ -568,17 +646,13 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
         free(sec_rva); free(sec_foff); free(sec_vsz); free(sec_seen);
         set_err(err, err_cap, "pe32: la seccion de entrada no tiene datos"); return 0; }
 
-    /* .idata: ImportDir(2*20) + ILT(8) + IAT(8) + hint/name + dllname. */
-    const char *func = "ExitProcess", *dll = "kernel32.dll";
+    /* .idata multi-DLL (kernel32!ExitProcess del stub + libc de los thunks). */
     uint32_t idata_rva = rva, idata_foff = foff;
-    uint32_t off_impdir = 0;                 /* +0  */
-    uint32_t off_ilt    = off_impdir + 40;   /* +40 */
-    uint32_t off_iat    = off_ilt + 8;       /* +48 */
-    uint32_t off_hint   = off_iat + 8;       /* +56 */
-    uint32_t hintlen    = 2 + (uint32_t)strlen(func) + 1;
-    if (hintlen & 1) ++hintlen;
-    uint32_t off_dll    = off_hint + hintlen;
-    uint32_t idata_size = off_dll + (uint32_t)strlen(dll) + 1;
+    uint32_t idata_size = 0, impdir_size = 0, iat_rva0 = 0, iat_total = 0;
+    uint32_t *imp_iat_off = (uint32_t *)calloc((size_t)num_imps, sizeof(uint32_t));
+    uint8_t  *idata_buf = build_idata32(imps, num_imps, idata_rva, &idata_size,
+                                        &impdir_size, &iat_rva0, &iat_total,
+                                        imp_iat_off);
     uint32_t idata_vsz  = idata_size;
     uint32_t idata_fsz  = aot_dyn_align_u32(idata_size, FILEALIGN);
 
@@ -628,10 +702,10 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
     wr32(oh + 92, 16);                               /* NumberOfRvaAndSizes */
     /* Data directories (offset 96), 16 * 8.  [1]=Import, [12]=IAT. */
     uint8_t *dd = oh + 96;
-    wr32(dd + 1*8 + 0, idata_rva + off_impdir);      /* Import dir RVA */
-    wr32(dd + 1*8 + 4, 40);                           /* Import dir size */
-    wr32(dd + 12*8 + 0, idata_rva + off_iat);        /* IAT RVA */
-    wr32(dd + 12*8 + 4, 8);                           /* IAT size */
+    wr32(dd + 1*8 + 0, idata_rva);                   /* Import dir RVA */
+    wr32(dd + 1*8 + 4, impdir_size);                  /* Import dir size */
+    wr32(dd + 12*8 + 0, iat_rva0);                   /* IAT RVA (1er IAT) */
+    wr32(dd + 12*8 + 4, iat_total);                   /* IAT size total */
 
     /* Section headers (tras el optional header). */
     uint8_t *sh = oh + opt_size;
@@ -664,17 +738,8 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
     for (int i = 0; i < num_secs; ++i)
         if (sec_seen[i]) memcpy(img + sec_foff[i], secs[i].data, secs[i].size);
 
-    /* .idata: import dir + ILT + IAT + hint/name + dll. */
-    uint8_t *id = img + idata_foff;
-    wr32(id + off_impdir + 0,  idata_rva + off_ilt);   /* OriginalFirstThunk */
-    wr32(id + off_impdir + 12, idata_rva + off_dll);   /* Name (dll) */
-    wr32(id + off_impdir + 16, idata_rva + off_iat);   /* FirstThunk (IAT) */
-    /* segunda entrada del import dir = 0 (terminador) */
-    wr32(id + off_ilt, idata_rva + off_hint);          /* ILT[0] -> hint/name */
-    wr32(id + off_iat, idata_rva + off_hint);          /* IAT[0] (idem; el loader lo sobreescribe) */
-    /* hint(0) + nombre de la funcion */
-    memcpy(id + off_hint + 2, func, strlen(func));
-    memcpy(id + off_dll, dll, strlen(dll));
+    /* .idata: el buffer multi-DLL construido por build_idata32. */
+    memcpy(img + idata_foff, idata_buf, idata_size);
 
     /* Relocs intra-imagen del driver (REL32 a funciones; ABS no en v1). */
     int ok = 1;
@@ -700,14 +765,15 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
         }
     }
 
-    /* Parchear el `call [ExitProcess]` del stub (FF 15 disp32 = abs IAT entry).
-     * imps[*] trae (dll,func,call_section,call_off) del _start. */
+    /* Parchear cada import: el FF 15/FF 25 disp32 = abs de SU entrada IAT.
+     * (FF 15 = call del stub ExitProcess; FF 25 = jmp del thunk de un libc).
+     * imp_iat_off[k] = offset dentro de .idata de la entrada IAT del import k. */
     for (int k = 0; k < num_imps && ok; ++k) {
         int cs = imps[k].call_section;
         if (cs < 0 || cs >= num_secs || !sec_seen[cs]) {
             set_err(err, err_cap, "pe32: call_section del import invalido"); ok = 0; break;
         }
-        uint32_t disp = IMGBASE + idata_rva + off_iat;   /* &IAT[ExitProcess] */
+        uint32_t disp = IMGBASE + idata_rva + imp_iat_off[k];
         wr32(img + sec_foff[cs] + imps[k].call_off + 2, disp);
     }
 
@@ -718,6 +784,7 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
                if (w != total) { set_err(err, err_cap, "pe32: escritura incompleta"); ok = 0; } }
     }
     free(img); free(sec_rva); free(sec_foff); free(sec_vsz); free(sec_seen);
+    free(idata_buf); free(imp_iat_off);
     return ok;
 }
 
