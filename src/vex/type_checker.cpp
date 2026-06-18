@@ -6401,16 +6401,41 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
                 }
             }
         }
-        if (!is_numeric(tl.kind) || !is_numeric(tr.kind)) {
+        // Aritmetica de char (estilo C): un char es un byte sin signo
+        // (0-255).  `'a' + 'b'` SUMA los valores; el resultado es CHAR
+        // si AMBOS operandos son CHAR (envuelve mod 256), o el tipo
+        // entero del otro operando si solo uno es CHAR (el char se
+        // promociona).  Para el calculo tratamos CHAR como U8 via
+        // char_as_u8(), reusando promote_arith y la maquinaria entera.
+        const bool lhs_char = (tl.kind == PrimitiveKind::CHAR);
+        const bool rhs_char = (tr.kind == PrimitiveKind::CHAR);
+        if (!is_char_or_integral(tl.kind) && !is_floating(tl.kind)) {
+            diags_.error(e->loc,
+                         "operandos no numericos en operacion aritmetica");
+            return Type{};
+        }
+        if (!is_char_or_integral(tr.kind) && !is_floating(tr.kind)) {
             diags_.error(e->loc,
                          "operandos no numericos en operacion aritmetica");
             return Type{};
         }
         if (e->op == ast::BinOp::Mod) {
-            if (!is_integral(tl.kind) || !is_integral(tr.kind)) {
+            if (!is_char_or_integral(tl.kind) ||
+                !is_char_or_integral(tr.kind)) {
                 diags_.error(e->loc, "'%' requiere operandos enteros");
                 return Type{};
             }
+        }
+        // char OP char -> char (un solo char, como pidio el usuario).
+        if (lhs_char && rhs_char) {
+            return Type{PrimitiveKind::CHAR};
+        }
+        // char OP integer (o al reves) -> el tipo entero (el char se
+        // promociona como u8).
+        if (lhs_char || rhs_char) {
+            const PrimitiveKind a = char_as_u8(tl.kind);
+            const PrimitiveKind b = char_as_u8(tr.kind);
+            return Type{promote_arith(a, b)};
         }
         /* Narrowing de literales enteros 2026-05-16: si UN operando es
          * un IntLit (default i64) y el otro tiene un tipo entero

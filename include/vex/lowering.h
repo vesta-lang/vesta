@@ -1000,6 +1000,14 @@ class Lowering {
     /// @c native_poo_ (AOT Embed/Bare); el path Full usa StringObject GC.
     ir::IrValueId build_native_string_from_literal(ast::StringLitExpr *slit,
                                                    uint32_t source_line);
+    /// Vex Embed: construye un value-string {ptr,len,cap} (24 bytes) en
+    /// stack desde un valor @c char en runtime (@p v_char).  Aloca un
+    /// buffer de 2 bytes (RAW_ALLOC), escribe el byte del char en
+    /// buf[0] + nul en buf[1], y rellena los campos len=1, cap=2.
+    /// Devuelve el PTR al slot.  Usado por el cast @c (string)<char>.
+    /// Solo en @c native_poo_ (AOT Embed/Bare).
+    ir::IrValueId build_native_string_from_char(ir::IrValueId v_char,
+                                                uint32_t source_line);
     /// Carga el campo @p byte_off (0=ptr, 8=len, 16=cap) del slot
     /// value-string @p v_slot.  @p as_host marca el resultado como
     /// host_ptr (para el ptr@0 que viene de RAW_ALLOC).
