@@ -45,7 +45,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace analyze {
@@ -203,26 +205,22 @@ static std::vector<ir::IrBlockId> collect_loop_headers(const ir::IrFunction &fn)
 }
 
 /**
- * @brief Calcula la profundidad de anidamiento de cada header de loop.
+ * @brief Rango de bloques [h, last] que abarca un loop con header @c h.
  *
- * Aproximacion estructural por contencion de rango de bloques: el frontend
- * Vex emite el CFG de modo que un loop interno tiene su header CON id mayor
- * que el del externo y su back-edge tambien dentro del rango del externo.
- * Definimos el rango de un loop con header @c h como [h, max_u] donde
- * @c max_u es el mayor bloque con un back-edge a @c h.  El loop A anida
- * dentro de B si el rango de A esta contenido estrictamente en el de B.
+ * @c last es el id del bloque mas lejano con un back-edge a @c h.  Un bloque
+ * @c b esta DENTRO del loop si @c h <= b <= last.  La profundidad de @c b es
+ * el numero de rangos que lo contienen.
  */
-static uint32_t compute_loop_depths(
-    const ir::IrFunction &fn,
-    const std::vector<ir::IrBlockId> &headers,
-    std::vector<LoopCost> &out_loops) {
+struct LoopRange {
+    ir::IrBlockId h;
+    ir::IrBlockId last;
+};
 
-    // Para cada header, el id del back-edge mas lejano (fin del rango).
-    struct Range {
-        ir::IrBlockId h;
-        ir::IrBlockId last;
-    };
-    std::vector<Range> ranges;
+/// @brief Calcula los rangos [h, last] de cada header de loop.
+static std::vector<LoopRange> compute_loop_ranges(
+    const ir::IrFunction &fn,
+    const std::vector<ir::IrBlockId> &headers) {
+    std::vector<LoopRange> ranges;
     ranges.reserve(headers.size());
     for (ir::IrBlockId h : headers) {
         ir::IrBlockId last = h;
@@ -233,7 +231,34 @@ static uint32_t compute_loop_depths(
         }
         ranges.push_back({h, last});
     }
+    return ranges;
+}
 
+/// @brief Profundidad de loop de un bloque = numero de rangos que lo abarcan.
+static uint32_t block_loop_depth(ir::IrBlockId b,
+                                 const std::vector<LoopRange> &ranges) {
+    uint32_t depth = 0;
+    for (const LoopRange &r : ranges) {
+        if (b >= r.h && b <= r.last) ++depth;
+    }
+    return depth;
+}
+
+/**
+ * @brief Calcula la profundidad de anidamiento de cada header de loop.
+ *
+ * Aproximacion estructural por contencion de rango de bloques: el frontend
+ * Vex emite el CFG de modo que un loop interno tiene su header CON id mayor
+ * que el del externo y su back-edge tambien dentro del rango del externo.
+ * El loop A anida dentro de B si el rango de A esta contenido estrictamente
+ * en el de B.  Recibe los rangos ya calculados por @c compute_loop_ranges.
+ */
+static uint32_t compute_loop_depths(
+    const ir::IrFunction &fn,
+    const std::vector<LoopRange> &ranges,
+    std::vector<LoopCost> &out_loops) {
+
+    using Range = LoopRange;
     uint32_t max_depth = 0;
     for (const Range &r : ranges) {
         // Profundidad = 1 + numero de loops que contienen estrictamente a r.
@@ -305,8 +330,25 @@ CostResult analyze_function(const ir::IrFunction &fn) {
 
     // 1. Loops + profundidad de anidamiento.
     std::vector<ir::IrBlockId> headers = collect_loop_headers(fn);
-    uint32_t max_depth = compute_loop_depths(fn, headers, r.loops);
+    std::vector<LoopRange> ranges = compute_loop_ranges(fn, headers);
+    uint32_t max_depth = compute_loop_depths(fn, ranges, r.loops);
     r.max_loop_depth = max_depth;
+
+    // 1.b. Recolectar los call sites (CALL/TAILCALL a una funcion con nombre)
+    //      anotando la profundidad de loop del bloque donde ocurren.  Estos
+    //      datos los consume la composicion interprocedural (compose_interproc)
+    //      para multiplicar el coste del callee por n^loop_depth.  Se ignoran
+    //      las self-calls (ya las modela la deteccion de recursion) y las
+    //      llamadas sin func_name (indirectas: closures/virtuales).
+    for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
+        uint32_t depth = block_loop_depth(bi, ranges);
+        for (const auto &ins : fn.blocks[bi].instrs) {
+            if ((ins.op == ir::IrOp::CALL || ins.op == ir::IrOp::TAILCALL) &&
+                !ins.func_name.empty() && ins.func_name != fn.name) {
+                r.calls.push_back({ins.func_name, depth});
+            }
+        }
+    }
 
     // 2. Recursion + divide-y-venceras.
     uint32_t self_calls = 0;
@@ -363,7 +405,18 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     }
     r.detail = det.str();
 
-    // 5. Contrato @complexity: validacion CONSERVADORA.
+    // 4.b. Inicializar el coste TOTAL = PARCIAL.  Si la funcion no tiene
+    //      call sites (o si no corre la composicion interprocedural), el
+    //      total coincide con el parcial.  @c compose_interproc lo refina.
+    r.total_class = r.big_o;
+    r.total_confidence = r.confidence;
+    r.total_detail = "= parcial (sin composicion)";
+
+    // 5. Contrato @complexity: capturar la expresion declarada.  La
+    //    validacion del MISMATCH se hace en @c compose_interproc contra el
+    //    coste TOTAL (la complejidad efectiva real).  Para el caso de uso
+    //    sin composicion (analyze_function aislada), tambien validamos aqui
+    //    contra el parcial de forma conservadora.
     if (!fn.complexity_expr.empty()) {
         r.declared_expr = fn.complexity_expr;
         r.declared_class = parse_cost_class(fn.complexity_expr);
@@ -390,6 +443,228 @@ ModuleCost analyze_module(const ir::IrModule &mod) {
         mc.functions.push_back(analyze_function(fn));
     }
     return mc;
+}
+
+/* ===================================================================== */
+/*  Composicion interprocedural (call-graph bottom-up)                    */
+/* ===================================================================== */
+
+/**
+ * @brief Descompone una @c CostClass en (grado polinomico, factor log,
+ *        factor exponencial) para poder componerla aritmeticamente.
+ *
+ * O(1)=g0; O(log n)=g0+log; O(n)=g1; O(n log n)=g1+log; O(n^2)=g2;
+ * O(n^3)=g3; O(n^k)=g4; O(2^n)=exp.  El factor log se preserva al
+ * multiplicar pero no se acumula (n log n * n = n^2 log n, que colapsamos
+ * conservadoramente a n^2 log n -> aproximado por O(n^k) si k crece).
+ */
+struct CostShape {
+    uint32_t degree = 0; ///< grado del termino polinomico (n^degree).
+    bool has_log = false; ///< multiplica por log n.
+    bool is_exp = false;  ///< O(2^n): domina todo.
+    bool unknown = false; ///< O(?): se propaga como desconocido.
+};
+
+static CostShape shape_of(CostClass c) {
+    CostShape s;
+    switch (c) {
+    case CostClass::O_1:
+        s.degree = 0;
+        break;
+    case CostClass::O_LOGN:
+        s.degree = 0;
+        s.has_log = true;
+        break;
+    case CostClass::O_N:
+        s.degree = 1;
+        break;
+    case CostClass::O_NLOGN:
+        s.degree = 1;
+        s.has_log = true;
+        break;
+    case CostClass::O_N2:
+        s.degree = 2;
+        break;
+    case CostClass::O_N3:
+        s.degree = 3;
+        break;
+    case CostClass::O_NK:
+        s.degree = 4;
+        break;
+    case CostClass::O_2N:
+        s.is_exp = true;
+        break;
+    case CostClass::O_UNKNOWN:
+    default:
+        s.unknown = true;
+        break;
+    }
+    return s;
+}
+
+/// @brief Recompone una @c CostShape a la @c CostClass canonica mas cercana.
+static CostClass class_of(const CostShape &s) {
+    if (s.unknown) return CostClass::O_UNKNOWN;
+    if (s.is_exp) return CostClass::O_2N;
+    switch (s.degree) {
+    case 0:
+        return s.has_log ? CostClass::O_LOGN : CostClass::O_1;
+    case 1:
+        return s.has_log ? CostClass::O_NLOGN : CostClass::O_N;
+    case 2:
+        return CostClass::O_N2;
+    case 3:
+        return CostClass::O_N3;
+    default:
+        return CostClass::O_NK;
+    }
+}
+
+/**
+ * @brief Multiplica un coste por @c n^depth (el factor de los loops que
+ *        contienen un call site).
+ *
+ * Suma @c depth al grado polinomico.  El factor log y el exponencial se
+ * preservan.  O(2^n) dentro de un loop sigue siendo dominado por el
+ * exponencial (no lo subimos mas; ya es la clase tope).
+ */
+static CostShape multiply_by_n_pow(CostShape s, uint32_t depth) {
+    if (s.unknown) return s;
+    if (s.is_exp) return s; // el exponencial ya domina.
+    s.degree += depth;
+    return s;
+}
+
+/// @brief Combina dos costes en SECUENCIA: en Big-O, O(f)+O(g)=O(max(f,g)).
+static CostShape combine_max(const CostShape &a, const CostShape &b) {
+    // Desconocido domina (conservador: si no sabemos uno de los terminos,
+    // el total es desconocido).
+    if (a.unknown || b.unknown) {
+        CostShape u;
+        u.unknown = true;
+        return u;
+    }
+    if (a.is_exp || b.is_exp) {
+        CostShape e;
+        e.is_exp = true;
+        return e;
+    }
+    if (a.degree != b.degree)
+        return a.degree > b.degree ? a : b;
+    // Mismo grado: el que tenga log domina (n log n > n).
+    CostShape r = a;
+    r.has_log = a.has_log || b.has_log;
+    return r;
+}
+
+/// @brief Combina dos confianzas: la mas debil gana (EXACT < HEURISTIC <
+///        UNKNOWN en "fuerza", pero como enum EXACT=0 es la mas fuerte).
+static Confidence weaker(Confidence a, Confidence b) {
+    return static_cast<uint8_t>(a) >= static_cast<uint8_t>(b) ? a : b;
+}
+
+void compose_interproc(ModuleCost &mc) {
+    // Indice nombre -> posicion en mc.functions para resolver callees.
+    std::unordered_map<std::string, size_t> idx;
+    for (size_t i = 0; i < mc.functions.size(); ++i)
+        idx[mc.functions[i].function] = i;
+
+    // Memoizacion del coste TOTAL ya resuelto + set de "en progreso" para
+    // cortar ciclos del call-graph (recursion mutua).
+    std::vector<CostShape> total_shape(mc.functions.size());
+    std::vector<Confidence> total_conf(mc.functions.size(),
+                                       Confidence::EXACT);
+    std::vector<char> resolved(mc.functions.size(), 0);
+    std::vector<char> on_stack(mc.functions.size(), 0);
+
+    // Resuelve el coste TOTAL de la funcion en la posicion @c i (DFS
+    // bottom-up con memoizacion).  @c out_shape / @c out_conf reciben el
+    // resultado.  En un ciclo del call-graph (callee ya en la pila) usa el
+    // coste PARCIAL del nodo en curso (conservador, evita bucle infinito).
+    std::function<void(size_t, CostShape &, Confidence &)> resolve =
+        [&](size_t i, CostShape &out_shape, Confidence &out_conf) {
+            if (resolved[i]) {
+                out_shape = total_shape[i];
+                out_conf = total_conf[i];
+                return;
+            }
+            const CostResult &r = mc.functions[i];
+            // Punto de partida: el coste PARCIAL del cuerpo de esta funcion.
+            CostShape acc = shape_of(r.big_o);
+            Confidence conf = r.confidence;
+
+            on_stack[i] = 1;
+            for (const CallSite &cs : r.calls) {
+                CostShape callee_shape;
+                Confidence callee_conf = Confidence::EXACT;
+                auto it = idx.find(cs.callee);
+                if (it == idx.end()) {
+                    // Callee externo / nativo sin cuerpo IR en el modulo:
+                    // O(1) por defecto.  (Si declarara @complexity y lo
+                    // tuvieramos, lo respetariamos; aqui no esta disponible.)
+                    callee_shape = shape_of(CostClass::O_1);
+                    callee_conf = Confidence::EXACT;
+                } else if (on_stack[it->second]) {
+                    // Ciclo en el call-graph (recursion directa o mutua):
+                    // conservador, usamos el coste PARCIAL del callee y
+                    // bajamos la confianza (la recurrencia exacta no se
+                    // modela).
+                    callee_shape = shape_of(mc.functions[it->second].big_o);
+                    callee_conf = Confidence::HEURISTIC;
+                } else {
+                    resolve(it->second, callee_shape, callee_conf);
+                }
+                // Multiplicar el coste del callee por n^loop_depth del site.
+                CostShape contrib = multiply_by_n_pow(callee_shape,
+                                                      cs.loop_depth);
+                // Si el call site esta dentro de un loop, la composicion es
+                // heuristica (no modelamos exactamente cuantas veces se
+                // ejecuta vs el tamano del problema).
+                if (cs.loop_depth > 0)
+                    callee_conf = weaker(callee_conf, Confidence::HEURISTIC);
+                acc = combine_max(acc, contrib);
+                conf = weaker(conf, callee_conf);
+            }
+            on_stack[i] = 0;
+
+            total_shape[i] = acc;
+            total_conf[i] = conf;
+            resolved[i] = 1;
+            out_shape = acc;
+            out_conf = conf;
+        };
+
+    for (size_t i = 0; i < mc.functions.size(); ++i) {
+        CostShape s;
+        Confidence c = Confidence::EXACT;
+        resolve(i, s, c);
+        CostResult &r = mc.functions[i];
+        r.total_class = class_of(s);
+        r.total_confidence = c;
+
+        // Detalle legible del total: indicar si difiere del parcial y por
+        // que (callees que aportan).
+        std::ostringstream td;
+        if (r.total_class == r.big_o) {
+            td << "= parcial (callees no elevan el coste)";
+        } else {
+            td << "parcial " << cost_class_str(r.big_o) << " elevado a "
+               << cost_class_str(r.total_class) << " por callees";
+        }
+        r.total_detail = td.str();
+
+        // Re-validar el contrato @complexity contra el coste TOTAL (la
+        // complejidad efectiva real).  Conservador: solo si EXACT y ambas
+        // clases conocidas y difieren.
+        r.contract_mismatch = false;
+        if (!r.declared_expr.empty() &&
+            r.total_confidence == Confidence::EXACT &&
+            r.total_class != CostClass::O_UNKNOWN &&
+            r.declared_class != CostClass::O_UNKNOWN &&
+            r.declared_class != r.total_class) {
+            r.contract_mismatch = true;
+        }
+    }
 }
 
 /* ===================================================================== */
@@ -428,8 +703,14 @@ std::string cost_result_to_json(const CostResult &r) {
     std::ostringstream o;
     o << "{";
     o << "\"function\":\"" << json_escape(r.function) << "\",";
+    // big_o = coste PARCIAL (cuerpo, calls=O(1)).
     o << "\"big_o\":\"" << cost_class_str(r.big_o) << "\",";
+    o << "\"partial\":\"" << cost_class_str(r.big_o) << "\",";
     o << "\"confidence\":\"" << confidence_str(r.confidence) << "\",";
+    // total = coste TOTAL (interprocedural, callees compuestos).
+    o << "\"total\":\"" << cost_class_str(r.total_class) << "\",";
+    o << "\"total_confidence\":\"" << confidence_str(r.total_confidence)
+      << "\",";
     o << "\"max_loop_depth\":" << r.max_loop_depth << ",";
     o << "\"is_recursive\":" << (r.is_recursive ? "true" : "false") << ",";
     o << "\"is_divide_conquer\":"
@@ -441,6 +722,15 @@ std::string cost_result_to_json(const CostResult &r) {
     o << "\"contract_mismatch\":"
       << (r.contract_mismatch ? "true" : "false") << ",";
     o << "\"detail\":\"" << json_escape(r.detail) << "\",";
+    o << "\"total_detail\":\"" << json_escape(r.total_detail) << "\",";
+    o << "\"calls\":[";
+    for (size_t i = 0; i < r.calls.size(); ++i) {
+        const CallSite &c = r.calls[i];
+        if (i) o << ",";
+        o << "{\"callee\":\"" << json_escape(c.callee)
+          << "\",\"loop_depth\":" << c.loop_depth << "}";
+    }
+    o << "],";
     o << "\"loops\":[";
     for (size_t i = 0; i < r.loops.size(); ++i) {
         const LoopCost &l = r.loops[i];

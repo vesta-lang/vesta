@@ -1325,10 +1325,13 @@ int main(int argc, char *argv[]) {
         ifs.close();
 
         // Compilar hasta el IR.  Reutilizamos compile_vex_source que ya
-        // rellena ir_module_cache_bytes con el modulo COMPLETO post-O2.
+        // rellena ir_module_cache_bytes (modulo POST-O2) y, con
+        // @c emit_ir_preopt, tambien ir_module_cache_bytes_preopt
+        // (modulo PRE-opt: la complejidad algoritmica del fuente).
         vex::CompileOptions copts;
         copts.module_name = "main";
         copts.opt_level = 2;
+        copts.emit_ir_preopt = true;
         vex::CompileResult cr =
             vex::compile_vex_source(vex_source, vex_path, copts);
         // Volcar diagnosticos (errores/warnings) del frontend.
@@ -1344,37 +1347,111 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        ir::IrModule amod;
-        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, amod)) {
+        // Deserializar el modulo POST-opt (complejidad efectiva del codigo
+        // final, tras inline/loop-elim/unroll) + correr el analisis +
+        // composicion interprocedural (call-graph bottom-up -> coste TOTAL).
+        ir::IrModule amod_post;
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, amod_post)) {
             std::cerr << "[analyze] no se pudo deserializar el IR.\n";
             return EXIT_FAILURE;
         }
+        analyze::ModuleCost mc_post = analyze::analyze_module(amod_post);
+        analyze::compose_interproc(mc_post);
 
-        analyze::ModuleCost mc = analyze::analyze_module(amod);
+        // Deserializar el modulo PRE-opt (complejidad algoritmica del fuente
+        // tal como se escribio).  Si por alguna razon no esta disponible,
+        // caemos al post (mejor mostrar algo que fallar).
+        bool have_pre = !cr.ir_module_cache_bytes_preopt.empty();
+        ir::IrModule amod_pre;
+        analyze::ModuleCost mc_pre;
+        if (have_pre &&
+            ir::parse_ir_module_cache(cr.ir_module_cache_bytes_preopt,
+                                      amod_pre)) {
+            mc_pre = analyze::analyze_module(amod_pre);
+            analyze::compose_interproc(mc_pre);
+        } else {
+            have_pre = false;
+        }
+
+        // Helper: localizar el CostResult de una funcion por nombre en un
+        // ModuleCost (el orden pre/post puede diferir tras la optimizacion).
+        auto find_fn = [](const analyze::ModuleCost &m,
+                          const std::string &name)
+            -> const analyze::CostResult * {
+            for (const auto &f : m.functions)
+                if (f.function == name) return &f;
+            return nullptr;
+        };
 
         if (want_json) {
-            std::cout << analyze::module_cost_to_json(mc) << "\n";
+            // JSON con dos arrays: "pre" y "post".  Cada CostResult expone
+            // ya su "partial" (big_o) y "total" + calls[] para diagramas.
+            std::ostringstream js;
+            js << "{\"pre\":"
+               << (have_pre ? analyze::module_cost_to_json(mc_pre)
+                            : std::string("[]"))
+               << ",\"post\":" << analyze::module_cost_to_json(mc_post) << "}";
+            std::cout << js.str() << "\n";
             return EXIT_SUCCESS;
         }
 
-        // Salida legible.
+        // Salida legible: por cada funcion (orden del modulo POST-opt),
+        // mostrar los 4 costes: PRE/POST x PARCIAL/TOTAL.
         std::cout << "Analisis de coste (Big-O) -- " << vex_path << "\n";
-        std::cout << "Nivel: estatico estructural sobre el IR optimizado "
-                     "(O2).\n";
+        std::cout << "Niveles: PRE-opt (fuente) y POST-opt (codigo final O2);"
+                     " PARCIAL (cuerpo, calls=O(1)) y TOTAL (interprocedural)."
+                     "\n";
+        std::cout << "Contrato @complexity validado contra el TOTAL POST-opt"
+                     " (complejidad efectiva real).\n";
         std::cout
             << "=================================================="
                "===========\n";
         int mismatches = 0;
-        for (const auto &r : mc.functions) {
-            std::cout << "  " << analyze::cost_class_str(r.big_o) << "   "
-                      << r.function;
-            std::cout << "   [" << r.detail << "]\n";
-            if (!r.declared_expr.empty()) {
-                std::cout << "        @complexity declarada: " << r.declared_expr
-                          << " -> " << analyze::cost_class_str(r.declared_class);
-                if (r.contract_mismatch) {
-                    std::cout << "  ** DISCREPANCIA: inferida "
-                              << analyze::cost_class_str(r.big_o) << " **";
+        for (const auto &rp : mc_post.functions) {
+            const analyze::CostResult *pre = have_pre
+                ? find_fn(mc_pre, rp.function)
+                : nullptr;
+
+            std::cout << "  " << rp.function << "\n";
+            // PRE-opt.
+            if (pre) {
+                std::cout << "      PRE-opt : parcial "
+                          << analyze::cost_class_str(pre->big_o)
+                          << "   total "
+                          << analyze::cost_class_str(pre->total_class)
+                          << "   [" << pre->detail << "]\n";
+            } else {
+                std::cout << "      PRE-opt : (no disponible)\n";
+            }
+            // POST-opt.
+            std::cout << "      POST-opt: parcial "
+                      << analyze::cost_class_str(rp.big_o) << "   total "
+                      << analyze::cost_class_str(rp.total_class) << "   ["
+                      << rp.detail << "]\n";
+
+            // Resaltar cuando PRE difiere de POST (el optimizer simplifico).
+            if (pre && pre->total_class != rp.total_class) {
+                std::cout << "      >> el optimizer cambio el coste TOTAL: "
+                          << analyze::cost_class_str(pre->total_class)
+                          << " (fuente) -> "
+                          << analyze::cost_class_str(rp.total_class)
+                          << " (efectivo)\n";
+            }
+            // Resaltar cuando PARCIAL difiere de TOTAL (callees elevan).
+            if (rp.big_o != rp.total_class) {
+                std::cout << "      >> callees elevan el coste: parcial "
+                          << analyze::cost_class_str(rp.big_o) << " -> total "
+                          << analyze::cost_class_str(rp.total_class) << "\n";
+            }
+
+            if (!rp.declared_expr.empty()) {
+                std::cout << "      @complexity declarada: " << rp.declared_expr
+                          << " -> "
+                          << analyze::cost_class_str(rp.declared_class);
+                if (rp.contract_mismatch) {
+                    std::cout << "  ** DISCREPANCIA con el TOTAL POST-opt "
+                              << analyze::cost_class_str(rp.total_class)
+                              << " **";
                     ++mismatches;
                 } else {
                     std::cout << "  (ok)";
@@ -1385,7 +1462,7 @@ int main(int argc, char *argv[]) {
         std::cout
             << "=================================================="
                "===========\n";
-        std::cout << "Funciones analizadas: " << mc.functions.size()
+        std::cout << "Funciones analizadas: " << mc_post.functions.size()
                   << "; contratos con discrepancia: " << mismatches << "\n";
         return EXIT_SUCCESS;
     }
