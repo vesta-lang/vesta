@@ -17,12 +17,13 @@
 //
 // Resultado esperado: R0 = 42 (todas las validaciones del override pasan).
 //
-// Nota AOT: el ruteo del override aplica tambien en `-m aot` (native),
-// pero el override es una funcion que RECIBE strings; pasar value-strings
-// como argumentos a funciones en native bare aun no esta soportado por el
-// backend (limitacion preexistente, no del ruteo).  Por eso este ejemplo
-// se valida en interp/Full.  El mecanismo C-3 (ruteo `+`/`==` a la fn del
-// usuario) es identico en ambos modos.
+// Nota AOT: el ruteo del override (@StringConcat/@StringEq) aplica tambien
+// en `-m aot` (native).  Pasar value-strings como argumentos a funciones y
+// retornarlos por valor YA esta soportado en native (SRET de struct de 24
+// bytes), asi que el @StringConcat es AOT-compilable -- ver el ejemplo
+// minimal aot/47_string_override_aot.vex.  Este ejemplo concreto se sigue
+// validando en interp/Full porque su `my_eq` usa str_bytes (StringObject
+// GC), que es Full-only; el mecanismo C-3 es identico en ambos modos.
 
 // Override del concat: siempre devuelve un marcador fijo "OVR".
 @StringConcat

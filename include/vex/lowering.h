@@ -818,6 +818,18 @@ class Lowering {
     /// pero el caller registra cleanup sobre el retbuf.
     std::unordered_set<std::string> fn_returns_smartptr_;
 
+    /// Funciones que en @c native_poo_ (AOT Embed/Bare) declaran
+    /// devolver `string`.  En native el `string` es VALUE-TYPE de 24
+    /// bytes {ptr,len,cap}; un retorno por valor debe usar el ABI SRET
+    /// (igual que un struct de 24 bytes): el caller aloca un retbuf de
+    /// 24 bytes y lo pasa como primer arg hidden; el callee copia el
+    /// value-string al retbuf y transfiere su ownership (no libera en
+    /// el callee, lo posee el caller via su RAII).  Sin esto el callee
+    /// retornaria en RAX un PTR a su slot local de 24 bytes que muere
+    /// al RET -> basura -> segfault.  El path Full/JIT NO usa esto:
+    /// ahi `string` es un GcHandle i64 retornado en registro.
+    std::unordered_set<std::string> fn_returns_str_value_;
+
     /// indicador activo durante el lowering del body de una
     /// funcion que retorna FUNCTION.  Disparado en @c lower_function
     /// y consultado por @c lower_lambda_expr para alocar el env
@@ -831,6 +843,14 @@ class Lowering {
     /// `lower_var_decl` para `string s = "lit"`).  Se restaura al
     /// salir de `lower_function`.
     bool current_fn_returns_string_ = false;
+
+    /// true mientras se baja el body de una funcion que en @c native_poo_
+    /// retorna `string` (value-type) por SRET.  El @c lower_return usa este
+    /// flag para construir el value-string nativo del `return <expr>` (p.ej.
+    /// un literal -> build_native_string_from_literal) ANTES de copiar los
+    /// 24 bytes al retbuf.  Sin el, `return "lit"` copiaria los bytes crudos
+    /// de static_data en lugar de un {ptr,len,cap}.  Se restaura al salir.
+    bool current_fn_sret_str_value_ = false;
 
     /// true si la funcion actual contiene algun `try { } catch`
     /// statement.  Se rellena con un pre-pase simple en lower_function.
