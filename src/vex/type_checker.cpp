@@ -6335,8 +6335,15 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     const bool rhs_str =
         (tr.kind == PrimitiveKind::STRING) ||
         (tr.kind == PrimitiveKind::PTR && is_str_lit(e->rhs.get()));
+    // `"a" + "b"` (ambos literales de string) tambien es concat: aunque
+    // ninguno sea STRING "real" (los literales se tipan PTR), dos literales
+    // de string juntos solo pueden ser concatenacion (nunca aritmetica de
+    // punteros, que requiere operandos PTR no-literales).
+    const bool both_str_lit =
+        is_str_lit(e->lhs.get()) && is_str_lit(e->rhs.get());
     const bool any_real_string = (tl.kind == PrimitiveKind::STRING) ||
-                                 (tr.kind == PrimitiveKind::STRING);
+                                 (tr.kind == PrimitiveKind::STRING) ||
+                                 both_str_lit;
     if (lhs_str && rhs_str && any_real_string) {
         if (e->op == ast::BinOp::Add) {
             return Type{PrimitiveKind::STRING};
