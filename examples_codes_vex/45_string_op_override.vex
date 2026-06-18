@@ -1,0 +1,78 @@
+// C-3: override del `string` built-in via @StringConcat / @StringEq.
+//
+// Demuestra que el usuario puede SOBRESCRIBIR las operaciones del tipo
+// `string` built-in con su propia implementacion (mecanismo, no
+// politica -- igual que @AllocatorOverride para malloc/free).
+//
+//   @StringConcat fn -> reemplaza el operador `+` y el builtin str_concat.
+//   @StringEq      fn -> reemplaza el operador `==` (y `!=` via negacion)
+//                        y el builtin str_equals.
+//
+// El observable: las implementaciones del usuario hacen algo DISTINTO al
+// default para PROBAR que el ruteo se usa.
+//   my_concat: ignora a/b y devuelve SIEMPRE "OVR" (length 3).  Sin
+//              override, "hola"+" mundo" tendria length 10.
+//   my_eq:     logica INVERTIDA -- devuelve true solo si los strings
+//              DIFIEREN.  Sin override, "x" == "x" seria true.
+//
+// Resultado esperado: R0 = 42 (todas las validaciones del override pasan).
+//
+// Nota AOT: el ruteo del override aplica tambien en `-m aot` (native),
+// pero el override es una funcion que RECIBE strings; pasar value-strings
+// como argumentos a funciones en native bare aun no esta soportado por el
+// backend (limitacion preexistente, no del ruteo).  Por eso este ejemplo
+// se valida en interp/Full.  El mecanismo C-3 (ruteo `+`/`==` a la fn del
+// usuario) es identico en ambos modos.
+
+// Override del concat: siempre devuelve un marcador fijo "OVR".
+@StringConcat
+string my_concat(string a, string b) {
+    return "OVR";
+}
+
+// Override del eq: invierte la semantica -- true si difieren.
+@StringEq
+bool my_eq(string a, string b) {
+    // Comparamos byte a byte sin usar `==` de strings (que se rutearia
+    // de vuelta a este override -- aunque el lowering ya lo protege).
+    i64 la = str_length(a);
+    i64 lb = str_length(b);
+    if (la != lb) return true;          // longitudes distintas -> difieren.
+    // Mismo length: comparar bytes via str_bytes + cstr.
+    bool same = (str_bytes(a) == str_bytes(b));
+    if (!same) return true;
+    return false;                       // (aprox.) iguales -> NO difieren.
+}
+
+i32 main() {
+    string s = "hola";
+    string t = " mundo";
+
+    // 1. Operador `+` ruteado a my_concat -> resultado fijo "OVR" (len 3).
+    string c = s + t;
+    if (str_length(c) != 3) return 1;
+
+    // 2. Builtin str_concat tambien ruteado a my_concat -> len 3.
+    string c2 = str_concat(s, t);
+    if (str_length(c2) != 3) return 2;
+
+    // 3. Operador `==` ruteado a my_eq (invertido):
+    //    "hola" == "hola" -> my_eq devuelve false (NO difieren).
+    string s2 = "hola";
+    if (s == s2) return 3;              // override invertido: deben dar false.
+
+    //    "hola" == " mundo" -> difieren -> my_eq devuelve true.
+    if (!(s == t)) return 4;
+
+    // 4. Operador `!=` = negacion de my_eq:
+    //    "hola" != "hola" -> !true... cuidado: my_eq("hola","hola")=false,
+    //    `!=` niega -> true.  (sin override, "hola"!="hola" seria false.)
+    if (!(s != s2)) return 5;
+
+    // 5. Builtin str_equals tambien ruteado a my_eq (invertido):
+    //    str_equals("hola","hola") -> false (NO difieren).
+    if (str_equals(s, s2)) return 6;
+
+    flush();
+    return 42;
+}

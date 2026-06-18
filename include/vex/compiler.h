@@ -146,6 +146,11 @@ struct CompileResult {
     std::string aot_alloc_sym; ///< @AllocatorOverride que devuelve ptr.
     std::string aot_free_sym;  ///< @AllocatorOverride que devuelve void.
     std::string aot_panic_sym; ///< @PanicHandler.
+    /// C-3: @StringConcat / @StringEq -- nombres de las funciones libres
+    /// que reemplazan el `+` (concat) y `==` (eq) del string built-in.
+    /// Vacios => comportamiento por defecto (STRCAT/STRCMP o value-string).
+    std::string string_concat_override;
+    std::string string_eq_override;
     /// Diagrama Mermaid del AST post type-check.  Llenado solo si
     /// @c CompileOptions::dump_mermaid_ast == true.  Vacio en caso
     /// contrario para no pagar el coste de generacion en builds prod.

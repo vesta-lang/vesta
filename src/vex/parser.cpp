@@ -720,6 +720,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_async = false;
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
+    bool top_is_string_concat = false;  /* C-3: @StringConcat */
+    bool top_is_string_eq = false;      /* C-3: @StringEq */
     bool top_is_introspect = false;
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
@@ -767,6 +769,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_alloc_override = true;
             else if (current_.lexeme == "PanicHandler")
                 top_is_panic_handler = true;
+            else if (current_.lexeme == "StringConcat")
+                top_is_string_concat = true;
+            else if (current_.lexeme == "StringEq")
+                top_is_string_eq = true;
             // Sprint lombok (2026-06-03): anotaciones class-level.
             // El parser solo marca los flags; el pre-pase del
             // TypeChecker (expand_lombok_annotations) genera los
@@ -1267,6 +1273,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_pure) fd->is_pure = true;
         if (fd && top_is_alloc_override) fd->is_alloc_override = true;
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
+        if (fd && top_is_string_concat) fd->is_string_concat_override = true;
+        if (fd && top_is_string_eq) fd->is_string_eq_override = true;
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.
         if (fd && !top_attr_section.empty()) {
             fd->attr_section = top_attr_section;

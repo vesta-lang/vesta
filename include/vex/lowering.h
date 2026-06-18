@@ -118,6 +118,17 @@ class Lowering {
     /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
     void set_native_poo(bool on) { native_poo_ = on; }
 
+    /// C-3: registra los nombres de las funciones libres marcadas con
+    /// @StringConcat / @StringEq.  Cuando no estan vacios, el lowering
+    /// del `+`/`==` entre strings (y de los builtins str_concat/
+    /// str_equals) rutea a una CALL a esas funciones en vez del
+    /// concat/cmp por defecto.  Aplica en native_poo_ y Full.
+    void set_string_op_overrides(const std::string &concat,
+                                 const std::string &eq) {
+        string_concat_override_ = concat;
+        string_eq_override_ = eq;
+    }
+
     /// Wrapper publico para que helpers estaticos del modulo (e.g.
     /// @c collect_spawn_captures_in_expr) puedan resolver un nombre
     /// recorriendo todos los scopes activos del lowering.
@@ -1132,6 +1143,21 @@ class Lowering {
     std::string instrument_mode_ = "none";
     /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
+    /// C-3: nombres de los override del string built-in (vacios => default).
+    std::string string_concat_override_;
+    std::string string_eq_override_;
+
+    /// C-3: emite una CALL a una funcion libre override del string
+    /// built-in (@StringConcat / @StringEq).  @p lhs / @p rhs son las
+    /// expresiones operando; se materializan al repr `string` adecuado
+    /// (StringObject handle i64 en Full, PTR a value-string en native).
+    /// @p ret_ir es el tipo IR de retorno (I64 para concat, BOOL para eq).
+    /// @p negate niega el resultado bool (para `!=` sobre @StringEq).
+    /// Devuelve el IrValueId del resultado, o IR_NO_VALUE en error.
+    ir::IrValueId emit_string_override_call(const std::string &fn_name,
+                                            ast::Expr *lhs, ast::Expr *rhs,
+                                            ir::IrType ret_ir, bool negate,
+                                            uint32_t source_line);
 
     /// Helper: emite CALLN sintetica a @c "vex_trace:enter" con
     /// argumento puntero al string literal del nombre de la funcion.
