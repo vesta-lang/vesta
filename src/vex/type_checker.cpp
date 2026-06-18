@@ -6601,11 +6601,15 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
         if (e->op == ast::BinOp::Add) {
             return Type{PrimitiveKind::STRING};
         }
-        if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq) {
+        // Inc 4: comparacion (== != < > <= >=) -> BOOL.  La ordenacion es
+        // lexicografica byte-a-byte (ver __vex_strcmp en el lowering native).
+        if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq ||
+            e->op == ast::BinOp::Lt || e->op == ast::BinOp::Gt ||
+            e->op == ast::BinOp::Le || e->op == ast::BinOp::Ge) {
             return Type{PrimitiveKind::BOOL};
         }
-        diags_.error(e->loc,
-                     "operador no soportado entre strings (solo + y == / !=)");
+        diags_.error(e->loc, "operador no soportado entre strings (solo + y "
+                             "== != < > <= >=)");
         return Type{};
     }
 
