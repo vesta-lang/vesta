@@ -920,6 +920,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         return true;
     }
+    case MOp::REP_MOVSB:
+        /* REP MOVSB: copia RCX bytes desde [RSI] a [RDI], incrementando
+         * ambos (DF=0 por la ABI host).  Encoding: F3 (prefijo REP) + A4
+         * (MOVSB).  Sin REX (movsb opera sobre los punteros completos
+         * RSI/RDI de 64 bits en modo long).  La instruccion x86 de
+         * copia mas rapida (fast-string-ops / ERMSB). */
+        put8(out, 0xF3); /* prefijo REP */
+        put8(out, 0xA4); /* MOVSB */
+        return true;
     default:
         /* Opcode no implementado en este encoder. */
         return false;

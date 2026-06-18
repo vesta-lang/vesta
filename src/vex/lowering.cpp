@@ -22069,14 +22069,25 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         fn_->append(current_block_, std::move(ra));
     }
 
-    // 4. Copia de los contenidos via loop de PALABRA (8 bytes/iter + cola
-    //    de bytes), ~8x menos iteraciones que byte-a-byte.  Ver
-    //    emit_word_copy_loop.  Todas las ops son PURE_NATIVE.
+    // 4. Copia de los contenidos via MEMCPY (baja a `rep movsb` en el
+    //    codegen vreg-native: la instruccion x86 de copia mas rapida,
+    //    fast-string-ops/ERMSB).  En el interp baja a `vmcopy`.  Todas
+    //    las ops son PURE_NATIVE/LIBC-free.  Helper local emit_memcpy.
+    auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
+                           ir::IrValueId len) {
+        ir::IrInstr mc{};
+        mc.op = ir::IrOp::MEMCPY;
+        mc.type = ir::IrType::I8;
+        mc.dst = ir::IR_NO_VALUE;
+        mc.operands = {dst, src, len}; // [0]=dst_ptr [1]=src_ptr [2]=len
+        mc.source_line = source_line;
+        fn_->append(current_block_, std::move(mc));
+    };
     // 4a. Copiar bytes de a a buf[0..la).
-    emit_word_copy_loop(v_buf, v_a_ptr, v_a_len, source_line);
+    emit_memcpy(v_buf, v_a_ptr, v_a_len);
     // 4b. Copiar bytes de b a buf[la..la+lb).  dst_base = buf + la.
     ir::IrValueId v_buf_off = ptr_add(v_buf, v_a_len);
-    emit_word_copy_loop(v_buf_off, v_b_ptr, v_b_len, source_line);
+    emit_memcpy(v_buf_off, v_b_ptr, v_b_len);
 
     // 5. Nul terminador en buf[total].
     {

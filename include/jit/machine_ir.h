@@ -583,7 +583,17 @@ enum class MOp : uint8_t {
     XORPS = 102,  ///< XORPS xmm,xmm (0F 57) -- clear / neg-mask de f32/f64
     ANDPS = 103,  ///< ANDPS xmm,xmm (0F 54) -- abs-mask de f32/f64 (FABS)
 
-    COUNT = 104
+    /* memcpy x86 nativo (perf strings 2026-06-18).  REP MOVSB copia RCX
+     * bytes desde [RSI] a [RDI] incrementando ambos (DF=0 asumido por la
+     * ABI host).  Es la instruccion de copia mas rapida del CPU moderno
+     * (fast-string-ops / ERMSB).  No tiene operandos vreg propios: opera
+     * sobre RSI/RDI/RCX FIJOS, que el selector carga (y salva/restaura con
+     * PUSH/POP) en la secuencia auto-contenida del IrOp::MEMCPY.  El
+     * encoder emite los 2 bytes F3 A4.  Indep. del regalloc (no asigna ni
+     * clobbea vregs porque la save/restore preserva RSI/RDI/RCX). */
+    REP_MOVSB = 104,
+
+    COUNT = 105
 };
 
 /* ===================================================================== */
@@ -639,6 +649,14 @@ struct MInstr {
     static MInstr make_ret() noexcept {
         MInstr i;
         i.op = MOp::RET;
+        return i;
+    }
+
+    /** @brief REP MOVSB: copia RCX bytes [RSI]->[RDI].  Sin operandos
+     *  vreg (opera sobre fisicos fijos; el selector los carga/restaura). */
+    static MInstr make_rep_movsb() noexcept {
+        MInstr i;
+        i.op = MOp::REP_MOVSB;
         return i;
     }
 
