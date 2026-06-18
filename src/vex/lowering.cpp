@@ -829,9 +829,18 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 is_smartptr_ret = true;
                 fn_returns_smartptr_.insert(fd->name);
             }
+            // Vex Embed (native_poo_): `string` es value-type de 24
+            // bytes -> retorno por valor via SRET (igual que struct).
+            // Solo en native; en Full/JIT `string` es handle i64.
+            bool is_str_value_ret = false;
+            if (native_poo_ && kind == PrimitiveKind::STRING &&
+                fd->return_type) {
+                is_str_value_ret = true;
+                fn_returns_str_value_.insert(fd->name);
+            }
             if (kind == PrimitiveKind::OPTIONAL ||
                 kind == PrimitiveKind::RESULT || is_user_enum ||
-                is_function_ret || is_smartptr_ret) {
+                is_function_ret || is_smartptr_ret || is_str_value_ret) {
                 rt = ir::IrType::VOID;
             }
             // Item 9: @Async wrapper retorna i64 (Future handle), no T.
@@ -1852,11 +1861,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // Smart pointers: SRET de 8 bytes para `unique<T>` / `shared<T>`.
     const bool sret_smartptr = (sem_ret.kind == PrimitiveKind::UNIQUE_PTR ||
                                 sem_ret.kind == PrimitiveKind::SHARED_PTR);
+    // Vex Embed (native_poo_): `string` value-type de 24 bytes -> SRET.
+    const bool sret_str_value =
+        (native_poo_ && sem_ret.kind == PrimitiveKind::STRING);
     const bool sret = (sem_ret.kind == PrimitiveKind::OPTIONAL ||
                        sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
-                       sret_function || sret_smartptr);
+                       sret_function || sret_smartptr || sret_str_value);
     if (fd->return_type &&
-        fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
+        fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode && !sret) {
         auto *pt = static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get());
         fn.ret_type = ir_type_from_primitive(pt->prim);
     } else if (fd->return_type) {
@@ -1884,9 +1896,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // SRET de Optional/Result/enum (donde el caller aloca host).
         // Para FUNCTION/smart-ptr el callee tiene su propio manejo y
         // marcarlo host rompe el copia in-place.
+        // El value-string (native_poo_) vive en host stack (ALLOCA host)
+        // -> su retbuf tambien es host_ptr para que las copias usen `movh`.
         const bool sret_optres_like =
             (sem_ret.kind == PrimitiveKind::OPTIONAL ||
-             sem_ret.kind == PrimitiveKind::RESULT || sret_enum);
+             sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
+             sret_str_value);
         if (sret_optres_like) {
             fn.values[v_retbuf].is_host_ptr = true;
         }
@@ -1899,6 +1914,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         if (p->type && p->type->kind == ast::NodeKind::PrimitiveTypeNode) {
             auto *ptn = static_cast<ast::PrimitiveTypeNode *>(p->type.get());
             pt = ir_type_from_primitive(ptn->prim);
+            // Vex Embed (native_poo_): un param `string` es value-type
+            // (24 bytes); el caller pasa un PTR HOST al value-string en
+            // su stack.  Marcar host_ptr para que los LOAD del callee
+            // (s.length(), s.cstr(), concat operand) usen `movh` (host).
+            // En Full/JIT `string` es un GcHandle i64 -> NO host_ptr.
+            if (native_poo_ && ptn->prim == PrimitiveKind::STRING) {
+                param_is_host_ptr = true;
+            }
         } else if (p->type) {
             // Para tipos compuestos (PointerTypeNode, ArrayTypeNode,
             // NamedTypeNode resuelto) usamos el helper de tipos del
@@ -1987,6 +2010,9 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // usamos 16 para unique y 8 para shared.
         sret_buf_size_ =
             (sem_ret.kind == PrimitiveKind::UNIQUE_PTR) ? 16ULL : 8ULL;
+    } else if (sret_str_value) {
+        // value-string: {ptr,len,cap} = 3 qwords = 24 bytes.
+        sret_buf_size_ = 24ULL;
     } else if (sret) {
         sret_buf_size_ =
             (sem_ret.kind == PrimitiveKind::OPTIONAL ? 16ULL : 24ULL);
@@ -2004,6 +2030,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // STRMAKE en vez de devolver el ptr crudo.
     const bool prev_returns_str = current_fn_returns_string_;
     current_fn_returns_string_ = (sem_ret.kind == PrimitiveKind::STRING);
+    // native_poo_: marca que el return de `string` baja por SRET de
+    // value-type (24 bytes) -> lower_return construye el value-string.
+    const bool prev_sret_str_value = current_fn_sret_str_value_;
+    current_fn_sret_str_value_ = sret_str_value;
 
     // nonnull en parametros: por cada parametro declarado con
     // `T !!name` (o `nonnull T name`), inyectamos un `unwrap` al
@@ -2181,6 +2211,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // (gap O): restaurar el flag de "funcion retorna FUNCTION".
     current_fn_returns_function_ = prev_returns_fn;
     current_fn_returns_string_ = prev_returns_str;
+    current_fn_sret_str_value_ = prev_sret_str_value;
     // Validar que todas las labels referenciadas por gotos esten
     // declaradas; si alguna se quedo sin declarar es uso de una
     // label inexistente (`goto missing_label`).
@@ -4760,7 +4791,24 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 }
             }
         }
-        const ir::IrValueId v_local = lower_expr(s->value.get());
+        // Vex Embed (native_poo_): si la funcion retorna `string`
+        // value-type y el `return <expr>` es un literal NO interpolado,
+        // construir el value-string nativo ({ptr,len,cap} con buffer
+        // heap propio) en vez de devolver el str_lit_addr crudo (que
+        // apunta a los BYTES en static_data, no a un value-string).
+        // Sin esto, la copia SRET leeria los bytes del literal como si
+        // fueran {ptr,len,cap} -> basura -> segfault.
+        ir::IrValueId v_local;
+        if (current_fn_sret_str_value_ &&
+            s->value->kind == ast::NodeKind::StringLitExpr &&
+            !static_cast<ast::StringLitExpr *>(s->value.get())
+                 ->is_interpolated()) {
+            v_local = build_native_string_from_literal(
+                static_cast<ast::StringLitExpr *>(s->value.get()),
+                s->loc.line);
+        } else {
+            v_local = lower_expr(s->value.get());
+        }
         unique_box_target_slot_ = ir::IR_NO_VALUE; // limpiar siempre
         if (inplace_sret) {
             // El smart pointer ya se construyo IN-PLACE sobre el
@@ -4814,6 +4862,13 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     add.source_line = s->loc.line;
                     fn_->append(current_block_, std::move(add));
                 }
+                // Vex Embed (native_poo_): el value-string fuente vive en
+                // host stack (ALLOCA host) -> propagar is_host_ptr del
+                // v_local al v_src_at para que el LOAD use `movh` (host) en
+                // lugar de `mov` (VM mem).  Sin esto, el retorno de un
+                // value-string leeria 24 bytes de vm_mem (cero/basura).
+                fn_->values[v_src_at].is_host_ptr =
+                    fn_->values[v_local].is_host_ptr;
                 // LOAD i64 from src+off
                 const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::I64);
                 {
@@ -4856,6 +4911,26 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                     st.source_line = s->loc.line;
                     fn_->append(current_block_, std::move(st));
                 }
+            }
+            // Vex Embed (native_poo_): `return <ident_string>` (devolver
+            // una variable/param string POR VALOR) hace MOVE: tras copiar
+            // los 24 bytes al retbuf, ZERAR el ptr@0 del slot fuente para
+            // transferir el ownership del buffer al caller.  Sin esto, la
+            // fuente y el retbuf comparten el mismo buffer -> doble-free
+            // (la fuente lo libera en su scope Y el caller lo libera via el
+            // retbuf).  El concat `a+b` produce un buffer fresco (no es
+            // ident) -> no se zera nada (no hay aliasing).
+            if (current_fn_sret_str_value_ && v_local != ir::IR_NO_VALUE &&
+                s->value->kind == ast::NodeKind::IdentExpr) {
+                ir::IrValueId v_zero =
+                    emit_const(ir::IrType::I64, 0, s->loc.line);
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.dst = ir::IR_NO_VALUE;
+                st.operands = {v_zero, v_local};
+                st.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(st));
             }
         }
         // ejecutar cleanups (e.g. monexit de synchronized
@@ -11930,10 +12005,15 @@ skip_comptime_eval_for_macro_to_macro:
     // via fn_returns_smartptr_; el slot tiene 8 bytes (host_ptr).
     const bool callee_is_smartptr_sret =
         (fn_returns_smartptr_.find(id->name) != fn_returns_smartptr_.end());
+    // Vex Embed (native_poo_): callee que retorna `string` value-type
+    // (24 bytes) usa SRET igual que un struct; el caller aloca el retbuf.
+    const bool callee_is_str_value_sret =
+        (fn_returns_str_value_.find(id->name) != fn_returns_str_value_.end());
     const bool callee_is_sret =
         (callee_kind == PrimitiveKind::OPTIONAL ||
          callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
-         callee_is_function_sret || callee_is_smartptr_sret);
+         callee_is_function_sret || callee_is_smartptr_sret ||
+         callee_is_str_value_sret);
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
     if (callee_is_sret) {
         uint64_t buf_bytes = 16ULL; // default Optional
@@ -11947,6 +12027,8 @@ skip_comptime_eval_for_macro_to_macro:
             buf_bytes = 24ULL;
         } else if (callee_is_function_sret) {
             buf_bytes = 16ULL; // function value: fn_addr + env_addr
+        } else if (callee_is_str_value_sret) {
+            buf_bytes = 24ULL; // value-string {ptr,len,cap}
         } else if (callee_is_smartptr_sret) {
             // unique<T> Tier 1 = 16 bytes (ptr+deleter); shared<T> = 8
             // (ctrl_ptr). No tenemos info del kind aqui sin parsear la firma;
@@ -11965,9 +12047,13 @@ skip_comptime_eval_for_macro_to_macro:
         // para retbuf de Optional/Result/enum (donde el bug cross-mem
         // se manifiesta).  NO para FUNCTION/smart-ptr cuyo lowering
         // tiene su propio manejo de memoria (env_addr=heap GC, ctrl_ptr).
+        // El retbuf del value-string vive en host stack (igual que
+        // Optional/Result/enum): host_alloca + is_host_ptr para que las
+        // copias del callee usen `movh` y el caller lea/libere host mem.
         const bool is_optres_retbuf =
             (callee_kind == PrimitiveKind::OPTIONAL ||
-             callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret);
+             callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
+             callee_is_str_value_sret);
         if (is_optres_retbuf) {
             al.host_alloca = true;
         }
@@ -11990,6 +12076,14 @@ skip_comptime_eval_for_macro_to_macro:
     std::vector<ir::IrValueId> arg_ids;
     arg_ids.reserve(e->args.size() + (callee_is_sret ? 1 : 0));
     if (callee_is_sret) arg_ids.push_back(v_call_retbuf);
+    // Vex Embed (native_poo_): args que son value-strings TEMPORALES
+    // (resultado de `mk(...)` SRET-string, concat `a+b`, o cast a string)
+    // tienen un buffer heap owned que nadie libera tras pasarlo al call.
+    // Los recolectamos y emitimos RAW_FREE de su ptr@0 DESPUES del CALL
+    // (el callee ya copio/uso los bytes).  Sin esto, `mk(mk(a,b), c)`
+    // fuga el buffer del intermedio.  Los IdentExpr (variables) NO se
+    // liberan: su RAII en el scope dueno lo hace (no doble-free).
+    std::vector<ir::IrValueId> tmp_str_args_to_free;
     for (size_t i = 0; i < e->args.size(); ++i) {
         ast::Expr *ae = e->args[i].get();
         // Detectar (param STRING, arg StringLitExpr no interpolado) y
@@ -12005,7 +12099,19 @@ skip_comptime_eval_for_macro_to_macro:
             promote_to_string = true;
         }
         if (!promote_to_string) {
-            arg_ids.push_back(lower_expr(ae));
+            const ir::IrValueId v_arg = lower_expr(ae);
+            arg_ids.push_back(v_arg);
+            // native_poo_: marcar arg como value-string temporal a liberar.
+            if (native_poo_ && v_arg != ir::IR_NO_VALUE && ae &&
+                ae->result_type.kind == PrimitiveKind::STRING) {
+                const bool is_tmp_str =
+                    (ae->kind == ast::NodeKind::CallExpr) ||
+                    (ae->kind == ast::NodeKind::BinaryExpr &&
+                     static_cast<ast::BinaryExpr *>(ae)->op ==
+                         ast::BinOp::Add) ||
+                    (ae->kind == ast::NodeKind::CastExpr);
+                if (is_tmp_str) tmp_str_args_to_free.push_back(v_arg);
+            }
         }
     }
 
@@ -12047,6 +12153,19 @@ skip_comptime_eval_for_macro_to_macro:
     ins.operands = std::move(arg_ids);
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
+    // native_poo_: liberar los buffers de los args value-string temporales
+    // (ya copiados/usados por el callee).  RAW_FREE(ptr@0); free(0)=no-op.
+    for (ir::IrValueId v_tmp : tmp_str_args_to_free) {
+        const ir::IrValueId v_ptr = load_native_string_field(
+            v_tmp, 0, /*as_host=*/true, e->loc.line);
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {v_ptr};
+        rf.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(rf));
+    }
     return callee_is_sret ? v_call_retbuf : dst;
 }
 
@@ -22225,6 +22344,53 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
         if (fs && !fs->mangled_label.empty()) callee_name = fs->mangled_label;
     }
 
+    // Vex Embed (native_poo_): si el override (@StringConcat) retorna un
+    // `string` value-type, su firma IR real es void + retbuf hidden (SRET
+    // de 24 bytes).  El call site debe alocar el retbuf, pasarlo PRIMERO,
+    // y devolver el retbuf como "valor" del override.  Sin esto, el CALL
+    // emite firma i64 (registro) contra una callee void+retbuf -> segfault.
+    const bool override_is_str_sret =
+        native_poo_ &&
+        (fn_returns_str_value_.find(fn_name) != fn_returns_str_value_.end());
+    if (override_is_str_sret) {
+        const ir::IrValueId v_retbuf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_retbuf].is_host_ptr = true;
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_retbuf;
+        al.imm = 24; // value-string {ptr,len,cap}
+        al.host_alloca = true;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.func_name = std::move(callee_name);
+        ins.operands = {v_retbuf, v_a, v_b};
+        ins.source_line = source_line;
+        fn_->append(current_block_, std::move(ins));
+        // Liberar operandos temporales (bytes ya copiados por la callee).
+        if (a_temp || b_temp) {
+            auto free_temp = [&](ir::IrValueId v_slot) {
+                ir::IrValueId v_ptr = load_native_string_field(
+                    v_slot, 0, /*as_host=*/true, source_line);
+                ir::IrInstr rf{};
+                rf.op = ir::IrOp::RAW_FREE;
+                rf.type = ir::IrType::VOID;
+                rf.dst = ir::IR_NO_VALUE;
+                rf.operands = {v_ptr};
+                rf.source_line = source_line;
+                fn_->append(current_block_, std::move(rf));
+            };
+            if (a_temp) free_temp(v_a);
+            if (b_temp) free_temp(v_b);
+        }
+        // El "valor" del override es el retbuf (PTR al value-string).
+        return v_retbuf;
+    }
+
     const ir::IrValueId v_ret = fn_->new_value(ret_ir);
     ir::IrInstr ins{};
     ins.op = ir::IrOp::CALL;
@@ -22348,15 +22514,22 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     const uint64_t len = static_cast<uint64_t>(lit.size());
     const uint64_t cap = len + 1; // +1 para el nul terminador.
 
-    // 1. Slot de 24 bytes en stack (ALLOCA).  No es host_ptr (es pila,
-    //    igual que un struct value-type; en AOT todo es nativo).
+    // 1. Slot de 24 bytes en stack (ALLOCA host).  En native_poo_/AOT el
+    //    value-string vive en HOST stack: su ptr debe ser un host_ptr
+    //    coherente en TODO el programa (se pasa a funciones que lo leen
+    //    via `movh`, se copia al retbuf SRET host).  Un ALLOCA VM-stack
+    //    (`[rbx+regs]`) daria un VM-addr que al cruzar a un callee
+    //    host_ptr se leeria como host -> segfault.  host_alloca=true +
+    //    is_host_ptr=true mantienen la coherencia.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
         al.dst = v_slot;
         al.imm = 24;
+        al.host_alloca = native_poo_;
         al.source_line = source_line;
         fn_->append(current_block_, std::move(al));
     }
