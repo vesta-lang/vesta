@@ -4472,6 +4472,67 @@ bool ir_pass_const_fold(IrFunction &fn) {
 bool ir_pass_dse(IrFunction &fn) {
     bool changed = false;
 
+    // Alias-safety del store-to-load forwarding: conjunto de direcciones
+    // LOCALES PRECISAS = dst de un ALLOCA + todo lo derivado por ADD con
+    // offset CONSTANTE o por BITCAST/MOV.  Dos direcciones locales precisas
+    // distintas NO aliasan (allocas distintos, u offsets const distintos del
+    // mismo alloca).  Un STORE a un puntero FUERA de este conjunto (puntero
+    // "salvaje": resultado de un LOAD, parametro, calculo con offset variable)
+    // puede aliasar CUALQUIER direccion local -> es una barrera que invalida
+    // todo el forwarding.  Sin esto, `(*p).x = v` (p puntero cargado que en
+    // runtime == &s) NO invalidaba el valor conocido de `s.x` -> el SLF
+    // forwardeaba un valor stale (bug: `s.x` leia 1 tras `(*p).x = 10`).
+    std::unordered_set<IrValueId> safe_addr;
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs)
+            if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE)
+                safe_addr.insert(ins.dst);
+    // Direcciones de HEAP: dst de un allocador (raw_alloc/gc_alloc/newobj) +
+    // derivados.  Un puntero de heap NUNCA aliasa una direccion de STACK
+    // (alloca) -> un store a traves de un puntero de heap NO invalida el
+    // contenido de los slots alloca trackeados (p.ej. `p[i]=v` con p host:
+    // escribe el heap, no el slot de p).  Distingue i5 (store via un puntero
+    // CARGADO = posible &alloca escapado -> barrera) de test 82 (store via un
+    // puntero de malloc -> no aliasa el slot de p).
+    std::unordered_set<IrValueId> heap_addr;
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs)
+            if ((ins.op == IrOp::RAW_ALLOC || ins.op == IrOp::GC_ALLOC ||
+                 ins.op == IrOp::NEWOBJ || ins.op == IrOp::NEWOBJS) &&
+                ins.dst != IR_NO_VALUE)
+                heap_addr.insert(ins.dst);
+    {
+        bool grew = true;
+        int guard = 0;
+        while (grew && guard++ < 16) {
+            grew = false;
+            for (auto &bb : fn.blocks)
+                for (auto &ins : bb.instrs) {
+                    if (ins.dst == IR_NO_VALUE) continue;
+                    auto derived_from = [&](std::unordered_set<IrValueId> &s) {
+                        if (s.count(ins.dst)) return false;
+                        if (ins.op == IrOp::ADD && ins.operands.size() == 2 &&
+                            s.count(ins.operands[0])) {
+                            uint64_t off;
+                            return get_const(fn, ins.operands[1], off);
+                        }
+                        if ((ins.op == IrOp::BITCAST || ins.op == IrOp::MOV) &&
+                            !ins.operands.empty() && s.count(ins.operands[0]))
+                            return true;
+                        return false;
+                    };
+                    if (derived_from(safe_addr)) {
+                        safe_addr.insert(ins.dst);
+                        grew = true;
+                    }
+                    if (derived_from(heap_addr)) {
+                        heap_addr.insert(ins.dst);
+                        grew = true;
+                    }
+                }
+        }
+    }
+
     for (auto &bb : fn.blocks) {
         // Mapa: ptr_vid -> indice del ultimo STORE a ese ptr (en este bloque)
         std::unordered_map<IrValueId, size_t> last_store_idx;
@@ -4493,6 +4554,23 @@ bool ir_pass_dse(IrFunction &fn) {
                 IrValueId ptr = ins.operands[1];
                 IrValueId val = ins.operands[0];
                 if (ptr == IR_NO_VALUE) break;
+                // Store a traves de un puntero que NO es una direccion local
+                // precisa (alloca + offset const).  Dos casos:
+                //  - puntero de HEAP (malloc/gc/newobj derivado): NO aliasa
+                //    ningun slot alloca de stack -> el contenido de los slots
+                //    trackeados no cambia; conservar su forwarding (test 82:
+                //    `p[i]=v` no toca el slot host-ptr de p).  No registramos
+                //    el store de heap (aliasing heap-heap desconocido).
+                //  - puntero UNKNOWN (load/param/calculo): podria ser la
+                //    direccion de un alloca escapado (`&s` cargado de vuelta)
+                //    -> barrera de alias, invalida TODO el forwarding (i5).
+                if (!safe_addr.count(ptr)) {
+                    if (!heap_addr.count(ptr)) {
+                        last_store_idx.clear();
+                        last_store_val.clear();
+                    }
+                    break;
+                }
                 auto it = last_store_idx.find(ptr);
                 if (it != last_store_idx.end()) {
                     // STORE anterior al mismo ptr SIN reads intermedios.
