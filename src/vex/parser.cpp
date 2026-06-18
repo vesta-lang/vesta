@@ -4928,6 +4928,31 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             expr = std::move(fa);
             break;
         }
+        case TokenKind::ARROW: {
+            // `a->b` es azucar estilo C de `(*a).b`: deref del puntero +
+            // acceso al miembro.  Para `a->m(args)`, el LPAREN de la
+            // siguiente iteracion construye el CallExpr sobre el
+            // FieldAccessExpr (igual que `(*a).m(args)`).  El type checker
+            // y el lowering reusan el path de `(*a).b` sin cambios.
+            const SourceLoc loc = current_.loc;
+            (void)consume(); // '->'
+            if (current_.kind != TokenKind::IDENTIFIER &&
+                current_.kind != TokenKind::KW_GET &&
+                current_.kind != TokenKind::KW_SET) {
+                error_here("se esperaba un nombre de campo tras '->'");
+                return expr;
+            }
+            auto deref = std::make_unique<ast::UnaryExpr>();
+            deref->loc = loc;
+            deref->op = ast::UnOp::Deref;
+            deref->operand = std::move(expr);
+            auto fa = std::make_unique<ast::FieldAccessExpr>();
+            fa->loc = loc;
+            fa->base = std::move(deref);
+            fa->field_name = consume().lexeme;
+            expr = std::move(fa);
+            break;
+        }
         case TokenKind::LBRACKET: {
             // Subscript: base[index].  El type checker restringe la
             // base a tipo puntero o array (operacion de indexacion).
