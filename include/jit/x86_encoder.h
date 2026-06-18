@@ -169,6 +169,18 @@ class X86Encoder {
         if (r) o.push_back(r);
     }
 
+    /// @c true si @p reg es uno de RSP/RBP/RSI/RDI (indices 4-7) y se
+    /// usa como operando de 8 bits.  En x86-64, acceder al byte bajo de
+    /// esos registros (SPL/BPL/SIL/DIL) EXIGE un prefijo REX; sin el, el
+    /// ensamblado interpreta los indices 4-7 como los high-bytes legacy
+    /// AH/CH/DH/BH, corrompiendo el valor.  Los indices extendidos (>=8)
+    /// ya fuerzan REX por su bit alto, asi que solo importan los 4-7.
+    /// En x86-32 nunca se emite REX (los high-bytes legacy son validos).
+    bool needs_rex_for_byte_reg(uint8_t reg) const {
+        if (mode32_) return false;
+        return reg >= 4 && reg <= 7;
+    }
+
     /// Construye un byte ModR/M con mod + reg + rm.
     static uint8_t modrm(uint8_t mod, uint8_t reg, uint8_t rm) {
         return static_cast<uint8_t>(((mod & 3) << 6) | ((reg & 7) << 3) |

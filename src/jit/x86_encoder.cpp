@@ -943,7 +943,12 @@ void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
         const uint8_t w = dst.width;
         if (w == 2) put8(out, 0x66);
         const bool need_rex_w = (w == 8);
-        const uint8_t rex = rex_byte(need_rex_w, src.reg, dst.reg);
+        uint8_t rex = rex_byte(need_rex_w, src.reg, dst.reg);
+        /* Byte op con SIL/DIL/BPL/SPL: forzar REX (sino seria AH/CH/etc). */
+        if (w == 1 && rex == 0 &&
+            (needs_rex_for_byte_reg(src.reg) ||
+             needs_rex_for_byte_reg(dst.reg)))
+            rex = 0x40;
         if (rex) put8(out, rex);
         put8(out, (w == 1) ? 0x88 : 0x89);
         put8(out, modrm(3, src.reg & 7, dst.reg & 7));
@@ -998,8 +1003,11 @@ void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
         const uint8_t w = dst.width;
         if (w == 2) put8(out, 0x66); /* 16-bit override */
         const bool need_rex_w = (w == 8);
-        const uint8_t rex =
+        uint8_t rex =
             rex_byte(need_rex_w, dst.reg, base, has_index ? index : 0);
+        /* Byte load a SIL/DIL/BPL/SPL: forzar REX. */
+        if (w == 1 && rex == 0 && needs_rex_for_byte_reg(dst.reg))
+            rex = 0x40;
         if (rex) put8(out, rex);
         put8(out, (w == 1) ? 0x8A : 0x8B);
         emit_modrm_mem(src, dst.reg & 7, out);
@@ -1014,8 +1022,12 @@ void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
         const uint8_t w = src.width;
         if (w == 2) put8(out, 0x66);
         const bool need_rex_w = (w == 8);
-        const uint8_t rex =
+        uint8_t rex =
             rex_byte(need_rex_w, src.reg, base, has_index ? index : 0);
+        /* Byte store desde SIL/DIL/BPL/SPL: forzar REX (sino seria
+         * AH/CH/DH/BH -> escribe el byte equivocado del registro). */
+        if (w == 1 && rex == 0 && needs_rex_for_byte_reg(src.reg))
+            rex = 0x40;
         if (rex) put8(out, rex);
         put8(out, (w == 1) ? 0x88 : 0x89);
         emit_modrm_mem(dst, src.reg & 7, out);
@@ -1289,8 +1301,11 @@ void X86Encoder::emit_setcc(MFunction & /*fn*/, const MInstr &mi,
         put8(out, 0xCC);
         return;
     }
-    /* SETcc r/m8: 0x0F 0x90+cc /0 -- NO REX.W (es 8-bit). */
-    const uint8_t rex = rex_byte(false, 0, dst.reg);
+    /* SETcc r/m8: 0x0F 0x90+cc /0 -- NO REX.W (es 8-bit).  Pero si el
+     * destino es SPL/BPL/SIL/DIL (4-7) hay que forzar REX, sino el
+     * ensamblado escribe AH/CH/DH/BH en su lugar. */
+    uint8_t rex = rex_byte(false, 0, dst.reg);
+    if (rex == 0 && needs_rex_for_byte_reg(dst.reg)) rex = 0x40;
     if (rex) put8(out, rex);
     put8(out, 0x0F);
     put8(out, 0x90 + static_cast<uint8_t>(cc));
