@@ -9030,6 +9030,27 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     const Type &dst_type = e->result_type;          // tipo destino del cast
     const Type &src_type = e->operand->result_type; // tipo del operando
 
+    // Vex Embed: cast (string)<char> -> value-string de un caracter.
+    // En native_poo_ el `string` es value-type {ptr,len,cap}; el cast
+    // construye un slot owned de 1 char (buffer malloc de 2 bytes).
+    // El resultado es TEMPORAL (sin RAII) salvo que el caller lo ligue
+    // a una variable -- lower_var_decl / build_native_operand del concat
+    // lo registran como STRING_FREE / lo liberan tras copiar.
+    if (dst_type.kind == PrimitiveKind::STRING &&
+        src_type.kind == PrimitiveKind::CHAR) {
+        if (native_poo_) {
+            // v_op es el valor del char (u8).  Construir el slot.
+            return build_native_string_from_char(v_op, e->loc.line);
+        }
+        // Path Full/JIT (StringObject GC): construir un StringObject de
+        // 1 byte via STRMAKE no esta implementado aun; reportamos el
+        // hueco sin romper Full.
+        error_at(e->loc,
+                 "(string)<char> solo soportado en compilacion nativa "
+                 "(-m aot); pendiente en el path Full");
+        return ir::IR_NO_VALUE;
+    }
+
     // Categorias.  PTR/ARRAY se tratan como pointer-like.
     auto is_ptr_like = [](const Type &t) {
         return t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY;
@@ -10432,6 +10453,15 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     is_temp = true;
                     return lower_expr(ex);
                 }
+                // Cast (string)<char>: produce un slot value-string owned
+                // SIN RAII (resultado de expresion).  Es TEMPORAL: hay que
+                // liberar su buffer tras copiar los bytes.  Sin esto el
+                // buffer del cast fuga.
+                if (ex && ex->kind == ast::NodeKind::CastExpr &&
+                    ex->result_type.kind == PrimitiveKind::STRING) {
+                    is_temp = true;
+                    return lower_expr(ex);
+                }
                 is_temp = false;
                 return lower_expr(ex);
             };
@@ -10618,11 +10648,15 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     }
 
     // Para operadores aritmeticos / bitwise / comparacion: promovemos
-    // ambos operandos al tipo comun.
+    // ambos operandos al tipo comun.  CHAR se trata como U8 (byte sin
+    // signo) para la aritmetica estilo C: `'a' + 'b'` baja como suma
+    // u8 (mismo ancho IR, zero-extend al castear a tipos mas anchos).
+    const PrimitiveKind ltk_a = char_as_u8(ltk);
+    const PrimitiveKind rtk_a = char_as_u8(rtk);
     const PrimitiveKind common =
         (ltk == PrimitiveKind::BOOL && rtk == PrimitiveKind::BOOL)
             ? PrimitiveKind::BOOL
-            : promote_arith(ltk, rtk);
+            : promote_arith(ltk_a, rtk_a);
     const ir::IrType common_ir = ir_type_from_primitive(common);
     const bool is_float = is_floating(common);
     const bool is_unsign = is_integral(common) && !is_signed_integral(common);
@@ -16229,6 +16263,15 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 // RAII los libera al exit del scope dueno (no doble-free).
                 if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
                     static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                    ex->result_type.kind == PrimitiveKind::STRING) {
+                    is_temp = true;
+                    return lower_expr(ex);
+                }
+                // Cast (string)<char>: produce un slot value-string owned
+                // SIN RAII (resultado de expresion).  Es TEMPORAL: hay que
+                // liberar su buffer tras copiar los bytes.  Sin esto el
+                // buffer del cast fuga.
+                if (ex && ex->kind == ast::NodeKind::CastExpr &&
                     ex->result_type.kind == PrimitiveKind::STRING) {
                     is_temp = true;
                     return lower_expr(ex);
@@ -21863,6 +21906,104 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     store_field(0, v_buf);
     store_field(8, emit_const(ir::IrType::I64, len, source_line));
     store_field(16, emit_const(ir::IrType::I64, cap, source_line));
+
+    return v_slot;
+}
+
+ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
+                                                      uint32_t source_line) {
+    // Vex Embed: cast (string)<char> -> value-string de UN caracter.
+    // Repr {ptr@0, len@8, cap@16} en stack (ALLOCA 24) + buffer de 2
+    // bytes en heap (el char + nul), igual patron que
+    // build_native_string_from_literal pero con 1 byte runtime.
+
+    // 1. Slot de 24 bytes en stack.
+    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_slot;
+        al.imm = 24;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+    }
+
+    // 2. Buffer en heap: RAW_ALLOC(2) (char + nul).  is_host_ptr para
+    //    que los STORE posteriores usen memoria host.
+    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_buf].is_host_ptr = true;
+    {
+        ir::IrValueId v_cap = emit_const(ir::IrType::I64, 2, source_line);
+        ir::IrInstr ra{};
+        ra.op = ir::IrOp::RAW_ALLOC;
+        ra.type = ir::IrType::PTR;
+        ra.dst = v_buf;
+        ra.operands = {v_cap};
+        ra.source_line = source_line;
+        fn_->append(current_block_, std::move(ra));
+    }
+
+    // 3. Escribir el byte del char en buf[0].  El char ya es un valor
+    //    u8 (0-255); el STORE U8 toma el byte bajo.
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_char, v_buf};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
+
+    // 4. Nul terminador en buf[1].
+    {
+        ir::IrValueId v_off = emit_const(ir::IrType::I64, 1, source_line);
+        ir::IrValueId v_dst = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_dst].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_dst;
+        ad.operands = {v_buf, v_off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+
+        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_zero, v_dst};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
+
+    // 5. Escribir los 3 campos del slot: ptr@0, len@8=1, cap@16=2.
+    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
+        ir::IrValueId v_addr = v_slot;
+        if (off > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {v_slot, v_off};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    store_field(0, v_buf);
+    store_field(8, emit_const(ir::IrType::I64, 1, source_line));
+    store_field(16, emit_const(ir::IrType::I64, 2, source_line));
 
     return v_slot;
 }

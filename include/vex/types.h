@@ -1075,6 +1075,30 @@ inline PrimitiveKind promote_arith(PrimitiveKind a, PrimitiveKind b) noexcept {
     return a; // ambos signed o ambos unsigned: da igual cual devolvamos.
 }
 
+/**
+ * @brief Mapea CHAR a U8 para las decisiones de aritmetica entera.
+ *
+ * En Vex un @c char es un byte sin signo (0-255), estilo C.  El resto
+ * del checker NO considera CHAR como numerico (is_numeric falso) para
+ * evitar coerciones implicitas no deseadas, pero la aritmetica de char
+ * (`'a' + 'b'`) debe tratarse como aritmetica u8.  Este helper traduce
+ * CHAR a U8 y deja cualquier otro tipo intacto, de modo que se puede
+ * reusar @c promote_arith y la maquinaria entera existente.
+ *
+ * @param k Tipo primitivo de entrada.
+ * @return U8 si @p k es CHAR; @p k en cualquier otro caso.
+ */
+constexpr PrimitiveKind char_as_u8(PrimitiveKind k) noexcept {
+    return k == PrimitiveKind::CHAR ? PrimitiveKind::U8 : k;
+}
+
+/**
+ * @brief @c true si @p k es CHAR o un entero (apto para aritmetica).
+ */
+constexpr bool is_char_or_integral(PrimitiveKind k) noexcept {
+    return k == PrimitiveKind::CHAR || is_integral(k);
+}
+
 } // namespace vex
 
 #endif // VEX_TYPES_H

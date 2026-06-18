@@ -1,0 +1,16 @@
+// Aritmetica de char estilo C: un `char` es un byte sin signo (0-255).
+// `'a' + 'b'` SUMA los valores y produce un char (envuelve mod 256).
+// El cast a i32 zero-extiende (char unsigned), por lo que
+// `(i32)('a' + 'b')` = 97 + 98 = 195.
+//
+// char OP char  -> char  (un solo char, como en C)
+// char OP int   -> int   (el char se promociona a u8)
+//
+// Validado por ejecucion (PE host + ELF + interp).
+
+i32 main() {
+    char a = 'a';            // 97
+    char b = 'b';            // 98
+    char c = a + b;          // 195 (char, byte sin signo)
+    return (i32) c;          // zero-extend -> 195
+}
