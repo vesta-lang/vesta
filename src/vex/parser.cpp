@@ -5060,6 +5060,17 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             idx->loc = loc;
             idx->base = std::move(expr);
             idx->index = parse_expr();
+            // String Inc 3: slice `base[a..b]` o `base[a..=b]`.  Cuando
+            // tras el limite inferior aparece `..` / `..=`, parseamos el
+            // limite superior y marcamos el IndexExpr como rango.  El
+            // type checker valida que la base sea `string` (native_poo_).
+            if (current_.kind == TokenKind::DOTDOT ||
+                current_.kind == TokenKind::DOTDOTEQ) {
+                idx->is_range = true;
+                idx->range_inclusive = (current_.kind == TokenKind::DOTDOTEQ);
+                (void)consume(); // '..' o '..='
+                idx->range_hi = parse_expr();
+            }
             (void)expect(TokenKind::RBRACKET,
                          "se esperaba ']' al cerrar el subindice");
             expr = std::move(idx);

@@ -773,6 +773,15 @@ struct IndexExpr : Expr {
     /// @c `base[index]` a la llamada @c `base.__index__(index)`.  Cadena
     /// vacia = comportamiento clasico (subscript de puntero/array).
     std::string overload_method;
+    /// String Inc 3 (native_poo_): slice `s[a..b]` (exclusivo) o
+    /// `s[a..=b]` (inclusivo).  Cuando @c is_range es true, @c index
+    /// es el limite inferior @c a y @c range_hi es el limite superior
+    /// @c b.  Hoy solo aplica al value-type `string` en modo native_poo_
+    /// (devuelve una COPIA owned de los bytes [a, b)); RAII libera la
+    /// copia.  La vista zero-copy (`borrow<string>`) llegara con borrow.
+    bool is_range = false;            ///< true para `s[a..b]` / `s[a..=b]`.
+    bool range_inclusive = false;     ///< true para `..=` (incluye b).
+    std::unique_ptr<Expr> range_hi;   ///< limite superior @c b del rango.
     IndexExpr() : Expr(NodeKind::IndexExpr) {}
 };
 

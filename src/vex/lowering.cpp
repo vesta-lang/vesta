@@ -9339,6 +9339,48 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
+    // String Inc 3: `s[i]` (char) y `s[a..b]` / `s[a..=b]` (slice copia
+    // owned) sobre el value-string nativo.  Solo en native_poo_; en
+    // Full/JIT el string es GC-managed y este path no se implementa aun.
+    if (e->base && e->base->result_type.kind == PrimitiveKind::STRING) {
+        if (!native_poo_) {
+            error_at(e->loc,
+                     "indexado/slice de string solo soportado en compilacion "
+                     "nativa (AOT Embed/Bare) por ahora");
+            return ir::IR_NO_VALUE;
+        }
+        const ir::IrValueId v_src = lower_expr(e->base.get());
+        if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        if (e->is_range) {
+            // `s[a..b]`: lo = index, hi = range_hi.
+            if (!e->index || !e->range_hi) {
+                error_at(e->loc, "slice de string con limite nulo");
+                return ir::IR_NO_VALUE;
+            }
+            ir::IrValueId v_lo = lower_expr(e->index.get());
+            ir::IrValueId v_hi = lower_expr(e->range_hi.get());
+            if (v_lo == ir::IR_NO_VALUE || v_hi == ir::IR_NO_VALUE)
+                return ir::IR_NO_VALUE;
+            // Promover ambos limites a I64.
+            v_lo = cast_if_needed(v_lo, fn_->values[v_lo].type, ir::IrType::I64,
+                                  e->loc.line);
+            v_hi = cast_if_needed(v_hi, fn_->values[v_hi].type, ir::IrType::I64,
+                                  e->loc.line);
+            return build_native_string_slice(v_src, v_lo, v_hi,
+                                             e->range_inclusive, e->loc.line);
+        }
+        // `s[i]`: el char en la posicion i.
+        if (!e->index) {
+            error_at(e->loc, "indexado de string sin indice");
+            return ir::IR_NO_VALUE;
+        }
+        ir::IrValueId v_idx = lower_expr(e->index.get());
+        if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type, ir::IrType::I64,
+                               e->loc.line);
+        return build_native_string_index_char(v_src, v_idx, e->loc.line);
+    }
+
     // Operator overloading C-2: `base[i]` (LECTURA) -> base.__index__(i)
     // cuando el type checker marco @c e->overload_method.  El receptor
     // puede ser CLASS (CALLVIRT) o STRUCT (CALL directo).  Construimos un
@@ -22995,6 +23037,182 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     store_field(16, v_cap);
 
     return v_slot;
+}
+
+ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
+                                                  ir::IrValueId v_lo,
+                                                  ir::IrValueId v_hi,
+                                                  bool inclusive,
+                                                  uint32_t source_line) {
+    // String Inc 3: `s[a..b]` (exclusivo) o `s[a..=b]` (inclusivo) ->
+    // NUEVO string owned con la copia de los bytes [a, b) (o [a, b]).
+    // Repr value-string {ptr@0,len@8,cap@16} en stack + buffer fresco en
+    // heap.  La copia usa MEMCPY (rep movsb).  Todas las ops son
+    // PURE_NATIVE/LIBC (RAW_ALLOC=malloc, MEMCPY=rep movsb).  v1 asume
+    // indices validos (a <= b <= src.len); indices negativos / OOB no
+    // soportados (mismo contrato que el resto del AOT bare).
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_addr].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {base, off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v_addr;
+    };
+    auto emit_sub = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr s{};
+        s.op = ir::IrOp::SUB;
+        s.type = ir::IrType::I64;
+        s.dst = v;
+        s.operands = {a, b};
+        s.source_line = source_line;
+        fn_->append(current_block_, std::move(s));
+        return v;
+    };
+    auto emit_add = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v;
+        ad.operands = {a, b};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v;
+    };
+
+    // 1. Cargar ptr del slot fuente (los limites a/b ya estan en regs).
+    ir::IrValueId v_src_ptr =
+        load_native_string_field(v_src, 0, /*as_host=*/true, source_line);
+
+    // 2. len = b - a  (o  b - a + 1  si es `..=` inclusivo).
+    ir::IrValueId v_len = emit_sub(v_hi, v_lo);
+    if (inclusive) {
+        ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
+        v_len = emit_add(v_len, v_one);
+    }
+    // cap = len + 1 (el nul terminador).
+    ir::IrValueId v_one2 = emit_const(ir::IrType::I64, 1, source_line);
+    ir::IrValueId v_cap = emit_add(v_len, v_one2);
+
+    // 3. Slot de 24 bytes del resultado + buffer heap (RAW_ALLOC cap).
+    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_slot;
+        al.imm = 24;
+        al.host_alloca = native_poo_;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+    }
+    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_buf].is_host_ptr = true;
+    {
+        ir::IrInstr ra{};
+        ra.op = ir::IrOp::RAW_ALLOC;
+        ra.type = ir::IrType::PTR;
+        ra.dst = v_buf;
+        ra.operands = {v_cap};
+        ra.source_line = source_line;
+        fn_->append(current_block_, std::move(ra));
+    }
+
+    // 4. Copiar len bytes desde src.ptr + a a buf[0..len) via MEMCPY.
+    ir::IrValueId v_src_off = ptr_add(v_src_ptr, v_lo);
+    {
+        ir::IrInstr mc{};
+        mc.op = ir::IrOp::MEMCPY;
+        mc.type = ir::IrType::I8;
+        mc.dst = ir::IR_NO_VALUE;
+        mc.operands = {v_buf, v_src_off, v_len}; // [0]=dst [1]=src [2]=len
+        mc.source_line = source_line;
+        fn_->append(current_block_, std::move(mc));
+    }
+
+    // 5. Nul terminador en buf[len].
+    {
+        ir::IrValueId v_dst = ptr_add(v_buf, v_len);
+        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_zero, v_dst};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
+
+    // 6. Escribir los 3 campos del slot resultado: ptr@0, len@8, cap@16.
+    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
+        ir::IrValueId v_addr = v_slot;
+        if (off > 0) {
+            ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, off, source_line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {v_slot, v_off};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    store_field(0, v_buf);
+    store_field(8, v_len);
+    store_field(16, v_cap);
+
+    return v_slot;
+}
+
+ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
+                                                       ir::IrValueId v_idx,
+                                                       uint32_t source_line) {
+    // String Inc 3: `s[i]` -> el byte en la posicion i del value-string.
+    // Carga ptr@0 del slot + LOAD u8 de [ptr+i].  El resultado es un U8
+    // zero-extended (0-255) que el type checker marca como char.  v1
+    // asume i valido (0 <= i < src.len).
+    ir::IrValueId v_ptr =
+        load_native_string_field(v_src, 0, /*as_host=*/true, source_line);
+    // addr = ptr + i (host_ptr).
+    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_addr].is_host_ptr = true;
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {v_ptr, v_idx};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    // LOAD u8: el codegen zero-extiende el byte a un registro completo.
+    ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v_byte;
+        ld.operands = {v_addr};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    return v_byte;
 }
 
 void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
