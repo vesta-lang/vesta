@@ -55,8 +55,8 @@
 
 // Tipo de descriptor de socket compatible con Windows (SOCKET) y POSIX (int)
 #ifdef _WIN32
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 typedef SOCKET vdp_sock_t;
 #else
 typedef int vdp_sock_t;
@@ -68,12 +68,12 @@ namespace distrib {
 // Estado interno de la sesion
 // ---------------------------------------------------------------------------
 enum class SessionState {
-    INIT          = 0, // recien creada, sin conexion
-    CONNECTING    = 1, // conexion TCP en progreso
-    HELLO_SENT    = 2, // VDP_HELLO enviado, esperando HELLO_ACK
-    AUTH_SENT     = 3, // VDP_AUTH_TOKEN enviado, esperando AUTH_OK
-    ACTIVE        = 4, // sesion autenticada y lista para usar
-    CLOSED        = 5, // sesion cerrada normalmente
+    INIT = 0,          // recien creada, sin conexion
+    CONNECTING = 1,    // conexion TCP en progreso
+    HELLO_SENT = 2,    // VDP_HELLO enviado, esperando HELLO_ACK
+    AUTH_SENT = 3,     // VDP_AUTH_TOKEN enviado, esperando AUTH_OK
+    ACTIVE = 4,        // sesion autenticada y lista para usar
+    CLOSED = 5,        // sesion cerrada normalmente
     SESSION_ERROR = 6, // sesion cerrada por error (ERROR es macro en Windows)
 };
 
@@ -90,14 +90,13 @@ enum class SessionState {
  * @param payload Bytes del payload (puede estar vacio).
  * @param node_idx Indice del nodo emisor en NodeRegistry.
  */
-using VdpMsgHandler = std::function<void(
-    const VdpHeader &hdr,
-    const std::vector<uint8_t> &payload,
-    uint32_t node_idx
-)>;
+using VdpMsgHandler =
+    std::function<void(const VdpHeader &hdr,
+                       const std::vector<uint8_t> &payload, uint32_t node_idx)>;
 
 /**
- * @brief Callback invocado cuando la sesion se desconecta (el hilo lector finaliza).
+ * @brief Callback invocado cuando la sesion se desconecta (el hilo lector
+ * finaliza).
  * @param node_idx Indice del nodo cuya sesion ha cerrado.
  */
 using VdpDisconnectHandler = std::function<void(uint32_t node_idx)>;
@@ -117,7 +116,7 @@ using VdpDisconnectHandler = std::function<void(uint32_t node_idx)>;
  * El hilo lector corre de forma independiente e invoca el VdpMsgHandler.
  */
 class VdpSession {
-public:
+  public:
     /**
      * @brief Construye una sesion con un socket ya aceptado (modo servidor).
      *
@@ -125,8 +124,10 @@ public:
      * Si la conexion usa TLS, @p ssl debe ser un SSL* ya tras SSL_accept().
      *
      * @param fd        Descriptor de socket ya aceptado.
-     * @param ssl       Objeto SSL si la conexion es TLS; nullptr si es TCP plano.
-     * @param node_idx  Indice del nodo en NodeRegistry (UINT32_MAX si desconocido).
+     * @param ssl       Objeto SSL si la conexion es TLS; nullptr si es TCP
+     * plano.
+     * @param node_idx  Indice del nodo en NodeRegistry (UINT32_MAX si
+     * desconocido).
      * @param local_id  ID de este nodo (para incluirlo en el HELLO_ACK).
      */
     VdpSession(vdp_sock_t fd, SSL *ssl, uint32_t node_idx, uint64_t local_id);
@@ -159,7 +160,8 @@ public:
      * @brief Conecta a un nodo remoto e inicia el handshake VDP.
      *
      * Crea un socket TCP, conecta al host:port, realiza el handshake TLS
-     * si auth.use_tls==true, y luego ejecuta el handshake VDP (HELLO -> AUTH_OK).
+     * si auth.use_tls==true, y luego ejecuta el handshake VDP (HELLO ->
+     * AUTH_OK).
      *
      * Esta llamada bloquea hasta que la sesion quede en estado ACTIVE o ERROR.
      *
@@ -169,8 +171,7 @@ public:
      * @param local_name Nombre de este nodo (para incluir en el HELLO).
      * @return true si la sesion quedo activa; false si hubo error.
      */
-    bool connect_to(const char *ip, uint16_t port,
-                    const NodeAuthConfig &auth,
+    bool connect_to(const char *ip, uint16_t port, const NodeAuthConfig &auth,
                     const char *local_name = "");
 
     // ----------------------------------------------------------------
@@ -203,8 +204,7 @@ public:
      * @param seq_num    Numero de secuencia (0 si no se espera ACK).
      * @return true si se envio correctamente.
      */
-    bool send_msg(VdpMsgType msg_type,
-                  const std::vector<uint8_t> &payload,
+    bool send_msg(VdpMsgType msg_type, const std::vector<uint8_t> &payload,
                   uint32_t seq_num = VDP_SEQ_NONE);
 
     /**
@@ -218,8 +218,7 @@ public:
      * @param seq_num   Numero de secuencia.
      * @return true si se envio correctamente.
      */
-    bool send_raw(VdpMsgType msg_type,
-                  const uint8_t *data, size_t len,
+    bool send_raw(VdpMsgType msg_type, const uint8_t *data, size_t len,
                   uint32_t seq_num = VDP_SEQ_NONE);
 
     // ----------------------------------------------------------------
@@ -233,9 +232,11 @@ public:
      * Se detiene cuando la conexion se cierra o se llama a close().
      *
      * @param handler      Callback invocado por cada paquete recibido.
-     * @param on_disconnect Callback opcional invocado al cerrar la sesion (puede ser nulo).
+     * @param on_disconnect Callback opcional invocado al cerrar la sesion
+     * (puede ser nulo).
      */
-    void start_reader(VdpMsgHandler handler, VdpDisconnectHandler on_disconnect = {});
+    void start_reader(VdpMsgHandler handler,
+                      VdpDisconnectHandler on_disconnect = {});
 
     /**
      * @brief Cierra la sesion y detiene el hilo lector.
@@ -258,7 +259,8 @@ public:
     /** @brief Indice del nodo remoto en NodeRegistry. */
     uint32_t node_idx() const { return node_idx_; }
 
-    /** @brief Actualiza el indice del nodo (necesario para sesiones entrantes). */
+    /** @brief Actualiza el indice del nodo (necesario para sesiones entrantes).
+     */
     void set_node_idx(uint32_t idx) { node_idx_ = idx; }
 
     /** @brief ID del nodo remoto (obtenido en el HELLO). */
@@ -267,18 +269,18 @@ public:
     /** @brief Incrementa el contador de secuencia y retorna el valor nuevo. */
     uint32_t next_seq() { return ++seq_counter_; }
 
-private:
-    vdp_sock_t                     fd_;             // descriptor de socket TCP subyacente
-    SSL                           *ssl_;             // objeto SSL (nullptr = sin TLS)
-    uint32_t                       node_idx_;        // indice en NodeRegistry
-    uint64_t                       local_id_;        // ID de este nodo
-    uint64_t                       remote_node_id_;  // ID del nodo remoto (del HELLO)
-    uint64_t                       session_id_;      // ID de sesion activo
-    std::atomic<SessionState>      state_{SessionState::INIT};
-    std::atomic<uint32_t>          seq_counter_{0};  // contador de secuencia monotono
-    std::mutex                     send_mtx_;        // protege el envio (thread-safe)
-    std::thread                    reader_thread_;   // hilo lector de paquetes
-    std::atomic<bool>              reader_running_{false};
+  private:
+    vdp_sock_t fd_;           // descriptor de socket TCP subyacente
+    SSL *ssl_;                // objeto SSL (nullptr = sin TLS)
+    uint32_t node_idx_;       // indice en NodeRegistry
+    uint64_t local_id_;       // ID de este nodo
+    uint64_t remote_node_id_; // ID del nodo remoto (del HELLO)
+    uint64_t session_id_;     // ID de sesion activo
+    std::atomic<SessionState> state_{SessionState::INIT};
+    std::atomic<uint32_t> seq_counter_{0}; // contador de secuencia monotono
+    std::mutex send_mtx_;                  // protege el envio (thread-safe)
+    std::thread reader_thread_;            // hilo lector de paquetes
+    std::atomic<bool> reader_running_{false};
 
     // escribe exactamente len bytes en el socket (bloqueante)
     bool write_exact_(const uint8_t *data, size_t len);
@@ -290,15 +292,16 @@ private:
     bool read_packet_(VdpHeader &hdr, std::vector<uint8_t> &payload);
 
     // construye y envia la cabecera VDP
-    bool send_header_(VdpMsgType msg_type, uint32_t payload_len, uint32_t seq_num);
+    bool send_header_(VdpMsgType msg_type, uint32_t payload_len,
+                      uint32_t seq_num);
 
     // bucle del hilo lector
-    void reader_loop_(VdpMsgHandler handler, VdpDisconnectHandler on_disconnect);
+    void reader_loop_(VdpMsgHandler handler,
+                      VdpDisconnectHandler on_disconnect);
 
     // calcula el CRAM SHA-256: SHA256(token_hash_hex || ":" || nonce_hex)
     static bool compute_cram_(const uint8_t token_hash[32],
-                               const uint8_t nonce[32],
-                               uint8_t out[32]);
+                              const uint8_t nonce[32], uint8_t out[32]);
 
     // genera bytes aleatorios seguros para el nonce
     static bool gen_random_(uint8_t *buf, size_t len);

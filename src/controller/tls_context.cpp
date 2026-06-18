@@ -1,12 +1,12 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * 
+ *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
@@ -22,7 +22,8 @@
 #include "controller/tls_context.h"
 #include <iostream>
 
-TLSContext::TLSContext(const std::string &cert_file, const std::string &key_file) {
+TLSContext::TLSContext(const std::string &cert_file,
+                       const std::string &key_file) {
     ctx = TLS_server_method() ? SSL_CTX_new(TLS_server_method()) : nullptr;
     if (!ctx) {
         std::cerr << "Error creating SSL_CTX\n";
@@ -30,8 +31,10 @@ TLSContext::TLSContext(const std::string &cert_file, const std::string &key_file
         exit(EXIT_FAILURE);
     }
 
-    if (SSL_CTX_use_certificate_file(ctx, cert_file.c_str(), SSL_FILETYPE_PEM) <= 0 ||
-        SSL_CTX_use_PrivateKey_file(ctx, key_file.c_str(), SSL_FILETYPE_PEM) <= 0) {
+    if (SSL_CTX_use_certificate_file(ctx, cert_file.c_str(),
+                                     SSL_FILETYPE_PEM) <= 0 ||
+        SSL_CTX_use_PrivateKey_file(ctx, key_file.c_str(), SSL_FILETYPE_PEM) <=
+            0) {
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }

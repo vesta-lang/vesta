@@ -49,9 +49,9 @@
  * @code
  *   RawAllocator raw;
  *
- *   uint64_t buf = raw.alloc(1024);   // reserva 1 KiB; buf == puntero host real
- *   void *p = reinterpret_cast<void *>(buf);
- *   std::memset(p, 0xAB, 1024);       // uso directo: sin wrappers
+ *   uint64_t buf = raw.alloc(1024);   // reserva 1 KiB; buf == puntero host
+ * real void *p = reinterpret_cast<void *>(buf); std::memset(p, 0xAB, 1024); //
+ * uso directo: sin wrappers
  *
  *   buf = raw.realloc(buf, 2048);     // crece a 2 KiB; buf puede cambiar
  *
@@ -61,8 +61,8 @@
  *
  * @section bytecode Instrucciones bytecode asociadas
  *
- *   ALLOC   <size>         -- Reserva <size> bytes; pone ptr en R0 (0 si falla).
- *   FREE    <reg>          -- Libera el bloque cuyo ptr esta en <reg>.
+ *   ALLOC   <size>         -- Reserva <size> bytes; pone ptr en R0 (0 si
+ * falla). FREE    <reg>          -- Libera el bloque cuyo ptr esta en <reg>.
  *   REALLOC <reg>, <size>  -- Redimensiona; pone nuevo ptr en R0.
  *
  * @section stats Estadisticas de rendimiento
@@ -87,357 +87,362 @@
 
 namespace gc {
 
-    // =========================================================================
-    // RawStats
-    // =========================================================================
+// =========================================================================
+// RawStats
+// =========================================================================
+
+/**
+ * @brief Estadisticas acumuladas del RawAllocator.
+ *
+ * Todos los campos son uint64_t sin atomics: el allocator es per-proceso
+ * y se actualiza desde un unico hilo de ejecucion VM.
+ *
+ * Los campos se leen via RawAllocator::stats() y son de solo lectura
+ * para el consumidor.
+ *
+ * Campos de asignacion:
+ *   - alloc_count   : numero total de llamadas exitosas a alloc().
+ *   - alloc_bytes   : bytes totales asignados (suma de todos los alloc).
+ *
+ * Campos de liberacion:
+ *   - free_count    : numero total de llamadas exitosas a free().
+ *   - freed_bytes   : bytes totales liberados (suma de todos los free).
+ *
+ * Campos de reajuste:
+ *   - realloc_count : numero de llamadas a realloc() (incluye caso
+ * new_size==0).
+ *
+ * Pico de uso:
+ *   - peak_bytes    : maximo de bytes vivos simultaneamente (high-water mark).
+ *                     Util para dimensionar el presupuesto de memoria del
+ * proceso.
+ *
+ * @note realloc() tambien incrementa alloc_count y free_count porque
+ *       implementa alloc-nuevo + free-viejo internamente.
+ */
+struct RawStats {
+    uint64_t alloc_count = 0;   ///< llamadas exitosas a alloc()
+    uint64_t alloc_bytes = 0;   ///< bytes asignados acumulados
+    uint64_t free_count = 0;    ///< llamadas exitosas a free()
+    uint64_t freed_bytes = 0;   ///< bytes liberados acumulados
+    uint64_t realloc_count = 0; ///< llamadas a realloc() ejecutadas
+    uint64_t peak_bytes = 0;    ///< maximo bytes vivos en cualquier instante
+};
+
+// =========================================================================
+// RawAllocator
+// =========================================================================
+
+/**
+ * @brief Allocator manual de memoria contigua para interoperabilidad nativa.
+ *
+ * Reserva bloques de bytes en el espacio de direcciones del host usando
+ * vm::allocate_memory() / vm::free_memory().  Cada bloque esta en un rango
+ * contiguo unico, directamente pasable a funciones C (FFI) sin conversion.
+ *
+ * @par Modelo de propiedad
+ *
+ * El RawAllocator es dueno de todos los bloques hasta que se liberen
+ * explicitamente con free() o hasta que el destructor llame free_all().
+ * No hay GC automatico: si el bytecode pierde la referencia al ptr sin
+ * llamar a FREE, el bloque queda vivo hasta que el proceso termine.
+ *
+ * @par Garantia de contiguidad
+ *
+ * Para cualquier bloque de N bytes retornado por alloc(N):
+ *   - bytes[0..N-1] son accesibles como un array C normal.
+ *   - No hay huecos ni remapeos internos entre paginas.
+ *   - El puntero es valido para pasar a memcpy, WriteFile, SSL_write, etc.
+ *
+ * @par Uso tipico desde el ejecutor de bytecode
+ *
+ * @code
+ *   // ALLOC 256   -> R0
+ *   uint64_t ptr = process->raw_alloc.alloc(256);
+ *   process->registers.regs[0] = ptr;
+ *
+ *   // FREE R0
+ *   uint64_t ptr = process->registers.regs[0].raw();
+ *   process->raw_alloc.free(ptr);
+ * @endcode
+ *
+ * @note No copiable ni movible.  Cada proceso crea su propia instancia.
+ */
+class RawAllocator {
+  public:
+    // ---------------------------------------------------------------------
+    // Constructor / destructor
+    // ---------------------------------------------------------------------
 
     /**
-     * @brief Estadisticas acumuladas del RawAllocator.
+     * @brief Constructor por defecto.
      *
-     * Todos los campos son uint64_t sin atomics: el allocator es per-proceso
-     * y se actualiza desde un unico hilo de ejecucion VM.
-     *
-     * Los campos se leen via RawAllocator::stats() y son de solo lectura
-     * para el consumidor.
-     *
-     * Campos de asignacion:
-     *   - alloc_count   : numero total de llamadas exitosas a alloc().
-     *   - alloc_bytes   : bytes totales asignados (suma de todos los alloc).
-     *
-     * Campos de liberacion:
-     *   - free_count    : numero total de llamadas exitosas a free().
-     *   - freed_bytes   : bytes totales liberados (suma de todos los free).
-     *
-     * Campos de reajuste:
-     *   - realloc_count : numero de llamadas a realloc() (incluye caso new_size==0).
-     *
-     * Pico de uso:
-     *   - peak_bytes    : maximo de bytes vivos simultaneamente (high-water mark).
-     *                     Util para dimensionar el presupuesto de memoria del proceso.
-     *
-     * @note realloc() tambien incrementa alloc_count y free_count porque
-     *       implementa alloc-nuevo + free-viejo internamente.
+     * No reserva memoria en construccion; el allocator comienza vacio.
      */
-    struct RawStats {
-        uint64_t alloc_count   = 0; ///< llamadas exitosas a alloc()
-        uint64_t alloc_bytes   = 0; ///< bytes asignados acumulados
-        uint64_t free_count    = 0; ///< llamadas exitosas a free()
-        uint64_t freed_bytes   = 0; ///< bytes liberados acumulados
-        uint64_t realloc_count = 0; ///< llamadas a realloc() ejecutadas
-        uint64_t peak_bytes    = 0; ///< maximo bytes vivos en cualquier instante
-    };
-
-    // =========================================================================
-    // RawAllocator
-    // =========================================================================
+    RawAllocator() = default;
 
     /**
-     * @brief Allocator manual de memoria contigua para interoperabilidad nativa.
+     * @brief Destructor.
      *
-     * Reserva bloques de bytes en el espacio de direcciones del host usando
-     * vm::allocate_memory() / vm::free_memory().  Cada bloque esta en un rango
-     * contiguo unico, directamente pasable a funciones C (FFI) sin conversion.
-     *
-     * @par Modelo de propiedad
-     *
-     * El RawAllocator es dueno de todos los bloques hasta que se liberen
-     * explicitamente con free() o hasta que el destructor llame free_all().
-     * No hay GC automatico: si el bytecode pierde la referencia al ptr sin
-     * llamar a FREE, el bloque queda vivo hasta que el proceso termine.
-     *
-     * @par Garantia de contiguidad
-     *
-     * Para cualquier bloque de N bytes retornado por alloc(N):
-     *   - bytes[0..N-1] son accesibles como un array C normal.
-     *   - No hay huecos ni remapeos internos entre paginas.
-     *   - El puntero es valido para pasar a memcpy, WriteFile, SSL_write, etc.
-     *
-     * @par Uso tipico desde el ejecutor de bytecode
-     *
-     * @code
-     *   // ALLOC 256   -> R0
-     *   uint64_t ptr = process->raw_alloc.alloc(256);
-     *   process->registers.regs[0] = ptr;
-     *
-     *   // FREE R0
-     *   uint64_t ptr = process->registers.regs[0].raw();
-     *   process->raw_alloc.free(ptr);
-     * @endcode
-     *
-     * @note No copiable ni movible.  Cada proceso crea su propia instancia.
+     * Llama a free_all() para liberar cualquier bloque pendiente.
+     * Es seguro destruir el allocator aunque queden bloques sin liberar;
+     * no hay double-free porque el mapa se vacia en free_all().
      */
-    class RawAllocator {
-    public:
+    ~RawAllocator() { free_all(); }
 
-        // ---------------------------------------------------------------------
-        // Constructor / destructor
-        // ---------------------------------------------------------------------
+    RawAllocator(const RawAllocator &) = delete;            ///< No copiable
+    RawAllocator &operator=(const RawAllocator &) = delete; ///< No asignable
 
-        /**
-         * @brief Constructor por defecto.
-         *
-         * No reserva memoria en construccion; el allocator comienza vacio.
-         */
-        RawAllocator()  = default;
+    // ---------------------------------------------------------------------
+    // API publica
+    // ---------------------------------------------------------------------
 
-        /**
-         * @brief Destructor.
-         *
-         * Llama a free_all() para liberar cualquier bloque pendiente.
-         * Es seguro destruir el allocator aunque queden bloques sin liberar;
-         * no hay double-free porque el mapa se vacia en free_all().
-         */
-        ~RawAllocator() { free_all(); }
+    /**
+     * @brief Reserva un bloque contiguo de `size` bytes con permisos
+     * READ|WRITE.
+     *
+     * Llama a vm::allocate_memory(size, READ|WRITE) que invoca VirtualAlloc
+     * o mmap con el tamano exacto.  El contenido se inicializa a cero.
+     *
+     * El valor de retorno es la direccion host real del bloque, codificada
+     * como uint64_t para que la VM pueda almacenarla en un registro de 64 bits
+     * y pasarla directamente a funciones nativas.
+     *
+     * @param size Numero de bytes a reservar.  Si es 0, retorna 0 sin error.
+     * @return Puntero host real como uint64_t.  0 si la asignacion falla.
+     *
+     * @note Actualiza stats_.alloc_count, stats_.alloc_bytes y
+     * stats_.peak_bytes.
+     *
+     * @warning El puntero retornado es valido solo mientras no se llame a
+     *          free() o realloc() con ese mismo valor.  Guardar una copia
+     *          y seguir usando el original tras free() es UB.
+     */
+    uint64_t alloc(size_t size);
 
-        RawAllocator(const RawAllocator &)            = delete; ///< No copiable
-        RawAllocator &operator=(const RawAllocator &) = delete; ///< No asignable
+    /**
+     * @brief Libera el bloque cuya direccion host es `ptr`.
+     *
+     * Si `ptr` no fue asignado por este allocator (o ya fue liberado),
+     * la funcion retorna false sin hacer nada: no hay double-free.
+     *
+     * @param ptr Puntero host como uint64_t (el mismo valor retornado por
+     * alloc).
+     * @return true si el bloque existia y se libero; false en caso contrario.
+     *
+     * @note Actualiza stats_.free_count y stats_.freed_bytes.
+     */
+    bool free(uint64_t ptr);
 
-        // ---------------------------------------------------------------------
-        // API publica
-        // ---------------------------------------------------------------------
+    /**
+     * @brief Redimensiona el bloque en `ptr` a `new_size` bytes.
+     *
+     * Algoritmo:
+     *   1. Reserva un nuevo bloque de new_size bytes.
+     *   2. Copia min(old_size, new_size) bytes del bloque original.
+     *   3. Si new_size > old_size, rellena el resto con ceros.
+     *   4. Libera el bloque original.
+     *
+     * Casos especiales:
+     *   - realloc(0, N)     : equivale a alloc(N).
+     *   - realloc(ptr, 0)   : equivale a free(ptr); retorna 0.
+     *   - new_ptr != ptr siempre (no hay reajuste in-place).
+     *
+     * El nuevo bloque conserva la garantia de contiguidad.
+     *
+     * @param ptr      Puntero host del bloque a redimensionar (puede ser 0).
+     * @param new_size Nuevo tamano en bytes.
+     * @return Nuevo puntero host como uint64_t.  0 si la asignacion falla.
+     *
+     * @note Incrementa stats_.realloc_count siempre, incluso en el caso
+     *       free-por-realloc (new_size == 0).
+     */
+    uint64_t realloc(uint64_t ptr, size_t new_size);
 
-        /**
-         * @brief Reserva un bloque contiguo de `size` bytes con permisos READ|WRITE.
-         *
-         * Llama a vm::allocate_memory(size, READ|WRITE) que invoca VirtualAlloc
-         * o mmap con el tamano exacto.  El contenido se inicializa a cero.
-         *
-         * El valor de retorno es la direccion host real del bloque, codificada
-         * como uint64_t para que la VM pueda almacenarla en un registro de 64 bits
-         * y pasarla directamente a funciones nativas.
-         *
-         * @param size Numero de bytes a reservar.  Si es 0, retorna 0 sin error.
-         * @return Puntero host real como uint64_t.  0 si la asignacion falla.
-         *
-         * @note Actualiza stats_.alloc_count, stats_.alloc_bytes y stats_.peak_bytes.
-         *
-         * @warning El puntero retornado es valido solo mientras no se llame a
-         *          free() o realloc() con ese mismo valor.  Guardar una copia
-         *          y seguir usando el original tras free() es UB.
-         */
-        uint64_t alloc(size_t size);
+    /**
+     * @brief Libera todos los bloques activos.
+     *
+     * Itera el mapa interno y llama a vm::free_memory() por cada entrada.
+     * Al finalizar, el allocator queda vacio (como recien construido).
+     *
+     * @note Llamado automaticamente por el destructor.
+     * @note Actualiza stats_.free_count y stats_.freed_bytes por cada bloque.
+     */
+    void free_all();
 
-        /**
-         * @brief Libera el bloque cuya direccion host es `ptr`.
-         *
-         * Si `ptr` no fue asignado por este allocator (o ya fue liberado),
-         * la funcion retorna false sin hacer nada: no hay double-free.
-         *
-         * @param ptr Puntero host como uint64_t (el mismo valor retornado por alloc).
-         * @return true si el bloque existia y se libero; false en caso contrario.
-         *
-         * @note Actualiza stats_.free_count y stats_.freed_bytes.
-         */
-        bool free(uint64_t ptr);
+    // ---------------------------------------------------------------------
+    // Consultas
+    // ---------------------------------------------------------------------
 
-        /**
-         * @brief Redimensiona el bloque en `ptr` a `new_size` bytes.
-         *
-         * Algoritmo:
-         *   1. Reserva un nuevo bloque de new_size bytes.
-         *   2. Copia min(old_size, new_size) bytes del bloque original.
-         *   3. Si new_size > old_size, rellena el resto con ceros.
-         *   4. Libera el bloque original.
-         *
-         * Casos especiales:
-         *   - realloc(0, N)     : equivale a alloc(N).
-         *   - realloc(ptr, 0)   : equivale a free(ptr); retorna 0.
-         *   - new_ptr != ptr siempre (no hay reajuste in-place).
-         *
-         * El nuevo bloque conserva la garantia de contiguidad.
-         *
-         * @param ptr      Puntero host del bloque a redimensionar (puede ser 0).
-         * @param new_size Nuevo tamano en bytes.
-         * @return Nuevo puntero host como uint64_t.  0 si la asignacion falla.
-         *
-         * @note Incrementa stats_.realloc_count siempre, incluso en el caso
-         *       free-por-realloc (new_size == 0).
-         */
-        uint64_t realloc(uint64_t ptr, size_t new_size);
+    /**
+     * @brief Bytes totales actualmente vivos (suma de todos los bloques
+     * activos).
+     * @return Tamano acumulado en bytes.
+     */
+    size_t total_allocated() const { return total_bytes_; }
 
-        /**
-         * @brief Libera todos los bloques activos.
-         *
-         * Itera el mapa interno y llama a vm::free_memory() por cada entrada.
-         * Al finalizar, el allocator queda vacio (como recien construido).
-         *
-         * @note Llamado automaticamente por el destructor.
-         * @note Actualiza stats_.free_count y stats_.freed_bytes por cada bloque.
-         */
-        void free_all();
+    /**
+     * @brief Numero de bloques activos (aun no liberados).
+     * @return Conteo de entradas en el mapa interno.
+     */
+    size_t block_count() const { return allocations_.size(); }
 
-        // ---------------------------------------------------------------------
-        // Consultas
-        // ---------------------------------------------------------------------
+    /**
+     * @brief Referencia de solo lectura a las estadisticas acumuladas.
+     *
+     * Las estadisticas persisten entre llamadas y nunca se reinician
+     * durante la vida del allocator.  Son acumulativas desde la
+     * construccion hasta la destruccion del objeto.
+     *
+     * @return Referencia constante a RawStats.
+     */
+    const RawStats &stats() const { return stats_; }
 
-        /**
-         * @brief Bytes totales actualmente vivos (suma de todos los bloques activos).
-         * @return Tamano acumulado en bytes.
-         */
-        size_t total_allocated() const { return total_bytes_; }
+    // ---------------------------------------------------------------------
+    // Soporte para el inline-alloc del JIT (Phase D.7 perf, 2026-06-06).
+    //
+    // El JIT inline-a el fast-path del slab (pop del free list por size
+    // class) sin CALL al runtime.  Necesita los offsets de los miembros
+    // privados @c slab_free_list_ y @c total_bytes_ (offsetof sobre
+    // miembros propios es legal aqui, dentro de la clase) y las constantes
+    // del slab (SLAB_SIZES, slab_class_for).  El selector emite el pop +
+    // zero-init + stat, con fallback CALL @c alloc cuando el free list de
+    // esa clase esta vacio (grow).  Ver vreg_select.cpp::RAW_ALLOC.
+    // ---------------------------------------------------------------------
+    static size_t jit_slab_free_list_offset() noexcept {
+        return offsetof(RawAllocator, slab_free_list_);
+    }
+    static size_t jit_total_bytes_offset() noexcept {
+        return offsetof(RawAllocator, total_bytes_);
+    }
+    static constexpr size_t jit_slab_classes() noexcept { return SLAB_CLASSES; }
+    static constexpr size_t jit_slab_size(size_t i) noexcept {
+        return (i < SLAB_CLASSES) ? SLAB_SIZES[i] : 0;
+    }
+    static constexpr size_t jit_slab_class_for(size_t n) noexcept {
+        return slab_class_for(n);
+    }
 
-        /**
-         * @brief Numero de bloques activos (aun no liberados).
-         * @return Conteo de entradas en el mapa interno.
-         */
-        size_t block_count() const { return allocations_.size(); }
+  private:
+    // ---------------------------------------------------------------------
+    // Tipos internos
+    // ---------------------------------------------------------------------
 
-        /**
-         * @brief Referencia de solo lectura a las estadisticas acumuladas.
-         *
-         * Las estadisticas persisten entre llamadas y nunca se reinician
-         * durante la vida del allocator.  Son acumulativas desde la
-         * construccion hasta la destruccion del objeto.
-         *
-         * @return Referencia constante a RawStats.
-         */
-        const RawStats &stats() const { return stats_; }
-
-        // ---------------------------------------------------------------------
-        // Soporte para el inline-alloc del JIT (Phase D.7 perf, 2026-06-06).
-        //
-        // El JIT inline-a el fast-path del slab (pop del free list por size
-        // class) sin CALL al runtime.  Necesita los offsets de los miembros
-        // privados @c slab_free_list_ y @c total_bytes_ (offsetof sobre
-        // miembros propios es legal aqui, dentro de la clase) y las constantes
-        // del slab (SLAB_SIZES, slab_class_for).  El selector emite el pop +
-        // zero-init + stat, con fallback CALL @c alloc cuando el free list de
-        // esa clase esta vacio (grow).  Ver vreg_select.cpp::RAW_ALLOC.
-        // ---------------------------------------------------------------------
-        static size_t jit_slab_free_list_offset() noexcept {
-            return offsetof(RawAllocator, slab_free_list_);
-        }
-        static size_t jit_total_bytes_offset() noexcept {
-            return offsetof(RawAllocator, total_bytes_);
-        }
-        static constexpr size_t jit_slab_classes() noexcept { return SLAB_CLASSES; }
-        static constexpr size_t jit_slab_size(size_t i) noexcept {
-            return (i < SLAB_CLASSES) ? SLAB_SIZES[i] : 0;
-        }
-        static constexpr size_t jit_slab_class_for(size_t n) noexcept {
-            return slab_class_for(n);
-        }
-
-    private:
-
-        // ---------------------------------------------------------------------
-        // Tipos internos
-        // ---------------------------------------------------------------------
-
-        /**
-         * @brief Metadatos de un bloque asignado.
-         *
-         * Almacenado en el mapa interno indexado por el puntero host (uint64_t).
-         * El campo host_ptr es redundante con la clave pero permite pasar el
-         * puntero tipado a vm::free_memory() sin reinterpret_cast en el sitio.
-         */
-        struct AllocRecord {
-            void  *host_ptr; ///< puntero real del bloque (== clave del mapa)
-            size_t size;     ///< tamano solicitado en bytes
-        };
-
-        // ---------------------------------------------------------------------
-        // Estado interno
-        // ---------------------------------------------------------------------
-
-        /**
-         * Mapa de bloques activos: puntero host (uint64_t) -> metadatos.
-         *
-         * Se usa unordered_map para busqueda O(1) en free() y realloc().
-         * La clave es el uint64_t retornado por alloc() / realloc().
-         */
-        std::unordered_map<uint64_t, AllocRecord> allocations_;
-
-        size_t   total_bytes_ = 0; ///< bytes vivos actualmente (suma de AllocRecord::size)
-        RawStats stats_;           ///< contadores de uso (ver RawStats)
-
-        // ---------------------------------------------------------------------
-        // Slab allocator (Sprint mem-loop-fix 2026-06-02)
-        // ---------------------------------------------------------------------
-        /// @brief Numero de size classes del slab.  Cubre 16, 32, 64, 128,
-        /// 256, 512, 1024 bytes (potencias de 2).  Cualquier alloc <= 1024
-        /// pasa por slab; > 1024 cae al path tradicional (VirtualAlloc).
-        ///
-        /// Bottleneck arreglado: bench mem_malloc_free (5M iter de
-        /// malloc(96) + free) pasaba de 20s -> ~50-100ms al evitar
-        /// 10M syscalls VirtualAlloc/VirtualFree.
-        static constexpr size_t SLAB_CLASSES = 7;
-        static constexpr size_t SLAB_SIZES[SLAB_CLASSES] = {
-            16, 32, 64, 128, 256, 512, 1024,
-        };
-        /// @brief Tamano del chunk OS por slab class.  Cada chunk se
-        /// trocea en N slots del tamano de la clase.  64 KB es el
-        /// sweet spot: pocos chunks por clase, baja fragmentacion.
-        static constexpr size_t SLAB_CHUNK_BYTES = 65536;
-
-        /// @brief Encabezado del slot del slab.  Almacena el size_class
-        /// del slot para que @c free pueda devolverlo al free list
-        /// correcto sin lookup en el mapa.  Se aloca AL INICIO del slot
-        /// (offset 0); el ptr devuelto al usuario apunta despues del header.
-        struct SlabSlotHeader {
-            uint8_t  size_class_idx; ///< indice en SLAB_SIZES
-            uint8_t  pad[7];         ///< alinear a 8 bytes (header total = 8)
-        };
-        static_assert(sizeof(SlabSlotHeader) == 8,
-                      "SlabSlotHeader debe ser 8 bytes para alinear payload");
-
-        /// @brief Nodo del free list intrusivo (vive dentro del slot
-        /// cuando esta libre).  Sobrescribe el payload del slot; en
-        /// @c alloc se vuelve a usar como payload.  LIFO O(1).
-        struct SlabFreeNode {
-            SlabFreeNode *next;
-        };
-
-        /// @brief Free list por size class.  Cabeza LIFO; @c free push,
-        /// @c alloc pop.  Inicialmente nullptr; @c slab_grow_class
-        /// aloca un chunk del SO + trocea + thread.
-        SlabFreeNode *slab_free_list_[SLAB_CLASSES] = {nullptr};
-
-        /// @brief Metadata de un chunk del slab.  Sprint mem-perf
-        /// (2026-06-02): eliminamos @c slab_payload_to_class_ (unordered_map
-        /// costaba ~150-200 ns por insert/erase).  Ahora @c free localiza
-        /// el chunk via binary search sobre @c slab_chunks_sorted_ y lee
-        /// el class_idx de la entry del chunk.  Mantiene el vector
-        /// ordenado por @c base para que el lookup sea O(log N_chunks).
-        struct SlabChunkInfo {
-            uint64_t base;       ///< chunk_base (host_ptr cast a u64)
-            uint64_t end;        ///< chunk_base + chunk_size (exclusivo)
-            uint8_t  class_idx;  ///< indice en SLAB_SIZES
-            uint8_t  _pad[7];    ///< alinear a 24 bytes para cache locality
-        };
-        static_assert(sizeof(SlabChunkInfo) == 24,
-                      "SlabChunkInfo debe ser 24 bytes para cache locality");
-
-        /// @brief Vector de chunks del slab, SIEMPRE ORDENADO por
-        /// @c base ascendente.  @c slab_grow_class anyade y reordena
-        /// (inserts son raros: ~1 por cada 500+ allocs del mismo class).
-        /// @c free hace binary search para encontrar el chunk que
-        /// contiene un ptr dado.
-        std::vector<SlabChunkInfo> slab_chunks_sorted_;
-
-        /// @brief Cache del env var @c VESTA_NO_SLAB para evitar
-        /// @c getenv en el hot path del alloc.  Valor:
-        ///   0 = no leido aun (lazy init en primera llamada)
-        ///   1 = slab habilitado (default)
-        ///   2 = slab deshabilitado (env var seteada)
-        mutable uint8_t slab_env_cache_ = 0;
-
-        // ---------------------------------------------------------------------
-        // Helpers del slab (privados)
-        // ---------------------------------------------------------------------
-        /// @brief Encuentra el indice de size class apropiado para @p size.
-        /// @return indice valido o SIZE_MAX si size > SLAB_SIZES[ultimo].
-        static constexpr size_t slab_class_for(size_t size) noexcept {
-            for (size_t i = 0; i < SLAB_CLASSES; ++i) {
-                if (size <= SLAB_SIZES[i]) return i;
-            }
-            return SIZE_MAX;
-        }
-        /// @brief Aloca un chunk OS + trocea + push al free list.
-        bool slab_grow_class(size_t class_idx);
-        /// @brief Libera todos los chunks del slab.  Llamado por @c free_all.
-        void slab_free_all();
+    /**
+     * @brief Metadatos de un bloque asignado.
+     *
+     * Almacenado en el mapa interno indexado por el puntero host (uint64_t).
+     * El campo host_ptr es redundante con la clave pero permite pasar el
+     * puntero tipado a vm::free_memory() sin reinterpret_cast en el sitio.
+     */
+    struct AllocRecord {
+        void *host_ptr; ///< puntero real del bloque (== clave del mapa)
+        size_t size;    ///< tamano solicitado en bytes
     };
+
+    // ---------------------------------------------------------------------
+    // Estado interno
+    // ---------------------------------------------------------------------
+
+    /**
+     * Mapa de bloques activos: puntero host (uint64_t) -> metadatos.
+     *
+     * Se usa unordered_map para busqueda O(1) en free() y realloc().
+     * La clave es el uint64_t retornado por alloc() / realloc().
+     */
+    std::unordered_map<uint64_t, AllocRecord> allocations_;
+
+    size_t total_bytes_ =
+        0;           ///< bytes vivos actualmente (suma de AllocRecord::size)
+    RawStats stats_; ///< contadores de uso (ver RawStats)
+
+    // ---------------------------------------------------------------------
+    // Slab allocator (Sprint mem-loop-fix 2026-06-02)
+    // ---------------------------------------------------------------------
+    /// @brief Numero de size classes del slab.  Cubre 16, 32, 64, 128,
+    /// 256, 512, 1024 bytes (potencias de 2).  Cualquier alloc <= 1024
+    /// pasa por slab; > 1024 cae al path tradicional (VirtualAlloc).
+    ///
+    /// Bottleneck arreglado: bench mem_malloc_free (5M iter de
+    /// malloc(96) + free) pasaba de 20s -> ~50-100ms al evitar
+    /// 10M syscalls VirtualAlloc/VirtualFree.
+    static constexpr size_t SLAB_CLASSES = 7;
+    static constexpr size_t SLAB_SIZES[SLAB_CLASSES] = {
+        16, 32, 64, 128, 256, 512, 1024,
+    };
+    /// @brief Tamano del chunk OS por slab class.  Cada chunk se
+    /// trocea en N slots del tamano de la clase.  64 KB es el
+    /// sweet spot: pocos chunks por clase, baja fragmentacion.
+    static constexpr size_t SLAB_CHUNK_BYTES = 65536;
+
+    /// @brief Encabezado del slot del slab.  Almacena el size_class
+    /// del slot para que @c free pueda devolverlo al free list
+    /// correcto sin lookup en el mapa.  Se aloca AL INICIO del slot
+    /// (offset 0); el ptr devuelto al usuario apunta despues del header.
+    struct SlabSlotHeader {
+        uint8_t size_class_idx; ///< indice en SLAB_SIZES
+        uint8_t pad[7];         ///< alinear a 8 bytes (header total = 8)
+    };
+    static_assert(sizeof(SlabSlotHeader) == 8,
+                  "SlabSlotHeader debe ser 8 bytes para alinear payload");
+
+    /// @brief Nodo del free list intrusivo (vive dentro del slot
+    /// cuando esta libre).  Sobrescribe el payload del slot; en
+    /// @c alloc se vuelve a usar como payload.  LIFO O(1).
+    struct SlabFreeNode {
+        SlabFreeNode *next;
+    };
+
+    /// @brief Free list por size class.  Cabeza LIFO; @c free push,
+    /// @c alloc pop.  Inicialmente nullptr; @c slab_grow_class
+    /// aloca un chunk del SO + trocea + thread.
+    SlabFreeNode *slab_free_list_[SLAB_CLASSES] = {nullptr};
+
+    /// @brief Metadata de un chunk del slab.  Sprint mem-perf
+    /// (2026-06-02): eliminamos @c slab_payload_to_class_ (unordered_map
+    /// costaba ~150-200 ns por insert/erase).  Ahora @c free localiza
+    /// el chunk via binary search sobre @c slab_chunks_sorted_ y lee
+    /// el class_idx de la entry del chunk.  Mantiene el vector
+    /// ordenado por @c base para que el lookup sea O(log N_chunks).
+    struct SlabChunkInfo {
+        uint64_t base;     ///< chunk_base (host_ptr cast a u64)
+        uint64_t end;      ///< chunk_base + chunk_size (exclusivo)
+        uint8_t class_idx; ///< indice en SLAB_SIZES
+        uint8_t _pad[7];   ///< alinear a 24 bytes para cache locality
+    };
+    static_assert(sizeof(SlabChunkInfo) == 24,
+                  "SlabChunkInfo debe ser 24 bytes para cache locality");
+
+    /// @brief Vector de chunks del slab, SIEMPRE ORDENADO por
+    /// @c base ascendente.  @c slab_grow_class anyade y reordena
+    /// (inserts son raros: ~1 por cada 500+ allocs del mismo class).
+    /// @c free hace binary search para encontrar el chunk que
+    /// contiene un ptr dado.
+    std::vector<SlabChunkInfo> slab_chunks_sorted_;
+
+    /// @brief Cache del env var @c VESTA_NO_SLAB para evitar
+    /// @c getenv en el hot path del alloc.  Valor:
+    ///   0 = no leido aun (lazy init en primera llamada)
+    ///   1 = slab habilitado (default)
+    ///   2 = slab deshabilitado (env var seteada)
+    mutable uint8_t slab_env_cache_ = 0;
+
+    // ---------------------------------------------------------------------
+    // Helpers del slab (privados)
+    // ---------------------------------------------------------------------
+    /// @brief Encuentra el indice de size class apropiado para @p size.
+    /// @return indice valido o SIZE_MAX si size > SLAB_SIZES[ultimo].
+    static constexpr size_t slab_class_for(size_t size) noexcept {
+        for (size_t i = 0; i < SLAB_CLASSES; ++i) {
+            if (size <= SLAB_SIZES[i]) return i;
+        }
+        return SIZE_MAX;
+    }
+    /// @brief Aloca un chunk OS + trocea + push al free list.
+    bool slab_grow_class(size_t class_idx);
+    /// @brief Libera todos los chunks del slab.  Llamado por @c free_all.
+    void slab_free_all();
+};
 
 } // namespace gc
 

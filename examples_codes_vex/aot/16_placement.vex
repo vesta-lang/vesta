@@ -1,0 +1,13 @@
+// AOT: control de ubicacion de secciones en .bin (@at / @order).
+//   @order(N): orden relativo de la seccion (menor primero).
+//   @at(N):    offset absoluto fijo en la imagen (rellena el hueco con ceros).
+// Ej: cabecera primero, cuerpo despues, y una firma fija en el offset 512.
+
+@section(".header") @order(0)
+bytes header { db "HDR!", 0x01 }      // 5 bytes en offset 0
+
+@section(".body") @order(1)
+bytes body { dd 0xAABBCCDD }          // 4 bytes tras la cabecera (offset 5)
+
+@section(".sig") @at(512)
+bytes sig { db 0x55, 0xAA }           // firma fija en el offset 512

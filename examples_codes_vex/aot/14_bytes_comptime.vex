@@ -1,0 +1,17 @@
+// AOT Inc 3b: operandos comptime en bloques `bytes` (combinar las dos
+// sintaxis: bloque NASM + arrays comptime tipados).  Un operando puede ser
+// un comptime const escalar, un comptime array (se expande) o una funcion.
+
+comptime u32 MAGIC = 0xDEADBEEF;
+comptime u8[] palette = {1, 2, 3, 4};
+
+bytes header {
+    dd MAGIC                   // 4 bytes: ef be ad de (comptime const escalar)
+    db palette                 // 4 bytes: 01 02 03 04 (comptime array, 1B c/u)
+    dq main                    // 8 bytes: reloc -> VA de main
+    dw 0x1234                  // 2 bytes literal: 34 12
+}
+
+i32 main() {
+    return 0x42;
+}

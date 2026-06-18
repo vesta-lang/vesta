@@ -42,10 +42,11 @@
  * @brief Activa el mensaje de carga del modulo en vesta_init cuando vale 1.
  *
  * Definir como 1 para depuracion; dejar en 0 para produccion.
- * Se puede sobreescribir desde la linea de compilacion con -DVESTA_MATH_DEBUG=1.
+ * Se puede sobreescribir desde la linea de compilacion con
+ * -DVESTA_MATH_DEBUG=1.
  */
 #ifndef VESTA_MATH_DEBUG
-#  define VESTA_MATH_DEBUG 0
+#define VESTA_MATH_DEBUG 0
 #endif
 
 #include "../../../include/ffi/vesta_plugin.h"
@@ -95,7 +96,7 @@ VESTA_PLUGIN_EXPORT void vesta_init(const VestaPluginAPI *api) {
 #if VESTA_MATH_DEBUG
     if (api) api->log("[vesta_math] cargado");
 #else
-    (void) api;
+    (void)api;
 #endif
 }
 
@@ -135,8 +136,8 @@ VESTA_PLUGIN_EXPORT uint64_t vmath_pow(uint64_t base_bits, uint64_t exp_bits) {
  * @return   |n| como uint64_t.
  */
 VESTA_PLUGIN_EXPORT uint64_t vmath_abs(uint64_t n) {
-    int64_t s = (int64_t) n;
-    return (uint64_t) (s < 0 ? -s : s);
+    int64_t s = (int64_t)n;
+    return (uint64_t)(s < 0 ? -s : s);
 }
 
 /**
@@ -345,10 +346,11 @@ VESTA_PLUGIN_EXPORT uint64_t vmath_ilog2(uint64_t n) {
 #elif defined(_MSC_VER)
     unsigned long idx = 0;
     _BitScanReverse64(&idx, n);
-    return (uint64_t) idx;
+    return (uint64_t)idx;
 #else
     uint64_t r = 0;
-    while (n >>= 1) ++r;
+    while (n >>= 1)
+        ++r;
     return r;
 #endif
 }
@@ -356,12 +358,15 @@ VESTA_PLUGIN_EXPORT uint64_t vmath_ilog2(uint64_t n) {
 /** @brief Cuenta los bits a 1 en un u64 (popcount/Hamming weight). */
 VESTA_PLUGIN_EXPORT uint64_t vmath_popcount(uint64_t n) {
 #if defined(__GNUC__) || defined(__clang__)
-    return (uint64_t) __builtin_popcountll(n);
+    return (uint64_t)__builtin_popcountll(n);
 #elif defined(_MSC_VER)
-    return (uint64_t) __popcnt64(n);
+    return (uint64_t)__popcnt64(n);
 #else
     uint64_t c = 0;
-    while (n) { c += n & 1; n >>= 1; }
+    while (n) {
+        c += n & 1;
+        n >>= 1;
+    }
     return c;
 #endif
 }
@@ -370,14 +375,17 @@ VESTA_PLUGIN_EXPORT uint64_t vmath_popcount(uint64_t n) {
 VESTA_PLUGIN_EXPORT uint64_t vmath_clz(uint64_t n) {
     if (n == 0) return 64;
 #if defined(__GNUC__) || defined(__clang__)
-    return (uint64_t) __builtin_clzll(n);
+    return (uint64_t)__builtin_clzll(n);
 #elif defined(_MSC_VER)
     unsigned long idx = 0;
     _BitScanReverse64(&idx, n);
     return (uint64_t)(63 - idx);
 #else
     uint64_t c = 0;
-    while (!(n & (1ULL << 63))) { ++c; n <<= 1; }
+    while (!(n & (1ULL << 63))) {
+        ++c;
+        n <<= 1;
+    }
     return c;
 #endif
 }
@@ -386,14 +394,17 @@ VESTA_PLUGIN_EXPORT uint64_t vmath_clz(uint64_t n) {
 VESTA_PLUGIN_EXPORT uint64_t vmath_ctz(uint64_t n) {
     if (n == 0) return 64;
 #if defined(__GNUC__) || defined(__clang__)
-    return (uint64_t) __builtin_ctzll(n);
+    return (uint64_t)__builtin_ctzll(n);
 #elif defined(_MSC_VER)
     unsigned long idx = 0;
     _BitScanForward64(&idx, n);
-    return (uint64_t) idx;
+    return (uint64_t)idx;
 #else
     uint64_t c = 0;
-    while (!(n & 1)) { ++c; n >>= 1; }
+    while (!(n & 1)) {
+        ++c;
+        n >>= 1;
+    }
     return c;
 #endif
 }
@@ -405,14 +416,11 @@ VESTA_PLUGIN_EXPORT uint64_t vmath_bswap(uint64_t n) {
 #elif defined(_MSC_VER)
     return _byteswap_uint64(n);
 #else
-    return ((n & 0xFFULL)              << 56)
-         | ((n & 0xFF00ULL)            << 40)
-         | ((n & 0xFF0000ULL)          << 24)
-         | ((n & 0xFF000000ULL)        << 8)
-         | ((n & 0xFF00000000ULL)      >> 8)
-         | ((n & 0xFF0000000000ULL)    >> 24)
-         | ((n & 0xFF000000000000ULL)  >> 40)
-         | ((n & 0xFF00000000000000ULL) >> 56);
+    return ((n & 0xFFULL) << 56) | ((n & 0xFF00ULL) << 40) |
+           ((n & 0xFF0000ULL) << 24) | ((n & 0xFF000000ULL) << 8) |
+           ((n & 0xFF00000000ULL) >> 8) | ((n & 0xFF0000000000ULL) >> 24) |
+           ((n & 0xFF000000000000ULL) >> 40) |
+           ((n & 0xFF00000000000000ULL) >> 56);
 #endif
 }
 

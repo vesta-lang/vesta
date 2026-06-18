@@ -1,0 +1,17 @@
+// Phase AS (inline-asm nativo ejecutado por el JIT de VestaVM).
+//
+// Invierte el orden de bytes de un u64 con la instruccion x86 BSWAP.
+// Demuestra un binding INOUT: la misma variable register("rax") es
+// entrada (se inicializa) y salida (el asm la modifica in-place).
+//
+//     vm --vex 02_byteswap.vex -o byteswap
+//     vm --run byteswap.velb
+//
+// @expect 0x8877665544332211
+u64 main() {
+    register("rax") u64 v = 0x1122334455667788;
+    asm volatile {
+        bswap rax                        // v = byteswap(v)
+    };                                   // sin clobbers: bswap no toca flags
+    return v;                            // -> 0x8877665544332211
+}

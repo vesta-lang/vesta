@@ -1,0 +1,21 @@
+// AOT Inc 1: bloque `bytes` (datos crudos estilo NASM).
+// Valida que db/dw/dd/dq/times emiten bytes verbatim en su @section.
+
+// Firma de boot al estilo MBR (0x55 0xAA) en una seccion propia.
+@section(".sig", "r")
+bytes boot_sig {
+    db 0x55, 0xAA
+}
+
+// Tabla mixta en .rodata (default): demuestra db/dw/dd/dq + string + times.
+bytes tabla {
+    db 0x01, 'A', "Hi"        // 1 + 1 + 2 = 4 bytes: 01 41 48 69
+    dw 0x1234                  // 34 12
+    dd 0xDEADBEEF             // EF BE AD DE
+    dq 0x1122334455667788      // 88 77 66 55 44 33 22 11
+    times 4 db 0xFF           // FF FF FF FF
+}
+
+i32 main() {
+    return 42;
+}

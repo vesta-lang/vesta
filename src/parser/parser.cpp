@@ -1,12 +1,12 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * 
+ *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
@@ -16,7 +16,8 @@
  *
  * Implementa @c vm::Parser: el metodo @c parse() que genera el AST completo,
  * @c parse_instruction(), @c parse_operand(), @c parse_annotation() y demas
- * metodos de produccion.  Tambien implementa @c is_valid_number() y @c parse_number().
+ * metodos de produccion.  Tambien implementa @c is_valid_number() y @c
+ * parse_number().
  */
 #include "parser/parser.h"
 
@@ -25,20 +26,21 @@
 #include "Levenshtein.hpp"
 
 namespace vm {
-    static const std::unordered_map<std::string, InstructionPattern> InstructionSet = {
+static const std::unordered_map<std::string, InstructionPattern>
+    InstructionSet = {
         // DOS operandos
         {"mov", {"mov", OpArity::TWO}},
         {"movh", {"movh", OpArity::TWO}},
         {"xchg", {"xchg", OpArity::TWO}},
-        {"readcur",  {"readcur",  OpArity::TWO}},
+        {"readcur", {"readcur", OpArity::TWO}},
         {"writecur", {"writecur", OpArity::TWO}},
-        {"gcderef",  {"gcderef",  OpArity::TWO}},
-        {"addcur",   {"addcur",   OpArity::TWO}},
-        {"vmcopy",   {"vmcopy",   OpArity::THREE}},
-        {"vcopyh",   {"vcopyh",   OpArity::THREE}},
-        {"getproc",  {"getproc",  OpArity::ONE}},
-        {"getvm",    {"getvm",    OpArity::ONE}},
-        {"getmgr",   {"getmgr",   OpArity::ONE}},
+        {"gcderef", {"gcderef", OpArity::TWO}},
+        {"addcur", {"addcur", OpArity::TWO}},
+        {"vmcopy", {"vmcopy", OpArity::THREE}},
+        {"vcopyh", {"vcopyh", OpArity::THREE}},
+        {"getproc", {"getproc", OpArity::ONE}},
+        {"getvm", {"getvm", OpArity::ONE}},
+        {"getmgr", {"getmgr", OpArity::ONE}},
         {"realloc", {"realloc", OpArity::TWO}},
 
         // UN operando
@@ -52,14 +54,15 @@ namespace vm {
         // Meta-programacion OOP: definir clases / fields / methods en runtime
         // y consultarlas por nombre.  Cada una toma 2 registros (destino +
         // direccion VM de la struct DefXxxParams).
-        {"defclass",  {"defclass",  OpArity::TWO}},
-        {"deffield",  {"deffield",  OpArity::TWO}},
+        {"defclass", {"defclass", OpArity::TWO}},
+        {"deffield", {"deffield", OpArity::TWO}},
         {"defmethod", {"defmethod", OpArity::TWO}},
         {"findclass", {"findclass", OpArity::TWO}},
-        {"findmethod",{"findmethod",OpArity::TWO}},
+        {"findmethod", {"findmethod", OpArity::TWO}},
         {"findfield", {"findfield", OpArity::TWO}},
-        {"callm",     {"callm",     OpArity::TWO}},
-        {"proceed",   {"proceed",   OpArity::ZERO}},
+        {"callm", {"callm", OpArity::TWO}},
+        {"callitf", {"callitf", OpArity::TWO}},
+        {"proceed", {"proceed", OpArity::ZERO}},
         // addadvice toma 3 operandos textualmente: r_target, r_advice, kind.
         // El emisor empaqueta r_target en reg1 (lo de byte2), r_advice en
         // reg2 (hi de byte2) y kind en byte3.
@@ -82,7 +85,7 @@ namespace vm {
         // pasa via convencion al emit (helper acepta hasta 4).  Ver el
         // emit_instr_dlsym dedicado mas abajo.
         {"dlopen", {"dlopen", OpArity::THREE}},
-        {"dlsym",  {"dlsym",  OpArity::FOUR}},
+        {"dlsym", {"dlsym", OpArity::FOUR}},
         {"callni", {"callni", OpArity::ONE}},
 
         // Mejora I optimizada (extended 0x65, FIXED_4, REG, 2 regs):
@@ -126,30 +129,30 @@ namespace vm {
         // Cada variante codifica la condicion en byte3 (igual set que jmp.j*).
         // Encoding FIXED_8: [0x00][0x68|0x69][b2][cond][target_u32_LE].
         // Reduce 2 instr (cmp + jcc) a 1 por comparacion condicional.
-        {"cmpjmp.je",   {"cmpjmp.je",   OpArity::THREE}},
-        {"cmpjmp.jz",   {"cmpjmp.jz",   OpArity::THREE}},
-        {"cmpjmp.jne",  {"cmpjmp.jne",  OpArity::THREE}},
-        {"cmpjmp.jnz",  {"cmpjmp.jnz",  OpArity::THREE}},
-        {"cmpjmp.jcs",  {"cmpjmp.jcs",  OpArity::THREE}},
-        {"cmpjmp.jb",   {"cmpjmp.jb",   OpArity::THREE}},
-        {"cmpjmp.jcc",  {"cmpjmp.jcc",  OpArity::THREE}},
-        {"cmpjmp.jae",  {"cmpjmp.jae",  OpArity::THREE}},
-        {"cmpjmp.jmi",  {"cmpjmp.jmi",  OpArity::THREE}},
-        {"cmpjmp.jpl",  {"cmpjmp.jpl",  OpArity::THREE}},
-        {"cmpjmp.jvs",  {"cmpjmp.jvs",  OpArity::THREE}},
-        {"cmpjmp.jvc",  {"cmpjmp.jvc",  OpArity::THREE}},
-        {"cmpjmp.jhi",  {"cmpjmp.jhi",  OpArity::THREE}},
-        {"cmpjmp.jls",  {"cmpjmp.jls",  OpArity::THREE}},
-        {"cmpjmp.jge",  {"cmpjmp.jge",  OpArity::THREE}},
-        {"cmpjmp.jlt",  {"cmpjmp.jlt",  OpArity::THREE}},
-        {"cmpjmp.jgt",  {"cmpjmp.jgt",  OpArity::THREE}},
-        {"cmpjmp.jle",  {"cmpjmp.jle",  OpArity::THREE}},
-        {"cmpjmpu.je",  {"cmpjmpu.je",  OpArity::THREE}},
-        {"cmpjmpu.jz",  {"cmpjmpu.jz",  OpArity::THREE}},
+        {"cmpjmp.je", {"cmpjmp.je", OpArity::THREE}},
+        {"cmpjmp.jz", {"cmpjmp.jz", OpArity::THREE}},
+        {"cmpjmp.jne", {"cmpjmp.jne", OpArity::THREE}},
+        {"cmpjmp.jnz", {"cmpjmp.jnz", OpArity::THREE}},
+        {"cmpjmp.jcs", {"cmpjmp.jcs", OpArity::THREE}},
+        {"cmpjmp.jb", {"cmpjmp.jb", OpArity::THREE}},
+        {"cmpjmp.jcc", {"cmpjmp.jcc", OpArity::THREE}},
+        {"cmpjmp.jae", {"cmpjmp.jae", OpArity::THREE}},
+        {"cmpjmp.jmi", {"cmpjmp.jmi", OpArity::THREE}},
+        {"cmpjmp.jpl", {"cmpjmp.jpl", OpArity::THREE}},
+        {"cmpjmp.jvs", {"cmpjmp.jvs", OpArity::THREE}},
+        {"cmpjmp.jvc", {"cmpjmp.jvc", OpArity::THREE}},
+        {"cmpjmp.jhi", {"cmpjmp.jhi", OpArity::THREE}},
+        {"cmpjmp.jls", {"cmpjmp.jls", OpArity::THREE}},
+        {"cmpjmp.jge", {"cmpjmp.jge", OpArity::THREE}},
+        {"cmpjmp.jlt", {"cmpjmp.jlt", OpArity::THREE}},
+        {"cmpjmp.jgt", {"cmpjmp.jgt", OpArity::THREE}},
+        {"cmpjmp.jle", {"cmpjmp.jle", OpArity::THREE}},
+        {"cmpjmpu.je", {"cmpjmpu.je", OpArity::THREE}},
+        {"cmpjmpu.jz", {"cmpjmpu.jz", OpArity::THREE}},
         {"cmpjmpu.jne", {"cmpjmpu.jne", OpArity::THREE}},
         {"cmpjmpu.jnz", {"cmpjmpu.jnz", OpArity::THREE}},
         {"cmpjmpu.jcs", {"cmpjmpu.jcs", OpArity::THREE}},
-        {"cmpjmpu.jb",  {"cmpjmpu.jb",  OpArity::THREE}},
+        {"cmpjmpu.jb", {"cmpjmpu.jb", OpArity::THREE}},
         {"cmpjmpu.jcc", {"cmpjmpu.jcc", OpArity::THREE}},
         {"cmpjmpu.jae", {"cmpjmpu.jae", OpArity::THREE}},
         {"cmpjmpu.jmi", {"cmpjmpu.jmi", OpArity::THREE}},
@@ -175,7 +178,7 @@ namespace vm {
         //   con 1 syscall de aritmetica sobre RSP + N memcpy lineales.
         //   Ascendente: r0 primero pushed, r0 ultimo popped.
         {"fastpush", {"fastpush", OpArity::ONE}},
-        {"fastpop",  {"fastpop",  OpArity::ONE}},
+        {"fastpop", {"fastpop", OpArity::ONE}},
 
         // CERO operandos
         {"gcrun", {"gcrun", OpArity::ZERO}},
@@ -205,43 +208,44 @@ namespace vm {
         {"addu3", {"addu3", OpArity::THREE}},
         {"subu3", {"subu3", OpArity::THREE}},
         {"mulu3", {"mulu3", OpArity::THREE}},
-        {"and3",  {"and3",  OpArity::THREE}},
-        {"or3",   {"or3",   OpArity::THREE}},
-        {"xor3",  {"xor3",  OpArity::THREE}},
+        {"and3", {"and3", OpArity::THREE}},
+        {"or3", {"or3", OpArity::THREE}},
+        {"xor3", {"xor3", OpArity::THREE}},
 
         // Super-instruccion LOAD con zero-extend (1 instr en vez de 2).
         // Sintaxis: loadz r_dst, r_src (arity TWO).  El size (8/16/32/64-bit)
-        // se selecciona por sufijo de tamano del registro destino igual que mov.
+        // se selecciona por sufijo de tamano del registro destino igual que
+        // mov.
         // loadz = memoria VM, loadzh = memoria HOST (host_ptr).
-        {"loadz",  {"loadz",  OpArity::TWO}},
+        {"loadz", {"loadz", OpArity::TWO}},
         {"loadzh", {"loadzh", OpArity::TWO}},
 
-        {"setcc",    {"setcc",    OpArity::TWO}},
+        {"setcc", {"setcc", OpArity::TWO}},
         {"tryenter", {"tryenter", OpArity::TWO}},
         {"tryleave", {"tryleave", OpArity::ZERO}},
-        {"strmake",  {"strmake",  OpArity::THREE}},
-        {"strmake_h",{"strmake_h",OpArity::THREE}},
-        {"strlen",   {"strlen",   OpArity::TWO}},
-        {"strcat",   {"strcat",   OpArity::THREE}},
-        {"strcmp",   {"strcmp",   OpArity::THREE}},
-        {"strconv",    {"strconv",    OpArity::THREE}},
-        {"strraw",     {"strraw",     OpArity::TWO}},
-        {"strslice",   {"strslice",   OpArity::THREE}},
-        {"strflat",    {"strflat",    OpArity::TWO}},
-        {"strhash",    {"strhash",    OpArity::TWO}},
-        {"strintern",  {"strintern",  OpArity::TWO}},
-        {"strgetenc",  {"strgetenc",  OpArity::TWO}},
-        {"strgetbytes",{"strgetbytes",OpArity::TWO}},
+        {"strmake", {"strmake", OpArity::THREE}},
+        {"strmake_h", {"strmake_h", OpArity::THREE}},
+        {"strlen", {"strlen", OpArity::TWO}},
+        {"strcat", {"strcat", OpArity::THREE}},
+        {"strcmp", {"strcmp", OpArity::THREE}},
+        {"strconv", {"strconv", OpArity::THREE}},
+        {"strraw", {"strraw", OpArity::TWO}},
+        {"strslice", {"strslice", OpArity::THREE}},
+        {"strflat", {"strflat", OpArity::TWO}},
+        {"strhash", {"strhash", OpArity::TWO}},
+        {"strintern", {"strintern", OpArity::TWO}},
+        {"strgetenc", {"strgetenc", OpArity::TWO}},
+        {"strgetbytes", {"strgetbytes", OpArity::TWO}},
         {"strgetkind", {"strgetkind", OpArity::TWO}},
         {"strreserve", {"strreserve", OpArity::TWO}},
-        {"strfinalize",{"strfinalize",OpArity::TWO}},
+        {"strfinalize", {"strfinalize", OpArity::TWO}},
 
         {"xor", {"xor", OpArity::TWO}},
         {"and", {"and", OpArity::TWO}},
-        {"or",  {"or",  OpArity::TWO}},
+        {"or", {"or", OpArity::TWO}},
 
         // TRES operandos: movc/movch destino, fuente, flag
-        {"movc",  {"movc",  OpArity::THREE}},
+        {"movc", {"movc", OpArity::THREE}},
         {"movch", {"movch", OpArity::THREE}},
         {"not", {"not", OpArity::ONE}},
 
@@ -250,43 +254,43 @@ namespace vm {
         {"sar", {"sar", OpArity::TWO}},
 
         // DOS operandos OOP
-        {"newobjraw",   {"newobjraw",   OpArity::TWO}},
-        {"callvirt",    {"callvirt",    OpArity::TWO}},
-        {"callsuper",   {"callsuper",   OpArity::TWO}},
-        {"instanceof",  {"instanceof",  OpArity::TWO}},
-        {"checkcast",   {"checkcast",   OpArity::TWO}},
-        {"getfield",    {"getfield",    OpArity::TWO}},
-        {"getmethod",   {"getmethod",   OpArity::TWO}},
+        {"newobjraw", {"newobjraw", OpArity::TWO}},
+        {"callvirt", {"callvirt", OpArity::TWO}},
+        {"callsuper", {"callsuper", OpArity::TWO}},
+        {"instanceof", {"instanceof", OpArity::TWO}},
+        {"checkcast", {"checkcast", OpArity::TWO}},
+        {"getfield", {"getfield", OpArity::TWO}},
+        {"getmethod", {"getmethod", OpArity::TWO}},
 
         // UN operando OOP
-        {"getclass",        {"getclass",        OpArity::ONE}},
-        {"fieldcount",      {"fieldcount",       OpArity::ONE}},
-        {"methodcount",     {"methodcount",      OpArity::ONE}},
-        {"classname",       {"classname",        OpArity::ONE}},
-        {"gcalloc",         {"gcalloc",          OpArity::ONE}},
-        {"throw",           {"throw",            OpArity::ONE}},
+        {"getclass", {"getclass", OpArity::ONE}},
+        {"fieldcount", {"fieldcount", OpArity::ONE}},
+        {"methodcount", {"methodcount", OpArity::ONE}},
+        {"classname", {"classname", OpArity::ONE}},
+        {"gcalloc", {"gcalloc", OpArity::ONE}},
+        {"throw", {"throw", OpArity::ONE}},
         // doc/atributos - UN operando
-        {"classdoc",        {"classdoc",         OpArity::ONE}},
-        {"classattrcount",  {"classattrcount",   OpArity::ONE}},
-        {"methodname",      {"methodname",       OpArity::ONE}},
-        {"methoddoc",       {"methoddoc",        OpArity::ONE}},
-        {"methoddesc",      {"methoddesc",       OpArity::ONE}},
-        {"methodattrcount", {"methodattrcount",  OpArity::ONE}},
-        {"fieldname",       {"fieldname",        OpArity::ONE}},
-        {"fielddoc",        {"fielddoc",         OpArity::ONE}},
-        {"fieldattrcount",  {"fieldattrcount",   OpArity::ONE}},
+        {"classdoc", {"classdoc", OpArity::ONE}},
+        {"classattrcount", {"classattrcount", OpArity::ONE}},
+        {"methodname", {"methodname", OpArity::ONE}},
+        {"methoddoc", {"methoddoc", OpArity::ONE}},
+        {"methoddesc", {"methoddesc", OpArity::ONE}},
+        {"methodattrcount", {"methodattrcount", OpArity::ONE}},
+        {"fieldname", {"fieldname", OpArity::ONE}},
+        {"fielddoc", {"fielddoc", OpArity::ONE}},
+        {"fieldattrcount", {"fieldattrcount", OpArity::ONE}},
         // doc/atributos - DOS operandos (reg, idx)
-        {"classattrkey",    {"classattrkey",     OpArity::TWO}},
-        {"classattrval",    {"classattrval",     OpArity::TWO}},
-        {"methodattrkey",   {"methodattrkey",    OpArity::TWO}},
-        {"methodattrval",   {"methodattrval",    OpArity::TWO}},
-        {"fieldattrkey",    {"fieldattrkey",     OpArity::TWO}},
-        {"fieldattrval",    {"fieldattrval",     OpArity::TWO}},
+        {"classattrkey", {"classattrkey", OpArity::TWO}},
+        {"classattrval", {"classattrval", OpArity::TWO}},
+        {"methodattrkey", {"methodattrkey", OpArity::TWO}},
+        {"methodattrval", {"methodattrval", OpArity::TWO}},
+        {"fieldattrkey", {"fieldattrkey", OpArity::TWO}},
+        {"fieldattrval", {"fieldattrval", OpArity::TWO}},
 
         // --- Corutinas y fibras ---
-        {"yield",   {"yield",   OpArity::ZERO}},
-        {"resume",  {"resume",  OpArity::ONE}},
-        {"spawn",   {"spawn",   OpArity::ONE}},
+        {"yield", {"yield", OpArity::ZERO}},
+        {"resume", {"resume", OpArity::ONE}},
+        {"spawn", {"spawn", OpArity::ONE}},
         // spawnon r_fn, r_hint -- spawn con scheduler hint.  r_hint: -1
         // (signed) = Here (mismo scheduler que el padre, ruta cooperativa
         // sin cruzar threads OS); 0..N-1 = Pinned al scheduler indicado
@@ -298,16 +302,16 @@ namespace vm {
         {"loadmod", {"loadmod", OpArity::TWO}},
         // panic r_msg_addr, r_msg_len -- lanza FatalError con
         // kind=FATAL_USER_ABORT.  Capturable con try/catch FatalError.
-        {"panic",   {"panic",   OpArity::TWO}},
+        {"panic", {"panic", OpArity::TWO}},
         // setmethdbg r_method, r_params -- registra debug info
         // (file + start_line) para un MethodInfo en la tabla global.
         {"setmethdbg", {"setmethdbg", OpArity::TWO}},
         {"swapctx", {"swapctx", OpArity::TWO}},
 
         // --- Closures GC y raw ---
-        {"mkclosure",      {"mkclosure",      OpArity::TWO}},
-        {"callclosure",    {"callclosure",    OpArity::ONE}},
-        {"mkrawclosure",   {"mkrawclosure",   OpArity::TWO}},
+        {"mkclosure", {"mkclosure", OpArity::TWO}},
+        {"callclosure", {"callclosure", OpArity::ONE}},
+        {"mkrawclosure", {"mkrawclosure", OpArity::TWO}},
         {"callrawclosure", {"callrawclosure", OpArity::ONE}},
 
         // --- TCO (tail call optimization) ---
@@ -315,58 +319,58 @@ namespace vm {
 
         // --- Nullable ---
         {"isnull", {"isnull", OpArity::TWO}},
-        {"unwrap",  {"unwrap",  OpArity::TWO}},
+        {"unwrap", {"unwrap", OpArity::TWO}},
 
         // --- Punto flotante escalar y vectorial ---
-        {"fmov",     {"fmov",     OpArity::TWO}},
-        {"fadd",     {"fadd",     OpArity::TWO}},
-        {"fadd.pd",  {"fadd.pd",  OpArity::TWO}},
-        {"fadd.ps",  {"fadd.ps",  OpArity::TWO}},
-        {"fsub",     {"fsub",     OpArity::TWO}},
-        {"fsub.pd",  {"fsub.pd",  OpArity::TWO}},
-        {"fsub.ps",  {"fsub.ps",  OpArity::TWO}},
-        {"fmul",     {"fmul",     OpArity::TWO}},
-        {"fmul.pd",  {"fmul.pd",  OpArity::TWO}},
-        {"fmul.ps",  {"fmul.ps",  OpArity::TWO}},
-        {"fdiv",     {"fdiv",     OpArity::TWO}},
-        {"fdiv.pd",  {"fdiv.pd",  OpArity::TWO}},
-        {"fdiv.ps",  {"fdiv.ps",  OpArity::TWO}},
-        {"fcmp",     {"fcmp",     OpArity::TWO}},
-        {"fcmp.pd",  {"fcmp.pd",  OpArity::TWO}},
-        {"fcmp.ps",  {"fcmp.ps",  OpArity::TWO}},
-        {"fsqrt",    {"fsqrt",    OpArity::TWO}},
+        {"fmov", {"fmov", OpArity::TWO}},
+        {"fadd", {"fadd", OpArity::TWO}},
+        {"fadd.pd", {"fadd.pd", OpArity::TWO}},
+        {"fadd.ps", {"fadd.ps", OpArity::TWO}},
+        {"fsub", {"fsub", OpArity::TWO}},
+        {"fsub.pd", {"fsub.pd", OpArity::TWO}},
+        {"fsub.ps", {"fsub.ps", OpArity::TWO}},
+        {"fmul", {"fmul", OpArity::TWO}},
+        {"fmul.pd", {"fmul.pd", OpArity::TWO}},
+        {"fmul.ps", {"fmul.ps", OpArity::TWO}},
+        {"fdiv", {"fdiv", OpArity::TWO}},
+        {"fdiv.pd", {"fdiv.pd", OpArity::TWO}},
+        {"fdiv.ps", {"fdiv.ps", OpArity::TWO}},
+        {"fcmp", {"fcmp", OpArity::TWO}},
+        {"fcmp.pd", {"fcmp.pd", OpArity::TWO}},
+        {"fcmp.ps", {"fcmp.ps", OpArity::TWO}},
+        {"fsqrt", {"fsqrt", OpArity::TWO}},
         {"fsqrt.pd", {"fsqrt.pd", OpArity::TWO}},
         {"fsqrt.ps", {"fsqrt.ps", OpArity::TWO}},
-        {"fabs",     {"fabs",     OpArity::TWO}},
-        {"fabs.pd",  {"fabs.pd",  OpArity::TWO}},
-        {"fabs.ps",  {"fabs.ps",  OpArity::TWO}},
-        {"fneg",     {"fneg",     OpArity::TWO}},
-        {"fneg.pd",  {"fneg.pd",  OpArity::TWO}},
-        {"fneg.ps",  {"fneg.ps",  OpArity::TWO}},
-        {"fcvt",     {"fcvt",     OpArity::TWO}},
-        {"fcvt.ps",  {"fcvt.ps",  OpArity::TWO}},
-        {"fextend",  {"fextend",  OpArity::TWO}},
-        {"fnarrow",  {"fnarrow",  OpArity::TWO}},
-        {"fmin",     {"fmin",     OpArity::TWO}},
-        {"fmin.ps",  {"fmin.ps",  OpArity::TWO}},
-        {"fmax",     {"fmax",     OpArity::TWO}},
-        {"fmax.ps",  {"fmax.ps",  OpArity::TWO}},
-        {"ffloor",   {"ffloor",   OpArity::TWO}},
-        {"ffloor.ps",{"ffloor.ps",OpArity::TWO}},
-        {"fceil",    {"fceil",    OpArity::TWO}},
+        {"fabs", {"fabs", OpArity::TWO}},
+        {"fabs.pd", {"fabs.pd", OpArity::TWO}},
+        {"fabs.ps", {"fabs.ps", OpArity::TWO}},
+        {"fneg", {"fneg", OpArity::TWO}},
+        {"fneg.pd", {"fneg.pd", OpArity::TWO}},
+        {"fneg.ps", {"fneg.ps", OpArity::TWO}},
+        {"fcvt", {"fcvt", OpArity::TWO}},
+        {"fcvt.ps", {"fcvt.ps", OpArity::TWO}},
+        {"fextend", {"fextend", OpArity::TWO}},
+        {"fnarrow", {"fnarrow", OpArity::TWO}},
+        {"fmin", {"fmin", OpArity::TWO}},
+        {"fmin.ps", {"fmin.ps", OpArity::TWO}},
+        {"fmax", {"fmax", OpArity::TWO}},
+        {"fmax.ps", {"fmax.ps", OpArity::TWO}},
+        {"ffloor", {"ffloor", OpArity::TWO}},
+        {"ffloor.ps", {"ffloor.ps", OpArity::TWO}},
+        {"fceil", {"fceil", OpArity::TWO}},
         {"fceil.ps", {"fceil.ps", OpArity::TWO}},
-        {"fround",   {"fround",   OpArity::TWO}},
-        {"fround.ps",{"fround.ps",OpArity::TWO}},
-        {"ftrunc",   {"ftrunc",   OpArity::TWO}},
-        {"ftrunc.ps",{"ftrunc.ps",OpArity::TWO}},
-        {"bitg2z",   {"bitg2z",   OpArity::TWO}},
-        {"bitz2g",   {"bitz2g",   OpArity::TWO}},
-        {"fmowi",    {"fmowi",    OpArity::TWO}},
-        {"fload",    {"fload",    OpArity::TWO}},
-        {"fstore",   {"fstore",   OpArity::TWO}},
+        {"fround", {"fround", OpArity::TWO}},
+        {"fround.ps", {"fround.ps", OpArity::TWO}},
+        {"ftrunc", {"ftrunc", OpArity::TWO}},
+        {"ftrunc.ps", {"ftrunc.ps", OpArity::TWO}},
+        {"bitg2z", {"bitg2z", OpArity::TWO}},
+        {"bitz2g", {"bitz2g", OpArity::TWO}},
+        {"fmowi", {"fmowi", OpArity::TWO}},
+        {"fload", {"fload", OpArity::TWO}},
+        {"fstore", {"fstore", OpArity::TWO}},
 
         // CERO operandos OOP
-        {"rethrow",     {"rethrow",     OpArity::ZERO}},
+        {"rethrow", {"rethrow", OpArity::ZERO}},
 
         // CERO operandos
         {"nop1", {"nop1", OpArity::ZERO}},
@@ -384,16 +388,15 @@ namespace vm {
         {"align", {"align", OpArity::ONE}},
         {"import", {"import", OpArity::ONE}},
 
-
-        {"jmp",     {"jmp",     OpArity::ONE}},
-        {"jmp.je",  {"jmp.je",  OpArity::ONE}},
-        {"jmp.jz",  {"jmp.jz",  OpArity::ONE}},
+        {"jmp", {"jmp", OpArity::ONE}},
+        {"jmp.je", {"jmp.je", OpArity::ONE}},
+        {"jmp.jz", {"jmp.jz", OpArity::ONE}},
         {"jmp.jne", {"jmp.jne", OpArity::ONE}},
         {"jmp.jnz", {"jmp.jnz", OpArity::ONE}},
         {"jmp.jcs", {"jmp.jcs", OpArity::ONE}},
         {"jmp.jae", {"jmp.jae", OpArity::ONE}},
         {"jmp.jcc", {"jmp.jcc", OpArity::ONE}},
-        {"jmp.jb",  {"jmp.jb",  OpArity::ONE}},
+        {"jmp.jb", {"jmp.jb", OpArity::ONE}},
         {"jmp.jmi", {"jmp.jmi", OpArity::ONE}},
         {"jmp.jpl", {"jmp.jpl", OpArity::ONE}},
         {"jmp.jvs", {"jmp.jvs", OpArity::ONE}},
@@ -405,15 +408,15 @@ namespace vm {
         {"jmp.jgt", {"jmp.jgt", OpArity::ONE}},
         {"jmp.jle", {"jmp.jle", OpArity::ONE}},
 
-        {"jrel",     {"jrel",     OpArity::ONE}},
-        {"jrel.je",  {"jrel.je",  OpArity::ONE}},
-        {"jrel.jz",  {"jrel.jz",  OpArity::ONE}},
+        {"jrel", {"jrel", OpArity::ONE}},
+        {"jrel.je", {"jrel.je", OpArity::ONE}},
+        {"jrel.jz", {"jrel.jz", OpArity::ONE}},
         {"jrel.jne", {"jrel.jne", OpArity::ONE}},
         {"jrel.jnz", {"jrel.jnz", OpArity::ONE}},
         {"jrel.jcs", {"jrel.jcs", OpArity::ONE}},
         {"jrel.jae", {"jrel.jae", OpArity::ONE}},
         {"jrel.jcc", {"jrel.jcc", OpArity::ONE}},
-        {"jrel.jb",  {"jrel.jb",  OpArity::ONE}},
+        {"jrel.jb", {"jrel.jb", OpArity::ONE}},
         {"jrel.jmi", {"jrel.jmi", OpArity::ONE}},
         {"jrel.jpl", {"jrel.jpl", OpArity::ONE}},
         {"jrel.jvs", {"jrel.jvs", OpArity::ONE}},
@@ -443,40 +446,42 @@ namespace vm {
         {"vminfomanager", {"vminfomanager", OpArity::ONE}},
 
         /* --- Pattern matching nativo --- */
-        {"jumptable",  {"jumptable",  OpArity::THREE}},
+        {"jumptable", {"jumptable", OpArity::THREE}},
         {"typeswitch", {"typeswitch", OpArity::THREE}},
 
         /* --- Async/await --- */
-        {"future",  {"future",  OpArity::ZERO}},
-        {"await",   {"await",   OpArity::ONE}},
+        {"future", {"future", OpArity::ZERO}},
+        {"await", {"await", OpArity::ONE}},
         {"fulfill", {"fulfill", OpArity::TWO}},
-        {"reject",  {"reject",  OpArity::TWO}},
+        {"reject", {"reject", OpArity::TWO}},
 
-        /* --- Aritmetica sobre registros especiales (rsp/rbp) con inmediato --- */
+        /* --- Aritmetica sobre registros especiales (rsp/rbp) con inmediato ---
+         */
         {"subsp", {"subsp", OpArity::TWO}},
         {"addsp", {"addsp", OpArity::TWO}},
 
         /* --- Referencias debiles --- */
-        {"weakref",   {"weakref",   OpArity::ONE}},
-        {"deref_weak",{"deref_weak",OpArity::ONE}},
+        {"weakref", {"weakref", OpArity::ONE}},
+        {"deref_weak", {"deref_weak", OpArity::ONE}},
         {"free_weak", {"free_weak", OpArity::ONE}},
 
         /* --- Lookup inverso ptr -> handle --- */
-        {"gchandle",  {"gchandle",  OpArity::TWO}},
+        {"gchandle", {"gchandle", OpArity::TWO}},
 
         /* --- PID del proceso actual --- */
-        {"getpid",    {"getpid",    OpArity::ONE}},
+        {"getpid", {"getpid", OpArity::ONE}},
 
         /* --- argv del script (builtins args_count / args_get) --- */
-        {"getargc",   {"getargc",   OpArity::ONE}},
-        {"getarg",    {"getarg",    OpArity::TWO}},
+        {"getargc", {"getargc", OpArity::ONE}},
+        {"getarg", {"getarg", OpArity::TWO}},
 
-        /* --- Move-and-take (primitivo de smart pointers unique<T> / shared<T>) --- */
-        {"mvtake",    {"mvtake",    OpArity::TWO}},
+        /* --- Move-and-take (primitivo de smart pointers unique<T> / shared<T>)
+           --- */
+        {"mvtake", {"mvtake", OpArity::TWO}},
 
         /* --- Sprint MMM-ext leak-fix: registra host_ptr para cleanup
          *     automatico cuando el frame actual se destruye. --- */
-        {"htrack",    {"htrack",    OpArity::ONE}},
+        {"htrack", {"htrack", OpArity::ONE}},
 
         /* --- Phase Z: memoria compartida cross-process ---
          *  Todos arity TWO (reg, reg).  El lowering los emite cuando un
@@ -484,13 +489,13 @@ namespace vm {
          *  para que el .vel emitido parsee; runtime los ejecuta como mov
          *  hasta que el mark/sweep cross-process este integrado.
          */
-        {"newobjs",    {"newobjs",    OpArity::ONE}},
-        {"gcpromote",  {"gcpromote",  OpArity::TWO}},
-        {"gcdemote",   {"gcdemote",   OpArity::TWO}},
-        {"atomicld",   {"atomicld",   OpArity::TWO}},   // dst, addr
-        {"atomicst",   {"atomicst",   OpArity::TWO}},   // addr, val
-        {"atomiccas",  {"atomiccas",  OpArity::FOUR}},  // dst, addr, exp, des
-        {"atomicadd",  {"atomicadd",  OpArity::THREE}}, // dst, addr, delta
+        {"newobjs", {"newobjs", OpArity::ONE}},
+        {"gcpromote", {"gcpromote", OpArity::TWO}},
+        {"gcdemote", {"gcdemote", OpArity::TWO}},
+        {"atomicld", {"atomicld", OpArity::TWO}},     // dst, addr
+        {"atomicst", {"atomicst", OpArity::TWO}},     // addr, val
+        {"atomiccas", {"atomiccas", OpArity::FOUR}},  // dst, addr, exp, des
+        {"atomicadd", {"atomicadd", OpArity::THREE}}, // dst, addr, delta
         {"sharedstat", {"sharedstat", OpArity::TWO}},
 
         /* --- descarga dinamica de modulos (builtin unloadmodule) --- */
@@ -498,549 +503,555 @@ namespace vm {
 
         /* --- introspeccion runtime: getMethodAt / getFieldAt --- */
         {"getmethat", {"getmethat", OpArity::TWO}},
-        {"getfldat",  {"getfldat",  OpArity::TWO}},
+        {"getfldat", {"getfldat", OpArity::TWO}},
 
         /* --- Monitor / sincronizacion --- */
-        {"monenter",  {"monenter",  OpArity::ONE}},
-        {"monexit",   {"monexit",   OpArity::ONE}},
-        {"monwait",   {"monwait",   OpArity::ONE}},
-        {"monnoti",   {"monnoti",   OpArity::ONE}},
-        {"monnota",   {"monnota",   OpArity::ONE}},
+        {"monenter", {"monenter", OpArity::ONE}},
+        {"monexit", {"monexit", OpArity::ONE}},
+        {"monwait", {"monwait", OpArity::ONE}},
+        {"monnoti", {"monnoti", OpArity::ONE}},
+        {"monnota", {"monnota", OpArity::ONE}},
 
         /* --- Genericos en tiempo de ejecucion --- */
-        {"specialize",{"specialize",OpArity::THREE}},
+        {"specialize", {"specialize", OpArity::THREE}},
 
         /* --- Instrucciones distribuidas VDP --- */
-        {"rspawn",  {"rspawn",  OpArity::TWO}},
+        {"rspawn", {"rspawn", OpArity::TWO}},
         {"msgsend", {"msgsend", OpArity::THREE}},
         {"msgrecv", {"msgrecv", OpArity::TWO}},
         {"memsync", {"memsync", OpArity::ONE}},
 
-    };
+};
 
-    bool Parser::match(TokenType type) {
-        if (current.type == type) {
+bool Parser::match(TokenType type) {
+    if (current.type == type) {
+        advance();
+        return true;
+    }
+    return false;
+}
+
+bool Parser::expect(TokenType type, const std::string &msg) {
+    if (current.type == type) {
+        advance();
+        return true;
+    }
+    error(current, msg);
+    return false;
+}
+
+void Parser::error(const Token &tok, const std::string &msg) {
+    throw ParseError(tok.line, tok.column,
+                     "Parser ERROR: " + msg + " [" + tok.lexeme + "]");
+}
+
+void Parser::warning(int line, int col, const std::string &msg,
+                     const std::string &sugg = "") {
+    warnings.emplace_back(line, col, msg, sugg);
+    std::cout << "Linea " << line << ":" << col << " - " << msg
+              << (sugg.empty() ? "" : " (" + sugg + "?)") << std::endl;
+}
+
+void Parser::print_warnings() const {
+    if (!warnings.empty()) {
+        std::cout << "\n" << warnings.size() << " warnings encontrados:\n";
+        for (const auto &w : warnings) {
+            std::cout << "    Linea " << w.line << ":" << w.column << " - "
+                      << w.what()
+                      << (w.suggestion.empty()
+                              ? ""
+                              : " (sugerencia: " + w.suggestion + ")")
+                      << std::endl;
+        }
+    }
+}
+
+std::vector<std::unique_ptr<ASTNode>> Parser::parse() {
+    std::vector<std::unique_ptr<ASTNode>> program;
+
+    while (current.type != TokenType::EndOfFile) {
+        std::unique_ptr<ASTNode> node = nullptr;
+        Token next = peek();
+        // IDENTIFICADOR + COLON? -> SECCION
+        if (current.type == TokenType::IDENTIFIER &&
+            peek().type == TokenType::COLON) {
+            node = parse_section();
+        }
+        // IDENTIFICADOR solo? -> INSTRUCCION
+        // IDENTIFICADOR IDENTIFICADOR? -> posible instruccion de dos
+        // identificadores
+        else if ((current.type == TokenType::IDENTIFIER) ||
+                 (current.type == TokenType::IDENTIFIER) &&
+                     peek().type == TokenType::IDENTIFIER) {
+            node = parse_statement();
+        }
+
+        // se encontro una o varias anotaciones
+        else if (current.type == TokenType::AT) {
+            node = parse_annotation();
+        }
+
+        // Omitir tokens invalidos
+        else {
+            std::cerr << "linea: " << current.line << ":" << current.column
+                      << " Parser ERROR: "
+                      << "Skipping invalid token: " +
+                             token_type_to_string(current.type) + " [" +
+                             current.lexeme + "]"
+                      << std::endl;
             advance();
-            return true;
+            continue;
         }
-        return false;
+
+        if (node) program.push_back(std::move(node));
     }
 
-    bool Parser::expect(TokenType type, const std::string &msg) {
-        if (current.type == type) {
+    return program;
+}
+
+std::unique_ptr<ASTNode> Parser::parse_mem_term() {
+    auto node = parse_mem_factor();
+
+    while (current.type == TokenType::STAR) {
+        Token op = current;
+        advance();
+        auto right = parse_mem_factor();
+        node = std::make_unique<BinaryExpr>(
+            op.lexeme[0],
+            std::unique_ptr<ExprNode>(static_cast<ExprNode *>(node.release())),
+            std::unique_ptr<ExprNode>(
+                static_cast<ExprNode *>(right.release())));
+    }
+
+    return node;
+}
+
+std::unique_ptr<ASTNode> Parser::parse_mem_expression() {
+    auto node = parse_mem_term();
+
+    while (current.type == TokenType::PLUS ||
+           current.type == TokenType::MINUS) {
+        Token op = current;
+        advance();
+        auto right = parse_mem_term();
+        node = std::make_unique<BinaryExpr>(
+            op.lexeme[0],
+            std::unique_ptr<ExprNode>(static_cast<ExprNode *>(node.release())),
+            std::unique_ptr<ExprNode>(
+                static_cast<ExprNode *>(right.release())));
+    }
+
+    return node;
+}
+
+std::unique_ptr<ASTNode> Parser::parse_mem_factor() {
+    // ( expr )
+    if (match(TokenType::LPAREN)) {
+        auto expr = parse_mem_expression();
+        expect(TokenType::RPAREN, "Falta ')'");
+        return expr;
+    }
+
+    // tipo REGISTRO
+    if (current.type == TokenType::REGISTER) {
+        return parse_operand(); // ya devuelve RegisterOperand
+    }
+
+    // tipo NUMERO
+    if (is_number_token(current.type)) {
+        return parse_operand(); // devuelve NumberOperand
+    }
+
+    // tipo ETIQUETA
+    if (current.type == TokenType::IDENTIFIER) {
+        return parse_operand(); // devuelve LabelOperand
+    }
+
+    error(current, "Expresion de memoria invalida");
+    return nullptr;
+}
+
+/**
+ * No pude usar el metodo principal parse en parse_section, ya que hacerlo hacia
+ * que todas las secciones se unieran en un unico arbol como si fuera una unica
+ * seccion, cosa que no se quiere. Para evitar esto usamos el mismo codigo, pero
+ * cuando se encuentre una seccion dentro de otra, ya no se sigue analizando en
+ * la seccion anterior, sino que vuelve al parse principal y lo analiza desde
+ * ahi
+ * @return seccion parseada
+ */
+std::vector<std::unique_ptr<ASTNode>> Parser::parse_in_label() {
+    std::vector<std::unique_ptr<ASTNode>> program;
+
+    while (current.type != TokenType::EndOfFile) {
+        std::unique_ptr<ASTNode> node = nullptr;
+        Token next = peek();
+        // IDENTIFICADOR + COLON? -> SECCION
+        if (current.type == TokenType::IDENTIFIER &&
+            peek().type == TokenType::COLON) {
+            // node = parse_section();
+            break;
+        }
+        // IDENTIFICADOR solo? -> INSTRUCCION
+        // IDENTIFICADOR IDENTIFICADOR? -> posible instruccion de dos
+        // identificadores
+        if ((current.type == TokenType::IDENTIFIER) ||
+            (current.type == TokenType::IDENTIFIER) &&
+                peek().type == TokenType::IDENTIFIER) {
+            node = parse_statement();
+        }
+
+        // se encontro una o varias anotaciones
+        else if (current.type == TokenType::AT) {
+            node = parse_annotation();
+        } else if (current.type == TokenType::END_LABEL) {
+            program.push_back(std::move(parser_end_label()));
+            break;
+        }
+
+        // Omitir tokens invalidos
+        else {
+            std::cerr << "linea: " << current.line << ":" << current.column
+                      << " Parser ERROR: "
+                      << "Skipping invalid token: " +
+                             token_type_to_string(current.type) + " [" +
+                             current.lexeme + "]"
+                      << std::endl;
             advance();
-            return true;
+            continue;
         }
-        error(current, msg);
-        return false;
+
+        if (node) program.push_back(std::move(node));
     }
 
+    return program;
+}
 
-    void Parser::error(const Token &tok, const std::string &msg) {
-        throw ParseError(tok.line, tok.column,
-                         "Parser ERROR: " + msg +
-                         " [" + tok.lexeme + "]");
-    }
+std::unique_ptr<ASTNode> Parser::parser_end_label() {
+    advance(); // consumimos el token end
+    return std::make_unique<EndLabelNode>("");
+}
 
-    void Parser::warning(int line, int col, const std::string &msg, const std::string &sugg = "") {
-        warnings.emplace_back(line, col, msg, sugg);
-        std::cout << "Linea " << line << ":" << col
-                << " - " << msg << (sugg.empty() ? "" : " (" + sugg + "?)") << std::endl;
-    }
-
-
-    void Parser::print_warnings() const {
-        if (!warnings.empty()) {
-            std::cout << "\n" << warnings.size() << " warnings encontrados:\n";
-            for (const auto &w: warnings) {
-                std::cout << "    Linea " << w.line << ":" << w.column
-                        << " - " << w.what()
-                        << (w.suggestion.empty() ? "" : " (sugerencia: " + w.suggestion + ")")
-                        << std::endl;
-            }
-        }
-    }
-
-    std::vector<std::unique_ptr<ASTNode> > Parser::parse() {
-        std::vector<std::unique_ptr<ASTNode> > program;
-
-        while (current.type != TokenType::EndOfFile) {
-            std::unique_ptr<ASTNode> node = nullptr;
-            Token                    next = peek();
-            // IDENTIFICADOR + COLON? -> SECCION
-            if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
-                node = parse_section();
-            }
-            // IDENTIFICADOR solo? -> INSTRUCCION
-            // IDENTIFICADOR IDENTIFICADOR? -> posible instruccion de dos identificadores
-            else if (
-                (current.type == TokenType::IDENTIFIER) ||
-                (current.type == TokenType::IDENTIFIER) && peek().type == TokenType::IDENTIFIER
-            ) {
-                node = parse_statement();
-            }
-
-            // se encontro una o varias anotaciones
-            else if (current.type == TokenType::AT) {
-                node = parse_annotation();
-            }
-
-            // Omitir tokens invalidos
-            else {
-                std::cerr << "linea: " << current.line << ":" << current.column <<
-                        " Parser ERROR: " << "Skipping invalid token: " + token_type_to_string(current.type) +
-                        " [" + current.lexeme + "]" << std::endl;
-                advance();
-                continue;
-            }
-
-            if (node) program.push_back(std::move(node));
-        }
-
-        return program;
-    }
-
-    std::unique_ptr<ASTNode> Parser::parse_mem_term() {
-        auto node = parse_mem_factor();
-
-        while (current.type == TokenType::STAR) {
-            Token op = current;
-            advance();
-            auto right = parse_mem_factor();
-            node       = std::make_unique<BinaryExpr>(op.lexeme[0],
-                                                std::unique_ptr<
-                                                    ExprNode>(static_cast<ExprNode *>(node.release())),
-                                                std::unique_ptr<ExprNode>(
-                                                    static_cast<ExprNode *>(right.release())));
-        }
-
-        return node;
-    }
-
-    std::unique_ptr<ASTNode> Parser::parse_mem_expression() {
-        auto node = parse_mem_term();
-
-        while (current.type == TokenType::PLUS || current.type == TokenType::MINUS) {
-            Token op = current;
-            advance();
-            auto right = parse_mem_term();
-            node       = std::make_unique<BinaryExpr>(op.lexeme[0],
-                                                std::unique_ptr<
-                                                    ExprNode>(static_cast<ExprNode *>(node.release())),
-                                                std::unique_ptr<ExprNode>(
-                                                    static_cast<ExprNode *>(right.release())));
-        }
-
-        return node;
-    }
-
-    std::unique_ptr<ASTNode> Parser::parse_mem_factor() {
-        // ( expr )
-        if (match(TokenType::LPAREN)) {
-            auto expr = parse_mem_expression();
-            expect(TokenType::RPAREN, "Falta ')'");
-            return expr;
-        }
-
-        // tipo REGISTRO
-        if (current.type == TokenType::REGISTER) {
-            return parse_operand(); // ya devuelve RegisterOperand
-        }
-
-        // tipo NUMERO
-        if (is_number_token(current.type)) {
-            return parse_operand(); // devuelve NumberOperand
-        }
-
-        // tipo ETIQUETA
-        if (current.type == TokenType::IDENTIFIER) {
-            return parse_operand(); // devuelve LabelOperand
-        }
-
-        error(current, "Expresion de memoria invalida");
+std::unique_ptr<ASTNode> Parser::parse_section() {
+    if (current.type != TokenType::IDENTIFIER) {
         return nullptr;
     }
 
-    /**
-     * No pude usar el metodo principal parse en parse_section, ya que hacerlo hacia que todas
-     * las secciones se unieran en un unico arbol como si fuera una unica seccion, cosa que no se quiere.
-     * Para evitar esto usamos el mismo codigo, pero cuando se encuentre una seccion dentro de otra, ya no
-     * se sigue analizando en la seccion anterior, sino que vuelve al parse principal y lo analiza desde ahi
-     * @return seccion parseada
-     */
-    std::vector<std::unique_ptr<ASTNode> > Parser::parse_in_label() {
-        std::vector<std::unique_ptr<ASTNode> > program;
+    // guardar nombre de la seccion:
+    std::string section_name = current.lexeme;
+    advance(); // consumimos el token
 
-        while (current.type != TokenType::EndOfFile) {
-            std::unique_ptr<ASTNode> node = nullptr;
-            Token                    next = peek();
-            // IDENTIFICADOR + COLON? -> SECCION
-            if (current.type == TokenType::IDENTIFIER && peek().type == TokenType::COLON) {
-                //node = parse_section();
-                break;
-            }
-            // IDENTIFICADOR solo? -> INSTRUCCION
-            // IDENTIFICADOR IDENTIFICADOR? -> posible instruccion de dos identificadores
-            if (
-                (current.type == TokenType::IDENTIFIER) ||
-                (current.type == TokenType::IDENTIFIER) && peek().type == TokenType::IDENTIFIER
-            ) {
-                node = parse_statement();
-            }
+    // esperamos q haya dos puntos despues del ID de una section.
+    expect(TokenType::COLON, "Expected COLON");
 
-            // se encontro una o varias anotaciones
-            else if (current.type == TokenType::AT) {
-                node = parse_annotation();
-            } else if (current.type == TokenType::END_LABEL) {
-                program.push_back(std::move(parser_end_label()));
-                break;
-            }
+    std::vector<std::unique_ptr<ASTNode>> body = parse_in_label();
 
-            // Omitir tokens invalidos
-            else {
-                std::cerr << "linea: " << current.line << ":" << current.column <<
-                        " Parser ERROR: " << "Skipping invalid token: " + token_type_to_string(current.type) +
-                        " [" + current.lexeme + "]" << std::endl;
-                advance();
-                continue;
-            }
+    if (!body.empty()) {
+        ASTNode *last = body.back().get();
 
-            if (node) program.push_back(std::move(node));
-        }
-
-        return program;
+        if (auto end = dynamic_cast<EndLabelNode *>(last)) {
+            // si el ultimo nodo del label, es un end label, le indicamos
+            // el nombre al que pertenece
+            end->label = section_name;
+        } // else error(current, "Falta un 'end'");
     }
 
-    std::unique_ptr<ASTNode> Parser::parser_end_label() {
-        advance(); // consumimos el token end
-        return std::make_unique<EndLabelNode>("");
-    }
+    return std::make_unique<LabelNode>(section_name, std::move(body));
+}
 
-    std::unique_ptr<ASTNode> Parser::parse_section() {
-        if (current.type != TokenType::IDENTIFIER) {
-            return nullptr;
-        }
+std::unique_ptr<ASTNode> Parser::parse_operand() {
+    switch (current.type) {
+    case TokenType::REGISTER: {
+        std::string reg = current.lexeme;
+        advance();
 
-        // guardar nombre de la seccion:
-        std::string section_name = current.lexeme;
-        advance(); // consumimos el token
+        // Decodificar tamano (r0b=8bit, r0w=16bit, etc.)
+        int size_bits = 64; // Default 64-bit
+        if (reg.size() > 2) {
+            char suffix = reg.back();
 
-        // esperamos q haya dos puntos despues del ID de una section.
-        expect(TokenType::COLON, "Expected COLON");
-
-        std::vector<std::unique_ptr<ASTNode> > body = parse_in_label();
-
-        if (!body.empty()) {
-            ASTNode *last = body.back().get();
-
-            if (auto end = dynamic_cast<EndLabelNode *>(last)) {
-                // si el ultimo nodo del label, es un end label, le indicamos
-                // el nombre al que pertenece
-                end->label = section_name;
-            } //else error(current, "Falta un 'end'");
-        }
-
-        return std::make_unique<LabelNode>(section_name, std::move(body));
-    }
-
-    std::unique_ptr<ASTNode> Parser::parse_operand() {
-        switch (current.type) {
-            case TokenType::REGISTER: {
-                std::string reg = current.lexeme;
-                advance();
-
-                // Decodificar tamano (r0b=8bit, r0w=16bit, etc.)
-                int size_bits = 64; // Default 64-bit
-                if (reg.size() > 2) {
-                    char suffix = reg.back();
-
-                    // Solo quitar el sufijo si realmente es un sufijo valido
-                    if (suffix == 'b' || suffix == 'w' || suffix == 'd') {
-                        reg.pop_back();
-                        switch (suffix) {
-                            case 'b': size_bits = 8;
-                                break;
-                            case 'w': size_bits = 16;
-                                break;
-                            case 'd': size_bits = 32;
-                                break;
-                        }
-                    }
-                }
-
-                return std::make_unique<RegisterOperand>(reg, size_bits);
-            }
-
-            case TokenType::NUMBER_DEC:
-            case TokenType::NUMBER_HEX:
-            case TokenType::NUMBER_BIN:
-            case TokenType::NUMBER_OCT: {
-                auto num = std::make_unique<NumberOperand>(
-                    current.lexeme, current.type);
-                advance();
-                return std::move(num);
-            }
-
-            case TokenType::STRING: {
-                auto str = std::make_unique<StringOperand>(current.lexeme);
-                advance();
-                return std::move(str);
-            }
-
-            case TokenType::IDENTIFIER: {
-                // Label o variable
-                auto label = std::make_unique<LabelOperand>(current.lexeme);
-                advance();
-                return std::move(label);
-            }
-
-            case TokenType::LBRACKET: {
-                // '['
-                advance(); // consumir '['
-
-                // Parsear la expresion dentro de los corchetes
-                auto expr = parse_mem_expression();
-
-                if (current.type != TokenType::RBRACKET)
-                    error(current, "Falta ']' en operando de memoria");
-
-                advance(); // consumir ']'
-
-                return std::make_unique<MemoryOperand>(std::move(expr));
-            }
-            case TokenType::AT: {
-                return parse_annotation();
-            }
-
-
-            default:
-                error(current, "Operando invalido");
-                advance(); // omitir token invalido
-                return nullptr;
-        }
-    }
-
-    std::unique_ptr<ASTNode> Parser::parse_data_directive() {
-        // PATRONES:
-        // msg db "Hola mundo"
-        // bytes db 0xFF, 0x00, 0x11
-        // count dw 42, 100
-
-        std::string label = current.lexeme; // "msg", "bytes"
-        advance();                          // Consumir label
-
-        // Esperar directiva: db, dw, dd, ptr, etc
-        Token directiveTok = expectToken(TokenType::DATA_DIRECTIVE, "Expected data directive (dq, db, dw, dd, ptr)");
-        if (directiveTok.type != TokenType::DATA_DIRECTIVE) {
-            return nullptr;
-        }
-        advance(); // consumir la directiva
-
-        std::string                             directive = directiveTok.lexeme; // "db", "dw", "dd"
-        std::vector<std::unique_ptr<ExprNode> > values;
-
-        // Parsear valores: "Hola", 42, 0xFF, label, etc.
-        while (current.type != TokenType::EndOfFile) {
-            // STRING, NUMBER, IDENTIFIER (labels)
-            switch (current.type) {
-                case TokenType::STRING:
-                    values.push_back(std::make_unique<StringExpr>(current.lexeme));
-                    advance();
-                    break;
-                case TokenType::NUMBER_DEC:
-                case TokenType::NUMBER_HEX:
-                case TokenType::NUMBER_BIN:
-                case TokenType::NUMBER_OCT:
-                case TokenType::IDENTIFIER:
-                case TokenType::MINUS: // si es un -, puede ser valor negativo?
-                    values.push_back(parse_expression());
-                    break;
-
-                default:
-                    error(current, "Invalid data value");
-                    advance();
-                    continue;
-            }
-
-            // Coma opcional
-            if (match(TokenType::COMMA)) {
-                continue; // Mas datos
-            }
-            break; // Fin de datos
-        }
-
-        return std::make_unique<DataDecl>(std::move(label),
-                                          std::move(directive),
-                                          std::move(values));
-    }
-
-
-    std::unique_ptr<ASTNode> Parser::parse_instruction() {
-        std::string opcode = current.lexeme;
-        std::string ext_opcode;
-        Token       tok = peek();
-        if (tok.type == TokenType::DOT) {
-            // si el siguiente token es un "." es una instruccion compuesta.
-            advance(); // consumismos el token opcode
-
-            opcode += current.lexeme;
-            advance(); // consumismos el token opcode, el token "."
-
-            // anadimos la siguiente parte de la instruccion compleja.
-            ext_opcode = current.lexeme;
-            opcode += ext_opcode;
-        }
-        auto it       = InstructionSet.find(opcode);
-        auto valid_it = it;
-        if (it == InstructionSet.end()) {
-            float affinity = 0.0;
-            int   dist     = 0;
-
-
-            // intentamos recuperarnos del error ?de sintaxis?
-            for (auto &option: InstructionSet) {
-                dist     = utils::Levenshtein::distance(opcode, option.first);
-                affinity = utils::Levenshtein::affinity(opcode, option.first);
-
-                // Top 3 resultados
-                if (dist <= 3 || affinity >= 80) {
-                    // si la distancia es <= 3 o la afinidad es mayor o igual al 80%
-                    warning(current.line, current.column,
-                            "Instruccion '" + opcode + "' desconocida",
-                            option.first);
-                    opcode   = option.first;
-                    valid_it = InstructionSet.find(option.first); // Actualizar
-                    goto exit_error;                              // nos pudimos recuperar tal vez
+            // Solo quitar el sufijo si realmente es un sufijo valido
+            if (suffix == 'b' || suffix == 'w' || suffix == 'd') {
+                reg.pop_back();
+                switch (suffix) {
+                case 'b': size_bits = 8; break;
+                case 'w': size_bits = 16; break;
+                case 'd': size_bits = 32; break;
                 }
             }
-
-            std::stringstream ss;
-            for (auto &option: InstructionSet) {
-                dist     = utils::Levenshtein::distance(opcode, option.first);
-                affinity = utils::Levenshtein::affinity(opcode, option.first);
-
-                if (affinity > 30) {
-                    ss << "Instr: " << option.first << "\n"
-                            << "Dist: " << dist << "\n"
-                            << "Aff: " << std::fixed << std::setprecision(1)
-                            << affinity * 100 << "%\n\n";
-                }
-            }
-
-            error(current,
-                  "Instruccion no existe esperado: " + opcode + "\n" + ss.str()
-            );
-            return nullptr;
-        }
-    exit_error:
-        const auto &pattern = valid_it->second; // SIEMPRE valido
-
-        advance(); // consumir el opcode
-
-        std::vector<std::unique_ptr<ASTNode> > operands;
-
-        switch (pattern.arity) {
-            case OpArity::ZERO: break;
-            case OpArity::ONE: operands.emplace_back(parse_operand());
-                break;
-            case OpArity::TWO:
-                operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' despues de destino");
-                operands.emplace_back(parse_operand());
-                break;
-            case OpArity::THREE:
-                operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' despues del primer operando");
-                operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' despues del segundo operando");
-                operands.emplace_back(parse_operand());
-                break;
-            case OpArity::FOUR:
-                operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' despues del primer operando");
-                operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' despues del segundo operando");
-                operands.emplace_back(parse_operand());
-                expect(TokenType::COMMA, "Se esperaba ',' despues del tercer operando");
-                operands.emplace_back(parse_operand());
-                break;
         }
 
-        // Usa pattern.opcode para codegen
-        auto instr = std::make_unique<Instruction>(pattern.opcode, std::move(operands));
-        // Captura la linea fuente Vex del marcador `// @line N` mas
-        // reciente (rellenado por el lexer en skip_whitespace).  Esto
-        // se usa luego por el bytecode emitter para registrar el par
-        // (byte_offset, source_line) en la tabla debug del linker.
-        instr->source_line = lexer.last_src_line;
-        return instr;
+        return std::make_unique<RegisterOperand>(reg, size_bits);
     }
 
-    std::unique_ptr<ASTNode> Parser::parse_import() {
-        // current == "import"
-        advance(); // consumir 'import'
-
-        if (current.type != TokenType::STRING) {
-            error(current, "Se esperaba un nombre de archivo entre comillas");
-        }
-
-        std::string filename = current.lexeme;
-        advance(); // consumir STRING
-
-        return std::make_unique<ImportNode>(filename);
+    case TokenType::NUMBER_DEC:
+    case TokenType::NUMBER_HEX:
+    case TokenType::NUMBER_BIN:
+    case TokenType::NUMBER_OCT: {
+        auto num =
+            std::make_unique<NumberOperand>(current.lexeme, current.type);
+        advance();
+        return std::move(num);
     }
 
-    std::unique_ptr<ASTNode> Parser::parse_statement() {
-        // Si es un registro y un identificador, se trata de una instruccion.
+    case TokenType::STRING: {
+        auto str = std::make_unique<StringOperand>(current.lexeme);
+        advance();
+        return std::move(str);
+    }
 
-        Token next = peek();
+    case TokenType::IDENTIFIER: {
+        // Label o variable
+        auto label = std::make_unique<LabelOperand>(current.lexeme);
+        advance();
+        return std::move(label);
+    }
 
-        // directiva datos: msg db "Hola mundo"
-        if (current.type == TokenType::IDENTIFIER && next.type == TokenType::DATA_DIRECTIVE) {
-            return parse_data_directive();
-        }
+    case TokenType::LBRACKET: {
+        // '['
+        advance(); // consumir '['
 
-        bool cur_is_id       = current.type == TokenType::IDENTIFIER;
-        bool next_is_operand =
-                next.type == TokenType::REGISTER
-                || is_number_token(next.type)
-                || next.type == TokenType::IDENTIFIER
-                || next.type == TokenType::LBRACKET
-                || next.type == TokenType::DOT;
+        // Parsear la expresion dentro de los corchetes
+        auto expr = parse_mem_expression();
 
-        /*
-        if (
-            (current.type == TokenType::IDENTIFIER && next.type == TokenType::REGISTER) ||
-            (current.type == TokenType::IDENTIFIER && is_number_token(next.type)) ||
-            (current.type == TokenType::IDENTIFIER && next.type == TokenType::IDENTIFIER) ||
-            (current.type == TokenType::IDENTIFIER && next.type == TokenType::LBRACKET) ||
-            current.lexeme == "call" && next.type == TokenType::AT
-        ) */
-        if ((cur_is_id && next_is_operand) ||
-            (current.type == TokenType::IDENTIFIER && next.type == TokenType::AT)) {
-            /**
-             * Si es identificador + registro       ||
-             * Si es identificador + numero         ||
-             * Si es identificador + identificador  ||
-             * Si es identificador + [ + identificador
-             */
-            return parse_instruction();
-        }
+        if (current.type != TokenType::RBRACKET)
+            error(current, "Falta ']' en operando de memoria");
 
-        // instrucciones de identificador unico sin operandos:
-        static const char *no_operand_instr[] = {"nop1", "nop2", "ret", "hlt", "leave"};
+        advance(); // consumir ']'
 
-        for (auto &name: no_operand_instr)
-            if (current.lexeme == name)
-                return parse_instruction();
+        return std::make_unique<MemoryOperand>(std::move(expr));
+    }
+    case TokenType::AT: {
+        return parse_annotation();
+    }
 
-
-        if (current.lexeme == "import") {
-            return parse_import();
-        }
-
-        error(current, "Token no esperado: " + current.lexeme);
-        advance(); // omitir token no reconocido
+    default:
+        error(current, "Operando invalido");
+        advance(); // omitir token invalido
         return nullptr;
     }
 }
+
+std::unique_ptr<ASTNode> Parser::parse_data_directive() {
+    // PATRONES:
+    // msg db "Hola mundo"
+    // bytes db 0xFF, 0x00, 0x11
+    // count dw 42, 100
+
+    std::string label = current.lexeme; // "msg", "bytes"
+    advance();                          // Consumir label
+
+    // Esperar directiva: db, dw, dd, ptr, etc
+    Token directiveTok =
+        expectToken(TokenType::DATA_DIRECTIVE,
+                    "Expected data directive (dq, db, dw, dd, ptr)");
+    if (directiveTok.type != TokenType::DATA_DIRECTIVE) {
+        return nullptr;
+    }
+    advance(); // consumir la directiva
+
+    std::string directive = directiveTok.lexeme; // "db", "dw", "dd"
+    std::vector<std::unique_ptr<ExprNode>> values;
+
+    // Parsear valores: "Hola", 42, 0xFF, label, etc.
+    while (current.type != TokenType::EndOfFile) {
+        // STRING, NUMBER, IDENTIFIER (labels)
+        switch (current.type) {
+        case TokenType::STRING:
+            values.push_back(std::make_unique<StringExpr>(current.lexeme));
+            advance();
+            break;
+        case TokenType::NUMBER_DEC:
+        case TokenType::NUMBER_HEX:
+        case TokenType::NUMBER_BIN:
+        case TokenType::NUMBER_OCT:
+        case TokenType::IDENTIFIER:
+        case TokenType::MINUS: // si es un -, puede ser valor negativo?
+            values.push_back(parse_expression());
+            break;
+
+        default:
+            error(current, "Invalid data value");
+            advance();
+            continue;
+        }
+
+        // Coma opcional
+        if (match(TokenType::COMMA)) {
+            continue; // Mas datos
+        }
+        break; // Fin de datos
+    }
+
+    return std::make_unique<DataDecl>(std::move(label), std::move(directive),
+                                      std::move(values));
+}
+
+std::unique_ptr<ASTNode> Parser::parse_instruction() {
+    std::string opcode = current.lexeme;
+    std::string ext_opcode;
+    Token tok = peek();
+    if (tok.type == TokenType::DOT) {
+        // si el siguiente token es un "." es una instruccion compuesta.
+        advance(); // consumismos el token opcode
+
+        opcode += current.lexeme;
+        advance(); // consumismos el token opcode, el token "."
+
+        // anadimos la siguiente parte de la instruccion compleja.
+        ext_opcode = current.lexeme;
+        opcode += ext_opcode;
+    }
+    auto it = InstructionSet.find(opcode);
+    auto valid_it = it;
+    if (it == InstructionSet.end()) {
+        float affinity = 0.0;
+        int dist = 0;
+
+        // intentamos recuperarnos del error ?de sintaxis?
+        for (auto &option : InstructionSet) {
+            dist = utils::Levenshtein::distance(opcode, option.first);
+            affinity = utils::Levenshtein::affinity(opcode, option.first);
+
+            // Top 3 resultados
+            if (dist <= 3 || affinity >= 80) {
+                // si la distancia es <= 3 o la afinidad es mayor o igual al 80%
+                warning(current.line, current.column,
+                        "Instruccion '" + opcode + "' desconocida",
+                        option.first);
+                opcode = option.first;
+                valid_it = InstructionSet.find(option.first); // Actualizar
+                goto exit_error; // nos pudimos recuperar tal vez
+            }
+        }
+
+        std::stringstream ss;
+        for (auto &option : InstructionSet) {
+            dist = utils::Levenshtein::distance(opcode, option.first);
+            affinity = utils::Levenshtein::affinity(opcode, option.first);
+
+            if (affinity > 30) {
+                ss << "Instr: " << option.first << "\n"
+                   << "Dist: " << dist << "\n"
+                   << "Aff: " << std::fixed << std::setprecision(1)
+                   << affinity * 100 << "%\n\n";
+            }
+        }
+
+        error(current,
+              "Instruccion no existe esperado: " + opcode + "\n" + ss.str());
+        return nullptr;
+    }
+exit_error:
+    const auto &pattern = valid_it->second; // SIEMPRE valido
+
+    advance(); // consumir el opcode
+
+    std::vector<std::unique_ptr<ASTNode>> operands;
+
+    switch (pattern.arity) {
+    case OpArity::ZERO: break;
+    case OpArity::ONE: operands.emplace_back(parse_operand()); break;
+    case OpArity::TWO:
+        operands.emplace_back(parse_operand());
+        expect(TokenType::COMMA, "Se esperaba ',' despues de destino");
+        operands.emplace_back(parse_operand());
+        break;
+    case OpArity::THREE:
+        operands.emplace_back(parse_operand());
+        expect(TokenType::COMMA, "Se esperaba ',' despues del primer operando");
+        operands.emplace_back(parse_operand());
+        expect(TokenType::COMMA,
+               "Se esperaba ',' despues del segundo operando");
+        operands.emplace_back(parse_operand());
+        break;
+    case OpArity::FOUR:
+        operands.emplace_back(parse_operand());
+        expect(TokenType::COMMA, "Se esperaba ',' despues del primer operando");
+        operands.emplace_back(parse_operand());
+        expect(TokenType::COMMA,
+               "Se esperaba ',' despues del segundo operando");
+        operands.emplace_back(parse_operand());
+        expect(TokenType::COMMA, "Se esperaba ',' despues del tercer operando");
+        operands.emplace_back(parse_operand());
+        break;
+    }
+
+    // Usa pattern.opcode para codegen
+    auto instr =
+        std::make_unique<Instruction>(pattern.opcode, std::move(operands));
+    // Captura la linea fuente Vex del marcador `// @line N` mas
+    // reciente (rellenado por el lexer en skip_whitespace).  Esto
+    // se usa luego por el bytecode emitter para registrar el par
+    // (byte_offset, source_line) en la tabla debug del linker.
+    instr->source_line = lexer.last_src_line;
+    return instr;
+}
+
+std::unique_ptr<ASTNode> Parser::parse_import() {
+    // current == "import"
+    advance(); // consumir 'import'
+
+    if (current.type != TokenType::STRING) {
+        error(current, "Se esperaba un nombre de archivo entre comillas");
+    }
+
+    std::string filename = current.lexeme;
+    advance(); // consumir STRING
+
+    return std::make_unique<ImportNode>(filename);
+}
+
+std::unique_ptr<ASTNode> Parser::parse_statement() {
+    // Si es un registro y un identificador, se trata de una instruccion.
+
+    Token next = peek();
+
+    // directiva datos: msg db "Hola mundo"
+    if (current.type == TokenType::IDENTIFIER &&
+        next.type == TokenType::DATA_DIRECTIVE) {
+        return parse_data_directive();
+    }
+
+    bool cur_is_id = current.type == TokenType::IDENTIFIER;
+    bool next_is_operand =
+        next.type == TokenType::REGISTER || is_number_token(next.type) ||
+        next.type == TokenType::IDENTIFIER ||
+        next.type == TokenType::LBRACKET || next.type == TokenType::DOT;
+
+    /*
+    if (
+        (current.type == TokenType::IDENTIFIER && next.type ==
+    TokenType::REGISTER) || (current.type == TokenType::IDENTIFIER &&
+    is_number_token(next.type)) || (current.type == TokenType::IDENTIFIER &&
+    next.type == TokenType::IDENTIFIER) || (current.type ==
+    TokenType::IDENTIFIER && next.type == TokenType::LBRACKET) || current.lexeme
+    == "call" && next.type == TokenType::AT
+    ) */
+    if ((cur_is_id && next_is_operand) ||
+        (current.type == TokenType::IDENTIFIER && next.type == TokenType::AT)) {
+        /**
+         * Si es identificador + registro       ||
+         * Si es identificador + numero         ||
+         * Si es identificador + identificador  ||
+         * Si es identificador + [ + identificador
+         */
+        return parse_instruction();
+    }
+
+    // instrucciones de identificador unico sin operandos:
+    static const char *no_operand_instr[] = {"nop1", "nop2", "ret", "hlt",
+                                             "leave"};
+
+    for (auto &name : no_operand_instr)
+        if (current.lexeme == name) return parse_instruction();
+
+    if (current.lexeme == "import") {
+        return parse_import();
+    }
+
+    error(current, "Token no esperado: " + current.lexeme);
+    advance(); // omitir token no reconocido
+    return nullptr;
+}
+} // namespace vm

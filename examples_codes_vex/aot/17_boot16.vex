@@ -1,0 +1,27 @@
+// AOT: boot sector BIOS de 16-bit COMPLETO en UN solo bloque `asm`.
+// El bloque mezcla codigo (ensamblado por Keystone) y datos crudos
+// (db/times/$/$$, evaluados por el compilador) igual que en NASM.
+// Compilar y bootear:
+//   vm -m aot --vex 17_boot16.vex --emit bin --bin-base 0x7C00 -o boot.bin
+//   qemu-system-i386 -drive format=raw,file=boot.bin
+
+@bits(16) @section(".text", "rx")
+asm boot {
+    cli
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
+
+    mov ah, 0x0E          ; BIOS teletype
+    mov al, 0x56          ; 'V'
+    int 0x10
+
+hang:
+    hlt
+    jmp hang              ; label intra-bloque (Keystone lo resuelve)
+
+    times 510-($-$$) db 0 ; relleno hasta 510 (datos: evaluado por el compilador)
+    dw 0xAA55             ; firma MBR en 510..511
+}

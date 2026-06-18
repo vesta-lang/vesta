@@ -1,0 +1,18 @@
+// Cast char -> string (Vex Embed, native_poo_ / AOT): `(string)<char>`
+// construye un value-string {ptr,len,cap} de UN caracter (buffer de 2
+// bytes en heap: el char + nul; len=1, cap=2).  RAII libera el buffer
+// al exit del scope.
+//
+// `(string)'a' + (string)'b'` -> concat de dos value-strings de 1 char
+// -> "ab" (length 2).  Los dos temporales del cast + el buffer del
+// concat se liberan (sin leak, sin double-free; verificado).
+//
+// Validado por ejecucion (PE host + ELF) + balance de malloc/free.
+
+i32 main() {
+    string s = (string)'a' + (string)'b';   // "ab"
+    char* c = s.cstr();                       // buffer nul-terminado
+    // c[0] = 'a' = 97 ; length = 2.  Devolvemos length para el
+    // exit-code (el contenido se verifica aparte en los tests).
+    return (i32) s.length();                  // 2
+}

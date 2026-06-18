@@ -11,4 +11,3 @@
  */
 
 #include "linker/velb_linker_bytecode.h"
-

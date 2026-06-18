@@ -72,68 +72,67 @@
 
 namespace jit {
 
-    /**
-     * @struct JitRegalloc
-     * @brief Resultado del analisis + asignacion regalloc del JIT.
-     *
-     * Contiene el mapping VID -> registro host para los SSA values
-     * elegidos, mas la lista de regs callee-saved usados (necesarios
-     * para push/pop en prologue/epilogue).
-     */
-    struct JitRegalloc {
-        /// VID asignado -> MReg host.  VIDs no presentes usan slot stack.
-        std::unordered_map<ir::IrValueId, MReg> vid_to_reg;
-        /// Regs callee-saved que el codigo emitido modifica y debe
-        /// preservar.  Lista deduplicada en orden estable (R12, R13, ...).
-        std::vector<MReg> callee_saved_used;
+/**
+ * @struct JitRegalloc
+ * @brief Resultado del analisis + asignacion regalloc del JIT.
+ *
+ * Contiene el mapping VID -> registro host para los SSA values
+ * elegidos, mas la lista de regs callee-saved usados (necesarios
+ * para push/pop en prologue/epilogue).
+ */
+struct JitRegalloc {
+    /// VID asignado -> MReg host.  VIDs no presentes usan slot stack.
+    std::unordered_map<ir::IrValueId, MReg> vid_to_reg;
+    /// Regs callee-saved que el codigo emitido modifica y debe
+    /// preservar.  Lista deduplicada en orden estable (R12, R13, ...).
+    std::vector<MReg> callee_saved_used;
 
-        /// True si la asignacion esta vacia (todos los VIDs usan slot).
-        bool empty() const noexcept { return vid_to_reg.empty(); }
+    /// True si la asignacion esta vacia (todos los VIDs usan slot).
+    bool empty() const noexcept { return vid_to_reg.empty(); }
 
-        /// Lookup rapido: devuelve MReg si vid esta pinned, MReg::NONE sino.
-        MReg lookup(ir::IrValueId vid) const noexcept {
-            auto it = vid_to_reg.find(vid);
-            if (it == vid_to_reg.end()) return MReg::NONE;
-            return it->second;
-        }
-    };
-
-    /**
-     * @brief Computa la asignacion regalloc para una @c IrFunction.
-     *
-     * @param fn  Funcion IR sobre la que ejecutar el analisis.
-     * @return    Asignacion (puede estar vacia si no hay candidatos).
-     */
-    JitRegalloc compute_jit_regalloc(const ir::IrFunction &fn);
-
-    /**
-     * @brief Aplica el rewrite slot->reg sobre un @c MFunction.
-     *
-     * Recorre todas las MInstrs.  Cualquier @c MOperand de tipo MEM con
-     * base=RBP y disp coincidente con @c slot_offset(pinned_vid) se
-     * reemplaza por un REG operand del reg asignado, preservando width.
-     *
-     * El caller es responsable de anyadir push/pop de
-     * @c regalloc.callee_saved_used en prologue/epilogue.
-     *
-     * @param mf       MFunction post-selector.
-     * @param fn       IrFunction original (para mapear offset <-> vid).
-     * @param regalloc Resultado de @c compute_jit_regalloc.
-     */
-    void apply_jit_regalloc_rewrite(MFunction &mf,
-                                    const ir::IrFunction &fn,
-                                    const JitRegalloc &regalloc);
-
-    /**
-     * @brief Convierte slot_offset (-8*(vid+1)) a vid, o -1 si invalido.
-     */
-    inline int32_t slot_offset_to_vid(int32_t offset) noexcept {
-        if (offset >= 0) return -1;
-        if (offset % 8 != 0) return -1;
-        const int32_t vid = (-offset / 8) - 1;
-        if (vid < 0) return -1;
-        return vid;
+    /// Lookup rapido: devuelve MReg si vid esta pinned, MReg::NONE sino.
+    MReg lookup(ir::IrValueId vid) const noexcept {
+        auto it = vid_to_reg.find(vid);
+        if (it == vid_to_reg.end()) return MReg::NONE;
+        return it->second;
     }
+};
+
+/**
+ * @brief Computa la asignacion regalloc para una @c IrFunction.
+ *
+ * @param fn  Funcion IR sobre la que ejecutar el analisis.
+ * @return    Asignacion (puede estar vacia si no hay candidatos).
+ */
+JitRegalloc compute_jit_regalloc(const ir::IrFunction &fn);
+
+/**
+ * @brief Aplica el rewrite slot->reg sobre un @c MFunction.
+ *
+ * Recorre todas las MInstrs.  Cualquier @c MOperand de tipo MEM con
+ * base=RBP y disp coincidente con @c slot_offset(pinned_vid) se
+ * reemplaza por un REG operand del reg asignado, preservando width.
+ *
+ * El caller es responsable de anyadir push/pop de
+ * @c regalloc.callee_saved_used en prologue/epilogue.
+ *
+ * @param mf       MFunction post-selector.
+ * @param fn       IrFunction original (para mapear offset <-> vid).
+ * @param regalloc Resultado de @c compute_jit_regalloc.
+ */
+void apply_jit_regalloc_rewrite(MFunction &mf, const ir::IrFunction &fn,
+                                const JitRegalloc &regalloc);
+
+/**
+ * @brief Convierte slot_offset (-8*(vid+1)) a vid, o -1 si invalido.
+ */
+inline int32_t slot_offset_to_vid(int32_t offset) noexcept {
+    if (offset >= 0) return -1;
+    if (offset % 8 != 0) return -1;
+    const int32_t vid = (-offset / 8) - 1;
+    if (vid < 0) return -1;
+    return vid;
+}
 
 } // namespace jit
 

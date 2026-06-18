@@ -50,58 +50,69 @@
 
 #include <string>
 
-namespace ast { struct ModuleNode; }
-namespace ir  { struct IrModule;  }
+namespace ast {
+struct ModuleNode;
+}
+namespace ir {
+struct IrModule;
+}
+namespace analyze {
+struct ModuleCost;
+}
 
 namespace vex {
 
-    /**
-     * @brief Convierte un diagrama Graphviz (DOT) en una pagina HTML interactiva.
-     *
-     * Parsea el DOT (clusters, nodos record/box/diamond/..., aristas con
-     * label/color/style) a un modelo de grafo y lo renderiza dentro de una
-     * plantilla HTML autocontenida con el motor de layout + interaccion en
-     * JS embebido.
-     *
-     * @param dot_source   Texto DOT completo (digraph G { ... }) tal cual lo
-     *                     produce @c graphviz_from_ast/ir_module/vel_text.
-     * @param title        Titulo mostrado en la cabecera de la pagina.
-     * @param view_kind    Identificador corto de la vista ("ast", "ir-pre",
-     *                     "ir-post", "vel"); afecta solo a etiquetas de UI.
-     * @return             Documento HTML completo (`<!DOCTYPE html> ...`).
-     */
-    std::string html_from_dot(const std::string &dot_source,
-                              const std::string &title,
-                              const std::string &view_kind);
+/**
+ * @brief Convierte un diagrama Graphviz (DOT) en una pagina HTML interactiva.
+ *
+ * Parsea el DOT (clusters, nodos record/box/diamond/..., aristas con
+ * label/color/style) a un modelo de grafo y lo renderiza dentro de una
+ * plantilla HTML autocontenida con el motor de layout + interaccion en
+ * JS embebido.
+ *
+ * @param dot_source   Texto DOT completo (digraph G { ... }) tal cual lo
+ *                     produce @c graphviz_from_ast/ir_module/vel_text.
+ * @param title        Titulo mostrado en la cabecera de la pagina.
+ * @param view_kind    Identificador corto de la vista ("ast", "ir-pre",
+ *                     "ir-post", "vel"); afecta solo a etiquetas de UI.
+ * @return             Documento HTML completo (`<!DOCTYPE html> ...`).
+ */
+std::string html_from_dot(const std::string &dot_source,
+                          const std::string &title,
+                          const std::string &view_kind);
 
-    /**
-     * @brief HTML interactivo del AST Vex post type-check.
-     *
-     * Conveniencia simetrica a @c mermaid_from_ast / @c graphviz_from_ast:
-     * genera el DOT del AST internamente y lo pasa a @c html_from_dot.
-     *
-     * @param mod  AST modulo (post type-check).
-     * @return     Documento HTML completo.
-     */
-    std::string html_from_ast(const ast::ModuleNode &mod);
+/**
+ * @brief HTML interactivo del AST Vex post type-check.
+ *
+ * Conveniencia simetrica a @c mermaid_from_ast / @c graphviz_from_ast:
+ * genera el DOT del AST internamente y lo pasa a @c html_from_dot.
+ *
+ * @param mod  AST modulo (post type-check).
+ * @return     Documento HTML completo.
+ */
+std::string html_from_ast(const ast::ModuleNode &mod);
 
-    /**
-     * @brief HTML interactivo del SSA IR (pre o post optimizacion).
-     *
-     * @param mod    IrModule a graficar.
-     * @param title  Titulo (e.g. "SSA IR pre-optimizacion").
-     * @return       Documento HTML completo.
-     */
-    std::string html_from_ir_module(const ir::IrModule &mod,
-                                    const std::string &title);
+/**
+ * @brief HTML interactivo del SSA IR (pre o post optimizacion).
+ *
+ * @param mod    IrModule a graficar.
+ * @param title  Titulo (e.g. "SSA IR pre-optimizacion").
+ * @param cost   (opcional) Coste Big-O del modulo (--diagram-cost).  Se
+ *               reenvia al generador DOT subyacente para anotar cada
+ *               funcion.  Default nullptr => sin anotacion.
+ * @return       Documento HTML completo.
+ */
+std::string html_from_ir_module(const ir::IrModule &mod,
+                                const std::string &title,
+                                const analyze::ModuleCost *cost = nullptr);
 
-    /**
-     * @brief HTML interactivo del bytecode .vel ensamblador final.
-     *
-     * @param vel_text   Codigo .vel completo.
-     * @return           Documento HTML completo.
-     */
-    std::string html_from_vel_text(const std::string &vel_text);
+/**
+ * @brief HTML interactivo del bytecode .vel ensamblador final.
+ *
+ * @param vel_text   Codigo .vel completo.
+ * @return           Documento HTML completo.
+ */
+std::string html_from_vel_text(const std::string &vel_text);
 
 } // namespace vex
 

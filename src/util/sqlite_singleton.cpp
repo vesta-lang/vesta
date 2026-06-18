@@ -1,12 +1,12 @@
 /*
  * VestaVM - Maquina Virtual Distribuida
- * 
+ *
  * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribucion obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
@@ -24,96 +24,101 @@
 #include "json.hpp"
 
 namespace Sqlite {
-    /**
-     * "Puntero inteligente con destructor personalizado"
-     */
-    std::unique_ptr<sqlite3, SqliteSingleton::SqliteDeleter> SqliteSingleton::db_instance = nullptr;
+/**
+ * "Puntero inteligente con destructor personalizado"
+ */
+std::unique_ptr<sqlite3, SqliteSingleton::SqliteDeleter>
+    SqliteSingleton::db_instance = nullptr;
 
-    /**
-     * Mutex para evitar el Race Condition
-     */
-    std::mutex SqliteSingleton::db_mutex{};
-    bool SqliteSingleton::initialized = false;
+/**
+ * Mutex para evitar el Race Condition
+ */
+std::mutex SqliteSingleton::db_mutex{};
+bool SqliteSingleton::initialized = false;
 
-    sqlite3 *SqliteSingleton::get_instance(const std::string &db_path) {
-        // Solo 1 thread pasa a la vez
-        std::lock_guard<std::mutex> lock(db_mutex);
+sqlite3 *SqliteSingleton::get_instance(const std::string &db_path) {
+    // Solo 1 thread pasa a la vez
+    std::lock_guard<std::mutex> lock(db_mutex);
 
-        if (!initialized) {
-            sqlite3 *raw_db = nullptr;
-            int rc = sqlite3_open(db_path.c_str(), &raw_db);
-            if (rc != SQLITE_OK) {
-                std::cerr << "Error SQLite: " << sqlite3_errmsg(raw_db) << std::endl;
-                sqlite3_close(raw_db);
-                return nullptr;
-            }
-            db_instance.reset(raw_db); // transferir propiedad
-            // SqliteDeleter() se ejecuta
-            initialized = true;
-            std::cout << "SQLite conectado: " << db_path << std::endl;
-        }
-
-        return db_instance.get();
-    }
-
-    void SqliteSingleton::cleanup() {
-        // Solo 1 thread pasa a la vez
-        std::lock_guard<std::mutex> lock(db_mutex);
-        if (db_instance) {
-            sqlite3_close(db_instance.get());
-            db_instance.reset();
-            initialized = false;
-            std::cout << "SQLite desconectado." << std::endl;
-        }
-    }
-
-    bool SqliteSingleton::execute(const std::string &sql, std::string *err) {
-        sqlite3 *db = get_instance();
-        if (!db) {
-            if (err) *err = "Sin conexion a la base de datos";
-            return false;
-        }
-
-        char *err_msg = nullptr;
-        int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err_msg);
+    if (!initialized) {
+        sqlite3 *raw_db = nullptr;
+        int rc = sqlite3_open(db_path.c_str(), &raw_db);
         if (rc != SQLITE_OK) {
-            if (err) *err = err_msg ? std::string(err_msg) : "Error desconocido de sqlite";
-            if (err_msg) sqlite3_free(err_msg);
-            return false;
+            std::cerr << "Error SQLite: " << sqlite3_errmsg(raw_db)
+                      << std::endl;
+            sqlite3_close(raw_db);
+            return nullptr;
         }
-        return true;
+        db_instance.reset(raw_db); // transferir propiedad
+        // SqliteDeleter() se ejecuta
+        initialized = true;
+        std::cout << "SQLite conectado: " << db_path << std::endl;
     }
 
-    json SqliteSingleton::execute_json(const std::string &sql) {
-        sqlite3 *db = get_instance();
-        if (!db) {
-            return json{{"error", "Sin conexion a la base de datos"}};
-        }
+    return db_instance.get();
+}
 
-        json result = json::array();
-
-        auto callback = [](void *data, int argc, char **argv, char **col_name) -> int {
-            // <- AQUi
-            json &row = *static_cast<json *>(data);
-            json obj;
-            for (int i = 0; i < argc; i++) {
-                std::string col = col_name[i] ? col_name[i] : std::to_string(i);
-                obj[col] = argv[i] ? argv[i] : "";
-            }
-            row.push_back(obj);
-            return 0;
-        };
-
-        char *err_msg = nullptr;
-        json rows; // Local para callback
-        int rc = sqlite3_exec(db, sql.c_str(), callback, &rows, &err_msg);
-
-        if (rc != SQLITE_OK) {
-            json error = {{"error", std::string(err_msg)}};
-            sqlite3_free(err_msg);
-            return error;
-        }
-
-        return rows;
+void SqliteSingleton::cleanup() {
+    // Solo 1 thread pasa a la vez
+    std::lock_guard<std::mutex> lock(db_mutex);
+    if (db_instance) {
+        sqlite3_close(db_instance.get());
+        db_instance.reset();
+        initialized = false;
+        std::cout << "SQLite desconectado." << std::endl;
     }
 }
+
+bool SqliteSingleton::execute(const std::string &sql, std::string *err) {
+    sqlite3 *db = get_instance();
+    if (!db) {
+        if (err) *err = "Sin conexion a la base de datos";
+        return false;
+    }
+
+    char *err_msg = nullptr;
+    int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &err_msg);
+    if (rc != SQLITE_OK) {
+        if (err)
+            *err =
+                err_msg ? std::string(err_msg) : "Error desconocido de sqlite";
+        if (err_msg) sqlite3_free(err_msg);
+        return false;
+    }
+    return true;
+}
+
+json SqliteSingleton::execute_json(const std::string &sql) {
+    sqlite3 *db = get_instance();
+    if (!db) {
+        return json{{"error", "Sin conexion a la base de datos"}};
+    }
+
+    json result = json::array();
+
+    auto callback = [](void *data, int argc, char **argv,
+                       char **col_name) -> int {
+        // <- AQUi
+        json &row = *static_cast<json *>(data);
+        json obj;
+        for (int i = 0; i < argc; i++) {
+            std::string col = col_name[i] ? col_name[i] : std::to_string(i);
+            obj[col] = argv[i] ? argv[i] : "";
+        }
+        row.push_back(obj);
+        return 0;
+    };
+
+    char *err_msg = nullptr;
+    json rows; // Local para callback
+    int rc = sqlite3_exec(db, sql.c_str(), callback, &rows, &err_msg);
+
+    if (rc != SQLITE_OK) {
+        json error = {{"error", std::string(err_msg)}};
+        sqlite3_free(err_msg);
+        return error;
+    }
+
+    return rows;
+}
+} // namespace Sqlite

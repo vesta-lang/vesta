@@ -64,12 +64,12 @@
 
 // Phase M5.A: cabeceras para PID + atomic rename portable.
 #ifdef _WIN32
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #else
-#  include <unistd.h>
+#include <unistd.h>
 #endif
 
 namespace vex {
@@ -80,11 +80,11 @@ namespace {
 /// no exponer la helper privada.
 ir::OptLevel opt_level_from_int_(int n) noexcept {
     switch (n) {
-        case 0: return ir::OptLevel::O0;
-        case 1: return ir::OptLevel::O1;
-        case 2: return ir::OptLevel::O2;
-        case 3: return ir::OptLevel::O3;
-        default: return ir::OptLevel::O1;
+    case 0: return ir::OptLevel::O0;
+    case 1: return ir::OptLevel::O1;
+    case 2: return ir::OptLevel::O2;
+    case 3: return ir::OptLevel::O3;
+    default: return ir::OptLevel::O1;
     }
 }
 
@@ -102,7 +102,8 @@ bool write_file_(const std::string &path, const std::vector<uint8_t> &bytes) {
     try {
         std::filesystem::create_directories(
             std::filesystem::path(path).parent_path());
-    } catch (...) { /* ignorar; el ofstream tambien fallara */ }
+    } catch (...) { /* ignorar; el ofstream tambien fallara */
+    }
     std::ofstream f(path, std::ios::binary);
     if (!f.is_open()) return false;
     if (!bytes.empty()) {
@@ -120,12 +121,13 @@ bool write_file_(const std::string &path, const std::vector<uint8_t> &bytes) {
 /// Esto cierra L.17: dos compilaciones simultaneas del mismo proyecto
 /// no corrompen los archivos de cache compartidos (.vexi, .vexir, .velb).
 bool write_file_atomic_(const std::string &path,
-                         const std::vector<uint8_t> &bytes) {
+                        const std::vector<uint8_t> &bytes) {
     namespace fs = std::filesystem;
     static std::atomic<uint64_t> tmp_counter{0};
     try {
         fs::create_directories(fs::path(path).parent_path());
-    } catch (...) { /* ignorar */ }
+    } catch (...) { /* ignorar */
+    }
     // Sufijo unico por proceso + thread + counter.  Asi multiples
     // compilaciones concurrentes nunca colisionan en el tmp.
     std::ostringstream suffix;
@@ -198,10 +200,10 @@ static std::string global_cache_dir_() {
 }
 
 static std::string global_cache_path_(const std::string &source_path,
-                                       const std::string &ext) {
+                                      const std::string &ext) {
     namespace fs = std::filesystem;
     const std::string dir = global_cache_dir_();
-    if (dir.empty()) return std::string();   // no global cache
+    if (dir.empty()) return std::string(); // no global cache
     // hash 64 del path canonico para que multiples sources con mismo
     // basename no colisionen.
     uint64_t h = 0xcbf29ce484222325ULL;
@@ -212,7 +214,7 @@ static std::string global_cache_path_(const std::string &source_path,
     std::string base = fs::path(source_path).stem().string();
     char hex[17];
     std::snprintf(hex, sizeof(hex), "%016llx",
-                    static_cast<unsigned long long>(h));
+                  static_cast<unsigned long long>(h));
     return (fs::path(dir) / (std::string(hex) + "_" + base + ext)).string();
 }
 
@@ -261,31 +263,31 @@ std::string read_source_(const std::string &path) {
 
 /// Estructura de trabajo por modulo durante la compilacion del proyecto.
 struct ProjectModuleWork {
-    uint32_t                              module_id = 0;
-    std::string                           canonical_path;
-    std::string                           module_name;
-    std::string                           source;
-    std::unique_ptr<ast::ModuleNode>      ast;
-    std::unique_ptr<TypeChecker>          tc;
-    ir::IrModule                          ir;
-    VexiModule                            vexi;
-    bool                                  ok = false;
+    uint32_t module_id = 0;
+    std::string canonical_path;
+    std::string module_name;
+    std::string source;
+    std::unique_ptr<ast::ModuleNode> ast;
+    std::unique_ptr<TypeChecker> tc;
+    ir::IrModule ir;
+    VexiModule vexi;
+    bool ok = false;
     /// Phase M.L20-full: Diagnostics local del modulo.  Cuando se
     /// paraleliza el compile (VEX_PARALLEL_COMPILE=1), cada thread
     /// usa este diags propio en lugar del res.diagnostics compartido,
     /// evitando race conditions.  Post-join se mergean al global.
-    Diagnostics                           diags;
+    Diagnostics diags;
 };
 
 /// Extrae los ImportDecl del AST en orden de declaracion.  Util para
 /// procesar los `only` imports tras tener las VexiModule de los deps.
 struct ImportRequest {
-    std::string                                       module_name;
-    std::string                                       local_name;      // alias o module_name
-    std::vector<TypeChecker::VexiOnlyEntry>           only_symbols;
-    bool                                              is_plain = false; // sin only -> registra namespace
-    bool                                              is_public_reexport = false; // L.23: public import
-    SourceLoc                                         loc{};            // posicion del ImportDecl (M6.a.3 diags)
+    std::string module_name;
+    std::string local_name; // alias o module_name
+    std::vector<TypeChecker::VexiOnlyEntry> only_symbols;
+    bool is_plain = false;           // sin only -> registra namespace
+    bool is_public_reexport = false; // L.23: public import
+    SourceLoc loc{};                 // posicion del ImportDecl (M6.a.3 diags)
 };
 
 /// Phase M.5: renombrar las top-level FunctionDecl y GlobalVarDecl del
@@ -316,7 +318,8 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
             if (fd->name.empty()) continue;
             if (fd->name == "main") continue;
-            if (fd->name.size() >= 2 && fd->name[0] == '_' && fd->name[1] == '_')
+            if (fd->name.size() >= 2 && fd->name[0] == '_' &&
+                fd->name[1] == '_')
                 continue;
             // Mangle: lib::foo -> lib__foo.
             const std::string newn = prefix + fd->name;
@@ -325,7 +328,8 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
         } else if (decl->kind == ast::NodeKind::GlobalVarDecl) {
             auto *gd = static_cast<ast::GlobalVarDecl *>(decl.get());
             if (gd->name.empty()) continue;
-            if (gd->name.size() >= 2 && gd->name[0] == '_' && gd->name[1] == '_')
+            if (gd->name.size() >= 2 && gd->name[0] == '_' &&
+                gd->name[1] == '_')
                 continue;
             const std::string newn = prefix + gd->name;
             rename_map.emplace(gd->name, newn);
@@ -340,136 +344,140 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
     walk_expr = [&](ast::Expr *e) {
         if (!e) return;
         switch (e->kind) {
-            case ast::NodeKind::IdentExpr: {
-                auto *id = static_cast<ast::IdentExpr *>(e);
-                auto it = rename_map.find(id->name);
-                if (it != rename_map.end()) id->name = it->second;
-                break;
+        case ast::NodeKind::IdentExpr: {
+            auto *id = static_cast<ast::IdentExpr *>(e);
+            auto it = rename_map.find(id->name);
+            if (it != rename_map.end()) id->name = it->second;
+            break;
+        }
+        case ast::NodeKind::CallExpr: {
+            auto *c = static_cast<ast::CallExpr *>(e);
+            walk_expr(c->callee.get());
+            for (auto &a : c->args)
+                walk_expr(a.get());
+            break;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            auto *b = static_cast<ast::BinaryExpr *>(e);
+            walk_expr(b->lhs.get());
+            walk_expr(b->rhs.get());
+            break;
+        }
+        case ast::NodeKind::UnaryExpr: {
+            auto *u = static_cast<ast::UnaryExpr *>(e);
+            walk_expr(u->operand.get());
+            break;
+        }
+        case ast::NodeKind::AssignExpr: {
+            auto *a = static_cast<ast::AssignExpr *>(e);
+            walk_expr(a->target.get());
+            walk_expr(a->value.get());
+            break;
+        }
+        case ast::NodeKind::IndexExpr: {
+            auto *ix = static_cast<ast::IndexExpr *>(e);
+            walk_expr(ix->base.get());
+            walk_expr(ix->index.get());
+            break;
+        }
+        case ast::NodeKind::FieldAccessExpr: {
+            auto *fa = static_cast<ast::FieldAccessExpr *>(e);
+            walk_expr(fa->base.get());
+            break;
+        }
+        case ast::NodeKind::CastExpr: {
+            auto *ce = static_cast<ast::CastExpr *>(e);
+            walk_expr(ce->operand.get());
+            break;
+        }
+        case ast::NodeKind::TernaryExpr: {
+            auto *tn = static_cast<ast::TernaryExpr *>(e);
+            walk_expr(tn->cond.get());
+            walk_expr(tn->then_expr.get());
+            walk_expr(tn->else_expr.get());
+            break;
+        }
+        case ast::NodeKind::NewExpr: {
+            auto *ne = static_cast<ast::NewExpr *>(e);
+            for (auto &a : ne->args)
+                walk_expr(a.get());
+            break;
+        }
+        case ast::NodeKind::StringLitExpr: {
+            // Interpolaciones `"...${expr}..."`: recorrer cada expr
+            // interna.  Sin esto, identificadores referenciados desde
+            // dentro de un string interpolado no se manglan cuando el
+            // modulo se compila como dep.
+            auto *sl = static_cast<ast::StringLitExpr *>(e);
+            for (auto &ie : sl->interp_exprs)
+                walk_expr(ie.get());
+            break;
+        }
+        case ast::NodeKind::LambdaExpr: {
+            auto *la = static_cast<ast::LambdaExpr *>(e);
+            if (la->body) walk_stmt(la->body.get());
+            break;
+        }
+        case ast::NodeKind::MatchExpr: {
+            auto *me = static_cast<ast::MatchExpr *>(e);
+            walk_expr(me->scrutinee.get());
+            for (auto &arm : me->arms) {
+                if (arm.guard) walk_expr(arm.guard.get());
+                if (arm.body) walk_stmt(arm.body.get());
             }
-            case ast::NodeKind::CallExpr: {
-                auto *c = static_cast<ast::CallExpr *>(e);
-                walk_expr(c->callee.get());
-                for (auto &a : c->args) walk_expr(a.get());
-                break;
-            }
-            case ast::NodeKind::BinaryExpr: {
-                auto *b = static_cast<ast::BinaryExpr *>(e);
-                walk_expr(b->lhs.get());
-                walk_expr(b->rhs.get());
-                break;
-            }
-            case ast::NodeKind::UnaryExpr: {
-                auto *u = static_cast<ast::UnaryExpr *>(e);
-                walk_expr(u->operand.get());
-                break;
-            }
-            case ast::NodeKind::AssignExpr: {
-                auto *a = static_cast<ast::AssignExpr *>(e);
-                walk_expr(a->target.get());
-                walk_expr(a->value.get());
-                break;
-            }
-            case ast::NodeKind::IndexExpr: {
-                auto *ix = static_cast<ast::IndexExpr *>(e);
-                walk_expr(ix->base.get());
-                walk_expr(ix->index.get());
-                break;
-            }
-            case ast::NodeKind::FieldAccessExpr: {
-                auto *fa = static_cast<ast::FieldAccessExpr *>(e);
-                walk_expr(fa->base.get());
-                break;
-            }
-            case ast::NodeKind::CastExpr: {
-                auto *ce = static_cast<ast::CastExpr *>(e);
-                walk_expr(ce->operand.get());
-                break;
-            }
-            case ast::NodeKind::TernaryExpr: {
-                auto *tn = static_cast<ast::TernaryExpr *>(e);
-                walk_expr(tn->cond.get());
-                walk_expr(tn->then_expr.get());
-                walk_expr(tn->else_expr.get());
-                break;
-            }
-            case ast::NodeKind::NewExpr: {
-                auto *ne = static_cast<ast::NewExpr *>(e);
-                for (auto &a : ne->args) walk_expr(a.get());
-                break;
-            }
-            case ast::NodeKind::StringLitExpr: {
-                // Interpolaciones `"...${expr}..."`: recorrer cada expr
-                // interna.  Sin esto, identificadores referenciados desde
-                // dentro de un string interpolado no se manglan cuando el
-                // modulo se compila como dep.
-                auto *sl = static_cast<ast::StringLitExpr *>(e);
-                for (auto &ie : sl->interp_exprs) walk_expr(ie.get());
-                break;
-            }
-            case ast::NodeKind::LambdaExpr: {
-                auto *la = static_cast<ast::LambdaExpr *>(e);
-                if (la->body) walk_stmt(la->body.get());
-                break;
-            }
-            case ast::NodeKind::MatchExpr: {
-                auto *me = static_cast<ast::MatchExpr *>(e);
-                walk_expr(me->scrutinee.get());
-                for (auto &arm : me->arms) {
-                    if (arm.guard) walk_expr(arm.guard.get());
-                    if (arm.body)  walk_stmt(arm.body.get());
-                }
-                break;
-            }
-            // Otros expr-kinds que pueden contener idents se cubren
-            // conforme aparezcan en tests.
-            default: break;
+            break;
+        }
+        // Otros expr-kinds que pueden contener idents se cubren
+        // conforme aparezcan en tests.
+        default: break;
         }
     };
     walk_stmt = [&](ast::Stmt *s) {
         if (!s) return;
         switch (s->kind) {
-            case ast::NodeKind::BlockStmt: {
-                auto *b = static_cast<ast::BlockStmt *>(s);
-                for (auto &c : b->body) walk_stmt(c.get());
-                break;
-            }
-            case ast::NodeKind::ExprStmt: {
-                auto *es = static_cast<ast::ExprStmt *>(s);
-                walk_expr(es->expr.get());
-                break;
-            }
-            case ast::NodeKind::VarDeclStmt: {
-                auto *vd = static_cast<ast::VarDeclStmt *>(s);
-                if (vd->init) walk_expr(vd->init.get());
-                break;
-            }
-            case ast::NodeKind::IfStmt: {
-                auto *ifs = static_cast<ast::IfStmt *>(s);
-                walk_expr(ifs->cond.get());
-                walk_stmt(ifs->then_branch.get());
-                walk_stmt(ifs->else_branch.get());
-                break;
-            }
-            case ast::NodeKind::WhileStmt: {
-                auto *w = static_cast<ast::WhileStmt *>(s);
-                walk_expr(w->cond.get());
-                walk_stmt(w->body.get());
-                break;
-            }
-            case ast::NodeKind::ForStmt: {
-                auto *fr = static_cast<ast::ForStmt *>(s);
-                walk_stmt(fr->init.get());
-                walk_expr(fr->cond.get());
-                walk_expr(fr->step.get());
-                walk_stmt(fr->body.get());
-                break;
-            }
-            case ast::NodeKind::ReturnStmt: {
-                auto *r = static_cast<ast::ReturnStmt *>(s);
-                walk_expr(r->value.get());
-                break;
-            }
-            default: break;
+        case ast::NodeKind::BlockStmt: {
+            auto *b = static_cast<ast::BlockStmt *>(s);
+            for (auto &c : b->body)
+                walk_stmt(c.get());
+            break;
+        }
+        case ast::NodeKind::ExprStmt: {
+            auto *es = static_cast<ast::ExprStmt *>(s);
+            walk_expr(es->expr.get());
+            break;
+        }
+        case ast::NodeKind::VarDeclStmt: {
+            auto *vd = static_cast<ast::VarDeclStmt *>(s);
+            if (vd->init) walk_expr(vd->init.get());
+            break;
+        }
+        case ast::NodeKind::IfStmt: {
+            auto *ifs = static_cast<ast::IfStmt *>(s);
+            walk_expr(ifs->cond.get());
+            walk_stmt(ifs->then_branch.get());
+            walk_stmt(ifs->else_branch.get());
+            break;
+        }
+        case ast::NodeKind::WhileStmt: {
+            auto *w = static_cast<ast::WhileStmt *>(s);
+            walk_expr(w->cond.get());
+            walk_stmt(w->body.get());
+            break;
+        }
+        case ast::NodeKind::ForStmt: {
+            auto *fr = static_cast<ast::ForStmt *>(s);
+            walk_stmt(fr->init.get());
+            walk_expr(fr->cond.get());
+            walk_expr(fr->step.get());
+            walk_stmt(fr->body.get());
+            break;
+        }
+        case ast::NodeKind::ReturnStmt: {
+            auto *r = static_cast<ast::ReturnStmt *>(s);
+            walk_expr(r->value.get());
+            break;
+        }
+        default: break;
         }
     };
 
@@ -503,8 +511,8 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
         // Extraer el nombre del modulo del path (ultimo segmento).
         size_t slash = im->path.find_last_of('/');
         req.module_name = (slash == std::string::npos)
-            ? im->path
-            : im->path.substr(slash + 1);
+                              ? im->path
+                              : im->path.substr(slash + 1);
         // local_name: alias o module_name si no hay alias.
         req.local_name = im->alias.empty() ? req.module_name : im->alias;
         // Mapear OnlySymbol AST -> TypeChecker::VexiOnlyEntry.
@@ -515,7 +523,7 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
         // Plain import = sin only.  Registra namespace en lugar de inyectar.
         req.is_plain = im->only_symbols.empty();
         req.is_public_reexport = im->is_public_reexport;
-        req.loc      = im->loc;
+        req.loc = im->loc;
         out.push_back(std::move(req));
     }
     return out;
@@ -528,9 +536,9 @@ std::vector<ImportRequest> collect_imports_(const ast::ModuleNode &mod) {
 /// MISMO nivel son independientes entre si (sus interfaces solo
 /// dependen de niveles menores), por lo que pueden compilarse en
 /// paralelo.  El root siempre tiene el nivel maximo.
-std::vector<int> compute_module_levels_(
-        const std::vector<ProjectModuleWork> &work,
-        const std::unordered_map<std::string, size_t> &by_name) {
+std::vector<int>
+compute_module_levels_(const std::vector<ProjectModuleWork> &work,
+                       const std::unordered_map<std::string, size_t> &by_name) {
     std::vector<int> levels(work.size(), 0);
     // Procesamos en orden topologico (work ya esta en topo).  Para cada
     // modulo, recogemos los imports de su AST + calculamos su nivel
@@ -548,13 +556,13 @@ std::vector<int> compute_module_levels_(
                 max_dep_level = levels[itd->second];
             }
         }
-        levels[i] = max_dep_level + 1;  // -1 + 1 = 0 si no hay deps
+        levels[i] = max_dep_level + 1; // -1 + 1 = 0 si no hay deps
     }
     return levels;
 }
 
 CompileResult compile_vex_project(const std::string &root_path,
-                                    const CompileOptions &opts) {
+                                  const CompileOptions &opts) {
     CompileResult res;
 
     // 1. Construir el dep graph + topo sort.
@@ -569,7 +577,8 @@ CompileResult compile_vex_project(const std::string &root_path,
     // que cambian segun donde vive el archivo -- frustrante a escala.
     {
         std::string norm = root_path;
-        for (char &c : norm) if (c == '\\') c = '/';
+        for (char &c : norm)
+            if (c == '\\') c = '/';
         size_t slash = norm.find_last_of('/');
         if (slash != std::string::npos) {
             graph.add_search_path(norm.substr(0, slash));
@@ -588,7 +597,7 @@ CompileResult compile_vex_project(const std::string &root_path,
 
     // 2. Mover los AST parseados del graph a estructuras de trabajo.
     std::vector<ProjectModuleWork> work(topo.size());
-    std::unordered_map<std::string, size_t> by_name;     // module_name -> idx
+    std::unordered_map<std::string, size_t> by_name; // module_name -> idx
     for (size_t i = 0; i < topo.size(); ++i) {
         const uint32_t mid = topo[i];
         const ResolvedModule *rm = graph.module(mid);
@@ -598,10 +607,10 @@ CompileResult compile_vex_project(const std::string &root_path,
         // Como simplificacion, hacemos const_cast aqui (el ModuleGraph
         // no se usa mas despues de este punto).
         ResolvedModule *rm_mut = const_cast<ResolvedModule *>(rm);
-        work[i].module_id      = mid;
+        work[i].module_id = mid;
         work[i].canonical_path = rm_mut->canonical_path;
-        work[i].module_name    = rm_mut->module_name;
-        work[i].ast            = std::move(rm_mut->parsed_ast);
+        work[i].module_name = rm_mut->module_name;
+        work[i].ast = std::move(rm_mut->parsed_ast);
         // Cargar source de disco para el lexer (necesario para el
         // diagnostics: queremos preservar locs).
         work[i].source = read_source_(rm_mut->canonical_path);
@@ -637,7 +646,8 @@ CompileResult compile_vex_project(const std::string &root_path,
     // al compiler) -- el refactor del loop a paralelo requiere thread
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
-    const std::vector<int> module_levels = compute_module_levels_(work, by_name);
+    const std::vector<int> module_levels =
+        compute_module_levels_(work, by_name);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -645,14 +655,15 @@ CompileResult compile_vex_project(const std::string &root_path,
     if (verbose_compile && max_level > 0) {
         // Reporte de paralelismo potencial.
         std::vector<int> per_level_count(max_level + 1, 0);
-        for (int L : module_levels) per_level_count[L]++;
+        for (int L : module_levels)
+            per_level_count[L]++;
         int parallel_opportunities = 0;
         for (int c : per_level_count) {
             if (c > 1) parallel_opportunities += c - 1;
         }
         std::cerr << "[topo] " << work.size() << " modulos en "
-                   << (max_level + 1) << " niveles, "
-                   << parallel_opportunities << " modulos paralelizables\n";
+                  << (max_level + 1) << " niveles, " << parallel_opportunities
+                  << " modulos paralelizables\n";
     }
     // Phase M8: refactor del loop body a lambda para enable dispatch paralelo
     // por nivel topo.  La lambda captura todo el entorno por referencia.
@@ -671,8 +682,8 @@ CompileResult compile_vex_project(const std::string &root_path,
         const bool is_root = (i + 1 == work.size());
         if (verbose_compile) {
             std::ostringstream ln;
-            ln << "[L" << module_levels[i] << "][" << (i + 1)
-               << "/" << work.size() << "] compiling " << pm.module_name
+            ln << "[L" << module_levels[i] << "][" << (i + 1) << "/"
+               << work.size() << "] compiling " << pm.module_name
                << (is_root ? " (root)" : "") << "...\n";
             std::lock_guard<std::mutex> lk(verbose_mtx);
             std::cerr << ln.str();
@@ -687,8 +698,8 @@ CompileResult compile_vex_project(const std::string &root_path,
         uint64_t source_hash = vexi_fnv1a(pm.source);
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             const uint64_t instrument_hash = vexi_fnv1a(opts.instrument_mode);
-            source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL
-                         + (source_hash << 6) + (source_hash >> 2);
+            source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +
+                           (source_hash << 6) + (source_hash >> 2);
         }
 
         // ---- M4: cache hit path ----
@@ -716,8 +727,9 @@ CompileResult compile_vex_project(const std::string &root_path,
                             // El dep ya no existe -> miss.
                             deps_match = false;
                             if (verbose_cache) {
-                                std::ostringstream tmp; tmp << "[vex-cache] miss (transitivo): dep '"
-                                          << dep_rec.name << "' no encontrado\n";
+                                std::ostringstream tmp;
+                                tmp << "[vex-cache] miss (transitivo): dep '"
+                                    << dep_rec.name << "' no encontrado\n";
                                 std::lock_guard<std::mutex> lk(verbose_mtx);
                                 std::cerr << tmp.str();
                             }
@@ -727,12 +739,12 @@ CompileResult compile_vex_project(const std::string &root_path,
                         if (actual != dep_rec.abi_hash) {
                             deps_match = false;
                             if (verbose_cache) {
-                                std::ostringstream tmp; tmp << "[vex-cache] miss (transitivo): dep '"
-                                          << dep_rec.name
-                                          << "' cambio (abi_hash old=0x"
-                                          << std::hex << dep_rec.abi_hash
-                                          << " new=0x" << actual << std::dec
-                                          << ")\n";
+                                std::ostringstream tmp;
+                                tmp << "[vex-cache] miss (transitivo): dep '"
+                                    << dep_rec.name
+                                    << "' cambio (abi_hash old=0x" << std::hex
+                                    << dep_rec.abi_hash << " new=0x" << actual
+                                    << std::dec << ")\n";
                                 std::lock_guard<std::mutex> lk(verbose_mtx);
                                 std::cerr << tmp.str();
                             }
@@ -752,13 +764,15 @@ CompileResult compile_vex_project(const std::string &root_path,
                             ir::IrModule dep_mod;
                             if (ir::parse_ir_module_cache(ibytes, dep_mod)) {
                                 pm.vexi = std::move(pr.module_);
-                                pm.ir.functions  = std::move(dep_mod.functions);
-                                pm.ir.static_data = std::move(dep_mod.static_data);
-                                pm.ir.globals    = std::move(dep_mod.globals);
+                                pm.ir.functions = std::move(dep_mod.functions);
+                                pm.ir.static_data =
+                                    std::move(dep_mod.static_data);
+                                pm.ir.globals = std::move(dep_mod.globals);
                                 pm.ok = true;
                                 if (verbose_cache) {
-                                    std::ostringstream tmp; tmp << "[vex-cache] hit: "
-                                              << pm.canonical_path << "\n";
+                                    std::ostringstream tmp;
+                                    tmp << "[vex-cache] hit: "
+                                        << pm.canonical_path << "\n";
                                     std::lock_guard<std::mutex> lk(verbose_mtx);
                                     std::cerr << tmp.str();
                                 }
@@ -769,7 +783,8 @@ CompileResult compile_vex_project(const std::string &root_path,
                 }
             }
             if (verbose_cache) {
-                std::ostringstream tmp; tmp << "[vex-cache] miss: " << pm.canonical_path << "\n";
+                std::ostringstream tmp;
+                tmp << "[vex-cache] miss: " << pm.canonical_path << "\n";
                 std::lock_guard<std::mutex> lk(verbose_mtx);
                 std::cerr << tmp.str();
             }
@@ -849,7 +864,7 @@ CompileResult compile_vex_project(const std::string &root_path,
             if (req.is_plain) {
                 // M.7: registrar namespace.
                 register_namespace_for_import(*pm.tc, req.local_name,
-                                                req.module_name, dep.vexi);
+                                              req.module_name, dep.vexi);
                 // M.reexport ext: para `public import "base";` (sin only),
                 // inyectar TAMBIEN cada simbolo publico del dep como si
                 // fuera un `only A, B, ...` sintetico Y marcarlo
@@ -865,9 +880,10 @@ CompileResult compile_vex_project(const std::string &root_path,
                         synth_only.push_back({sym.name, ""});
                     }
                     auto missing = import_vexi_into_typechecker_with_missing(
-                            *pm.tc, dep.vexi, synth_only);
-                    (void)missing;  // best-effort; los privados ya fueron
-                                    //              filtrados al construir el .vexi.
+                        *pm.tc, dep.vexi, synth_only);
+                    (void)missing; // best-effort; los privados ya fueron
+                                   //              filtrados al construir el
+                                   //              .vexi.
                     for (const auto &os : synth_only) {
                         pm.tc->mark_imported(os.name, /*is_reexport=*/true);
                     }
@@ -876,7 +892,7 @@ CompileResult compile_vex_project(const std::string &root_path,
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 auto missing = import_vexi_into_typechecker_with_missing(
-                        *pm.tc, dep.vexi, req.only_symbols);
+                    *pm.tc, dep.vexi, req.only_symbols);
                 for (const auto &m : missing) {
                     std::string msg = "el modulo '";
                     msg += req.module_name;
@@ -885,7 +901,10 @@ CompileResult compile_vex_project(const std::string &root_path,
                     msg += "' (es privado o no existe)";
                     pm.diags.error(req.loc, std::move(msg));
                 }
-                if (!missing.empty()) { pm.ok = false; return; }
+                if (!missing.empty()) {
+                    pm.ok = false;
+                    return;
+                }
                 // Phase M.L23: marcar cada simbolo importado como
                 // (imported, is_reexport).  El export del .vexi del
                 // modulo actual filtra los importados NO marcados como
@@ -898,7 +917,10 @@ CompileResult compile_vex_project(const std::string &root_path,
             }
         }
 
-        if (!pm.tc->run()) { pm.ok = false; return; }
+        if (!pm.tc->run()) {
+            pm.ok = false;
+            return;
+        }
 
         // Phase M.L26: warning de imports sin usar.  Tras el check, el
         // TypeChecker tiene un set de nombres referenciados.  Cada
@@ -919,8 +941,8 @@ CompileResult compile_vex_project(const std::string &root_path,
                     if (refs.find(req.local_name) == refs.end()) {
                         std::string msg = "import '";
                         msg += req.module_name;
-                        if (!req.local_name.empty()
-                         && req.local_name != req.module_name) {
+                        if (!req.local_name.empty() &&
+                            req.local_name != req.module_name) {
                             msg += "' as '";
                             msg += req.local_name;
                         }
@@ -950,14 +972,17 @@ CompileResult compile_vex_project(const std::string &root_path,
             lo.set_instrument_mode(opts.instrument_mode);
         }
         const std::string mod_name = pm.module_name;
-        if (!lo.run(pm.ir, mod_name)) { pm.ok = false; return; }
+        if (!lo.run(pm.ir, mod_name)) {
+            pm.ok = false;
+            return;
+        }
 
         // Phase M.5: export con strip_prefix = `<module>__` para que el
         // .vexi exponga nombres publicos sin el mangle.  El consumidor
         // importa "sumar" pero la FunctionSig lleva mangled_label="lib__sumar".
-        const std::string strip_prefix = is_root
-            ? std::string()           // root: sin prefix (no se exporta)
-            : (pm.module_name + "__");
+        const std::string strip_prefix =
+            is_root ? std::string() // root: sin prefix (no se exporta)
+                    : (pm.module_name + "__");
         export_typechecker_to_vexi(*pm.tc, source_hash, pm.vexi, strip_prefix);
 
         // Phase M4.ext L.13: poblar dep table con los (name, abi_hash) de
@@ -971,7 +996,7 @@ CompileResult compile_vex_project(const std::string &root_path,
             if (itd == by_name.end()) continue;
             const ProjectModuleWork &dep = work[itd->second];
             VexiModule::DepRecord drec;
-            drec.name     = req.module_name;
+            drec.name = req.module_name;
             drec.abi_hash = dep.vexi.abi_hash;
             pm.vexi.deps.push_back(std::move(drec));
         }
@@ -1006,23 +1031,22 @@ CompileResult compile_vex_project(const std::string &root_path,
             // consumidor puede tomar lib.vex + lib.vexi + lib.vel y
             // armar su .velb directamente con vm --asm-file lib.vel.
             ir::EmitOptions dep_emit_opts;
-            dep_emit_opts.opt_level   = opt_level_from_int_(opts.opt_level);
-            dep_emit_opts.emit_debug  = opts.emit_debug;
+            dep_emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
+            dep_emit_opts.emit_debug = opts.emit_debug;
             dep_emit_opts.module_name = pm.module_name;
-            ir::EmitResult dep_eres      = ir::ir_emit_module(pm.ir, dep_emit_opts);
+            ir::EmitResult dep_eres = ir::ir_emit_module(pm.ir, dep_emit_opts);
             std::string dvel_path = dep_vel_path_for_(pm.canonical_path);
             if (dep_eres.ok) {
-                std::vector<uint8_t> velb_bytes(
-                    dep_eres.vel_text.begin(), dep_eres.vel_text.end());
+                std::vector<uint8_t> velb_bytes(dep_eres.vel_text.begin(),
+                                                dep_eres.vel_text.end());
                 (void)write_file_atomic_(dvel_path, velb_bytes);
             }
             if (verbose_cache) {
-                std::ostringstream tmp; tmp << "[vex-cache] wrote: " << vp
-                          << " (" << vbytes.size() << " B) + "
-                          << ip << " (" << ibytes.size() << " B) + "
-                          << dvel_path << " ("
-                          << (dep_eres.ok ? dep_eres.vel_text.size() : 0)
-                          << " B)\n";
+                std::ostringstream tmp;
+                tmp << "[vex-cache] wrote: " << vp << " (" << vbytes.size()
+                    << " B) + " << ip << " (" << ibytes.size() << " B) + "
+                    << dvel_path << " ("
+                    << (dep_eres.ok ? dep_eres.vel_text.size() : 0) << " B)\n";
                 std::lock_guard<std::mutex> lk(verbose_mtx);
                 std::cerr << tmp.str();
             }
@@ -1043,8 +1067,11 @@ CompileResult compile_vex_project(const std::string &root_path,
     bool env_present = false;
     if (const char *p = std::getenv("VEX_PARALLEL_COMPILE")) {
         env_present = true;
-        try { parallel_threads = std::stoi(p); }
-        catch (...) { parallel_threads = 0; }
+        try {
+            parallel_threads = std::stoi(p);
+        } catch (...) {
+            parallel_threads = 0;
+        }
         if (parallel_threads < 0) parallel_threads = 0;
     }
     // Phase M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
@@ -1072,7 +1099,7 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
         if (verbose_compile) {
             std::cerr << "[parallel] threads=" << parallel_threads
-                       << " niveles=" << (max_level + 1) << "\n";
+                      << " niveles=" << (max_level + 1) << "\n";
         }
         for (int L = 0; L <= max_level; ++L) {
             const auto &mods = by_level[L];
@@ -1092,15 +1119,17 @@ CompileResult compile_vex_project(const std::string &root_path,
                 std::vector<std::thread> threads;
                 threads.reserve(end_idx - base);
                 for (size_t k = base; k < end_idx; ++k) {
-                    threads.emplace_back([&compile_one_module, idx = mods[k]]() {
-                        compile_one_module(idx);
-                    });
+                    threads.emplace_back(
+                        [&compile_one_module, idx = mods[k]]() {
+                            compile_one_module(idx);
+                        });
                 }
                 // Barrier: esperar todos los threads del lote antes de
                 // pasar al siguiente.  Necesario porque modulos del mismo
                 // nivel pueden compartir cache writes que deben terminar
                 // antes de que el siguiente nivel intente cache hit.
-                for (auto &t : threads) t.join();
+                for (auto &t : threads)
+                    t.join();
             }
         }
     }
@@ -1154,13 +1183,12 @@ CompileResult compile_vex_project(const std::string &root_path,
     std::unordered_set<size_t> shaken_indices;
     if (tree_shake && work.size() >= 2) {
         const auto &root_pm = work.back();
-        const auto &root_refs = root_pm.tc
-            ? root_pm.tc->referenced_names()
-            : std::unordered_set<std::string>{};
+        const auto &root_refs = root_pm.tc ? root_pm.tc->referenced_names()
+                                           : std::unordered_set<std::string>{};
         auto root_imports = collect_imports_(*root_pm.ast);
         for (const auto &req : root_imports) {
-            if (req.is_plain) continue;        // namespace -> nunca shake
-            if (req.is_public_reexport) continue;  // re-export consume el dep
+            if (req.is_plain) continue;           // namespace -> nunca shake
+            if (req.is_public_reexport) continue; // re-export consume el dep
             auto itd = by_name.find(req.module_name);
             if (itd == by_name.end()) continue;
             // Verificar si el dep declara clases (no shake-able).
@@ -1178,7 +1206,8 @@ CompileResult compile_vex_project(const std::string &root_path,
             // Verificar si TODOS los only simbolos estan sin usar.
             bool all_unused = true;
             for (const auto &os : req.only_symbols) {
-                const std::string &local = os.rename.empty() ? os.name : os.rename;
+                const std::string &local =
+                    os.rename.empty() ? os.name : os.rename;
                 if (root_refs.find(local) != root_refs.end()) {
                     all_unused = false;
                     break;
@@ -1188,16 +1217,16 @@ CompileResult compile_vex_project(const std::string &root_path,
                 shaken_indices.insert(itd->second);
                 if (verbose_compile) {
                     std::cerr << "[tree-shake] dep '" << req.module_name
-                               << "' eliminado (ninguno de "
-                               << req.only_symbols.size()
-                               << " simbolos importados se usa)\n";
+                              << "' eliminado (ninguno de "
+                              << req.only_symbols.size()
+                              << " simbolos importados se usa)\n";
                 }
             }
         }
     }
 
     for (size_t i = 0; i + 1 < work.size(); ++i) {
-        if (shaken_indices.count(i)) continue;  // L.25: skip dep no usado
+        if (shaken_indices.count(i)) continue; // L.25: skip dep no usado
         auto &dep_ir = work[i].ir;
         // BugFix M.sd: remapeo de STR_LIT_ADDR.imm al mergear static_data.
         // Cada modulo usa indices locales 0..N-1 para sus literales.  Al
@@ -1219,7 +1248,8 @@ CompileResult compile_vex_project(const std::string &root_path,
                 fn.name = dep_mod_init;
             }
         }
-        const uint64_t sd_offset = static_cast<uint64_t>(merged.static_data.size());
+        const uint64_t sd_offset =
+            static_cast<uint64_t>(merged.static_data.size());
         if (sd_offset != 0) {
             // Helper: en cualquier string que contenga subcadenas
             // `code.s_<N>` (referencias a static_data del dep), reemplaza
@@ -1241,8 +1271,7 @@ CompileResult compile_vex_project(const std::string &root_path,
                     // Parsear los digitos.
                     size_t j = p;
                     uint64_t num = 0;
-                    while (j < s.size()
-                        && s[j] >= '0' && s[j] <= '9') {
+                    while (j < s.size() && s[j] >= '0' && s[j] <= '9') {
                         num = num * 10 + static_cast<uint64_t>(s[j] - '0');
                         ++j;
                     }
@@ -1322,15 +1351,15 @@ CompileResult compile_vex_project(const std::string &root_path,
                 head.reserve(dep_init_names.size());
                 for (const auto &dn : dep_init_names) {
                     ir::IrInstr c{};
-                    c.op        = ir::IrOp::CALL;
-                    c.type      = ir::IrType::I64;
-                    c.dst       = ir::IR_NO_VALUE;
+                    c.op = ir::IrOp::CALL;
+                    c.type = ir::IrType::I64;
+                    c.dst = ir::IR_NO_VALUE;
                     c.func_name = dn;
                     head.push_back(std::move(c));
                 }
                 entry.instrs.insert(entry.instrs.begin(),
-                                     std::make_move_iterator(head.begin()),
-                                     std::make_move_iterator(head.end()));
+                                    std::make_move_iterator(head.begin()),
+                                    std::make_move_iterator(head.end()));
                 found = true;
                 break;
             }
@@ -1338,21 +1367,21 @@ CompileResult compile_vex_project(const std::string &root_path,
             // con classes, creamos un stub que solo encadena llamadas.
             if (!found) {
                 ir::IrFunction stub;
-                stub.name     = "__module_init";
+                stub.name = "__module_init";
                 stub.ret_type = ir::IrType::I64;
                 const ir::IrBlockId entry = stub.new_block("entry");
                 for (const auto &dn : dep_init_names) {
                     ir::IrInstr c{};
-                    c.op        = ir::IrOp::CALL;
-                    c.type      = ir::IrType::I64;
-                    c.dst       = ir::IR_NO_VALUE;
+                    c.op = ir::IrOp::CALL;
+                    c.type = ir::IrType::I64;
+                    c.dst = ir::IR_NO_VALUE;
                     c.func_name = dn;
                     stub.append(entry, std::move(c));
                 }
                 ir::IrInstr ret{};
-                ret.op   = ir::IrOp::RET;
+                ret.op = ir::IrOp::RET;
                 ret.type = ir::IrType::I64;
-                ret.dst  = ir::IR_NO_VALUE;
+                ret.dst = ir::IR_NO_VALUE;
                 stub.append(entry, std::move(ret));
                 merged.functions.push_back(std::move(stub));
             }
@@ -1403,9 +1432,9 @@ CompileResult compile_vex_project(const std::string &root_path,
                 auto it = first_by_hash.find(hkey);
                 if (it != first_by_hash.end()) {
                     const uint64_t prev_idx = it->second;
-                    if (new_store.equals(prev_idx, bp, bn)
-                     && new_store.meta_at(prev_idx).flags == m.flags
-                     && new_store.meta_at(prev_idx).alignment == m.alignment) {
+                    if (new_store.equals(prev_idx, bp, bn) &&
+                        new_store.meta_at(prev_idx).flags == m.flags &&
+                        new_store.meta_at(prev_idx).alignment == m.alignment) {
                         remap[i] = prev_idx;
                         merged_in = true;
                     }
@@ -1413,7 +1442,7 @@ CompileResult compile_vex_project(const std::string &root_path,
             }
             if (!merged_in) {
                 const uint64_t new_idx = new_store.push_back(bp, bn);
-                new_store.meta_at(new_idx) = m;     // copiar flags/section
+                new_store.meta_at(new_idx) = m; // copiar flags/section
                 first_by_hash.emplace(hkey, new_idx);
                 remap[i] = new_idx;
             }
@@ -1430,8 +1459,8 @@ CompileResult compile_vex_project(const std::string &root_path,
                             }
                             continue;
                         }
-                        if (ins.op == ir::IrOp::RAW_ASM
-                         && !ins.func_name.empty()) {
+                        if (ins.op == ir::IrOp::RAW_ASM &&
+                            !ins.func_name.empty()) {
                             std::string &s = ins.func_name;
                             std::string out;
                             out.reserve(s.size());
@@ -1446,10 +1475,10 @@ CompileResult compile_vex_project(const std::string &root_path,
                                 out.append("code.s_");
                                 size_t j = p + 7;
                                 uint64_t num = 0;
-                                while (j < s.size()
-                                    && s[j] >= '0' && s[j] <= '9') {
-                                    num = num * 10
-                                        + static_cast<uint64_t>(s[j] - '0');
+                                while (j < s.size() && s[j] >= '0' &&
+                                       s[j] <= '9') {
+                                    num = num * 10 +
+                                          static_cast<uint64_t>(s[j] - '0');
                                     ++j;
                                 }
                                 const uint64_t nidx =
@@ -1471,24 +1500,23 @@ CompileResult compile_vex_project(const std::string &root_path,
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;
-    emit_opts.opt_level     = opt_level_from_int_(opts.opt_level);
+    emit_opts.opt_level = opt_level_from_int_(opts.opt_level);
     emit_opts.emit_comments = true;
-    emit_opts.emit_debug    = opts.emit_debug;
-    emit_opts.module_name   = opts.module_name.empty()
-        ? work.back().module_name
-        : opts.module_name;
+    emit_opts.emit_debug = opts.emit_debug;
+    emit_opts.module_name =
+        opts.module_name.empty() ? work.back().module_name : opts.module_name;
     ir::EmitResult eres = ir::ir_emit_module(merged, emit_opts);
     if (!eres.ok) {
         SourceLoc loc;
         loc.file = root_path;
         res.diagnostics.error(std::move(loc),
-            std::string("emisor IR fallo: ") + eres.error);
+                              std::string("emisor IR fallo: ") + eres.error);
         res.ok = false;
         return res;
     }
-    res.vel_text          = std::move(eres.vel_text);
-    res.ir_section_bytes  = ir::emit_ir_section(merged.functions);
-    res.ok                = !res.diagnostics.has_errors();
+    res.vel_text = std::move(eres.vel_text);
+    res.ir_section_bytes = ir::emit_ir_section(merged.functions);
+    res.ok = !res.diagnostics.has_errors();
 
     // Diagramas (Mermaid / Graphviz) del AST del root + IR mergeado +
     // .vel final.  En el path project compile (multi-fichero) el AST
@@ -1510,20 +1538,23 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
     }
     if (opts.dump_mermaid_ir_pre || opts.dump_mermaid_ir_post) {
-        std::string ir_text = mermaid_from_ir_module(merged, "IR (merged + optimized)");
-        if (opts.dump_mermaid_ir_pre)  res.mermaid_ir_pre  = ir_text;
+        std::string ir_text =
+            mermaid_from_ir_module(merged, "IR (merged + optimized)");
+        if (opts.dump_mermaid_ir_pre) res.mermaid_ir_pre = ir_text;
         if (opts.dump_mermaid_ir_post) res.mermaid_ir_post = ir_text;
     }
     if (opts.dump_graphviz_ir_pre || opts.dump_graphviz_ir_post) {
-        std::string ir_text = graphviz_from_ir_module(merged, "IR (merged + optimized)");
-        if (opts.dump_graphviz_ir_pre)  res.graphviz_ir_pre  = ir_text;
+        std::string ir_text =
+            graphviz_from_ir_module(merged, "IR (merged + optimized)");
+        if (opts.dump_graphviz_ir_pre) res.graphviz_ir_pre = ir_text;
         if (opts.dump_graphviz_ir_post) res.graphviz_ir_post = ir_text;
     }
     if (opts.dump_html_ir_pre || opts.dump_html_ir_post) {
         // Proyecto multi-fichero: el IR ya esta merged + optimizado, asi que
         // pre y post comparten el mismo grafo (igual que Mermaid/Graphviz).
-        std::string html = html_from_ir_module(merged, "SSA IR (merged + optimized)");
-        if (opts.dump_html_ir_pre)  res.html_ir_pre  = html;
+        std::string html =
+            html_from_ir_module(merged, "SSA IR (merged + optimized)");
+        if (opts.dump_html_ir_pre) res.html_ir_pre = html;
         if (opts.dump_html_ir_post) res.html_ir_post = html;
     }
     if (opts.dump_mermaid_vel) {
@@ -1553,58 +1584,68 @@ bool vex_source_has_imports(const std::string &source) {
     // imports" pero el parser no los encuentra, no pasa nada (cae al
     // path normal).  Si dice "no" cuando si los hay, el path single-file
     // los rechaza con error claro.
-    enum { NORMAL, IN_LINE_COMMENT, IN_BLOCK_COMMENT, IN_STRING } state = NORMAL;
+    enum {
+        NORMAL,
+        IN_LINE_COMMENT,
+        IN_BLOCK_COMMENT,
+        IN_STRING
+    } state = NORMAL;
     size_t i = 0;
     auto at_word_boundary = [&](size_t k) {
         if (k > 0) {
             char p = source[k - 1];
-            if ((p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z')
-             || (p >= '0' && p <= '9') || p == '_') return false;
+            if ((p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z') ||
+                (p >= '0' && p <= '9') || p == '_')
+                return false;
         }
         if (k + 6 > source.size()) return false;
         if (source.compare(k, 6, "import") != 0) return false;
         if (k + 6 < source.size()) {
             char n = source[k + 6];
-            if ((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z')
-             || (n >= '0' && n <= '9') || n == '_') return false;
+            if ((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z') ||
+                (n >= '0' && n <= '9') || n == '_')
+                return false;
         }
         return true;
     };
     while (i < source.size()) {
         char c = source[i];
         switch (state) {
-            case NORMAL:
-                if (c == '/' && i + 1 < source.size() && source[i+1] == '/') {
-                    state = IN_LINE_COMMENT;
-                    i += 2;
-                    continue;
-                }
-                if (c == '/' && i + 1 < source.size() && source[i+1] == '*') {
-                    state = IN_BLOCK_COMMENT;
-                    i += 2;
-                    continue;
-                }
-                if (c == '"') {
-                    state = IN_STRING;
-                    ++i;
-                    continue;
-                }
-                if (at_word_boundary(i)) return true;
-                break;
-            case IN_LINE_COMMENT:
-                if (c == '\n') state = NORMAL;
-                break;
-            case IN_BLOCK_COMMENT:
-                if (c == '*' && i + 1 < source.size() && source[i+1] == '/') {
-                    state = NORMAL;
-                    i += 2;
-                    continue;
-                }
-                break;
-            case IN_STRING:
-                if (c == '\\' && i + 1 < source.size()) { i += 2; continue; }
-                if (c == '"') state = NORMAL;
-                break;
+        case NORMAL:
+            if (c == '/' && i + 1 < source.size() && source[i + 1] == '/') {
+                state = IN_LINE_COMMENT;
+                i += 2;
+                continue;
+            }
+            if (c == '/' && i + 1 < source.size() && source[i + 1] == '*') {
+                state = IN_BLOCK_COMMENT;
+                i += 2;
+                continue;
+            }
+            if (c == '"') {
+                state = IN_STRING;
+                ++i;
+                continue;
+            }
+            if (at_word_boundary(i)) return true;
+            break;
+        case IN_LINE_COMMENT:
+            if (c == '\n') state = NORMAL;
+            break;
+        case IN_BLOCK_COMMENT:
+            if (c == '*' && i + 1 < source.size() && source[i + 1] == '/') {
+                state = NORMAL;
+                i += 2;
+                continue;
+            }
+            break;
+        case IN_STRING:
+            if (c == '\\' && i + 1 < source.size()) {
+                i += 2;
+                continue;
+            }
+            if (c == '"') state = NORMAL;
+            break;
         }
         ++i;
     }

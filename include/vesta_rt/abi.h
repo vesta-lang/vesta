@@ -67,25 +67,26 @@ extern "C" {
 /*  +22 [2]  _mon_pad    padding                                              */
 /* ========================================================================= */
 
-#define VESTA_OBJ_HDR_SIZE                24
+#define VESTA_OBJ_HDR_SIZE 24
 
-#define VESTA_OBJ_HDR_CLASS_PTR_OFFSET    0
-#define VESTA_OBJ_HDR_FLAGS_OFFSET        8
-#define VESTA_OBJ_HDR_HASH_CODE_OFFSET    12
-#define VESTA_OBJ_HDR_OWNER_PID_OFFSET    16
-#define VESTA_OBJ_HDR_LOCK_DEPTH_OFFSET   20
+#define VESTA_OBJ_HDR_CLASS_PTR_OFFSET 0
+#define VESTA_OBJ_HDR_FLAGS_OFFSET 8
+#define VESTA_OBJ_HDR_HASH_CODE_OFFSET 12
+#define VESTA_OBJ_HDR_OWNER_PID_OFFSET 16
+#define VESTA_OBJ_HDR_LOCK_DEPTH_OFFSET 20
 /* offset 22-23: _mon_pad (no usado por codigo generado) */
 
 /* Bits del campo flags (OBJ_FLAG_*) */
-#define VESTA_OBJ_FLAG_GC_OWNED           (1u << 0)
-#define VESTA_OBJ_FLAG_INTERNED           (1u << 1)
-#define VESTA_OBJ_FLAG_PINNED             (1u << 2)
+#define VESTA_OBJ_FLAG_GC_OWNED (1u << 0)
+#define VESTA_OBJ_FLAG_INTERNED (1u << 1)
+#define VESTA_OBJ_FLAG_PINNED (1u << 2)
 
 /* ========================================================================= */
 /* StringObject (40 bytes header + data[] inline)                             */
 /* ========================================================================= */
 /*  +0  [24] header      ObjectHeader                                         */
-/*  +24 [1]  encoding    StringEncoding (0=ASCII 1=ANSI 2=UTF8 3=UTF16 4=UTF32)*/
+/*  +24 [1]  encoding    StringEncoding (0=ASCII 1=ANSI 2=UTF8 3=UTF16
+ * 4=UTF32)*/
 /*  +25 [1]  kind        StringKind bits[1:0] (0=FLAT 1=ROPE 2=SLICE)         */
 /*                       + bit[7] = is_interned                               */
 /*  +26 [2]  _pad        padding                                              */
@@ -95,28 +96,28 @@ extern "C" {
 /*  +40        data[]    contenido (variable, segun kind)                     */
 /* ========================================================================= */
 
-#define VESTA_STR_OBJ_SIZE                40
+#define VESTA_STR_OBJ_SIZE 40
 
-#define VESTA_STR_HEADER_OFFSET           0
-#define VESTA_STR_ENCODING_OFFSET         24
-#define VESTA_STR_KIND_OFFSET             25
-#define VESTA_STR_LENGTH_OFFSET           28
-#define VESTA_STR_BYTE_LEN_OFFSET         32
-#define VESTA_STR_HASH_OFFSET             36
-#define VESTA_STR_DATA_OFFSET             40
+#define VESTA_STR_HEADER_OFFSET 0
+#define VESTA_STR_ENCODING_OFFSET 24
+#define VESTA_STR_KIND_OFFSET 25
+#define VESTA_STR_LENGTH_OFFSET 28
+#define VESTA_STR_BYTE_LEN_OFFSET 32
+#define VESTA_STR_HASH_OFFSET 36
+#define VESTA_STR_DATA_OFFSET 40
 
 /* Valores de encoding */
-#define VESTA_STR_ENC_ASCII               0
-#define VESTA_STR_ENC_ANSI                1
-#define VESTA_STR_ENC_UTF8                2
-#define VESTA_STR_ENC_UTF16               3
-#define VESTA_STR_ENC_UTF32               4
+#define VESTA_STR_ENC_ASCII 0
+#define VESTA_STR_ENC_ANSI 1
+#define VESTA_STR_ENC_UTF8 2
+#define VESTA_STR_ENC_UTF16 3
+#define VESTA_STR_ENC_UTF32 4
 
 /* Valores de kind */
-#define VESTA_STR_KIND_FLAT               0
-#define VESTA_STR_KIND_ROPE               1
-#define VESTA_STR_KIND_SLICE              2
-#define VESTA_STR_KIND_INTERNED_BIT       0x80
+#define VESTA_STR_KIND_FLAT 0
+#define VESTA_STR_KIND_ROPE 1
+#define VESTA_STR_KIND_SLICE 2
+#define VESTA_STR_KIND_INTERNED_BIT 0x80
 
 /* ========================================================================= */
 /* ClassInfo / MethodInfo / FrameHeader                                       */
@@ -171,19 +172,19 @@ extern "C" {
 /// a proposito: permite que el poll JIT-eado sea
 /// @c cmp byte [rbx], 0 (4 bytes, sin displacement), mas compacto
 /// que disp8 (5 bytes) o disp32 (8 bytes).
-#define VESTA_PROC_SAFEPOINT_FLAG_OFFSET   0
+#define VESTA_PROC_SAFEPOINT_FLAG_OFFSET 0
 
 /// Offset del array @c registers.regs[0..15] dentro de ProcessVM.
 /// Verificado en compile-time.  Cada registro ocupa 8 bytes.
 /// Para R0..R3 (offset 96..120), el encoder puede usar disp8 (6 bytes).
 /// Para R4..R15 (offset 128..216), se usa disp32 (9 bytes por acceso).
-#define VESTA_PROC_REGISTERS_OFFSET        96
+#define VESTA_PROC_REGISTERS_OFFSET 96
 
 /// Size en bytes de cada Register (slot de 8 bytes con union).
-#define VESTA_REGISTER_SIZE                8
+#define VESTA_REGISTER_SIZE 8
 
 /// Numero total de registros VM (R0..R15).
-#define VESTA_PROC_REGISTER_COUNT          16
+#define VESTA_PROC_REGISTER_COUNT 16
 
 /// Offset de @c proc->registers.stack_pointer dentro de ProcessVM.
 /// El stack_pointer es el primer campo de @c context_registers_vm,
@@ -194,10 +195,10 @@ extern "C" {
 /// Usado por Phase D.jit-mem-model VM-STACK: el JIT modifica el VM-RSP
 /// al ejecutar ALLOCAs vex (consistente con interp `subsp`), salvando
 /// y restaurando el valor en prologue/epilogue.
-#define VESTA_PROC_STACK_POINTER_OFFSET    64
+#define VESTA_PROC_STACK_POINTER_OFFSET 64
 
 /// Offset de @c proc->registers.base_pointer (similar al anterior).
-#define VESTA_PROC_BASE_POINTER_OFFSET     72
+#define VESTA_PROC_BASE_POINTER_OFFSET 72
 
 /// Offset del puntero @c jit_handle_table dentro de ProcessVM (Phase D.7).
 /// Es un campo POD (void*) colocado antes de los miembros no-POD (atomics,
@@ -216,36 +217,36 @@ extern "C" {
 /// esta activo (nullptr por defecto -> cero coste).  El JIT lo lee con
 /// @c mov rax, [rbx + VESTA_PROC_OSR_BUFFER_OFFSET] (rbx = ProcessVM*).
 /// Verificado en compile-time por @c abi_checks.cpp.
-#define VESTA_PROC_OSR_BUFFER_OFFSET       1312
+#define VESTA_PROC_OSR_BUFFER_OFFSET 1312
 
 /// Numero de celdas (uint64) del @c osr_buffer.  Cota superior del numero de
 /// IR values de una funcion OSR-able; si una funcion excede esto, el JIT
 /// ABORTA el OSR de ese loop (sin capturar).  64 KB por proceso cuando OSR
 /// activo (off por defecto).
-#define VESTA_OSR_BUFFER_N                 8192
+#define VESTA_OSR_BUFFER_N 8192
 
 /// El offset de @c exc_frame_stack dentro de @c ProcessVM NO es estable
 /// cross-build porque la struct tiene miembros no-POD antes (atomicos,
 /// vectores, GcHeap).  En lugar de un #define, se computa en runtime
-/// con @c offsetof y se pasa al selector via @c SelectorOptions::exc_frame_stack_offset.
-/// El JIT lo embebe como disp32 en las instrucciones inline.  Mismo patron
-/// que @c nursery_bump_offset.
+/// con @c offsetof y se pasa al selector via @c
+/// SelectorOptions::exc_frame_stack_offset. El JIT lo embebe como disp32 en las
+/// instrucciones inline.  Mismo patron que @c nursery_bump_offset.
 
 #ifdef __cplusplus
 namespace vesta_rt {
-    /* Phase D.jit-mem-model INLINE-CACHE: offsets resueltos en runtime
-     * via offsetof.  Defined en abi_checks.cpp. */
-    extern const int32_t kProcVmMemOffset;
-    extern const int32_t kVmMemCachedPageVaddrOffset;
-    extern const int32_t kVmMemCachedPageHostOffset;
+/* Phase D.jit-mem-model INLINE-CACHE: offsets resueltos en runtime
+ * via offsetof.  Defined en abi_checks.cpp. */
+extern const int32_t kProcVmMemOffset;
+extern const int32_t kVmMemCachedPageVaddrOffset;
+extern const int32_t kVmMemCachedPageHostOffset;
 
-    /* Phase D.7 perf inline-alloc (2026-06-06): offset del miembro
-     * @c raw_alloc (gc::RawAllocator) dentro de @c runtime::ProcessVM.
-     * El JIT inline-a el fast-path del slab leyendo @c raw_alloc.slab_free_list_
-     * y @c total_bytes_ (sus offsets internos via gc::RawAllocator::jit_*).
-     * Resuelto en runtime (member non-POD impide #define). */
-    extern const int32_t kProcRawAllocOffset;
-}
+/* Phase D.7 perf inline-alloc (2026-06-06): offset del miembro
+ * @c raw_alloc (gc::RawAllocator) dentro de @c runtime::ProcessVM.
+ * El JIT inline-a el fast-path del slab leyendo @c raw_alloc.slab_free_list_
+ * y @c total_bytes_ (sus offsets internos via gc::RawAllocator::jit_*).
+ * Resuelto en runtime (member non-POD impide #define). */
+extern const int32_t kProcRawAllocOffset;
+} // namespace vesta_rt
 #endif
 
 /* ----------------------------------------------------------------------- */
@@ -305,17 +306,31 @@ namespace vesta_rt {
  * Estos offsets se validan con static_assert en abi_checks.cpp.  Si cambia
  * el layout en oop_types.h, el build falla aqui forzando actualizacion.
  */
-#define VESTA_CLASSINFO_VTABLE_OFFSET      80
+#define VESTA_CLASSINFO_VTABLE_OFFSET 80
 /* Offset del puntero static_data (uint8_t*) en ClassInfo.  Apunta a un
  * bloque host de bytes con los valores de los static fields.  Usado por
  * GETSTATIC / SETSTATIC en JIT para load/store directo sin runtime call:
  *
- *   mov rax, [rax + VESTA_CLASSINFO_VTABLE_OFFSET + 16] ; (vtable=80, vtable_size=8, padding+static_data=16+x)
+ *   mov rax, [rax + VESTA_CLASSINFO_VTABLE_OFFSET + 16] ; (vtable=80,
+ * vtable_size=8, padding+static_data=16+x)
  *
  * El offset exacto se valida via static_assert en abi_checks.cpp.
  */
 #define VESTA_CLASSINFO_STATIC_DATA_OFFSET 96
-#define VESTA_METHODINFO_JIT_CODE_OFFSET   104
+/* Offsets de los campos de dispatch de interfaz (itables) en ClassInfo.
+ * Anyadidos al FINAL de la struct -> los offsets anteriores quedan intactos.
+ * El JIT/AOT recorre @c itables (array de ItableEntry de 24 bytes:
+ * iface@0, methods@8, count@16) comparando @c iface contra el ClassInfo* de
+ * la interfaz (resuelto en compile-time del JIT) y carga @c methods[idx].
+ * Validados con static_assert en abi_checks.cpp. */
+#define VESTA_CLASSINFO_ITABLES_OFFSET 248
+#define VESTA_CLASSINFO_ITABLE_COUNT_OFFSET 256
+/* Layout de ItableEntry (24 bytes). */
+#define VESTA_ITABLE_ENTRY_SIZE 24
+#define VESTA_ITABLE_IFACE_OFFSET 0
+#define VESTA_ITABLE_METHODS_OFFSET 8
+#define VESTA_ITABLE_COUNT_OFFSET 16
+#define VESTA_METHODINFO_JIT_CODE_OFFSET 104
 /* Offset del puntero advice_chain (cadena AOP BEFORE/AFTER/AROUND).
  * Si != NULL, el inline dispatch JIT debe caer al slow path para que
  * la cadena se ejecute correctamente.  Sin esto, el JIT salta al body
@@ -351,8 +366,8 @@ namespace vesta_rt {
  *
  * Verificado en abi_checks.cpp con static_assert.
  */
-#define VESTA_EXC_FRAME_PREV_OFFSET        168
-#define VESTA_EXC_FRAME_SIZE               176
+#define VESTA_EXC_FRAME_PREV_OFFSET 168
+#define VESTA_EXC_FRAME_SIZE 176
 
 /* ========================================================================= */
 /* Codigos de FatalError (usados por vrt_throw_fatal)                         */
@@ -364,20 +379,20 @@ namespace vesta_rt {
 /* sincronizados con FatalKind.                                               */
 /* ========================================================================= */
 
-#define VESTA_FATAL_NULL_POINTER            1
-#define VESTA_FATAL_DIVISION_BY_ZERO        2
-#define VESTA_FATAL_STACK_OVERFLOW          3
-#define VESTA_FATAL_STACK_UNDERFLOW         4
-#define VESTA_FATAL_ILLEGAL_INSTRUCTION     5
-#define VESTA_FATAL_INVALID_SYSCALL         6
-#define VESTA_FATAL_SEGMENTATION_FAULT      7
-#define VESTA_FATAL_NATIVE_CRASH            8
-#define VESTA_FATAL_NATIVE_EXCEPTION        9
-#define VESTA_FATAL_OUT_OF_MEMORY           10
-#define VESTA_FATAL_USER_ABORT              11
+#define VESTA_FATAL_NULL_POINTER 1
+#define VESTA_FATAL_DIVISION_BY_ZERO 2
+#define VESTA_FATAL_STACK_OVERFLOW 3
+#define VESTA_FATAL_STACK_UNDERFLOW 4
+#define VESTA_FATAL_ILLEGAL_INSTRUCTION 5
+#define VESTA_FATAL_INVALID_SYSCALL 6
+#define VESTA_FATAL_SEGMENTATION_FAULT 7
+#define VESTA_FATAL_NATIVE_CRASH 8
+#define VESTA_FATAL_NATIVE_EXCEPTION 9
+#define VESTA_FATAL_OUT_OF_MEMORY 10
+#define VESTA_FATAL_USER_ABORT 11
 /* Codigos NO presentes en FatalKind (specific to ABI public): */
-#define VESTA_FATAL_INDEX_OUT_OF_BOUNDS     12
-#define VESTA_FATAL_TYPE_MISMATCH           13
+#define VESTA_FATAL_INDEX_OUT_OF_BOUNDS 12
+#define VESTA_FATAL_TYPE_MISMATCH 13
 
 /* ========================================================================= */
 /* Convenciones de calling                                                    */
@@ -406,7 +421,7 @@ namespace vesta_rt {
  *     - Via trampoline @c return_from_jit en @c interp_jit_bridge.
  */
 
-#define VESTA_VM_REG_COUNT                  16
+#define VESTA_VM_REG_COUNT 16
 
 #ifdef __cplusplus
 } /* extern "C" */

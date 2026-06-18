@@ -1,0 +1,34 @@
+// C-3 en AOT: override del operador `+` de `string` via @StringConcat,
+// ahora compilable a nativo (-m aot) gracias al retorno de string por
+// valor (SRET de struct de 24 bytes) y al paso de value-strings como
+// argumentos a funciones.
+//
+// El override `my_concat` IGNORA sus argumentos y devuelve SIEMPRE un
+// marcador fijo "OVR" (length 3).  Sin el override, "hola" + " mundo"
+// tendria length 10; con el override la suma da length 3 -- eso PRUEBA
+// que el ruteo del operador `+` al @StringConcat se usa en native.
+//
+// El ejemplo 45 original valida ademas @StringEq, pero su `my_eq` usa
+// str_bytes (StringObject GC) que es Full-only; aqui mostramos solo el
+// concat, que es 100% AOT-compatible.
+//
+// Resultado esperado: R0 = 3 (length del resultado del override).
+
+@StringConcat
+string my_concat(string a, string b) {
+    return "OVR";
+}
+
+i32 main() {
+    string s = "hola";
+    string t = " mundo";
+
+    // Operador `+` ruteado a my_concat -> resultado fijo "OVR" (len 3).
+    string c = s + t;
+
+    // Builtin str_concat tambien ruteado a my_concat -> len 3.
+    string c2 = str_concat(s, t);
+
+    // 3 + 3 - 3 = 3 (validamos ambos rutas; el resultado final es 3).
+    return (i32)(c.length() + c2.length() - 3);
+}

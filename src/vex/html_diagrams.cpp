@@ -12,7 +12,8 @@
 
 /**
  * @file html_diagrams.cpp
- * @brief Implementacion de los generadores HTML interactivos (ver html_diagrams.h).
+ * @brief Implementacion de los generadores HTML interactivos (ver
+ * html_diagrams.h).
  *
  * Flujo: DOT (de graphviz_from_*) -> modelo de grafo (grupos/nodos/aristas)
  * -> JSON embebido -> plantilla HTML autocontenida con motor de layout +
@@ -42,458 +43,503 @@
 
 namespace vex {
 
-    namespace {
+namespace {
 
-        // ------------------------------------------------------------------
-        //  Modelo de grafo intermedio
-        // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+//  Modelo de grafo intermedio
+// ------------------------------------------------------------------
 
-        /// Un nodo del grafo, derivado de un nodo DOT.
-        struct HNode {
-            std::string id;        ///< identificador unico (el del DOT).
-            std::string group;     ///< cluster contenedor ("" si ninguno).
-            std::string kind;      ///< clase semantica derivada del shape.
-            std::string shape;     ///< shape DOT original.
-            std::string header;    ///< primera linea / cabecera del nodo.
-            std::vector<std::string> lines; ///< lineas de cuerpo (instrucciones).
-            std::string tooltip;   ///< texto extra (line numbers, conteos).
-            std::string fill;      ///< color de fondo (#hex).
-            std::string fontcolor; ///< color de texto (#hex).
-            std::string stroke;    ///< color de borde (#hex).
-        };
+/// Un nodo del grafo, derivado de un nodo DOT.
+struct HNode {
+    std::string id;                 ///< identificador unico (el del DOT).
+    std::string group;              ///< cluster contenedor ("" si ninguno).
+    std::string kind;               ///< clase semantica derivada del shape.
+    std::string shape;              ///< shape DOT original.
+    std::string header;             ///< primera linea / cabecera del nodo.
+    std::vector<std::string> lines; ///< lineas de cuerpo (instrucciones).
+    std::string tooltip;            ///< texto extra (line numbers, conteos).
+    std::string fill;               ///< color de fondo (#hex).
+    std::string fontcolor;          ///< color de texto (#hex).
+    std::string stroke;             ///< color de borde (#hex).
+};
 
-        /// Una arista entre dos nodos.
-        struct HEdge {
-            std::string from;
-            std::string to;
-            std::string label;
-            std::string type;   ///< flow|true|false|call|extends|implements|back|break|body
-            std::string color;
-            std::string style;  ///< solid|dotted|dashed
-        };
+/// Una arista entre dos nodos.
+struct HEdge {
+    std::string from;
+    std::string to;
+    std::string label;
+    std::string
+        type; ///< flow|true|false|call|extends|implements|back|break|body
+    std::string color;
+    std::string style; ///< solid|dotted|dashed
+};
 
-        /// Un grupo (cluster) con su titulo.
-        struct HGroup {
-            std::string id;
-            std::string title;
-        };
+/// Un grupo (cluster) con su titulo.
+struct HGroup {
+    std::string id;
+    std::string title;
+};
 
-        // ------------------------------------------------------------------
-        //  Helpers de string
-        // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+//  Helpers de string
+// ------------------------------------------------------------------
 
-        std::string trim(const std::string &s) {
-            size_t a = 0, b = s.size();
-            while (a < b && (unsigned char)s[a] <= ' ') ++a;
-            while (b > a && (unsigned char)s[b - 1] <= ' ') --b;
-            return s.substr(a, b - a);
-        }
+std::string trim(const std::string &s) {
+    size_t a = 0, b = s.size();
+    while (a < b && (unsigned char)s[a] <= ' ')
+        ++a;
+    while (b > a && (unsigned char)s[b - 1] <= ' ')
+        --b;
+    return s.substr(a, b - a);
+}
 
-        bool starts_with(const std::string &s, const char *p) {
-            size_t n = 0;
-            while (p[n]) ++n;
-            return s.size() >= n && s.compare(0, n, p) == 0;
-        }
+bool starts_with(const std::string &s, const char *p) {
+    size_t n = 0;
+    while (p[n])
+        ++n;
+    return s.size() >= n && s.compare(0, n, p) == 0;
+}
 
-        /// Deshace los escapes DOT de un label/tooltip a texto plano UTF-8.
-        std::string unescape_dot(const std::string &s) {
-            std::string out;
-            out.reserve(s.size());
-            for (size_t i = 0; i < s.size(); ++i) {
-                if (s[i] == '\\' && i + 1 < s.size()) {
-                    char c = s[i + 1];
-                    switch (c) {
-                        case 'n': out += '\n'; break; // salto estandar
-                        case 'l': out += '\n'; break; // left-justify de records
-                        case 'r': break;              // ignorar
-                        case '"': out += '"'; break;
-                        case '\\': out += '\\'; break;
-                        case '{': out += '{'; break;
-                        case '}': out += '}'; break;
-                        case '|': out += '|'; break;
-                        case '<': out += '<'; break;
-                        case '>': out += '>'; break;
-                        default: out += c; break;
-                    }
-                    ++i;
-                } else {
-                    out += s[i];
-                }
+/// Deshace los escapes DOT de un label/tooltip a texto plano UTF-8.
+std::string unescape_dot(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            char c = s[i + 1];
+            switch (c) {
+            case 'n': out += '\n'; break; // salto estandar
+            case 'l': out += '\n'; break; // left-justify de records
+            case 'r': break;              // ignorar
+            case '"': out += '"'; break;
+            case '\\': out += '\\'; break;
+            case '{': out += '{'; break;
+            case '}': out += '}'; break;
+            case '|': out += '|'; break;
+            case '<': out += '<'; break;
+            case '>': out += '>'; break;
+            default: out += c; break;
             }
-            return out;
+            ++i;
+        } else {
+            out += s[i];
         }
+    }
+    return out;
+}
 
-        /// Escapa un string para incluirlo en un literal JSON.
-        std::string json_escape(const std::string &s) {
-            std::string out;
-            out.reserve(s.size() + 8);
-            for (unsigned char c : s) {
-                switch (c) {
-                    case '"':  out += "\\\""; break;
-                    case '\\': out += "\\\\"; break;
-                    case '\n': out += "\\n";  break;
-                    case '\r': out += "\\r";  break;
-                    case '\t': out += "\\t";  break;
-                    default:
-                        if (c < 0x20) {
-                            char buf[8];
-                            std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                            out += buf;
-                        } else {
-                            out += (char)c;
-                        }
-                }
+/// Escapa un string para incluirlo en un literal JSON.
+std::string json_escape(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                out += buf;
+            } else {
+                out += (char)c;
             }
-            return out;
         }
+    }
+    return out;
+}
 
-        // ------------------------------------------------------------------
-        //  Parser de atributos DOT
-        // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+//  Parser de atributos DOT
+// ------------------------------------------------------------------
 
-        /// Parsea el contenido `k=v, k="v", ...` entre `[` y `]` a un mapa.
-        std::unordered_map<std::string, std::string>
-        parse_attrs(const std::string &body) {
-            std::unordered_map<std::string, std::string> m;
-            size_t i = 0, n = body.size();
+/// Parsea el contenido `k=v, k="v", ...` entre `[` y `]` a un mapa.
+std::unordered_map<std::string, std::string>
+parse_attrs(const std::string &body) {
+    std::unordered_map<std::string, std::string> m;
+    size_t i = 0, n = body.size();
+    while (i < n) {
+        // key
+        while (i < n && (body[i] == ',' || (unsigned char)body[i] <= ' '))
+            ++i;
+        size_t ks = i;
+        while (i < n && body[i] != '=' && body[i] != ',')
+            ++i;
+        if (i >= n) break;
+        std::string key = trim(body.substr(ks, i - ks));
+        if (body[i] != '=') {
+            continue;
+        }
+        ++i; // skip '='
+        while (i < n && (unsigned char)body[i] <= ' ')
+            ++i;
+        std::string val;
+        if (i < n && body[i] == '"') {
+            ++i;
+            std::string raw;
             while (i < n) {
-                // key
-                while (i < n && (body[i] == ',' || (unsigned char)body[i] <= ' ')) ++i;
-                size_t ks = i;
-                while (i < n && body[i] != '=' && body[i] != ',') ++i;
-                if (i >= n) break;
-                std::string key = trim(body.substr(ks, i - ks));
-                if (body[i] != '=') { continue; }
-                ++i; // skip '='
-                while (i < n && (unsigned char)body[i] <= ' ') ++i;
-                std::string val;
-                if (i < n && body[i] == '"') {
-                    ++i;
-                    std::string raw;
-                    while (i < n) {
-                        char c = body[i];
-                        if (c == '\\' && i + 1 < n) { raw += c; raw += body[i + 1]; i += 2; continue; }
-                        if (c == '"') { ++i; break; }
-                        raw += c; ++i;
-                    }
-                    val = raw; // sigue escapado; el caller deshace si toca
-                } else {
-                    size_t vs = i;
-                    while (i < n && body[i] != ',') ++i;
-                    val = trim(body.substr(vs, i - vs));
-                }
-                if (!key.empty()) m[key] = val;
-            }
-            return m;
-        }
-
-        /// Divide un record label `{ a | b | c }` (escapado) en sus campos,
-        /// respetando los `\|` escapados.  Devuelve los campos SIN deshacer
-        /// (el caller deshace cada uno).
-        std::vector<std::string> split_record(const std::string &raw) {
-            std::string s = trim(raw);
-            if (!s.empty() && s.front() == '{') s = s.substr(1);
-            if (!s.empty() && s.back() == '}') s.pop_back();
-            std::vector<std::string> out;
-            std::string cur;
-            for (size_t i = 0; i < s.size(); ++i) {
-                if (s[i] == '\\' && i + 1 < s.size()) { cur += s[i]; cur += s[i + 1]; i++; continue; }
-                if (s[i] == '|') { out.push_back(trim(cur)); cur.clear(); continue; }
-                cur += s[i];
-            }
-            out.push_back(trim(cur));
-            return out;
-        }
-
-        // ------------------------------------------------------------------
-        //  Clasificacion semantica
-        // ------------------------------------------------------------------
-
-        std::string kind_for_shape(const std::string &shape) {
-            if (shape == "record")        return "block";
-            if (shape == "diamond")       return "branch";
-            if (shape == "doublecircle")  return "terminal";
-            if (shape == "circle")        return "entry";
-            if (shape == "box3d")         return "module";
-            if (shape == "ellipse" || shape == "oval") return "terminal";
-            if (shape == "octagon")       return "special";
-            if (shape == "box")           return "decl";
-            return "node";
-        }
-
-        std::string edge_type(const std::string &label, const std::string &style,
-                              const std::string &color) {
-            bool dotted = style.find("dotted") != std::string::npos;
-            if (label == "body")        return "body";
-            if (dotted && (label == "call" || label == "callvm" || label.empty()))
-                return "call";
-            if (label == "fall")        return "fall";
-            if (label == "true")        return "true";
-            if (label == "false")       return "false";
-            if (label == "back" || label == "continue" || label == "loop")
-                return "back";
-            if (label == "break")       return "break";
-            if (label == "extends")     return "extends";
-            if (label == "implements")  return "implements";
-            if (label == "next")        return "true";
-            if (label == "done")        return "false";
-            if (dotted)                 return "call";
-            (void)color;
-            return "flow";
-        }
-
-        // ------------------------------------------------------------------
-        //  Parser DOT -> modelo
-        // ------------------------------------------------------------------
-
-        struct DotModel {
-            std::vector<HGroup> groups;
-            std::vector<HNode>  nodes;
-            std::vector<HEdge>  edges;
-        };
-
-        DotModel parse_dot(const std::string &dot) {
-            DotModel mdl;
-            std::unordered_map<std::string, size_t> group_idx;
-
-            // 1) Quitar lineas de comentario `//...` (solo a inicio de linea).
-            std::string src;
-            src.reserve(dot.size());
-            {
-                size_t i = 0, n = dot.size();
-                while (i < n) {
-                    size_t eol = dot.find('\n', i);
-                    if (eol == std::string::npos) eol = n;
-                    std::string line = dot.substr(i, eol - i);
-                    std::string t = trim(line);
-                    if (!starts_with(t, "//")) { src += line; src += '\n'; }
-                    i = eol + 1;
-                }
-            }
-
-            // 2) Scanner por statements respetando comillas y tracking de `{ }`.
-            std::vector<std::string> group_stack;       // ids de cluster ("" = root/no-grupo)
-            std::string pending_group;                  // grupo recien abierto sin titulo aun
-
-            auto cur_group = [&]() -> std::string {
-                for (auto it = group_stack.rbegin(); it != group_stack.rend(); ++it)
-                    if (!it->empty()) return *it;
-                return std::string();
-            };
-
-            auto handle_stmt = [&](const std::string &raw_stmt) {
-                std::string st = trim(raw_stmt);
-                if (st.empty()) return;
-
-                // Titulo de grupo: `label="..."` suelto justo tras abrir cluster.
-                if (!pending_group.empty() && starts_with(st, "label=")) {
-                    auto m = parse_attrs(st);
-                    auto it = m.find("label");
-                    if (it != m.end()) {
-                        size_t gi = group_idx[pending_group];
-                        mdl.groups[gi].title = unescape_dot(it->second);
-                    }
-                    pending_group.clear();
-                    return;
-                }
-
-                // Arista: contiene " -> ".
-                size_t arrow = st.find("->");
-                if (arrow != std::string::npos) {
-                    std::string from = trim(st.substr(0, arrow));
-                    std::string rest = trim(st.substr(arrow + 2));
-                    std::string to, attrs;
-                    size_t br = rest.find('[');
-                    if (br != std::string::npos) {
-                        to = trim(rest.substr(0, br));
-                        size_t cb = rest.rfind(']');
-                        if (cb != std::string::npos && cb > br)
-                            attrs = rest.substr(br + 1, cb - br - 1);
-                    } else {
-                        to = trim(rest);
-                    }
-                    if (from.empty() || to.empty()) return;
-                    HEdge e;
-                    e.from = from;
-                    e.to   = to;
-                    auto m = parse_attrs(attrs);
-                    if (m.count("label")) e.label = unescape_dot(m["label"]);
-                    if (m.count("color")) e.color = m["color"];
-                    if (m.count("style")) e.style = m["style"];
-                    e.type = edge_type(e.label, e.style, e.color);
-                    mdl.edges.push_back(std::move(e));
-                    return;
-                }
-
-                // Nodo: `id [ ... ]`.
-                size_t br = st.find('[');
-                if (br == std::string::npos) return; // attr de grafo suelta -> ignorar
-                std::string id = trim(st.substr(0, br));
-                if (id.empty() || id == "node" || id == "edge" || id == "graph") return;
-                // id valido: solo letra/digito/_.
-                for (char c : id)
-                    if (!(std::isalnum((unsigned char)c) || c == '_')) return;
-                size_t cb = st.rfind(']');
-                std::string attrs = (cb != std::string::npos && cb > br)
-                                        ? st.substr(br + 1, cb - br - 1)
-                                        : std::string();
-                auto m = parse_attrs(attrs);
-
-                HNode nd;
-                nd.id    = id;
-                nd.group = cur_group();
-                nd.shape = m.count("shape") ? m["shape"] : "box";
-                nd.kind  = kind_for_shape(nd.shape);
-                nd.fill      = m.count("fillcolor") ? m["fillcolor"] : "#1e293b";
-                nd.fontcolor = m.count("fontcolor") ? m["fontcolor"] : "#e5e7eb";
-                nd.stroke    = m.count("color")     ? m["color"]     : "#475569";
-                if (m.count("tooltip")) nd.tooltip = unescape_dot(m["tooltip"]);
-
-                std::string label = m.count("label") ? m["label"] : id;
-                if (nd.shape == "record") {
-                    std::vector<std::string> fields = split_record(label);
-                    if (!fields.empty()) {
-                        nd.header = unescape_dot(fields[0]);
-                        for (size_t k = 1; k < fields.size(); ++k) {
-                            std::string ln = unescape_dot(fields[k]);
-                            if (!ln.empty()) nd.lines.push_back(ln);
-                        }
-                    }
-                } else {
-                    std::string txt = unescape_dot(label);
-                    size_t nl = txt.find('\n');
-                    if (nl == std::string::npos) {
-                        nd.header = txt;
-                    } else {
-                        nd.header = txt.substr(0, nl);
-                        std::string rest = txt.substr(nl + 1);
-                        size_t p = 0;
-                        while (p < rest.size()) {
-                            size_t q = rest.find('\n', p);
-                            if (q == std::string::npos) q = rest.size();
-                            std::string ln = trim(rest.substr(p, q - p));
-                            if (!ln.empty()) nd.lines.push_back(ln);
-                            p = q + 1;
-                        }
-                    }
-                }
-                mdl.nodes.push_back(std::move(nd));
-            };
-
-            size_t i = 0, n = src.size();
-            std::string cur;
-            while (i < n) {
-                char c = src[i];
-                if (c == '"') {
-                    cur += c; ++i;
-                    while (i < n) {
-                        char cc = src[i];
-                        cur += cc;
-                        if (cc == '\\' && i + 1 < n) { cur += src[i + 1]; i += 2; continue; }
-                        if (cc == '"') { ++i; break; }
-                        ++i;
-                    }
+                char c = body[i];
+                if (c == '\\' && i + 1 < n) {
+                    raw += c;
+                    raw += body[i + 1];
+                    i += 2;
                     continue;
                 }
-                if (c == '{') {
-                    std::string opener = trim(cur);
-                    cur.clear();
-                    std::string gid;
-                    if (starts_with(opener, "subgraph")) {
-                        // extraer el nombre del cluster
-                        std::string nm = trim(opener.substr(8));
-                        size_t sp = nm.find_first_of(" \t");
-                        if (sp != std::string::npos) nm = nm.substr(0, sp);
-                        if (starts_with(nm, "cluster_")) nm = nm.substr(8);
-                        gid = nm;
-                        if (!group_idx.count(gid)) {
-                            group_idx[gid] = mdl.groups.size();
-                            HGroup g; g.id = gid; g.title = gid;
-                            mdl.groups.push_back(g);
-                        }
-                        pending_group = gid;
-                    }
-                    group_stack.push_back(gid); // "" si es digraph root
-                    ++i; continue;
+                if (c == '"') {
+                    ++i;
+                    break;
                 }
-                if (c == '}') {
-                    if (!trim(cur).empty()) handle_stmt(cur);
-                    cur.clear();
-                    if (!group_stack.empty()) group_stack.pop_back();
-                    ++i; continue;
-                }
-                if (c == ';') {
-                    handle_stmt(cur);
-                    cur.clear();
-                    ++i; continue;
-                }
-                cur += c; ++i;
+                raw += c;
+                ++i;
             }
+            val = raw; // sigue escapado; el caller deshace si toca
+        } else {
+            size_t vs = i;
+            while (i < n && body[i] != ',')
+                ++i;
+            val = trim(body.substr(vs, i - vs));
+        }
+        if (!key.empty()) m[key] = val;
+    }
+    return m;
+}
+
+/// Divide un record label `{ a | b | c }` (escapado) en sus campos,
+/// respetando los `\|` escapados.  Devuelve los campos SIN deshacer
+/// (el caller deshace cada uno).
+std::vector<std::string> split_record(const std::string &raw) {
+    std::string s = trim(raw);
+    if (!s.empty() && s.front() == '{') s = s.substr(1);
+    if (!s.empty() && s.back() == '}') s.pop_back();
+    std::vector<std::string> out;
+    std::string cur;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            cur += s[i];
+            cur += s[i + 1];
+            i++;
+            continue;
+        }
+        if (s[i] == '|') {
+            out.push_back(trim(cur));
+            cur.clear();
+            continue;
+        }
+        cur += s[i];
+    }
+    out.push_back(trim(cur));
+    return out;
+}
+
+// ------------------------------------------------------------------
+//  Clasificacion semantica
+// ------------------------------------------------------------------
+
+std::string kind_for_shape(const std::string &shape) {
+    if (shape == "record") return "block";
+    if (shape == "diamond") return "branch";
+    if (shape == "doublecircle") return "terminal";
+    if (shape == "circle") return "entry";
+    if (shape == "box3d") return "module";
+    if (shape == "ellipse" || shape == "oval") return "terminal";
+    if (shape == "octagon") return "special";
+    if (shape == "box") return "decl";
+    return "node";
+}
+
+std::string edge_type(const std::string &label, const std::string &style,
+                      const std::string &color) {
+    bool dotted = style.find("dotted") != std::string::npos;
+    if (label == "body") return "body";
+    if (dotted && (label == "call" || label == "callvm" || label.empty()))
+        return "call";
+    if (label == "fall") return "fall";
+    if (label == "true") return "true";
+    if (label == "false") return "false";
+    if (label == "back" || label == "continue" || label == "loop")
+        return "back";
+    if (label == "break") return "break";
+    if (label == "extends") return "extends";
+    if (label == "implements") return "implements";
+    if (label == "next") return "true";
+    if (label == "done") return "false";
+    if (dotted) return "call";
+    (void)color;
+    return "flow";
+}
+
+// ------------------------------------------------------------------
+//  Parser DOT -> modelo
+// ------------------------------------------------------------------
+
+struct DotModel {
+    std::vector<HGroup> groups;
+    std::vector<HNode> nodes;
+    std::vector<HEdge> edges;
+};
+
+DotModel parse_dot(const std::string &dot) {
+    DotModel mdl;
+    std::unordered_map<std::string, size_t> group_idx;
+
+    // 1) Quitar lineas de comentario `//...` (solo a inicio de linea).
+    std::string src;
+    src.reserve(dot.size());
+    {
+        size_t i = 0, n = dot.size();
+        while (i < n) {
+            size_t eol = dot.find('\n', i);
+            if (eol == std::string::npos) eol = n;
+            std::string line = dot.substr(i, eol - i);
+            std::string t = trim(line);
+            if (!starts_with(t, "//")) {
+                src += line;
+                src += '\n';
+            }
+            i = eol + 1;
+        }
+    }
+
+    // 2) Scanner por statements respetando comillas y tracking de `{ }`.
+    std::vector<std::string> group_stack; // ids de cluster ("" = root/no-grupo)
+    std::string pending_group;            // grupo recien abierto sin titulo aun
+
+    auto cur_group = [&]() -> std::string {
+        for (auto it = group_stack.rbegin(); it != group_stack.rend(); ++it)
+            if (!it->empty()) return *it;
+        return std::string();
+    };
+
+    auto handle_stmt = [&](const std::string &raw_stmt) {
+        std::string st = trim(raw_stmt);
+        if (st.empty()) return;
+
+        // Titulo de grupo: `label="..."` suelto justo tras abrir cluster.
+        if (!pending_group.empty() && starts_with(st, "label=")) {
+            auto m = parse_attrs(st);
+            auto it = m.find("label");
+            if (it != m.end()) {
+                size_t gi = group_idx[pending_group];
+                mdl.groups[gi].title = unescape_dot(it->second);
+            }
+            pending_group.clear();
+            return;
+        }
+
+        // Arista: contiene " -> ".
+        size_t arrow = st.find("->");
+        if (arrow != std::string::npos) {
+            std::string from = trim(st.substr(0, arrow));
+            std::string rest = trim(st.substr(arrow + 2));
+            std::string to, attrs;
+            size_t br = rest.find('[');
+            if (br != std::string::npos) {
+                to = trim(rest.substr(0, br));
+                size_t cb = rest.rfind(']');
+                if (cb != std::string::npos && cb > br)
+                    attrs = rest.substr(br + 1, cb - br - 1);
+            } else {
+                to = trim(rest);
+            }
+            if (from.empty() || to.empty()) return;
+            HEdge e;
+            e.from = from;
+            e.to = to;
+            auto m = parse_attrs(attrs);
+            if (m.count("label")) e.label = unescape_dot(m["label"]);
+            if (m.count("color")) e.color = m["color"];
+            if (m.count("style")) e.style = m["style"];
+            e.type = edge_type(e.label, e.style, e.color);
+            mdl.edges.push_back(std::move(e));
+            return;
+        }
+
+        // Nodo: `id [ ... ]`.
+        size_t br = st.find('[');
+        if (br == std::string::npos) return; // attr de grafo suelta -> ignorar
+        std::string id = trim(st.substr(0, br));
+        if (id.empty() || id == "node" || id == "edge" || id == "graph") return;
+        // id valido: solo letra/digito/_.
+        for (char c : id)
+            if (!(std::isalnum((unsigned char)c) || c == '_')) return;
+        size_t cb = st.rfind(']');
+        std::string attrs = (cb != std::string::npos && cb > br)
+                                ? st.substr(br + 1, cb - br - 1)
+                                : std::string();
+        auto m = parse_attrs(attrs);
+
+        HNode nd;
+        nd.id = id;
+        nd.group = cur_group();
+        nd.shape = m.count("shape") ? m["shape"] : "box";
+        nd.kind = kind_for_shape(nd.shape);
+        nd.fill = m.count("fillcolor") ? m["fillcolor"] : "#1e293b";
+        nd.fontcolor = m.count("fontcolor") ? m["fontcolor"] : "#e5e7eb";
+        nd.stroke = m.count("color") ? m["color"] : "#475569";
+        if (m.count("tooltip")) nd.tooltip = unescape_dot(m["tooltip"]);
+
+        std::string label = m.count("label") ? m["label"] : id;
+        if (nd.shape == "record") {
+            std::vector<std::string> fields = split_record(label);
+            if (!fields.empty()) {
+                nd.header = unescape_dot(fields[0]);
+                for (size_t k = 1; k < fields.size(); ++k) {
+                    std::string ln = unescape_dot(fields[k]);
+                    if (!ln.empty()) nd.lines.push_back(ln);
+                }
+            }
+        } else {
+            std::string txt = unescape_dot(label);
+            size_t nl = txt.find('\n');
+            if (nl == std::string::npos) {
+                nd.header = txt;
+            } else {
+                nd.header = txt.substr(0, nl);
+                std::string rest = txt.substr(nl + 1);
+                size_t p = 0;
+                while (p < rest.size()) {
+                    size_t q = rest.find('\n', p);
+                    if (q == std::string::npos) q = rest.size();
+                    std::string ln = trim(rest.substr(p, q - p));
+                    if (!ln.empty()) nd.lines.push_back(ln);
+                    p = q + 1;
+                }
+            }
+        }
+        mdl.nodes.push_back(std::move(nd));
+    };
+
+    size_t i = 0, n = src.size();
+    std::string cur;
+    while (i < n) {
+        char c = src[i];
+        if (c == '"') {
+            cur += c;
+            ++i;
+            while (i < n) {
+                char cc = src[i];
+                cur += cc;
+                if (cc == '\\' && i + 1 < n) {
+                    cur += src[i + 1];
+                    i += 2;
+                    continue;
+                }
+                if (cc == '"') {
+                    ++i;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+        if (c == '{') {
+            std::string opener = trim(cur);
+            cur.clear();
+            std::string gid;
+            if (starts_with(opener, "subgraph")) {
+                // extraer el nombre del cluster
+                std::string nm = trim(opener.substr(8));
+                size_t sp = nm.find_first_of(" \t");
+                if (sp != std::string::npos) nm = nm.substr(0, sp);
+                if (starts_with(nm, "cluster_")) nm = nm.substr(8);
+                gid = nm;
+                if (!group_idx.count(gid)) {
+                    group_idx[gid] = mdl.groups.size();
+                    HGroup g;
+                    g.id = gid;
+                    g.title = gid;
+                    mdl.groups.push_back(g);
+                }
+                pending_group = gid;
+            }
+            group_stack.push_back(gid); // "" si es digraph root
+            ++i;
+            continue;
+        }
+        if (c == '}') {
             if (!trim(cur).empty()) handle_stmt(cur);
-            return mdl;
+            cur.clear();
+            if (!group_stack.empty()) group_stack.pop_back();
+            ++i;
+            continue;
         }
-
-        // ------------------------------------------------------------------
-        //  Modelo -> JSON
-        // ------------------------------------------------------------------
-
-        std::string model_to_json(const DotModel &mdl, const std::string &view) {
-            std::ostringstream os;
-            os << "{";
-            os << "\"view\":\"" << json_escape(view) << "\",";
-
-            os << "\"groups\":[";
-            for (size_t i = 0; i < mdl.groups.size(); ++i) {
-                if (i) os << ",";
-                os << "{\"id\":\"" << json_escape(mdl.groups[i].id) << "\","
-                   << "\"title\":\"" << json_escape(mdl.groups[i].title) << "\"}";
-            }
-            os << "],";
-
-            os << "\"nodes\":[";
-            for (size_t i = 0; i < mdl.nodes.size(); ++i) {
-                const HNode &nd = mdl.nodes[i];
-                if (i) os << ",";
-                os << "{\"id\":\"" << json_escape(nd.id) << "\","
-                   << "\"group\":\"" << json_escape(nd.group) << "\","
-                   << "\"kind\":\"" << json_escape(nd.kind) << "\","
-                   << "\"shape\":\"" << json_escape(nd.shape) << "\","
-                   << "\"header\":\"" << json_escape(nd.header) << "\","
-                   << "\"tooltip\":\"" << json_escape(nd.tooltip) << "\","
-                   << "\"fill\":\"" << json_escape(nd.fill) << "\","
-                   << "\"fc\":\"" << json_escape(nd.fontcolor) << "\","
-                   << "\"stroke\":\"" << json_escape(nd.stroke) << "\","
-                   << "\"lines\":[";
-                for (size_t k = 0; k < nd.lines.size(); ++k) {
-                    if (k) os << ",";
-                    os << "\"" << json_escape(nd.lines[k]) << "\"";
-                }
-                os << "]}";
-            }
-            os << "],";
-
-            os << "\"edges\":[";
-            for (size_t i = 0; i < mdl.edges.size(); ++i) {
-                const HEdge &e = mdl.edges[i];
-                if (i) os << ",";
-                os << "{\"from\":\"" << json_escape(e.from) << "\","
-                   << "\"to\":\"" << json_escape(e.to) << "\","
-                   << "\"type\":\"" << json_escape(e.type) << "\","
-                   << "\"label\":\"" << json_escape(e.label) << "\","
-                   << "\"color\":\"" << json_escape(e.color) << "\","
-                   << "\"style\":\"" << json_escape(e.style) << "\"}";
-            }
-            os << "]";
-            os << "}";
-            return os.str();
+        if (c == ';') {
+            handle_stmt(cur);
+            cur.clear();
+            ++i;
+            continue;
         }
+        cur += c;
+        ++i;
+    }
+    if (!trim(cur).empty()) handle_stmt(cur);
+    return mdl;
+}
 
-        // Plantilla HTML autocontenida (CSS + JS embebidos, sin CDN).  Los
-        // tokens __GRAPH_DATA__ / __GRAPH_TITLE__ / __GRAPH_VIEW__ /
-        // __TITLE_TEXT__ se sustituyen en build_page por el JSON del modelo
-        // y el titulo.  El motor JS hace layout en capas (longest-path),
-        // pan/zoom, panel de detalle, busqueda y filtros de aristas.
-        static const char *kHtmlTemplate = R"VEXHTML(<!DOCTYPE html>
+// ------------------------------------------------------------------
+//  Modelo -> JSON
+// ------------------------------------------------------------------
+
+std::string model_to_json(const DotModel &mdl, const std::string &view) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"view\":\"" << json_escape(view) << "\",";
+
+    os << "\"groups\":[";
+    for (size_t i = 0; i < mdl.groups.size(); ++i) {
+        if (i) os << ",";
+        os << "{\"id\":\"" << json_escape(mdl.groups[i].id) << "\","
+           << "\"title\":\"" << json_escape(mdl.groups[i].title) << "\"}";
+    }
+    os << "],";
+
+    os << "\"nodes\":[";
+    for (size_t i = 0; i < mdl.nodes.size(); ++i) {
+        const HNode &nd = mdl.nodes[i];
+        if (i) os << ",";
+        os << "{\"id\":\"" << json_escape(nd.id) << "\","
+           << "\"group\":\"" << json_escape(nd.group) << "\","
+           << "\"kind\":\"" << json_escape(nd.kind) << "\","
+           << "\"shape\":\"" << json_escape(nd.shape) << "\","
+           << "\"header\":\"" << json_escape(nd.header) << "\","
+           << "\"tooltip\":\"" << json_escape(nd.tooltip) << "\","
+           << "\"fill\":\"" << json_escape(nd.fill) << "\","
+           << "\"fc\":\"" << json_escape(nd.fontcolor) << "\","
+           << "\"stroke\":\"" << json_escape(nd.stroke) << "\","
+           << "\"lines\":[";
+        for (size_t k = 0; k < nd.lines.size(); ++k) {
+            if (k) os << ",";
+            os << "\"" << json_escape(nd.lines[k]) << "\"";
+        }
+        os << "]}";
+    }
+    os << "],";
+
+    os << "\"edges\":[";
+    for (size_t i = 0; i < mdl.edges.size(); ++i) {
+        const HEdge &e = mdl.edges[i];
+        if (i) os << ",";
+        os << "{\"from\":\"" << json_escape(e.from) << "\","
+           << "\"to\":\"" << json_escape(e.to) << "\","
+           << "\"type\":\"" << json_escape(e.type) << "\","
+           << "\"label\":\"" << json_escape(e.label) << "\","
+           << "\"color\":\"" << json_escape(e.color) << "\","
+           << "\"style\":\"" << json_escape(e.style) << "\"}";
+    }
+    os << "]";
+    os << "}";
+    return os.str();
+}
+
+// Plantilla HTML autocontenida (CSS + JS embebidos, sin CDN).  Los
+// tokens __GRAPH_DATA__ / __GRAPH_TITLE__ / __GRAPH_VIEW__ /
+// __TITLE_TEXT__ se sustituyen en build_page por el JSON del modelo
+// y el titulo.  El motor JS hace layout en capas (longest-path),
+// pan/zoom, panel de detalle, busqueda y filtros de aristas.
+static const char *kHtmlTemplate = R"VEXHTML(<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -1051,54 +1097,55 @@ window.addEventListener('resize',updateMinimapView);
 </html>
 )VEXHTML";
 
-        std::string build_page(const std::string &json,
-                               const std::string &title,
-                               const std::string &view) {
-            std::string page = kHtmlTemplate;
-            auto replace_all = [&](const std::string &needle, const std::string &val) {
-                size_t pos = 0;
-                while ((pos = page.find(needle, pos)) != std::string::npos) {
-                    page.replace(pos, needle.size(), val);
-                    pos += val.size();
-                }
-            };
-            replace_all("__GRAPH_DATA__", json);
-            replace_all("__GRAPH_TITLE__", "\"" + json_escape(title) + "\"");
-            replace_all("__GRAPH_VIEW__", "\"" + json_escape(view) + "\"");
-            // Tambien el titulo visible en <title> y <h1> (texto plano).
-            replace_all("__TITLE_TEXT__", json_escape(title));
-            return page;
+std::string build_page(const std::string &json, const std::string &title,
+                       const std::string &view) {
+    std::string page = kHtmlTemplate;
+    auto replace_all = [&](const std::string &needle, const std::string &val) {
+        size_t pos = 0;
+        while ((pos = page.find(needle, pos)) != std::string::npos) {
+            page.replace(pos, needle.size(), val);
+            pos += val.size();
         }
+    };
+    replace_all("__GRAPH_DATA__", json);
+    replace_all("__GRAPH_TITLE__", "\"" + json_escape(title) + "\"");
+    replace_all("__GRAPH_VIEW__", "\"" + json_escape(view) + "\"");
+    // Tambien el titulo visible en <title> y <h1> (texto plano).
+    replace_all("__TITLE_TEXT__", json_escape(title));
+    return page;
+}
 
-    } // namespace
+} // namespace
 
-    // ----------------------------------------------------------------------
-    //  API publica
-    // ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+//  API publica
+// ----------------------------------------------------------------------
 
-    std::string html_from_dot(const std::string &dot_source,
-                              const std::string &title,
-                              const std::string &view_kind) {
-        DotModel mdl = parse_dot(dot_source);
-        std::string json = model_to_json(mdl, view_kind);
-        return build_page(json, title, view_kind);
-    }
+std::string html_from_dot(const std::string &dot_source,
+                          const std::string &title,
+                          const std::string &view_kind) {
+    DotModel mdl = parse_dot(dot_source);
+    std::string json = model_to_json(mdl, view_kind);
+    return build_page(json, title, view_kind);
+}
 
-    std::string html_from_ast(const ast::ModuleNode &mod) {
-        return html_from_dot(graphviz_from_ast(mod),
-                             "AST Vex (post type-check)", "ast");
-    }
+std::string html_from_ast(const ast::ModuleNode &mod) {
+    return html_from_dot(graphviz_from_ast(mod), "AST Vex (post type-check)",
+                         "ast");
+}
 
-    std::string html_from_ir_module(const ir::IrModule &mod,
-                                    const std::string &title) {
-        std::string view = (title.find("post") != std::string::npos) ? "ir-post"
-                                                                      : "ir-pre";
-        return html_from_dot(graphviz_from_ir_module(mod, title), title, view);
-    }
+std::string html_from_ir_module(const ir::IrModule &mod,
+                                const std::string &title,
+                                const analyze::ModuleCost *cost) {
+    std::string view =
+        (title.find("post") != std::string::npos) ? "ir-post" : "ir-pre";
+    return html_from_dot(graphviz_from_ir_module(mod, title, cost), title,
+                         view);
+}
 
-    std::string html_from_vel_text(const std::string &vel_text) {
-        return html_from_dot(graphviz_from_vel_text(vel_text),
-                             "Bytecode .vel", "vel");
-    }
+std::string html_from_vel_text(const std::string &vel_text) {
+    return html_from_dot(graphviz_from_vel_text(vel_text), "Bytecode .vel",
+                         "vel");
+}
 
 } // namespace vex

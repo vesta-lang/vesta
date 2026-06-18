@@ -10,7 +10,8 @@
 
 /**
  * @file node_registry.cpp
- * @brief Implementacion del registro de nodos VDP con descubrimiento estatico y dinamico.
+ * @brief Implementacion del registro de nodos VDP con descubrimiento estatico y
+ * dinamico.
  *
  * El descubrimiento dinamico usa UDP:
  *   - Broadcast NODE_DISCOVER cada 30 segundos.
@@ -25,22 +26,22 @@
 #include <chrono>
 
 #ifdef _WIN32
-#  ifndef _WIN32_WINNT
-#    define _WIN32_WINNT 0x0600  // Vista+: inet_ntop, inet_pton disponibles
-#  endif
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600 // Vista+: inet_ntop, inet_pton disponibles
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 typedef SOCKET udp_sock_t;
-#  define INVALID_UDP_SOCK INVALID_SOCKET
-#  define close_udp(s)     closesocket(s)
+#define INVALID_UDP_SOCK INVALID_SOCKET
+#define close_udp(s) closesocket(s)
 #else
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <arpa/inet.h>
-#  include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 typedef int udp_sock_t;
-#  define INVALID_UDP_SOCK (-1)
-#  define close_udp(s)     ::close(s)
+#define INVALID_UDP_SOCK (-1)
+#define close_udp(s) ::close(s)
 #endif
 
 namespace distrib {
@@ -50,9 +51,7 @@ namespace distrib {
 // ---------------------------------------------------------------------------
 
 NodeRegistry::NodeRegistry(uint64_t local_node_id, uint16_t local_port)
-    : local_id_(local_node_id)
-    , local_port_(local_port)
-{}
+    : local_id_(local_node_id), local_port_(local_port) {}
 
 NodeRegistry::~NodeRegistry() {
     stop_discovery();
@@ -63,15 +62,15 @@ NodeRegistry::~NodeRegistry() {
 // ---------------------------------------------------------------------------
 
 uint32_t NodeRegistry::add_static(const char *ip, uint16_t port,
-                                   const NodeAuthConfig &auth,
-                                   const char *name) {
+                                  const NodeAuthConfig &auth,
+                                  const char *name) {
     std::lock_guard<std::mutex> lk(mtx_);
 
     // verificar si ya existe un nodo con la misma IP:puerto
     for (auto &n : nodes_) {
         if (port == n.port && std::strcmp(ip, n.ip) == 0) {
             n.is_static = true; // promover a estatico si era dinamico
-            n.auth      = auth;
+            n.auth = auth;
             if (name && name[0]) {
                 std::snprintf(n.name, sizeof(n.name), "%s", name);
             }
@@ -82,16 +81,16 @@ uint32_t NodeRegistry::add_static(const char *ip, uint16_t port,
     if (nodes_.size() >= VDP_MAX_NODES) return VDP_MAX_NODES; // registro lleno
 
     NodeInfo ni{};
-    ni.idx       = static_cast<uint32_t>(nodes_.size());
-    ni.node_id   = 0;             // desconocido hasta el HELLO
-    ni.port      = port;
+    ni.idx = static_cast<uint32_t>(nodes_.size());
+    ni.node_id = 0; // desconocido hasta el HELLO
+    ni.port = port;
     ni.is_static = true;
-    ni.state     = NodeState::UNKNOWN;
-    ni.auth      = auth;
-    ni.session   = nullptr;
+    ni.state = NodeState::UNKNOWN;
+    ni.auth = auth;
+    ni.session = nullptr;
     ni.auth_failures = 0;
 
-    std::snprintf(ni.ip,   sizeof(ni.ip),   "%s", ip);
+    std::snprintf(ni.ip, sizeof(ni.ip), "%s", ip);
     std::snprintf(ni.name, sizeof(ni.name), "%s", name ? name : ip);
 
     nodes_.push_back(ni);
@@ -99,7 +98,7 @@ uint32_t NodeRegistry::add_static(const char *ip, uint16_t port,
 }
 
 uint32_t NodeRegistry::add_dynamic(uint64_t node_id, const char *ip,
-                                    uint16_t port, const char *name) {
+                                   uint16_t port, const char *name) {
     std::lock_guard<std::mutex> lk(mtx_);
 
     // no sobreescribir nodos estaticos existentes
@@ -111,17 +110,17 @@ uint32_t NodeRegistry::add_dynamic(uint64_t node_id, const char *ip,
     if (nodes_.size() >= VDP_MAX_NODES) return VDP_MAX_NODES;
 
     NodeInfo ni{};
-    ni.idx       = static_cast<uint32_t>(nodes_.size());
-    ni.node_id   = node_id;
-    ni.port      = port;
+    ni.idx = static_cast<uint32_t>(nodes_.size());
+    ni.node_id = node_id;
+    ni.port = port;
     ni.is_static = false;
-    ni.state     = NodeState::UNKNOWN;
-    ni.session   = nullptr;
+    ni.state = NodeState::UNKNOWN;
+    ni.session = nullptr;
     ni.auth_failures = 0;
 
     std::memset(&ni.auth, 0, sizeof(ni.auth)); // sin config de auth por defecto
 
-    std::snprintf(ni.ip,   sizeof(ni.ip),   "%s", ip);
+    std::snprintf(ni.ip, sizeof(ni.ip), "%s", ip);
     std::snprintf(ni.name, sizeof(ni.name), "%s", name ? name : ip);
 
     nodes_.push_back(ni);
@@ -172,9 +171,8 @@ void NodeRegistry::set_session(uint32_t idx, void *session) {
 void NodeRegistry::start_discovery(uint16_t discover_port) {
     if (disc_running_.exchange(true)) return; // ya activo
 
-    disc_thread_ = std::thread([this, discover_port]() {
-        discovery_loop_(discover_port);
-    });
+    disc_thread_ = std::thread(
+        [this, discover_port]() { discovery_loop_(discover_port); });
 }
 
 void NodeRegistry::stop_discovery() {
@@ -193,15 +191,17 @@ void NodeRegistry::broadcast_discover() {
 
     // construir el payload NODE_DISCOVER
     VdpPayloadNodeDiscover disc{};
-    disc.magic[0] = 'V'; disc.magic[1] = 'D';
-    disc.magic[2] = 'P'; disc.magic[3] = 'D';
-    disc.node_id   = local_id_;
+    disc.magic[0] = 'V';
+    disc.magic[1] = 'D';
+    disc.magic[2] = 'P';
+    disc.magic[3] = 'D';
+    disc.node_id = local_id_;
     disc.reply_port = local_port_;
-    disc._pad       = 0;
+    disc._pad = 0;
 
     sockaddr_in dest{};
-    dest.sin_family      = AF_INET;
-    dest.sin_port        = htons(VDP_DISCOVER_PORT);
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(VDP_DISCOVER_PORT);
     dest.sin_addr.s_addr = INADDR_BROADCAST;
 
     sendto(sock, reinterpret_cast<const char *>(&disc), sizeof(disc), 0,
@@ -218,7 +218,8 @@ void NodeRegistry::discovery_loop_(uint16_t discover_port) {
         return;
     }
 
-    // reutilizacion de puerto para que varios nodos en el mismo host puedan escuchar
+    // reutilizacion de puerto para que varios nodos en el mismo host puedan
+    // escuchar
     int reuse = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
                reinterpret_cast<const char *>(&reuse), sizeof(reuse));
@@ -229,17 +230,19 @@ void NodeRegistry::discovery_loop_(uint16_t discover_port) {
                reinterpret_cast<const char *>(&bcast), sizeof(bcast));
 
     sockaddr_in bind_addr{};
-    bind_addr.sin_family      = AF_INET;
-    bind_addr.sin_port        = htons(discover_port);
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_port = htons(discover_port);
     bind_addr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(sock, reinterpret_cast<const sockaddr *>(&bind_addr), sizeof(bind_addr)) != 0) {
+    if (bind(sock, reinterpret_cast<const sockaddr *>(&bind_addr),
+             sizeof(bind_addr)) != 0) {
         close_udp(sock);
         disc_running_.store(false);
         return;
     }
 
-    // timeout de recepcion para que el bucle pueda verificar disc_running_ periodicamente
+    // timeout de recepcion para que el bucle pueda verificar disc_running_
+    // periodicamente
 #ifdef _WIN32
     DWORD timeout_ms = 1000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
@@ -277,41 +280,51 @@ void NodeRegistry::discovery_loop_(uint16_t discover_port) {
         // obtener la IP del remitente del paquete UDP
         char ip_str[64] = {};
         const uint8_t *ab = reinterpret_cast<const uint8_t *>(&from.sin_addr);
-        std::snprintf(ip_str, sizeof(ip_str), "%u.%u.%u.%u",
-                      static_cast<unsigned>(ab[0]), static_cast<unsigned>(ab[1]),
-                      static_cast<unsigned>(ab[2]), static_cast<unsigned>(ab[3]));
+        std::snprintf(
+            ip_str, sizeof(ip_str), "%u.%u.%u.%u", static_cast<unsigned>(ab[0]),
+            static_cast<unsigned>(ab[1]), static_cast<unsigned>(ab[2]),
+            static_cast<unsigned>(ab[3]));
 
-        // comprobar si es NODE_DISCOVER ("VDPD") para responder con NODE_ANNOUNCE
+        // comprobar si es NODE_DISCOVER ("VDPD") para responder con
+        // NODE_ANNOUNCE
         const uint8_t *magic = buf;
-        if (magic[0] == 'V' && magic[1] == 'D' && magic[2] == 'P' && magic[3] == 'D') {
+        if (magic[0] == 'V' && magic[1] == 'D' && magic[2] == 'P' &&
+            magic[3] == 'D') {
             const VdpPayloadNodeDiscover *disc =
                 reinterpret_cast<const VdpPayloadNodeDiscover *>(buf);
 
             // ignorar descubrimientos propios
             if (disc->node_id == local_id_) continue;
 
-            // responder con NODE_ANNOUNCE al mismo puerto de descubrimiento del remitente
+            // responder con NODE_ANNOUNCE al mismo puerto de descubrimiento del
+            // remitente
             VdpPayloadNodeAnnounce ann{};
-            ann.magic[0] = 'V'; ann.magic[1] = 'D';
-            ann.magic[2] = 'P'; ann.magic[3] = 'A';
-            ann.node_id   = local_id_;
-            ann.vdp_port  = local_port_; // nuestro puerto TCP VDP
+            ann.magic[0] = 'V';
+            ann.magic[1] = 'D';
+            ann.magic[2] = 'P';
+            ann.magic[3] = 'A';
+            ann.node_id = local_id_;
+            ann.vdp_port = local_port_; // nuestro puerto TCP VDP
             ann.auth_flags = 0;
-            ann._pad       = 0;
+            ann._pad = 0;
             std::snprintf(ann.node_name, sizeof(ann.node_name), "node");
 
             // enviar unicast al remitente en el mismo puerto de descubrimiento
             sockaddr_in reply_addr = from;
             reply_addr.sin_port = htons(discover_port);
             sendto(sock, reinterpret_cast<const char *>(&ann), sizeof(ann), 0,
-                   reinterpret_cast<const sockaddr *>(&reply_addr), sizeof(reply_addr));
+                   reinterpret_cast<const sockaddr *>(&reply_addr),
+                   sizeof(reply_addr));
 
-            // registrar el nodo descubierto (su puerto TCP esta en disc->reply_port)
-            uint32_t idx = add_dynamic(disc->node_id, ip_str, disc->reply_port, "discovered");
+            // registrar el nodo descubierto (su puerto TCP esta en
+            // disc->reply_port)
+            uint32_t idx = add_dynamic(disc->node_id, ip_str, disc->reply_port,
+                                       "discovered");
             if (idx < VDP_MAX_NODES && new_node_cb_) {
                 NodeInfo *info = get(idx);
                 if (info && info->state == NodeState::UNKNOWN) {
-                    new_node_cb_(*info); // notificar al DistRuntime para conectar
+                    new_node_cb_(
+                        *info); // notificar al DistRuntime para conectar
                 }
             }
             continue;
@@ -323,12 +336,14 @@ void NodeRegistry::discovery_loop_(uint16_t discover_port) {
             reinterpret_cast<const VdpPayloadNodeAnnounce *>(buf);
 
         if (ann->magic[0] != 'V' || ann->magic[1] != 'D' ||
-            ann->magic[2] != 'P' || ann->magic[3] != 'A') continue;
+            ann->magic[2] != 'P' || ann->magic[3] != 'A')
+            continue;
 
         // ignorar anuncios propios
         if (ann->node_id == local_id_) continue;
 
-        uint32_t idx = add_dynamic(ann->node_id, ip_str, ann->vdp_port, ann->node_name);
+        uint32_t idx =
+            add_dynamic(ann->node_id, ip_str, ann->vdp_port, ann->node_name);
         if (idx < VDP_MAX_NODES && new_node_cb_) {
             NodeInfo *info = get(idx);
             if (info && info->state == NodeState::UNKNOWN) {

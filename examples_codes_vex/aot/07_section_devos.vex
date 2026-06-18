@@ -1,0 +1,8 @@
+// dev OS: control de seccion + permisos (@section(".name"[,"perms"])).
+// boot_entry vive en una seccion RWX propia (.boot); main en .text.  La
+// llamada main -> boot_entry es CROSS-SECCION (la resuelve el ObjectWriter).
+// Una funcion con @section NO se inlinea (debe permanecer fisica en su seccion).
+@section(".boot", "rwx")
+i32 boot_entry(i32 x) { return x + 7; }
+
+i32 main() { return boot_entry(35); }   // exit-code 42

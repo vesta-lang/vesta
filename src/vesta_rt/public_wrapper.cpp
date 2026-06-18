@@ -52,18 +52,26 @@
 
 #include <cstring>
 
+/* Forward-decl SOLO de la fn que necesitamos para el dispatch de advices desde
+ * codigo JIT (no incluimos exec_instruction.h entero para no arrastrar sus
+ * definiciones inline a este TU -> evita choques de ODR/layout).  Debe estar a
+ * scope GLOBAL (::runtime), no dentro del namespace anonimo de abajo. */
+namespace runtime {
+void exec_instr_callvirt(ProcessVM *vm, const DecodedInstr &instr);
+}
+
 namespace {
-    /* Cast helpers locales para mantener legible el resto del codigo. */
-    inline runtime::ProcessVM *as_proc(vrt_proc *p) noexcept {
-        return reinterpret_cast<runtime::ProcessVM *>(p);
-    }
-    inline runtime::VM *as_vm(vrt_vm *v) noexcept {
-        return reinterpret_cast<runtime::VM *>(v);
-    }
-    inline loader::ClassInfo *as_class(vrt_class *c) noexcept {
-        return reinterpret_cast<loader::ClassInfo *>(c);
-    }
-} // namespace anonymous
+/* Cast helpers locales para mantener legible el resto del codigo. */
+inline runtime::ProcessVM *as_proc(vrt_proc *p) noexcept {
+    return reinterpret_cast<runtime::ProcessVM *>(p);
+}
+inline runtime::VM *as_vm(vrt_vm *v) noexcept {
+    return reinterpret_cast<runtime::VM *>(v);
+}
+inline loader::ClassInfo *as_class(vrt_class *c) noexcept {
+    return reinterpret_cast<loader::ClassInfo *>(c);
+}
+} // namespace
 
 extern "C" {
 
@@ -73,9 +81,9 @@ extern "C" {
 
 uint32_t vrt_api_version(void) {
     /* version encoded como (major << 16) | (minor << 8) | patch */
-    return (static_cast<uint32_t>(VRT_API_VERSION_MAJOR) << 16)
-         | (static_cast<uint32_t>(VRT_API_VERSION_MINOR) << 8)
-         | static_cast<uint32_t>(VRT_API_VERSION_PATCH);
+    return (static_cast<uint32_t>(VRT_API_VERSION_MAJOR) << 16) |
+           (static_cast<uint32_t>(VRT_API_VERSION_MINOR) << 8) |
+           static_cast<uint32_t>(VRT_API_VERSION_PATCH);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -153,19 +161,19 @@ void vrt_gc_write_barrier(vrt_proc *proc, vrt_handle old_handle) {
 
 int32_t vrt_monitor_enter(vrt_proc *proc, vrt_handle obj) {
     if (!proc || obj == VRT_NULL_HANDLE) return 0;
-    runtime::ProcessVM *p   = as_proc(proc);
+    runtime::ProcessVM *p = as_proc(proc);
     // Phase Z.11 ext: usamos el PID encoded (sched<<32|local) de 48 bits para
     // evitar la colision local_pid cross-scheduler.
-    const uint64_t      pid = (static_cast<uint64_t>(p->pid.scheduler_id) << 32)
-                              | static_cast<uint64_t>(p->pid.local_pid);
+    const uint64_t pid = (static_cast<uint64_t>(p->pid.scheduler_id) << 32) |
+                         static_cast<uint64_t>(p->pid.local_pid);
     return p->gc_heap.monitor_try_acquire(obj, pid) ? 1 : 0;
 }
 
 void vrt_monitor_exit(vrt_proc *proc, vrt_handle obj) {
     if (!proc || obj == VRT_NULL_HANDLE) return;
-    runtime::ProcessVM *p   = as_proc(proc);
-    const uint64_t      pid = (static_cast<uint64_t>(p->pid.scheduler_id) << 32)
-                              | static_cast<uint64_t>(p->pid.local_pid);
+    runtime::ProcessVM *p = as_proc(proc);
+    const uint64_t pid = (static_cast<uint64_t>(p->pid.scheduler_id) << 32) |
+                         static_cast<uint64_t>(p->pid.local_pid);
     (void)p->gc_heap.monitor_release(obj, pid);
     /* TODO Phase E (D.2): si monitor_release devuelve un waiter,
      * llamar vm.make_ready(next).  Por ahora el bytecode handler
@@ -176,7 +184,8 @@ void vrt_monitor_wait(vrt_proc *proc, vrt_handle obj) {
     /* Slow path: queda como stub.  El JIT en v1 cae al interprete
      * via el trampoline @c jit_to_interp para llamar al bytecode
      * MONWAIT.  En Phase E expondremos un wait completo aqui. */
-    (void)proc; (void)obj;
+    (void)proc;
+    (void)obj;
 }
 
 void vrt_monitor_notify(vrt_proc *proc, vrt_handle obj) {
@@ -231,10 +240,10 @@ void vrt_tryenter(vrt_proc *proc, uint64_t handler_pc, vrt_class *type_class) {
     } else {
         ef = new runtime::ProcessVM::ExceptionFrame();
     }
-    ef->handler_pc        = handler_pc;
-    ef->type              = reinterpret_cast<loader::ClassInfo *>(type_class);
-    ef->saved_rsp         = p->registers.stack_pointer.qword();
-    ef->saved_rbp         = p->registers.base_pointer.qword();
+    ef->handler_pc = handler_pc;
+    ef->type = reinterpret_cast<loader::ClassInfo *>(type_class);
+    ef->saved_rsp = p->registers.stack_pointer.qword();
+    ef->saved_rbp = p->registers.base_pointer.qword();
     ef->saved_frame_stack = reinterpret_cast<uint64_t>(p->frame_stack);
     for (int i = 0; i < 16; ++i) {
         ef->saved_regs[i] = p->registers.regs[i].qword();
@@ -245,7 +254,8 @@ void vrt_tryenter(vrt_proc *proc, uint64_t handler_pc, vrt_class *type_class) {
 
 void vrt_tryleave(vrt_proc *proc) {
     /* Pop del tope + push al free list para reciclar.  El JIT inlinea
-     * la misma logica en 7 instrucciones x86-64 cuando @c exc_frame_stack_offset
+     * la misma logica en 7 instrucciones x86-64 cuando @c
+     * exc_frame_stack_offset
      * + @c exc_free_list_offset estan configurados (~3x mas rapido que
      * llegar aqui via call).  Esta version C es fallback para bytecode
      * interp + JIT en modo testing sin offsets. */
@@ -308,36 +318,43 @@ uint64_t vrt_invoke_native(void *fn, uint64_t argc, vrt_proc *proc) {
 /* Dispatch dinamico (CALLVIRT desde JIT)                                  */
 /* ----------------------------------------------------------------------- */
 
-/* Forward decl: definido mas abajo (compartido entre vrt_callvirt y vrt_callm). */
+/* Forward decl: definido mas abajo (compartido entre vrt_callvirt y vrt_callm).
+ */
 static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
                                          loader::MethodInfo *mi);
+static uint64_t vrt_run_callvirt_with_advices(runtime::ProcessVM *p,
+                                              uint8_t *obj_payload,
+                                              uint32_t vtbl_idx);
 
 uint64_t vrt_callvirt(vrt_proc *proc, uint8_t *obj_payload, uint32_t vtbl_idx) {
     if (!proc || !obj_payload) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "callvirt: obj payload nulo");
+                                 "callvirt: obj payload nulo");
         }
         return 0;
     }
     runtime::ProcessVM *p = as_proc(proc);
 
     /* Convencion bytecode/Vex: obj_payload APUNTA al ObjectHeader (NO al
-     * payload de campos).  El gcderef del bytecode devuelve `addr + sizeof(GcHeader)`
-     * que ES la direccion del ObjectHeader; y los campos siguen DESPUES del header
-     * a offset >= sizeof(ObjectHeader).  Tratar obj_payload directamente como
-     * ObjectHeader* es lo consistente con el resto del runtime. */
-    loader::ObjectHeader *hdr = reinterpret_cast<loader::ObjectHeader *>(obj_payload);
+     * payload de campos).  El gcderef del bytecode devuelve `addr +
+     * sizeof(GcHeader)` que ES la direccion del ObjectHeader; y los campos
+     * siguen DESPUES del header a offset >= sizeof(ObjectHeader).  Tratar
+     * obj_payload directamente como ObjectHeader* es lo consistente con el
+     * resto del runtime. */
+    loader::ObjectHeader *hdr =
+        reinterpret_cast<loader::ObjectHeader *>(obj_payload);
     loader::ClassInfo *cls = hdr->class_ptr;
     if (!cls || vtbl_idx >= cls->vtable_size) {
-        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+        runtime::throw_fatal(
+            p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
             "callvirt: clase nula o vtable_idx fuera de rango");
         return 0;
     }
     loader::MethodInfo *method = cls->vtable[vtbl_idx];
     if (!method) {
         runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
-            "callvirt: vtable slot vacio (metodo abstracto?)");
+                             "callvirt: vtable slot vacio (metodo abstracto?)");
         return 0;
     }
 
@@ -359,8 +376,21 @@ uint64_t vrt_callvirt(vrt_proc *proc, uint8_t *obj_payload, uint32_t vtbl_idx) {
     /* Si el metodo tiene advices (AOP @Before/@After/@Around), NO podemos
      * llamar directo al JIT-eated body porque eso salta la cadena
      * advice_chain.  Caemos al bytecode interp que SI recorre la cadena
-     * correctamente (ver exec_instr_callvirt slow path). */
-    if (method->jit_code != nullptr && method->advice_chain == nullptr) {
+     * correctamente (ver exec_instr_callvirt slow path).
+     *
+     * NOTA (raw_asm-elim Fase 2c): este fallback (vrt_run_method_in_interp)
+     * salta al cuerpo del metodo y TAMBIEN se salta los advices, lo que es un
+     * bug latente del JIT con AOP.  Por eso el frontend marca las funciones que
+     * REGISTRAN advices (addadvice) como no-JIT-compilables (ver vreg_select /
+     * selector), forzando que el programa AOP corra `main` en interp -> los
+     * CALLVIRT recorren la cadena correctamente y este path no se ejercita.  Un
+     * fix completo (dispatch de la cadena desde JIT) queda como trabajo futuro.
+     */
+    if (method->advice_chain != nullptr) {
+        return vrt_run_callvirt_with_advices(p, obj_payload, vtbl_idx);
+    }
+
+    if (method->jit_code != nullptr) {
         /* Dispatch directo a codigo nativo.  VM_ABI: args ya en
          * proc->registers.regs[1..N] (el caller los puso antes de invocar
          * vrt_callvirt).  Solo necesitamos asegurar R1 = obj_payload. */
@@ -385,25 +415,28 @@ uint64_t vrt_callvirt(vrt_proc *proc, uint8_t *obj_payload, uint32_t vtbl_idx) {
  *   +8  [8] cached_jit_code (o vrt_run_method_in_interp_addr para fallback)
  */
 uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
-                          uint32_t vtbl_idx, uint64_t ic_slot_addr) {
+                         uint32_t vtbl_idx, uint64_t ic_slot_addr) {
     if (!proc || !obj_payload) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "callvirt_ic: obj payload nulo");
+                                 "callvirt_ic: obj payload nulo");
         }
         return 0;
     }
     runtime::ProcessVM *p = as_proc(proc);
-    loader::ObjectHeader *hdr = reinterpret_cast<loader::ObjectHeader *>(obj_payload);
+    loader::ObjectHeader *hdr =
+        reinterpret_cast<loader::ObjectHeader *>(obj_payload);
     loader::ClassInfo *cls = hdr->class_ptr;
     if (!cls || vtbl_idx >= cls->vtable_size) {
-        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+        runtime::throw_fatal(
+            p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
             "callvirt_ic: clase nula o vtable_idx fuera de rango");
         return 0;
     }
     loader::MethodInfo *method = cls->vtable[vtbl_idx];
     if (!method) {
-        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+        runtime::throw_fatal(
+            p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
             "callvirt_ic: vtable slot vacio (metodo abstracto?)");
         return 0;
     }
@@ -435,10 +468,10 @@ uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
      * Solo se actualiza si hay jit_code Y NO hay advices.  Sin
      * jit_code el inline cache no sirve (no podriamos llamar
      * directo); con advices necesitamos el slow path siempre. */
-    if (ic_slot_addr != 0 && method->jit_code != nullptr
-     && method->advice_chain == nullptr) {
+    if (ic_slot_addr != 0 && method->jit_code != nullptr &&
+        method->advice_chain == nullptr) {
         uint64_t *slot = reinterpret_cast<uint64_t *>(ic_slot_addr);
-        const uint64_t cls_u  = reinterpret_cast<uint64_t>(cls);
+        const uint64_t cls_u = reinterpret_cast<uint64_t>(cls);
         const uint64_t code_u = reinterpret_cast<uint64_t>(method->jit_code);
         /* Buscar entry vacia.  Si la clase YA esta cacheada (caso raro
          * de race en multi-thread), actualizar su jit_code. */
@@ -447,7 +480,7 @@ uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
             const uint64_t s_cls = slot[i * 2];
             if (s_cls == cls_u) {
                 slot[i * 2 + 1] = code_u;
-                free_idx = -2;  /* sentinel: ya cacheada, no insertar */
+                free_idx = -2; /* sentinel: ya cacheada, no insertar */
                 break;
             }
             if (free_idx < 0 && s_cls == 0) {
@@ -455,15 +488,19 @@ uint64_t vrt_callvirt_ic(vrt_proc *proc, uint8_t *obj_payload,
             }
         }
         if (free_idx >= 0) {
-            slot[free_idx * 2]     = cls_u;
+            slot[free_idx * 2] = cls_u;
             slot[free_idx * 2 + 1] = code_u;
         } else if (free_idx == -1) {
             /* Todas ocupadas con otras clases -> rotar.  Entry 0 cae,
              * 1->0, 2->1, 3->2, nueva clase en 3. */
-            slot[0] = slot[2]; slot[1] = slot[3];
-            slot[2] = slot[4]; slot[3] = slot[5];
-            slot[4] = slot[6]; slot[5] = slot[7];
-            slot[6] = cls_u;   slot[7] = code_u;
+            slot[0] = slot[2];
+            slot[1] = slot[3];
+            slot[2] = slot[4];
+            slot[3] = slot[5];
+            slot[4] = slot[6];
+            slot[5] = slot[7];
+            slot[6] = cls_u;
+            slot[7] = code_u;
         }
     }
 
@@ -503,8 +540,8 @@ static constexpr uint64_t VRT_BYTECODE_RET_SENTINEL = 0xFEFEFEFE00000000ULL;
 static uint64_t vrt_run_bc_at(runtime::ProcessVM *p, uint64_t bc_va) {
     const uint64_t saved_rip = p->registers.rip.raw();
     const uint64_t saved_rsp = p->registers.stack_pointer.qword();
-    auto *saved_frame_stack  = p->frame_stack;
-    auto *saved_decoded_ptr  = p->decoded_ptr;
+    auto *saved_frame_stack = p->frame_stack;
+    auto *saved_decoded_ptr = p->decoded_ptr;
 
     const uint64_t new_rsp = saved_rsp - 8;
     p->vm_mem.write_u64_fast(new_rsp, VRT_BYTECODE_RET_SENTINEL);
@@ -524,7 +561,8 @@ static uint64_t vrt_run_bc_at(runtime::ProcessVM *p, uint64_t bc_va) {
         if (ev == runtime::EVT_HALT || ev == runtime::EVT_ERROR) break;
         if (ev == runtime::EVT_IO_WAIT) {
             runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
-                "vrt trampoline JIT->interp: IO_WAIT no soportado en sync interp");
+                                 "vrt trampoline JIT->interp: IO_WAIT no "
+                                 "soportado en sync interp");
             break;
         }
     }
@@ -547,10 +585,10 @@ static uint64_t vrt_run_bc_at(runtime::ProcessVM *p, uint64_t bc_va) {
 static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
                                          loader::MethodInfo *mi) {
     /* Salvar estado del proceso. */
-    const uint64_t saved_rip   = p->registers.rip.raw();
-    const uint64_t saved_rsp   = p->registers.stack_pointer.qword();
-    auto *saved_frame_stack    = p->frame_stack;
-    auto *saved_decoded_ptr    = p->decoded_ptr;
+    const uint64_t saved_rip = p->registers.rip.raw();
+    const uint64_t saved_rsp = p->registers.stack_pointer.qword();
+    auto *saved_frame_stack = p->frame_stack;
+    auto *saved_decoded_ptr = p->decoded_ptr;
 
     /* Push ret_addr sentinel al stack VM. */
     const uint64_t new_rsp = saved_rsp - 8;
@@ -560,19 +598,31 @@ static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
     /* Push frame OOP (necesario para que callvirt/proceed funcionen
      * desde dentro del metodo si los usa). */
     auto *frame = p->frame_pool.acquire();
-    frame->prev            = p->frame_stack;
-    frame->method          = mi;
-    frame->return_pc       = VRT_BYTECODE_RET_SENTINEL;
-    frame->frame_base      = saved_rsp;
-    frame->proceed_target  = nullptr;
-    p->frame_stack         = frame;
+    frame->prev = p->frame_stack;
+    frame->method = mi;
+    frame->return_pc = VRT_BYTECODE_RET_SENTINEL;
+    frame->frame_base = saved_rsp;
+    frame->proceed_target = nullptr;
+    /* CRITICO: inicializar los campos AOP/save-regs del frame.  El
+     * frame_pool reusa frames y NO los limpia; sin esta inicializacion,
+     * el frame hereda basura del uso anterior y @c exec_instr_ret puede
+     * hacer @c delete[] de un @c around_chain corrupto (heap corruption)
+     * o restaurar r1..r12 desde un snapshot basura.  Mismo conjunto de
+     * campos que inicializa el push_step normal (exec_instruction_oop.cpp). */
+    frame->around_chain = nullptr;
+    frame->around_chain_len = 0;
+    frame->around_chain_owns = 0;
+    frame->has_saved_regs = 0;
+    frame->inject_r0_to_reg = 0;
+    p->frame_stack = frame;
 
     /* Saltar al code del metodo. */
     p->registers.rip.qword(mi->code_vaddr);
 
     /* Reset decoded_ptr para forzar fresh decode. */
     p->decoded_ptr = &p->icache[0];
-    p->decoded_ptr->pc = UINT64_MAX;  /* invalidar para que decode no haga HIT erroneo */
+    p->decoded_ptr->pc =
+        UINT64_MAX; /* invalidar para que decode no haga HIT erroneo */
 
     /* Mini run-loop: ejecutar hasta que el frame retorne al sentinel
      * o el proceso entre en HALT/DEAD/error.  Max iters defensivo. */
@@ -588,7 +638,8 @@ static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
         if (ev == runtime::EVT_IO_WAIT) {
             /* No podemos esperar IO sincronicamente desde JIT.
              * Abortar el fallback con error. */
-            runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+            runtime::throw_fatal(
+                p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
                 "vrt_callm fallback: IO_WAIT no soportado en sync interp");
             break;
         }
@@ -611,11 +662,80 @@ static uint64_t vrt_run_method_in_interp(runtime::ProcessVM *p,
     return p->registers.regs[0].qword();
 }
 
+static uint64_t vrt_run_callvirt_with_advices(runtime::ProcessVM *p,
+                                              uint8_t *obj_payload,
+                                              uint32_t vtbl_idx) {
+    /* Salvar estado del proceso (igual que vrt_run_method_in_interp). */
+    const uint64_t saved_rip = p->registers.rip.raw();
+    const uint64_t saved_rsp = p->registers.stack_pointer.qword();
+    auto *saved_frame_stack = p->frame_stack;
+    auto *saved_decoded_ptr = p->decoded_ptr;
+
+    /* obj en R1 (this).  Los args ya estan en regs[2..N] (puestos por el
+     * caller JIT antes de invocar vrt_callvirt). */
+    p->registers.regs[1].qword(reinterpret_cast<uint64_t>(obj_payload));
+
+    /* Construir un CALLVIRT sintetico: reg1=R1 (obj), reg2=vtbl_idx, size=0.
+     * Ponemos rip = sentinel ANTES, para que exec_instr_callvirt calcule
+     * ret_addr = rip + size_instr = sentinel; cuando la cadena de advices
+     * retorne a ese ret_addr, el mini run-loop para. */
+    p->registers.rip.qword(VRT_BYTECODE_RET_SENTINEL);
+    runtime::DecodedInstr di{};
+    di.data_instruction.reg_data.reg1 = 1;
+    di.data_instruction.reg_data.reg2 = static_cast<uint8_t>(vtbl_idx);
+    di.flags_info.size_instr = 0;
+    /* cached_class/cached_method a 0 (di zero-init) -> resuelve via vtable. */
+
+    /* decoded_ptr a un slot fresco ANTES de exec_instr_callvirt (que puede
+     * referenciar vm->decoded_ptr al pushear los steps). */
+    p->decoded_ptr = &p->icache[0];
+    p->decoded_ptr->pc = UINT64_MAX;
+
+    /* exec_instr_callvirt recorre la cadena de advices, pushea los frames
+     * (BEFORE -> metodo -> AFTER) via push_step y deja rip en el primer
+     * step (seq[0]->code_vaddr). */
+    runtime::exec_instr_callvirt(p, di);
+
+    /* Mini run-loop: ejecuta los steps hasta volver al sentinel. */
+    const uint64_t MAX_ITERS = 100'000'000;
+    uint64_t iters = 0;
+    while (iters++ < MAX_ITERS) {
+        if (p->registers.rip.raw() == VRT_BYTECODE_RET_SENTINEL) break;
+        if (p->state == runtime::HALT || p->state == runtime::DEAD) break;
+        if (p->err_thread != runtime::THREAD_NO_ERROR) break;
+        runtime::decode_instruction(p);
+        runtime::vm_event ev = runtime::execute_instruction(p);
+        if (ev == runtime::EVT_HALT || ev == runtime::EVT_ERROR) break;
+        if (ev == runtime::EVT_IO_WAIT) {
+            runtime::throw_fatal(
+                p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+                "vrt_callvirt advices: IO_WAIT no soportado en sync interp");
+            break;
+        }
+    }
+
+    const uint64_t result = p->registers.regs[0].qword();
+
+    /* Restaurar estado.  Si la cadena completo limpiamente, sus `ret`
+     * popearon todos los frames hasta saved_frame_stack.  Si paro por
+     * error, liberar los frames colgantes hasta saved_frame_stack. */
+    p->registers.rip.qword(saved_rip);
+    p->registers.stack_pointer.qword(saved_rsp);
+    while (p->frame_stack != saved_frame_stack && p->frame_stack != nullptr) {
+        auto *f = p->frame_stack;
+        p->frame_stack = f->prev;
+        runtime::host_alloca_release_all(p, f);
+        p->frame_pool.release(f);
+    }
+    p->decoded_ptr = saved_decoded_ptr;
+    return result;
+}
+
 uint64_t vrt_callm(vrt_proc *proc, uint8_t *obj_payload, void *method) {
     if (!proc || !method) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "callm: method o proc nulo");
+                                 "callm: method o proc nulo");
         }
         return 0;
     }
@@ -650,11 +770,91 @@ uint64_t vrt_callm(vrt_proc *proc, uint8_t *obj_payload, void *method) {
     return vrt_run_method_in_interp(p, mi);
 }
 
+uint64_t vrt_callitf(vrt_proc *proc, uint8_t *obj_payload, uint64_t params_addr,
+                     uint64_t ic_slot_addr) {
+    if (!proc || !obj_payload) {
+        if (proc) {
+            runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
+                                 "callitf: proc u objeto nulo");
+        }
+        return 0;
+    }
+    runtime::ProcessVM *p = as_proc(proc);
+
+    /* Leer el ItfCallParams (32 bytes) de vm_mem.  Mismo layout que
+     * @c ItfCallParamsLayout en exec_instruction_oop.cpp / el frontend. */
+    struct ItfP {
+        uint64_t iface_name_addr;
+        uint32_t iface_name_len;
+        uint32_t method_index;
+        uint64_t method_name_addr;
+        uint32_t method_name_len;
+        uint32_t count;
+    } pr;
+    p->vm_mem.read_bytes(params_addr, &pr, sizeof(pr));
+
+    auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
+
+    /* Resolver la interfaz por nombre. */
+    char ibuf[256];
+    uint32_t ilen = pr.iface_name_len < 255 ? pr.iface_name_len : 255;
+    if (ilen > 0) p->vm_mem.read_bytes(pr.iface_name_addr, ibuf, ilen);
+    loader::ClassInfo *iface = reg.find_class(std::string(ibuf, ilen));
+    if (!iface) {
+        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+                             "callitf: interfaz no encontrada en el registry");
+        return 0;
+    }
+    /* F3b: poblar el IC slot del call site con el iface_ptr resuelto, para que
+     * los dispatch siguientes tomen el scan inline (saltando este wrapper). */
+    if (ic_slot_addr != 0) {
+        *reinterpret_cast<uint64_t *>(ic_slot_addr) =
+            reinterpret_cast<uint64_t>(iface);
+    }
+
+    auto *hdr = reinterpret_cast<loader::ObjectHeader *>(obj_payload);
+    loader::ClassInfo *cls = hdr->class_ptr;
+    if (!cls) {
+        runtime::throw_fatal(p, VESTA_FATAL_NULL_POINTER,
+                             "callitf: objeto sin class_ptr");
+        return 0;
+    }
+
+    /* Resolver el metodo concreto via la itable (cold: por nombre). */
+    char mbuf[256];
+    uint32_t mlen = pr.method_name_len < 255 ? pr.method_name_len : 255;
+    if (mlen > 0) p->vm_mem.read_bytes(pr.method_name_addr, mbuf, mlen);
+    loader::MethodInfo *mi = reg.resolve_itable_method(
+        cls, iface, pr.count, pr.method_index, mbuf, mlen);
+    if (!mi || mi->code_vaddr == 0) {
+        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION,
+                             "callitf: metodo de interfaz sin implementacion");
+        return 0;
+    }
+
+    /* Dispatch identico a vrt_callm: si el metodo no esta JIT-compilado,
+     * intentar on-demand; luego enter_jit o mini-interp sincronico.
+     * (AOP: igual que vrt_callm, el advice_chain se maneja en el path interp;
+     * los metodos con advices no se inline-an en el JIT -- ver F3b.) */
+    if (mi->jit_code == nullptr) {
+        const uint32_t saved = mi->invocation_count;
+        mi->invocation_count = jit::g_jit_threshold;
+        jit::maybe_compile_method(p, mi);
+        if (mi->jit_code == nullptr) mi->invocation_count = saved;
+    }
+    p->registers.regs[1].qword(reinterpret_cast<uint64_t>(obj_payload));
+    if (mi->jit_code != nullptr) {
+        jit::JitFn fn = reinterpret_cast<jit::JitFn>(mi->jit_code);
+        return jit::enter_jit(fn, proc);
+    }
+    return vrt_run_method_in_interp(p, mi);
+}
+
 uint64_t vrt_callclosure(vrt_proc *proc, uint64_t fn_addr, uint64_t env_addr) {
     if (!proc || fn_addr == 0) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "callclosure: fn_addr o proc nulo");
+                                 "callclosure: fn_addr o proc nulo");
         }
         return 0;
     }
@@ -694,7 +894,7 @@ uint64_t vrt_call_bc_function(vrt_proc *proc, uint64_t bc_entry_va) {
     if (!proc || bc_entry_va == 0) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "vrt_call_bc_function: bc_entry_va nulo");
+                                 "vrt_call_bc_function: bc_entry_va nulo");
         }
         return 0;
     }
@@ -714,7 +914,8 @@ uint64_t vrt_calln(vrt_proc *proc, const char *lib_name, const char *fn_name) {
     (void)lib_name;
     (void)fn_name;
     if (proc) {
-        runtime::throw_fatal(as_proc(proc), VESTA_FATAL_ILLEGAL_INSTRUCTION,
+        runtime::throw_fatal(
+            as_proc(proc), VESTA_FATAL_ILLEGAL_INSTRUCTION,
             "calln desde JIT no implementado en v1 (Phase D.3-G+)");
     }
     return 0;
@@ -774,8 +975,8 @@ uint64_t vrt_proc_pid(vrt_proc *proc) {
     if (!proc) return 0;
     const runtime::ProcessVM *p = as_proc(proc);
     /* PID encoded: (scheduler_id << 32) | local_pid */
-    return (static_cast<uint64_t>(p->pid.scheduler_id) << 32)
-         |  static_cast<uint64_t>(p->pid.local_pid);
+    return (static_cast<uint64_t>(p->pid.scheduler_id) << 32) |
+           static_cast<uint64_t>(p->pid.local_pid);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -872,13 +1073,14 @@ uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
     if (!proc || !cls) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "newobj: clase nula");
+                                 "newobj: clase nula");
         }
         return nullptr;
     }
     runtime::ProcessVM *p = as_proc(proc);
     loader::ClassInfo *ci = reinterpret_cast<loader::ClassInfo *>(cls);
-    /* gc_heap.alloc devuelve un GcHandle; deref para obtener host_ptr al payload. */
+    /* gc_heap.alloc devuelve un GcHandle; deref para obtener host_ptr al
+     * payload. */
     const uint32_t handle = p->gc_heap.alloc(ci->instance_size);
     if (handle == VRT_NULL_HANDLE) {
         runtime::throw_fatal(p, VESTA_FATAL_NULL_POINTER, "newobj: OOM");
@@ -888,9 +1090,9 @@ uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls) {
     if (!payload) return nullptr;
     /* Inicializar header: class_ptr = ci, flags = OBJ_FLAG_GC_OWNED.
      * Replica exacto del bytecode exec_instr_newobj. */
-    auto *hdr     = reinterpret_cast<loader::ObjectHeader *>(payload);
+    auto *hdr = reinterpret_cast<loader::ObjectHeader *>(payload);
     hdr->class_ptr = ci;
-    hdr->flags     = loader::OBJ_FLAG_GC_OWNED;
+    hdr->flags = loader::OBJ_FLAG_GC_OWNED;
     /* El resto del header viene zeroed por el alloc. */
     /* Retornar el host_ptr al ObjectHeader (convencion bytecode/Vex:
      * gcderef devuelve addr+sizeof(GcHeader) = ObjectHeader start, NO
@@ -907,7 +1109,7 @@ vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
     if (!proc || !cls) {
         if (proc) {
             runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                "newobj: clase nula");
+                                 "newobj: clase nula");
         }
         return VRT_NULL_HANDLE;
     }
@@ -920,9 +1122,9 @@ vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
     }
     uint8_t *payload = p->gc_heap.deref(handle);
     if (!payload) return VRT_NULL_HANDLE;
-    auto *hdr     = reinterpret_cast<loader::ObjectHeader *>(payload);
+    auto *hdr = reinterpret_cast<loader::ObjectHeader *>(payload);
     hdr->class_ptr = ci;
-    hdr->flags     = loader::OBJ_FLAG_GC_OWNED;
+    hdr->flags = loader::OBJ_FLAG_GC_OWNED;
     return handle;
 }
 
@@ -960,8 +1162,13 @@ vrt_class *vrt_defclass(vrt_proc *proc, uint64_t params_vaddr) {
      *   +12 flags         [4]
      *   +16 super_class   [8]  ptr o 0
      *   +24 _reserved     [8]  */
-    struct Params { uint64_t name_addr; uint32_t name_len; uint32_t flags;
-                    uint64_t super_ptr; uint64_t _rsv; };
+    struct Params {
+        uint64_t name_addr;
+        uint32_t name_len;
+        uint32_t flags;
+        uint64_t super_ptr;
+        uint64_t _rsv;
+    };
     Params pr{};
     p->vm_mem.read_bytes(params_vaddr, &pr, sizeof(pr));
     if (pr.name_len == 0 || pr.name_len > 4096) return nullptr;
@@ -969,8 +1176,10 @@ vrt_class *vrt_defclass(vrt_proc *proc, uint64_t params_vaddr) {
     p->vm_mem.read_bytes(pr.name_addr, buf, pr.name_len);
     buf[pr.name_len] = '\0';
     auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
-    loader::ClassInfo *super_cls = reinterpret_cast<loader::ClassInfo *>(pr.super_ptr);
-    /* define_class signature: (name, super, interfaces[], fields[], methods[], flags) */
+    loader::ClassInfo *super_cls =
+        reinterpret_cast<loader::ClassInfo *>(pr.super_ptr);
+    /* define_class signature: (name, super, interfaces[], fields[], methods[],
+     * flags) */
     auto *cls = reg.define_class(buf, super_cls, {}, {}, {}, pr.flags);
     return reinterpret_cast<vrt_class *>(cls);
 }
@@ -989,9 +1198,17 @@ int32_t vrt_deffield(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr) {
      *   +20 _pad2
      *   +24 type_class  [8]
      */
-    struct Params { uint64_t name_addr; uint32_t name_len; uint8_t kind; uint8_t access;
-                    uint8_t is_static; uint8_t _pad; uint32_t size_bytes; uint32_t _pad2;
-                    uint64_t type_class; };
+    struct Params {
+        uint64_t name_addr;
+        uint32_t name_len;
+        uint8_t kind;
+        uint8_t access;
+        uint8_t is_static;
+        uint8_t _pad;
+        uint32_t size_bytes;
+        uint32_t _pad2;
+        uint64_t type_class;
+    };
     Params pr{};
     p->vm_mem.read_bytes(params_vaddr, &pr, sizeof(pr));
     if (pr.name_len == 0 || pr.name_len > 4096) return 0;
@@ -1021,8 +1238,14 @@ uint32_t vrt_defmethod(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr) {
      *   +24 code_vaddr     [8]
      *   +32 flags          [8]
      */
-    struct Params { uint64_t name_addr; uint32_t name_len; uint32_t descriptor_len;
-                    uint64_t descriptor_addr; uint64_t code_vaddr; uint64_t flags; };
+    struct Params {
+        uint64_t name_addr;
+        uint32_t name_len;
+        uint32_t descriptor_len;
+        uint64_t descriptor_addr;
+        uint64_t code_vaddr;
+        uint64_t flags;
+    };
     Params pr{};
     p->vm_mem.read_bytes(params_vaddr, &pr, sizeof(pr));
     if (pr.name_len == 0 || pr.name_len > 4096) return UINT32_MAX;
@@ -1046,8 +1269,11 @@ uint32_t vrt_defmethod(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr) {
     return reg.add_method(ci, md);
 }
 
-int32_t vrt_addadvice(vrt_proc *proc, void *target_method, void *advice_method, uint8_t kind) {
-    if (!proc || !target_method || !advice_method) return 0;
+int32_t vrt_addadvice(vrt_proc *proc, void *target_method, void *advice_method,
+                      uint8_t kind) {
+    if (!proc || !target_method || !advice_method) {
+        return 0;
+    }
     runtime::ProcessVM *p = as_proc(proc);
     auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
     auto *target = reinterpret_cast<loader::MethodInfo *>(target_method);
@@ -1064,8 +1290,8 @@ int32_t vrt_addadvice(vrt_proc *proc, void *target_method, void *advice_method, 
  * Coste: 1 cmp + 1 branch (~1 ciclo predicho).  Despreciable comparado
  * con el FFI overhead que ya tiene cada CALLN.
  */
-static inline void read_params_unified(runtime::ProcessVM *p,
-                                       uint64_t ptr, void *dst, size_t size) {
+static inline void read_params_unified(runtime::ProcessVM *p, uint64_t ptr,
+                                       void *dst, size_t size) {
     if (ptr > 0x100000000ULL) {
         /* Host stack ptr -> memcpy directo. */
         std::memcpy(dst, reinterpret_cast<const void *>(ptr), size);
@@ -1078,24 +1304,35 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
     if (!proc) return nullptr;
     runtime::ProcessVM *p = as_proc(proc);
     /* FindMethodParams (24 bytes): +0 class_ptr, +8 name_addr, +16 name_len */
-    struct Params { uint64_t class_ptr; uint64_t name_addr; uint32_t name_len; uint32_t _pad; };
+    struct Params {
+        uint64_t class_ptr;
+        uint64_t name_addr;
+        uint32_t name_len;
+        uint32_t _pad;
+    };
     Params pr{};
     read_params_unified(p, params_vaddr, &pr, sizeof(pr));
     if (!pr.class_ptr || pr.name_len == 0 || pr.name_len > 4096) return nullptr;
 
     /* CACHE (Phase D.8): el dispatch de interfaz (shape.area()) llama a este
-     * findmethod POR ITERACION, y resolverlo cuesta 2 lecturas de vm_mem (params
+     * findmethod POR ITERACION, y resolverlo cuesta 2 lecturas de vm_mem
+     * (params
      * + nombre) + copia del nombre + hash lookup -- pero (class_ptr, name_addr)
      * casi siempre se repite (el nombre es constante; la clase rota entre pocos
      * tipos).  Un cache thread_local pequeno (8 entradas, LRU-ish por reemplazo
-     * del mas viejo) keyed por (class_ptr, name_addr) salta TODO el trabajo caro
-     * en hit, dejando solo la lectura de params (24 B) para la key.  Esto cierra
-     * el grueso del 115x de pic_real sin tocar el codegen.  thread_local =
-     * seguro sin locks (el resultado find_method es verdad global, no por-proc).
-     * Las (class_ptr, name_addr) son estables durante el run; defmethod en
-     * runtime (raro, solo en __module_init que corre antes del hot path) podria
-     * stalear una entrada -> aceptable (el cache se llena tras __module_init). */
-    struct FmEntry { uint64_t cls; uint64_t name_addr; void *method; };
+     * del mas viejo) keyed por (class_ptr, name_addr) salta TODO el trabajo
+     * caro en hit, dejando solo la lectura de params (24 B) para la key.  Esto
+     * cierra el grueso del 115x de pic_real sin tocar el codegen.  thread_local
+     * = seguro sin locks (el resultado find_method es verdad global, no
+     * por-proc). Las (class_ptr, name_addr) son estables durante el run;
+     * defmethod en runtime (raro, solo en __module_init que corre antes del hot
+     * path) podria stalear una entrada -> aceptable (el cache se llena tras
+     * __module_init). */
+    struct FmEntry {
+        uint64_t cls;
+        uint64_t name_addr;
+        void *method;
+    };
     static thread_local FmEntry g_fm_cache[8] = {};
     static thread_local unsigned g_fm_next = 0;
     for (const FmEntry &e : g_fm_cache) {
@@ -1110,7 +1347,7 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
     auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
     auto *ci = reinterpret_cast<loader::ClassInfo *>(pr.class_ptr);
     void *m = reg.find_method(ci, buf);
-    if (m) {  /* cachear (reemplazo round-robin del slot mas viejo). */
+    if (m) { /* cachear (reemplazo round-robin del slot mas viejo). */
         g_fm_cache[g_fm_next & 7u] = FmEntry{pr.class_ptr, pr.name_addr, m};
         ++g_fm_next;
     }
@@ -1120,7 +1357,12 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
 void *vrt_findfield(vrt_proc *proc, uint64_t params_vaddr) {
     if (!proc) return nullptr;
     runtime::ProcessVM *p = as_proc(proc);
-    struct Params { uint64_t class_ptr; uint64_t name_addr; uint32_t name_len; uint32_t _pad; };
+    struct Params {
+        uint64_t class_ptr;
+        uint64_t name_addr;
+        uint32_t name_len;
+        uint32_t _pad;
+    };
     Params pr{};
     read_params_unified(p, params_vaddr, &pr, sizeof(pr));
     if (!pr.class_ptr || pr.name_len == 0 || pr.name_len > 4096) return nullptr;
@@ -1153,8 +1395,8 @@ void vrt_setmethdbg(vrt_proc *proc, uint64_t params_vaddr) {
     }
     fbuf[flen] = '\0';
     runtime::register_method_debug(
-        reinterpret_cast<loader::MethodInfo *>(sp.method_ptr),
-        fbuf, flen, sp.start_line);
+        reinterpret_cast<loader::MethodInfo *>(sp.method_ptr), fbuf, flen,
+        sp.start_line);
 }
 
 /* =========================================================================
@@ -1239,8 +1481,8 @@ uint64_t vrt_str_get_bytes(vrt_proc *proc, vrt_handle h) {
 uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h) {
     if (!proc || h == VRT_NULL_HANDLE) return 0;
     runtime::ProcessVM *p = as_proc(proc);
-    gc::GcHandle flat = runtime::flatten_string_public(
-        p, static_cast<gc::GcHandle>(h));
+    gc::GcHandle flat =
+        runtime::flatten_string_public(p, static_cast<gc::GcHandle>(h));
     uint8_t *payload = p->gc_heap.deref(flat);
     if (!payload) return 0;
     /* StringObject layout: header(24) + encoding(1) + pad(3) + length(4)
@@ -1252,19 +1494,16 @@ uint64_t vrt_str_raw(vrt_proc *proc, vrt_handle h) {
 vrt_handle vrt_str_cat(vrt_proc *proc, vrt_handle a, vrt_handle b) {
     if (!proc) return VRT_NULL_HANDLE;
     runtime::ProcessVM *p = as_proc(proc);
-    return static_cast<vrt_handle>(
-        runtime::strcat_public(p,
-            static_cast<gc::GcHandle>(a),
-            static_cast<gc::GcHandle>(b)));
+    return static_cast<vrt_handle>(runtime::strcat_public(
+        p, static_cast<gc::GcHandle>(a), static_cast<gc::GcHandle>(b)));
 }
 
 /* STRCMP: comparacion lexicografica.  Returns -1, 0 o 1. */
 int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b) {
     if (!proc) return -1;
     runtime::ProcessVM *p = as_proc(proc);
-    return runtime::strcmp_public(p,
-        static_cast<gc::GcHandle>(a),
-        static_cast<gc::GcHandle>(b));
+    return runtime::strcmp_public(p, static_cast<gc::GcHandle>(a),
+                                  static_cast<gc::GcHandle>(b));
 }
 
 } /* extern "C" */
@@ -1275,7 +1514,7 @@ int64_t vrt_str_cmp(vrt_proc *proc, vrt_handle a, vrt_handle b) {
  * preservar el name-mangling de C++.                                        */
 /* ------------------------------------------------------------------------- */
 namespace runtime {
-    void do_throw(ProcessVM *vm, uint64_t exception_ptr);
+void do_throw(ProcessVM *vm, uint64_t exception_ptr);
 }
 
 void vrt_internal_do_throw(runtime::ProcessVM *vm, uint64_t exc_handle) {

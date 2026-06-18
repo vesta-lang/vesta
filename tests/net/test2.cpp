@@ -1,15 +1,14 @@
 /*
  * VestaVM - Máquina Virtual Distribuida
- * 
+ *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
-
 
 #include "net/tcp_server.h"
 #include "controller/tls_context.h"
@@ -20,11 +19,10 @@
 #include <vector>
 #include <chrono>
 
-
 // ---------------- Conexión TLS personalizada ----------------
 class HelloTLSConnection : public TLSConnection {
-public:
-    HelloTLSConnection(socket_t fd, SSL* ssl) : TLSConnection(fd, ssl) {}
+  public:
+    HelloTLSConnection(socket_t fd, SSL *ssl) : TLSConnection(fd, ssl) {}
 
     void start() override {
         // Enviar mensaje
@@ -34,7 +32,9 @@ public:
 
         // Cierre TLS seguro
         int ret = 0;
-        do { ret = SSL_shutdown(get_ssl()); } while (ret == 0);
+        do {
+            ret = SSL_shutdown(get_ssl());
+        } while (ret == 0);
 
         stop();
     }
@@ -42,12 +42,13 @@ public:
 
 // ---------------- Servidor usando TCPServer generico ----------------
 class HelloTCPServer : public TCPServer {
-public:
-    HelloTCPServer(uint16_t port, TLSContext* ctx) : TCPServer(port, ctx) {}
+  public:
+    HelloTCPServer(uint16_t port, TLSContext *ctx) : TCPServer(port, ctx) {}
 
-protected:
-    Connection* create_connection(socket_t client_fd, TLSContext* ctx) override {
-        SSL* ssl = nullptr;
+  protected:
+    Connection *create_connection(socket_t client_fd,
+                                  TLSContext *ctx) override {
+        SSL *ssl = nullptr;
         if (tls_enabled && ctx) {
             ssl = SSL_new(ctx->get());
             SSL_set_fd(ssl, (int)client_fd);
@@ -62,25 +63,30 @@ protected:
 };
 
 // ---------------- Cliente TLS simple ----------------
-bool run_client(const std::string& host, int port, int id) {
+bool run_client(const std::string &host, int port, int id) {
     SSL_library_init();
     SSL_load_error_strings();
-    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) return false;
 
     socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == SOCKET_INVALID) { SSL_CTX_free(ctx); return false; }
+    if (sock == SOCKET_INVALID) {
+        SSL_CTX_free(ctx);
+        return false;
+    }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = inet_addr(host.c_str());
 
-    if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
-        close_socket(sock); SSL_CTX_free(ctx); return false;
+    if (connect(sock, (sockaddr *)&addr, sizeof(addr)) < 0) {
+        close_socket(sock);
+        SSL_CTX_free(ctx);
+        return false;
     }
 
-    SSL* ssl = SSL_new(ctx);
+    SSL *ssl = SSL_new(ctx);
     SSL_set_fd(ssl, (int)sock);
     SSL_set_verify(ssl, SSL_VERIFY_NONE, nullptr);
 
@@ -93,8 +99,11 @@ bool run_client(const std::string& host, int port, int id) {
     }
 
     char buf[1024];
-    int len = SSL_read(ssl, buf, sizeof(buf)-1);
-    if (len > 0) { buf[len] = 0; std::cout << "[Cliente " << id << "] Recibido: " << buf; }
+    int len = SSL_read(ssl, buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = 0;
+        std::cout << "[Cliente " << id << "] Recibido: " << buf;
+    }
 
     SSL_shutdown(ssl);
     SSL_free(ssl);
@@ -119,12 +128,13 @@ int main() {
     std::vector<std::thread> clients;
     for (int i = 0; i < 5; i++) {
         clients.emplace_back([i]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200*i));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200 * i));
             run_client("127.0.0.1", 9000, i);
         });
     }
 
-    for (auto &t : clients) t.join();
+    for (auto &t : clients)
+        t.join();
 
     // Detener servidor y limpiar TLS
     server.stop();

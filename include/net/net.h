@@ -63,8 +63,8 @@ typedef struct __attribute__((packed)) HostIpv4 {
  * listos para usarse directamente en operaciones de red.
  */
 typedef struct __attribute__((packed)) HostIpv6 {
-    uint8_t  bytes[16] = {}; ///< Direccion IPv6 en network byte order (16 bytes)
-    uint16_t port = 0;       ///< Puerto en network byte order (big-endian)
+    uint8_t bytes[16] = {}; ///< Direccion IPv6 en network byte order (16 bytes)
+    uint16_t port = 0;      ///< Puerto en network byte order (big-endian)
 } HostIpv6;
 
 #endif // NET_H

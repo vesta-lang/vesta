@@ -1,0 +1,12 @@
+// cpuid(0) devuelve en eax el maximo "basic leaf" soportado por el CPU.
+// cpuid pisa eax/ebx/ecx/edx; rbx es el ProcessVM* del runtime -> caso limite.
+// @expect-run
+u64 main() {
+
+    register("rax") u64 a = 0;   // eax=0 (input) -> max leaf (output): INOUT
+    asm volatile {
+        cpuid
+    };
+    
+    return a;
+}

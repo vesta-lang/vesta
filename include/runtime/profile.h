@@ -68,177 +68,179 @@
 #include <string>
 #include <unordered_map>
 
-namespace loader { struct ClassInfo; }
+namespace loader {
+struct ClassInfo;
+}
 
 namespace runtime {
 namespace profile {
 
-    /**
-     * @struct BranchCounter
-     * @brief Contador per-PC de un branch condicional (BR_COND / jcc).
-     *
-     * Incrementa @c taken o @c not_taken segun el resultado de la
-     * condicion al ejecutar el branch.  Counters son @c atomic con
-     * @c memory_order_relaxed.
-     */
-    struct BranchCounter {
-        std::atomic<uint64_t> taken{0};
-        std::atomic<uint64_t> not_taken{0};
+/**
+ * @struct BranchCounter
+ * @brief Contador per-PC de un branch condicional (BR_COND / jcc).
+ *
+ * Incrementa @c taken o @c not_taken segun el resultado de la
+ * condicion al ejecutar el branch.  Counters son @c atomic con
+ * @c memory_order_relaxed.
+ */
+struct BranchCounter {
+    std::atomic<uint64_t> taken{0};
+    std::atomic<uint64_t> not_taken{0};
 
-        BranchCounter() = default;
-        // No copyable porque @c atomic no es copyable.
-        BranchCounter(const BranchCounter &) = delete;
-        BranchCounter &operator=(const BranchCounter &) = delete;
-        BranchCounter(BranchCounter &&other) noexcept {
-            taken.store(other.taken.load(std::memory_order_relaxed),
+    BranchCounter() = default;
+    // No copyable porque @c atomic no es copyable.
+    BranchCounter(const BranchCounter &) = delete;
+    BranchCounter &operator=(const BranchCounter &) = delete;
+    BranchCounter(BranchCounter &&other) noexcept {
+        taken.store(other.taken.load(std::memory_order_relaxed),
+                    std::memory_order_relaxed);
+        not_taken.store(other.not_taken.load(std::memory_order_relaxed),
                         std::memory_order_relaxed);
-            not_taken.store(other.not_taken.load(std::memory_order_relaxed),
-                            std::memory_order_relaxed);
-        }
-    };
+    }
+};
 
-    /**
-     * @struct TypeObservation
-     * @brief Una clase vista en un call site con su count de hits.
-     *
-     * El @c class_ptr es un puntero opaco a @c loader::ClassInfo (se
-     * resuelve via @c ClassRegistry).  Para persistencia cross-run,
-     * el dump serializa el nombre de la clase (no el puntero).
-     */
-    struct TypeObservation {
-        loader::ClassInfo *class_ptr = nullptr;
-        uint64_t           count     = 0;
-        /// Nombre cacheado al momento de la PRIMERA observacion.  El
-        /// ClassRegistry se destruye antes que el atexit handler, asi
-        /// que NO podemos dereferenciar @c class_ptr->name al dump.
-        std::string        class_name;
-    };
+/**
+ * @struct TypeObservation
+ * @brief Una clase vista en un call site con su count de hits.
+ *
+ * El @c class_ptr es un puntero opaco a @c loader::ClassInfo (se
+ * resuelve via @c ClassRegistry).  Para persistencia cross-run,
+ * el dump serializa el nombre de la clase (no el puntero).
+ */
+struct TypeObservation {
+    loader::ClassInfo *class_ptr = nullptr;
+    uint64_t count = 0;
+    /// Nombre cacheado al momento de la PRIMERA observacion.  El
+    /// ClassRegistry se destruye antes que el atexit handler, asi
+    /// que NO podemos dereferenciar @c class_ptr->name al dump.
+    std::string class_name;
+};
 
-    /**
-     * @struct CallSiteCounter
-     * @brief Observaciones de tipo en un CALLVIRT/CALLM/CALLCLOSURE.
-     *
-     * Mantiene hasta 4 clases distintas (suficiente para PIC monomorfico
-     * y polimorfico-estable).  Cuando se observa una 5ta clase, marca
-     * @c megamorphic_count++ y no agrega nueva entrada.  C2 puede
-     * decidir devirtualizar si:
-     *   - n_types == 1 (monomorfico) -> direct call + guard
-     *   - n_types <= 4 + megamorphic == 0 (estable) -> PIC inline
-     *   - megamorphic > 0 -> dispatch normal via vtable
-     */
-    struct CallSiteCounter {
-        std::array<TypeObservation, 4> types{};
-        uint64_t                       megamorphic_count = 0;
-        uint8_t                        n_types           = 0;
-    };
+/**
+ * @struct CallSiteCounter
+ * @brief Observaciones de tipo en un CALLVIRT/CALLM/CALLCLOSURE.
+ *
+ * Mantiene hasta 4 clases distintas (suficiente para PIC monomorfico
+ * y polimorfico-estable).  Cuando se observa una 5ta clase, marca
+ * @c megamorphic_count++ y no agrega nueva entrada.  C2 puede
+ * decidir devirtualizar si:
+ *   - n_types == 1 (monomorfico) -> direct call + guard
+ *   - n_types <= 4 + megamorphic == 0 (estable) -> PIC inline
+ *   - megamorphic > 0 -> dispatch normal via vtable
+ */
+struct CallSiteCounter {
+    std::array<TypeObservation, 4> types{};
+    uint64_t megamorphic_count = 0;
+    uint8_t n_types = 0;
+};
 
-    /**
-     * @struct ProfileCollector
-     * @brief Singleton runtime que mantiene todos los counters.
-     *
-     * Lifetime: instanciado al inicio si @c profile_init() se llamo.
-     * Dump al @c .vprof file al exit (atexit handler o llamada
-     * explicita a @c profile_dump()).
-     */
-    struct ProfileCollector {
-        /// PC -> contador taken/not_taken.  Atomic counters; el map
-        /// crece bajo @c collector_mtx.
-        std::unordered_map<uint64_t, BranchCounter> branches;
+/**
+ * @struct ProfileCollector
+ * @brief Singleton runtime que mantiene todos los counters.
+ *
+ * Lifetime: instanciado al inicio si @c profile_init() se llamo.
+ * Dump al @c .vprof file al exit (atexit handler o llamada
+ * explicita a @c profile_dump()).
+ */
+struct ProfileCollector {
+    /// PC -> contador taken/not_taken.  Atomic counters; el map
+    /// crece bajo @c collector_mtx.
+    std::unordered_map<uint64_t, BranchCounter> branches;
 
-        /// PC -> contador per-class.  Acceso completo bajo @c collector_mtx
-        /// porque la lista de tipos puede crecer.
-        std::unordered_map<uint64_t, CallSiteCounter> callsites;
+    /// PC -> contador per-class.  Acceso completo bajo @c collector_mtx
+    /// porque la lista de tipos puede crecer.
+    std::unordered_map<uint64_t, CallSiteCounter> callsites;
 
-        /// PC del NEWOBJ -> count.  Atomic.
-        std::unordered_map<uint64_t, std::atomic<uint64_t>> allocs;
+    /// PC del NEWOBJ -> count.  Atomic.
+    std::unordered_map<uint64_t, std::atomic<uint64_t>> allocs;
 
-        /// Mutex compartido para todos los inserts en los maps.
-        /// Lookup por iterator es lock-free (pero el iterator
-        /// puede invalidarse si otro thread inserta).  Usamos lock
-        /// shared para read si llegamos a multi-thread; por ahora
-        /// lock simple en hot path.
-        mutable std::mutex collector_mtx;
+    /// Mutex compartido para todos los inserts en los maps.
+    /// Lookup por iterator es lock-free (pero el iterator
+    /// puede invalidarse si otro thread inserta).  Usamos lock
+    /// shared para read si llegamos a multi-thread; por ahora
+    /// lock simple en hot path.
+    mutable std::mutex collector_mtx;
 
-        /// Flag global; permite fast-path inline con cero overhead
-        /// cuando esta desactivado (default).  Set por
-        /// @c profile_init().
-        std::atomic<bool> active{false};
+    /// Flag global; permite fast-path inline con cero overhead
+    /// cuando esta desactivado (default).  Set por
+    /// @c profile_init().
+    std::atomic<bool> active{false};
 
-        /// Path al @c .vprof de salida.  Vacio = no dump.
-        std::string output_path;
-    };
+    /// Path al @c .vprof de salida.  Vacio = no dump.
+    std::string output_path;
+};
 
-    /// Instancia singleton.  Sin TLS: un solo set de counters por
-    /// proceso.  Inicializado lazy en @c profile_init().
-    extern ProfileCollector g_profile;
+/// Instancia singleton.  Sin TLS: un solo set de counters por
+/// proceso.  Inicializado lazy en @c profile_init().
+extern ProfileCollector g_profile;
 
-    /**
-     * @brief Inicializa el profiler con un path de salida.
-     *
-     * Setea @c g_profile.active=true y registra un handler @c atexit
-     * para dump automatico al exit.  Llamado por @c main.cpp cuando
-     * el flag CLI @c --profile <path> esta presente, o por env var
-     * @c VESTA_PROFILE_DUMP=path.
-     *
-     * Idempotente: si ya esta inicializado con el mismo path, no-op.
-     *
-     * @param output_path  Ruta del @c .vprof a generar.  Vacio = solo
-     *                     instrumentacion, sin dump.
-     */
-    void profile_init(const std::string &output_path);
+/**
+ * @brief Inicializa el profiler con un path de salida.
+ *
+ * Setea @c g_profile.active=true y registra un handler @c atexit
+ * para dump automatico al exit.  Llamado por @c main.cpp cuando
+ * el flag CLI @c --profile <path> esta presente, o por env var
+ * @c VESTA_PROFILE_DUMP=path.
+ *
+ * Idempotente: si ya esta inicializado con el mismo path, no-op.
+ *
+ * @param output_path  Ruta del @c .vprof a generar.  Vacio = solo
+ *                     instrumentacion, sin dump.
+ */
+void profile_init(const std::string &output_path);
 
-    /**
-     * @brief Volcar todos los counters al @c output_path como @c .vprof.
-     *
-     * Llamado automaticamente por el atexit handler.  Tambien expuesto
-     * para tests o dumps intermedios.
-     */
-    void profile_dump();
+/**
+ * @brief Volcar todos los counters al @c output_path como @c .vprof.
+ *
+ * Llamado automaticamente por el atexit handler.  Tambien expuesto
+ * para tests o dumps intermedios.
+ */
+void profile_dump();
 
-    /**
-     * @brief Registra el resultado de un branch condicional.
-     *
-     * Llamado desde @c exec_instr_jmp (cuando cond != 0x0F que es
-     * incondicional) y desde los opcodes fusionados @c cmpjmp /
-     * @c cmpjmpu / @c decjnz.
-     *
-     * @param pc     PC del branch (instr.rip antes del jump).
-     * @param taken  True si la condicion fue verdadera.
-     */
-    void profile_branch(uint64_t pc, bool taken);
+/**
+ * @brief Registra el resultado de un branch condicional.
+ *
+ * Llamado desde @c exec_instr_jmp (cuando cond != 0x0F que es
+ * incondicional) y desde los opcodes fusionados @c cmpjmp /
+ * @c cmpjmpu / @c decjnz.
+ *
+ * @param pc     PC del branch (instr.rip antes del jump).
+ * @param taken  True si la condicion fue verdadera.
+ */
+void profile_branch(uint64_t pc, bool taken);
 
-    /**
-     * @brief Registra un tipo observado en un call site virtual.
-     *
-     * Llamado desde @c exec_instr_callvirt / @c exec_instr_callm /
-     * @c exec_instr_callclosure tras resolver la clase del objeto.
-     *
-     * Si el call site ya tiene 4 tipos distintos y este es nuevo,
-     * incrementa @c megamorphic_count.  Si el tipo ya esta en la lista,
-     * incrementa su count.
-     *
-     * @param pc          PC del CALLVIRT.
-     * @param class_ptr   Clase del receptor (obj->class_ptr).
-     */
-    void profile_callvirt(uint64_t pc, loader::ClassInfo *class_ptr);
+/**
+ * @brief Registra un tipo observado en un call site virtual.
+ *
+ * Llamado desde @c exec_instr_callvirt / @c exec_instr_callm /
+ * @c exec_instr_callclosure tras resolver la clase del objeto.
+ *
+ * Si el call site ya tiene 4 tipos distintos y este es nuevo,
+ * incrementa @c megamorphic_count.  Si el tipo ya esta en la lista,
+ * incrementa su count.
+ *
+ * @param pc          PC del CALLVIRT.
+ * @param class_ptr   Clase del receptor (obj->class_ptr).
+ */
+void profile_callvirt(uint64_t pc, loader::ClassInfo *class_ptr);
 
-    /**
-     * @brief Registra una alocacion (NEWOBJ o GC_ALLOC).
-     *
-     * Llamado desde @c exec_instr_newobj y @c exec_instr_gcalloc.
-     * Util para identificar hot allocs candidatos a stack allocation
-     * por escape analysis en C2 (Phase D.8.b).
-     *
-     * @param pc  PC del NEWOBJ/GC_ALLOC.
-     */
-    void profile_newobj(uint64_t pc);
+/**
+ * @brief Registra una alocacion (NEWOBJ o GC_ALLOC).
+ *
+ * Llamado desde @c exec_instr_newobj y @c exec_instr_gcalloc.
+ * Util para identificar hot allocs candidatos a stack allocation
+ * por escape analysis en C2 (Phase D.8.b).
+ *
+ * @param pc  PC del NEWOBJ/GC_ALLOC.
+ */
+void profile_newobj(uint64_t pc);
 
-    /**
-     * @brief Reset todos los counters (sin desactivar).
-     *
-     * Util para tests que quieren mediar solo una seccion.
-     */
-    void profile_reset();
+/**
+ * @brief Reset todos los counters (sin desactivar).
+ *
+ * Util para tests que quieren mediar solo una seccion.
+ */
+void profile_reset();
 
 } // namespace profile
 } // namespace runtime

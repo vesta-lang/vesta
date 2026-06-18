@@ -1,0 +1,5 @@
+i32 loop(i32 i, i32 acc) {
+    if (i == 0) { return acc; }
+    return loop(i - 1, acc + 1);
+}
+i32 main() { return loop(5000000, 0); }

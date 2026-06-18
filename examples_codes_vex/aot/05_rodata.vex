@@ -1,0 +1,6 @@
+// .rodata: literal char* en seccion de solo-lectura (RIP-relativo por defecto,
+// o absoluto con --no-pie).  Devuelve m[2] = 'C' = 67.
+i32 main() {
+    char* m = "ABC";
+    return (i32) m[2];
+}

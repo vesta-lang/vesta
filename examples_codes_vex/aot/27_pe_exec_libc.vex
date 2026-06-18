@@ -1,0 +1,26 @@
+// AOT.2.exec (PE-IAT) -- EXEC standalone que llama a libc via la IAT.
+// En Windows el `new`/malloc/free/panic se resuelven contra msvcrt.dll por la
+// Import Address Table: NO hace falta `--emit obj` + enlazar con gcc.
+//
+//   vm -m aot --vex examples_codes_vex/aot/27_pe_exec_libc.vex \
+//      -o pe_libc.exe --format pe
+//   ./pe_libc.exe ; echo $%errorlevel%   # -> 42
+//
+// Como funciona: el codigo emite `call calloc` (E8 rel32 directo), pero calloc
+// no esta en la imagen.  El driver emite por cada simbolo externo un THUNK en
+// .text -- `FF 25 [IAT]` (jmp [rip+IAT], 6 bytes, como un linker) -- y el
+// `call calloc` apunta al thunk.  El loader rellena la IAT con la direccion
+// real de msvcrt.dll!calloc.  objdump -p muestra:
+//   DLL Name: msvcrt.dll   ->  free, calloc
+//   DLL Name: KERNEL32.dll ->  ExitProcess (del _start)
+//
+// ELF EXEC (PLT-GOT) y PE .dll llegan en slices siguientes; .o sigue resolviendo
+// los externos con el linker del sistema (gcc/ld).
+
+class Box { i64 v; }
+
+i64 main() {
+    Box b = new Box();   // calloc (msvcrt.dll); RAII -> free al salir de scope
+    b.v = 42;
+    return b.v;          // 42
+}

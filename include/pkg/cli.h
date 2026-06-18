@@ -29,18 +29,18 @@
 
 namespace pkg::cli {
 
-    /**
-     * @brief Punto de entrada principal.
-     *
-     * @param argc/argv  igual que un main; argv[0] = "pkg".
-     * @return codigo de salida (0 ok, !=0 error).
-     */
-    int run(int argc, char **argv);
+/**
+ * @brief Punto de entrada principal.
+ *
+ * @param argc/argv  igual que un main; argv[0] = "pkg".
+ * @return codigo de salida (0 ok, !=0 error).
+ */
+int run(int argc, char **argv);
 
-    /**
-     * @brief Helper para ejecutar via vector<string>.
-     */
-    int run_args(const std::vector<std::string> &args);
+/**
+ * @brief Helper para ejecutar via vector<string>.
+ */
+int run_args(const std::vector<std::string> &args);
 
 } // namespace pkg::cli
 

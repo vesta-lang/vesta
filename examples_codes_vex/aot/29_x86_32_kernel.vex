@@ -1,0 +1,25 @@
+// Codegen x86-32 nativo (modo protegido, kernels) -- slice 1.
+// El AOT emite codigo i386 (sin prefijo REX, operando 32-bit, 8 GP eax-edi,
+// convencion regparm(3): args en eax/edx/ecx, retorno en eax).  Subset: enteros
+// de 32-bit (i32/u32/ptr32).
+//
+//   vm -m aot --vex examples_codes_vex/aot/29_x86_32_kernel.vex \
+//      -o k32.bin --aot-arch x86-32 --emit bin
+//   objdump -D -b binary -m i386 -M intel k32.bin
+//
+// `sum` (con @section para que no se dead-strip) baja a:
+//   mov ecx, edx        ; 89 d1   (b)
+//   add eax, ecx        ; 01 c8   (a + b)
+//   ret                 ; c3
+// -- sin REX (en x86-64 seria 48 89 d1 / 48 01 c8).
+//
+// Validado por ejecucion (ELF 32-bit, gcc -m32 -mregparm=3, los bytes en .text
+// real): sum(17,25)=42, sum(100,8)=108, sum(-5,9)=4 (signed correcto).
+//
+// v1: solo --emit bin (binario plano para modo protegido).  ELF32/PE32 + _start
+// 32-bit (EXEC standalone), i64 como par edx:eax y float son follow-ups.
+
+@section(".text")
+i32 sum(i32 a, i32 b) {
+    return a + b;
+}

@@ -55,24 +55,30 @@ using vex::TokenKind;
 static int g_failed = 0;
 static int g_passed = 0;
 
-#define VEX_ASSERT(cond, msg) do {                                          \
-    if (!(cond)) {                                                          \
-        std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__, msg); \
-        ++g_failed;                                                         \
-    } else {                                                                \
-        ++g_passed;                                                         \
-    }                                                                       \
-} while (0)
+#define VEX_ASSERT(cond, msg)                                                  \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            std::fprintf(stderr, "FAIL [%s:%d] %s\n", __FILE__, __LINE__,      \
+                         msg);                                                 \
+            ++g_failed;                                                        \
+        } else {                                                               \
+            ++g_passed;                                                        \
+        }                                                                      \
+    } while (0)
 
-#define VEX_ASSERT_EQ(a, b, msg) do {                                                       \
-    auto av = (a); auto bv = (b);                                                           \
-    if (!(av == bv)) {                                                                      \
-        std::fprintf(stderr, "FAIL [%s:%d] %s (got %lld, expected %lld)\n",                 \
-                     __FILE__, __LINE__, msg,                                               \
-                     (long long)av, (long long)bv);                                         \
-        ++g_failed;                                                                         \
-    } else { ++g_passed; }                                                                  \
-} while (0)
+#define VEX_ASSERT_EQ(a, b, msg)                                               \
+    do {                                                                       \
+        auto av = (a);                                                         \
+        auto bv = (b);                                                         \
+        if (!(av == bv)) {                                                     \
+            std::fprintf(                                                      \
+                stderr, "FAIL [%s:%d] %s (got %lld, expected %lld)\n",         \
+                __FILE__, __LINE__, msg, (long long)av, (long long)bv);        \
+            ++g_failed;                                                        \
+        } else {                                                               \
+            ++g_passed;                                                        \
+        }                                                                      \
+    } while (0)
 
 // Wrapper que tokeniza una cadena entera y devuelve el vector de tokens.
 static std::vector<Token> tokenize_all(const std::string &src,
@@ -104,14 +110,14 @@ static void test_empty_source() {
 
 static void test_whitespace_and_comments() {
     Diagnostics diags;
-    const std::string src =
-        "   \t\n"
-        "// comentario de linea\n"
-        "/* comentario\n"
-        "   de bloque */\n"
-        "  ";
+    const std::string src = "   \t\n"
+                            "// comentario de linea\n"
+                            "/* comentario\n"
+                            "   de bloque */\n"
+                            "  ";
     auto toks = tokenize_all(src, diags);
-    VEX_ASSERT_EQ(toks.size(), (size_t)1, "solo whitespace y comentarios -> EOF");
+    VEX_ASSERT_EQ(toks.size(), (size_t)1,
+                  "solo whitespace y comentarios -> EOF");
     VEX_ASSERT(!diags.has_errors(), "comentarios bien cerrados");
 }
 
@@ -138,16 +144,16 @@ static void test_identifiers_and_keywords() {
     VEX_ASSERT(!diags.has_errors(), "sin errores en keywords+ident");
 
     // Comprobar algunas posiciones clave.
-    VEX_ASSERT(toks[0].kind  == TokenKind::KW_INT32,    "i32 reconocido");
-    VEX_ASSERT(toks[1].kind  == TokenKind::KW_UINT8,    "u8 reconocido");
-    VEX_ASSERT(toks[2].kind  == TokenKind::KW_UINT64_T, "uint64_t reconocido");
-    VEX_ASSERT(toks[3].kind  == TokenKind::KW_F64,      "f64 reconocido");
-    VEX_ASSERT(toks[4].kind  == TokenKind::KW_FLOAT,    "float reconocido");
-    VEX_ASSERT(toks[5].kind  == TokenKind::KW_DOUBLE,   "double reconocido");
-    VEX_ASSERT(toks[6].kind  == TokenKind::KW_BOOL,     "bool reconocido");
-    VEX_ASSERT(toks[7].kind  == TokenKind::KW_CHAR,     "char reconocido");
-    VEX_ASSERT(toks[8].kind  == TokenKind::KW_VOID,     "void reconocido");
-    VEX_ASSERT(toks[9].kind  == TokenKind::KW_STRING,   "string reconocido");
+    VEX_ASSERT(toks[0].kind == TokenKind::KW_INT32, "i32 reconocido");
+    VEX_ASSERT(toks[1].kind == TokenKind::KW_UINT8, "u8 reconocido");
+    VEX_ASSERT(toks[2].kind == TokenKind::KW_UINT64_T, "uint64_t reconocido");
+    VEX_ASSERT(toks[3].kind == TokenKind::KW_F64, "f64 reconocido");
+    VEX_ASSERT(toks[4].kind == TokenKind::KW_FLOAT, "float reconocido");
+    VEX_ASSERT(toks[5].kind == TokenKind::KW_DOUBLE, "double reconocido");
+    VEX_ASSERT(toks[6].kind == TokenKind::KW_BOOL, "bool reconocido");
+    VEX_ASSERT(toks[7].kind == TokenKind::KW_CHAR, "char reconocido");
+    VEX_ASSERT(toks[8].kind == TokenKind::KW_VOID, "void reconocido");
+    VEX_ASSERT(toks[9].kind == TokenKind::KW_STRING, "string reconocido");
 
     // El ultimo de la fila previa al EOF deberia ser un identificador.
     // Recorremos buscando "miVariable", "_ot_ra", "var123".
@@ -155,12 +161,12 @@ static void test_identifiers_and_keywords() {
     for (const auto &t : toks) {
         if (t.kind == TokenKind::IDENTIFIER) {
             if (t.lexeme == "miVariable") found_mi = true;
-            if (t.lexeme == "_ot_ra")     found_ot = true;
-            if (t.lexeme == "var123")     found_var123 = true;
+            if (t.lexeme == "_ot_ra") found_ot = true;
+            if (t.lexeme == "var123") found_var123 = true;
         }
     }
-    VEX_ASSERT(found_mi,     "miVariable es IDENTIFIER");
-    VEX_ASSERT(found_ot,     "_ot_ra es IDENTIFIER");
+    VEX_ASSERT(found_mi, "miVariable es IDENTIFIER");
+    VEX_ASSERT(found_ot, "_ot_ra es IDENTIFIER");
     VEX_ASSERT(found_var123, "var123 es IDENTIFIER");
 }
 
@@ -170,13 +176,13 @@ static void test_int_literals() {
     auto toks = tokenize_all(src, diags);
     VEX_ASSERT(!diags.has_errors(), "sin errores int literals");
 
-    VEX_ASSERT_EQ(toks[0].int_val, (uint64_t)0,          "literal 0");
-    VEX_ASSERT_EQ(toks[1].int_val, (uint64_t)42,         "literal 42");
-    VEX_ASSERT_EQ(toks[2].int_val, (uint64_t)1000000,    "literal 1_000_000");
-    VEX_ASSERT_EQ(toks[3].int_val, (uint64_t)0xFF,       "literal 0xFF");
+    VEX_ASSERT_EQ(toks[0].int_val, (uint64_t)0, "literal 0");
+    VEX_ASSERT_EQ(toks[1].int_val, (uint64_t)42, "literal 42");
+    VEX_ASSERT_EQ(toks[2].int_val, (uint64_t)1000000, "literal 1_000_000");
+    VEX_ASSERT_EQ(toks[3].int_val, (uint64_t)0xFF, "literal 0xFF");
     VEX_ASSERT_EQ(toks[4].int_val, (uint64_t)0xDEADBEEF, "literal 0xDEAD_BEEF");
-    VEX_ASSERT_EQ(toks[5].int_val, (uint64_t)0xAC,       "literal 0b1010_1100");
-    VEX_ASSERT_EQ(toks[6].int_val, (uint64_t)0755,       "literal 0o755");
+    VEX_ASSERT_EQ(toks[5].int_val, (uint64_t)0xAC, "literal 0b1010_1100");
+    VEX_ASSERT_EQ(toks[6].int_val, (uint64_t)0755, "literal 0o755");
     for (int i = 0; i < 7; ++i) {
         VEX_ASSERT(toks[i].kind == TokenKind::INT_LIT, "INT_LIT");
     }
@@ -191,8 +197,10 @@ static void test_float_literals() {
         VEX_ASSERT(toks[i].kind == TokenKind::FLOAT_LIT, "FLOAT_LIT");
     }
     // Comparacion aproximada para evitar problemas de coma flotante.
-    VEX_ASSERT(toks[0].flt_val > 3.13 && toks[0].flt_val < 3.15, "3.14 ~= 3.14");
-    VEX_ASSERT(toks[2].flt_val > 2.49e10 && toks[2].flt_val < 2.51e10, "2.5e10");
+    VEX_ASSERT(toks[0].flt_val > 3.13 && toks[0].flt_val < 3.15,
+               "3.14 ~= 3.14");
+    VEX_ASSERT(toks[2].flt_val > 2.49e10 && toks[2].flt_val < 2.51e10,
+               "2.5e10");
 }
 
 static void test_char_literals() {
@@ -200,7 +208,7 @@ static void test_char_literals() {
     const std::string src = R"('a' '\n' '\t' '\xFF' '\u00e9' '\\' '\'')";
     auto toks = tokenize_all(src, diags);
     VEX_ASSERT(!diags.has_errors(), "sin errores char literals");
-    VEX_ASSERT_EQ(toks[0].int_val, (uint64_t)'a',  "char 'a'");
+    VEX_ASSERT_EQ(toks[0].int_val, (uint64_t)'a', "char 'a'");
     VEX_ASSERT_EQ(toks[1].int_val, (uint64_t)'\n', "char '\\n'");
     VEX_ASSERT_EQ(toks[2].int_val, (uint64_t)'\t', "char '\\t'");
     VEX_ASSERT_EQ(toks[3].int_val, (uint64_t)0xFF, "char '\\xFF'");
@@ -214,9 +222,9 @@ static void test_string_literals() {
     const std::string src = R"("hola" r"sin\escapes" "con \"comillas\"")";
     auto toks = tokenize_all(src, diags);
     VEX_ASSERT(!diags.has_errors(), "sin errores en strings simples");
-    VEX_ASSERT(toks[0].kind == TokenKind::STRING_LIT,     "primer string");
+    VEX_ASSERT(toks[0].kind == TokenKind::STRING_LIT, "primer string");
     VEX_ASSERT(toks[1].kind == TokenKind::RAW_STRING_LIT, "raw string");
-    VEX_ASSERT(toks[2].kind == TokenKind::STRING_LIT,     "string con escapes");
+    VEX_ASSERT(toks[2].kind == TokenKind::STRING_LIT, "string con escapes");
 }
 
 static void test_string_unterminated() {
@@ -242,97 +250,95 @@ static void test_triple_quoted_rejected_in_a1() {
 
 static void test_operators_compound() {
     Diagnostics diags;
-    const std::string src =
-        "+ - * / % "
-        "= == != < <= > >= "
-        "+= -= *= /= %= &= |= ^= <<= >>= "
-        "&& || ! "
-        "& | ^ ~ << >> "
-        "++ -- "
-        "( ) { } [ ] , ; : . -> => ? @";
+    const std::string src = "+ - * / % "
+                            "= == != < <= > >= "
+                            "+= -= *= /= %= &= |= ^= <<= >>= "
+                            "&& || ! "
+                            "& | ^ ~ << >> "
+                            "++ -- "
+                            "( ) { } [ ] , ; : . -> => ? @";
     auto toks = tokenize_all(src, diags);
     VEX_ASSERT(!diags.has_errors(), "todos los operadores reconocidos");
 
     // Verificar algunos clave que tienen multiples caminos en el switch.
     // Indices conocidos por construccion (espacio entre cada simbolo).
     // Aritmeticos
-    VEX_ASSERT(toks[0].kind == TokenKind::PLUS,    "+");
-    VEX_ASSERT(toks[1].kind == TokenKind::MINUS,   "-");
-    VEX_ASSERT(toks[2].kind == TokenKind::STAR,    "*");
-    VEX_ASSERT(toks[3].kind == TokenKind::SLASH,   "/");
+    VEX_ASSERT(toks[0].kind == TokenKind::PLUS, "+");
+    VEX_ASSERT(toks[1].kind == TokenKind::MINUS, "-");
+    VEX_ASSERT(toks[2].kind == TokenKind::STAR, "*");
+    VEX_ASSERT(toks[3].kind == TokenKind::SLASH, "/");
     VEX_ASSERT(toks[4].kind == TokenKind::PERCENT, "%");
     // Comparacion
-    VEX_ASSERT(toks[5].kind  == TokenKind::ASSIGN, "=");
-    VEX_ASSERT(toks[6].kind  == TokenKind::EQ,     "==");
-    VEX_ASSERT(toks[7].kind  == TokenKind::NEQ,    "!=");
-    VEX_ASSERT(toks[8].kind  == TokenKind::LT,     "<");
-    VEX_ASSERT(toks[9].kind  == TokenKind::LE,     "<=");
-    VEX_ASSERT(toks[10].kind == TokenKind::GT,     ">");
-    VEX_ASSERT(toks[11].kind == TokenKind::GE,     ">=");
+    VEX_ASSERT(toks[5].kind == TokenKind::ASSIGN, "=");
+    VEX_ASSERT(toks[6].kind == TokenKind::EQ, "==");
+    VEX_ASSERT(toks[7].kind == TokenKind::NEQ, "!=");
+    VEX_ASSERT(toks[8].kind == TokenKind::LT, "<");
+    VEX_ASSERT(toks[9].kind == TokenKind::LE, "<=");
+    VEX_ASSERT(toks[10].kind == TokenKind::GT, ">");
+    VEX_ASSERT(toks[11].kind == TokenKind::GE, ">=");
     // Compuestos
-    VEX_ASSERT(toks[12].kind == TokenKind::PLUS_ASSIGN,    "+=");
-    VEX_ASSERT(toks[13].kind == TokenKind::MINUS_ASSIGN,   "-=");
-    VEX_ASSERT(toks[14].kind == TokenKind::STAR_ASSIGN,    "*=");
-    VEX_ASSERT(toks[15].kind == TokenKind::SLASH_ASSIGN,   "/=");
+    VEX_ASSERT(toks[12].kind == TokenKind::PLUS_ASSIGN, "+=");
+    VEX_ASSERT(toks[13].kind == TokenKind::MINUS_ASSIGN, "-=");
+    VEX_ASSERT(toks[14].kind == TokenKind::STAR_ASSIGN, "*=");
+    VEX_ASSERT(toks[15].kind == TokenKind::SLASH_ASSIGN, "/=");
     VEX_ASSERT(toks[16].kind == TokenKind::PERCENT_ASSIGN, "%=");
-    VEX_ASSERT(toks[17].kind == TokenKind::AMP_ASSIGN,     "&=");
-    VEX_ASSERT(toks[18].kind == TokenKind::PIPE_ASSIGN,    "|=");
-    VEX_ASSERT(toks[19].kind == TokenKind::CARET_ASSIGN,   "^=");
-    VEX_ASSERT(toks[20].kind == TokenKind::SHL_ASSIGN,     "<<=");
-    VEX_ASSERT(toks[21].kind == TokenKind::SHR_ASSIGN,     ">>=");
+    VEX_ASSERT(toks[17].kind == TokenKind::AMP_ASSIGN, "&=");
+    VEX_ASSERT(toks[18].kind == TokenKind::PIPE_ASSIGN, "|=");
+    VEX_ASSERT(toks[19].kind == TokenKind::CARET_ASSIGN, "^=");
+    VEX_ASSERT(toks[20].kind == TokenKind::SHL_ASSIGN, "<<=");
+    VEX_ASSERT(toks[21].kind == TokenKind::SHR_ASSIGN, ">>=");
     // Logicos
     VEX_ASSERT(toks[22].kind == TokenKind::AND_AND, "&&");
-    VEX_ASSERT(toks[23].kind == TokenKind::OR_OR,   "||");
-    VEX_ASSERT(toks[24].kind == TokenKind::BANG,    "!");
+    VEX_ASSERT(toks[23].kind == TokenKind::OR_OR, "||");
+    VEX_ASSERT(toks[24].kind == TokenKind::BANG, "!");
     // Bitwise
-    VEX_ASSERT(toks[25].kind == TokenKind::AMP,   "&");
-    VEX_ASSERT(toks[26].kind == TokenKind::PIPE,  "|");
+    VEX_ASSERT(toks[25].kind == TokenKind::AMP, "&");
+    VEX_ASSERT(toks[26].kind == TokenKind::PIPE, "|");
     VEX_ASSERT(toks[27].kind == TokenKind::CARET, "^");
     VEX_ASSERT(toks[28].kind == TokenKind::TILDE, "~");
-    VEX_ASSERT(toks[29].kind == TokenKind::SHL,   "<<");
-    VEX_ASSERT(toks[30].kind == TokenKind::SHR,   ">>");
+    VEX_ASSERT(toks[29].kind == TokenKind::SHL, "<<");
+    VEX_ASSERT(toks[30].kind == TokenKind::SHR, ">>");
     // Inc/dec
-    VEX_ASSERT(toks[31].kind == TokenKind::PLUS_PLUS,   "++");
+    VEX_ASSERT(toks[31].kind == TokenKind::PLUS_PLUS, "++");
     VEX_ASSERT(toks[32].kind == TokenKind::MINUS_MINUS, "--");
     // Puntuacion
-    VEX_ASSERT(toks[33].kind == TokenKind::LPAREN,    "(");
-    VEX_ASSERT(toks[34].kind == TokenKind::RPAREN,    ")");
-    VEX_ASSERT(toks[35].kind == TokenKind::LBRACE,    "{");
-    VEX_ASSERT(toks[36].kind == TokenKind::RBRACE,    "}");
-    VEX_ASSERT(toks[37].kind == TokenKind::LBRACKET,  "[");
-    VEX_ASSERT(toks[38].kind == TokenKind::RBRACKET,  "]");
-    VEX_ASSERT(toks[39].kind == TokenKind::COMMA,     ",");
+    VEX_ASSERT(toks[33].kind == TokenKind::LPAREN, "(");
+    VEX_ASSERT(toks[34].kind == TokenKind::RPAREN, ")");
+    VEX_ASSERT(toks[35].kind == TokenKind::LBRACE, "{");
+    VEX_ASSERT(toks[36].kind == TokenKind::RBRACE, "}");
+    VEX_ASSERT(toks[37].kind == TokenKind::LBRACKET, "[");
+    VEX_ASSERT(toks[38].kind == TokenKind::RBRACKET, "]");
+    VEX_ASSERT(toks[39].kind == TokenKind::COMMA, ",");
     VEX_ASSERT(toks[40].kind == TokenKind::SEMICOLON, ";");
-    VEX_ASSERT(toks[41].kind == TokenKind::COLON,     ":");
-    VEX_ASSERT(toks[42].kind == TokenKind::DOT,       ".");
-    VEX_ASSERT(toks[43].kind == TokenKind::ARROW,     "->");
+    VEX_ASSERT(toks[41].kind == TokenKind::COLON, ":");
+    VEX_ASSERT(toks[42].kind == TokenKind::DOT, ".");
+    VEX_ASSERT(toks[43].kind == TokenKind::ARROW, "->");
     VEX_ASSERT(toks[44].kind == TokenKind::FAT_ARROW, "=>");
-    VEX_ASSERT(toks[45].kind == TokenKind::QUESTION,  "?");
-    VEX_ASSERT(toks[46].kind == TokenKind::AT,        "@");
+    VEX_ASSERT(toks[45].kind == TokenKind::QUESTION, "?");
+    VEX_ASSERT(toks[46].kind == TokenKind::AT, "@");
 }
 
 static void test_position_tracking() {
     Diagnostics diags;
-    const std::string src =
-        "i32 main()\n"     // linea 1
-        "{\n"              // linea 2
-        "    return 0;\n"  // linea 3
-        "}\n";             // linea 4
+    const std::string src = "i32 main()\n"    // linea 1
+                            "{\n"             // linea 2
+                            "    return 0;\n" // linea 3
+                            "}\n";            // linea 4
     auto toks = tokenize_all(src, diags);
 
     // i32 esta en linea 1, columna 1.
-    VEX_ASSERT_EQ(toks[0].loc.line,   (uint32_t)1, "linea de i32");
+    VEX_ASSERT_EQ(toks[0].loc.line, (uint32_t)1, "linea de i32");
     VEX_ASSERT_EQ(toks[0].loc.column, (uint32_t)1, "columna de i32");
 
     // main en linea 1, columna 5 (i32 = 3 chars + 1 espacio = pos 4 -> col 5).
-    VEX_ASSERT_EQ(toks[1].loc.line,   (uint32_t)1, "linea de main");
+    VEX_ASSERT_EQ(toks[1].loc.line, (uint32_t)1, "linea de main");
     VEX_ASSERT_EQ(toks[1].loc.column, (uint32_t)5, "columna de main");
 
     // '{' en linea 2, columna 1.
     bool found_open_brace = false;
     for (const auto &t : toks) {
         if (t.kind == TokenKind::LBRACE) {
-            VEX_ASSERT_EQ(t.loc.line,   (uint32_t)2, "linea de {");
+            VEX_ASSERT_EQ(t.loc.line, (uint32_t)2, "linea de {");
             VEX_ASSERT_EQ(t.loc.column, (uint32_t)1, "columna de {");
             found_open_brace = true;
             break;
@@ -373,11 +379,11 @@ static void test_tricky_dot_vs_float() {
     auto toks = tokenize_all("1.method", diags);
     VEX_ASSERT(!diags.has_errors(), "sin errores en 1.method");
     VEX_ASSERT(toks.size() >= 4, "al menos 4 tokens incluyendo EOF");
-    VEX_ASSERT(toks[0].kind == TokenKind::INT_LIT,    "INT_LIT 1");
-    VEX_ASSERT_EQ(toks[0].int_val, (uint64_t)1,       "valor 1");
-    VEX_ASSERT(toks[1].kind == TokenKind::DOT,        "DOT");
+    VEX_ASSERT(toks[0].kind == TokenKind::INT_LIT, "INT_LIT 1");
+    VEX_ASSERT_EQ(toks[0].int_val, (uint64_t)1, "valor 1");
+    VEX_ASSERT(toks[1].kind == TokenKind::DOT, "DOT");
     VEX_ASSERT(toks[2].kind == TokenKind::IDENTIFIER, "IDENT method");
-    VEX_ASSERT(toks[2].lexeme == "method",            "lexema method");
+    VEX_ASSERT(toks[2].lexeme == "method", "lexema method");
 }
 
 static void test_minimal_program() {
@@ -388,17 +394,17 @@ static void test_minimal_program() {
 
     // Esperamos: i32, main, (, ), {, return, 0, ;, }, EOF.
     VEX_ASSERT_EQ(toks.size(), (size_t)10, "10 tokens en programa minimo");
-    VEX_ASSERT(toks[0].kind == TokenKind::KW_INT32,    "i32");
-    VEX_ASSERT(toks[1].kind == TokenKind::IDENTIFIER,  "main");
-    VEX_ASSERT(toks[1].lexeme == "main",               "lexema main");
-    VEX_ASSERT(toks[2].kind == TokenKind::LPAREN,      "(");
-    VEX_ASSERT(toks[3].kind == TokenKind::RPAREN,      ")");
-    VEX_ASSERT(toks[4].kind == TokenKind::LBRACE,      "{");
-    VEX_ASSERT(toks[5].kind == TokenKind::KW_RETURN,   "return");
-    VEX_ASSERT(toks[6].kind == TokenKind::INT_LIT,     "INT_LIT 0");
-    VEX_ASSERT_EQ(toks[6].int_val, (uint64_t)0,        "valor 0");
-    VEX_ASSERT(toks[7].kind == TokenKind::SEMICOLON,   ";");
-    VEX_ASSERT(toks[8].kind == TokenKind::RBRACE,      "}");
+    VEX_ASSERT(toks[0].kind == TokenKind::KW_INT32, "i32");
+    VEX_ASSERT(toks[1].kind == TokenKind::IDENTIFIER, "main");
+    VEX_ASSERT(toks[1].lexeme == "main", "lexema main");
+    VEX_ASSERT(toks[2].kind == TokenKind::LPAREN, "(");
+    VEX_ASSERT(toks[3].kind == TokenKind::RPAREN, ")");
+    VEX_ASSERT(toks[4].kind == TokenKind::LBRACE, "{");
+    VEX_ASSERT(toks[5].kind == TokenKind::KW_RETURN, "return");
+    VEX_ASSERT(toks[6].kind == TokenKind::INT_LIT, "INT_LIT 0");
+    VEX_ASSERT_EQ(toks[6].int_val, (uint64_t)0, "valor 0");
+    VEX_ASSERT(toks[7].kind == TokenKind::SEMICOLON, ";");
+    VEX_ASSERT(toks[8].kind == TokenKind::RBRACE, "}");
     VEX_ASSERT(toks[9].kind == TokenKind::END_OF_FILE, "EOF");
 }
 

@@ -51,88 +51,86 @@
 
 namespace jit {
 
-    /**
-     * @struct JitFunctionInfo
-     * @brief Descriptor de una funcion JIT-compilada activa.
-     */
-    struct JitFunctionInfo {
-        const uint8_t       *code_start = nullptr;
-        const uint8_t       *code_end   = nullptr;  ///< exclusive
-        /// Stackmaps ordenados por @c pc_offset (ascending).  El GC
-        /// usa @c binary_search para encontrar el stackmap que cubre
-        /// un RIP dado.
-        std::vector<Stackmap> stackmaps;
-        /// Tamano del frame stack (sub rsp, frame_size).  Usado por el
-        /// GC scan para identificar limites de slots dentro del frame.
-        uint32_t              frame_size = 0;
-        /// Nombre legible (debugging).
-        const char           *name = "";
-    };
+/**
+ * @struct JitFunctionInfo
+ * @brief Descriptor de una funcion JIT-compilada activa.
+ */
+struct JitFunctionInfo {
+    const uint8_t *code_start = nullptr;
+    const uint8_t *code_end = nullptr; ///< exclusive
+    /// Stackmaps ordenados por @c pc_offset (ascending).  El GC
+    /// usa @c binary_search para encontrar el stackmap que cubre
+    /// un RIP dado.
+    std::vector<Stackmap> stackmaps;
+    /// Tamano del frame stack (sub rsp, frame_size).  Usado por el
+    /// GC scan para identificar limites de slots dentro del frame.
+    uint32_t frame_size = 0;
+    /// Nombre legible (debugging).
+    const char *name = "";
+};
+
+/**
+ * @class JitRegistry
+ * @brief Singleton global con las funciones JIT activas.
+ */
+class JitRegistry {
+  public:
+    static JitRegistry &instance() noexcept;
 
     /**
-     * @class JitRegistry
-     * @brief Singleton global con las funciones JIT activas.
+     * @brief Registra una funcion JIT recien compilada.
+     *
+     * Toma ownership del @c stackmaps por @c std::move; el caller
+     * no debe seguir usandolo tras el registro.
      */
-    class JitRegistry {
-    public:
-        static JitRegistry &instance() noexcept;
+    void register_function(const uint8_t *code_start, const uint8_t *code_end,
+                           std::vector<Stackmap> stackmaps, uint32_t frame_size,
+                           const char *name = "");
 
-        /**
-         * @brief Registra una funcion JIT recien compilada.
-         *
-         * Toma ownership del @c stackmaps por @c std::move; el caller
-         * no debe seguir usandolo tras el registro.
-         */
-        void register_function(const uint8_t *code_start,
-                               const uint8_t *code_end,
-                               std::vector<Stackmap> stackmaps,
-                               uint32_t frame_size,
-                               const char *name = "");
+    /**
+     * @brief Elimina el registro de una funcion (e.g. cuando se
+     *        invalida via deopt).  No-op si no existe.
+     */
+    void unregister_function(const uint8_t *code_start);
 
-        /**
-         * @brief Elimina el registro de una funcion (e.g. cuando se
-         *        invalida via deopt).  No-op si no existe.
-         */
-        void unregister_function(const uint8_t *code_start);
+    /**
+     * @brief Busca la funcion JIT que contiene @p rip.
+     * @return puntero al descriptor (estable durante la vida del
+     *         registro) o @c nullptr si @p rip no esta en ninguna
+     *         funcion JIT activa.
+     *
+     * Coste: O(log N) con N = funciones registradas.
+     */
+    const JitFunctionInfo *lookup(const uint8_t *rip) const;
 
-        /**
-         * @brief Busca la funcion JIT que contiene @p rip.
-         * @return puntero al descriptor (estable durante la vida del
-         *         registro) o @c nullptr si @p rip no esta en ninguna
-         *         funcion JIT activa.
-         *
-         * Coste: O(log N) con N = funciones registradas.
-         */
-        const JitFunctionInfo *lookup(const uint8_t *rip) const;
+    /**
+     * @brief Busca el Stackmap correspondiente al @p rip dentro de
+     *        una funcion JIT (helper combinado).
+     * @return puntero al stackmap si encontrado, o @c nullptr.
+     *
+     * Para que el GC scan no tenga que hacer la busqueda en dos
+     * pasos.  Si @c rip no pertenece a ninguna funcion JIT o la
+     * funcion no tiene stackmap exacto en ese pc_offset, retorna
+     * el stackmap MAS RECIENTE @c <= pc_offset (el ultimo safepoint
+     * antes del PC actual).
+     */
+    const Stackmap *lookup_stackmap(const uint8_t *rip) const;
 
-        /**
-         * @brief Busca el Stackmap correspondiente al @p rip dentro de
-         *        una funcion JIT (helper combinado).
-         * @return puntero al stackmap si encontrado, o @c nullptr.
-         *
-         * Para que el GC scan no tenga que hacer la busqueda en dos
-         * pasos.  Si @c rip no pertenece a ninguna funcion JIT o la
-         * funcion no tiene stackmap exacto en ese pc_offset, retorna
-         * el stackmap MAS RECIENTE @c <= pc_offset (el ultimo safepoint
-         * antes del PC actual).
-         */
-        const Stackmap *lookup_stackmap(const uint8_t *rip) const;
+    /** @brief Numero de funciones registradas actualmente. */
+    size_t size() const;
 
-        /** @brief Numero de funciones registradas actualmente. */
-        size_t size() const;
+    /** @brief Borrar todas las entradas (testing). */
+    void clear();
 
-        /** @brief Borrar todas las entradas (testing). */
-        void clear();
+  private:
+    JitRegistry() = default;
+    ~JitRegistry() = default;
+    JitRegistry(const JitRegistry &) = delete;
+    JitRegistry &operator=(const JitRegistry &) = delete;
 
-    private:
-        JitRegistry() = default;
-        ~JitRegistry() = default;
-        JitRegistry(const JitRegistry &) = delete;
-        JitRegistry &operator=(const JitRegistry &) = delete;
-
-        mutable std::mutex                mutex_;
-        std::vector<JitFunctionInfo>      functions_;  ///< sorted by code_start
-    };
+    mutable std::mutex mutex_;
+    std::vector<JitFunctionInfo> functions_; ///< sorted by code_start
+};
 
 } // namespace jit
 

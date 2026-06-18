@@ -12,25 +12,27 @@
 
 /**
  * @file timer.h
- * @brief Temporizador de alta resolucion para medir tiempos de ejecucion en VestaVM.
+ * @brief Temporizador de alta resolucion para medir tiempos de ejecucion en
+ * VestaVM.
  *
- * Proporciona la estructura @c Timer basada en @c std::chrono::steady_clock, que
- * garantiza mediciones monoton icas (no retrocede, no se ve afectada por ajustes del
- * reloj del sistema) y de alta resolucion.
+ * Proporciona la estructura @c Timer basada en @c std::chrono::steady_clock,
+ * que garantiza mediciones monoton icas (no retrocede, no se ve afectada por
+ * ajustes del reloj del sistema) y de alta resolucion.
  *
  * Unidades disponibles y cuando usarlas:
  *
  *  - @b ms (milisegundos, 1 ms = 1.000 us):
- *      Util para medir tareas "grandes" como lectura de archivos o parseo de proyectos
- *      completos.  Puede mostrar 0 si la operacion dura menos de 1 ms.
+ *      Util para medir tareas "grandes" como lectura de archivos o parseo de
+ * proyectos completos.  Puede mostrar 0 si la operacion dura menos de 1 ms.
  *
  *  - @b us (microsegundos, 1 us = 1.000 ns):
  *      Precision media; ideal para medir fases del compilador (lexer, parser,
  *      ensamblador) o funciones de coste medio.
  *
  *  - @b ns (nanosegundos, 1 ns = 1/1.000.000.000 s):
- *      Maxima precision; util para micro-optimizaciones y benchmarks de instrucciones
- *      individuales.  El resultado puede ser ruidoso en sistemas con alta contention.
+ *      Maxima precision; util para micro-optimizaciones y benchmarks de
+ * instrucciones individuales.  El resultado puede ser ruidoso en sistemas con
+ * alta contention.
  *
  * Uso tipico:
  * @code
@@ -68,18 +70,15 @@ typedef struct Timer {
     /**
      * @brief Constructor: inicia el temporizador en el instante de creacion.
      */
-    Timer() {
-        reset();
-    }
+    Timer() { reset(); }
 
     /**
      * @brief Reinicia el punto de inicio al instante actual.
      *
-     * Llamar a @c reset() descarta el tiempo acumulado y comienza una nueva medicion.
+     * Llamar a @c reset() descarta el tiempo acumulado y comienza una nueva
+     * medicion.
      */
-    void reset() {
-        start = std::chrono::steady_clock::now();
-    }
+    void reset() { start = std::chrono::steady_clock::now(); }
 
     /**
      * @brief Devuelve el tiempo transcurrido en milisegundos.
@@ -90,7 +89,9 @@ typedef struct Timer {
      */
     long long ms() const {
         auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end -
+                                                                     start)
+            .count();
     }
 
     /**
@@ -102,7 +103,9 @@ typedef struct Timer {
      */
     long long us() const {
         auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        return std::chrono::duration_cast<std::chrono::microseconds>(end -
+                                                                     start)
+            .count();
     }
 
     /**
@@ -115,7 +118,8 @@ typedef struct Timer {
      */
     long long ns() const {
         auto end = std::chrono::steady_clock::now();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
+            .count();
     }
 } Timer;
 

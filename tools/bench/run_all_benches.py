@@ -17,6 +17,9 @@ Sprint bench-multilang (2026-06-02):
 Modos de ejecucion del Vex:
 - @b interp: VESTA_JIT_THRESHOLD=UINT32_MAX (forzado; el default del vm es 1500), 100% interp.
 - @b jit: VESTA_JIT_THRESHOLD=1, fuerza JIT en el primer call.
+- @b aot: compila el .vex a un .exe nativo standalone (-m aot --emit exe) y
+  mide el wall time de la ejecucion nativa.  Solo cubre el subset nativo
+  del lenguaje; los benches no soportados quedan N/A en esa columna.
 
 Output:
 - Tabla coloreada en terminal con spinner live + timer.
@@ -531,6 +534,16 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
         available=vm_bin.is_file(),
         why_unavailable="" if vm_bin.is_file() else "vm binary missing"
     )
+    # Sprint bench-aot (2026-06-17): modo AOT nativo.  Compila cada bench
+    # a un .exe nativo standalone (-m aot --emit exe) y mide su wall time.
+    # El AOT solo cubre un SUBSET del lenguaje (enteros/structs/funciones/
+    # control de flujo; sin GC/strings-managed/print/async), asi que
+    # muchos benches caen a N/A cuando el compile nativo falla.
+    tc["vex_aot"] = Toolchain(
+        "vex_aot", "Vex AOT nativo", C.BLUE,
+        available=vm_bin.is_file(),
+        why_unavailable="" if vm_bin.is_file() else "vm binary missing"
+    )
 
     gcc = shutil.which("gcc")
     tc["c"] = Toolchain(
@@ -865,6 +878,42 @@ def compile_vex(variant: BenchVariant, work_dir: Path,
     return ([str(vm_bin), "--run", str(velb)], work_dir, 1.0)
 
 
+def compile_vex_aot(variant: BenchVariant, work_dir: Path,
+                    vm_bin: Path) -> Optional[tuple[list[str], Path, float]]:
+    """Compila el .vex a un ejecutable nativo standalone via el driver AOT.
+
+    En Windows emite un PE (--format pe); en POSIX un ELF (--format elf).
+    El AOT solo soporta un subset del lenguaje, por lo que para muchos
+    benches el compile falla (returncode != 0 o no se genera el .exe).
+    En ese caso devolvemos None y el bench queda como N/A en la columna
+    AOT (no entra en el geomean).
+
+    El comando de ejecucion es simplemente el .exe nativo (su exit-code
+    es el return de main); medimos su wall time como cualquier otro lang.
+    """
+    fmt = "pe" if sys.platform == "win32" else "elf"
+    suffix = ".exe" if sys.platform == "win32" else ""
+    out = work_dir / f"{variant.bench_name}_aot{suffix}"
+    # Limpiar un binario previo para no medir uno viejo si el compile falla.
+    try:
+        if out.exists():
+            out.unlink()
+    except OSError:
+        pass
+    try:
+        r = subprocess.run(
+            [str(vm_bin), "-m", "aot", "--vex", str(variant.src_path),
+             "-o", str(out), "--emit", "exe", "--format", fmt],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60.0,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    # N/A si el compile fallo o el ejecutable nativo no se materializo.
+    if r.returncode != 0 or not out.is_file():
+        return None
+    return ([str(out)], work_dir, 1.0)
+
+
 # =============================================================================
 # Reporte: tabla + grafica matplotlib
 # =============================================================================
@@ -1115,6 +1164,7 @@ def print_ascii_charts(rows: list[dict], active_langs: list[str],
 LANG_LABELS_PLAIN = {
     "vex_interp": "Vex interp",
     "vex_jit":    "Vex JIT",
+    "vex_aot":    "Vex AOT nativo",
     "c":          "C (gcc -O3)",
     "cpp":        "C++ (g++ -O3)",
     "python":     "Python",
@@ -1192,6 +1242,7 @@ def save_matplotlib(rows: list[dict], active_langs: list[str],
     lang_color = {
         "vex_interp": "#ff7f0e",
         "vex_jit":    "#2ca02c",
+        "vex_aot":    "#8c564b",
         "c":          "#1f77b4",
         "cpp":        "#9467bd",
         "python":     "#17becf",
@@ -1543,6 +1594,7 @@ def rerender_from_json(json_path: Path, project_root: Path,
     LABELS = {
         "vex_interp": ("Vex interp",   C.YELLOW),
         "vex_jit":    ("Vex JIT",      C.GREEN),
+        "vex_aot":    ("Vex AOT nativo", C.BLUE),
         "c":          ("C (gcc -O3)",  C.BLUE),
         "cpp":        ("C++ (g++ -O3)", C.MAGENTA),
         "python":     ("Python (CPython)", C.CYAN),
@@ -1611,7 +1663,7 @@ def main() -> int:
     )
     parser.add_argument("vm_path", nargs="?")
     parser.add_argument("--langs", type=str,
-                        default="vex_interp,vex_jit,c,cpp,python,java",
+                        default="vex_interp,vex_jit,vex_aot,c,cpp,python,java",
                         help="lista CSV de lenguajes a ejecutar")
     parser.add_argument("--filter", type=str, default="",
                         help="Regex para filtrar benches por nombre")
@@ -1766,7 +1818,7 @@ def main() -> int:
     for idx, b in enumerate(benches, 1):
         for ln in active_langs:
             variant: Optional[BenchVariant] = None
-            if ln in ("vex_interp", "vex_jit"):
+            if ln in ("vex_interp", "vex_jit", "vex_aot"):
                 variant = b.variants.get("vex")
             else:
                 variant = b.variants.get(ln)
@@ -1779,6 +1831,8 @@ def main() -> int:
         try:
             if ln in ("vex_interp", "vex_jit"):
                 return (idx, b.name, ln, compile_vex(variant, work_dir, vm), None)
+            elif ln == "vex_aot":
+                return (idx, b.name, ln, compile_vex_aot(variant, work_dir, vm), None)
             elif ln == "c":
                 return (idx, b.name, ln, compile_c(variant, work_dir, tc["c"]), None)
             elif ln == "cpp":
@@ -1826,7 +1880,7 @@ def main() -> int:
 
         for ln in active_langs:
             variant: Optional[BenchVariant] = None
-            if ln in ("vex_interp", "vex_jit"):
+            if ln in ("vex_interp", "vex_jit", "vex_aot"):
                 variant = b.variants.get("vex")
             else:
                 variant = b.variants.get(ln)
@@ -1836,7 +1890,10 @@ def main() -> int:
 
             compiled = compiled_map.get((b.name, ln))
             if compiled is None:
-                row[ln] = -1.0
+                # Para AOT, un compile fallido significa "bench no soportado
+                # por el subset nativo" -> N/A (gris), no FAIL (rojo).  Asi
+                # no entra en el geomean ni se confunde con un crash real.
+                row[ln] = None if ln == "vex_aot" else -1.0
                 continue
             cmd, cwd, factor = compiled
 
@@ -1878,15 +1935,25 @@ def main() -> int:
         rows.append(row)
 
         # Imprimir fila parcial.
+        # Cada columna usa ANCHO FIJO para que las etiquetas (vex_jit=, c=, ...)
+        # queden alineadas verticalmente en todas las filas.  El padding se
+        # aplica sobre el texto VISIBLE (sin contar los codigos de color ANSI),
+        # por eso se construye primero la celda en crudo y se pad-ea con ljust
+        # antes de envolverla en color.
         line = f"  [{idx:>3}/{len(benches)}] {C.BOLD}{b.name:<22}{C.RESET}"
         for ln in active_langs:
             v = row.get(ln)
+            # Ancho fijo de la columna: etiqueta (p.ej. "vex_interp=") mas hasta
+            # 6 digitos de ms y el sufijo "ms".  Caben N/A, FAIL y TIMEOUT.
+            col_w = len(ln) + 1 + 6 + 2  # "<ln>=" + 6 digitos + "ms"
             if v is None:
-                line += f"  {C.GREY}N/A{C.RESET}"
+                text, color = "N/A", C.GREY
             elif v < 0:
-                line += f"  {C.RED}FAIL{C.RESET}"
+                text, color = "FAIL", C.RED
             else:
-                line += f"  {tc[ln].color}{ln}={v:.0f}ms{C.RESET}"
+                text, color = f"{ln}={v:.0f}ms", tc[ln].color
+            # Pad-ear el texto visible a ancho fijo y luego aplicar color.
+            line += f"  {color}{text.ljust(col_w)}{C.RESET}"
         print(line)
 
     elapsed = time.perf_counter() - started_at

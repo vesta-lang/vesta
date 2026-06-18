@@ -1,19 +1,19 @@
 /*
  * VestaVM - Máquina Virtual Distribuida
- * 
+ *
  * Copyright © 2026 David López.T (DesmonHak) (Castilla y León, ES)
  * Licencia VMProject
- * 
+ *
  * USO LIBRE NO COMERCIAL con atribución obligatoria.
  * PROHIBIDO lucro sin permiso escrito.
- * 
+ *
  * Descargo: Autor no responsable por modificaciones.
  */
 
 #include "runtime/manager_runtime.h"
 #include <iostream>
 #include <pthread.h>
-#include <cstdio>  // printf
+#include <cstdio> // printf
 
 #include "runtime/runtime.h"
 
@@ -33,7 +33,7 @@ void operator delete(void *ptr) noexcept {
 
 void print_memory_stats() {
     std::cout << "Memoria actual: " << total_allocated
-            << " bytes, maximo: " << peak_memory << " bytes\n";
+              << " bytes, maximo: " << peak_memory << " bytes\n";
 }
 
 int main() {
@@ -47,12 +47,12 @@ int main() {
     for (int i = 0; i < manager.vm_count(); i++) {
         if (auto vm = manager.get_vm(i)) {
             std::cout << vm->to_string();
-            printf("VMs: %zu | Arenas VM1: %zu\n", manager.vms.size(), vm->manager_mem_public.arenas.size());
+            printf("VMs: %zu | Arenas VM1: %zu\n", manager.vms.size(),
+                   vm->manager_mem_public.arenas.size());
 
         } else {
             printf("VM no encontrada\n");
         }
-
     }
 
     manager.print_vm_manager_info();

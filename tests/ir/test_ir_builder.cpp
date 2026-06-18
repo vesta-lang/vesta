@@ -26,7 +26,7 @@ static IrFunction make_factorial() {
      *   }
      */
     IrFunction fn;
-    fn.name     = "factorial";
+    fn.name = "factorial";
     fn.ret_type = IrType::I32;
 
     IrBuilder b(fn);
@@ -36,13 +36,13 @@ static IrFunction make_factorial() {
 
     /* Bloques: entry, then (return 1), else (recursion), exit. */
     const auto entry_bb = b.new_block("entry");
-    const auto then_bb  = b.new_block("then");
-    const auto else_bb  = b.new_block("else");
+    const auto then_bb = b.new_block("then");
+    const auto else_bb = b.new_block("else");
 
     /* entry: if (n <= 1) goto then else goto else */
     b.set_insert_point(entry_bb);
-    const auto one      = b.const_i32(1);
-    const auto cond     = b.cmp_le(n, one);
+    const auto one = b.const_i32(1);
+    const auto cond = b.cmp_le(n, one);
     b.br_cond(cond, then_bb, else_bb);
 
     /* then: return 1 */
@@ -52,9 +52,9 @@ static IrFunction make_factorial() {
 
     /* else: tmp = n - 1; sub = factorial(tmp); return n * sub */
     b.set_insert_point(else_bb);
-    const auto one3   = b.const_i32(1);
-    const auto tmp    = b.sub(n, one3, IrType::I32);
-    const auto sub_v  = b.call("factorial", {tmp}, IrType::I32);
+    const auto one3 = b.const_i32(1);
+    const auto tmp = b.sub(n, one3, IrType::I32);
+    const auto sub_v = b.call("factorial", {tmp}, IrType::I32);
     const auto result = b.mul(n, sub_v, IrType::I32);
     b.ret(result);
 
@@ -75,15 +75,15 @@ static IrFunction make_sum_loop() {
      *   }
      */
     IrFunction fn;
-    fn.name     = "sum_to_n";
+    fn.name = "sum_to_n";
     fn.ret_type = IrType::I32;
 
     IrBuilder b(fn);
     const auto n = b.param(IrType::I32, "n");
 
-    const auto entry  = b.new_block("entry");
+    const auto entry = b.new_block("entry");
     const auto header = b.new_block("loop_header");
-    const auto body   = b.new_block("loop_body");
+    const auto body = b.new_block("loop_body");
     const auto exit_b = b.new_block("loop_exit");
 
     /* entry: sum=0, i=0, jump header */
@@ -97,15 +97,15 @@ static IrFunction make_sum_loop() {
      * sus values asignados.  Para simplificar: emitimos los phi con
      * IR_NO_VALUE inicialmente y los actualizamos despues. */
     const auto sum_phi = b.phi(IrType::I32, {{entry, zero}});
-    const auto i_phi   = b.phi(IrType::I32, {{entry, zero}});
-    const auto cmp_lt  = b.cmp_lt(i_phi, n);
+    const auto i_phi = b.phi(IrType::I32, {{entry, zero}});
+    const auto cmp_lt = b.cmp_lt(i_phi, n);
     b.br_cond(cmp_lt, body, exit_b);
 
     /* body: sum2 = sum + i; i2 = i + 1; back to header */
     b.set_insert_point(body);
     const auto new_sum = b.add(sum_phi, i_phi, IrType::I32);
-    const auto one     = b.const_i32(1);
-    const auto new_i   = b.add(i_phi, one, IrType::I32);
+    const auto one = b.const_i32(1);
+    const auto new_i = b.add(i_phi, one, IrType::I32);
     b.br(header);
 
     /* Cerrar los PHIs anyadiendo el back-edge. */
@@ -135,8 +135,13 @@ static IrFunction make_sum_loop() {
 int main() {
     int ok = 0, fail = 0;
     auto check = [&](bool cond, const char *desc) {
-        if (cond) { ++ok; std::printf("OK: %s\n", desc); }
-        else      { ++fail; std::printf("FAIL: %s\n", desc); }
+        if (cond) {
+            ++ok;
+            std::printf("OK: %s\n", desc);
+        } else {
+            ++fail;
+            std::printf("FAIL: %s\n", desc);
+        }
     };
 
     /* Construir factorial via builder. */
@@ -171,8 +176,7 @@ int main() {
         check(!bytes.empty(), "factorial serializes to bytes");
 
         std::vector<IrFunction> loaded;
-        const bool ok_parse =
-            parse_ir_section(bytes, 0, bytes.size(), loaded);
+        const bool ok_parse = parse_ir_section(bytes, 0, bytes.size(), loaded);
         check(ok_parse, "factorial parses back");
         check(loaded.size() == 1, "factorial round-trip count");
         if (!loaded.empty()) {

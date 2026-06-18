@@ -30,12 +30,21 @@
 using namespace jit;
 
 static int g_checks = 0, g_fails = 0;
-#define CHECK(cond, msg)                                                    \
-    do { ++g_checks; if (!(cond)) { ++g_fails;                              \
-        std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__); } } while (0)
+#define CHECK(cond, msg)                                                       \
+    do {                                                                       \
+        ++g_checks;                                                            \
+        if (!(cond)) {                                                         \
+            ++g_fails;                                                         \
+            std::printf("  FAIL: %s  (linea %d)\n", (msg), __LINE__);          \
+        }                                                                      \
+    } while (0)
 
-static MOperand imm(int32_t v) { return MOperand::make_imm32(v); }
-static MOperand pr(MReg r)     { return MOperand::make_reg(r, 8); }
+static MOperand imm(int32_t v) {
+    return MOperand::make_imm32(v);
+}
+static MOperand pr(MReg r) {
+    return MOperand::make_reg(r, 8);
+}
 
 /** @brief Funcion nativa de prueba (convencion C host).  a*10 + b. */
 extern "C" int64_t vex_test_addmul(int64_t a, int64_t b) {
@@ -72,8 +81,10 @@ static void test_call_two() {
     b.instrs.push_back(MInstr::make_arg(0, v0));
     b.instrs.push_back(MInstr::make_arg(1, v1));
     b.instrs.push_back(MInstr::make_call_abs(addr));
-    b.instrs.push_back(MInstr::make_unary(MOp::MOV, res, pr(MReg::RAX)));  // capturar
-    b.instrs.push_back(MInstr::make_unary(MOp::MOV, pr(MReg::RAX), res));  // return
+    b.instrs.push_back(
+        MInstr::make_unary(MOp::MOV, res, pr(MReg::RAX))); // capturar
+    b.instrs.push_back(
+        MInstr::make_unary(MOp::MOV, pr(MReg::RAX), res)); // return
     b.instrs.push_back(MInstr::make_ret());
     mf.blocks.push_back(std::move(b));
 
@@ -107,7 +118,7 @@ static void test_call_three() {
     b.instrs.push_back(MInstr::make_arg(1, v1));
     b.instrs.push_back(MInstr::make_arg(2, v2));
     b.instrs.push_back(MInstr::make_call_abs(addr));
-    b.instrs.push_back(MInstr::make_ret());  // resultado ya en RAX
+    b.instrs.push_back(MInstr::make_ret()); // resultado ya en RAX
     mf.blocks.push_back(std::move(b));
 
     const TargetRegInfo &tri = target_x86_64_vm_abi();

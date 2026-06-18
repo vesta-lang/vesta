@@ -50,18 +50,20 @@ namespace ir {
  * @brief Opciones de emision del emisor IR -> .vel.
  */
 struct EmitOptions {
-    OptLevel    opt_level      = OptLevel::O1; ///< nivel de optimizacion aplicado antes de emitir
-    bool        emit_comments  = true;         ///< emitir comentarios con info de origen IR
-    bool        emit_debug     = false;        ///< emitir comentarios @line N para cada instruccion
-    bool        export_all     = false;        ///< exportar todas las funciones con @Export
-    std::string module_name;                   ///< nombre @Module (vacio = usar mod.name)
+    OptLevel opt_level =
+        OptLevel::O1; ///< nivel de optimizacion aplicado antes de emitir
+    bool emit_comments = true; ///< emitir comentarios con info de origen IR
+    bool emit_debug =
+        false; ///< emitir comentarios @line N para cada instruccion
+    bool export_all = false; ///< exportar todas las funciones con @Export
+    std::string module_name; ///< nombre @Module (vacio = usar mod.name)
 };
 
 /**
  * @brief Resultado de la emision de un modulo IR a texto .vel.
  */
 struct EmitResult {
-    bool        ok;       ///< true si la emision fue exitosa
+    bool ok;              ///< true si la emision fue exitosa
     std::string vel_text; ///< texto .vel generado (valido si ok)
     std::string error;    ///< mensaje de error si !ok
 };
@@ -90,7 +92,8 @@ EmitResult ir_emit_module(const IrModule &mod, const EmitOptions &opts = {});
  * @param opts     Opciones de emision.
  * @return Resultado con el texto .vel o el error.
  */
-EmitResult ir_emit_text(const std::string &ir_text, const EmitOptions &opts = {});
+EmitResult ir_emit_text(const std::string &ir_text,
+                        const EmitOptions &opts = {});
 
 } // namespace ir
 

@@ -1,0 +1,16 @@
+// BMI2 `pext` (parallel bits extract): empaqueta los bits de `src`
+// seleccionados por `mask` hacia los bits bajos del resultado.  Util para
+// descomponer campos de bits dispersos sin shifts/masks manuales.
+//
+// @expect 3
+u64 main() {
+    
+    register("rdi") u64 src  = 0b1011;   // bits: 3,1,0
+    register("rsi") u64 mask = 0b1010;   // selecciona los bits 3 y 1
+    register("rax") u64 out;
+    asm volatile {
+        pext rax, rdi, rsi               // bit3(src)=1, bit1(src)=1 -> 0b11
+    };
+
+    return out;                          // -> 3
+}

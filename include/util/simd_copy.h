@@ -12,14 +12,17 @@
 
 /**
  * @file simd_copy.h
- * @brief Copia de memoria acelerada por SIMD con deteccion de capacidades en tiempo de ejecucion.
+ * @brief Copia de memoria acelerada por SIMD con deteccion de capacidades en
+ * tiempo de ejecucion.
  *
  * Expone una funcion de copia eficiente que selecciona automaticamente el mejor
- * camino disponible segun las capacidades del procesador (detectadas una sola vez
- * al inicio del programa):
+ * camino disponible segun las capacidades del procesador (detectadas una sola
+ * vez al inicio del programa):
  *
- *   - AVX-512F : bloques de 64 bytes con _mm512_loadu_si512 / _mm512_storeu_si512.
- *   - AVX2     : bloques de 32 bytes con _mm256_loadu_si256 / _mm256_storeu_si256.
+ *   - AVX-512F : bloques de 64 bytes con _mm512_loadu_si512 /
+ * _mm512_storeu_si512.
+ *   - AVX2     : bloques de 32 bytes con _mm256_loadu_si256 /
+ * _mm256_storeu_si256.
  *   - SSE2     : bloques de 16 bytes con _mm_loadu_si128   / _mm_storeu_si128.
  *   - Escalar  : std::memcpy estandar (fallback para arquitecturas sin SIMD).
  *
@@ -43,13 +46,13 @@
 
 // --- cabeceras de intrinsecos por nivel ---
 #if defined(__GNUC__) || defined(__clang__)
-#  include <cpuid.h>      // __get_cpuid / __get_cpuid_count
+#include <cpuid.h> // __get_cpuid / __get_cpuid_count
 #endif
 #if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
-#  include <emmintrin.h>  // SSE2
+#include <emmintrin.h> // SSE2
 #endif
 #if defined(__AVX2__)
-#  include <immintrin.h>  // AVX2 / AVX-512
+#include <immintrin.h> // AVX2 / AVX-512
 #endif
 
 // Nivel SIMD detectado en tiempo de ejecucion (cacheado estaticamente)
@@ -60,155 +63,167 @@
 
 namespace simd_copy {
 
-    /**
-     * @brief Detecta el nivel SIMD maximo del procesador actual.
-     *
-     * Ejecuta CPUID una sola vez y almacena el resultado en una variable
-     * estatica para consultas posteriores.  Hilo-seguro (inicializacion
-     * garantizada una sola vez por el compilador para static locales en C++11).
-     *
-     * @return Nivel SIMD: 0=escalar, 1=SSE2, 2=AVX2, 3=AVX512F.
-     */
-    inline int detect_level() {
-        static int level = []() -> int {
-            int lvl = 0;
+/**
+ * @brief Detecta el nivel SIMD maximo del procesador actual.
+ *
+ * Ejecuta CPUID una sola vez y almacena el resultado en una variable
+ * estatica para consultas posteriores.  Hilo-seguro (inicializacion
+ * garantizada una sola vez por el compilador para static locales en C++11).
+ *
+ * @return Nivel SIMD: 0=escalar, 1=SSE2, 2=AVX2, 3=AVX512F.
+ */
+inline int detect_level() {
+    static int level = []() -> int {
+        int lvl = 0;
 #if defined(__GNUC__) || defined(__clang__)
-            // GCC/Clang: __builtin_cpu_supports funciona en tiempo de ejecucion
-            // incluso si el binario no fue compilado con -mavx2
-            if (__builtin_cpu_supports("avx512f")) { lvl = 3; }
-            else if (__builtin_cpu_supports("avx2"))    { lvl = 2; }
-            else if (__builtin_cpu_supports("sse2"))    { lvl = 1; }
+        // GCC/Clang: __builtin_cpu_supports funciona en tiempo de ejecucion
+        // incluso si el binario no fue compilado con -mavx2
+        if (__builtin_cpu_supports("avx512f")) {
+            lvl = 3;
+        } else if (__builtin_cpu_supports("avx2")) {
+            lvl = 2;
+        } else if (__builtin_cpu_supports("sse2")) {
+            lvl = 1;
+        }
 #elif defined(_MSC_VER)
-            // MSVC: __cpuid/__cpuidex
-            int info[4];
-            __cpuid(info, 1);
-            if (info[3] & (1 << 26)) lvl = 1; // SSE2: EDX bit 26
-            __cpuidex(info, 7, 0);
-            if (info[1] & (1 << 5))  lvl = 2; // AVX2: EBX bit 5
-            if (info[1] & (1 << 16)) lvl = 3; // AVX512F: EBX bit 16
+        // MSVC: __cpuid/__cpuidex
+        int info[4];
+        __cpuid(info, 1);
+        if (info[3] & (1 << 26)) lvl = 1; // SSE2: EDX bit 26
+        __cpuidex(info, 7, 0);
+        if (info[1] & (1 << 5)) lvl = 2;  // AVX2: EBX bit 5
+        if (info[1] & (1 << 16)) lvl = 3; // AVX512F: EBX bit 16
 #endif
-            return lvl;
-        }();
-        return level;
-    }
+        return lvl;
+    }();
+    return level;
+}
 
-    // -------------------------------------------------------------------------
-    // Implementaciones por nivel (compiladas con el target adecuado)
-    // -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+// Implementaciones por nivel (compiladas con el target adecuado)
+// -------------------------------------------------------------------------
 
-    /**
-     * @brief Copia usando registros SSE2 (bloques de 16 bytes).
-     *
-     * @param dst  Puntero destino (memoria host, puede ser no alineado).
-     * @param src  Puntero origen  (memoria host, puede ser no alineado).
-     * @param len  Numero de bytes a copiar.
-     */
+/**
+ * @brief Copia usando registros SSE2 (bloques de 16 bytes).
+ *
+ * @param dst  Puntero destino (memoria host, puede ser no alineado).
+ * @param src  Puntero origen  (memoria host, puede ser no alineado).
+ * @param len  Numero de bytes a copiar.
+ */
 #if defined(__GNUC__) || defined(__clang__)
-    __attribute__((target("sse2")))
+__attribute__((target("sse2")))
 #endif
-    inline void copy_sse2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
+inline void
+copy_sse2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
 #if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
-        size_t i = 0;
-        // bucle principal: bloques de 16 bytes con stores no temporales para
-        // evitar la contaminacion de cache en copias grandes
-        for (; i + 16 <= len; i += 16) {
-            __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
-            _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), v);
-        }
-        // resto de bytes que no caben en un registro completo
-        std::memcpy(dst + i, src + i, len - i);
-#else
-        std::memcpy(dst, src, len);
-#endif
+    size_t i = 0;
+    // bucle principal: bloques de 16 bytes con stores no temporales para
+    // evitar la contaminacion de cache en copias grandes
+    for (; i + 16 <= len; i += 16) {
+        __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), v);
     }
-
-    /**
-     * @brief Copia usando registros AVX2 (bloques de 32 bytes).
-     *
-     * @param dst  Puntero destino (no alineado permitido).
-     * @param src  Puntero origen  (no alineado permitido).
-     * @param len  Numero de bytes a copiar.
-     */
-#if defined(__GNUC__) || defined(__clang__)
-    __attribute__((target("avx2")))
+    // resto de bytes que no caben en un registro completo
+    std::memcpy(dst + i, src + i, len - i);
+#else
+    std::memcpy(dst, src, len);
 #endif
-    inline void copy_avx2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
+}
+
+/**
+ * @brief Copia usando registros AVX2 (bloques de 32 bytes).
+ *
+ * @param dst  Puntero destino (no alineado permitido).
+ * @param src  Puntero origen  (no alineado permitido).
+ * @param len  Numero de bytes a copiar.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx2")))
+#endif
+inline void
+copy_avx2(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
 #if defined(__AVX2__)
-        size_t i = 0;
-        for (; i + 32 <= len; i += 32) {
-            __m256i v = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(src + i));
-            _mm256_storeu_si256(reinterpret_cast<__m256i *>(dst + i), v);
-        }
-        // remanente con SSE2 para aprovechar los 16 bytes sobrantes si existen
-        if (i + 16 <= len) {
-            __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
-            _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), v);
-            i += 16;
-        }
-        std::memcpy(dst + i, src + i, len - i);
-#else
-        copy_sse2(dst, src, len);
-#endif
+    size_t i = 0;
+    for (; i + 32 <= len; i += 32) {
+        __m256i v =
+            _mm256_loadu_si256(reinterpret_cast<const __m256i *>(src + i));
+        _mm256_storeu_si256(reinterpret_cast<__m256i *>(dst + i), v);
     }
+    // remanente con SSE2 para aprovechar los 16 bytes sobrantes si existen
+    if (i + 16 <= len) {
+        __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + i));
+        _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + i), v);
+        i += 16;
+    }
+    std::memcpy(dst + i, src + i, len - i);
+#else
+    copy_sse2(dst, src, len);
+#endif
+}
 
-    /**
-     * @brief Copia usando registros AVX-512F (bloques de 64 bytes).
-     *
-     * @param dst  Puntero destino (no alineado permitido).
-     * @param src  Puntero origen  (no alineado permitido).
-     * @param len  Numero de bytes a copiar.
-     */
+/**
+ * @brief Copia usando registros AVX-512F (bloques de 64 bytes).
+ *
+ * @param dst  Puntero destino (no alineado permitido).
+ * @param src  Puntero origen  (no alineado permitido).
+ * @param len  Numero de bytes a copiar.
+ */
 #if defined(__GNUC__) || defined(__clang__)
-    __attribute__((target("avx512f")))
+__attribute__((target("avx512f")))
 #endif
-    inline void copy_avx512(uint8_t *__restrict dst, const uint8_t *__restrict src, size_t len) {
+inline void
+copy_avx512(uint8_t *__restrict dst, const uint8_t *__restrict src,
+            size_t len) {
 #if defined(__AVX512F__)
-        size_t i = 0;
-        for (; i + 64 <= len; i += 64) {
-            __m512i v = _mm512_loadu_si512(reinterpret_cast<const void *>(src + i));
-            _mm512_storeu_si512(reinterpret_cast<void *>(dst + i), v);
-        }
-        // remanente con AVX2 si quedan >= 32 bytes
-        copy_avx2(dst + i, src + i, len - i);
+    size_t i = 0;
+    for (; i + 64 <= len; i += 64) {
+        __m512i v = _mm512_loadu_si512(reinterpret_cast<const void *>(src + i));
+        _mm512_storeu_si512(reinterpret_cast<void *>(dst + i), v);
+    }
+    // remanente con AVX2 si quedan >= 32 bytes
+    copy_avx2(dst + i, src + i, len - i);
 #else
-        copy_avx2(dst, src, len);
+    copy_avx2(dst, src, len);
 #endif
+}
+
+// -------------------------------------------------------------------------
+// Punto de entrada publico
+// -------------------------------------------------------------------------
+
+/**
+ * @brief Copia @p len bytes de @p src a @p dst usando el mejor nivel SIMD
+ * disponible.
+ *
+ * Para copias pequenas (< 16 bytes) usa directamente std::memcpy para evitar
+ * el overhead de los registros SIMD.  Para copias mayores selecciona el nivel
+ * detectado en la primera llamada.
+ *
+ * @param dst Puntero destino (memoria host).
+ * @param src Puntero origen  (memoria host).
+ * @param len Numero de bytes a copiar.
+ */
+inline void fast_copy(void *__restrict dst, const void *__restrict src,
+                      size_t len) {
+    if (len == 0) return;
+
+    // umbral minimo para activar SIMD: copias pequenas no se benefician del
+    // overhead
+    if (len < 16) {
+        std::memcpy(dst, src, len);
+        return;
     }
 
-    // -------------------------------------------------------------------------
-    // Punto de entrada publico
-    // -------------------------------------------------------------------------
+    auto *d = static_cast<uint8_t *>(dst);
+    const auto *s = static_cast<const uint8_t *>(src);
 
-    /**
-     * @brief Copia @p len bytes de @p src a @p dst usando el mejor nivel SIMD disponible.
-     *
-     * Para copias pequenas (< 16 bytes) usa directamente std::memcpy para evitar
-     * el overhead de los registros SIMD.  Para copias mayores selecciona el nivel
-     * detectado en la primera llamada.
-     *
-     * @param dst Puntero destino (memoria host).
-     * @param src Puntero origen  (memoria host).
-     * @param len Numero de bytes a copiar.
-     */
-    inline void fast_copy(void *__restrict dst, const void *__restrict src, size_t len) {
-        if (len == 0) return;
-
-        // umbral minimo para activar SIMD: copias pequenas no se benefician del overhead
-        if (len < 16) {
-            std::memcpy(dst, src, len);
-            return;
-        }
-
-        auto *d = static_cast<uint8_t *>(dst);
-        const auto *s = static_cast<const uint8_t *>(src);
-
-        switch (detect_level()) {
-            case 3:  copy_avx512(d, s, len); break;
-            case 2:  copy_avx2(d, s, len);   break;
-            case 1:  copy_sse2(d, s, len);   break;
-            default: std::memcpy(d, s, len); break;
-        }
+    switch (detect_level()) {
+    case 3: copy_avx512(d, s, len); break;
+    case 2: copy_avx2(d, s, len); break;
+    case 1: copy_sse2(d, s, len); break;
+    default: std::memcpy(d, s, len); break;
     }
+}
 
 } // namespace simd_copy
 

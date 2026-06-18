@@ -7,7 +7,8 @@
 
 /**
  * @file jit/selector.h
- * @brief Instruction selector @c ssa_ir::IrFunction -> @c jit::MFunction (Phase D.1.b).
+ * @brief Instruction selector @c ssa_ir::IrFunction -> @c jit::MFunction (Phase
+ * D.1.b).
  *
  * = Diseno =
  *
@@ -60,227 +61,230 @@
 
 namespace jit {
 
-    /**
-     * @enum SelectorMode
-     * @brief Convencion de llamada para el codigo generado.
-     */
-    enum class SelectorMode {
-        NATIVE_ABI,  ///< Convencion C nativa del host (SysV / Win64).
-        VM_ABI       ///< Convencion VM (ProcessVM* + regs internos).
-    };
+/**
+ * @enum SelectorMode
+ * @brief Convencion de llamada para el codigo generado.
+ */
+enum class SelectorMode {
+    NATIVE_ABI, ///< Convencion C nativa del host (SysV / Win64).
+    VM_ABI      ///< Convencion VM (ProcessVM* + regs internos).
+};
+
+/**
+ * @struct SelectorOptions
+ * @brief Opciones de configuracion del selector.
+ */
+struct SelectorOptions {
+    SelectorMode mode = SelectorMode::NATIVE_ABI;
+    /// Direccion absoluta de @c vrt_safepoint_handler para que el
+    /// selector pueda emitir safepoints en VM_ABI mode.  Tipicamente
+    /// se obtiene de @c jit::RuntimeEntries::safepoint_handler.
+    /// Si es 0 en VM_ABI mode, los safepoints se omiten (modo
+    /// debug/testing sin coordinacion GC).
+    uint64_t safepoint_handler_addr = 0;
+    /// D.3-B: tabla de runtime entries.  El selector la usa para
+    /// resolver @c IrOp::CALL a @c vrt_* y emitir CALL directo a la
+    /// direccion del wrapper.  Si es @c nullptr, cualquier
+    /// @c IrOp::CALL no soportado marca @c unsupported=true.
+    const RuntimeEntries *runtime = nullptr;
+
+    /// D.3-E: callback opcional para resolver CALLs a funciones user
+    /// (definidas en el .velb, no en runtime).  El selector la
+    /// invoca cuando @c IrOp::CALL tiene un @c func_name que NO es
+    /// @c vrt_* y necesita recursivamente compilar la callee.
+    /// Devuelve 0 si la funcion no existe / no es compilable; sino
+    /// la direccion absoluta de su codigo nativo (call rax).
+    /// El callee se invoca con VM_ABI calling convention (args ya
+    /// staged en @c proc->registers.regs[1..N+1]).
+    /// Es responsabilidad del callback evitar recursion infinita
+    /// (e.g. via cache name -> ptr, valor centinela "in progress").
+    std::function<uint64_t(const std::string &)> resolve_user_fn{};
+
+    /// D.3-H: callback opcional para resolver simbolos @Absolute("X")
+    /// dentro de raw_asm a su direccion VM absoluta (resuelta por
+    /// el linker).  El selector invoca este callback al parsear
+    /// `mov rN, @Absolute("code.s_K")` o `mov [rN], @Absolute(...)`.
+    /// Si es nullptr o retorna 0, esos patrones siguen siendo
+    /// rechazados como unsupported.
+    std::function<uint64_t(const std::string &)> resolve_symbol{};
+
+    /// 2026-05-16: callback opcional para resolver funciones nativas
+    /// importadas via CALLN.  Recibe el nombre completo @c "lib:func"
+    /// (e.g. @c "stdlib/native/io/vesta_io:vio_println") y devuelve la
+    /// direccion HOST del simbolo nativo cargado (LoadLibraryA +
+    /// GetProcAddress).  Si retorna 0, la CALLN se marca @c unsupported
+    /// y el metodo cae a fallback interp.  Tipicamente el caller
+    /// resuelve usando @c loader::FFI::load_native_module +
+    /// @c resolve_native_symbol.
+    std::function<uint64_t(const std::string &)> resolve_native_fn{};
+
+    /// Callback para reservar un slot de Inline Cache (PIC de 4 entradas
+    /// x 16 bytes = 64 bytes: [class_ptr][jit_code] por entrada, inicial
+    /// 0).  Retorna la addr HOST del slot.  El selector embebe esa addr
+    /// en el codigo emitido para el CALLVIRT IC pattern.  Si es null, el
+    /// selector emite el inline dispatch tradicional (sin IC).
+    ///
+    /// C2-cimiento (2026-06-07): el parametro @p callsite_key identifica
+    /// el call site (clave = (fn_pc << 8) | ordinal-de-IC-en-la-fn) para
+    /// que el slot sea DIRECCIONABLE: el mismo call site reusa el mismo
+    /// slot entre recompilaciones, y el pase C2 puede encontrarlo y leer
+    /// su estado (clases observadas) para especular.  @p callsite_key==0
+    /// significa "sin clave" (e.g. NATIVE_ABI / tests): se aloca un slot
+    /// fresco no-direccionable, como antes.
+    std::function<uint64_t(uint64_t /*callsite_key*/)> reserve_ic_slot{};
+
+    /// Callback para leer un qword (u64) de @c vm_mem en compile-time.
+    /// Usado por el peephole de inlining: cuando el JIT ve
+    /// @c mov rN, @Absolute("code.s_X") + @c mov rN, [rN], lee el
+    /// valor cacheado en s_X (typically un @c ClassInfo* poblado por
+    /// @c __module_init que ya corrio antes del JIT compile) e
+    /// inlinea el constante como imm64, eliminando la llamada a
+    /// @c vrt_vm_read_u64 en cada iteracion del hot path.
+    /// Si retorna 0 o no esta seteado, el patron usa la ruta normal
+    /// (resolver vaddr + vrt_vm_read_u64).
+    std::function<uint64_t(uint64_t /*vaddr*/)> read_vmem_u64{};
+
+    /// Offset (en bytes) desde @c ProcessVM* hasta @c gc_heap.nursery_bump_.
+    /// Si != 0, el mini-parser del JIT inlinea bump-pointer allocation
+    /// emitiendo @c mov rax, [rbx + nursery_bump_off] +
+    /// @c lea rcx, [rax + total] + @c cmp rcx, [rbx + nursery_end_off]
+    /// + @c ja slow_path + @c mov [rbx + nursery_bump_off], rcx +
+    /// init GcHeader + init ObjectHeader + call @c vrt_register_alloc
+    /// para registrar el handle.  Saves ~30 ns por allocacion
+    /// (vs ~50 ns del call a @c vrt_newobj).
+    /// Si es 0, el JIT cae al call de @c vrt_newobj normal.
+    int32_t nursery_bump_offset = 0;
+    int32_t nursery_end_offset = 0;
+    /// Direccion del runtime helper @c vrt_register_alloc (param 2
+    /// = host_ptr al GcHeader, register handle solo).  Si es 0, el
+    /// JIT no puede inlinear (fallback a @c vrt_newobj).
+    uint64_t register_alloc_addr = 0;
+
+    /// Offset en bytes desde @c ProcessVM* hasta @c exc_frame_stack.
+    /// Computado en runtime con @c offsetof porque @c ProcessVM no es
+    /// standard-layout y el offset depende del libstdc++ del compilador.
+    /// Si != 0, el JIT inlinea @c tryleave como un pop de linked list
+    /// en 5 instrucciones x86-64 (vs ~20-30 de runtime call):
+    ///
+    ///     mov rax, [rbx + EXC_FRAME_OFF]      ; top
+    ///     test rax, rax
+    ///     je skip
+    ///     mov rcx, [rax + 168]                 ; prev
+    ///     (VESTA_EXC_FRAME_PREV_OFFSET) mov [rbx + EXC_FRAME_OFF], rcx       ;
+    ///     head = prev
+    ///   skip:
+    ///
+    /// El frame popped queda leaked en heap raw (~176 bytes); este
+    /// coste se considera aceptable v1 (1MB cada 5680 tries).  Future
+    /// sprint: free list per-proc.
+    ///
+    /// Si es 0, el JIT cae al runtime call @c vrt_tryleave (correcto pero ~5x
+    /// mas lento).
+    int32_t exc_frame_stack_offset = 0;
+
+    /// callback-ABI (2026-06-06): cuando @c mode==VM_ABI y este flag es
+    /// true, la funcion se compila con ENTRY de ABI C nativo (callable
+    /// directamente por qsort/Win32) en vez del entry VM_ABI estandar.
+    /// El cuerpo se lowerea identico a VM_ABI (RBX=proc), pero el prologo
+    /// lee @c ProcessVM* via @c LOAD_PROC (no de un arg), mueve los args
+    /// nativos a los slots de los params, y -- solo si el cuerpo puede
+    /// ensuciar @c proc->registers (tiene CALL/raw_asm/etc.) -- salva y
+    /// restaura el banco de registros VM para la re-entrancia del
+    /// callback.  Funciones hoja puras NO salvan nada (save-set vacio).
+    /// Reemplaza el thunk hand-emitted de @c native_callback.cpp.
+    bool callback_entry = false;
+    /// Direccion de @c runtime::get_current_executing_process (fallback
+    /// del @c LOAD_PROC cuando no hay TLS-direct).  Solo usado si
+    /// @c callback_entry.
+    uint64_t callback_get_proc_addr = 0;
+    /// Desplazamiento @c gs:[disp] para leer @c ProcessVM* en TLS-direct
+    /// (Win64).  -1 = usar el fallback por call.  Solo usado si
+    /// @c callback_entry.
+    int32_t callback_tls_gs_disp = -1;
+
+    /// Direccion absoluta de @c proc->scheduler.profiler_jit_instr_counter.
+    /// Si != 0, el JIT emite al inicio de cada metodo:
+    ///   @c mov rax, imm64  (counter_addr)
+    ///   @c add qword [rax], N   (N = ir_fn.values.size() approx)
+    /// Asi cada invocacion JIT contribuye N "instrucciones VM" al
+    /// contador, permitiendo que @c --stats calcule MIPS reales aunque
+    /// el codigo este corriendo en JIT (donde el dispatch loop del
+    /// interp NUNCA se ejecuta).  Coste: 2 instr (~3 ns) al entry de
+    /// cada metodo.  Si es 0, el contador queda sin actualizar (MIPS
+    /// JIT subestimado pero programa OK).
+    uint64_t jit_instr_counter_addr = 0;
+
+    /// Offset en bytes desde @c ProcessVM* hasta @c exc_free_list (head
+    /// de la pila de @c ExceptionFrames reciclables).  Si != 0, el JIT
+    /// inlinea tryleave anyadiendo PUSH a este free list en lugar de
+    /// dejar el frame leaked.  Patron x86-64 emitido (7 instr total):
+    ///
+    ///     mov rax, [rbx + EXC_FRAME_OFF]       ; top
+    ///     test rax, rax; je skip
+    ///     mov rcx, [rax + 168]                  ; prev (linked list)
+    ///     mov [rbx + EXC_FRAME_OFF], rcx        ; head = prev
+    ///     mov rcx, [rbx + EXC_FREE_LIST_OFF]    ; free head
+    ///     mov [rax + 168], rcx                  ; popped.prev = free head
+    ///     mov [rbx + EXC_FREE_LIST_OFF], rax    ; free head = popped
+    ///   skip:
+    ///
+    /// Coste: 2 instrucciones extra vs version con leak.  Elimina leak
+    /// de 176 bytes/try -> 0.  El siguiente tryenter (runtime call)
+    /// pop-ea del free list en lugar de hacer new.
+    int32_t exc_free_list_offset = 0;
+
+    /* ================= C2 tier-up (recompile-and-swap) ================= */
+    /// C2 (2026-06-07): si != 0, el Selector emite en el prologo un
+    /// contador on-entry + check; cuando el contador cruza
+    /// @c tier_up_threshold (exactamente), llama a esta direccion con
+    /// ABI C nativo: @c void handler(ProcessVM* proc, uint64_t fn_pc).
+    /// El handler recompila la funcion con el pipeline C2 y hace swap
+    /// atomico de su codigo (pc-map + method->jit_code).  0 = no emitir
+    /// contador (cero overhead; comportamiento C1 puro).
+    ///
+    /// Modelo HotSpot: el contador cuenta INVOCACIONES (entradas a la
+    /// funcion), no iteraciones de loop.  Captura las llamadas JIT->JIT
+    /// e interp->JIT (a diferencia de los contadores del interprete, que
+    /// se congelan tras C1).  Una funcion con su hotness en un loop de
+    /// entrada-unica (e.g. main) no sube de tier con esto -> requiere
+    /// backedge-counter + OSR (futuro).
+    uint64_t tier_up_handler_addr = 0;
+    /// Umbral de invocaciones (post-C1) que dispara el recompile C2.
+    uint32_t tier_up_threshold = 0;
+    /// Si true, emite el contador en TODA funcion compilada; si false
+    /// (default), solo en funciones con >=1 CALLVIRT (candidato real a
+    /// especulacion).  Configurable para A/B (VESTA_C2_TIER_ALL).
+    bool tier_up_all_fns = false;
+    /// Callback para reservar el contador de 8 bytes (zero-init) keyed
+    /// por @c fn_pc (mismo contador entre recompilaciones del call site).
+    /// Retorna la addr HOST del contador, 0 si no disponible.
+    std::function<uint64_t(uint64_t /*fn_pc*/)> reserve_tier_counter{};
+};
+
+/**
+ * @class Selector
+ * @brief Baja un @c IrFunction a un @c MFunction.
+ */
+class Selector {
+  public:
+    explicit Selector(SelectorOptions opts = {}) : opts_(opts) {}
 
     /**
-     * @struct SelectorOptions
-     * @brief Opciones de configuracion del selector.
+     * @brief Selecciona instrucciones para @p ir_fn.
+     * @return @c MFunction listo para encoder.  Si encuentra un IR
+     *         op no soportado, anyade un @c MOp::INT3 como marker y
+     *         pone @p out_unsupported a true.
      */
-    struct SelectorOptions {
-        SelectorMode mode = SelectorMode::NATIVE_ABI;
-        /// Direccion absoluta de @c vrt_safepoint_handler para que el
-        /// selector pueda emitir safepoints en VM_ABI mode.  Tipicamente
-        /// se obtiene de @c jit::RuntimeEntries::safepoint_handler.
-        /// Si es 0 en VM_ABI mode, los safepoints se omiten (modo
-        /// debug/testing sin coordinacion GC).
-        uint64_t safepoint_handler_addr = 0;
-        /// D.3-B: tabla de runtime entries.  El selector la usa para
-        /// resolver @c IrOp::CALL a @c vrt_* y emitir CALL directo a la
-        /// direccion del wrapper.  Si es @c nullptr, cualquier
-        /// @c IrOp::CALL no soportado marca @c unsupported=true.
-        const RuntimeEntries *runtime = nullptr;
+    MFunction select(const ir::IrFunction &ir_fn,
+                     bool *out_unsupported = nullptr);
 
-        /// D.3-E: callback opcional para resolver CALLs a funciones user
-        /// (definidas en el .velb, no en runtime).  El selector la
-        /// invoca cuando @c IrOp::CALL tiene un @c func_name que NO es
-        /// @c vrt_* y necesita recursivamente compilar la callee.
-        /// Devuelve 0 si la funcion no existe / no es compilable; sino
-        /// la direccion absoluta de su codigo nativo (call rax).
-        /// El callee se invoca con VM_ABI calling convention (args ya
-        /// staged en @c proc->registers.regs[1..N+1]).
-        /// Es responsabilidad del callback evitar recursion infinita
-        /// (e.g. via cache name -> ptr, valor centinela "in progress").
-        std::function<uint64_t(const std::string &)> resolve_user_fn{};
-
-        /// D.3-H: callback opcional para resolver simbolos @Absolute("X")
-        /// dentro de raw_asm a su direccion VM absoluta (resuelta por
-        /// el linker).  El selector invoca este callback al parsear
-        /// `mov rN, @Absolute("code.s_K")` o `mov [rN], @Absolute(...)`.
-        /// Si es nullptr o retorna 0, esos patrones siguen siendo
-        /// rechazados como unsupported.
-        std::function<uint64_t(const std::string &)> resolve_symbol{};
-
-        /// 2026-05-16: callback opcional para resolver funciones nativas
-        /// importadas via CALLN.  Recibe el nombre completo @c "lib:func"
-        /// (e.g. @c "stdlib/native/io/vesta_io:vio_println") y devuelve la
-        /// direccion HOST del simbolo nativo cargado (LoadLibraryA +
-        /// GetProcAddress).  Si retorna 0, la CALLN se marca @c unsupported
-        /// y el metodo cae a fallback interp.  Tipicamente el caller
-        /// resuelve usando @c loader::FFI::load_native_module +
-        /// @c resolve_native_symbol.
-        std::function<uint64_t(const std::string &)> resolve_native_fn{};
-
-        /// Callback para reservar un slot de Inline Cache (PIC de 4 entradas
-        /// x 16 bytes = 64 bytes: [class_ptr][jit_code] por entrada, inicial
-        /// 0).  Retorna la addr HOST del slot.  El selector embebe esa addr
-        /// en el codigo emitido para el CALLVIRT IC pattern.  Si es null, el
-        /// selector emite el inline dispatch tradicional (sin IC).
-        ///
-        /// C2-cimiento (2026-06-07): el parametro @p callsite_key identifica
-        /// el call site (clave = (fn_pc << 8) | ordinal-de-IC-en-la-fn) para
-        /// que el slot sea DIRECCIONABLE: el mismo call site reusa el mismo
-        /// slot entre recompilaciones, y el pase C2 puede encontrarlo y leer
-        /// su estado (clases observadas) para especular.  @p callsite_key==0
-        /// significa "sin clave" (e.g. NATIVE_ABI / tests): se aloca un slot
-        /// fresco no-direccionable, como antes.
-        std::function<uint64_t(uint64_t /*callsite_key*/)> reserve_ic_slot{};
-
-        /// Callback para leer un qword (u64) de @c vm_mem en compile-time.
-        /// Usado por el peephole de inlining: cuando el JIT ve
-        /// @c mov rN, @Absolute("code.s_X") + @c mov rN, [rN], lee el
-        /// valor cacheado en s_X (typically un @c ClassInfo* poblado por
-        /// @c __module_init que ya corrio antes del JIT compile) e
-        /// inlinea el constante como imm64, eliminando la llamada a
-        /// @c vrt_vm_read_u64 en cada iteracion del hot path.
-        /// Si retorna 0 o no esta seteado, el patron usa la ruta normal
-        /// (resolver vaddr + vrt_vm_read_u64).
-        std::function<uint64_t(uint64_t /*vaddr*/)> read_vmem_u64{};
-
-        /// Offset (en bytes) desde @c ProcessVM* hasta @c gc_heap.nursery_bump_.
-        /// Si != 0, el mini-parser del JIT inlinea bump-pointer allocation
-        /// emitiendo @c mov rax, [rbx + nursery_bump_off] +
-        /// @c lea rcx, [rax + total] + @c cmp rcx, [rbx + nursery_end_off]
-        /// + @c ja slow_path + @c mov [rbx + nursery_bump_off], rcx +
-        /// init GcHeader + init ObjectHeader + call @c vrt_register_alloc
-        /// para registrar el handle.  Saves ~30 ns por allocacion
-        /// (vs ~50 ns del call a @c vrt_newobj).
-        /// Si es 0, el JIT cae al call de @c vrt_newobj normal.
-        int32_t nursery_bump_offset = 0;
-        int32_t nursery_end_offset  = 0;
-        /// Direccion del runtime helper @c vrt_register_alloc (param 2
-        /// = host_ptr al GcHeader, register handle solo).  Si es 0, el
-        /// JIT no puede inlinear (fallback a @c vrt_newobj).
-        uint64_t register_alloc_addr = 0;
-
-        /// Offset en bytes desde @c ProcessVM* hasta @c exc_frame_stack.
-        /// Computado en runtime con @c offsetof porque @c ProcessVM no es
-        /// standard-layout y el offset depende del libstdc++ del compilador.
-        /// Si != 0, el JIT inlinea @c tryleave como un pop de linked list
-        /// en 5 instrucciones x86-64 (vs ~20-30 de runtime call):
-        ///
-        ///     mov rax, [rbx + EXC_FRAME_OFF]      ; top
-        ///     test rax, rax
-        ///     je skip
-        ///     mov rcx, [rax + 168]                 ; prev (VESTA_EXC_FRAME_PREV_OFFSET)
-        ///     mov [rbx + EXC_FRAME_OFF], rcx       ; head = prev
-        ///   skip:
-        ///
-        /// El frame popped queda leaked en heap raw (~176 bytes); este
-        /// coste se considera aceptable v1 (1MB cada 5680 tries).  Future
-        /// sprint: free list per-proc.
-        ///
-        /// Si es 0, el JIT cae al runtime call @c vrt_tryleave (correcto pero ~5x mas lento).
-        int32_t exc_frame_stack_offset = 0;
-
-        /// callback-ABI (2026-06-06): cuando @c mode==VM_ABI y este flag es
-        /// true, la funcion se compila con ENTRY de ABI C nativo (callable
-        /// directamente por qsort/Win32) en vez del entry VM_ABI estandar.
-        /// El cuerpo se lowerea identico a VM_ABI (RBX=proc), pero el prologo
-        /// lee @c ProcessVM* via @c LOAD_PROC (no de un arg), mueve los args
-        /// nativos a los slots de los params, y -- solo si el cuerpo puede
-        /// ensuciar @c proc->registers (tiene CALL/raw_asm/etc.) -- salva y
-        /// restaura el banco de registros VM para la re-entrancia del
-        /// callback.  Funciones hoja puras NO salvan nada (save-set vacio).
-        /// Reemplaza el thunk hand-emitted de @c native_callback.cpp.
-        bool callback_entry = false;
-        /// Direccion de @c runtime::get_current_executing_process (fallback
-        /// del @c LOAD_PROC cuando no hay TLS-direct).  Solo usado si
-        /// @c callback_entry.
-        uint64_t callback_get_proc_addr = 0;
-        /// Desplazamiento @c gs:[disp] para leer @c ProcessVM* en TLS-direct
-        /// (Win64).  -1 = usar el fallback por call.  Solo usado si
-        /// @c callback_entry.
-        int32_t callback_tls_gs_disp = -1;
-
-        /// Direccion absoluta de @c proc->scheduler.profiler_jit_instr_counter.
-        /// Si != 0, el JIT emite al inicio de cada metodo:
-        ///   @c mov rax, imm64  (counter_addr)
-        ///   @c add qword [rax], N   (N = ir_fn.values.size() approx)
-        /// Asi cada invocacion JIT contribuye N "instrucciones VM" al
-        /// contador, permitiendo que @c --stats calcule MIPS reales aunque
-        /// el codigo este corriendo en JIT (donde el dispatch loop del
-        /// interp NUNCA se ejecuta).  Coste: 2 instr (~3 ns) al entry de
-        /// cada metodo.  Si es 0, el contador queda sin actualizar (MIPS
-        /// JIT subestimado pero programa OK).
-        uint64_t jit_instr_counter_addr = 0;
-
-        /// Offset en bytes desde @c ProcessVM* hasta @c exc_free_list (head
-        /// de la pila de @c ExceptionFrames reciclables).  Si != 0, el JIT
-        /// inlinea tryleave anyadiendo PUSH a este free list en lugar de
-        /// dejar el frame leaked.  Patron x86-64 emitido (7 instr total):
-        ///
-        ///     mov rax, [rbx + EXC_FRAME_OFF]       ; top
-        ///     test rax, rax; je skip
-        ///     mov rcx, [rax + 168]                  ; prev (linked list)
-        ///     mov [rbx + EXC_FRAME_OFF], rcx        ; head = prev
-        ///     mov rcx, [rbx + EXC_FREE_LIST_OFF]    ; free head
-        ///     mov [rax + 168], rcx                  ; popped.prev = free head
-        ///     mov [rbx + EXC_FREE_LIST_OFF], rax    ; free head = popped
-        ///   skip:
-        ///
-        /// Coste: 2 instrucciones extra vs version con leak.  Elimina leak
-        /// de 176 bytes/try -> 0.  El siguiente tryenter (runtime call)
-        /// pop-ea del free list en lugar de hacer new.
-        int32_t exc_free_list_offset = 0;
-
-        /* ================= C2 tier-up (recompile-and-swap) ================= */
-        /// C2 (2026-06-07): si != 0, el Selector emite en el prologo un
-        /// contador on-entry + check; cuando el contador cruza
-        /// @c tier_up_threshold (exactamente), llama a esta direccion con
-        /// ABI C nativo: @c void handler(ProcessVM* proc, uint64_t fn_pc).
-        /// El handler recompila la funcion con el pipeline C2 y hace swap
-        /// atomico de su codigo (pc-map + method->jit_code).  0 = no emitir
-        /// contador (cero overhead; comportamiento C1 puro).
-        ///
-        /// Modelo HotSpot: el contador cuenta INVOCACIONES (entradas a la
-        /// funcion), no iteraciones de loop.  Captura las llamadas JIT->JIT
-        /// e interp->JIT (a diferencia de los contadores del interprete, que
-        /// se congelan tras C1).  Una funcion con su hotness en un loop de
-        /// entrada-unica (e.g. main) no sube de tier con esto -> requiere
-        /// backedge-counter + OSR (futuro).
-        uint64_t tier_up_handler_addr = 0;
-        /// Umbral de invocaciones (post-C1) que dispara el recompile C2.
-        uint32_t tier_up_threshold = 0;
-        /// Si true, emite el contador en TODA funcion compilada; si false
-        /// (default), solo en funciones con >=1 CALLVIRT (candidato real a
-        /// especulacion).  Configurable para A/B (VESTA_C2_TIER_ALL).
-        bool tier_up_all_fns = false;
-        /// Callback para reservar el contador de 8 bytes (zero-init) keyed
-        /// por @c fn_pc (mismo contador entre recompilaciones del call site).
-        /// Retorna la addr HOST del contador, 0 si no disponible.
-        std::function<uint64_t(uint64_t /*fn_pc*/)> reserve_tier_counter{};
-    };
-
-    /**
-     * @class Selector
-     * @brief Baja un @c IrFunction a un @c MFunction.
-     */
-    class Selector {
-    public:
-        explicit Selector(SelectorOptions opts = {}) : opts_(opts) {}
-
-        /**
-         * @brief Selecciona instrucciones para @p ir_fn.
-         * @return @c MFunction listo para encoder.  Si encuentra un IR
-         *         op no soportado, anyade un @c MOp::INT3 como marker y
-         *         pone @p out_unsupported a true.
-         */
-        MFunction select(const ir::IrFunction &ir_fn, bool *out_unsupported = nullptr);
-
-    private:
-        SelectorOptions opts_;
-        /// Indice en imm64_pool de la direccion del safepoint handler.
-        /// Computado al inicio de @c select() si VM_ABI y handler != 0.
-        /// UINT32_MAX = no disponible (safepoints omitidos).
-        uint32_t safepoint_pool_idx_ = UINT32_MAX;
-    };
+  private:
+    SelectorOptions opts_;
+    /// Indice en imm64_pool de la direccion del safepoint handler.
+    /// Computado al inicio de @c select() si VM_ABI y handler != 0.
+    /// UINT32_MAX = no disponible (safepoints omitidos).
+    uint32_t safepoint_pool_idx_ = UINT32_MAX;
+};
 
 } // namespace jit
 

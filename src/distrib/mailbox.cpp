@@ -18,10 +18,7 @@
 namespace distrib {
 
 Mailbox::Mailbox(size_t max_msgs, size_t max_bytes)
-    : bytes_used_(0)
-    , max_msgs_(max_msgs)
-    , max_bytes_(max_bytes)
-{}
+    : bytes_used_(0), max_msgs_(max_msgs), max_bytes_(max_bytes) {}
 
 bool Mailbox::push(uint64_t pid, const uint8_t *buf, size_t len) {
     std::lock_guard<std::mutex> lk(mtx_);
@@ -39,7 +36,8 @@ MailboxMsg Mailbox::try_pop() {
     std::lock_guard<std::mutex> lk(mtx_);
 
     if (queue_.empty()) {
-        // retornar mensaje vacio: el llamador detecta buzon vacio con data.empty()
+        // retornar mensaje vacio: el llamador detecta buzon vacio con
+        // data.empty()
         return MailboxMsg(0, nullptr, 0);
     }
 

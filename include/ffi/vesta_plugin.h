@@ -43,7 +43,8 @@
 extern "C" {
 #endif
 
-/** @brief Version de la API expuesta al plugin. Incrementar en cambios incompatibles. */
+/** @brief Version de la API expuesta al plugin. Incrementar en cambios
+ * incompatibles. */
 #define VESTA_PLUGIN_API_VERSION 2
 
 /**
@@ -57,17 +58,20 @@ typedef void VestaManager;
 /**
  * @brief Handle opaco a una instancia VM de VestaVM.
  *
- * Obtenido mediante @c VestaPluginAPI::get_vm() o @c VestaPluginAPI::create_vm().
- * Pasado a las funciones de ciclo de vida (@c start_vm, @c stop_vm, etc.).
+ * Obtenido mediante @c VestaPluginAPI::get_vm() o @c
+ * VestaPluginAPI::create_vm(). Pasado a las funciones de ciclo de vida (@c
+ * start_vm, @c stop_vm, etc.).
  */
 typedef void VestaVM_t;
 
 /**
  * @struct VestaPluginAPI
- * @brief Tabla de funciones de la API que VestaVM entrega al plugin en @c vesta_init.
+ * @brief Tabla de funciones de la API que VestaVM entrega al plugin en @c
+ * vesta_init.
  *
- * Todos los punteros de funcion son validos durante toda la vida del ejecutable.
- * El plugin NO debe guardar punteros a instancias VM mas alla de @c stop_vm.
+ * Todos los punteros de funcion son validos durante toda la vida del
+ * ejecutable. El plugin NO debe guardar punteros a instancias VM mas alla de @c
+ * stop_vm.
  *
  * Uso tipico:
  * @code
@@ -84,12 +88,13 @@ typedef void VestaVM_t;
  * @endcode
  */
 typedef struct VestaPluginAPI {
+    /** @brief Version de la API. Comparar con VESTA_PLUGIN_API_VERSION para
+     * compatibilidad. */
+    uint32_t api_version;
 
-    /** @brief Version de la API. Comparar con VESTA_PLUGIN_API_VERSION para compatibilidad. */
-    uint32_t       api_version;
-
-    /** @brief Handle al ManageVM activo. Pasarlo a todas las funciones del manager. */
-    VestaManager  *manager;
+    /** @brief Handle al ManageVM activo. Pasarlo a todas las funciones del
+     * manager. */
+    VestaManager *manager;
 
     /* --- operaciones del manager --- */
 
@@ -99,7 +104,7 @@ typedef struct VestaPluginAPI {
      * @param num_schedulers Numero de schedulers de la nueva VM.
      * @return ID unico de la VM creada.
      */
-    uint64_t   (*create_vm)  (VestaManager *mgr, uint32_t num_schedulers);
+    uint64_t (*create_vm)(VestaManager *mgr, uint32_t num_schedulers);
 
     /**
      * @brief Destruye la instancia VM con el ID indicado.
@@ -107,7 +112,7 @@ typedef struct VestaPluginAPI {
      * @param vm_id ID de la VM a destruir.
      * @return 1 si se destruyo; 0 si no existia.
      */
-    int        (*destroy_vm) (VestaManager *mgr, uint64_t vm_id);
+    int (*destroy_vm)(VestaManager *mgr, uint64_t vm_id);
 
     /**
      * @brief Devuelve el handle a la instancia VM con el ID indicado.
@@ -115,7 +120,7 @@ typedef struct VestaPluginAPI {
      * @param vm_id ID de la VM.
      * @return Handle a la VM, o NULL si no existe.
      */
-    VestaVM_t *(*get_vm)     (VestaManager *mgr, uint64_t vm_id);
+    VestaVM_t *(*get_vm)(VestaManager *mgr, uint64_t vm_id);
 
     /**
      * @brief Comprueba si existe una VM con el ID indicado.
@@ -123,14 +128,14 @@ typedef struct VestaPluginAPI {
      * @param vm_id ID a verificar.
      * @return 1 si existe; 0 si no.
      */
-    int        (*has_vm)     (VestaManager *mgr, uint64_t vm_id);
+    int (*has_vm)(VestaManager *mgr, uint64_t vm_id);
 
     /**
      * @brief Devuelve el numero de instancias VM activas en el manager.
      * @param mgr Handle al manager.
      * @return Numero de VMs activas.
      */
-    uint64_t   (*vm_count)   (VestaManager *mgr);
+    uint64_t (*vm_count)(VestaManager *mgr);
 
     /* --- ciclo de vida de la VM --- */
 
@@ -138,19 +143,19 @@ typedef struct VestaPluginAPI {
      * @brief Lanza los schedulers de la VM (no bloquea).
      * @param vm Handle a la instancia VM.
      */
-    void       (*start_vm)   (VestaVM_t *vm);
+    void (*start_vm)(VestaVM_t *vm);
 
     /**
      * @brief Solicita la parada cooperativa de todos los schedulers de la VM.
      * @param vm Handle a la instancia VM.
      */
-    void       (*stop_vm)    (VestaVM_t *vm);
+    void (*stop_vm)(VestaVM_t *vm);
 
     /**
      * @brief Bloquea hasta que todos los schedulers de la VM finalicen.
      * @param vm Handle a la instancia VM.
      */
-    void       (*wait_vm)    (VestaVM_t *vm);
+    void (*wait_vm)(VestaVM_t *vm);
 
     /* --- procesos virtuales --- */
 
@@ -163,7 +168,8 @@ typedef struct VestaPluginAPI {
      * @param out_sched Recibe el ID del scheduler asignado al nuevo proceso.
      * @param out_pid   Recibe el PID local del nuevo proceso.
      */
-    void       (*spawn_process) (VestaVM_t *vm, uint32_t *out_sched, uint64_t *out_pid);
+    void (*spawn_process)(VestaVM_t *vm, uint32_t *out_sched,
+                          uint64_t *out_pid);
 
     /**
      * @brief Marca un proceso como READY para que el scheduler lo ejecute.
@@ -171,7 +177,7 @@ typedef struct VestaPluginAPI {
      * @param sched_id ID del scheduler propietario del proceso.
      * @param local_pid PID local del proceso (obtenido con @c spawn_process).
      */
-    void       (*make_ready)    (VestaVM_t *vm, uint32_t sched_id, uint64_t local_pid);
+    void (*make_ready)(VestaVM_t *vm, uint32_t sched_id, uint64_t local_pid);
 
     /* --- acceso a memoria virtual de la VM --- */
 
@@ -188,18 +194,21 @@ typedef struct VestaPluginAPI {
      *   mov     r3, longitud
      *   mov     r15, 3
      *   calln   @Method("mi_lib.dll:mi_funcion")
-     *   ; en mi_funcion: g_api->vm_read_bytes((void*)proc_ptr, vm_addr, buf, len)
+     *   ; en mi_funcion: g_api->vm_read_bytes((void*)proc_ptr, vm_addr, buf,
+     * len)
      * @endcode
      *
      * @param proc_ptr  Valor uint64_t con el ProcessVM* (resultado de getproc).
-     *                  Se interpreta internamente como ProcessVM* mediante cast.
+     *                  Se interpreta internamente como ProcessVM* mediante
+     * cast.
      * @param vm_addr   Direccion virtual dentro del espacio de la VM.
-     * @param dst       Buffer host de destino (debe tener al menos @p len bytes).
+     * @param dst       Buffer host de destino (debe tener al menos @p len
+     * bytes).
      * @param len       Numero de bytes a leer.
      * @return Numero de bytes leidos (igual a @p len si no hay error).
      */
-    uint64_t   (*vm_read_bytes) (uint64_t proc_ptr, uint64_t vm_addr,
-                                 void *dst, uint64_t len);
+    uint64_t (*vm_read_bytes)(uint64_t proc_ptr, uint64_t vm_addr, void *dst,
+                              uint64_t len);
 
     /**
      * @brief Escribe bytes desde un buffer host a la memoria virtual de la VM.
@@ -212,8 +221,8 @@ typedef struct VestaPluginAPI {
      * @param len       Numero de bytes a escribir.
      * @return Numero de bytes escritos (igual a @p len si no hay error).
      */
-    uint64_t   (*vm_write_bytes)(uint64_t proc_ptr, uint64_t vm_addr,
-                                 const void *src, uint64_t len);
+    uint64_t (*vm_write_bytes)(uint64_t proc_ptr, uint64_t vm_addr,
+                               const void *src, uint64_t len);
 
     /* --- utilidades --- */
 
@@ -221,7 +230,7 @@ typedef struct VestaPluginAPI {
      * @brief Emite un mensaje de log hilo-seguro a la salida de VestaVM.
      * @param msg Cadena terminada en '\0' a imprimir.
      */
-    void       (*log)           (const char *msg);
+    void (*log)(const char *msg);
 
     /* --- - GC roots externos (write-barrier para colecciones nativas) --- */
 
@@ -249,7 +258,7 @@ typedef struct VestaPluginAPI {
      * @param gc_handle  GcHandle a pinnar (uint32_t encoded como uint64_t).
      *                   Si @c gc_handle == 0 (GC_NULL_HANDLE), no-op.
      */
-    void       (*gc_addref)     (uint64_t proc_ptr, uint64_t gc_handle);
+    void (*gc_addref)(uint64_t proc_ptr, uint64_t gc_handle);
 
     /**
      * @brief Decrementa el refcount externo de @p gc_handle.
@@ -262,7 +271,7 @@ typedef struct VestaPluginAPI {
      * @param proc_ptr   Handle al ProcessVM activo.
      * @param gc_handle  GcHandle a despinnar.  Si no estaba pinnado, no-op.
      */
-    void       (*gc_release)    (uint64_t proc_ptr, uint64_t gc_handle);
+    void (*gc_release)(uint64_t proc_ptr, uint64_t gc_handle);
 
 } VestaPluginAPI;
 

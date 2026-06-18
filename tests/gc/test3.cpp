@@ -21,7 +21,8 @@
  * Cuando una particula muere, su handle se suelta (drop) y queda como basura.
  *
  * Se observa:
- *   - Minor GC recoge la mayoria de particulas antes de que abandonen la Nursery.
+ *   - Minor GC recoge la mayoria de particulas antes de que abandonen la
+ * Nursery.
  *   - Las particulas de larga vida se promocionan a OldGen.
  *   - Major GC recoge las particulas promovidas que finalmente mueren.
  *   - Las estadisticas muestran la proporcion joven/viejo de la basura.
@@ -55,10 +56,10 @@ static uint32_t rng_range(uint32_t lo, uint32_t hi) {
 // ---------------------------------------------------------------------------
 
 struct Particle {
-    int32_t  x, y;        // posicion actual
-    int32_t  vx, vy;      // velocidad (pixeles por tick)
-    int32_t  lifetime;    // ticks restantes de vida
-    uint32_t id;          // ID unico para trazabilidad
+    int32_t x, y;     // posicion actual
+    int32_t vx, vy;   // velocidad (pixeles por tick)
+    int32_t lifetime; // ticks restantes de vida
+    uint32_t id;      // ID unico para trazabilidad
 };
 static_assert(sizeof(Particle) == 24, "Particle debe medir 24 bytes");
 
@@ -70,30 +71,30 @@ static Particle *pget(gc::GcHeap &heap, gc::GcHandle h) {
 // Helpers de salida
 // ---------------------------------------------------------------------------
 
-static int g_tests_run    = 0;
+static int g_tests_run = 0;
 static int g_tests_passed = 0;
 static int g_tests_failed = 0;
 
-#define ASSERT_MSG(cond, msg) \
-    do { \
-        g_tests_run++; \
-        if (!(cond)) { \
-            printf("  \033[1;31m[FAIL]\033[0m %s  (linea %d)\n", msg, __LINE__); \
-            g_tests_failed++; \
-        } else { \
-            printf("  \033[1;32m[OK]  \033[0m %s\n", msg); \
-            g_tests_passed++; \
-        } \
+#define ASSERT_MSG(cond, msg)                                                  \
+    do {                                                                       \
+        g_tests_run++;                                                         \
+        if (!(cond)) {                                                         \
+            printf("  \033[1;31m[FAIL]\033[0m %s  (linea %d)\n", msg,          \
+                   __LINE__);                                                  \
+            g_tests_failed++;                                                  \
+        } else {                                                               \
+            printf("  \033[1;32m[OK]  \033[0m %s\n", msg);                     \
+            g_tests_passed++;                                                  \
+        }                                                                      \
     } while (0)
 
 static void print_stats(const gc::GcStats &s, size_t nursery_used,
-                        size_t nursery_total, size_t old_used)
-{
+                        size_t nursery_total, size_t old_used) {
     printf("  ┌─────────────────────────────────────────────┐\n");
     printf("  │ STATS GcHeap                                │\n");
     printf("  ├─────────────────────────────────────────────┤\n");
-    printf("  │  Nursery:  %6zu / %-6zu bytes             │\n",
-           nursery_used, nursery_total);
+    printf("  │  Nursery:  %6zu / %-6zu bytes             │\n", nursery_used,
+           nursery_total);
     printf("  │  OldGen:   %6zu bytes en uso               │\n", old_used);
     printf("  ├─────────────────────────────────────────────┤\n");
     printf("  │  alloc_count    : %-8llu objetos          │\n",
@@ -119,12 +120,14 @@ static void print_stats(const gc::GcStats &s, size_t nursery_used,
     printf("  └─────────────────────────────────────────────┘\n");
 }
 
-static void bar(const char *label, uint64_t value, uint64_t total, int width = 30) {
+static void bar(const char *label, uint64_t value, uint64_t total,
+                int width = 30) {
     int filled = total > 0 ? (int)(value * width / total) : 0;
     printf("  %-18s [", label);
     for (int i = 0; i < width; ++i)
         putchar(i < filled ? '#' : '.');
-    printf("] %llu/%llu\n", (unsigned long long)value, (unsigned long long)total);
+    printf("] %llu/%llu\n", (unsigned long long)value,
+           (unsigned long long)total);
 }
 
 // ---------------------------------------------------------------------------
@@ -132,30 +135,34 @@ static void bar(const char *label, uint64_t value, uint64_t total, int width = 3
 // ---------------------------------------------------------------------------
 
 static void run_particle_simulation() {
-    printf("\n\033[1;36m══════════════════════════════════════════════\033[0m\n");
-    printf("\033[1;36m  Simulacion de particulas — GC Generacional   \033[0m\n");
-    printf("\033[1;36m══════════════════════════════════════════════\033[0m\n\n");
+    printf(
+        "\n\033[1;36m══════════════════════════════════════════════\033[0m\n");
+    printf(
+        "\033[1;36m  Simulacion de particulas — GC Generacional   \033[0m\n");
+    printf(
+        "\033[1;36m══════════════════════════════════════════════\033[0m\n\n");
 
     // Nursery pequeña para provocar GC frecuente y visible.
     // Con objetos de 24+8=32 bytes, la nursery de 2 KB aguanta 64 particulas.
     // El old_threshold bajo (8 KB) provoca major GC tras pocos ciclos.
-    constexpr size_t NURSERY_SIZE  = 2 * 1024;
+    constexpr size_t NURSERY_SIZE = 2 * 1024;
     constexpr size_t OLD_THRESHOLD = 8 * 1024;
-    constexpr int    TICKS         = 120;
-    constexpr int    SPAWN_PER_TICK = 5;
+    constexpr int TICKS = 120;
+    constexpr int SPAWN_PER_TICK = 5;
 
     vm::ArenaManager mgr;
-    gc::GcHeap       heap(mgr, NURSERY_SIZE, OLD_THRESHOLD);
+    gc::GcHeap heap(mgr, NURSERY_SIZE, OLD_THRESHOLD);
 
     // Particulas activas: el simulador mantiene esta lista como "raices"
     std::vector<gc::GcHandle> alive;
     alive.reserve(256);
 
-    uint32_t next_id    = 0;
-    int      tick       = 0;
+    uint32_t next_id = 0;
+    int tick = 0;
     uint64_t born_total = 0;
-    uint64_t died_young = 0; // murieron sin salir de Nursery (minor GC las borro)
-    uint64_t died_old   = 0; // murieron en OldGen (major GC las borro)
+    uint64_t died_young =
+        0;                 // murieron sin salir de Nursery (minor GC las borro)
+    uint64_t died_old = 0; // murieron en OldGen (major GC las borro)
 
     // snapshot de minor/major GC antes del tick para detectar ciclos nuevos
     uint64_t last_minor = 0;
@@ -171,24 +178,22 @@ static void run_particle_simulation() {
     printf("\n");
 
     for (tick = 1; tick <= TICKS; ++tick) {
-
         // --- SPAWN: crear nuevas particulas ---
         for (int s = 0; s < SPAWN_PER_TICK; ++s) {
             // 80% vida corta (mueren en nursery), 20% vida larga (se promueven)
-            int32_t life = (rng_next() % 10 < 8)
-                ? (int32_t)rng_range(1, 4)
-                : (int32_t)rng_range(10, 25);
+            int32_t life = (rng_next() % 10 < 8) ? (int32_t)rng_range(1, 4)
+                                                 : (int32_t)rng_range(10, 25);
 
             gc::GcHandle h = heap.alloc(sizeof(Particle));
             if (h == gc::GC_NULL_HANDLE) continue;
 
             Particle *p = pget(heap, h);
-            p->x        = (int32_t)rng_range(0, 1920);
-            p->y        = (int32_t)rng_range(0, 1080);
-            p->vx       = (int32_t)rng_range(0, 10) - 5;
-            p->vy       = (int32_t)rng_range(0, 10) - 5;
+            p->x = (int32_t)rng_range(0, 1920);
+            p->y = (int32_t)rng_range(0, 1080);
+            p->vx = (int32_t)rng_range(0, 10) - 5;
+            p->vy = (int32_t)rng_range(0, 10) - 5;
             p->lifetime = life;
-            p->id       = next_id++;
+            p->id = next_id++;
 
             alive.push_back(h);
             born_total++;
@@ -203,7 +208,8 @@ static void run_particle_simulation() {
             if (!p) {
                 // El GC movio el objeto (evacuacion): deref sigue valido
                 // porque el handle apunta a la nueva ubicacion.
-                // Si deref es null, el handle fue liberado — no deberia pasar aqui.
+                // Si deref es null, el handle fue liberado — no deberia pasar
+                // aqui.
                 continue;
             }
 
@@ -227,10 +233,8 @@ static void run_particle_simulation() {
 
         if (minor_fired || major_fired || tick % 10 == 0 || tick == 1) {
             printf("  Tick %3d │ vivas=%3zu │ nursery=%4zu/%4zu │ old=%5zu",
-                   tick,
-                   alive.size(),
-                   heap.nursery_used(), heap.nursery_total(),
-                   heap.old_used());
+                   tick, alive.size(), heap.nursery_used(),
+                   heap.nursery_total(), heap.old_used());
 
             if (minor_fired)
                 printf(" │ \033[1;33m[MINOR GC #%llu]\033[0m",
@@ -243,14 +247,17 @@ static void run_particle_simulation() {
         }
 
         // calcular particulas muertas por tipo para las estadisticas finales
-        // (aproximacion: promovidas = promovidas segun stats; el resto murio joven)
+        // (aproximacion: promovidas = promovidas segun stats; el resto murio
+        // joven)
         last_minor = st.minor_gc_count;
         last_major = st.major_gc_count;
     }
 
-    // Tick final: soltar todas las particulas restantes para que major GC las limpie
+    // Tick final: soltar todas las particulas restantes para que major GC las
+    // limpie
     printf("\n  Soltando %zu particulas supervivientes...\n", alive.size());
-    for (gc::GcHandle h : alive) heap.drop(h);
+    for (gc::GcHandle h : alive)
+        heap.drop(h);
     alive.clear();
 
     printf("  >>> major_gc() final para limpiar OldGen...\n");
@@ -262,24 +269,32 @@ static void run_particle_simulation() {
 
     const gc::GcStats &st = heap.stats();
 
-    printf("\n  \033[1;35m═══════════════════════════════════════════════\033[0m\n");
+    printf(
+        "\n  "
+        "\033[1;35m═══════════════════════════════════════════════\033[0m\n");
     printf("  \033[1;35m  RESUMEN DE LA SIMULACION\033[0m\n");
-    printf("  \033[1;35m═══════════════════════════════════════════════\033[0m\n\n");
+    printf(
+        "  "
+        "\033[1;35m═══════════════════════════════════════════════\033[0m\n\n");
 
-    printf("  Particulas nacidas        : %llu\n", (unsigned long long)born_total);
+    printf("  Particulas nacidas        : %llu\n",
+           (unsigned long long)born_total);
     printf("  Particulas promovidas     : %llu  (sobrevivieron >=1 minor GC)\n",
            (unsigned long long)st.promoted_count);
     printf("  Particulas no promovidas  : %llu  (murieron en Nursery)\n",
            (unsigned long long)(born_total - st.promoted_count));
-    printf("  Ciclos minor GC           : %llu\n", (unsigned long long)st.minor_gc_count);
-    printf("  Ciclos major GC           : %llu\n", (unsigned long long)st.major_gc_count);
+    printf("  Ciclos minor GC           : %llu\n",
+           (unsigned long long)st.minor_gc_count);
+    printf("  Ciclos major GC           : %llu\n",
+           (unsigned long long)st.major_gc_count);
     printf("\n");
 
     // Visualizacion: proporcion joven vs viejo
     uint64_t died_in_nursery = born_total - st.promoted_count;
     bar("Muertes jovenes", died_in_nursery, born_total);
-    bar("Promovidas",      st.promoted_count, born_total);
-    bar("Liberadas major", st.freed_count,    st.promoted_count > 0 ? st.promoted_count : 1);
+    bar("Promovidas", st.promoted_count, born_total);
+    bar("Liberadas major", st.freed_count,
+        st.promoted_count > 0 ? st.promoted_count : 1);
 
     printf("\n");
     print_stats(st, heap.nursery_used(), heap.nursery_total(), heap.old_used());
@@ -290,10 +305,11 @@ static void run_particle_simulation() {
     printf("\n  \033[1;36m── Validaciones ──\033[0m\n");
 
     // La mayoria de particulas debe morir joven (hipotesis generacional)
-    double pct_young = born_total > 0
-        ? 100.0 * (double)died_in_nursery / (double)born_total
-        : 0.0;
-    printf("  Porcentaje que murio joven: %.1f%%  (esperado >50%%)\n", pct_young);
+    double pct_young =
+        born_total > 0 ? 100.0 * (double)died_in_nursery / (double)born_total
+                       : 0.0;
+    printf("  Porcentaje que murio joven: %.1f%%  (esperado >50%%)\n",
+           pct_young);
     ASSERT_MSG(pct_young > 50.0,
                "hipotesis generacional: >50% de objetos mueren jovenes");
 
@@ -333,10 +349,10 @@ static void run_particle_simulation() {
  */
 
 struct Node {
-    uint32_t     value;
+    uint32_t value;
     gc::GcHandle next;
-    uint32_t     id;
-    uint32_t     _pad;
+    uint32_t id;
+    uint32_t _pad;
 };
 static_assert(sizeof(Node) == 16, "Node debe medir 16 bytes");
 
@@ -345,33 +361,36 @@ static Node *nget(gc::GcHeap &heap, gc::GcHandle h) {
 }
 
 static void run_linked_list_test() {
-    printf("\n\033[1;36m══════════════════════════════════════════════\033[0m\n");
-    printf("\033[1;36m  Lista enlazada con referencias entre objetos  \033[0m\n");
-    printf("\033[1;36m══════════════════════════════════════════════\033[0m\n\n");
+    printf(
+        "\n\033[1;36m══════════════════════════════════════════════\033[0m\n");
+    printf(
+        "\033[1;36m  Lista enlazada con referencias entre objetos  \033[0m\n");
+    printf(
+        "\033[1;36m══════════════════════════════════════════════\033[0m\n\n");
 
-    constexpr int    N              = 20;
-    constexpr size_t NURSERY_SIZE   = 16 * 1024;
-    constexpr size_t OLD_THRESHOLD  = 32 * 1024;
+    constexpr int N = 20;
+    constexpr size_t NURSERY_SIZE = 16 * 1024;
+    constexpr size_t OLD_THRESHOLD = 32 * 1024;
 
     vm::ArenaManager mgr;
-    gc::GcHeap       heap(mgr, NURSERY_SIZE, OLD_THRESHOLD);
+    gc::GcHeap heap(mgr, NURSERY_SIZE, OLD_THRESHOLD);
 
     // Crear N nodos
     std::vector<gc::GcHandle> nodes(N);
     for (int i = 0; i < N; ++i) {
         nodes[i] = heap.alloc(sizeof(Node));
-        Node *n  = nget(heap, nodes[i]);
+        Node *n = nget(heap, nodes[i]);
         n->value = (uint32_t)i * 10;
-        n->id    = (uint32_t)i;
-        n->next  = gc::GC_NULL_HANDLE; // se enlazara despues
-        printf("  alloc nodo[%2d] → handle=%u  value=%u\n",
-               i, nodes[i], n->value);
+        n->id = (uint32_t)i;
+        n->next = gc::GC_NULL_HANDLE; // se enlazara despues
+        printf("  alloc nodo[%2d] → handle=%u  value=%u\n", i, nodes[i],
+               n->value);
     }
 
     // Enlazar: cada nodo apunta al siguiente, el ultimo apunta al primero
     for (int i = 0; i < N; ++i) {
-        Node *n  = nget(heap, nodes[i]);
-        n->next  = nodes[(i + 1) % N];
+        Node *n = nget(heap, nodes[i]);
+        n->next = nodes[(i + 1) % N];
     }
     printf("\n  Lista circular de %d nodos creada.\n", N);
 
@@ -409,7 +428,7 @@ static void run_linked_list_test() {
     printf("  Verificando enlaces next tras evacuacion...\n");
     bool links_ok = true;
     for (int i = 0; i < N; ++i) {
-        Node *n    = nget(heap, nodes[i]);
+        Node *n = nget(heap, nodes[i]);
         Node *next = nget(heap, n->next);
         if (!next || next->id != (uint32_t)((i + 1) % N)) {
             printf("  FALLO: enlace nodo[%d]→nodo[%d] roto\n", i, (i + 1) % N);
@@ -448,17 +467,18 @@ static void run_linked_list_test() {
             survivors_ok = false;
         }
     }
-    ASSERT_MSG(survivors_ok, "nodos pares supervivientes intactos tras major GC");
+    ASSERT_MSG(survivors_ok,
+               "nodos pares supervivientes intactos tras major GC");
 
     // Soltar los nodos pares y hacer major GC final: OldGen debe quedar a 0
     printf("\n  Soltando todos los nodos restantes...\n");
     for (int i = 0; i < N; i += 2) {
-        if (nodes[i] != gc::GC_NULL_HANDLE)
-            heap.drop(nodes[i]);
+        if (nodes[i] != gc::GC_NULL_HANDLE) heap.drop(nodes[i]);
     }
     heap.major_gc();
     printf("  old_used tras limpieza total: %zu bytes\n", heap.old_used());
-    ASSERT_MSG(heap.old_used() == 0, "OldGen vacia tras soltar todos los nodos");
+    ASSERT_MSG(heap.old_used() == 0,
+               "OldGen vacia tras soltar todos los nodos");
 
     printf("\n");
     print_stats(st, heap.nursery_used(), heap.nursery_total(), heap.old_used());
@@ -469,26 +489,41 @@ static void run_linked_list_test() {
 // ---------------------------------------------------------------------------
 
 int main() {
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32) && !defined(__CYGWIN__)
+#if defined(WIN32) || defined(_WIN32) ||                                       \
+    defined(__WIN32) && !defined(__CYGWIN__)
     system("chcp 65001");
 #endif
-    printf("\n\033[1;35m╔══════════════════════════════════════════════╗\033[0m\n");
-    printf("\033[1;35m║   TEST 3 — GcHeap en uso real                ║\033[0m\n");
-    printf("\033[1;35m╚══════════════════════════════════════════════╝\033[0m\n");
+    printf("\n\033[1;35m╔══════════════════════════════════════════════╗\033["
+           "0m\n");
+    printf(
+        "\033[1;35m║   TEST 3 — GcHeap en uso real                ║\033[0m\n");
+    printf(
+        "\033[1;35m╚══════════════════════════════════════════════╝\033[0m\n");
 
     run_particle_simulation();
     run_linked_list_test();
 
-    printf("\n\033[1;35m╔══════════════════════════════════════════════╗\033[0m\n");
-    printf("\033[1;35m║  RESULTADO FINAL                             ║\033[0m\n");
-    printf("\033[1;35m╠══════════════════════════════════════════════╣\033[0m\n");
-    printf("\033[1;35m║  Tests ejecutados : %-4d                     ║\033[0m\n", g_tests_run);
-    printf("\033[1;32m║  Pasados          : %-4d                     ║\033[0m\n", g_tests_passed);
+    printf("\n\033[1;35m╔══════════════════════════════════════════════╗\033["
+           "0m\n");
+    printf(
+        "\033[1;35m║  RESULTADO FINAL                             ║\033[0m\n");
+    printf(
+        "\033[1;35m╠══════════════════════════════════════════════╣\033[0m\n");
+    printf(
+        "\033[1;35m║  Tests ejecutados : %-4d                     ║\033[0m\n",
+        g_tests_run);
+    printf(
+        "\033[1;32m║  Pasados          : %-4d                     ║\033[0m\n",
+        g_tests_passed);
     if (g_tests_failed > 0)
-        printf("\033[1;31m║  Fallados         : %-4d                     ║\033[0m\n", g_tests_failed);
+        printf("\033[1;31m║  Fallados         : %-4d                     "
+               "║\033[0m\n",
+               g_tests_failed);
     else
-        printf("\033[1;32m║  Fallados         : 0                        ║\033[0m\n");
-    printf("\033[1;35m╚══════════════════════════════════════════════╝\033[0m\n\n");
+        printf("\033[1;32m║  Fallados         : 0                        "
+               "║\033[0m\n");
+    printf("\033[1;35m╚══════════════════════════════════════════════╝\033["
+           "0m\n\n");
 
     return g_tests_failed == 0 ? 0 : 1;
 }
