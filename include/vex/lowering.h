@@ -1006,6 +1006,16 @@ class Lowering {
     ir::IrValueId load_native_string_field(ir::IrValueId v_slot,
                                            uint64_t byte_off, bool as_host,
                                            uint32_t source_line);
+    /// Vex Embed Inc 1: concatena dos value-strings nativos @p v_a y
+    /// @p v_b produciendo un NUEVO string owned (slot de 24 bytes en
+    /// stack + buffer fresco en heap de total+1 bytes con ambos
+    /// contenidos copiados y nul final).  Devuelve el PTR al slot
+    /// resultado; el caller registra su STRING_FREE (es owned).  Solo
+    /// en @c native_poo_.  @p v_a / @p v_b son PTR a slots value-string;
+    /// no se consumen (el concat copia sus bytes).
+    ir::IrValueId build_native_string_concat(ir::IrValueId v_a,
+                                             ir::IrValueId v_b,
+                                             uint32_t source_line);
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);

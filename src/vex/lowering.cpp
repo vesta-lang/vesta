@@ -3521,6 +3521,26 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     return;
                 }
             }
+            // Caso (c): init es una EXPRESION que produce un value-string
+            // owned (concat `a + b`, str_concat(a, b), o futuras ops Inc
+            // 2+).  lower_expr devuelve el PTR al slot nativo.  Bind +
+            // RAII STRING_FREE (el resultado de un concat es owned).
+            {
+                const ir::IrValueId v_slot = lower_expr(vd->init.get());
+                if (v_slot != ir::IR_NO_VALUE) {
+                    bind(vd->name, v_slot);
+                    if (escaping_locals_.find(vd->name) ==
+                        escaping_locals_.end()) {
+                        CleanupAction act;
+                        act.kind = CleanupAction::Kind::STRING_FREE;
+                        act.operands = {v_slot};
+                        act.source_line = vd->loc.line;
+                        act.refresh_name = vd->name;
+                        cleanup_stack_.push_back(std::move(act));
+                    }
+                    return;
+                }
+            }
         }
         // Lazy promotion: si el tipo destino es STRING y el
         // init es un string literal puro (StringLitExpr), promover
@@ -10376,6 +10396,56 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     const bool any_real_str =
         (ltk == PrimitiveKind::STRING) || (rtk == PrimitiveKind::STRING);
     if (lhs_is_str && rhs_is_str && any_real_str) {
+        // Vex Embed Inc 1: en native_poo_ el `string` es value-type
+        // {ptr,len,cap}; `a + b` produce un NUEVO string owned (buffer
+        // fresco malloc + ambos contenidos copiados).  Los operandos
+        // literales se materializan como slots value-string temporales;
+        // como el concat copia los bytes, sus buffers son descartables y
+        // se liberan inmediatamente (sin leak, sin doble-free porque no
+        // se vuelven a usar).  El path Full/JIT (sin native_poo_) cae a
+        // emit_strcat (StringObject GC) mas abajo.
+        if (native_poo_ && e->op == ast::BinOp::Add) {
+            // Construir slots nativos de ambos operandos.  Para
+            // literales NO interpolados se construye un temporal; para
+            // expresiones (var / concat anidado) lower_expr ya devuelve
+            // un slot value-string.
+            auto build_native_operand =
+                [&](ast::Expr *ex, bool &is_temp) -> ir::IrValueId {
+                if (ex && ex->kind == ast::NodeKind::StringLitExpr &&
+                    !static_cast<ast::StringLitExpr *>(ex)->is_interpolated()) {
+                    is_temp = true;
+                    return build_native_string_from_literal(
+                        static_cast<ast::StringLitExpr *>(ex), e->loc.line);
+                }
+                is_temp = false;
+                return lower_expr(ex);
+            };
+            bool a_temp = false, b_temp = false;
+            ir::IrValueId v_na = build_native_operand(e->lhs.get(), a_temp);
+            ir::IrValueId v_nb = build_native_operand(e->rhs.get(), b_temp);
+            if (v_na == ir::IR_NO_VALUE || v_nb == ir::IR_NO_VALUE)
+                return ir::IR_NO_VALUE;
+            ir::IrValueId v_res =
+                build_native_string_concat(v_na, v_nb, e->loc.line);
+            // Liberar los buffers de los operandos LITERAL temporales
+            // (sus bytes ya estan copiados en el resultado).  Los
+            // operandos que son slots de variables NO se liberan aqui
+            // (su RAII los libera al exit del scope dueno).
+            auto free_temp = [&](ir::IrValueId v_slot) {
+                ir::IrValueId v_ptr = load_native_string_field(
+                    v_slot, 0, /*as_host=*/true, e->loc.line);
+                ir::IrInstr rf{};
+                rf.op = ir::IrOp::RAW_FREE;
+                rf.type = ir::IrType::VOID;
+                rf.dst = ir::IR_NO_VALUE;
+                rf.operands = {v_ptr};
+                rf.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(rf));
+            };
+            if (a_temp) free_temp(v_na);
+            if (b_temp) free_temp(v_nb);
+            return v_res;
+        }
         ir::IrValueId v_a = coerce_string_operand(e->lhs.get());
         ir::IrValueId v_b = coerce_string_operand(e->rhs.get());
         if (v_a == ir::IR_NO_VALUE || v_b == ir::IR_NO_VALUE)
@@ -16124,6 +16194,46 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // Vex Embed Inc 1: en native_poo_ str_concat(a, b) == `a + b`
+        // (value-string).  Mismo lowering: buffer nuevo owned + copia de
+        // ambos.  str_equals (cmp) es Inc 4 -> sigue su path normal.
+        if (native_poo_ && is_str_concat) {
+            auto build_native_operand =
+                [&](ast::Expr *ex, bool &is_temp) -> ir::IrValueId {
+                if (ex && ex->kind == ast::NodeKind::StringLitExpr &&
+                    !static_cast<ast::StringLitExpr *>(ex)->is_interpolated()) {
+                    is_temp = true;
+                    return build_native_string_from_literal(
+                        static_cast<ast::StringLitExpr *>(ex), e->loc.line);
+                }
+                is_temp = false;
+                return lower_expr(ex);
+            };
+            bool a_temp = false, b_temp = false;
+            ir::IrValueId v_na = build_native_operand(e->args[0].get(), a_temp);
+            ir::IrValueId v_nb = build_native_operand(e->args[1].get(), b_temp);
+            if (v_na == ir::IR_NO_VALUE || v_nb == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            ir::IrValueId v_res =
+                build_native_string_concat(v_na, v_nb, e->loc.line);
+            auto free_temp = [&](ir::IrValueId v_slot) {
+                ir::IrValueId v_ptr = load_native_string_field(
+                    v_slot, 0, /*as_host=*/true, e->loc.line);
+                ir::IrInstr rf{};
+                rf.op = ir::IrOp::RAW_FREE;
+                rf.type = ir::IrType::VOID;
+                rf.dst = ir::IR_NO_VALUE;
+                rf.operands = {v_ptr};
+                rf.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(rf));
+            };
+            if (a_temp) free_temp(v_na);
+            if (b_temp) free_temp(v_nb);
+            out_value = v_res;
+            return true;
+        }
         // Coerce string literals (PTR) a StringObject
         // (STRING handle) inline via STRMAKE.  Sin esto pasar un
         // literal directamente a str_concat/str_equals enviaria un
@@ -21726,6 +21836,271 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     store_field(0, v_buf);
     store_field(8, emit_const(ir::IrType::I64, len, source_line));
     store_field(16, emit_const(ir::IrType::I64, cap, source_line));
+
+    return v_slot;
+}
+
+ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
+                                                   ir::IrValueId v_b,
+                                                   uint32_t source_line) {
+    // Vex Embed Inc 1: a + b -> nuevo string owned.  Repr value-string
+    // {ptr@0,len@8,cap@16} de 24 bytes en stack, buffer fresco en heap
+    // con los bytes de a seguidos de los de b + nul final.  v_a / v_b
+    // son PTR a slots value-string (no se consumen).  Longitudes
+    // dinamicas -> copia por loop runtime byte-a-byte (mismas ops
+    // PURE_NATIVE que el Inc 0: LOAD/STORE/ADD/CMP/BR; sin MEMCPY que
+    // el codegen vreg-native no soporta todavia).
+
+    // Helper local: emite addr = base + off (off es un IrValue I64).
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_addr].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {base, off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v_addr;
+    };
+
+    // 1. Cargar ptr/len de ambos operandos.
+    ir::IrValueId v_a_ptr = load_native_string_field(v_a, 0, /*as_host=*/true,
+                                                     source_line);
+    ir::IrValueId v_a_len = load_native_string_field(v_a, 8, /*as_host=*/false,
+                                                     source_line);
+    ir::IrValueId v_b_ptr = load_native_string_field(v_b, 0, /*as_host=*/true,
+                                                     source_line);
+    ir::IrValueId v_b_len = load_native_string_field(v_b, 8, /*as_host=*/false,
+                                                     source_line);
+
+    // 2. total = la + lb ; cap = total + 1.
+    ir::IrValueId v_total = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_total;
+        ad.operands = {v_a_len, v_b_len};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
+    ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_cap;
+        ad.operands = {v_total, v_one};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+
+    // 3. Slot de 24 bytes del resultado + buffer heap (RAW_ALLOC cap).
+    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_slot;
+        al.imm = 24;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+    }
+    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_buf].is_host_ptr = true;
+    {
+        ir::IrInstr ra{};
+        ra.op = ir::IrOp::RAW_ALLOC;
+        ra.type = ir::IrType::PTR;
+        ra.dst = v_buf;
+        ra.operands = {v_cap};
+        ra.source_line = source_line;
+        fn_->append(current_block_, std::move(ra));
+    }
+
+    // 4. Loop de copia byte-a-byte.  El contador vive en un ALLOCA
+    //    (sin PHI a mano; mem2reg lo promueve a registro/PHI en O2 si
+    //    procede).  Copia `len` bytes desde src_base a dst_base.
+    auto emit_copy_loop = [&](ir::IrValueId dst_base, ir::IrValueId src_base,
+                              ir::IrValueId v_len) {
+        // Slot del contador i = 0.
+        const ir::IrValueId v_i_slot = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_i_slot;
+            al.imm = 8;
+            al.source_line = source_line;
+            fn_->append(current_block_, std::move(al));
+        }
+        {
+            ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, source_line);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_z, v_i_slot};
+            st.source_line = source_line;
+            fn_->append(current_block_, std::move(st));
+        }
+
+        const ir::IrBlockId hdr = fn_->new_block("strcat_hdr");
+        const ir::IrBlockId body = fn_->new_block("strcat_body");
+        const ir::IrBlockId done = fn_->new_block("strcat_done");
+
+        // entry -> hdr
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = hdr;
+            br.source_line = source_line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(hdr);
+        fn_->blocks[hdr].preds.push_back(current_block_);
+
+        // hdr: i = load slot ; cond = i < len ; br_cond body, done
+        current_block_ = hdr;
+        ir::IrValueId v_i = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_i;
+            ld.operands = {v_i_slot};
+            ld.source_line = source_line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+        {
+            ir::IrInstr cmp{};
+            cmp.op = ir::IrOp::CMP_LT; // signed; len/i no negativos
+            cmp.type = ir::IrType::BOOL;
+            cmp.dst = v_cond;
+            cmp.operands = {v_i, v_len};
+            cmp.source_line = source_line;
+            fn_->append(current_block_, std::move(cmp));
+        }
+        {
+            ir::IrInstr brc{};
+            brc.op = ir::IrOp::BR_COND;
+            brc.operands = {v_cond};
+            brc.target_block = body;
+            brc.false_block = done;
+            brc.source_line = source_line;
+            fn_->append(current_block_, std::move(brc));
+        }
+        fn_->blocks[hdr].succs.push_back(body);
+        fn_->blocks[hdr].succs.push_back(done);
+        fn_->blocks[body].preds.push_back(hdr);
+        fn_->blocks[done].preds.push_back(hdr);
+
+        // body: byte = load src+i ; store byte -> dst+i ; i = i+1 ; -> hdr
+        current_block_ = body;
+        ir::IrValueId v_src = ptr_add(src_base, v_i);
+        ir::IrValueId v_dst = ptr_add(dst_base, v_i);
+        ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::U8;
+            ld.dst = v_byte;
+            ld.operands = {v_src};
+            ld.source_line = source_line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::U8;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_byte, v_dst};
+            st.source_line = source_line;
+            fn_->append(current_block_, std::move(st));
+        }
+        ir::IrValueId v_i1 = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrValueId v_1 = emit_const(ir::IrType::I64, 1, source_line);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_i1;
+            ad.operands = {v_i, v_1};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_i1, v_i_slot};
+            st.source_line = source_line;
+            fn_->append(current_block_, std::move(st));
+        }
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = hdr;
+            br.source_line = source_line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[body].succs.push_back(hdr);
+        fn_->blocks[hdr].preds.push_back(body);
+
+        // continuar en done
+        current_block_ = done;
+        block_terminated_ = false;
+    };
+
+    // 4a. Copiar bytes de a a buf[0..la).
+    emit_copy_loop(v_buf, v_a_ptr, v_a_len);
+    // 4b. Copiar bytes de b a buf[la..la+lb).  dst_base = buf + la.
+    ir::IrValueId v_buf_off = ptr_add(v_buf, v_a_len);
+    emit_copy_loop(v_buf_off, v_b_ptr, v_b_len);
+
+    // 5. Nul terminador en buf[total].
+    {
+        ir::IrValueId v_dst = ptr_add(v_buf, v_total);
+        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_zero, v_dst};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
+
+    // 6. Escribir los 3 campos del slot resultado: ptr@0, len@8, cap@16.
+    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
+        ir::IrValueId v_addr = v_slot;
+        if (off > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {v_slot, v_off};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    store_field(0, v_buf);
+    store_field(8, v_total);
+    store_field(16, v_cap);
 
     return v_slot;
 }

@@ -1,0 +1,23 @@
+// Vex Embed Inc 1: concatenacion de value-strings nativos (AOT).
+// `a + b` y str_concat producen un NUEVO buffer owned (malloc + copia
+// de ambos contenidos + nul), liberado por RAII al exit del scope.
+// Sin GC, sin StringObject.  Validado por ejecucion (PE/ELF) + valgrind.
+
+i32 main() {
+    // Caso 1: dos variables.
+    string a = "ab";
+    string b = "cde";
+    string c = a + b;            // "abcde" -> length 5
+
+    // Caso 2: variable + literal (operando literal temporal liberado).
+    string e = a + "XYZ";        // "abXYZ" -> length 5
+
+    // Caso 3: literal + variable.
+    string h = "WW" + b;         // "WWcde" -> length 5
+
+    // Caso 4: str_concat builtin (mismo lowering que `+`).
+    string f = str_concat(b, "Z"); // "cdeZ" -> length 4
+
+    // Suma de longitudes: 5 + 5 + 5 + 4 = 19.
+    return (i32)(c.length() + e.length() + h.length() + f.length());
+}
