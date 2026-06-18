@@ -1024,6 +1024,17 @@ class Lowering {
     ir::IrValueId build_native_string_concat(ir::IrValueId v_a,
                                              ir::IrValueId v_b,
                                              uint32_t source_line);
+    /// Copia @p v_len bytes desde @p src_base a @p dst_base con un loop de
+    /// PALABRA: cuerpo principal de 8 bytes por iteracion (LOAD/STORE i64)
+    /// mas un loop de cola para los <8 bytes restantes (LOAD/STORE u8).
+    /// ~8x menos iteraciones que el copiado byte-a-byte sin necesitar
+    /// registros fijos (rep movsb) -> cero riesgo en el regalloc.  Todas
+    /// las ops son PURE_NATIVE (LOAD/STORE/ADD/SUB/CMP/BR) por lo que el
+    /// codegen vreg-native (HOST_LEAF) las soporta y el interp/Full siguen
+    /// funcionando.  @p src_base / @p dst_base son host_ptr; @p v_len es
+    /// un IrValue I64 (>= 0).
+    void emit_word_copy_loop(ir::IrValueId dst_base, ir::IrValueId src_base,
+                             ir::IrValueId v_len, uint32_t source_line);
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);

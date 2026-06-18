@@ -21788,80 +21788,26 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         fn_->append(current_block_, std::move(ra));
     }
 
-    // 3. Copiar los bytes del literal (.rodata) al buffer host, byte a
-    //    byte (len conocido en compile-time, literales cortos).  El
-    //    literal se materializa como STR_LIT_ADDR (ptr a .rodata,
-    //    PURE_NATIVE en AOT).
-    ir::IrValueId v_lit = ir::IR_NO_VALUE;
-    if (len > 0) {
-        std::vector<uint8_t> bytes(lit.begin(), lit.end());
-        const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
-        v_lit = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_lit].is_host_ptr = true;
-        ir::IrInstr sa{};
-        sa.op = ir::IrOp::STR_LIT_ADDR;
-        sa.type = ir::IrType::PTR;
-        sa.dst = v_lit;
-        sa.imm = idx;
-        sa.source_line = source_line;
-        fn_->append(current_block_, std::move(sa));
-    }
-    for (uint64_t i = 0; i < len; ++i) {
-        // src = v_lit + i ; dst = v_buf + i.
-        ir::IrValueId v_src = v_lit;
-        ir::IrValueId v_dst = v_buf;
-        if (i > 0) {
-            ir::IrValueId v_off =
-                emit_const(ir::IrType::I64, i, source_line);
-            {
-                v_src = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_src].is_host_ptr = true;
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_src;
-                ad.operands = {v_lit, v_off};
-                ad.source_line = source_line;
-                fn_->append(current_block_, std::move(ad));
-            }
-            {
-                v_dst = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst].is_host_ptr = true;
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_dst;
-                ad.operands = {v_buf, v_off};
-                ad.source_line = source_line;
-                fn_->append(current_block_, std::move(ad));
-            }
-        }
-        ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::U8;
-            ld.dst = v_byte;
-            ld.operands = {v_src};
-            ld.source_line = source_line;
-            fn_->append(current_block_, std::move(ld));
-        }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::U8;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_byte, v_dst};
-            st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
-        }
-    }
-    // 4. Nul terminador en buf[len].
+    // 3 + 4. Escribir el contenido del literal + nul final al buffer.
+    //    El contenido es CONOCIDO en compile-time -> emitimos STOREs
+    //    desempaquetados de constantes (sin .rodata, sin loop, sin
+    //    LOAD): el nul terminador es el byte (len) del buffer, asi que
+    //    escribimos `cap = len+1` bytes (literal + nul) agrupados en
+    //    qwords (8B), luego dword (4B), word (2B) y byte (1B) de cola.
+    //    Cada STORE es de un CONST empaquetado en little-endian.  ~8x
+    //    menos STOREs que byte-a-byte para literales largos; cero
+    //    branches (totalmente desenrollado).  Todas las ops son
+    //    PURE_NATIVE (CONST + ADD + STORE).
     {
-        ir::IrValueId v_dst = v_buf;
-        if (len > 0) {
-            ir::IrValueId v_off = emit_const(ir::IrType::I64, len, source_line);
-            v_dst = fn_->new_value(ir::IrType::PTR);
+        // Bytes a escribir = el literal seguido del nul terminador.
+        std::vector<uint8_t> data(lit.begin(), lit.end());
+        data.push_back(0); // nul final; data.size() == cap.
+
+        // Helper: dst = v_buf + off (host_ptr).  off==0 -> v_buf directo.
+        auto buf_at = [&](uint64_t off) -> ir::IrValueId {
+            if (off == 0) return v_buf;
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            ir::IrValueId v_dst = fn_->new_value(ir::IrType::PTR);
             fn_->values[v_dst].is_host_ptr = true;
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
@@ -21870,15 +21816,49 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             ad.operands = {v_buf, v_off};
             ad.source_line = source_line;
             fn_->append(current_block_, std::move(ad));
+            return v_dst;
+        };
+        // Helper: STORE de un valor empaquetado de `w` bytes (1/2/4/8) en
+        // buf[off].  val ya viene empaquetado little-endian.
+        auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
+            ir::IrValueId v_dst = buf_at(off);
+            ir::IrValueId v_val = emit_const(ty, val, source_line);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ty;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_val, v_dst};
+            st.source_line = source_line;
+            fn_->append(current_block_, std::move(st));
+        };
+        // Empaquetar `n` bytes de data[pos..] en un entero little-endian.
+        auto pack = [&](uint64_t pos, int n) -> uint64_t {
+            uint64_t v = 0;
+            for (int k = 0; k < n; ++k)
+                v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
+            return v;
+        };
+
+        uint64_t pos = 0;
+        const uint64_t total_w = data.size(); // = cap
+        // Qwords (8B).
+        for (; pos + 8 <= total_w; pos += 8)
+            store_chunk(pos, pack(pos, 8), ir::IrType::I64);
+        // Dword (4B).
+        if (pos + 4 <= total_w) {
+            store_chunk(pos, pack(pos, 4), ir::IrType::I32);
+            pos += 4;
         }
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_dst};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
+        // Word (2B).
+        if (pos + 2 <= total_w) {
+            store_chunk(pos, pack(pos, 2), ir::IrType::I16);
+            pos += 2;
+        }
+        // Byte (1B).
+        if (pos + 1 <= total_w) {
+            store_chunk(pos, pack(pos, 1), ir::IrType::U8);
+            pos += 1;
+        }
     }
 
     // 5. Escribir los 3 campos del slot: ptr@0, len@8, cap@16.
@@ -22089,38 +22069,130 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         fn_->append(current_block_, std::move(ra));
     }
 
-    // 4. Loop de copia byte-a-byte.  El contador vive en un ALLOCA
-    //    (sin PHI a mano; mem2reg lo promueve a registro/PHI en O2 si
-    //    procede).  Copia `len` bytes desde src_base a dst_base.
-    auto emit_copy_loop = [&](ir::IrValueId dst_base, ir::IrValueId src_base,
-                              ir::IrValueId v_len) {
-        // Slot del contador i = 0.
-        const ir::IrValueId v_i_slot = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_i_slot;
-            al.imm = 8;
-            al.source_line = source_line;
-            fn_->append(current_block_, std::move(al));
-        }
-        {
-            ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, source_line);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_z, v_i_slot};
-            st.source_line = source_line;
-            fn_->append(current_block_, std::move(st));
-        }
+    // 4. Copia de los contenidos via loop de PALABRA (8 bytes/iter + cola
+    //    de bytes), ~8x menos iteraciones que byte-a-byte.  Ver
+    //    emit_word_copy_loop.  Todas las ops son PURE_NATIVE.
+    // 4a. Copiar bytes de a a buf[0..la).
+    emit_word_copy_loop(v_buf, v_a_ptr, v_a_len, source_line);
+    // 4b. Copiar bytes de b a buf[la..la+lb).  dst_base = buf + la.
+    ir::IrValueId v_buf_off = ptr_add(v_buf, v_a_len);
+    emit_word_copy_loop(v_buf_off, v_b_ptr, v_b_len, source_line);
 
-        const ir::IrBlockId hdr = fn_->new_block("strcat_hdr");
-        const ir::IrBlockId body = fn_->new_block("strcat_body");
-        const ir::IrBlockId done = fn_->new_block("strcat_done");
+    // 5. Nul terminador en buf[total].
+    {
+        ir::IrValueId v_dst = ptr_add(v_buf, v_total);
+        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_zero, v_dst};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
 
-        // entry -> hdr
+    // 6. Escribir los 3 campos del slot resultado: ptr@0, len@8, cap@16.
+    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
+        ir::IrValueId v_addr = v_slot;
+        if (off > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {v_slot, v_off};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    store_field(0, v_buf);
+    store_field(8, v_total);
+    store_field(16, v_cap);
+
+    return v_slot;
+}
+
+void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
+                                   ir::IrValueId src_base, ir::IrValueId v_len,
+                                   uint32_t source_line) {
+    // Copia v_len bytes de src_base -> dst_base.  Estrategia: dos loops.
+    //   (1) Loop de PALABRA: mientras i + 8 <= len, copia un qword (LOAD
+    //       i64 + STORE i64) y avanza i += 8.  ~8x menos iteraciones que
+    //       byte-a-byte.
+    //   (2) Loop de COLA: copia los <8 bytes restantes byte-a-byte
+    //       (mientras i < len).
+    // El contador i vive en un ALLOCA de 8 bytes (mem2reg lo promueve a
+    // PHI en O2).  Las direcciones src/dst se recalculan con ADD por
+    // iteracion.  Sin registros fijos -> cero impacto en el regalloc.
+    // Correctness: nunca lee/escribe fuera de [base, base+len) (el qword
+    // solo corre cuando i+8 <= len; la cola cubre el resto exacto).  El
+    // buffer destino tiene cap = total+1 bytes -> margen suficiente.
+
+    // Helper local: addr = base + off (off es un IrValue I64).
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_addr].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {base, off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v_addr;
+    };
+
+    // Slot del contador i = 0 (compartido por ambos loops).
+    const ir::IrValueId v_i_slot = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_i_slot;
+        al.imm = 8;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+    }
+    {
+        ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_z, v_i_slot};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    }
+
+    // limit8 = len - 7 (el qword corre mientras i < limit8, i.e. i+8 <= len).
+    // Para len < 8 -> limit8 <= 0 -> el loop de palabra no entra (i=0 >= 0
+    // no se cumple con CMP_LT signed) y todo se copia por la cola.
+    ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
+    ir::IrValueId v_limit8 = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr su{};
+        su.op = ir::IrOp::SUB;
+        su.type = ir::IrType::I64;
+        su.dst = v_limit8;
+        su.operands = {v_len, v_seven};
+        su.source_line = source_line;
+        fn_->append(current_block_, std::move(su));
+    }
+
+    // ---- Loop 1: copia de palabra (8 bytes/iter). ----
+    {
+        const ir::IrBlockId hdr = fn_->new_block("wcopy_w_hdr");
+        const ir::IrBlockId body = fn_->new_block("wcopy_w_body");
+        const ir::IrBlockId done = fn_->new_block("wcopy_w_done");
+
         {
             ir::IrInstr br{};
             br.op = ir::IrOp::BR;
@@ -22131,7 +22203,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         fn_->blocks[current_block_].succs.push_back(hdr);
         fn_->blocks[hdr].preds.push_back(current_block_);
 
-        // hdr: i = load slot ; cond = i < len ; br_cond body, done
+        // hdr: i = load slot ; cond = i < limit8 ; br body, done
         current_block_ = hdr;
         ir::IrValueId v_i = fn_->new_value(ir::IrType::I64);
         {
@@ -22147,6 +22219,115 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         {
             ir::IrInstr cmp{};
             cmp.op = ir::IrOp::CMP_LT; // signed; len/i no negativos
+            cmp.type = ir::IrType::BOOL;
+            cmp.dst = v_cond;
+            cmp.operands = {v_i, v_limit8};
+            cmp.source_line = source_line;
+            fn_->append(current_block_, std::move(cmp));
+        }
+        {
+            ir::IrInstr brc{};
+            brc.op = ir::IrOp::BR_COND;
+            brc.operands = {v_cond};
+            brc.target_block = body;
+            brc.false_block = done;
+            brc.source_line = source_line;
+            fn_->append(current_block_, std::move(brc));
+        }
+        fn_->blocks[hdr].succs.push_back(body);
+        fn_->blocks[hdr].succs.push_back(done);
+        fn_->blocks[body].preds.push_back(hdr);
+        fn_->blocks[done].preds.push_back(hdr);
+
+        // body: w = load.i64 src+i ; store.i64 w -> dst+i ; i += 8 ; -> hdr
+        current_block_ = body;
+        ir::IrValueId v_src = ptr_add(src_base, v_i);
+        ir::IrValueId v_dst = ptr_add(dst_base, v_i);
+        ir::IrValueId v_w = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_w;
+            ld.operands = {v_src};
+            ld.source_line = source_line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_w, v_dst};
+            st.source_line = source_line;
+            fn_->append(current_block_, std::move(st));
+        }
+        ir::IrValueId v_i8 = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrValueId v_8 = emit_const(ir::IrType::I64, 8, source_line);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_i8;
+            ad.operands = {v_i, v_8};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_i8, v_i_slot};
+            st.source_line = source_line;
+            fn_->append(current_block_, std::move(st));
+        }
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = hdr;
+            br.source_line = source_line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[body].succs.push_back(hdr);
+        fn_->blocks[hdr].preds.push_back(body);
+
+        current_block_ = done;
+        block_terminated_ = false;
+    }
+
+    // ---- Loop 2: cola byte-a-byte (mientras i < len). ----
+    {
+        const ir::IrBlockId hdr = fn_->new_block("wcopy_b_hdr");
+        const ir::IrBlockId body = fn_->new_block("wcopy_b_body");
+        const ir::IrBlockId done = fn_->new_block("wcopy_b_done");
+
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = hdr;
+            br.source_line = source_line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(hdr);
+        fn_->blocks[hdr].preds.push_back(current_block_);
+
+        // hdr: i = load slot ; cond = i < len ; br body, done
+        current_block_ = hdr;
+        ir::IrValueId v_i = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_i;
+            ld.operands = {v_i_slot};
+            ld.source_line = source_line;
+            fn_->append(current_block_, std::move(ld));
+        }
+        ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+        {
+            ir::IrInstr cmp{};
+            cmp.op = ir::IrOp::CMP_LT;
             cmp.type = ir::IrType::BOOL;
             cmp.dst = v_cond;
             cmp.operands = {v_i, v_len};
@@ -22167,7 +22348,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         fn_->blocks[body].preds.push_back(hdr);
         fn_->blocks[done].preds.push_back(hdr);
 
-        // body: byte = load src+i ; store byte -> dst+i ; i = i+1 ; -> hdr
+        // body: byte = load.u8 src+i ; store.u8 byte -> dst+i ; i += 1 ; -> hdr
         current_block_ = body;
         ir::IrValueId v_src = ptr_add(src_base, v_i);
         ir::IrValueId v_dst = ptr_add(dst_base, v_i);
@@ -22220,57 +22401,9 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         fn_->blocks[body].succs.push_back(hdr);
         fn_->blocks[hdr].preds.push_back(body);
 
-        // continuar en done
         current_block_ = done;
         block_terminated_ = false;
-    };
-
-    // 4a. Copiar bytes de a a buf[0..la).
-    emit_copy_loop(v_buf, v_a_ptr, v_a_len);
-    // 4b. Copiar bytes de b a buf[la..la+lb).  dst_base = buf + la.
-    ir::IrValueId v_buf_off = ptr_add(v_buf, v_a_len);
-    emit_copy_loop(v_buf_off, v_b_ptr, v_b_len);
-
-    // 5. Nul terminador en buf[total].
-    {
-        ir::IrValueId v_dst = ptr_add(v_buf, v_total);
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_dst};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
     }
-
-    // 6. Escribir los 3 campos del slot resultado: ptr@0, len@8, cap@16.
-    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
-        ir::IrValueId v_addr = v_slot;
-        if (off > 0) {
-            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {v_slot, v_off};
-            ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
-        }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    };
-    store_field(0, v_buf);
-    store_field(8, v_total);
-    store_field(16, v_cap);
-
-    return v_slot;
 }
 
 ir::IrValueId Lowering::load_native_string_field(ir::IrValueId v_slot,
