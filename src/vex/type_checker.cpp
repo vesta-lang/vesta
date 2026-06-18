@@ -489,6 +489,9 @@ static std::unique_ptr<ast::Expr> clone_expr(const ast::Expr *e,
         x->loc = s->loc;
         x->base = clone_expr(s->base.get(), g);
         x->index = clone_expr(s->index.get(), g);
+        x->is_range = s->is_range;
+        x->range_inclusive = s->range_inclusive;
+        if (s->range_hi) x->range_hi = clone_expr(s->range_hi.get(), g);
         return x;
     }
     case ast::NodeKind::NewExpr: {
@@ -5761,6 +5764,39 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
             }
         }
     }
+    // String Inc 3: `s[i]` (indexado simple) y `s[a..b]` / `s[a..=b]`
+    // (slice) sobre `string`.  El indexado devuelve el CHAR (byte) en la
+    // posicion i; el slice devuelve un NUEVO `string` con la copia de los
+    // bytes [a, b).  El lowering nativo (native_poo_) implementa ambos;
+    // en Full/JIT el lowering aun no los soporta y emite un error claro.
+    if (bt.kind == PrimitiveKind::STRING) {
+        if (e->index) {
+            const Type it = e->index->result_type;
+            if (!is_integral(it.kind)) {
+                diags_.error(e->loc,
+                             std::string("indice de string debe ser entero, "
+                                         "recibido ") +
+                                 type_to_string(it));
+            }
+        }
+        if (e->is_range) {
+            if (e->range_hi) {
+                const Type ht = check_expr(e->range_hi.get());
+                if (!is_integral(ht.kind)) {
+                    diags_.error(e->loc,
+                                 std::string("limite superior del slice de "
+                                             "string debe ser entero, "
+                                             "recibido ") +
+                                     type_to_string(ht));
+                }
+            }
+            // `s[a..b]` -> nuevo string owned.
+            return Type{PrimitiveKind::STRING};
+        }
+        // `s[i]` -> el char (byte) en la posicion i.
+        return Type{PrimitiveKind::CHAR};
+    }
+
     const bool is_ptr_like =
         (bt.kind == PrimitiveKind::PTR || bt.kind == PrimitiveKind::ARRAY) &&
         static_cast<bool>(bt.pointee);

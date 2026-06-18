@@ -1076,6 +1076,25 @@ class Lowering {
     ir::IrValueId build_native_string_concat(ir::IrValueId v_a,
                                              ir::IrValueId v_b,
                                              uint32_t source_line);
+    /// String Inc 3 (native_poo_): slice `s[a..b]` -> NUEVO string owned
+    /// = copia de los bytes [a, b) del value-string @p v_src.  @p v_lo /
+    /// @p v_hi son IrValue I64 (limites a y b).  @p inclusive=true para
+    /// `s[a..=b]` (longitud b-a+1).  Aloca slot de 24 bytes en stack +
+    /// buffer fresco en heap de (len+1) bytes, MEMCPY (rep movsb) de
+    /// [src.ptr+a] por len bytes, nul-termina y rellena ptr/len/cap.  El
+    /// caller registra su STRING_FREE (es owned).  v1 asume indices
+    /// validos (a <= b <= src.len); negativos no soportados.
+    ir::IrValueId build_native_string_slice(ir::IrValueId v_src,
+                                            ir::IrValueId v_lo,
+                                            ir::IrValueId v_hi, bool inclusive,
+                                            uint32_t source_line);
+    /// String Inc 3 (native_poo_): indexado simple `s[i]` -> el CHAR
+    /// (byte) en la posicion @p v_idx del value-string @p v_src.  Carga
+    /// el ptr@0 del slot y emite LOAD u8 de [ptr+i].  Devuelve un U8
+    /// zero-extended (0-255).  v1 asume i valido (0 <= i < src.len).
+    ir::IrValueId build_native_string_index_char(ir::IrValueId v_src,
+                                                 ir::IrValueId v_idx,
+                                                 uint32_t source_line);
     /// Copia @p v_len bytes desde @p src_base a @p dst_base con un loop de
     /// PALABRA: cuerpo principal de 8 bytes por iteracion (LOAD/STORE i64)
     /// mas un loop de cola para los <8 bytes restantes (LOAD/STORE u8).
