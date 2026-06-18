@@ -1,0 +1,21 @@
+// Vex Embed Inc 0: string value-type (native_poo_, AOT, sin GC).
+// `string` es un struct {ptr,len,cap} de 24 bytes en stack, HEAP-ALWAYS,
+// con RAII free al exit del scope.  Cubre: decl-desde-literal, .length(),
+// .cstr(), move (string b = a, zera la fuente -> sin doble-free).
+//
+// caso 1: s.length() de "hola mundo" = 10.
+// caso 2: move + .cstr() -> primer byte 'h' = 104.  Tras `string b = a`,
+//   `a` queda movido (ptr=0) y `b` posee el buffer; b.cstr()[0] = 'h'.
+// resultado: 10 + (104 - 104) = 10.  Ambos buffers se liberan por RAII.
+
+i32 main() {
+    string s = "hola mundo";
+    i64 n = s.length();          // 10
+
+    string a = "hola";
+    string b = a;                // MOVE: a -> b (a queda con ptr=0)
+    char* c = b.cstr();          // buffer nul-terminado de b
+    i64 first = (i64) c[0];      // 'h' = 104
+
+    return (i32) (n + first - 104);
+}
