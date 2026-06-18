@@ -1409,6 +1409,14 @@ struct FunctionDecl : Node {
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
     bool is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
     bool is_panic_handler = false;  ///< @PanicHandler (AOT freestanding)
+    /// C-3: @StringConcat -- esta fn libre reemplaza el operador `+`
+    /// (y el builtin str_concat) entre dos strings.  Firma esperada:
+    /// fn(string, string) -> string.  Aplica en native_poo_ (AOT) y Full.
+    bool is_string_concat_override = false;
+    /// C-3: @StringEq -- esta fn libre reemplaza el operador `==`
+    /// (y `!=` via negacion) entre dos strings.  Firma esperada:
+    /// fn(string, string) -> bool.  Aplica en native_poo_ (AOT) y Full.
+    bool is_string_eq_override = false;
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
 };
 

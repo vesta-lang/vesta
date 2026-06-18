@@ -2131,10 +2131,22 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         emit_instrument_enter(fd->name, fd->loc.line);
     }
 
+    // C-3: dentro del cuerpo de la PROPIA fn override desactivar el
+    // ruteo, o un `a + b` / `str_concat(a, b)` en su body se rutearia a
+    // si mismo (recursion infinita).  Se restaura al cerrar la funcion.
+    const std::string saved_concat_ovr = string_concat_override_;
+    const std::string saved_eq_ovr = string_eq_override_;
+    if (!string_concat_override_.empty() && fd->name == string_concat_override_)
+        string_concat_override_.clear();
+    if (!string_eq_override_.empty() && fd->name == string_eq_override_)
+        string_eq_override_.clear();
+
     // Cuerpo.
     if (fd->body) {
         lower_block(fd->body.get());
     }
+    string_concat_override_ = saved_concat_ovr;
+    string_eq_override_ = saved_eq_ovr;
 
     // Cerrar la funcion: si la ultima instruccion no es terminador,
     // anyadir RET con valor por defecto (0) en funciones no-void, o
@@ -10518,6 +10530,22 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     const bool any_real_str = (ltk == PrimitiveKind::STRING) ||
                               (rtk == PrimitiveKind::STRING) || both_str_lit;
     if (lhs_is_str && rhs_is_str && any_real_str) {
+        // C-3: si el usuario marco una fn libre @StringConcat / @StringEq,
+        // rutear el operador a una CALL a esa fn (mecanismo override).
+        // Aplica en native_poo_ y Full por igual.
+        if (e->op == ast::BinOp::Add && !string_concat_override_.empty()) {
+            return emit_string_override_call(string_concat_override_,
+                                             e->lhs.get(), e->rhs.get(),
+                                             ir::IrType::I64, /*negate=*/false,
+                                             e->loc.line);
+        }
+        if ((e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq) &&
+            !string_eq_override_.empty()) {
+            return emit_string_override_call(
+                string_eq_override_, e->lhs.get(), e->rhs.get(),
+                ir::IrType::BOOL, /*negate=*/(e->op == ast::BinOp::Neq),
+                e->loc.line);
+        }
         // Vex Embed Inc 1: en native_poo_ el `string` es value-type
         // {ptr,len,cap}; `a + b` produce un NUEVO string owned (buffer
         // fresco malloc + ambos contenidos copiados).  Los operandos
@@ -16388,6 +16416,21 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // C-3: ruteo del builtin str_concat/str_equals al override del
+        // usuario (@StringConcat / @StringEq).  Solo el builtin runtime
+        // real, NO el alias comptime_concat (que vive en compile-time).
+        if (name == "str_concat" && !string_concat_override_.empty()) {
+            out_value = emit_string_override_call(
+                string_concat_override_, e->args[0].get(), e->args[1].get(),
+                ir::IrType::I64, /*negate=*/false, e->loc.line);
+            return true;
+        }
+        if (name == "str_equals" && !string_eq_override_.empty()) {
+            out_value = emit_string_override_call(
+                string_eq_override_, e->args[0].get(), e->args[1].get(),
+                ir::IrType::BOOL, /*negate=*/false, e->loc.line);
+            return true;
+        }
         // Vex Embed Inc 1: en native_poo_ str_concat(a, b) == `a + b`
         // (value-string).  Mismo lowering: buffer nuevo owned + copia de
         // ambos.  str_equals (cmp) es Inc 4 -> sigue su path normal.
@@ -22114,6 +22157,118 @@ ir::IrValueId Lowering::emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
     ins.source_line = source_line;
     fn_->append(current_block_, std::move(ins));
     return v_str;
+}
+
+// ---------------------------------------------------------------------
+// C-3: ruteo del operador `+`/`==` del string built-in a una funcion
+// libre marcada con @StringConcat / @StringEq.  Materializa ambos
+// operandos al repr `string` adecuado (StringObject handle i64 en Full,
+// PTR a value-string en native_poo_) y emite una CALL a la funcion del
+// usuario.  La funcion se compila como cualquier otra; solo cambia el
+// SITIO de llamada (mecanismo, no politica -- como @AllocatorOverride).
+// ---------------------------------------------------------------------
+ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
+                                                  ast::Expr *lhs,
+                                                  ast::Expr *rhs,
+                                                  ir::IrType ret_ir,
+                                                  bool negate,
+                                                  uint32_t source_line) {
+    // Materializa un operando como `string` para pasarlo por valor a la
+    // funcion del usuario.  En native un literal se construye en un slot
+    // value-string TEMPORAL (la callee copia los bytes -> se libera tras
+    // la CALL); las variables/expresiones devuelven su slot via lower_expr
+    // y NO se liberan aqui (su RAII manda).  En Full el literal se
+    // promueve a StringObject via STRMAKE; el GC libera el intermedio.
+    auto materialize = [&](ast::Expr *ex, bool &is_temp) -> ir::IrValueId {
+        is_temp = false;
+        if (native_poo_) {
+            if (ex && ex->kind == ast::NodeKind::StringLitExpr &&
+                !static_cast<ast::StringLitExpr *>(ex)->is_interpolated()) {
+                is_temp = true;
+                return build_native_string_from_literal(
+                    static_cast<ast::StringLitExpr *>(ex), source_line);
+            }
+            // Concat anidado / cast (string)<char>: slot owned sin RAII ->
+            // temporal a liberar tras copiar bytes (igual que el concat).
+            if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
+                static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                ex->result_type.kind == PrimitiveKind::STRING) {
+                is_temp = true;
+                return lower_expr(ex);
+            }
+            if (ex && ex->kind == ast::NodeKind::CastExpr &&
+                ex->result_type.kind == PrimitiveKind::STRING) {
+                is_temp = true;
+                return lower_expr(ex);
+            }
+            return lower_expr(ex);
+        }
+        // Full: literal -> StringObject handle; var/expr -> handle directo.
+        if (ex && ex->kind == ast::NodeKind::StringLitExpr) {
+            return lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(ex));
+        }
+        return lower_expr(ex);
+    };
+
+    bool a_temp = false, b_temp = false;
+    ir::IrValueId v_a = materialize(lhs, a_temp);
+    ir::IrValueId v_b = materialize(rhs, b_temp);
+    if (v_a == ir::IR_NO_VALUE || v_b == ir::IR_NO_VALUE)
+        return ir::IR_NO_VALUE;
+
+    // Resolver el label real de la funcion (mismo manejo cross-module que
+    // lower_call: si fue importada con mangling, usar el mangled label).
+    std::string callee_name = fn_name;
+    {
+        const FunctionSig *fs = tc_.function_sig_by_name(fn_name);
+        if (fs && !fs->mangled_label.empty()) callee_name = fs->mangled_label;
+    }
+
+    const ir::IrValueId v_ret = fn_->new_value(ret_ir);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::CALL;
+    ins.type = ret_ir;
+    ins.dst = v_ret;
+    ins.func_name = std::move(callee_name);
+    ins.operands = {v_a, v_b};
+    ins.source_line = source_line;
+    fn_->append(current_block_, std::move(ins));
+
+    // Liberar los operandos LITERAL/expr-temporales en native (sus bytes
+    // ya estan copiados por la callee).  Las variables NO se liberan aqui.
+    if (native_poo_) {
+        auto free_temp = [&](ir::IrValueId v_slot) {
+            ir::IrValueId v_ptr =
+                load_native_string_field(v_slot, 0, /*as_host=*/true,
+                                         source_line);
+            ir::IrInstr rf{};
+            rf.op = ir::IrOp::RAW_FREE;
+            rf.type = ir::IrType::VOID;
+            rf.dst = ir::IR_NO_VALUE;
+            rf.operands = {v_ptr};
+            rf.source_line = source_line;
+            fn_->append(current_block_, std::move(rf));
+        };
+        if (a_temp) free_temp(v_a);
+        if (b_temp) free_temp(v_b);
+    }
+
+    // Para `!=` sobre @StringEq: negar el bool resultante.
+    if (negate && ret_ir == ir::IrType::BOOL) {
+        const ir::IrValueId v_zero = emit_const(ir::IrType::BOOL, 0,
+                                                source_line);
+        const ir::IrValueId v_neg = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ; // (resultado == false) => negacion
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = v_neg;
+        cmp.operands = {v_ret, v_zero};
+        cmp.source_line = source_line;
+        fn_->append(current_block_, std::move(cmp));
+        return v_neg;
+    }
+    return v_ret;
 }
 
 ir::IrValueId Lowering::emit_strcat(ir::IrValueId v_a, ir::IrValueId v_b,

@@ -156,6 +156,39 @@ CompileResult compile_vex_source(const std::string &source,
         lo.set_instrument_mode(opts.instrument_mode);
     }
     lo.set_native_poo(opts.native_poo); // Phase AOT.2.b: POO nativa (-m aot)
+    // C-3: detectar @StringConcat / @StringEq ANTES del lowering.  A
+    // diferencia de @AllocatorOverride (que reescribe IR post-lowering),
+    // el override del string built-in debe afectar el lowering MISMO del
+    // operador `+`/`==` (y de los builtins str_concat/str_equals), por lo
+    // que se resuelve aqui y se pasa al Lowering via setter.
+    for (auto &decl : mod->decls) {
+        if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+        auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+        if (fd->is_string_concat_override) {
+            if (!res.string_concat_override.empty()) {
+                res.ok = false;
+                res.diagnostics.error(
+                    SourceLoc{opts.module_name, 0, 0},
+                    "multiples @StringConcat: '" + res.string_concat_override +
+                        "' y '" + fd->name + "'");
+                return res;
+            }
+            res.string_concat_override = fd->name;
+        }
+        if (fd->is_string_eq_override) {
+            if (!res.string_eq_override.empty()) {
+                res.ok = false;
+                res.diagnostics.error(
+                    SourceLoc{opts.module_name, 0, 0},
+                    "multiples @StringEq: '" + res.string_eq_override + "' y '" +
+                        fd->name + "'");
+                return res;
+            }
+            res.string_eq_override = fd->name;
+        }
+    }
+    lo.set_string_op_overrides(res.string_concat_override,
+                               res.string_eq_override);
     const std::string mod_name =
         opts.module_name.empty() ? std::string("main") : opts.module_name;
     if (!lo.run(irmod, mod_name)) {
