@@ -2516,6 +2516,36 @@ void TypeChecker::collect_globals() {
             // Phase M6.a L.3.
             layout.is_public = s->is_public;
 
+            // Registrar metodos del struct (value-type, dispatch
+            // estatico).  Cada metodo baja a una funcion libre
+            // <Struct>__<metodo>(this_ptr, args...).  No hay vtable
+            // ni constructores; @c defining_class lleva el nombre del
+            // struct para que el lowering construya el label correcto.
+            std::unordered_map<std::string, bool> seen_methods;
+            for (const auto &m_uptr : s->methods) {
+                auto *m = m_uptr.get();
+                if (!m) continue;
+                if (!seen_methods.emplace(m->name, true).second) {
+                    diags_.error(m->loc, "metodo duplicado en struct '" +
+                                             s->name + "': '" + m->name + "'");
+                    continue;
+                }
+                ClassMethodInfo mi;
+                mi.name = m->name;
+                mi.is_destructor = m->is_destructor;
+                mi.defining_class = s->name;
+                mi.source_file = m->loc.file;
+                mi.source_line = m->loc.line;
+                mi.return_type = m->return_type
+                                     ? type_from_node(m->return_type.get())
+                                     : Type{PrimitiveKind::VOID};
+                mi.param_types.reserve(m->params.size());
+                for (const auto &p : m->params) {
+                    mi.param_types.push_back(type_from_node(p->type.get()));
+                }
+                layout.methods.push_back(std::move(mi));
+            }
+
             // Sobrescribir la entrada vacia pre-registrada con el layout
             // ya completo.  Usar operator[] = porque la entrada existe.
             struct_layouts_[s->name] = std::move(layout);
@@ -3461,6 +3491,25 @@ void TypeChecker::check_functions() {
         }
         current_class_ = saved_class;
     }
+
+    // Chequeo de cuerpos de metodos de struct (value-types).  Mismo
+    // patron que clases pero @c this se tipa STRUCT y no hay vtable
+    // ni super.  El campo @c current_struct_ guia check_this.
+    for (auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::StructDecl) continue;
+        auto *sd = static_cast<ast::StructDecl *>(decl.get());
+        auto it = struct_layouts_.find(sd->name);
+        if (it == struct_layouts_.end()) continue;
+        const StructLayout &lay = it->second;
+
+        const std::string saved_struct = current_struct_;
+        current_struct_ = sd->name;
+        for (auto &m : sd->methods) {
+            if (!m || !m->body) continue;
+            check_struct_method(lay, m.get());
+        }
+        current_struct_ = saved_struct;
+    }
 }
 
 /**
@@ -3836,6 +3885,55 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
     const Type fn_ret = m->is_constructor
                             ? Type{PrimitiveKind::VOID}
                             : type_from_node(m->return_type.get());
+    const Type saved_ret = current_fn_return_type_;
+    current_fn_return_type_ = fn_ret;
+    check_block(m->body.get(), fn_ret);
+    current_fn_return_type_ = saved_ret;
+    pop_scope();
+    current_method_is_static_ = saved_static;
+}
+
+void TypeChecker::check_struct_method(const StructLayout &lay,
+                                      ast::ClassMethodDecl *m) {
+    // Los structs no tienen metodos static / constructores; el parser
+    // ya los excluye.  Aqui solo configuramos el scope con 'this'
+    // (STRUCT) + parametros y chequeamos el body.
+    const bool saved_static = current_method_is_static_;
+    current_method_is_static_ = false;
+
+    push_scope();
+    // 'this' implicito como Symbol de tipo STRUCT.
+    Symbol s_this;
+    s_this.kind = SymbolKind::Param;
+    s_this.type = Type{PrimitiveKind::STRUCT, lay.name};
+    (void)declare("this", s_this);
+    // Parametros declarados.
+    for (auto &p : m->params) {
+        Symbol sp;
+        sp.kind = SymbolKind::Param;
+        sp.type = type_from_node(p->type.get());
+        if (!declare(p->name, sp)) {
+            diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
+        }
+    }
+    // Pre-pase implicit-this: reescribe identifiers que matchean un
+    // campo del struct a FieldAccessExpr(this, campo).  Mismo
+    // mecanismo que metodos de clase (sin supers: los structs no
+    // heredan).
+    if (m->body) {
+        std::unordered_set<std::string> field_names;
+        for (const auto &f : lay.fields)
+            field_names.insert(f.name);
+        std::unordered_set<std::string> params_set;
+        params_set.insert("this");
+        for (auto &p : m->params)
+            params_set.insert(p->name);
+        std::unique_ptr<ast::Stmt> body_as_stmt(m->body.release());
+        rewrite_implicit_this(body_as_stmt, field_names, params_set);
+        m->body.reset(static_cast<ast::BlockStmt *>(body_as_stmt.release()));
+    }
+    const Type fn_ret = m->return_type ? type_from_node(m->return_type.get())
+                                       : Type{PrimitiveKind::VOID};
     const Type saved_ret = current_fn_return_type_;
     current_fn_return_type_ = fn_ret;
     check_block(m->body.get(), fn_ret);
@@ -5390,6 +5488,10 @@ Type TypeChecker::check_expr(ast::Expr *e) {
 }
 
 Type TypeChecker::check_this(ast::ThisExpr *e) {
+    // Metodo de struct: @c this es un value-type (STRUCT).
+    if (!current_struct_.empty()) {
+        return Type{PrimitiveKind::STRUCT, current_struct_};
+    }
     if (current_class_.empty()) {
         diags_.error(e->loc, "'this' solo es valido dentro del cuerpo de un "
                              "metodo de instancia");
@@ -6372,6 +6474,49 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
         // Sin dunder aplicable: cae al flujo clasico (que probablemente
         // emitira un error de "operandos no numericos" para CLASS, igual
         // que hoy).
+    }
+
+    // Operator overloading via dunder en STRUCT (C-1 ext).  Mismo
+    // mecanismo que CLASS pero el dunder vive en @c StructLayout::methods
+    // y el dispatch baja a @c lower_struct_method_call (CALL directo).
+    // Si NO hay dunder aplicable, cae al flujo clasico (que para STRUCT
+    // permite igualdad campo-a-campo via la rama de mas abajo).
+    if (tl.kind == PrimitiveKind::STRUCT && !tl.struct_name.empty() &&
+        (e->op == ast::BinOp::Add || e->op == ast::BinOp::Eq ||
+         e->op == ast::BinOp::Neq)) {
+        auto it_s = struct_layouts_.find(tl.struct_name);
+        if (it_s != struct_layouts_.end()) {
+            const StructLayout &slay = it_s->second;
+            auto find_dunder =
+                [&](const char *nm) -> const ClassMethodInfo * {
+                for (const auto &m : slay.methods) {
+                    if (m.name != nm) continue;
+                    if (m.param_types.size() != 1) continue;
+                    if (types_assignable(m.param_types[0], tr)) return &m;
+                }
+                return nullptr;
+            };
+            if (e->op == ast::BinOp::Add) {
+                if (const ClassMethodInfo *m = find_dunder("__add__")) {
+                    e->overload_method = "__add__";
+                    return m->return_type;
+                }
+            } else {
+                if (e->op == ast::BinOp::Neq) {
+                    if (const ClassMethodInfo *m = find_dunder("__ne__")) {
+                        e->overload_method = "__ne__";
+                        return m->return_type;
+                    }
+                }
+                if (const ClassMethodInfo *m = find_dunder("__eq__")) {
+                    e->overload_method = "__eq__";
+                    e->overload_negate = (e->op == ast::BinOp::Neq);
+                    (void)m;
+                    return Type{PrimitiveKind::BOOL};
+                }
+            }
+        }
+        // Sin dunder: cae al flujo clasico (igualdad struct campo-a-campo).
     }
 
     // Operadores nativos para STRING.
@@ -7789,14 +7934,68 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     }
 
     // Caso A: obj.method(args) - callee es FieldAccessExpr.  El base
-    // debe ser de tipo CLASS (instancia con vtable).  Los structs son
-    // value types y sus metodos se desugaran a funciones libres
-    // tomando @c Struct* como primer argumento, asi que el dispatch
-    // de @c struct_instance.method() pasa por la ruta de free function
-    // call, no por aqui.
+    // debe ser de tipo CLASS (instancia con vtable) o STRUCT (value
+    // type con dispatch estatico).  Los metodos de struct se desugaran
+    // a funciones libres tomando @c Struct* como primer argumento; el
+    // lowering emite CALL directo (sin vtable).
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
         const Type bt = check_expr(fa->base.get());
+        // STRUCT: resolver el metodo en el layout del struct (dispatch
+        // estatico).  Si no es un metodo del struct, error claro.
+        if (bt.kind == PrimitiveKind::STRUCT) {
+            auto it_s = struct_layouts_.find(bt.struct_name);
+            if (it_s == struct_layouts_.end()) {
+                diags_.error(e->loc,
+                             "struct desconocido: '" + bt.struct_name + "'");
+                for (auto &a : e->args)
+                    (void)check_expr(a.get());
+                return Type{};
+            }
+            const StructLayout &slay = it_s->second;
+            const ClassMethodInfo *smtd = nullptr;
+            for (const auto &mm : slay.methods) {
+                if (mm.name == fa->field_name) {
+                    smtd = &mm;
+                    break;
+                }
+            }
+            if (!smtd) {
+                diags_.error(e->loc, "el struct '" + bt.struct_name +
+                                         "' no tiene un metodo '" +
+                                         fa->field_name + "'");
+                for (auto &a : e->args)
+                    (void)check_expr(a.get());
+                return Type{};
+            }
+            if (e->args.size() != smtd->param_types.size()) {
+                diags_.error(e->loc,
+                             "numero de argumentos incorrecto en metodo '" +
+                                 fa->field_name + "': esperados " +
+                                 std::to_string(smtd->param_types.size()) +
+                                 ", recibidos " +
+                                 std::to_string(e->args.size()));
+            }
+            const size_t ns = std::min(e->args.size(), smtd->param_types.size());
+            for (size_t i = 0; i < ns; ++i) {
+                const Type ta = check_expr(e->args[i].get());
+                const Type &tp = smtd->param_types[i];
+                if (ta.kind == PrimitiveKind::COUNT) continue;
+                if (!types_assignable(tp, ta)) {
+                    diags_.error(e->args[i]->loc,
+                                 std::string("argumento ") +
+                                     std::to_string(i + 1) + " del metodo '" +
+                                     fa->field_name + "': tipo (" +
+                                     type_to_string(ta) +
+                                     ") incompatible con parametro (" +
+                                     type_to_string(tp) + ")");
+                }
+            }
+            for (size_t i = ns; i < e->args.size(); ++i)
+                (void)check_expr(e->args[i].get());
+            fa->result_type = smtd->return_type;
+            return smtd->return_type;
+        }
         if (bt.kind != PrimitiveKind::CLASS) {
             diags_.error(e->loc, "invocacion de metodo sobre tipo no-clase: " +
                                      type_to_string(bt));

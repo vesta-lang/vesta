@@ -484,6 +484,18 @@ class Lowering {
     void lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out);
 
     /**
+     * @brief Baja los metodos de un struct a funciones libres.
+     *
+     * Cada metodo @c m del struct @c sd produce una @c IrFunction
+     * @c <Struct>__<metodo> con un primer parametro implicito @c this
+     * (PTR a la direccion del buffer del struct, memoria VM por
+     * defecto -- @c is_host_ptr=false).  El dispatch en el call site
+     * es CALL directo (sin vtable).  Soporta SRET (Optional/Result)
+     * con retbuf hidden tras @c this, igual que las funciones libres.
+     */
+    void lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out);
+
+    /**
      * @brief Genera el bloque @c __module_init que registra todas las
      *        clases del modulo.  Se invoca al inicio de @c main.
      *
@@ -554,6 +566,15 @@ class Lowering {
      *        Emite CALLVIRT con el indice del metodo en la vtable.
      */
     ir::IrValueId lower_class_method_call(ast::CallExpr *e);
+
+    /**
+     * @brief Lower de @c s.method(args) cuando @c s es STRUCT
+     *        (value-type).  Emite CALL directo a @c <Struct>__<metodo>
+     *        pasando la direccion del struct como primer argumento
+     *        (@c this).  Sin vtable: dispatch estatico.  Soporta SRET
+     *        (Optional/Result) con retbuf hidden tras @c this.
+     */
+    ir::IrValueId lower_struct_method_call(ast::CallExpr *e);
 
     /**
      * @brief Calcula el puntero al elemento indexado (base + i*sizeof(*base)).

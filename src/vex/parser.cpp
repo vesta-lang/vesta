@@ -2807,24 +2807,108 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl() {
 
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
+        // Modificadores de acceso opcionales en el miembro.  Los
+        // structs son flat: aceptamos public/private (informativo;
+        // sin enforcement por ahora) pero NO static/final/virtual.
+        uint8_t access = 0; // 0 = public/default, 1 = private
+        for (;;) {
+            if (current_.kind == TokenKind::KW_PUBLIC) {
+                access = 0;
+                (void)consume();
+            } else if (current_.kind == TokenKind::KW_PRIVATE) {
+                access = 1;
+                (void)consume();
+            } else {
+                break;
+            }
+        }
+
+        // Destructor `~Struct()` opcional (RAII).  Mismo patron que en
+        // class pero sin polimorfismo: baja a `<Struct>__dtor(this)`.
+        if (current_.kind == TokenKind::TILDE &&
+            lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
+            lex_.peek_at(0).lexeme == s->name &&
+            lex_.peek_at(1).kind == TokenKind::LPAREN) {
+            (void)consume(); // '~'
+            auto m = std::make_unique<ast::ClassMethodDecl>();
+            m->loc = current_.loc;
+            (void)consume(); // nombre del struct
+            m->name = "__dtor";
+            m->is_destructor = true;
+            m->return_type = nullptr; // void implicito
+            m->access = access;
+            (void)expect(TokenKind::LPAREN,
+                         "se esperaba '(' tras nombre del destructor");
+            if (current_.kind != TokenKind::RPAREN) {
+                error_here("destructor de struct no acepta parametros");
+                synchronize();
+                continue;
+            }
+            (void)expect(TokenKind::RPAREN, "se esperaba ')' tras destructor");
+            m->body = parse_method_body(/*is_void=*/true);
+            s->methods.push_back(std::move(m));
+            continue;
+        }
+
         if (!starts_type()) {
-            error_here("se esperaba un tipo de campo dentro del struct");
+            error_here("se esperaba un tipo de campo o metodo dentro del "
+                       "struct");
             synchronize();
             continue;
         }
-        ast::StructFieldDecl f;
-        f.loc = current_.loc;
-        f.type = parse_type_node();
-        if (!f.type) {
+        const SourceLoc mloc = current_.loc;
+        auto type_node = parse_type_node();
+        if (!type_node) {
             synchronize();
             continue;
         }
         if (current_.kind != TokenKind::IDENTIFIER) {
-            error_here("se esperaba un nombre de campo tras el tipo");
+            error_here("se esperaba un nombre de campo o metodo tras el tipo");
             synchronize();
             continue;
         }
-        f.name = consume().lexeme;
+        std::string member_name = consume().lexeme;
+
+        // Distinguir metodo (siguiente '(') vs campo (':' bit-width o ';').
+        if (current_.kind == TokenKind::LPAREN) {
+            // Metodo de instancia: dispatch estatico.  Cuerpo de bloque
+            // o expression-bodied `=>`.  Sin static/virtual/override.
+            auto m = std::make_unique<ast::ClassMethodDecl>();
+            m->loc = mloc;
+            m->name = std::move(member_name);
+            m->return_type = std::move(type_node);
+            m->access = access;
+            (void)consume(); // '('
+            while (current_.kind != TokenKind::RPAREN &&
+                   current_.kind != TokenKind::END_OF_FILE) {
+                auto p = std::make_unique<ast::ParamDecl>();
+                p->loc = current_.loc;
+                p->type = parse_type_node();
+                if (!p->type) {
+                    synchronize();
+                    break;
+                }
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    error_here("se esperaba el nombre del parametro");
+                    synchronize();
+                    break;
+                }
+                p->name = consume().lexeme;
+                m->params.push_back(std::move(p));
+                if (!match(TokenKind::COMMA)) break;
+            }
+            (void)expect(TokenKind::RPAREN,
+                         "se esperaba ')' al cerrar parametros del metodo");
+            m->body = parse_method_body(/*is_void=*/false);
+            s->methods.push_back(std::move(m));
+            continue;
+        }
+
+        // Campo.  Reusa el manejo de bit fields del codigo previo.
+        ast::StructFieldDecl f;
+        f.loc = mloc;
+        f.type = std::move(type_node);
+        f.name = std::move(member_name);
         // Bit field width: `i32 flag : 3;`.  El bit_width
         // se guarda en el AST y el type checker calcula el packing.
         if (current_.kind == TokenKind::COLON) {

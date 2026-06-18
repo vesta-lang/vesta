@@ -262,6 +262,7 @@ struct Expr;
 struct Stmt;
 struct TypeNode;
 struct ParamDecl; ///< Necesaria para LambdaExpr antes de su definicion.
+struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de definirse.
 struct BlockStmt; ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
@@ -1641,6 +1642,13 @@ struct StructFieldDecl {
 struct StructDecl : Node {
     std::string name;
     std::vector<StructFieldDecl> fields;
+    /// Metodos del struct (value-type, dispatch estatico).  Reusa
+    /// @c ClassMethodDecl pero los structs NO tienen vtable, herencia
+    /// ni constructores con this(...): cada metodo baja a una funcion
+    /// libre @c <Struct>__<metodo>(this_ptr, args...) donde @c this_ptr
+    /// es la direccion (PTR) del buffer del struct.  El dispatch es
+    /// siempre CALL directo (sin CALLVIRT).
+    std::vector<std::unique_ptr<ClassMethodDecl>> methods;
     /// Phase M6.a L.3: visibilidad cross-module (default true).
     bool is_public = true;
     /// marca `@Introspect` -- el compilador
