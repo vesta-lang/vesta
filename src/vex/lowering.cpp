@@ -10417,6 +10417,18 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     return build_native_string_from_literal(
                         static_cast<ast::StringLitExpr *>(ex), e->loc.line);
                 }
+                // Concat anidado (`a + b + c`): un operando que es a su vez un
+                // `+` de strings produjo un buffer owned SIN RAII (resultado de
+                // expresion, no ligado a variable) -> es TEMPORAL: hay que
+                // liberarlo tras copiar sus bytes.  Sin esto, el intermedio
+                // (a+b) fuga.  Los IdentExpr (variables) NO se marcan temp: su
+                // RAII los libera al exit del scope dueno (no doble-free).
+                if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
+                    static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                    ex->result_type.kind == PrimitiveKind::STRING) {
+                    is_temp = true;
+                    return lower_expr(ex);
+                }
                 is_temp = false;
                 return lower_expr(ex);
             };
@@ -16205,6 +16217,18 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     is_temp = true;
                     return build_native_string_from_literal(
                         static_cast<ast::StringLitExpr *>(ex), e->loc.line);
+                }
+                // Concat anidado (`a + b + c`): un operando que es a su vez un
+                // `+` de strings produjo un buffer owned SIN RAII (resultado de
+                // expresion, no ligado a variable) -> es TEMPORAL: hay que
+                // liberarlo tras copiar sus bytes.  Sin esto, el intermedio
+                // (a+b) fuga.  Los IdentExpr (variables) NO se marcan temp: su
+                // RAII los libera al exit del scope dueno (no doble-free).
+                if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
+                    static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                    ex->result_type.kind == PrimitiveKind::STRING) {
+                    is_temp = true;
+                    return lower_expr(ex);
                 }
                 is_temp = false;
                 return lower_expr(ex);

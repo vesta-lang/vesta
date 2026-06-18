@@ -21,3 +21,13 @@ i32 main() {
     // Suma de longitudes: 5 + 5 + 5 + 4 = 19.
     return (i32)(c.length() + e.length() + h.length() + f.length());
 }
+
+// Inc 1 fix: concat ANIDADO `a + b + c` -- el intermedio (a+b) es un
+// buffer owned sin RAII; se libera tras copiar sus bytes (valgrind: 0 leaks).
+i32 nested_demo() {
+    string a = "ab";
+    string b = "cd";
+    string c = "ef";
+    string r = a + b + c;        // "abcdef"
+    return (i32) r.length();     // 6
+}
