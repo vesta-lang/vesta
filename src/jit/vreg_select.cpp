@@ -1341,6 +1341,75 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* MEMCPY %dst_ptr, %src_ptr, %len -> `rep movsb` (memcpy x86
+             * nativo, perf strings 2026-06-18).  REP MOVSB copia RCX bytes
+             * desde [RSI] a [RDI].  Secuencia AUTO-CONTENIDA respecto al
+             * regalloc: salvamos RSI/RDI/RCX con PUSH (por si tienen vregs
+             * vivos a traves -- RSI/RDI son callee-saved asignables en
+             * Win64, RCX caller-saved asignable) y los restauramos con POP.
+             * Asi NO importa que asignacion fisica tengan los operandos.
+             *
+             * Orden de carga (sin colisiones):
+             *   MOV R10, dst   ; R10/R11 = scratch del rewrite (NO asignables)
+             *   MOV R11, src   ;   -> vr(dst)/vr(src) jamas estan en R10/R11
+             *   PUSH RDI ; PUSH RSI ; PUSH RCX   (salvar fijos)
+             *   MOV RCX, len   ; len desde su fisico (RSI/RDI/RCX aun intactos)
+             *   MOV RDI, R10   ; dst
+             *   MOV RSI, R11   ; src
+             *   REP MOVSB      ; copia RCX bytes [RSI]->[RDI]
+             *   POP RCX ; POP RSI ; POP RDI       (restaurar)
+             * No es call-position: PUSH/POP preservan todo; el unico uso de
+             * los vregs operandos es ANTES de clobear RSI/RDI/RCX. */
+            case ir::IrOp::MEMCPY: {
+                flush_pending();
+                if (in.operands.size() != 3) return false;
+                /* 1. dst/src a los scratch reservados (R10/R11): el rewrite
+                 *    resuelve cada vr() a su fisico/spill; como el DESTINO es
+                 *    un reg fisico, emite MOV reg,reg o MOV reg,[rbp-off]
+                 *    directo (no recurre a R10/R11 como intermediario). */
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0]))); // dst
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R11, 8),
+                                               vr(in.operands[1]))); // src
+                /* 2. Salvar los fijos (pueden tener vregs vivos a traves). */
+                O.push_back(MInstr::make_unary(
+                    MOp::PUSH, MOperand::none(),
+                    MOperand::make_reg(MReg::RDI, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::PUSH, MOperand::none(),
+                    MOperand::make_reg(MReg::RSI, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::PUSH, MOperand::none(),
+                    MOperand::make_reg(MReg::RCX, 8)));
+                /* 3. len -> RCX (leido de su fisico ANTES de clobear los
+                 *    fijos; RSI/RDI/RCX aun intactos en este punto). */
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::RCX, 8),
+                                               vr(in.operands[2]))); // len
+                /* 4. dst/src desde los scratch a los fijos. */
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RDI, 8),
+                    MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::RSI, 8),
+                    MOperand::make_reg(MReg::R11, 8)));
+                /* 5. La copia. */
+                O.push_back(MInstr::make_rep_movsb());
+                /* 6. Restaurar los fijos (orden inverso). */
+                O.push_back(MInstr::make_unary(
+                    MOp::POP, MOperand::make_reg(MReg::RCX, 8),
+                    MOperand::none()));
+                O.push_back(MInstr::make_unary(
+                    MOp::POP, MOperand::make_reg(MReg::RSI, 8),
+                    MOperand::none()));
+                O.push_back(MInstr::make_unary(
+                    MOp::POP, MOperand::make_reg(MReg::RDI, 8),
+                    MOperand::none()));
+                break;
+            }
+
             /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
              * (NASM Intel, ya con comptime-consts sustituidas por el
              * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite
