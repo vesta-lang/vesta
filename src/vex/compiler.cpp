@@ -405,6 +405,13 @@ CompileResult compile_vex_source(const std::string &source,
      * pipeline para mantener consistencia entre @c .velb (JIT
      * source) y @c .vel (interp source). */
     {
+        /* Modo --analyze: serializar el IR PRE-optimizacion (irmod tal cual
+         * lo emite el lowering) antes de tocar nada.  Captura la complejidad
+         * algoritmica del fuente; el analyzer la contrasta con la POST-opt. */
+        if (opts.emit_ir_preopt) {
+            res.ir_module_cache_bytes_preopt =
+                ir::emit_ir_module_cache(irmod);
+        }
         ir::IrModule irmod_for_section = irmod;
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level));
         res.ir_section_bytes = ir::emit_ir_section(irmod_for_section.functions);

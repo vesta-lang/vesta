@@ -99,28 +99,59 @@ struct LoopCost {
 };
 
 /**
+ * @brief Una llamada (CALL/TAILCALL) dentro del cuerpo de una funcion,
+ *        anotada con la profundidad de loop EN LA QUE OCURRE.
+ *
+ * Es la informacion clave para la composicion interprocedural: el coste
+ * del callee se multiplica por n^depth (el factor de los loops que
+ * contienen el call site).
+ */
+struct CallSite {
+    std::string callee;      ///< nombre de la funcion invocada (func_name).
+    uint32_t loop_depth = 0; ///< profundidad de loop del call site (0 = top).
+};
+
+/**
  * @brief Resultado del analisis de coste de UNA funcion.
  *
  * Estructura de datos consumible por:
  *   - el modo --analyze (impresion legible + validacion del contrato);
  *   - un renderer de diagramas (via @c cost_result_to_json).
+ *
+ * Distingue DOS niveles de coste:
+ *   - PARCIAL (@c big_o): el coste del CUERPO de la funcion tratando cada
+ *     CALL a otra funcion como O(1) unitario.
+ *   - TOTAL (@c total_class): el coste componiendo transitivamente el coste
+ *     de las funciones que llama (call-graph bottom-up).  Solo se llena
+ *     tras @c analyze_module_interproc; antes vale igual que el parcial.
  */
 struct CostResult {
     std::string function;     ///< nombre de la funcion analizada.
-    CostClass big_o = CostClass::O_1;       ///< clase inferida.
-    Confidence confidence = Confidence::EXACT; ///< confianza en la cota.
+    CostClass big_o = CostClass::O_1;       ///< clase PARCIAL (cuerpo, calls=O(1)).
+    Confidence confidence = Confidence::EXACT; ///< confianza en la cota parcial.
     uint32_t max_loop_depth = 0;            ///< maxima profundidad de loop.
     bool is_recursive = false;              ///< la fn se llama a si misma.
     bool is_divide_conquer = false;         ///< patron divide-y-venceras.
     std::vector<LoopCost> loops;            ///< coste por loop (diagramas).
     std::string detail;                     ///< explicacion legible breve.
 
+    /// Coste TOTAL (interprocedural): el cuerpo compuesto con el coste TOTAL
+    /// de los callees.  Igual al parcial hasta que corre la composicion.
+    CostClass total_class = CostClass::O_1;
+    Confidence total_confidence = Confidence::EXACT; ///< confianza del total.
+    std::string total_detail;               ///< explicacion legible del total.
+
+    /// Call sites del cuerpo (callee + profundidad de loop), para que la
+    /// composicion interprocedural sepa que coste multiplicar por que factor.
+    std::vector<CallSite> calls;
+
     /// Contrato declarado por el usuario (@complexity), si lo hay.
     std::string declared_expr;              ///< vacio => sin contrato.
     CostClass declared_class = CostClass::O_UNKNOWN; ///< parseado de declared_expr.
     /// true si HAY contrato Y el analizador esta CONFIADO de que la cota
     /// real difiere de la declarada.  Validacion conservadora: solo se
-    /// pone a true con @c confidence == EXACT y clases distintas.
+    /// pone a true con @c confidence == EXACT y clases distintas.  Se
+    /// compara contra el coste TOTAL (la complejidad real efectiva).
     bool contract_mismatch = false;
 };
 
@@ -143,20 +174,46 @@ struct ModuleCost {
 CostResult analyze_function(const ir::IrFunction &fn);
 
 /**
- * @brief Analiza el coste de todas las funciones de un modulo.
+ * @brief Analiza el coste de todas las funciones de un modulo (PARCIAL).
  *
  * Salta los stubs nativos (@c is_native) y las funciones macro-compiladas
  * (existen solo en compile-time).  Conserva el orden de @c mod.functions.
+ * Solo computa el coste PARCIAL (cuerpo, calls=O(1)); el coste TOTAL queda
+ * igual al parcial salvo que se llame despues @c compose_interproc.
  */
 ModuleCost analyze_module(const ir::IrModule &mod);
+
+/**
+ * @brief Composicion interprocedural: rellena @c total_class / @c
+ *        total_confidence de cada @c CostResult de @c mc usando el
+ *        call-graph del modulo.
+ *
+ * Algoritmo (bottom-up sobre el call-graph, con memoizacion y deteccion de
+ * ciclos):
+ *   - El coste TOTAL de @c f = MAX (clase dominante) sobre todos sus call
+ *     sites del coste-TOTAL del callee multiplicado por @c n^loop_depth del
+ *     call site, combinado tambien con el coste PARCIAL de @c f (sus propios
+ *     loops/recursion).  En Big-O sumar terminos = tomar el dominante.
+ *   - Recursion / ciclos en el call-graph: conservador, se usa el coste
+ *     PARCIAL de @c f (no se entra en bucle infinito; se marca visitado).
+ *   - Callees externos / nativos sin cuerpo: O(1) por defecto, salvo que
+ *     declaren @c @complexity (se respeta su clase declarada).
+ *
+ * La validacion del contrato (@c contract_mismatch) se RE-evalua contra el
+ * coste TOTAL (la complejidad efectiva real), de forma conservadora.
+ *
+ * @param mc   Resultado de @c analyze_module (se modifica in-place).
+ */
+void compose_interproc(ModuleCost &mc);
 
 /**
  * @brief Serializa un @c CostResult a JSON (hook para diagramas).
  *
  * Forma estable para que un renderer de diagramas (Graphviz/Mermaid/HTML)
  * anote cada nodo-funcion con su coste.  Sin dependencias externas: emite
- * el JSON a mano (claves: function, big_o, confidence, max_loop_depth,
- * is_recursive, declared, mismatch, loops[]).
+ * el JSON a mano (claves: function, big_o (parcial), total, confidence,
+ * total_confidence, max_loop_depth, is_recursive, declared, mismatch,
+ * calls[], loops[]).
  */
 std::string cost_result_to_json(const CostResult &r);
 

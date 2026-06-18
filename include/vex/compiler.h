@@ -52,6 +52,14 @@ struct CompileOptions {
     /// fixes (PHIs, SSA, CALLCLOSURE, etc.).
     bool dump_ir = false;
 
+    /// Cuando true, ademas del @c ir_module_cache_bytes (modulo POST-opt),
+    /// llena @c CompileResult::ir_module_cache_bytes_preopt con el modulo
+    /// IR completo ANTES de la optimizacion O2.  Lo consume el modo
+    /// @c --analyze para reportar el coste PRE-opt (complejidad algoritmica
+    /// del fuente) junto al POST-opt (complejidad efectiva tras inline/
+    /// loop-elim).  Cero impacto en el codegen (rama de debug/analisis).
+    bool emit_ir_preopt = false;
+
     /// Cuando true, llena @c CompileResult::mermaid_ast con un diagrama
     /// Mermaid del AST Vex post type-check.  Util para visualizar la
     /// estructura del codigo fuente: clases, herencia, anotaciones.
@@ -210,6 +218,22 @@ struct CompileResult {
      * Vacio si la compilacion no produjo IR (caso de errores).
      */
     std::vector<uint8_t> ir_module_cache_bytes;
+
+    /**
+     * @brief Modo --analisis: IR del modulo completo serializado ANTES de
+     * la optimizacion O2 (mismo formato magic VXMC que
+     * @c ir_module_cache_bytes).  Llenado SOLO si
+     * @c CompileOptions::emit_ir_preopt esta activo.
+     *
+     * El modo @c --analyze lo usa para computar el coste PRE-opt (la
+     * complejidad algoritmica del codigo tal como se escribio) y
+     * contrastarlo con el POST-opt (la complejidad efectiva del codigo
+     * final, que puede ser MENOR si el optimizer elimina/folda loops).
+     *
+     * Vacio si la compilacion no produjo IR o si @c emit_ir_preopt es
+     * false (caso comun en builds de produccion: cero coste extra).
+     */
+    std::vector<uint8_t> ir_module_cache_bytes_preopt;
 
     /// Codigo fuente generado por el transpiler IR -> lenguaje destino.
     /// Lleno solo si @c CompileOptions::port_target != "".  El contenido
