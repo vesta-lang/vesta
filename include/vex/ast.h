@@ -563,6 +563,19 @@ struct BinaryExpr : Expr {
     BinOp op;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
+    /// Operator overloading via metodos dunder (C-1).  Cuando el type
+    /// checker detecta que @c lhs es de tipo CLASS y declara el metodo
+    /// dunder correspondiente al operador (@c __add__ para `+`,
+    /// @c __eq__ para `==`/`!=`) cuya firma acepta @c rhs, deja aqui el
+    /// nombre del metodo a invocar (@c "__add__" / @c "__eq__").  El
+    /// lowering, al ver este campo no vacio, desugara @c `a OP b` a la
+    /// llamada de metodo @c `a.__op__(b)` (CALLVIRT) reusando la
+    /// maquinaria de @c lower_class_method_call.  Cadena vacia = sin
+    /// sobrecarga; comportamiento clasico (aritmetica/concat/etc.).
+    /// @c overload_negate indica que el operador era @c `!=` y NO existe
+    /// @c __ne__, asi el lowering invoca @c __eq__ y niega el resultado.
+    std::string overload_method;
+    bool overload_negate = false;
     BinaryExpr() : Expr(NodeKind::BinaryExpr) {}
 };
 
