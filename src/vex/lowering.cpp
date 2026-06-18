@@ -10165,6 +10165,48 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     const PrimitiveKind rtk =
         e->rhs ? e->rhs->result_type.kind : PrimitiveKind::COUNT;
 
+    // Operator overloading via metodos dunder (C-1).  El type checker
+    // dejo en @c e->overload_method el nombre del metodo (@c __add__ /
+    // @c __eq__ / @c __ne__) cuando @c lhs es CLASS y declara el dunder.
+    // Desugaramos @c `a OP b` a la llamada de metodo @c `a.__op__(b)`
+    // construyendo un CallExpr sintetico y delegando en
+    // @c lower_class_method_call (reusa CALLVIRT, marshalling y SRET).
+    // Si el operador era @c `!=` sin @c __ne__ propio, negamos el BOOL
+    // que devuelve @c __eq__.  Robamos los hijos @c lhs/@c rhs para el
+    // call sintetico y los restauramos despues para no danar el AST.
+    if (!e->overload_method.empty() && e->lhs && e->rhs) {
+        ast::CallExpr synth;
+        synth.loc = e->loc;
+        auto fa = std::make_unique<ast::FieldAccessExpr>();
+        fa->loc = e->loc;
+        fa->field_name = e->overload_method;
+        fa->base = std::move(e->lhs); // receptor (CLASS)
+        synth.callee = std::move(fa);
+        synth.args.push_back(std::move(e->rhs)); // unico argumento
+        const bool negate = e->overload_negate;
+        ir::IrValueId v_call = lower_class_method_call(&synth);
+        // Restaurar los hijos al BinaryExpr original.
+        auto *fa_back =
+            static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+        e->lhs = std::move(fa_back->base);
+        e->rhs = std::move(synth.args[0]);
+        if (v_call == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        if (!negate) return v_call;
+        // `a != b` sin __ne__ propio: niega el BOOL de __eq__ con
+        // `cmp.eq result, 0` (= NOT logico).
+        const ir::IrValueId zero =
+            emit_const(ir::IrType::I64, 0, e->loc.line);
+        const ir::IrValueId v_neg = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = v_neg;
+        cmp.operands = {v_call, zero};
+        cmp.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(cmp));
+        return v_neg;
+    }
+
     // Bug fix 2026-05-23 (LR2): struct == struct via comparacion
     // field-a-field.  El type checker valida que ambos lados sean el
     // mismo struct nombrado.  Lowering emite: para cada campo, LOAD

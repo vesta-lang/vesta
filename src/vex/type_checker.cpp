@@ -6319,6 +6319,61 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     const Type tl = check_expr(e->lhs.get());
     const Type tr = check_expr(e->rhs.get());
 
+    // Operator overloading via metodos dunder (C-1).  Solo `+` y
+    // `==`/`!=`.  Si @c tl es de tipo CLASS y la clase declara el dunder
+    // correspondiente (@c __add__ para `+`, @c __eq__ para `==`/`!=`)
+    // cuya firma acepta @c tr, el operador DESPACHA a @c tl.__op__(tr) y
+    // el resultado es el return type del metodo (BOOL para `==`/`!=`).
+    // Sin el dunder, el flujo clasico de abajo queda intacto (cero cambio
+    // para tipos que no sobrecargan).  Solo CLASS tiene metodos en Vex
+    // hoy (los structs son value-types sin metodos), asi que esto no
+    // toca el path de structs ni de primitivos.
+    if (tl.kind == PrimitiveKind::CLASS && !tl.struct_name.empty() &&
+        (e->op == ast::BinOp::Add || e->op == ast::BinOp::Eq ||
+         e->op == ast::BinOp::Neq)) {
+        auto it_cls = class_layouts_.find(tl.struct_name);
+        if (it_cls != class_layouts_.end()) {
+            const ClassLayout &cls = it_cls->second;
+            // Localiza un metodo no-constructor por nombre cuya firma sea
+            // unaria (1 param) y acepte @c tr.  Devuelve nullptr si no.
+            auto find_dunder =
+                [&](const char *nm) -> const ClassMethodInfo * {
+                for (const auto &m : cls.methods) {
+                    if (m.is_constructor || m.is_static) continue;
+                    if (m.name != nm) continue;
+                    if (m.param_types.size() != 1) continue;
+                    if (types_assignable(m.param_types[0], tr)) return &m;
+                }
+                return nullptr;
+            };
+            if (e->op == ast::BinOp::Add) {
+                if (const ClassMethodInfo *m = find_dunder("__add__")) {
+                    e->overload_method = "__add__";
+                    return m->return_type;
+                }
+            } else {
+                // `==` -> __eq__ ; `!=` -> __ne__ si existe, si no __eq__
+                // negado.  En ambos casos el resultado del operador es
+                // BOOL (negamos en el lowering si hace falta).
+                if (e->op == ast::BinOp::Neq) {
+                    if (const ClassMethodInfo *m = find_dunder("__ne__")) {
+                        e->overload_method = "__ne__";
+                        return m->return_type;
+                    }
+                }
+                if (const ClassMethodInfo *m = find_dunder("__eq__")) {
+                    e->overload_method = "__eq__";
+                    e->overload_negate = (e->op == ast::BinOp::Neq);
+                    (void)m;
+                    return Type{PrimitiveKind::BOOL};
+                }
+            }
+        }
+        // Sin dunder aplicable: cae al flujo clasico (que probablemente
+        // emitira un error de "operandos no numericos" para CLASS, igual
+        // que hoy).
+    }
+
     // Operadores nativos para STRING.
     // Auto-coerce: si un lado es STRING y el otro es un literal de
     // string (PTR no-interp), el lowering lo promovera a StringObject
