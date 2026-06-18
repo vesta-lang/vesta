@@ -991,6 +991,22 @@ class Lowering {
                                uint32_t source_line);
     ir::IrValueId emit_strgetbytes(ir::IrValueId v_str, uint32_t source_line);
 
+    // --- Vex Embed Inc 0: string value-type (solo native_poo_) ---
+    /// Construye el repr value-string {ptr,len,cap} (24 bytes) en stack
+    /// (ALLOCA) desde un literal: aloca buffer en heap (RAW_ALLOC len+1),
+    /// copia los bytes del literal + nul final, y escribe los 3 campos
+    /// del slot.  Devuelve el PTR al slot de 24 bytes (el "valor" del
+    /// string, igual que un struct value-type).  Solo se usa en
+    /// @c native_poo_ (AOT Embed/Bare); el path Full usa StringObject GC.
+    ir::IrValueId build_native_string_from_literal(ast::StringLitExpr *slit,
+                                                   uint32_t source_line);
+    /// Carga el campo @p byte_off (0=ptr, 8=len, 16=cap) del slot
+    /// value-string @p v_slot.  @p as_host marca el resultado como
+    /// host_ptr (para el ptr@0 que viene de RAW_ALLOC).
+    ir::IrValueId load_native_string_field(ir::IrValueId v_slot,
+                                           uint64_t byte_off, bool as_host,
+                                           uint32_t source_line);
+
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findfield(ir::IrValueId v_params, uint32_t line);
@@ -1141,10 +1157,16 @@ class Lowering {
             SHAREDPTR_REL, ///< Decrementar refcount de @c shared<T>.
             SYNC_EXIT, ///< Exit de @c synchronized {} : TRYLEAVE + MONEXIT como
                        ///< IR ops.
-            NATIVE_FREE ///< Phase AOT.2.b: RAW_FREE(obj) de una instancia de
+            NATIVE_FREE, ///< Phase AOT.2.b: RAW_FREE(obj) de una instancia de
                         ///< clase NATIVA (calloc) al exit del scope (RAII; sin
                         ///< GC). aot_lower lo convierte en call<free>.  Sin
                         ///< dangling.
+            STRING_FREE ///< Vex Embed Inc 0: liberar el buffer de un
+                        ///< string value-type (native_poo_) al exit del
+                        ///< scope.  operands[0] = PTR al slot de 24 bytes
+                        ///< {ptr,len,cap}.  Emite LOAD ptr@[slot+0] +
+                        ///< RAW_FREE(ptr) (aot_lower -> call free; free(0)
+                        ///< es no-op tras un move, sin doble-free).
         };
         Kind kind = Kind::RAW_ASM;
         // --- Comun ---
