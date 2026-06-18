@@ -1,0 +1,121 @@
+// examples_codes_vex/analyze/cost_four_dims.vex
+//
+// Ejemplos del SUBSISTEMA DE COSTE con anotaciones de las CUATRO
+// dimensiones de complejidad (modo --analyze).
+//
+// El analizador computa cuatro costes por funcion:
+//   - partial_pre  : coste del CUERPO (calls=O(1)) sobre el IR PRE-opt.
+//   - partial_post : idem sobre el IR POST-opt (codigo final O2).
+//   - total_pre    : coste interprocedural (callees compuestos) PRE-opt.
+//   - total_post   : idem POST-opt (la complejidad efectiva REAL).
+//
+// La anotacion @complexity permite DOCUMENTAR cada dimension por separado
+// con campos nombrados.  La forma posicional @complexity(O(...)) sigue
+// siendo azucar de total_post (compat).  Cada dimension declarada se valida
+// de forma conservadora contra su coste inferido: solo se reporta
+// DISCREPANCIA si el analizador esta CONFIADO (EXACT) de que difieren.
+//
+// Uso:
+//   vm --analyze examples_codes_vex/analyze/cost_four_dims.vex
+//   vm --analyze examples_codes_vex/analyze/cost_four_dims.vex --analyze-json
+
+// -------------------------------------------------------------------------
+// 1) Las CUATRO dimensiones declaradas y TODAS correctas.
+//    Un solo loop -> parcial O(n).  No llama a nada caro -> total O(n).
+//    El optimizer no cambia el grado -> pre == post.  Los cuatro contratos
+//    coinciden con la inferencia: ningun warning.
+// -------------------------------------------------------------------------
+@complexity(partial_pre: O(n), partial_post: O(n),
+            total_pre: O(n), total_post: O(n), n = m)
+i64 suma_lineal(i64 m) {
+    i64 acc = 0;
+    i64 i = 0;
+    while (i < m) {
+        acc = acc + i;
+        i = i + 1;
+    }
+    return acc;
+}
+
+// -------------------------------------------------------------------------
+// 2) Callee cuadratico: el PARCIAL difiere del TOTAL.
+//    El cuerpo de 'usa_helper' tiene un solo loop (parcial O(n)) pero DENTRO
+//    del loop llama a 'cuadr_helper' (O(n^2)) -> el coste TOTAL sube a O(n^3).
+//    Las cuatro dimensiones documentan exactamente esa diferencia.
+// -------------------------------------------------------------------------
+i64 cuadr_helper(i64 n) {
+    i64 acc = 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 j = 0;
+        while (j < n) {
+            acc = acc + (i * j);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return acc;
+}
+
+@complexity(partial_pre: O(n), partial_post: O(n),
+            total_pre: O(n^3), total_post: O(n^3))
+i64 usa_helper(i64 n) {
+    i64 acc = 0;
+    i64 i = 0;
+    while (i < n) {
+        acc = acc + cuadr_helper(n);
+        i = i + 1;
+    }
+    return acc;
+}
+
+// -------------------------------------------------------------------------
+// 3) Subconjunto: solo se declara total_post.  Equivalente a usar la forma
+//    posicional @complexity(O(n^2)).  El resto de dimensiones no se valida.
+//    Aqui es CORRECTA: dos loops anidados -> O(n^2).
+// -------------------------------------------------------------------------
+@complexity(total_post: O(n^2))
+i64 solo_total_post(i64 n) {
+    i64 acc = 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 j = 0;
+        while (j < n) {
+            acc = acc + 1;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return acc;
+}
+
+// -------------------------------------------------------------------------
+// 4) DISCREPANCIA en UNA dimension concreta.  El cuerpo tiene DOS loops
+//    anidados -> el analizador infiere O(n^2) con confianza EXACTA para las
+//    dimensiones PARCIALES (loops directos, sin composicion).  Declaramos
+//    total_pre/total_post CORRECTAS (O(n^2)) pero partial_pre/partial_post
+//    INCORRECTAS (O(n)).  El analizador valida CADA dimension por separado:
+//    las totales pasan (ok), las parciales fallan (discrepancia confirmada,
+//    EXACT).  Demuestra que el warning es ESPECIFICO de la dimension errada.
+// -------------------------------------------------------------------------
+@complexity(partial_pre: O(n), partial_post: O(n),
+            total_pre: O(n^2), total_post: O(n^2))
+i64 dim_incorrecta(i64 n) {
+    i64 acc = 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 j = 0;
+        while (j < n) {
+            acc = acc + (i + j);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    return acc;
+}
+
+i32 main() {
+    i64 r = suma_lineal(10) + usa_helper(4) + solo_total_post(5);
+    r = r + dim_incorrecta(3);
+    return 0;
+}

@@ -176,6 +176,10 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/vex/")
 # Port transpiler IR -> codigo (C, futuro Java/JS) vive en vex_lib (ver
 # src/vex/CMakeLists.txt).  Excluir para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/port/")
+# Subsistema de coste (analyze::bigo) vive en vex_lib para que los renderers
+# de diagramas (tambien en vex_lib) puedan anotar el coste por funcion.  Solo
+# depende de ir::IrModule.  Excluir aqui para evitar definicion duplicada.
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)

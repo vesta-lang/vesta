@@ -63,6 +63,9 @@ struct ModuleNode;
 namespace ir {
 struct IrModule;
 }
+namespace analyze {
+struct ModuleCost;
+}
 
 namespace vex {
 
@@ -114,10 +117,15 @@ std::string mermaid_from_ast(const ast::ModuleNode &mod);
  * @param title        Titulo del diagrama, incluido en un comentario
  *                     superior (e.g., "SSA IR pre-optimizacion" o
  *                     "SSA IR post-optimizacion (opt_level=2)").
+ * @param cost         (opcional) Resultado del analisis de coste Big-O del
+ *                     mismo modulo (--diagram-cost).  Si no es nullptr, cada
+ *                     subgraph de funcion anota su coste (parcial + total) en
+ *                     el titulo.  Default nullptr => sin anotacion.
  * @return             String con el bloque mermaid listo para escribir.
  */
 std::string mermaid_from_ir_module(const ir::IrModule &mod,
-                                   const std::string &title);
+                                   const std::string &title,
+                                   const analyze::ModuleCost *cost = nullptr);
 
 /**
  * @brief Genera un diagrama Mermaid a partir del texto .vel ensamblador.

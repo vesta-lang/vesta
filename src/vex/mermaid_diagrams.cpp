@@ -34,6 +34,7 @@
 
 #include "vex/mermaid_diagrams.h"
 
+#include "analyze/bigo.h"
 #include "vex/ast.h"
 #include "ir/ssa_ir.h"
 #include "vex/types.h"
@@ -842,7 +843,8 @@ void render_ir_block(std::ostringstream &os, const ir::IrFunction &fn,
  */
 void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
                         size_t fn_idx,
-                        std::unordered_set<std::string> &intra_calls_out) {
+                        std::unordered_set<std::string> &intra_calls_out,
+                        const std::string &cost_label = std::string()) {
     const std::string fn_id = "fn" + std::to_string(fn_idx);
     std::string title = fn.name;
     // anyadir conteo de bloques + tipo retorno + n params
@@ -853,6 +855,12 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
     title += " params, ret ";
     title += ir::ir_type_name(fn.ret_type);
     title += ")";
+    // --diagram-cost: anexar el coste Big-O al titulo del subgraph (segunda
+    // linea, separada con <br/> para que Mermaid la renderice debajo).
+    if (!cost_label.empty()) {
+        title += "<br/>";
+        title += cost_label;
+    }
 
     os << "    subgraph " << fn_id << " [\"" << escape_label(title) << "\"]\n";
     os << "    direction TB\n";
@@ -1721,7 +1729,8 @@ std::string mermaid_from_ast(const ast::ModuleNode &mod) {
 }
 
 std::string mermaid_from_ir_module(const ir::IrModule &mod,
-                                   const std::string &title) {
+                                   const std::string &title,
+                                   const analyze::ModuleCost *cost) {
     std::ostringstream os;
     os << "```mermaid\n";
     os << "%% " << title << "\n";
@@ -1748,7 +1757,13 @@ std::string mermaid_from_ir_module(const ir::IrModule &mod,
     std::unordered_set<std::string>
         intra_calls; // formato: "src_fn_id>callee_name"
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
-        render_ir_function(os, mod.functions[fi], fi, intra_calls);
+        // --diagram-cost: si hay analisis de coste, anexar la etiqueta al
+        // subgraph de cada funcion.
+        std::string cost_label =
+            cost ? analyze::cost_label_for_function(*cost,
+                                                    mod.functions[fi].name)
+                 : std::string();
+        render_ir_function(os, mod.functions[fi], fi, intra_calls, cost_label);
     }
 
     // Edges cross-subgraph para llamadas

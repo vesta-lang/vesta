@@ -30,6 +30,7 @@
 
 #include "vex/graphviz_diagrams.h"
 
+#include "analyze/bigo.h"
 #include "vex/ast.h"
 #include "ir/ssa_ir.h"
 #include "vex/types.h"
@@ -1501,14 +1502,23 @@ void render_ir_block(std::ostringstream &os, const ir::IrFunction &fn,
  */
 void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
                         size_t fn_idx,
-                        std::unordered_set<std::string> &intra_calls_out) {
+                        std::unordered_set<std::string> &intra_calls_out,
+                        const std::string &cost_label = std::string()) {
     const std::string fn_id = "fn" + std::to_string(fn_idx);
     std::string title = fn.name + " (" + std::to_string(fn.blocks.size()) +
                         " bb, " + std::to_string(fn.params.size()) +
                         " params, ret " + ir::ir_type_name(fn.ret_type) + ")";
+    // --diagram-cost: anexar el coste Big-O al label en una segunda linea.
+    // Usamos un '\n' REAL: escape_label lo convierte al "\\n" que DOT
+    // interpreta como salto de linea dentro del label.
+    if (!cost_label.empty())
+        title += "\n" + cost_label;
 
     os << "    subgraph cluster_" << fn_id << " {\n";
     os << "        label=\"" << escape_label(title) << "\";\n";
+    // Tooltip con el coste (visible al hover en herramientas interactivas).
+    if (!cost_label.empty())
+        os << "        tooltip=\"" << escape_label(cost_label) << "\";\n";
     os << "        style=\"rounded,filled\";\n";
     os << "        fillcolor=\"#f8fafc\";\n";
     os << "        color=\"#475569\";\n";
@@ -1696,7 +1706,8 @@ std::string graphviz_from_ast(const ast::ModuleNode &mod) {
 }
 
 std::string graphviz_from_ir_module(const ir::IrModule &mod,
-                                    const std::string &title) {
+                                    const std::string &title,
+                                    const analyze::ModuleCost *cost) {
     std::ostringstream os;
     os << "// " << title << "\n";
     os << "// Modulo: " << mod.name << " (" << mod.functions.size()
@@ -1725,7 +1736,12 @@ std::string graphviz_from_ir_module(const ir::IrModule &mod,
 
     std::unordered_set<std::string> intra_calls;
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
-        render_ir_function(os, mod.functions[fi], fi, intra_calls);
+        // --diagram-cost: si hay analisis de coste, anexarlo al cluster.
+        std::string cost_label =
+            cost ? analyze::cost_label_for_function(*cost,
+                                                    mod.functions[fi].name)
+                 : std::string();
+        render_ir_function(os, mod.functions[fi], fi, intra_calls, cost_label);
     }
 
     // Cross-cluster edges para llamadas: enlazamos un nodo de origen

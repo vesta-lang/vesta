@@ -30,6 +30,10 @@ add_library(vex_lib STATIC
     mermaid_diagrams.cpp
     graphviz_diagrams.cpp
     html_diagrams.cpp
+    # Subsistema de coste Big-O (modo --analyze).  Solo depende de
+    # ir::IrModule; vive aqui para que los renderers de diagramas puedan
+    # anotar el coste por funcion (--diagram-cost).
+    ${CMAKE_SOURCE_DIR}/src/analyze/bigo.cpp
     comptime_introspect.cpp
     # Sistema de modulos.
     module_resolver.cpp

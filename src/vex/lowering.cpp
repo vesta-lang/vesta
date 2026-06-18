@@ -1845,6 +1845,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // solo la consume el analizador estatico analyze::bigo.
     fn.complexity_expr = fd->complexity_expr;
     fn.complexity_vars = fd->complexity_vars;
+    fn.complexity_partial_pre = fd->complexity_partial_pre;
+    fn.complexity_partial_post = fd->complexity_partial_post;
+    fn.complexity_total_pre = fd->complexity_total_pre;
+    fn.complexity_total_post = fd->complexity_total_post;
 
     // Tipo de retorno.  Aceptamos tipos primitivos directamente o
     // pasamos por resolve_type_node para PointerTypeNode/ArrayTypeNode

@@ -1084,9 +1084,19 @@ struct IrFunction {
      *   - @c complexity_vars: bindings opcionales `n = <expr>` que indican
      *     que variable es el tamano del input (necesarios para --measure
      *     en niveles superiores).  Cada entrada es el texto raw del binding.
+     *   - @c complexity_partial_pre / @c complexity_partial_post /
+     *     @c complexity_total_pre / @c complexity_total_post: contratos por
+     *     DIMENSION (PARCIAL/TOTAL x PRE-opt/POST-opt).  Cada uno se valida
+     *     contra su coste inferido correspondiente.  @c complexity_total_post
+     *     equivale a la forma posicional @complexity(O(...)).  Vacio => esa
+     *     dimension no se declara (no se valida).
      */
     std::string complexity_expr;
     std::vector<std::string> complexity_vars;
+    std::string complexity_partial_pre;
+    std::string complexity_partial_post;
+    std::string complexity_total_pre;
+    std::string complexity_total_post;
 
     /**
      * @brief Crea un nuevo valor SSA en el pool.

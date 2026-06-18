@@ -412,14 +412,28 @@ CostResult analyze_function(const ir::IrFunction &fn) {
     r.total_confidence = r.confidence;
     r.total_detail = "= parcial (sin composicion)";
 
-    // 5. Contrato @complexity: capturar la expresion declarada.  La
-    //    validacion del MISMATCH se hace en @c compose_interproc contra el
-    //    coste TOTAL (la complejidad efectiva real).  Para el caso de uso
-    //    sin composicion (analyze_function aislada), tambien validamos aqui
-    //    contra el parcial de forma conservadora.
-    if (!fn.complexity_expr.empty()) {
-        r.declared_expr = fn.complexity_expr;
-        r.declared_class = parse_cost_class(fn.complexity_expr);
+    // 5. Contrato @complexity: capturar las expresiones declaradas.  Los
+    //    cuatro contratos por dimension viajan en la IrFunction y son los
+    //    mismos en el CostResult PRE y POST de la funcion; la VALIDACION de
+    //    cada dimension contra su coste inferido la hace el consumidor
+    //    (main.cpp) que tiene los cuatro modulos.  Aqui solo los copiamos.
+    r.decl_partial_pre = fn.complexity_partial_pre;
+    r.decl_partial_post = fn.complexity_partial_post;
+    r.decl_total_pre = fn.complexity_total_pre;
+    // total_post: preferir el campo nombrado; si esta vacio caer al
+    // @c complexity_expr legacy (forma posicional @complexity(O(...))).
+    r.decl_total_post = !fn.complexity_total_post.empty()
+                            ? fn.complexity_total_post
+                            : fn.complexity_expr;
+
+    // Legacy: @c declared_expr / @c declared_class + @c contract_mismatch
+    // siguen representando la dimension TOTAL (validada contra el total
+    // POST-opt en compose_interproc).  Usar el contrato total_post si existe.
+    const std::string &legacy_expr =
+        !r.decl_total_post.empty() ? r.decl_total_post : fn.complexity_expr;
+    if (!legacy_expr.empty()) {
+        r.declared_expr = legacy_expr;
+        r.declared_class = parse_cost_class(legacy_expr);
         // Solo avisar si: confianza EXACT, ambas clases conocidas, y
         // difieren.  Nunca avisar cuando inferimos O(?) o la declarada es
         // O(?) (la conservadora exige certeza para senalar el error).
@@ -719,6 +733,14 @@ std::string cost_result_to_json(const CostResult &r) {
       << json_escape(r.declared_expr.empty() ? std::string()
                                              : r.declared_expr)
       << "\",";
+    // Contratos por dimension declarados (vacio => no declarada).
+    o << "\"declared_partial_pre\":\"" << json_escape(r.decl_partial_pre)
+      << "\",";
+    o << "\"declared_partial_post\":\"" << json_escape(r.decl_partial_post)
+      << "\",";
+    o << "\"declared_total_pre\":\"" << json_escape(r.decl_total_pre) << "\",";
+    o << "\"declared_total_post\":\"" << json_escape(r.decl_total_post)
+      << "\",";
     o << "\"contract_mismatch\":"
       << (r.contract_mismatch ? "true" : "false") << ",";
     o << "\"detail\":\"" << json_escape(r.detail) << "\",";
@@ -752,6 +774,29 @@ std::string module_cost_to_json(const ModuleCost &m) {
         o << cost_result_to_json(m.functions[i]);
     }
     o << "]";
+    return o.str();
+}
+
+std::string cost_label_for_function(const ModuleCost &mc,
+                                    const std::string &name) {
+    const CostResult *r = nullptr;
+    for (const auto &f : mc.functions) {
+        if (f.function == name) {
+            r = &f;
+            break;
+        }
+    }
+    if (!r) return std::string();
+    std::ostringstream o;
+    o << "coste: parcial " << cost_class_str(r->big_o) << " | total "
+      << cost_class_str(r->total_class);
+    // Si hay contrato declarado, indicar si concuerda o discrepa.
+    if (!r->declared_expr.empty()) {
+        if (r->contract_mismatch)
+            o << " [!= @complexity " << r->declared_expr << "]";
+        else
+            o << " [@complexity " << r->declared_expr << " ok]";
+    }
     return o.str();
 }
 

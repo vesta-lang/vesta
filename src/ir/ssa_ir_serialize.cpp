@@ -420,6 +420,11 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     write_u32(out, static_cast<uint32_t>(fn.complexity_vars.size()));
     for (const auto &s : fn.complexity_vars)
         write_str(out, s);
+    // v5/v6: contratos @complexity por dimension (PARCIAL/TOTAL x PRE/POST).
+    write_str(out, fn.complexity_partial_pre);
+    write_str(out, fn.complexity_partial_post);
+    write_str(out, fn.complexity_total_pre);
+    write_str(out, fn.complexity_total_post);
 
     return out.size() - start;
 }
@@ -539,6 +544,11 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
         if (!read_str(in, off, s)) return false;
         out.complexity_vars.push_back(std::move(s));
     }
+    // v5/v6: contratos @complexity por dimension (PARCIAL/TOTAL x PRE/POST).
+    if (!read_str(in, off, out.complexity_partial_pre)) return false;
+    if (!read_str(in, off, out.complexity_partial_post)) return false;
+    if (!read_str(in, off, out.complexity_total_pre)) return false;
+    if (!read_str(in, off, out.complexity_total_post)) return false;
     return true;
 }
 

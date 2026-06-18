@@ -17,6 +17,7 @@
 
 #include "vex/compiler.h"
 
+#include "analyze/bigo.h"
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
 #include "ir/ssa_ir.h"
@@ -256,17 +257,30 @@ CompileResult compile_vex_source(const std::string &source,
     // generamos ANTES de tocar irmod para capturar el output crudo
     // del lowering (todos los PHIs, todos los CONSTs, blocks como
     // los emite el frontend, sin las transformaciones del optimizer).
+    //
+    // --diagram-cost: si se pidio anotar el coste, calcular el analisis
+    // Big-O sobre el IR PRE-opt (complejidad algoritmica del fuente) una
+    // vez y reusarlo para los tres formatos de la vista pre.
+    const bool want_cost_pre =
+        opts.annotate_cost && (opts.dump_mermaid_ir_pre ||
+                               opts.dump_graphviz_ir_pre || opts.dump_html_ir_pre);
+    analyze::ModuleCost mc_pre;
+    if (want_cost_pre) {
+        mc_pre = analyze::analyze_module(irmod);
+        analyze::compose_interproc(mc_pre);
+    }
+    const analyze::ModuleCost *cost_pre = want_cost_pre ? &mc_pre : nullptr;
     if (opts.dump_mermaid_ir_pre) {
         res.mermaid_ir_pre = mermaid_from_ir_module(
-            irmod, "Diagrama IR pre-optimizacion (frontend output)");
+            irmod, "Diagrama IR pre-optimizacion (frontend output)", cost_pre);
     }
     if (opts.dump_graphviz_ir_pre) {
         res.graphviz_ir_pre = graphviz_from_ir_module(
-            irmod, "Diagrama IR pre-optimizacion (frontend output)");
+            irmod, "Diagrama IR pre-optimizacion (frontend output)", cost_pre);
     }
     if (opts.dump_html_ir_pre) {
         res.html_ir_pre = html_from_ir_module(
-            irmod, "SSA IR pre-optimizacion (frontend output)");
+            irmod, "SSA IR pre-optimizacion (frontend output)", cost_pre);
     }
     // Si CUALQUIERA de las opciones pide informacion post-opt
     // (ir_text dump, mermaid_post o graphviz_post, port target),
@@ -295,14 +309,29 @@ CompileResult compile_vex_source(const std::string &source,
         }
         const std::string title = "Diagrama IR post-optimizacion (opt_level=" +
                                   std::to_string(opts.opt_level) + ")";
+        // --diagram-cost: analisis Big-O sobre el IR POST-opt (complejidad
+        // efectiva del codigo final) calculado una vez para los tres formatos.
+        const bool want_cost_post =
+            opts.annotate_cost &&
+            (opts.dump_mermaid_ir_post || opts.dump_graphviz_ir_post ||
+             opts.dump_html_ir_post);
+        analyze::ModuleCost mc_post;
+        if (want_cost_post) {
+            mc_post = analyze::analyze_module(irmod_opt);
+            analyze::compose_interproc(mc_post);
+        }
+        const analyze::ModuleCost *cost_post =
+            want_cost_post ? &mc_post : nullptr;
         if (opts.dump_mermaid_ir_post) {
-            res.mermaid_ir_post = mermaid_from_ir_module(irmod_opt, title);
+            res.mermaid_ir_post =
+                mermaid_from_ir_module(irmod_opt, title, cost_post);
         }
         if (opts.dump_graphviz_ir_post) {
-            res.graphviz_ir_post = graphviz_from_ir_module(irmod_opt, title);
+            res.graphviz_ir_post =
+                graphviz_from_ir_module(irmod_opt, title, cost_post);
         }
         if (opts.dump_html_ir_post) {
-            res.html_ir_post = html_from_ir_module(irmod_opt, title);
+            res.html_ir_post = html_from_ir_module(irmod_opt, title, cost_post);
         }
 
         // Port transpiler: convierte el IR optimizado a codigo fuente
