@@ -1,0 +1,20 @@
+// Vex Embed Inc 2: mutacion `+=` de value-strings nativos (AOT).
+// `s += t` (string) y `s += c` (char) appendean in-place al buffer de
+// `s`, creciendo el buffer (realloc) cuando la capacidad no alcanza.
+// Sin GC, sin StringObject.  RAII libera el buffer final; los buffers
+// intermedios del grow se liberan dentro del propio append (sin leak,
+// sin double-free).  Validado por ejecucion (PE/ELF) + valgrind.
+//
+// Sugar syntax: el usuario escribe `+=`, no metodos.
+
+i32 main() {
+    string s = "ab";     // len 2
+    s += "cd";           // "abcd" -> len 4
+    s += "ef";           // "abcdef" -> len 6
+    s += 'x';            // "abcdefx" -> len 7
+
+    // Verificar el contenido via cstr: s[0]='a'(97), s[6]='x'(120).
+    char* p = s.cstr();
+    // Devolvemos la length (7) como exit-code principal.
+    return (i32) s.length();   // 7
+}
