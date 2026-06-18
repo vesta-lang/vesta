@@ -1417,6 +1417,16 @@ struct FunctionDecl : Node {
     /// (y `!=` via negacion) entre dos strings.  Firma esperada:
     /// fn(string, string) -> bool.  Aplica en native_poo_ (AOT) y Full.
     bool is_string_eq_override = false;
+    /// Subsistema de coste (modo --analyze): `@complexity(O(...))`.
+    /// Metadata PURA -- NO afecta el codegen.  La consume el analizador
+    /// estatico (analyze::bigo) como contrato a validar contra la
+    /// complejidad inferida del IR.  @c complexity_expr guarda la
+    /// expresion de coste normalizada (e.g. "O(n^2)", "O(n log n)");
+    /// vacio si la funcion no declara @complexity.  @c complexity_vars
+    /// guarda los bindings opcionales `n = <expr>` (texto raw) que
+    /// indican cual es la variable de tamano del input.
+    std::string complexity_expr;
+    std::vector<std::string> complexity_vars;
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
 };
 

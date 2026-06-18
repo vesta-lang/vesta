@@ -25,6 +25,7 @@
 
 #include "cli/cli.h"
 #include "cli/vsh.h"
+#include "analyze/bigo.h" // Subsistema de coste: modo --analyze (Big-O)
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir_serialize.h" // Phase AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h" // Phase AOT.1: analisis de compatibilidad nativa
@@ -336,7 +337,15 @@ int main(int argc, char *argv[]) {
             "Solo emitir el .vel intermedio del .vex; no compilar a .velb")(
             "vex-emit-ir",
             "Emitir el SSA IR del .vex (pre y post optimizacion) en "
-            "<output>.ir; util para debug del frontend")
+            "<output>.ir; util para debug del frontend")(
+            "analyze",
+            "Subsistema de coste: analiza la complejidad algoritmica (Big-O) "
+            "estatica de cada funcion de un .vex y la imprime; valida el "
+            "contrato @complexity si esta presente. Cero impacto en codegen.",
+            cxxopts::value<std::string>())(
+            "analyze-json",
+            "Con --analyze: emite el coste por funcion como JSON (para "
+            "consumir desde un renderer de diagramas) en vez de texto legible.")
         // Phase AOT: con -m aot, target de compilacion nativa.
         ("target",
          "Tier de compilacion nativa AOT (-m aot): bare|embed|full (default "
@@ -1289,6 +1298,98 @@ int main(int argc, char *argv[]) {
     //     -> run_worker(.vel, skip_preprocessor=true)
     //     -> .velb
     //
+    // -----------------------------------------------------------------
+    // Subsistema de coste (MODO ANALISIS): vm --analyze <archivo.vex>
+    //
+    // Rama APARTE del path de compilacion normal.  Compila el .vex hasta
+    // el SSA IR (sin emitir .velb), corre el analizador estatico de
+    // complejidad (analyze::bigo) sobre cada funcion del modulo OPTIMIZADO
+    // (O2), e imprime el coste Big-O.  Si una funcion declara @complexity,
+    // valida el contrato de forma conservadora (solo avisa si esta
+    // CONFIADO de la discrepancia).  Cero impacto en el codegen.
+    //
+    //   vm --analyze prog.vex            -> salida legible
+    //   vm --analyze prog.vex --analyze-json -> JSON (para diagramas)
+    // -----------------------------------------------------------------
+    if (result.count("analyze")) {
+        const std::string &vex_path = result["analyze"].as<std::string>();
+        const bool want_json = result.count("analyze-json") > 0;
+
+        std::ifstream ifs(vex_path);
+        if (!ifs.is_open()) {
+            std::cerr << "[analyze] No se puede abrir: " << vex_path << "\n";
+            return EXIT_FAILURE;
+        }
+        std::string vex_source((std::istreambuf_iterator<char>(ifs)),
+                               std::istreambuf_iterator<char>());
+        ifs.close();
+
+        // Compilar hasta el IR.  Reutilizamos compile_vex_source que ya
+        // rellena ir_module_cache_bytes con el modulo COMPLETO post-O2.
+        vex::CompileOptions copts;
+        copts.module_name = "main";
+        copts.opt_level = 2;
+        vex::CompileResult cr =
+            vex::compile_vex_source(vex_source, vex_path, copts);
+        // Volcar diagnosticos (errores/warnings) del frontend.
+        for (const auto &d : cr.diagnostics.all())
+            vex::print_diagnostic(std::cerr, d);
+        if (!cr.ok) {
+            std::cerr << "[analyze] la compilacion fallo; no hay IR que "
+                         "analizar.\n";
+            return EXIT_FAILURE;
+        }
+        if (cr.ir_module_cache_bytes.empty()) {
+            std::cerr << "[analyze] el modulo no produjo IR.\n";
+            return EXIT_FAILURE;
+        }
+
+        ir::IrModule amod;
+        if (!ir::parse_ir_module_cache(cr.ir_module_cache_bytes, amod)) {
+            std::cerr << "[analyze] no se pudo deserializar el IR.\n";
+            return EXIT_FAILURE;
+        }
+
+        analyze::ModuleCost mc = analyze::analyze_module(amod);
+
+        if (want_json) {
+            std::cout << analyze::module_cost_to_json(mc) << "\n";
+            return EXIT_SUCCESS;
+        }
+
+        // Salida legible.
+        std::cout << "Analisis de coste (Big-O) -- " << vex_path << "\n";
+        std::cout << "Nivel: estatico estructural sobre el IR optimizado "
+                     "(O2).\n";
+        std::cout
+            << "=================================================="
+               "===========\n";
+        int mismatches = 0;
+        for (const auto &r : mc.functions) {
+            std::cout << "  " << analyze::cost_class_str(r.big_o) << "   "
+                      << r.function;
+            std::cout << "   [" << r.detail << "]\n";
+            if (!r.declared_expr.empty()) {
+                std::cout << "        @complexity declarada: " << r.declared_expr
+                          << " -> " << analyze::cost_class_str(r.declared_class);
+                if (r.contract_mismatch) {
+                    std::cout << "  ** DISCREPANCIA: inferida "
+                              << analyze::cost_class_str(r.big_o) << " **";
+                    ++mismatches;
+                } else {
+                    std::cout << "  (ok)";
+                }
+                std::cout << "\n";
+            }
+        }
+        std::cout
+            << "=================================================="
+               "===========\n";
+        std::cout << "Funciones analizadas: " << mc.functions.size()
+                  << "; contratos con discrepancia: " << mismatches << "\n";
+        return EXIT_SUCCESS;
+    }
+
     // Ejemplo: vm.exe --vex src/main.vex -o main.velb
     if (result.count("vex")) {
         const std::string &vex_path = result["vex"].as<std::string>();

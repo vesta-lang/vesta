@@ -1840,6 +1840,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.section_at = fd->attr_at;
     fn.section_order = fd->attr_order;
 
+    // Subsistema de coste (modo --analyze): propagar el contrato
+    // @complexity del AST al IR.  Metadata pura -- el codegen la ignora;
+    // solo la consume el analizador estatico analyze::bigo.
+    fn.complexity_expr = fd->complexity_expr;
+    fn.complexity_vars = fd->complexity_vars;
+
     // Tipo de retorno.  Aceptamos tipos primitivos directamente o
     // pasamos por resolve_type_node para PointerTypeNode/ArrayTypeNode
     // (mapeados a IrType::PTR via ir_type_from_primitive).
