@@ -10393,8 +10393,11 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         (rtk == PrimitiveKind::STRING) ||
         (is_string_lit_node(e->rhs.get()) &&
          (rtk == PrimitiveKind::PTR || rtk == PrimitiveKind::VOID));
-    const bool any_real_str =
-        (ltk == PrimitiveKind::STRING) || (rtk == PrimitiveKind::STRING);
+    // `"a" + "b"` (ambos literales): concat tambien (espejo del checker).
+    const bool both_str_lit =
+        is_string_lit_node(e->lhs.get()) && is_string_lit_node(e->rhs.get());
+    const bool any_real_str = (ltk == PrimitiveKind::STRING) ||
+                              (rtk == PrimitiveKind::STRING) || both_str_lit;
     if (lhs_is_str && rhs_is_str && any_real_str) {
         // Vex Embed Inc 1: en native_poo_ el `string` es value-type
         // {ptr,len,cap}; `a + b` produce un NUEVO string owned (buffer
