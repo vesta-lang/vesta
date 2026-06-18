@@ -5733,6 +5733,34 @@ Type TypeChecker::check_index(ast::IndexExpr *e) {
     }
     const Type bt = check_expr(e->base.get());
     if (e->index) (void)check_expr(e->index.get());
+    // Operator overloading C-2: `base[i]` (LECTURA) -> base.__index__(i)
+    // cuando @c bt es CLASS o STRUCT y declara @c __index__ cuya firma
+    // unaria acepta el tipo del indice.  El resultado es el return type
+    // del metodo.  Sin el dunder cae al flujo clasico (subscript de
+    // puntero/array).  Nota: solo LECTURA en C-2; @c base[i] = v
+    // (index-set) no esta cubierto aqui.
+    {
+        const Type it = e->index ? e->index->result_type : Type{};
+        const std::vector<ClassMethodInfo> *methods = nullptr;
+        if (bt.kind == PrimitiveKind::CLASS && !bt.struct_name.empty()) {
+            auto it_cls = class_layouts_.find(bt.struct_name);
+            if (it_cls != class_layouts_.end())
+                methods = &it_cls->second.methods;
+        } else if (bt.kind == PrimitiveKind::STRUCT && !bt.struct_name.empty()) {
+            auto it_s = struct_layouts_.find(bt.struct_name);
+            if (it_s != struct_layouts_.end()) methods = &it_s->second.methods;
+        }
+        if (methods) {
+            for (const auto &m : *methods) {
+                if (m.is_constructor || m.is_static) continue;
+                if (m.name != "__index__") continue;
+                if (m.param_types.size() != 1) continue;
+                if (!types_assignable(m.param_types[0], it)) continue;
+                e->overload_method = "__index__";
+                return m.return_type;
+            }
+        }
+    }
     const bool is_ptr_like =
         (bt.kind == PrimitiveKind::PTR || bt.kind == PrimitiveKind::ARRAY) &&
         static_cast<bool>(bt.pointee);
@@ -6421,102 +6449,91 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     const Type tl = check_expr(e->lhs.get());
     const Type tr = check_expr(e->rhs.get());
 
-    // Operator overloading via metodos dunder (C-1).  Solo `+` y
-    // `==`/`!=`.  Si @c tl es de tipo CLASS y la clase declara el dunder
-    // correspondiente (@c __add__ para `+`, @c __eq__ para `==`/`!=`)
-    // cuya firma acepta @c tr, el operador DESPACHA a @c tl.__op__(tr) y
-    // el resultado es el return type del metodo (BOOL para `==`/`!=`).
+    // Operator overloading via metodos dunder (C-1 + C-2).  Si @c tl es
+    // de tipo CLASS o STRUCT y declara el dunder correspondiente al
+    // operador cuya firma acepta @c tr, el operador DESPACHA a
+    // @c tl.__op__(tr) y el resultado es el return type del metodo.
+    // Mapeo C-1: `+` -> __add__, `==`/`!=` -> __eq__/__ne__.
+    // Mapeo C-2 (aritmetica): `-` -> __sub__, `*` -> __mul__,
+    //   `/` -> __div__, `%` -> __mod__.
+    // Mapeo C-2 (comparacion): `<` -> __lt__, `>` -> __gt__,
+    //   `<=` -> __le__, `>=` -> __ge__.
     // Sin el dunder, el flujo clasico de abajo queda intacto (cero cambio
-    // para tipos que no sobrecargan).  Solo CLASS tiene metodos en Vex
-    // hoy (los structs son value-types sin metodos), asi que esto no
-    // toca el path de structs ni de primitivos.
-    if (tl.kind == PrimitiveKind::CLASS && !tl.struct_name.empty() &&
-        (e->op == ast::BinOp::Add || e->op == ast::BinOp::Eq ||
-         e->op == ast::BinOp::Neq)) {
-        auto it_cls = class_layouts_.find(tl.struct_name);
-        if (it_cls != class_layouts_.end()) {
-            const ClassLayout &cls = it_cls->second;
-            // Localiza un metodo no-constructor por nombre cuya firma sea
-            // unaria (1 param) y acepte @c tr.  Devuelve nullptr si no.
-            auto find_dunder =
-                [&](const char *nm) -> const ClassMethodInfo * {
-                for (const auto &m : cls.methods) {
-                    if (m.is_constructor || m.is_static) continue;
-                    if (m.name != nm) continue;
-                    if (m.param_types.size() != 1) continue;
-                    if (types_assignable(m.param_types[0], tr)) return &m;
-                }
-                return nullptr;
-            };
-            if (e->op == ast::BinOp::Add) {
-                if (const ClassMethodInfo *m = find_dunder("__add__")) {
-                    e->overload_method = "__add__";
-                    return m->return_type;
-                }
-            } else {
+    // para tipos que no sobrecargan).  El dispatch del lowering es
+    // generico: CALLVIRT para CLASS, CALL directo para STRUCT.
+    {
+        // Mapea el operador binario a su nombre dunder canonico.  Cadena
+        // vacia = operador sin dunder asociado (logicos, bitwise, shifts).
+        auto binop_dunder = [](ast::BinOp op) -> const char * {
+            switch (op) {
+            case ast::BinOp::Add: return "__add__";
+            case ast::BinOp::Sub: return "__sub__";
+            case ast::BinOp::Mul: return "__mul__";
+            case ast::BinOp::Div: return "__div__";
+            case ast::BinOp::Mod: return "__mod__";
+            case ast::BinOp::Lt: return "__lt__";
+            case ast::BinOp::Gt: return "__gt__";
+            case ast::BinOp::Le: return "__le__";
+            case ast::BinOp::Ge: return "__ge__";
+            // `==`/`!=` se manejan aparte (derivacion __ne__ via __eq__).
+            default: return "";
+            }
+        };
+        // Localiza un metodo dunder por nombre en una lista de metodos
+        // (CLASS o STRUCT): no-constructor, no-static, unario (1 param)
+        // cuya firma acepte @c tr.  Devuelve nullptr si no hay match.
+        auto find_dunder =
+            [&](const std::vector<ClassMethodInfo> &methods,
+                const char *nm) -> const ClassMethodInfo * {
+            for (const auto &m : methods) {
+                if (m.is_constructor || m.is_static) continue;
+                if (m.name != nm) continue;
+                if (m.param_types.size() != 1) continue;
+                if (types_assignable(m.param_types[0], tr)) return &m;
+            }
+            return nullptr;
+        };
+        // Obtiene el vector de metodos del tipo del lhs (CLASS o STRUCT).
+        // nullptr si el tipo no es sobrecargable o no esta registrado.
+        const std::vector<ClassMethodInfo> *methods = nullptr;
+        if (tl.kind == PrimitiveKind::CLASS && !tl.struct_name.empty()) {
+            auto it_cls = class_layouts_.find(tl.struct_name);
+            if (it_cls != class_layouts_.end()) methods = &it_cls->second.methods;
+        } else if (tl.kind == PrimitiveKind::STRUCT && !tl.struct_name.empty()) {
+            auto it_s = struct_layouts_.find(tl.struct_name);
+            if (it_s != struct_layouts_.end()) methods = &it_s->second.methods;
+        }
+        if (methods) {
+            if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq) {
                 // `==` -> __eq__ ; `!=` -> __ne__ si existe, si no __eq__
-                // negado.  En ambos casos el resultado del operador es
-                // BOOL (negamos en el lowering si hace falta).
+                // negado.  El lowering niega el BOOL cuando overload_negate.
                 if (e->op == ast::BinOp::Neq) {
-                    if (const ClassMethodInfo *m = find_dunder("__ne__")) {
+                    if (const ClassMethodInfo *m = find_dunder(*methods, "__ne__")) {
                         e->overload_method = "__ne__";
                         return m->return_type;
                     }
                 }
-                if (const ClassMethodInfo *m = find_dunder("__eq__")) {
+                if (const ClassMethodInfo *m = find_dunder(*methods, "__eq__")) {
                     e->overload_method = "__eq__";
                     e->overload_negate = (e->op == ast::BinOp::Neq);
                     (void)m;
                     return Type{PrimitiveKind::BOOL};
-                }
-            }
-        }
-        // Sin dunder aplicable: cae al flujo clasico (que probablemente
-        // emitira un error de "operandos no numericos" para CLASS, igual
-        // que hoy).
-    }
-
-    // Operator overloading via dunder en STRUCT (C-1 ext).  Mismo
-    // mecanismo que CLASS pero el dunder vive en @c StructLayout::methods
-    // y el dispatch baja a @c lower_struct_method_call (CALL directo).
-    // Si NO hay dunder aplicable, cae al flujo clasico (que para STRUCT
-    // permite igualdad campo-a-campo via la rama de mas abajo).
-    if (tl.kind == PrimitiveKind::STRUCT && !tl.struct_name.empty() &&
-        (e->op == ast::BinOp::Add || e->op == ast::BinOp::Eq ||
-         e->op == ast::BinOp::Neq)) {
-        auto it_s = struct_layouts_.find(tl.struct_name);
-        if (it_s != struct_layouts_.end()) {
-            const StructLayout &slay = it_s->second;
-            auto find_dunder =
-                [&](const char *nm) -> const ClassMethodInfo * {
-                for (const auto &m : slay.methods) {
-                    if (m.name != nm) continue;
-                    if (m.param_types.size() != 1) continue;
-                    if (types_assignable(m.param_types[0], tr)) return &m;
-                }
-                return nullptr;
-            };
-            if (e->op == ast::BinOp::Add) {
-                if (const ClassMethodInfo *m = find_dunder("__add__")) {
-                    e->overload_method = "__add__";
-                    return m->return_type;
                 }
             } else {
-                if (e->op == ast::BinOp::Neq) {
-                    if (const ClassMethodInfo *m = find_dunder("__ne__")) {
-                        e->overload_method = "__ne__";
+                // Aritmeticos + comparacion ordenada: dunder directo.  El
+                // resultado es el return type del metodo (BOOL para los
+                // comparadores normalmente).
+                const char *nm = binop_dunder(e->op);
+                if (nm[0] != '\0') {
+                    if (const ClassMethodInfo *m = find_dunder(*methods, nm)) {
+                        e->overload_method = nm;
                         return m->return_type;
                     }
                 }
-                if (const ClassMethodInfo *m = find_dunder("__eq__")) {
-                    e->overload_method = "__eq__";
-                    e->overload_negate = (e->op == ast::BinOp::Neq);
-                    (void)m;
-                    return Type{PrimitiveKind::BOOL};
-                }
             }
         }
-        // Sin dunder: cae al flujo clasico (igualdad struct campo-a-campo).
+        // Sin dunder aplicable: cae al flujo clasico (aritmetica de
+        // primitivos/punteros, igualdad struct campo-a-campo, etc.).
     }
 
     // Operadores nativos para STRING.
@@ -6773,7 +6790,35 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
 Type TypeChecker::check_unary(ast::UnaryExpr *e) {
     const Type t = check_expr(e->operand.get());
     switch (e->op) {
-    case ast::UnOp::Neg:
+    case ast::UnOp::Neg: {
+        // Operator overloading C-2: `-x` -> x.__neg__() cuando @c t es
+        // CLASS o STRUCT y declara @c __neg__ (metodo sin parametros).
+        // El resultado es el return type del metodo.  Sin el dunder cae
+        // al flujo clasico (negacion aritmetica de primitivos).
+        const std::vector<ClassMethodInfo> *methods = nullptr;
+        if (t.kind == PrimitiveKind::CLASS && !t.struct_name.empty()) {
+            auto it_cls = class_layouts_.find(t.struct_name);
+            if (it_cls != class_layouts_.end())
+                methods = &it_cls->second.methods;
+        } else if (t.kind == PrimitiveKind::STRUCT && !t.struct_name.empty()) {
+            auto it_s = struct_layouts_.find(t.struct_name);
+            if (it_s != struct_layouts_.end()) methods = &it_s->second.methods;
+        }
+        if (methods) {
+            for (const auto &m : *methods) {
+                if (m.is_constructor || m.is_static) continue;
+                if (m.name != "__neg__") continue;
+                if (!m.param_types.empty()) continue;
+                e->overload_method = "__neg__";
+                return m.return_type;
+            }
+        }
+        if (!is_numeric(t.kind)) {
+            diags_.error(e->loc,
+                         "operador unario aritmetico requiere numerico");
+        }
+        return t;
+    }
     case ast::UnOp::Pos:
         if (!is_numeric(t.kind)) {
             diags_.error(e->loc,
