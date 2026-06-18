@@ -10744,6 +10744,137 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             if (b_temp) free_temp(v_nb);
             return v_res;
         }
+        // Vex Embed Inc 4: comparacion native de strings value-type via
+        // helper __vex_strcmp (lexicografica, -1/0/1).  Cubre == != < > <= >=.
+        // El resultado del strcmp se mapea a BOOL con la comparacion entera
+        // correspondiente.
+        if (native_poo_ &&
+            (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq ||
+             e->op == ast::BinOp::Lt || e->op == ast::BinOp::Gt ||
+             e->op == ast::BinOp::Le || e->op == ast::BinOp::Ge)) {
+            // Obtener (ptr, len) de cada operando SIN materializar el literal
+            // en heap.  Para un literal no interpolado: el contenido es
+            // conocido en compile-time -> lo internamos en .rodata
+            // (static_data) y emitimos STR_LIT_ADDR (host_ptr a .rodata) +
+            // CONST len.  Cero malloc / free / STOREs (mucho mas barato que
+            // un value-string temporal y, ademas, evita acumular varios
+            // RAW_ALLOC/RAW_FREE en un mismo bloque cuando AMBOS operandos
+            // son literales).  Para var / concat / cast: lower al slot
+            // value-string y cargar ptr@0 / len@8; concat y cast son
+            // resultados de expresion (temporales) cuyo buffer se libera
+            // tras comparar.  Las variables NO se liberan (su RAII las
+            // libera al exit del scope).  Devuelve true si el operando
+            // produjo un slot value-string temporal a liberar.
+            struct OperandRef {
+                ir::IrValueId ptr = ir::IR_NO_VALUE;
+                ir::IrValueId len = ir::IR_NO_VALUE;
+                ir::IrValueId temp_slot = ir::IR_NO_VALUE; // !=NO_VALUE -> free
+            };
+            auto get_operand = [&](ast::Expr *ex) -> OperandRef {
+                OperandRef r;
+                // Literal no interpolado -> .rodata + CONST len.
+                if (ex && ex->kind == ast::NodeKind::StringLitExpr &&
+                    !static_cast<ast::StringLitExpr *>(ex)->is_interpolated()) {
+                    auto *slit = static_cast<ast::StringLitExpr *>(ex);
+                    const std::string &lit = slit->value;
+                    std::vector<uint8_t> data(lit.begin(), lit.end());
+                    // Nul final por seguridad (el strcmp usa solo len bytes,
+                    // pero deja el literal NUL-terminated por si otro uso lo
+                    // toma).
+                    data.push_back(0);
+                    const uint64_t idx =
+                        out_mod_->intern_static_data(std::move(data));
+                    r.ptr = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[r.ptr].is_host_ptr = true;
+                    ir::IrInstr sa{};
+                    sa.op = ir::IrOp::STR_LIT_ADDR;
+                    sa.type = ir::IrType::PTR;
+                    sa.dst = r.ptr;
+                    sa.imm = idx;
+                    sa.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(sa));
+                    r.len = emit_const(ir::IrType::I64,
+                                       static_cast<uint64_t>(lit.size()),
+                                       e->loc.line);
+                    return r;
+                }
+                // concat / cast -> resultado temporal (buffer a liberar).
+                bool is_temp = false;
+                if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
+                    static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                    ex->result_type.kind == PrimitiveKind::STRING)
+                    is_temp = true;
+                else if (ex && ex->kind == ast::NodeKind::CastExpr &&
+                         ex->result_type.kind == PrimitiveKind::STRING)
+                    is_temp = true;
+                ir::IrValueId v_slot = lower_expr(ex);
+                if (v_slot == ir::IR_NO_VALUE) return r; // error -> r vacio
+                r.ptr = load_native_string_field(v_slot, 0, /*as_host=*/true,
+                                                 e->loc.line);
+                r.len = load_native_string_field(v_slot, 8, /*as_host=*/false,
+                                                 e->loc.line);
+                if (is_temp) r.temp_slot = v_slot;
+                return r;
+            };
+            OperandRef ra = get_operand(e->lhs.get());
+            OperandRef rb = get_operand(e->rhs.get());
+            if (ra.ptr == ir::IR_NO_VALUE || rb.ptr == ir::IR_NO_VALUE)
+                return ir::IR_NO_VALUE;
+            // CALL __vex_strcmp(pa, la, pb, lb) -> i64 (-1/0/1).
+            const std::string strcmp_fn = ensure_strcmp_helper();
+            ir::IrValueId v_cmp = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ca{};
+                ca.op = ir::IrOp::CALL;
+                ca.type = ir::IrType::I64;
+                ca.dst = v_cmp;
+                ca.func_name = strcmp_fn;
+                ca.operands = {ra.ptr, ra.len, rb.ptr, rb.len};
+                ca.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ca));
+            }
+            // Liberar buffers de operandos temporales (concat / cast).  El
+            // CALL ya leyo sus bytes -> sin uso posterior, sin leak.  Los
+            // literales (.rodata) NO se liberan; las variables tampoco (su
+            // RAII las libera al exit del scope).
+            auto free_temp = [&](ir::IrValueId v_slot) {
+                if (v_slot == ir::IR_NO_VALUE) return;
+                ir::IrValueId v_ptr = load_native_string_field(
+                    v_slot, 0, /*as_host=*/true, e->loc.line);
+                ir::IrInstr rf{};
+                rf.op = ir::IrOp::RAW_FREE;
+                rf.type = ir::IrType::VOID;
+                rf.dst = ir::IR_NO_VALUE;
+                rf.operands = {v_ptr};
+                rf.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(rf));
+            };
+            free_temp(ra.temp_slot);
+            free_temp(rb.temp_slot);
+            // Mapear strcmp(-1/0/1) a BOOL:
+            //   ==  -> cmp == 0    !=  -> cmp != 0
+            //   <   -> cmp < 0     >   -> cmp > 0
+            //   <=  -> cmp <= 0    >=  -> cmp >= 0
+            ir::IrOp map_op;
+            switch (e->op) {
+                case ast::BinOp::Eq:  map_op = ir::IrOp::CMP_EQ; break;
+                case ast::BinOp::Neq: map_op = ir::IrOp::CMP_NE; break;
+                case ast::BinOp::Lt:  map_op = ir::IrOp::CMP_LT; break;
+                case ast::BinOp::Gt:  map_op = ir::IrOp::CMP_GT; break;
+                case ast::BinOp::Le:  map_op = ir::IrOp::CMP_LE; break;
+                default:              map_op = ir::IrOp::CMP_GE; break; // Ge
+            }
+            ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
+            ir::IrValueId v_bool = fn_->new_value(ir::IrType::BOOL);
+            ir::IrInstr cm{};
+            cm.op = map_op;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = v_bool;
+            cm.operands = {v_cmp, v_zero};
+            cm.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(cm));
+            return v_bool;
+        }
         ir::IrValueId v_a = coerce_string_operand(e->lhs.get());
         ir::IrValueId v_b = coerce_string_operand(e->rhs.get());
         if (v_a == ir::IR_NO_VALUE || v_b == ir::IR_NO_VALUE)
@@ -10752,7 +10883,10 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             // strcat -> rope handle (i64 STRING).
             return emit_strcat(v_a, v_b, e->loc.line);
         }
-        if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq) {
+        // Full/JIT: == != < > <= >= via STRCMP (-1/0/1, lexicografico).
+        if (e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq ||
+            e->op == ast::BinOp::Lt || e->op == ast::BinOp::Gt ||
+            e->op == ast::BinOp::Le || e->op == ast::BinOp::Ge) {
             ir::IrValueId v_cmp = fn_->new_value(ir::IrType::I64);
             ir::IrInstr ra{};
             ra.op = ir::IrOp::STRCMP;
@@ -10763,9 +10897,17 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             fn_->append(current_block_, std::move(ra));
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
             ir::IrValueId v_bool = fn_->new_value(ir::IrType::BOOL);
+            ir::IrOp map_op;
+            switch (e->op) {
+                case ast::BinOp::Eq:  map_op = ir::IrOp::CMP_EQ; break;
+                case ast::BinOp::Neq: map_op = ir::IrOp::CMP_NE; break;
+                case ast::BinOp::Lt:  map_op = ir::IrOp::CMP_LT; break;
+                case ast::BinOp::Gt:  map_op = ir::IrOp::CMP_GT; break;
+                case ast::BinOp::Le:  map_op = ir::IrOp::CMP_LE; break;
+                default:              map_op = ir::IrOp::CMP_GE; break; // Ge
+            }
             ir::IrInstr cmp{};
-            cmp.op =
-                (e->op == ast::BinOp::Eq) ? ir::IrOp::CMP_EQ : ir::IrOp::CMP_NE;
+            cmp.op = map_op;
             cmp.type = ir::IrType::BOOL;
             cmp.dst = v_bool;
             cmp.operands = {v_cmp, v_zero};
@@ -23815,6 +23957,277 @@ std::string Lowering::ensure_btoa_helper() {
     current_block_ = bb_false;
     write_bytes("false");
     ret_len(5);
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+std::string Lowering::ensure_strcmp_helper() {
+    // Vex Embed Inc 4: helper de comparacion lexicografica de strings
+    // value-type nativos.  Firma:
+    //   i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb)
+    // Devuelve -1/0/1 (memcmp + tie-break por longitud):
+    //   1. min = (la < lb) ? la : lb.
+    //   2. for (i = 0; i < min; i++): comparar pa[i] vs pb[i] como bytes
+    //      unsigned (0..255).  El primer byte que difiere decide:
+    //      pa[i] < pb[i] -> -1 ; pa[i] > pb[i] -> 1.
+    //   3. Si los min bytes coinciden, el mas CORTO es menor:
+    //      la < lb -> -1 ; la > lb -> 1 ; la == lb -> 0.
+    // Vive en una funcion APARTE con loop -> el optimizer NO foldea la
+    // comparacion byte-a-byte mid-expression con operandos constantes y
+    // el inliner no la re-inlinea (is_inlineable exige 1 bloque).  Usa
+    // slots ALLOCA para el indice (mem2reg los promueve en O2) y evita
+    // PHIs manuales.  Todas las ops son PURE_NATIVE.
+    const std::string name = "__vex_strcmp";
+    if (strcmp_helper_emitted_) return name;
+    strcmp_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_pa = hf.new_value(ir::IrType::PTR, "%pa");
+    hf.values[p_pa].is_param = true;
+    hf.values[p_pa].is_host_ptr = true;
+    hf.params.push_back(p_pa);
+    const ir::IrValueId p_la = hf.new_value(ir::IrType::I64, "%la");
+    hf.values[p_la].is_param = true;
+    hf.params.push_back(p_la);
+    const ir::IrValueId p_pb = hf.new_value(ir::IrType::PTR, "%pb");
+    hf.values[p_pb].is_param = true;
+    hf.values[p_pb].is_host_ptr = true;
+    hf.params.push_back(p_pb);
+    const ir::IrValueId p_lb = hf.new_value(ir::IrType::I64, "%lb");
+    hf.values[p_lb].is_param = true;
+    hf.params.push_back(p_lb);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    const uint32_t ln = 0;
+
+    // Helpers locales (mismo patron que emit_native_itoa_to_buf).
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v;
+        ad.operands = {base, off};
+        ad.source_line = ln;
+        fn_->append(current_block_, std::move(ad));
+        return v;
+    };
+    auto new_slot = [&]() -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v;
+        al.imm = 8;
+        al.host_alloca = true;
+        al.source_line = ln;
+        fn_->append(current_block_, std::move(al));
+        return v;
+    };
+    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v;
+        ld.operands = {addr};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {val, addr};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    };
+    auto load_byte = [&](ir::IrValueId addr) -> ir::IrValueId {
+        // LOAD U8 -> zero-extend a i64 (byte unsigned 0..255).
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v;
+        ld.operands = {addr};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::I64;
+        in.dst = v;
+        in.operands = {a, b};
+        in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return v;
+    };
+    auto cmp = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::I64;
+        in.dst = v;
+        in.operands = {a, b};
+        in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return v;
+    };
+    auto new_block = [&]() -> ir::IrBlockId { return fn_->new_block(); };
+    auto br = [&](ir::IrBlockId target) {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.target_block = target;
+        b.source_line = ln;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(target);
+        fn_->blocks[target].preds.push_back(current_block_);
+    };
+    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
+                       ir::IrBlockId t_false) {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {cond};
+        b.target_block = t_true;
+        b.false_block = t_false;
+        b.source_line = ln;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(t_true);
+        fn_->blocks[current_block_].succs.push_back(t_false);
+        fn_->blocks[t_true].preds.push_back(current_block_);
+        fn_->blocks[t_false].preds.push_back(current_block_);
+    };
+    auto ret = [&](ir::IrValueId v) {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {v};
+        rt.source_line = ln;
+        fn_->append(current_block_, std::move(rt));
+    };
+
+    ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, ln);
+    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, ln);
+    ir::IrValueId v_neg1 = emit_const(ir::IrType::I64, (uint64_t)(-1), ln);
+
+    // min = (la < lb) ? la : lb.  Bloques: bb_minA / bb_minB / join.
+    ir::IrValueId s_min = new_slot();
+    {
+        ir::IrValueId la_lt_lb = cmp(ir::IrOp::CMP_LT, p_la, p_lb); // signed
+        ir::IrBlockId bb_minA = new_block();
+        ir::IrBlockId bb_minB = new_block();
+        ir::IrBlockId bb_minJ = new_block();
+        br_cond(la_lt_lb, bb_minA, bb_minB);
+        current_block_ = bb_minA;
+        store_i64(s_min, p_la);
+        br(bb_minJ);
+        current_block_ = bb_minB;
+        store_i64(s_min, p_lb);
+        br(bb_minJ);
+        current_block_ = bb_minJ;
+    }
+
+    // i = 0.
+    ir::IrValueId s_i = new_slot();
+    store_i64(s_i, v_zero);
+
+    // Loop: while (i < min) { ca=pa[i]; cb=pb[i]; if(ca!=cb) ret cmp; i++; }
+    ir::IrBlockId bb_hdr = new_block();
+    br(bb_hdr);
+    current_block_ = bb_hdr;
+    {
+        ir::IrValueId v_i = load_i64(s_i);
+        ir::IrValueId v_min = load_i64(s_min);
+        ir::IrValueId i_lt = cmp(ir::IrOp::CMP_LT, v_i, v_min); // signed
+        ir::IrBlockId bb_body = new_block();
+        ir::IrBlockId bb_tail = new_block();
+        br_cond(i_lt, bb_body, bb_tail);
+
+        // bb_body: comparar bytes.
+        current_block_ = bb_body;
+        {
+            ir::IrValueId v_i2 = load_i64(s_i);
+            ir::IrValueId v_a_at = ptr_add(p_pa, v_i2);
+            ir::IrValueId v_b_at = ptr_add(p_pb, v_i2);
+            ir::IrValueId v_ca = load_byte(v_a_at);
+            ir::IrValueId v_cb = load_byte(v_b_at);
+            ir::IrValueId ne = cmp(ir::IrOp::CMP_NE, v_ca, v_cb);
+            ir::IrBlockId bb_diff = new_block();
+            ir::IrBlockId bb_cont = new_block();
+            br_cond(ne, bb_diff, bb_cont);
+
+            // bb_diff: ret (ca < cb) ? -1 : 1.  Bytes 0..255 -> CMP_LT
+            //          unsigned == signed (ambos positivos en i64).
+            current_block_ = bb_diff;
+            {
+                ir::IrValueId lt = cmp(ir::IrOp::CMP_LT, v_ca, v_cb);
+                ir::IrBlockId bb_lt = new_block();
+                ir::IrBlockId bb_gt = new_block();
+                br_cond(lt, bb_lt, bb_gt);
+                current_block_ = bb_lt;
+                ret(v_neg1);
+                current_block_ = bb_gt;
+                ret(v_one);
+            }
+
+            // bb_cont: i++ ; volver al header.
+            current_block_ = bb_cont;
+            {
+                ir::IrValueId v_i3 = load_i64(s_i);
+                ir::IrValueId v_i4 = bin(ir::IrOp::ADD, v_i3, v_one);
+                store_i64(s_i, v_i4);
+            }
+            br(bb_hdr);
+        }
+
+        // bb_tail: prefijos iguales -> el mas corto es menor.
+        current_block_ = bb_tail;
+        {
+            ir::IrValueId la_lt = cmp(ir::IrOp::CMP_LT, p_la, p_lb);
+            ir::IrBlockId bb_short = new_block();
+            ir::IrBlockId bb_chk_gt = new_block();
+            br_cond(la_lt, bb_short, bb_chk_gt);
+            current_block_ = bb_short;
+            ret(v_neg1);
+            current_block_ = bb_chk_gt;
+            {
+                ir::IrValueId la_gt = cmp(ir::IrOp::CMP_GT, p_la, p_lb);
+                ir::IrBlockId bb_long = new_block();
+                ir::IrBlockId bb_eq = new_block();
+                br_cond(la_gt, bb_long, bb_eq);
+                current_block_ = bb_long;
+                ret(v_one);
+                current_block_ = bb_eq;
+                ret(v_zero);
+            }
+        }
+    }
 
     fn_ = saved_fn;
     current_block_ = saved_block;

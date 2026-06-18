@@ -1159,6 +1159,18 @@ class Lowering {
     /// Devuelve el nombre del helper.  Solo en @c native_poo_.
     std::string ensure_btoa_helper();
     bool btoa_helper_emitted_ = false; ///< El helper btoa ya esta emitido.
+    /// Vex Embed Inc 4: helper de comparacion lexicografica de strings
+    /// value-type nativos.  Firma:
+    /// @c i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb).
+    /// Devuelve -1/0/1 (memcmp + tie-break por longitud: a la izquierda
+    /// del primer byte distinto decide; si un prefijo coincide, el mas
+    /// corto es menor).  Como funcion APARTE con loop -> el optimizer no
+    /// foldea la comparacion byte-a-byte mid-expression con operandos
+    /// constantes (mismo motivo que itoa/btoa) y el inliner no la re-inlinea
+    /// (is_inlineable exige 1 bloque).  Devuelve el nombre.  Solo en
+    /// @c native_poo_.
+    std::string ensure_strcmp_helper();
+    bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
