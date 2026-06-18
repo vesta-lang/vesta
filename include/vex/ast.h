@@ -1434,8 +1434,25 @@ struct FunctionDecl : Node {
     /// vacio si la funcion no declara @complexity.  @c complexity_vars
     /// guarda los bindings opcionales `n = <expr>` (texto raw) que
     /// indican cual es la variable de tamano del input.
+    ///
+    /// @c complexity_expr es AZUCAR: equivale a declarar la dimension
+    /// @c total_post (el coste efectivo real, validado contra el TOTAL
+    /// POST-opt).  Para documentar las CUATRO dimensiones por separado se
+    /// usan los campos nombrados de abajo.
     std::string complexity_expr;
     std::vector<std::string> complexity_vars;
+    /// Contratos por DIMENSION del subsistema de coste.  Cada uno es la
+    /// expresion declarada para una de las cuatro combinaciones
+    /// PARCIAL/TOTAL x PRE-opt/POST-opt.  Vacio => esa dimension no se
+    /// declara (no se valida).  Sintaxis:
+    ///   @complexity(partial_pre: O(n), partial_post: O(n),
+    ///               total_pre: O(n^2), total_post: O(n^2))
+    /// La forma posicional @complexity(O(n)) llena @c complexity_total_post
+    /// (compat).  Los campos son opcionales e independientes.
+    std::string complexity_partial_pre;
+    std::string complexity_partial_post;
+    std::string complexity_total_pre;
+    std::string complexity_total_post;
     FunctionDecl() : Node(NodeKind::FunctionDecl) {}
 };
 

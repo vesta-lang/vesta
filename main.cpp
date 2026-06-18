@@ -427,6 +427,10 @@ int main(int argc, char *argv[]) {
             "mermaid). html produce paginas interactivas autocontenidas "
             "(.html); both=mermaid+graphviz; all=los tres.",
             cxxopts::value<std::string>()->default_value("mermaid"))(
+            "diagram-cost",
+            "Anotar cada nodo-funcion de los diagramas IR (pre y post) con su "
+            "coste Big-O (parcial + total) calculado por analyze::bigo. Aplica "
+            "a --diagram-ir / --diagram-ir-opt / --diagram-all.")(
             "gc-debug",
             "Activar trazas de debug del Garbage Collector a stderr (minor_gc, "
             "major_gc, sweep, release_handle, evacuate). Util para "
@@ -1383,6 +1387,22 @@ int main(int argc, char *argv[]) {
             return nullptr;
         };
 
+        // Helper: validar UNA dimension declarada contra su clase inferida.
+        // CONSERVADOR: solo senala discrepancia si HAY contrato, la
+        // inferencia es EXACT, ambas clases son conocidas (no O(?)) y
+        // difieren.  Devuelve true si hay discrepancia confirmada.  Si la
+        // dimension no se declara (decl vacio) devuelve false sin tocar nada.
+        auto validate_dim = [](const std::string &decl,
+                               analyze::CostClass inferred,
+                               analyze::Confidence conf) -> bool {
+            if (decl.empty()) return false;
+            analyze::CostClass dc = analyze::parse_cost_class(decl);
+            if (conf != analyze::Confidence::EXACT) return false;
+            if (inferred == analyze::CostClass::O_UNKNOWN) return false;
+            if (dc == analyze::CostClass::O_UNKNOWN) return false;
+            return dc != inferred;
+        };
+
         if (want_json) {
             // JSON con dos arrays: "pre" y "post".  Cada CostResult expone
             // ya su "partial" (big_o) y "total" + calls[] para diagramas.
@@ -1401,8 +1421,10 @@ int main(int argc, char *argv[]) {
         std::cout << "Niveles: PRE-opt (fuente) y POST-opt (codigo final O2);"
                      " PARCIAL (cuerpo, calls=O(1)) y TOTAL (interprocedural)."
                      "\n";
-        std::cout << "Contrato @complexity validado contra el TOTAL POST-opt"
-                     " (complejidad efectiva real).\n";
+        std::cout << "Contrato @complexity: cada dimension declarada "
+                     "(partial_pre/partial_post/total_pre/total_post) se valida"
+                     " contra su coste inferido.  @complexity(O(...)) = azucar"
+                     " de total_post.\n";
         std::cout
             << "=================================================="
                "===========\n";
@@ -1444,19 +1466,58 @@ int main(int argc, char *argv[]) {
                           << analyze::cost_class_str(rp.total_class) << "\n";
             }
 
-            if (!rp.declared_expr.empty()) {
-                std::cout << "      @complexity declarada: " << rp.declared_expr
-                          << " -> "
-                          << analyze::cost_class_str(rp.declared_class);
-                if (rp.contract_mismatch) {
-                    std::cout << "  ** DISCREPANCIA con el TOTAL POST-opt "
-                              << analyze::cost_class_str(rp.total_class)
-                              << " **";
-                    ++mismatches;
-                } else {
-                    std::cout << "  (ok)";
+            // Contrato @complexity: validar CADA dimension declarada contra
+            // su coste inferido correspondiente.  Cada una es independiente.
+            const bool has_any_contract =
+                !rp.decl_partial_pre.empty() || !rp.decl_partial_post.empty() ||
+                !rp.decl_total_pre.empty() || !rp.decl_total_post.empty();
+            if (has_any_contract) {
+                std::cout << "      @complexity declarada:\n";
+                // Tabla: (etiqueta, decl, inferida, confianza).  Para PRE
+                // usamos el CostResult PRE si existe.
+                struct DimRow {
+                    const char *label;
+                    const std::string *decl;
+                    analyze::CostClass inferred;
+                    analyze::Confidence conf;
+                    bool have;
+                };
+                std::vector<DimRow> rows = {
+                    {"partial_pre ", &rp.decl_partial_pre,
+                     pre ? pre->big_o : analyze::CostClass::O_UNKNOWN,
+                     pre ? pre->confidence : analyze::Confidence::UNKNOWN,
+                     pre != nullptr},
+                    {"partial_post", &rp.decl_partial_post, rp.big_o,
+                     rp.confidence, true},
+                    {"total_pre   ", &rp.decl_total_pre,
+                     pre ? pre->total_class : analyze::CostClass::O_UNKNOWN,
+                     pre ? pre->total_confidence
+                         : analyze::Confidence::UNKNOWN,
+                     pre != nullptr},
+                    {"total_post  ", &rp.decl_total_post, rp.total_class,
+                     rp.total_confidence, true},
+                };
+                for (const auto &row : rows) {
+                    if (row.decl->empty()) continue;
+                    std::cout << "        " << row.label << ": " << *row.decl
+                              << " -> "
+                              << analyze::cost_class_str(
+                                     analyze::parse_cost_class(*row.decl));
+                    if (!row.have) {
+                        std::cout << "  (dimension no disponible; no validada)";
+                    } else if (validate_dim(*row.decl, row.inferred,
+                                            row.conf)) {
+                        std::cout << "  ** DISCREPANCIA: inferida "
+                                  << analyze::cost_class_str(row.inferred)
+                                  << " **";
+                        ++mismatches;
+                    } else {
+                        std::cout << "  (ok, inferida "
+                                  << analyze::cost_class_str(row.inferred)
+                                  << ")";
+                    }
+                    std::cout << "\n";
                 }
-                std::cout << "\n";
             }
         }
         std::cout
@@ -1620,6 +1681,8 @@ int main(int argc, char *argv[]) {
         copts.dump_html_ir_pre = emit_html && diag_ir_pre;
         copts.dump_html_ir_post = emit_html && diag_ir_post;
         copts.dump_html_vel = emit_html && diag_vel;
+        // --diagram-cost: anotar el coste Big-O en los diagramas IR.
+        copts.annotate_cost = result.count("diagram-cost") > 0;
 
         // Flag --port=<lang>: si presente, configurar el transpiler IR ->
         // codigo. El frontend Vex llama al port::Transpiler tras la fase de

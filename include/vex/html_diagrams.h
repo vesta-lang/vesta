@@ -56,6 +56,9 @@ struct ModuleNode;
 namespace ir {
 struct IrModule;
 }
+namespace analyze {
+struct ModuleCost;
+}
 
 namespace vex {
 
@@ -94,10 +97,14 @@ std::string html_from_ast(const ast::ModuleNode &mod);
  *
  * @param mod    IrModule a graficar.
  * @param title  Titulo (e.g. "SSA IR pre-optimizacion").
+ * @param cost   (opcional) Coste Big-O del modulo (--diagram-cost).  Se
+ *               reenvia al generador DOT subyacente para anotar cada
+ *               funcion.  Default nullptr => sin anotacion.
  * @return       Documento HTML completo.
  */
 std::string html_from_ir_module(const ir::IrModule &mod,
-                                const std::string &title);
+                                const std::string &title,
+                                const analyze::ModuleCost *cost = nullptr);
 
 /**
  * @brief HTML interactivo del bytecode .vel ensamblador final.

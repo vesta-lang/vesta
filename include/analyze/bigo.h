@@ -146,6 +146,10 @@ struct CostResult {
     std::vector<CallSite> calls;
 
     /// Contrato declarado por el usuario (@complexity), si lo hay.
+    /// @c declared_expr/@c declared_class corresponden a la dimension que
+    /// este @c CostResult representa (PARCIAL o TOTAL del modulo PRE o POST
+    /// que se analizo).  Para los 4 contratos crudos (independientes del
+    /// nivel) ver los campos @c decl_* de abajo.
     std::string declared_expr;              ///< vacio => sin contrato.
     CostClass declared_class = CostClass::O_UNKNOWN; ///< parseado de declared_expr.
     /// true si HAY contrato Y el analizador esta CONFIADO de que la cota
@@ -153,6 +157,17 @@ struct CostResult {
     /// pone a true con @c confidence == EXACT y clases distintas.  Se
     /// compara contra el coste TOTAL (la complejidad real efectiva).
     bool contract_mismatch = false;
+
+    /// Contratos por DIMENSION declarados en @complexity (texto crudo tal
+    /// como lo escribio el usuario; vacio => esa dimension no se declara).
+    /// Son los MISMOS cuatro valores en el CostResult PRE y en el POST de
+    /// una funcion (viajan en la IrFunction).  La VALIDACION de cada
+    /// dimension la hace el consumidor (main.cpp) que dispone de los cuatro
+    /// costes inferidos (PARCIAL/TOTAL x PRE/POST).
+    std::string decl_partial_pre;
+    std::string decl_partial_post;
+    std::string decl_total_pre;
+    std::string decl_total_post;
 };
 
 /// @brief Resultado del analisis de un modulo completo.
@@ -219,6 +234,19 @@ std::string cost_result_to_json(const CostResult &r);
 
 /// @brief Serializa un @c ModuleCost completo como array JSON.
 std::string module_cost_to_json(const ModuleCost &m);
+
+/**
+ * @brief Etiqueta de coste compacta de una funcion (hook para diagramas).
+ *
+ * Busca la funcion @p name en @p mc y devuelve una linea legible con su
+ * coste PARCIAL y TOTAL, e.g. "coste: parcial O(n) | total O(n^2)".  Si
+ * la funcion declara @c @complexity y hay discrepancia confirmada,
+ * anyade un marcador "[!= declarada]".  Si la funcion no esta en @p mc
+ * devuelve cadena vacia (el renderer no anota nada).  Pensada para
+ * anexar al titulo del nodo-funcion en Graphviz/Mermaid/HTML.
+ */
+std::string cost_label_for_function(const ModuleCost &mc,
+                                    const std::string &name);
 
 } // namespace analyze
 

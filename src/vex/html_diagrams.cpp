@@ -1135,10 +1135,12 @@ std::string html_from_ast(const ast::ModuleNode &mod) {
 }
 
 std::string html_from_ir_module(const ir::IrModule &mod,
-                                const std::string &title) {
+                                const std::string &title,
+                                const analyze::ModuleCost *cost) {
     std::string view =
         (title.find("post") != std::string::npos) ? "ir-post" : "ir-pre";
-    return html_from_dot(graphviz_from_ir_module(mod, title), title, view);
+    return html_from_dot(graphviz_from_ir_module(mod, title, cost), title,
+                         view);
 }
 
 std::string html_from_vel_text(const std::string &vel_text) {

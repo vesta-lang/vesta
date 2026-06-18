@@ -169,6 +169,50 @@ void test_trivial_function() {
 }
 
 /* ===================================================================== */
+/* Test 1.b: round-trip de los contratos @complexity por dimension        */
+/* ===================================================================== */
+void test_complexity_dimensions() {
+    ir::IrFunction fn;
+    fn.name = "anotada";
+    fn.ret_type = ir::IrType::I64;
+    // Forma posicional (legacy) + bindings + las cuatro dimensiones.
+    fn.complexity_expr = "O(n)";
+    fn.complexity_vars = {"n = m"};
+    fn.complexity_partial_pre = "O(n)";
+    fn.complexity_partial_post = "O(n)";
+    fn.complexity_total_pre = "O(n^2)";
+    fn.complexity_total_post = "O(n^3)";
+
+    // Un bloque trivial para que la funcion sea valida.
+    const auto v = mk_const(fn, ir::IrType::I64, 7);
+    ir::IrBlock entry;
+    entry.id = 0;
+    entry.name = "entry";
+    ir::IrInstr r;
+    r.op = ir::IrOp::RET;
+    r.type = ir::IrType::I64;
+    r.dst = ir::IR_NO_VALUE;
+    r.operands.push_back(v);
+    entry.instrs.push_back(r);
+    fn.blocks.push_back(entry);
+
+    std::vector<uint8_t> buf;
+    ir::serialize_function(fn, buf);
+    size_t off = 0;
+    ir::IrFunction fn2;
+    CHECK(ir::deserialize_function(buf, off, fn2), "deserialize complexity");
+    CHECK(off == buf.size(), "consumido todo el buffer");
+    // Cada uno de los cuatro campos + el legacy + los vars sobreviven.
+    CHECK(fn2.complexity_expr == "O(n)", "complexity_expr preservado");
+    CHECK(fn2.complexity_vars.size() == 1 && fn2.complexity_vars[0] == "n = m",
+          "complexity_vars preservado");
+    CHECK(fn2.complexity_partial_pre == "O(n)", "partial_pre preservado");
+    CHECK(fn2.complexity_partial_post == "O(n)", "partial_post preservado");
+    CHECK(fn2.complexity_total_pre == "O(n^2)", "total_pre preservado");
+    CHECK(fn2.complexity_total_post == "O(n^3)", "total_post preservado");
+}
+
+/* ===================================================================== */
 /* Test 2: Funcion con flags de IrValue                                   */
 /* ===================================================================== */
 
@@ -641,6 +685,7 @@ void test_truncated_buffer() {
 
 int main() {
     test_trivial_function();
+    test_complexity_dimensions();
     test_value_flags();
     test_multi_block_branches();
     test_phi_nodes();

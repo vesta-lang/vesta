@@ -729,6 +729,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
     std::string top_complexity_expr;          // expr de coste normalizada
     std::vector<std::string> top_complexity_vars; // bindings `n = <expr>`
+    // Contratos por dimension PARCIAL/TOTAL x PRE/POST (campos nombrados).
+    std::string top_complexity_partial_pre;
+    std::string top_complexity_partial_post;
+    std::string top_complexity_total_pre;
+    std::string top_complexity_total_post;
     // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel
     // de clase.  El TypeChecker pre-pase las consume y genera
     // ClassMethodDecls sinteticos (getters, setters, toString, etc.).
@@ -848,51 +853,89 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     } else if (cstart <= csrc.size() && cend >= cstart &&
                                cend <= csrc.size()) {
                         std::string raw = csrc.substr(cstart, cend - cstart);
-                        // Partir por la primera coma de NIVEL SUPERIOR (las
-                        // comas dentro de O(...) -- p.ej. O(n, m) -- no cuentan).
-                        size_t split = std::string::npos;
-                        int d = 0;
-                        for (size_t k = 0; k < raw.size(); ++k) {
-                            char c = raw[k];
-                            if (c == '(')
-                                ++d;
-                            else if (c == ')')
-                                --d;
-                            else if (c == ',' && d == 0) {
-                                split = k;
-                                break;
-                            }
-                        }
                         auto trim = [](std::string s) {
                             size_t a = s.find_first_not_of(" \t\r\n");
                             size_t b = s.find_last_not_of(" \t\r\n");
                             if (a == std::string::npos) return std::string();
                             return s.substr(a, b - a + 1);
                         };
-                        if (split == std::string::npos) {
-                            top_complexity_expr = trim(raw);
-                        } else {
-                            top_complexity_expr = trim(raw.substr(0, split));
-                            // Resto: uno o mas bindings separados por coma.
-                            std::string rest = raw.substr(split + 1);
-                            size_t pos = 0;
-                            int dd = 0;
+                        // Partir TODO el contenido por comas de NIVEL SUPERIOR
+                        // (las comas dentro de O(...) -- p.ej. O(n, m) -- no
+                        // cuentan).  Cada segmento es uno de:
+                        //   - "dimension: O(...)" -> contrato por dimension
+                        //     (partial_pre/partial_post/total_pre/total_post);
+                        //   - "var = <expr>"      -> binding de tamano de input;
+                        //   - "O(...)" posicional -> azucar de total_post (1ra).
+                        std::vector<std::string> segs;
+                        {
+                            int d = 0;
                             size_t seg = 0;
-                            for (; pos < rest.size(); ++pos) {
-                                char c = rest[pos];
+                            for (size_t k = 0; k <= raw.size(); ++k) {
+                                char c = (k < raw.size()) ? raw[k] : ',';
                                 if (c == '(')
-                                    ++dd;
+                                    ++d;
                                 else if (c == ')')
-                                    --dd;
-                                else if (c == ',' && dd == 0) {
-                                    std::string b = trim(rest.substr(seg, pos - seg));
-                                    if (!b.empty())
-                                        top_complexity_vars.push_back(b);
-                                    seg = pos + 1;
+                                    --d;
+                                else if (c == ',' && d == 0) {
+                                    std::string s = trim(raw.substr(seg, k - seg));
+                                    if (!s.empty()) segs.push_back(s);
+                                    seg = k + 1;
                                 }
                             }
-                            std::string b = trim(rest.substr(seg));
-                            if (!b.empty()) top_complexity_vars.push_back(b);
+                        }
+                        // Helper: localizar el ':' de nivel superior (separador
+                        // del nombre de dimension), ignorando los ':' que
+                        // pudieran aparecer dentro de O(...).
+                        auto top_colon = [](const std::string &s) -> size_t {
+                            int d = 0;
+                            for (size_t k = 0; k < s.size(); ++k) {
+                                char c = s[k];
+                                if (c == '(')
+                                    ++d;
+                                else if (c == ')')
+                                    --d;
+                                else if (c == ':' && d == 0)
+                                    return k;
+                            }
+                            return std::string::npos;
+                        };
+                        bool got_positional = false;
+                        for (const std::string &s : segs) {
+                            size_t col = top_colon(s);
+                            if (col != std::string::npos) {
+                                // Campo nombrado "dimension: O(...)".
+                                std::string key = trim(s.substr(0, col));
+                                std::string val = trim(s.substr(col + 1));
+                                if (key == "partial_pre")
+                                    top_complexity_partial_pre = val;
+                                else if (key == "partial_post")
+                                    top_complexity_partial_post = val;
+                                else if (key == "total_pre")
+                                    top_complexity_total_pre = val;
+                                else if (key == "total_post")
+                                    top_complexity_total_post = val;
+                                else
+                                    error_here(
+                                        ("@complexity: dimension desconocida "
+                                         "'" + key + "' (usar partial_pre, "
+                                         "partial_post, total_pre o "
+                                         "total_post)")
+                                            .c_str());
+                                continue;
+                            }
+                            // Sin ':' -> binding "var = ..." o expr posicional.
+                            if (s.find('=') != std::string::npos) {
+                                top_complexity_vars.push_back(s);
+                            } else if (!got_positional) {
+                                // Primera expr posicional = azucar de total_post.
+                                top_complexity_expr = s;
+                                got_positional = true;
+                            } else {
+                                error_here(
+                                    "@complexity: expresion posicional "
+                                    "duplicada (solo se admite una; usa los "
+                                    "campos nombrados para las 4 dimensiones)");
+                            }
                         }
                     }
                 }
@@ -1361,9 +1404,19 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
         // Subsistema de coste: propagar el contrato @complexity al AST.
-        if (fd && !top_complexity_expr.empty()) {
+        // @c complexity_expr (forma posicional) es azucar de total_post: si
+        // no se declaro total_post nombrado, lo usamos como tal.
+        if (fd) {
             fd->complexity_expr = top_complexity_expr;
             fd->complexity_vars = top_complexity_vars;
+            fd->complexity_partial_pre = top_complexity_partial_pre;
+            fd->complexity_partial_post = top_complexity_partial_post;
+            fd->complexity_total_pre = top_complexity_total_pre;
+            fd->complexity_total_post = top_complexity_total_post;
+            // Azucar: la expr posicional rellena total_post si nadie lo declaro.
+            if (fd->complexity_total_post.empty() &&
+                !top_complexity_expr.empty())
+                fd->complexity_total_post = top_complexity_expr;
         }
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.
         if (fd && !top_attr_section.empty()) {

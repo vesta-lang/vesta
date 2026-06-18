@@ -60,6 +60,9 @@ struct ModuleNode;
 namespace ir {
 struct IrModule;
 }
+namespace analyze {
+struct ModuleCost;
+}
 
 namespace vex {
 
@@ -112,10 +115,14 @@ std::string graphviz_from_ast(const ast::ModuleNode &mod);
  * @param mod          IrModule (pre o post optimizacion).
  * @param title        Titulo (e.g. "SSA IR pre-opt"), va al `label` del
  * digraph.
+ * @param cost         (opcional) Coste Big-O del modulo (--diagram-cost).  Si
+ *                     no es nullptr, cada cluster de funcion anota su coste
+ *                     (parcial + total) en el label y el tooltip.
  * @return             String con el codigo DOT.
  */
 std::string graphviz_from_ir_module(const ir::IrModule &mod,
-                                    const std::string &title);
+                                    const std::string &title,
+                                    const analyze::ModuleCost *cost = nullptr);
 
 /**
  * @brief Genera un diagrama Graphviz (DOT) del bytecode .vel ensamblador.
