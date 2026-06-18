@@ -1119,6 +1119,27 @@ class Lowering {
     ir::IrValueId emit_native_itoa_to_buf(ir::IrValueId v_buf,
                                           ir::IrValueId v_val, bool is_signed,
                                           uint32_t source_line);
+    /// Vex Embed Inc 2: garantiza que el helper itoa nativo
+    /// @c __vex_itoa_s (signed) / @c __vex_itoa_u (unsigned) este emitido
+    /// como funcion IR independiente en @c out_mod_ (una sola vez por
+    /// modulo y signedness).  Firma: @c (u8* buf, i64 val) -> i64 len.
+    /// El cuerpo es el itoa de @c emit_native_itoa_to_buf, pero como
+    /// funcion separada con loops -> el optimizer NO lo foldea cuando el
+    /// argumento es una constante (el const-fold mid-expression del itoa
+    /// INLINE producia longitudes erroneas).  Por tener varios bloques
+    /// (loops) el inliner tampoco lo re-inlinea (is_inlineable exige 1
+    /// bloque).  Devuelve el nombre del helper.  Solo en @c native_poo_.
+    std::string ensure_itoa_helper(bool is_signed);
+    /// Flags: el helper itoa signed/unsigned ya esta emitido en este
+    /// modulo (indice 0=unsigned, 1=signed).  Evita duplicar la funcion.
+    bool itoa_helper_emitted_[2] = {false, false};
+    /// Vex Embed Inc 2: helper bool->string nativo
+    /// @c i64 __vex_btoa(u8* buf, i64 b): escribe "true" (4) o "false"
+    /// (5) en @p buf y devuelve la longitud.  Como funcion APARTE con
+    /// branch -> evita el const-fold mid-expression del append condicional.
+    /// Devuelve el nombre del helper.  Solo en @c native_poo_.
+    std::string ensure_btoa_helper();
+    bool btoa_helper_emitted_ = false; ///< El helper btoa ya esta emitido.
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);

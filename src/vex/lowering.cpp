@@ -23418,6 +23418,189 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
     return load_i64(s_pos);
 }
 
+std::string Lowering::ensure_itoa_helper(bool is_signed) {
+    // Vex Embed Inc 2: emite (una vez por modulo + signedness) el helper
+    // itoa como funcion IR independiente.  Firma:
+    //   i64 __vex_itoa_{s|u}(u8* buf, i64 val)
+    // El cuerpo reutiliza emit_native_itoa_to_buf, que construye los loops
+    // de extraccion/inversion sobre fn_/current_block_.  Al vivir en una
+    // funcion APARTE con varios bloques:
+    //   (a) el const-fold del optimizer NO foldea el itoa mid-expression
+    //       (el bug de length erronea con argumento constante);
+    //   (b) el inliner NO lo re-inlinea (is_inlineable exige 1 bloque).
+    const int idx = is_signed ? 1 : 0;
+    const std::string name = is_signed ? "__vex_itoa_s" : "__vex_itoa_u";
+    if (itoa_helper_emitted_[idx]) return name;
+    itoa_helper_emitted_[idx] = true;
+
+    // Guardar el contexto del lowering en curso.
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    // Construir el helper.  Params: buf (host_ptr), val (i64).
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
+    hf.values[p_buf].is_param = true;
+    hf.values[p_buf].is_host_ptr = true;
+    hf.params.push_back(p_buf);
+    const ir::IrValueId p_val = hf.new_value(ir::IrType::I64, "%val");
+    hf.values[p_val].is_param = true;
+    hf.params.push_back(p_val);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    // El itoa escribe en buf y devuelve la longitud.
+    ir::IrValueId v_len =
+        emit_native_itoa_to_buf(p_buf, p_val, is_signed, /*source_line=*/0);
+
+    // ret len.
+    {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {v_len};
+        rt.source_line = 0;
+        fn_->append(current_block_, std::move(rt));
+    }
+
+    // Restaurar el contexto del padre antes de mover el helper al modulo.
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+std::string Lowering::ensure_btoa_helper() {
+    // Vex Embed Inc 2: helper bool->string nativo (una vez por modulo).
+    //   i64 __vex_btoa(u8* buf, i64 b)
+    //     if (b != 0) { buf <- "true";  ret 4; }
+    //     else        { buf <- "false"; ret 5; }
+    // Vive en una funcion APARTE con branch -> el optimizer no foldea el
+    // append condicional mid-expression con argumento constante.
+    const std::string name = "__vex_btoa";
+    if (btoa_helper_emitted_) return name;
+    btoa_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
+    hf.values[p_buf].is_param = true;
+    hf.values[p_buf].is_host_ptr = true;
+    hf.params.push_back(p_buf);
+    const ir::IrValueId p_b = hf.new_value(ir::IrType::I64, "%b");
+    hf.values[p_b].is_param = true;
+    hf.params.push_back(p_b);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    // Helper: STORE empaquetado de los bytes de `s` en buf[off..].
+    auto write_bytes = [&](const std::string &s) {
+        std::vector<uint8_t> data(s.begin(), s.end());
+        auto ptr_add = [&](ir::IrValueId base, uint64_t off) -> ir::IrValueId {
+            if (off == 0) return base;
+            ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v].is_host_ptr = true;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v;
+            ad.operands = {base, emit_const(ir::IrType::I64, off, 0)};
+            ad.source_line = 0;
+            fn_->append(current_block_, std::move(ad));
+            return v;
+        };
+        auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
+            ir::IrValueId v_dst = ptr_add(p_buf, off);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ty;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {emit_const(ty, val, 0), v_dst};
+            st.source_line = 0;
+            fn_->append(current_block_, std::move(st));
+        };
+        auto pack = [&](uint64_t pos, int n) -> uint64_t {
+            uint64_t v = 0;
+            for (int k = 0; k < n; ++k)
+                v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
+            return v;
+        };
+        const uint64_t plen = data.size();
+        uint64_t pos = 0;
+        for (; pos + 4 <= plen; pos += 4)
+            store_chunk(pos, pack(pos, 4), ir::IrType::I32);
+        if (pos + 2 <= plen) { store_chunk(pos, pack(pos, 2), ir::IrType::I16); pos += 2; }
+        if (pos + 1 <= plen) { store_chunk(pos, pack(pos, 1), ir::IrType::U8); pos += 1; }
+    };
+    auto ret_len = [&](uint64_t len) {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {emit_const(ir::IrType::I64, len, 0)};
+        rt.source_line = 0;
+        fn_->append(current_block_, std::move(rt));
+    };
+
+    // if (b != 0) -> bb_true ; else -> bb_false.
+    ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, 0);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr in{};
+        in.op = ir::IrOp::CMP_NE;
+        in.type = ir::IrType::I64;
+        in.dst = v_cond;
+        in.operands = {p_b, v_zero};
+        in.source_line = 0;
+        fn_->append(current_block_, std::move(in));
+    }
+    ir::IrBlockId bb_true = fn_->new_block("btoa_true");
+    ir::IrBlockId bb_false = fn_->new_block("btoa_false");
+    {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {v_cond};
+        b.target_block = bb_true;
+        b.false_block = bb_false;
+        b.source_line = 0;
+        fn_->append(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(bb_true);
+        fn_->blocks[current_block_].succs.push_back(bb_false);
+        fn_->blocks[bb_true].preds.push_back(current_block_);
+        fn_->blocks[bb_false].preds.push_back(current_block_);
+    }
+    current_block_ = bb_true;
+    write_bytes("true");
+    ret_len(4);
+    current_block_ = bb_false;
+    write_bytes("false");
+    ret_len(5);
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
 ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
     // Vex Embed Inc 2: interpolacion native.  Construimos un value-string
     // owned partiendo de un buffer vacio + appendeando cada parte (literal
@@ -23602,18 +23785,104 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                                                 ln);
             return true;
         }
-        // Tipo no soportado en interpolacion native (int/bool/float/struct/
-        // class/enum) -- Inc 2b futuro.  La conversion int->ASCII (itoa) y
-        // bool->"true"/"false" requieren CREAR BLOQUES de control flow
-        // (loops del itoa, branch del bool) DENTRO de la construccion del
-        // value-string; el codegen vreg-native (HOST_LEAF) produce codigo
-        // incorrecto para ese patron concreto (los appends lineales de
-        // string/char SI funcionan).  Hasta que el backend vreg maneje
-        // bloques anidados en la construccion de strings, estos tipos
-        // quedan fuera.  Diagnostico claro pidiendo conversion explicita.
+        // Enteros (i8..i64/u8..u64): itoa decimal inline a un scratch de
+        // 24 bytes, luego append de los `len` bytes escritos.
+        if (is_integral(ek)) {
+            ir::IrValueId v_int = lower_expr(ex);
+            if (v_int == ir::IR_NO_VALUE) return false;
+            // El itoa trabaja en i64: promover si es mas estrecho.
+            if (ek != PrimitiveKind::I64 && ek != PrimitiveKind::U64) {
+                ir::IrValueId v64 = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ext{};
+                ext.op = is_signed_integral(ek) ? ir::IrOp::SEXT : ir::IrOp::ZEXT;
+                ext.type = ir::IrType::I64;
+                ext.dst = v64;
+                ext.operands = {v_int};
+                ext.source_line = ln;
+                fn_->append(current_block_, std::move(ext));
+                v_int = v64;
+            }
+            // scratch de 24 bytes (suficiente para i64 con signo).
+            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = v_scr;
+                al.imm = 24;
+                al.host_alloca = native_poo_;
+                al.source_line = ln;
+                fn_->append(current_block_, std::move(al));
+            }
+            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            // CALL al helper itoa (no inline): evita el const-fold
+            // mid-expression que daba longitudes erroneas con argumento
+            // constante (el itoa vive en una funcion aparte con loops).
+            const std::string itoa_fn =
+                ensure_itoa_helper(is_signed_integral(ek));
+            ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ca{};
+                ca.op = ir::IrOp::CALL;
+                ca.type = ir::IrType::I64;
+                ca.dst = v_len;
+                ca.func_name = itoa_fn;
+                ca.operands = {v_scr, v_int};
+                ca.source_line = ln;
+                fn_->append(current_block_, std::move(ca));
+            }
+            build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
+            return true;
+        }
+        // bool: "true" (4) / "false" (5) via helper btoa (no inline,
+        // branch -> fold-safe con argumento constante).
+        if (ek == PrimitiveKind::BOOL) {
+            ir::IrValueId v_b = lower_expr(ex);
+            if (v_b == ir::IR_NO_VALUE) return false;
+            // Promover el bool a i64 para el helper (cmp != 0).
+            ir::IrValueId v_b64 = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ext{};
+                ext.op = ir::IrOp::ZEXT;
+                ext.type = ir::IrType::I64;
+                ext.dst = v_b64;
+                ext.operands = {v_b};
+                ext.source_line = ln;
+                fn_->append(current_block_, std::move(ext));
+            }
+            // scratch de 8 bytes (cabe "false" + margen).
+            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = v_scr;
+                al.imm = 8;
+                al.host_alloca = native_poo_;
+                al.source_line = ln;
+                fn_->append(current_block_, std::move(al));
+            }
+            if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
+            const std::string btoa_fn = ensure_btoa_helper();
+            ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ca{};
+                ca.op = ir::IrOp::CALL;
+                ca.type = ir::IrType::I64;
+                ca.dst = v_len;
+                ca.func_name = btoa_fn;
+                ca.operands = {v_scr, v_b64};
+                ca.source_line = ln;
+                fn_->append(current_block_, std::move(ca));
+            }
+            build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
+            return true;
+        }
+        // Tipo no soportado en interpolacion native (float/struct/class/
+        // enum) -- Inc 2b futuro.  Diagnostico claro.
         error_at(ex->loc,
                  "interpolacion `${expr}` native (AOT): solo se soportan "
-                 "todavia string y char.  int/bool/float (y struct/class/"
+                 "todavia string, char, int y bool.  float (y struct/class/"
                  "enum) quedan para un follow-up (requieren codegen de "
                  "bloques anidados en la construccion del string).");
         return false;
