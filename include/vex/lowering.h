@@ -1088,6 +1088,38 @@ class Lowering {
     void emit_word_copy_loop(ir::IrValueId dst_base, ir::IrValueId src_base,
                              ir::IrValueId v_len, uint32_t source_line);
 
+    // --- Vex Embed Inc 2: mutacion += + interpolacion (solo native_poo_) ---
+    /// Append in-place de @p v_app_len bytes (en @p v_app_ptr, host) al
+    /// value-string cuyo slot {ptr,len,cap} apunta @p v_dst_slot.  Crece
+    /// el buffer si la capacidad es insuficiente (RAW_ALLOC nuevo de
+    /// new_len+1, MEMCPY de lo viejo, RAW_FREE del viejo, actualiza
+    /// ptr@0/cap@16), copia los bytes nuevos al final, actualiza len@8 y
+    /// nul-termina.  El slot se muta in-place (es owned mutable); NO
+    /// crea slot nuevo.  Usado por `s += t` y por la interpolacion
+    /// native.  Solo en @c native_poo_.  @p v_app_ptr / @p v_app_len no
+    /// se consumen.
+    void build_native_string_append_inplace(ir::IrValueId v_dst_slot,
+                                             ir::IrValueId v_app_ptr,
+                                             ir::IrValueId v_app_len,
+                                             uint32_t source_line);
+    /// Vex Embed Inc 2: construye un value-string owned a partir de un
+    /// literal interpolado @p slit ("texto ${a} mas ${b}").  Concatena las
+    /// partes literales con cada @c ${expr} convertido a texto INLINE
+    /// (string -> bytes directos, char -> 1 byte, int -> itoa decimal por
+    /// div/mod, bool -> "true"/"false").  Devuelve el PTR al slot del
+    /// value-string resultado (owned; el caller registra STRING_FREE).
+    /// Solo en @c native_poo_.
+    ir::IrValueId build_native_string_interp(ast::StringLitExpr *slit);
+    /// Vex Embed Inc 2: escribe en @p v_buf (host, >= 24 bytes) la
+    /// representacion decimal ASCII de @p v_val (un I64).  @p is_signed
+    /// controla el manejo del signo (emite '-' si negativo).  Devuelve el
+    /// IrValue I64 con la longitud escrita (sin nul).  itoa INLINE via
+    /// loop div/mod por 10 + inversion -- sin helper nativo (AOT bare no
+    /// tiene plugin).  Solo en @c native_poo_.
+    ir::IrValueId emit_native_itoa_to_buf(ir::IrValueId v_buf,
+                                          ir::IrValueId v_val, bool is_signed,
+                                          uint32_t source_line);
+
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findfield(ir::IrValueId v_params, uint32_t line);

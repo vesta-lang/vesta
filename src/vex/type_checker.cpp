@@ -7399,7 +7399,16 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
     }
 
     const Type tv = check_expr(e->value.get());
-    if (tv.kind != PrimitiveKind::COUNT && !types_assignable(s->type, tv)) {
+    // Vex Embed Inc 2: `string += string` y `string += char` son legales
+    // (append sugar).  El RHS char NO es assignable a string en general,
+    // pero en compound `+=` sobre string lo aceptamos: el lowering native
+    // appenda 1 byte (igual que str + char).  Aceptamos tambien string.
+    const bool string_append_ok =
+        (e->op == ast::AssignOp::AddAssign &&
+         s->type.kind == PrimitiveKind::STRING &&
+         (tv.kind == PrimitiveKind::STRING || tv.kind == PrimitiveKind::CHAR));
+    if (tv.kind != PrimitiveKind::COUNT && !string_append_ok &&
+        !types_assignable(s->type, tv)) {
         diags_.error(e->loc, std::string("tipo del valor (") +
                                  type_to_string(tv) +
                                  ") incompatible con tipo del destino (" +

@@ -1,0 +1,29 @@
+// Vex Embed Inc 2: interpolacion `"${...}"` en value-strings nativos (AOT).
+// Construye UN value-string concatenando las partes literales con cada
+// `${expr}` appendado in-place al buffer (grow/realloc).  Sin GC, sin
+// StringObject, sin helper nativo (AOT bare no tiene plugin).  RAII libera
+// el resultado y los temporales del append.  Validado por ejecucion.
+//
+// Sugar syntax: el usuario escribe `"${...}"`, no metodos.
+//
+// Tipos soportados en esta entrega: string y char (append lineal).  int /
+// bool / float quedan para un follow-up (su conversion a texto necesita
+// crear bloques de control flow -- loops itoa, branch bool -- dentro de la
+// construccion del string, patron que el codegen vreg-native aun no maneja
+// correctamente).
+
+i32 main() {
+    string name = "Vex";
+    char excl = '!';
+    // "hola Vex mundo!" -> 15 bytes.
+    string m = "hola ${name} mundo${excl}";
+
+    // length esperada: "hola "(5) + "Vex"(3) + " mundo"(6) + "!"(1) = 15.
+    // Verificamos el byte interpolado al final (p[14] = '!' = 33) y, si es
+    // correcto, devolvemos la length (15) como exit-code.
+    char* p = m.cstr();
+    if (p[14] == 33) {
+        return (i32) m.length();   // 15
+    }
+    return -1;
+}
