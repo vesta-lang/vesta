@@ -726,6 +726,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
     bool top_target_skip = false; /* L.24: @Target no matchea */
+    // Subsistema de coste (modo --analyze): @complexity(O(...)[, n=...]).
+    std::string top_complexity_expr;          // expr de coste normalizada
+    std::vector<std::string> top_complexity_vars; // bindings `n = <expr>`
     // Sprint lombok (2026-06-03): anotaciones tipo Lombok a nivel
     // de clase.  El TypeChecker pre-pase las consume y genera
     // ClassMethodDecls sinteticos (getters, setters, toString, etc.).
@@ -812,7 +815,89 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             const bool is_at = (current_.lexeme == "at");
             const bool is_order = (current_.lexeme == "order");
             const bool is_bits = (current_.lexeme == "bits");
+            const bool is_complexity = (current_.lexeme == "complexity");
             (void)consume();
+            // @complexity(O(...)[, n = <expr>]): contrato de coste para el
+            // modo --analyze.  Se captura el texto RAW entre los parens y se
+            // parte por la primera coma (la sub-expr de coste va antes; los
+            // bindings `var = ...` despues).  Metadata pura: el codegen la
+            // ignora.  Tolerante a errores: si falta '(' se omite sin abortar.
+            if (is_complexity) {
+                if (current_.kind != TokenKind::LPAREN) {
+                    error_here("@complexity requiere '(O(...))'");
+                } else {
+                    (void)consume(); // '('
+                    const std::string &csrc = lex_.source_buffer();
+                    const uint32_t cstart = current_.loc.offset;
+                    uint32_t cend = cstart;
+                    int pdepth = 1;
+                    while (current_.kind != TokenKind::END_OF_FILE) {
+                        if (current_.kind == TokenKind::LPAREN) {
+                            ++pdepth;
+                        } else if (current_.kind == TokenKind::RPAREN) {
+                            if (--pdepth == 0) {
+                                cend = current_.loc.offset;
+                                (void)consume(); // ')' de cierre
+                                break;
+                            }
+                        }
+                        (void)consume();
+                    }
+                    if (pdepth != 0) {
+                        error_here("se esperaba ')' al cerrar @complexity(...)");
+                    } else if (cstart <= csrc.size() && cend >= cstart &&
+                               cend <= csrc.size()) {
+                        std::string raw = csrc.substr(cstart, cend - cstart);
+                        // Partir por la primera coma de NIVEL SUPERIOR (las
+                        // comas dentro de O(...) -- p.ej. O(n, m) -- no cuentan).
+                        size_t split = std::string::npos;
+                        int d = 0;
+                        for (size_t k = 0; k < raw.size(); ++k) {
+                            char c = raw[k];
+                            if (c == '(')
+                                ++d;
+                            else if (c == ')')
+                                --d;
+                            else if (c == ',' && d == 0) {
+                                split = k;
+                                break;
+                            }
+                        }
+                        auto trim = [](std::string s) {
+                            size_t a = s.find_first_not_of(" \t\r\n");
+                            size_t b = s.find_last_not_of(" \t\r\n");
+                            if (a == std::string::npos) return std::string();
+                            return s.substr(a, b - a + 1);
+                        };
+                        if (split == std::string::npos) {
+                            top_complexity_expr = trim(raw);
+                        } else {
+                            top_complexity_expr = trim(raw.substr(0, split));
+                            // Resto: uno o mas bindings separados por coma.
+                            std::string rest = raw.substr(split + 1);
+                            size_t pos = 0;
+                            int dd = 0;
+                            size_t seg = 0;
+                            for (; pos < rest.size(); ++pos) {
+                                char c = rest[pos];
+                                if (c == '(')
+                                    ++dd;
+                                else if (c == ')')
+                                    --dd;
+                                else if (c == ',' && dd == 0) {
+                                    std::string b = trim(rest.substr(seg, pos - seg));
+                                    if (!b.empty())
+                                        top_complexity_vars.push_back(b);
+                                    seg = pos + 1;
+                                }
+                            }
+                            std::string b = trim(rest.substr(seg));
+                            if (!b.empty()) top_complexity_vars.push_back(b);
+                        }
+                    }
+                }
+                continue;
+            }
             if (is_hot) {
                 top_attr_hot = true;
                 continue;
@@ -1275,6 +1360,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
+        // Subsistema de coste: propagar el contrato @complexity al AST.
+        if (fd && !top_complexity_expr.empty()) {
+            fd->complexity_expr = top_complexity_expr;
+            fd->complexity_vars = top_complexity_vars;
+        }
         // AOT 2b (dev OS): seccion de salida del codigo + permisos.
         if (fd && !top_attr_section.empty()) {
             fd->attr_section = top_attr_section;

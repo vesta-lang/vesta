@@ -413,6 +413,14 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     write_u64(out, (uint64_t)fn.section_at);
     write_u32(out, (uint32_t)fn.section_order);
 
+    // Subsistema de coste (--analyze): contrato @complexity.  Metadata pura;
+    // viaja en el cache para que el modo --analyze (que reusa el .vexir /
+    // ir_module_cache_bytes) pueda comparar contra la complejidad inferida.
+    write_str(out, fn.complexity_expr);
+    write_u32(out, static_cast<uint32_t>(fn.complexity_vars.size()));
+    for (const auto &s : fn.complexity_vars)
+        write_str(out, s);
+
     return out.size() - start;
 }
 
@@ -520,6 +528,17 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     if (!read_u32(in, off, ord_u)) return false;
     out.section_at = (int64_t)at_u;
     out.section_order = (int32_t)ord_u;
+    // Subsistema de coste (--analyze): contrato @complexity.
+    if (!read_str(in, off, out.complexity_expr)) return false;
+    uint32_t cvn = 0;
+    if (!read_u32(in, off, cvn)) return false;
+    out.complexity_vars.clear();
+    out.complexity_vars.reserve(cvn);
+    for (uint32_t k = 0; k < cvn; ++k) {
+        std::string s;
+        if (!read_str(in, off, s)) return false;
+        out.complexity_vars.push_back(std::move(s));
+    }
     return true;
 }
 

@@ -1070,6 +1070,25 @@ struct IrFunction {
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
 
     /**
+     * @brief Subsistema de coste (modo --analyze): contrato @complexity
+     *        declarado por el usuario en el fuente Vex.
+     *
+     * Metadata PURA, propagada desde @c ast::FunctionDecl por el lowering.
+     * NO afecta el codegen (interp/JIT/AOT la ignoran por completo).  La
+     * consume el analizador estatico @c analyze::bigo (modo --analyze)
+     * como contrato a validar contra la complejidad inferida.
+     *
+     *   - @c complexity_expr: la sub-expresion de coste tal cual la
+     *     escribio el usuario, normalizada (e.g. "O(n^2)", "O(n log n)",
+     *     "O(1)").  Vacio => la funcion no declara @complexity.
+     *   - @c complexity_vars: bindings opcionales `n = <expr>` que indican
+     *     que variable es el tamano del input (necesarios para --measure
+     *     en niveles superiores).  Cada entrada es el texto raw del binding.
+     */
+    std::string complexity_expr;
+    std::vector<std::string> complexity_vars;
+
+    /**
      * @brief Crea un nuevo valor SSA en el pool.
      * @param type Tipo del valor.
      * @param name Nombre opcional (si vacio se genera "%%N").
