@@ -1,0 +1,70 @@
+// examples_codes_vex/42_struct_operator.vex
+//
+// Operator overloading en structs (C-1 ext).  Igual que las clases,
+// un struct (value-type) puede sobrecargar `+` declarando un metodo
+// `__add__(rhs) -> R` y `==`/`!=` declarando `__eq__(rhs) -> bool`.
+// El operador `a OP b` despacha a `a.__op__(b)` cuando `a` es un
+// STRUCT cuyo layout declara el dunder cuya firma acepta `b`.  `!=`
+// deriva de `__eq__` negado si no hay `__ne__`.  El dispatch es CALL
+// directo (sin vtable: los structs son value-types).
+//
+// Sin el dunder, el comportamiento clasico queda intacto (aritmetica
+// de numeros, igualdad struct campo-a-campo).  Este ejemplo verifica
+// AMBAS cosas.
+//
+// Compilar y ejecutar (interp/Full):
+//   vm --vex examples_codes_vex/42_struct_operator.vex -o so
+//   vm --run so.velb --stats          (R00 == 42)
+//
+// Compilar nativo (AOT, los structs son AOT-compilables):
+//   vm --vex examples_codes_vex/42_struct_operator.vex -m aot --emit exe -o so.exe
+//   ./so.exe ; echo $?                 (exit-code == 42)
+//
+// Resultado esperado: 42.
+
+struct Vec2 {
+    i32 x;
+    i32 y;
+
+    // Sobrecarga de `+`: devuelve la suma de todas las componentes.
+    i32 __add__(Vec2 o) {
+        return this.x + o.x + this.y + o.y;
+    }
+
+    // Sobrecarga de `==`: igualdad componente a componente.
+    bool __eq__(Vec2 o) {
+        return this.x == o.x && this.y == o.y;
+    }
+}
+
+i32 main() {
+    Vec2 a;
+    a.x = 10;
+    a.y = 20;
+    Vec2 b;
+    b.x = 5;
+    b.y = 7;
+
+    // Operador `+` sobrecargado: 10+5+20+7 = 42.
+    i32 total = a + b;             // despacha a a.__add__(b)
+
+    // Operador `==` sobrecargado (verdadero): a == a2 -> 1.
+    Vec2 a2;
+    a2.x = 10;
+    a2.y = 20;
+    i32 eq_true = (i32)(a == a2);  // a.__eq__(a2) -> true -> 1
+
+    // Operador `!=` (derivado de __eq__ negado): a != b -> verdadero.
+    i32 ne_true = (i32)(a != b);   // !(a.__eq__(b)) -> true -> 1
+
+    // FALLBACK INTACTO: aritmetica de int y comparacion de int siguen
+    // funcionando exactamente igual que sin overloading.
+    i32 i = 3;
+    i32 j = 3;
+    i32 int_eq = (i32)(i == j);    // comparacion de int clasica -> 1
+    i32 int_sum = 1 + 1;           // suma de int clasica -> 2
+
+    // 42 solo si TODO va bien.
+    i32 gate = eq_true * ne_true * int_eq * (int_sum - 1);  // 1*1*1*1 = 1
+    return total * gate;           // 42 * 1 = 42
+}

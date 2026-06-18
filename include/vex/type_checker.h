@@ -146,6 +146,57 @@ struct StructFieldInfo {
 };
 
 /**
+ * @struct ClassMethodInfo
+ * @brief Resumen de un metodo de clase para el type checker.
+ *
+ * @c vtable_index es el slot donde el lowering insertara el metodo
+ * en la vtable del ClassRegistry (constructor en posicion 0 por
+ * convencion, resto en orden de declaracion).  @c is_constructor
+ * y @c is_static replican la info del AST.
+ *
+ * Tambien lo reutiliza @c StructLayout::methods: los structs son
+ * value-types sin vtable, asi que @c vtable_index/@c is_constructor
+ * no aplican; el lowering despacha sus metodos como funciones libres
+ * @c <Struct>__<metodo> con dispatch estatico.
+ */
+struct ClassMethodInfo {
+    std::string name;
+    Type return_type;
+    std::vector<Type> param_types;
+    uint32_t vtable_index = 0;
+    bool is_constructor = false;
+    /// destructor `~ClassName()`.  Sin params, void retorno.
+    /// El lowering lo invoca via CALLVIRT al exit del scope para
+    /// instancias locales que NO escapan
+    bool is_destructor = false;
+    bool is_static = false;
+    bool is_final = false;
+    /// el lowering, si encuentra un metodo expression-bodied
+    /// con esta marca, sustituye la llamada por el cuerpo en el call
+    /// site (sin CALLVIRT).  No es heredable: cada override decide su
+    /// propio @c is_inline.
+    bool is_inline = false;
+    /// ctor "trivial zero-init": cuerpo del constructor
+    /// solo asigna campos a valores que coinciden con el zero-init
+    /// que ya hace el GC (`gc_heap.alloc` memset el payload a 0).  En
+    /// ese caso, generate_new_helpers omite el callvirt al ctor en
+    /// `__new_<X>` -- ahorra ~9 instrucciones VM por `new` para clases
+    /// triviales.  Detectado en el type checker analizando el body.
+    bool is_zero_init_ctor = false;
+    /// Nombre de la clase donde el metodo esta DEFINIDO realmente
+    /// (importante para herencia: un metodo heredado por @c Y de
+    /// @c X tiene @c defining_class == "X" aunque lay.methods de Y
+    /// lo liste).  El lowering usa este nombre para construir el
+    /// label del code_vaddr (@c <defining_class>__<name>).
+    std::string defining_class;
+    /// Debug info para stack traces.  Llenado por el type
+    /// checker al ver el ClassMethodDecl original.  El lowering lo
+    /// emite en __module_init via @c setmethdbg.
+    std::string source_file;
+    uint32_t source_line = 0;
+};
+
+/**
  * @struct StructLayout
  * @brief Layout completo de un @c struct: nombre + campos + tamano total.
  *
@@ -157,6 +208,12 @@ struct StructFieldInfo {
 struct StructLayout {
     std::string name;
     std::vector<StructFieldInfo> fields;
+    /// Metodos del struct (value-type, dispatch estatico).  Reusa
+    /// @c ClassMethodInfo; @c vtable_index/@c is_constructor no se usan
+    /// (los structs no tienen vtable ni constructores con this(...)).
+    /// @c defining_class lleva el nombre del struct (para el label
+    /// @c <Struct>__<metodo> que emite el lowering como funcion libre).
+    std::vector<ClassMethodInfo> methods;
     uint32_t size_bytes = 0;
     uint32_t align_bytes = 1;
     /// marca `@Introspect` -- el lowering emite
@@ -206,52 +263,6 @@ struct EnumLayout {
     bool is_introspect = false;
     /// Phase M6.a L.3: visibilidad cross-module.
     bool is_public = true;
-};
-
-/**
- * @struct ClassMethodInfo
- * @brief Resumen de un metodo de clase para el type checker.
- *
- * @c vtable_index es el slot donde el lowering insertara el metodo
- * en la vtable del ClassRegistry (constructor en posicion 0 por
- * convencion, resto en orden de declaracion).  @c is_constructor
- * y @c is_static replican la info del AST.
- */
-struct ClassMethodInfo {
-    std::string name;
-    Type return_type;
-    std::vector<Type> param_types;
-    uint32_t vtable_index = 0;
-    bool is_constructor = false;
-    /// destructor `~ClassName()`.  Sin params, void retorno.
-    /// El lowering lo invoca via CALLVIRT al exit del scope para
-    /// instancias locales que NO escapan
-    bool is_destructor = false;
-    bool is_static = false;
-    bool is_final = false;
-    /// el lowering, si encuentra un metodo expression-bodied
-    /// con esta marca, sustituye la llamada por el cuerpo en el call
-    /// site (sin CALLVIRT).  No es heredable: cada override decide su
-    /// propio @c is_inline.
-    bool is_inline = false;
-    /// ctor "trivial zero-init": cuerpo del constructor
-    /// solo asigna campos a valores que coinciden con el zero-init
-    /// que ya hace el GC (`gc_heap.alloc` memset el payload a 0).  En
-    /// ese caso, generate_new_helpers omite el callvirt al ctor en
-    /// `__new_<X>` -- ahorra ~9 instrucciones VM por `new` para clases
-    /// triviales.  Detectado en el type checker analizando el body.
-    bool is_zero_init_ctor = false;
-    /// Nombre de la clase donde el metodo esta DEFINIDO realmente
-    /// (importante para herencia: un metodo heredado por @c Y de
-    /// @c X tiene @c defining_class == "X" aunque lay.methods de Y
-    /// lo liste).  El lowering usa este nombre para construir el
-    /// label del code_vaddr (@c <defining_class>__<name>).
-    std::string defining_class;
-    /// Debug info para stack traces.  Llenado por el type
-    /// checker al ver el ClassMethodDecl original.  El lowering lo
-    /// emite en __module_init via @c setmethdbg.
-    std::string source_file;
-    uint32_t source_line = 0;
 };
 
 /**
@@ -622,6 +633,17 @@ class TypeChecker {
      *        (en bytecode) es @c this; los demas vienen detras.
      */
     void check_class_method(const ClassLayout &cls, ast::ClassMethodDecl *m);
+
+    /**
+     * @brief Chequea el cuerpo de un metodo de struct (value-type).
+     *
+     * Analogo a @c check_class_method pero @c this se tipa
+     * @c Type{STRUCT, lay.name} (no CLASS) y no hay super ni vtable.
+     * El reescrito implicit-this usa los nombres de campos del struct.
+     * @param lay layout del struct contenedor.
+     * @param m   declaracion del metodo (reusa @c ClassMethodDecl).
+     */
+    void check_struct_method(const StructLayout &lay, ast::ClassMethodDecl *m);
 
     /**
      * @brief Sprint lombok (2026-06-03): pre-pase de anotaciones Lombok.
@@ -1382,6 +1404,14 @@ class TypeChecker {
     // check_this y la resolucion de nombres no calificados que
     // refieren a campos/metodos de la propia clase.
     std::string current_class_;
+
+    // Nombre del struct contenedor durante la verificacion de un
+    // metodo de struct (vacio fuera).  Los structs son value-types
+    // sin vtable: @c this dentro de un metodo de struct se tipa como
+    // @c Type{STRUCT, current_struct_} y @c this.campo resuelve via
+    // la rama STRUCT de check_field_access.  Disjunto de
+    // @c current_class_ (nunca ambos no-vacios a la vez).
+    std::string current_struct_;
 
     // Flag activo cuando el metodo en chequeo es static.  Se usa para
     // rechazar @c this dentro de su body con un mensaje claro.
