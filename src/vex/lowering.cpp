@@ -9246,6 +9246,34 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
+    // Operator overloading C-2: `base[i]` (LECTURA) -> base.__index__(i)
+    // cuando el type checker marco @c e->overload_method.  El receptor
+    // puede ser CLASS (CALLVIRT) o STRUCT (CALL directo).  Construimos un
+    // CallExpr sintetico `base.__index__(index)` y delegamos en la
+    // maquinaria de metodos.  Robamos los hijos @c base/@c index y los
+    // restauramos despues para no danar el AST.
+    if (!e->overload_method.empty() && e->base && e->index) {
+        const bool recv_is_struct =
+            (e->base->result_type.kind == PrimitiveKind::STRUCT);
+        ast::CallExpr synth;
+        synth.loc = e->loc;
+        auto fa = std::make_unique<ast::FieldAccessExpr>();
+        fa->loc = e->loc;
+        fa->field_name = e->overload_method;
+        fa->base = std::move(e->base); // receptor (CLASS o STRUCT)
+        synth.callee = std::move(fa);
+        synth.args.push_back(std::move(e->index)); // unico argumento (indice)
+        ir::IrValueId v_call = recv_is_struct
+                                   ? lower_struct_method_call(&synth)
+                                   : lower_class_method_call(&synth);
+        // Restaurar los hijos al IndexExpr original.
+        auto *fa_back =
+            static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+        e->base = std::move(fa_back->base);
+        e->index = std::move(synth.args[0]);
+        return v_call;
+    }
+
     const ir::IrValueId addr = lower_index_addr(e);
     if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
     // Bug fix 2026-05-23: para arrays multi-dim `m[i]` donde m es
@@ -10801,6 +10829,33 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
 }
 
 ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
+    // Operator overloading C-2: `-x` -> x.__neg__() cuando el type
+    // checker marco @c e->overload_method.  El receptor puede ser CLASS
+    // (CALLVIRT) o STRUCT (CALL directo).  Construimos un CallExpr
+    // sintetico `operand.__neg__()` (sin args) y delegamos en la
+    // maquinaria de metodos.  Robamos el hijo @c operand para el call y
+    // lo restauramos despues para no danar el AST.
+    if (!e->overload_method.empty() && e->operand) {
+        const bool recv_is_struct =
+            (e->operand->result_type.kind == PrimitiveKind::STRUCT);
+        ast::CallExpr synth;
+        synth.loc = e->loc;
+        auto fa = std::make_unique<ast::FieldAccessExpr>();
+        fa->loc = e->loc;
+        fa->field_name = e->overload_method;
+        fa->base = std::move(e->operand); // receptor (CLASS o STRUCT)
+        synth.callee = std::move(fa);
+        // Sin argumentos: __neg__ es unario sobre el receptor.
+        ir::IrValueId v_call = recv_is_struct
+                                   ? lower_struct_method_call(&synth)
+                                   : lower_class_method_call(&synth);
+        // Restaurar el hijo al UnaryExpr original.
+        auto *fa_back =
+            static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+        e->operand = std::move(fa_back->base);
+        return v_call;
+    }
+
     // Caso especial: ++/-- requieren leer la variable, sumar/restar 1
     // y reescribir el valor.  Para variables address-taken pasamos por
     // LOAD/STORE; para SSA puro hacemos update_scope (Braun on-the-fly).

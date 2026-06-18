@@ -583,6 +583,14 @@ struct BinaryExpr : Expr {
 struct UnaryExpr : Expr {
     UnOp op;
     std::unique_ptr<Expr> operand;
+    /// Operator overloading via metodo dunder (C-2).  Cuando el type
+    /// checker detecta que @c operand es CLASS o STRUCT y declara
+    /// @c __neg__ (metodo sin parametros sobre el tipo del operando)
+    /// para @c `-x`, deja aqui el nombre del metodo.  El lowering, al
+    /// ver este campo no vacio, desugara @c `-x` a la llamada de metodo
+    /// @c `x.__neg__()`.  Cadena vacia = sin sobrecarga; comportamiento
+    /// clasico (negacion aritmetica de primitivos).
+    std::string overload_method;
     UnaryExpr() : Expr(NodeKind::UnaryExpr) {}
 };
 
@@ -758,6 +766,13 @@ struct NewExpr : Expr {
 struct IndexExpr : Expr {
     std::unique_ptr<Expr> base;
     std::unique_ptr<Expr> index;
+    /// Operator overloading via metodo dunder (C-2).  Cuando el type
+    /// checker detecta que @c base es CLASS o STRUCT y declara
+    /// @c __index__(i) cuya firma acepta @c index para @c `base[index]`
+    /// (LECTURA), deja aqui @c "__index__".  El lowering desugara
+    /// @c `base[index]` a la llamada @c `base.__index__(index)`.  Cadena
+    /// vacia = comportamiento clasico (subscript de puntero/array).
+    std::string overload_method;
     IndexExpr() : Expr(NodeKind::IndexExpr) {}
 };
 
