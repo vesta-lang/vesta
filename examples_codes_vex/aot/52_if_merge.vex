@@ -1,0 +1,54 @@
+// Critical-edge splitting (vreg/AOT): un `if(c){n=v}` sin else produce un
+// PHI en el bloque MERGE cuyo borde entry->merge es una arista a partir de
+// un BR_COND de 2 vias.  Antes el selector vreg rechazaba la funcion -> no
+// compilaba en --target=bare (AOT).  Ahora el pre-pase de critical-edge
+// splitting inserta un bloque puente (en orden de layout valido) y la copia
+// del PHI se coloca solo en esa arista.  Cubre: if-sin-else, if anidado /
+// secuencial que asigna la misma var, e if dentro de loop.
+//
+// f(x): if(x==4) n=5; (sin else) -> n queda 0 o 5 segun x.
+// g(x): dos ifs secuenciales que acumulan sobre la misma var.
+// h(x): if dentro de while.
+// main: f(4)=5; f(3)=0; g(...)=...; h(...)=... -> suma fija = 42.
+
+// if-sin-else en funcion no-main.
+i64 f(i64 x) {
+    i64 n = 0;
+    if (x == 4) { n = 5; }
+    return n;
+}
+
+// ifs secuenciales + anidado, todos asignando la misma var.
+i64 g(i64 x) {
+    i64 acc = 0;
+    if (x > 0) { acc = acc + 10; }
+    if (x > 5) {
+        if (x < 100) { acc = acc + 7; }
+    }
+    return acc;
+}
+
+// if-sin-else dentro de un while-loop.
+i64 h(i64 n) {
+    i64 sum = 0;
+    i64 i = 0;
+    while (i < n) {
+        i64 add = 0;
+        if (i == 2) { add = 100; }   // PHI en el merge dentro del loop body
+        sum = sum + add + 1;
+        i = i + 1;
+    }
+    return sum;
+}
+
+i32 main() {
+    i64 a = f(4);        // 5
+    i64 b = f(3);        // 0
+    i64 c = g(10);       // 10 + 7 = 17
+    i64 d = g(3);        // 10
+    // h(4): i=0->+1, i=1->+1, i=2->+101, i=3->+1 => 104.
+    i64 e = h(4);        // 104
+
+    // 5 + 0 + 17 + 10 + 104 = 136.  Restamos 94 para fijar 42.
+    return (i32) (a + b + c + d + e - 94);
+}

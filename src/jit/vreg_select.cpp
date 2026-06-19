@@ -43,6 +43,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <utility> // std::swap (FCMP operand reorder)
+#include <vector>  // critical-edge splitting (pred_count, working copy)
 
 namespace jit {
 
@@ -207,6 +208,164 @@ inline bool block_has_phi(const ir::IrBlock &b) {
 }
 
 /**
+ * @brief CRITICAL-EDGE SPLITTING (pre-pase out-of-SSA).
+ *
+ * Inserta un bloque puente vacio en cada arista pred->succ donde @c pred
+ * tiene >1 sucesor (BR_COND) y @c succ tiene PHIs.  El problema: las copias
+ * de PHI (phi_dst <- pred_value) se colocan al FINAL del predecesor, lo que
+ * las ejecutaria TAMBIEN cuando @c pred salta a su OTRO sucesor.  El puente
+ * rompe esto: pred->puente->succ, con el puente teniendo 1 solo sucesor, asi
+ * la copia (emitida al final del puente) corre exclusivamente en esa arista.
+ *
+ * Nota: esto cubre tanto las aristas CRITICAS estrictas (succ con >1 pred)
+ * como el caso pred-multi-succ / succ-1-pred (donde la copia al final del
+ * pred tambien seria incorrecta porque pred tiene otra rama).  Un puente de
+ * sobra es siempre correcto (un JMP extra, sin coste observable).
+ *
+ * CRITICO -- ORDEN DE LAYOUT: el constructor de live-intervals
+ * (@c build_intervals) asigna POSICIONES LINEALES por orden de
+ * almacenamiento de @c fn.blocks; un valor definido en @c pred y consumido
+ * por la copia del puente debe tener su rango SIN un hueco que el
+ * linear-scan reutilice (si el puente quedara al final, las posiciones de
+ * @c then/@c merge caerian ENTRE el def y el uso del puente, y el regalloc
+ * reasignaria el registro del valor -> lost-copy).  Por eso cada puente se
+ * inserta INMEDIATAMENTE DESPUES de su predecesor en el layout (orden de
+ * ejecucion valido); luego se RENUMERAN todos los block-ids (target_block,
+ * false_block, phi_args.block, preds, succs, id) via un remap old->new.
+ *
+ * @return true si modifico la funcion (split aplicado).
+ */
+inline bool split_critical_edges(ir::IrFunction &fn) {
+    const size_t NB0 = fn.blocks.size();
+
+    /* Fase 1: detectar las aristas a partir y crear los puentes con IDs
+     * TEMPORALES (>= NB0).  Redirigir terminadores + PHI args + preds/succs
+     * en el espacio de IDs original + temporal.  @c bridge_after[pred]
+     * lista los puentes que deben ir tras ese predecesor en el layout. */
+    std::vector<ir::IrBlock> bridges;
+    std::vector<std::vector<ir::IrBlockId>> bridge_after(NB0);
+    auto next_id = [&]() {
+        return static_cast<ir::IrBlockId>(NB0 + bridges.size());
+    };
+
+    for (size_t b = 0; b < NB0; ++b) {
+        /* Localizar el BR_COND terminador (unico con 2 sucesores). */
+        ir::IrInstr *term = nullptr;
+        for (auto it = fn.blocks[b].instrs.rbegin();
+             it != fn.blocks[b].instrs.rend(); ++it) {
+            if (it->op == ir::IrOp::BR_COND) { term = &*it; break; }
+            if (it->op == ir::IrOp::BR || it->op == ir::IrOp::RET ||
+                it->op == ir::IrOp::THROW || it->op == ir::IrOp::TAILCALL)
+                break;
+        }
+        if (term == nullptr) continue;
+        if (term->target_block == term->false_block) continue; // 1 succ real
+
+        for (int side = 0; side < 2; ++side) {
+            const ir::IrBlockId succ =
+                (side == 0) ? term->target_block : term->false_block;
+            if (succ >= NB0) continue;
+            if (!block_has_phi(fn.blocks[succ])) continue;
+
+            const ir::IrBlockId bridge = next_id();
+            ir::IrBlock bb;
+            bb.id = bridge;
+            bb.name = "crit_edge_split";
+            ir::IrInstr br;
+            br.op = ir::IrOp::BR;
+            br.target_block = succ;
+            bb.instrs.push_back(br);
+            bb.preds.push_back(static_cast<ir::IrBlockId>(b));
+            bb.succs.push_back(succ);
+
+            if (side == 0)
+                term->target_block = bridge;
+            else
+                term->false_block = bridge;
+
+            /* Los PHI args del succ que venian de @c b ahora vienen del
+             * puente. */
+            for (ir::IrInstr &p : fn.blocks[succ].instrs) {
+                if (p.op != ir::IrOp::PHI) continue;
+                for (ir::IrPhiArg &a : p.phi_args)
+                    if (a.block == static_cast<ir::IrBlockId>(b))
+                        a.block = bridge;
+            }
+            for (ir::IrBlockId &s : fn.blocks[b].succs)
+                if (s == succ) s = bridge;
+            for (ir::IrBlockId &pr : fn.blocks[succ].preds)
+                if (pr == static_cast<ir::IrBlockId>(b)) pr = bridge;
+
+            bridge_after[b].push_back(bridge);
+            bridges.push_back(std::move(bb));
+        }
+    }
+    if (bridges.empty()) return false;
+
+    /* Fase 2: construir el nuevo layout (cada puente justo tras su pred) y
+     * el remap old_id -> new_id.  @c temp_id de un puente = NB0 + indice en
+     * @c bridges. */
+    std::vector<ir::IrBlock> laid;
+    laid.reserve(NB0 + bridges.size());
+    std::vector<ir::IrBlockId> remap(NB0 + bridges.size(), ir::IR_NO_BLOCK);
+    for (size_t b = 0; b < NB0; ++b) {
+        remap[b] = static_cast<ir::IrBlockId>(laid.size());
+        laid.push_back(std::move(fn.blocks[b]));
+        for (ir::IrBlockId tmp : bridge_after[b]) {
+            const size_t bidx = static_cast<size_t>(tmp) - NB0;
+            remap[tmp] = static_cast<ir::IrBlockId>(laid.size());
+            laid.push_back(std::move(bridges[bidx]));
+        }
+    }
+
+    /* Fase 3: aplicar el remap a todas las referencias de block-id. */
+    auto rm = [&](ir::IrBlockId id) -> ir::IrBlockId {
+        return (id < remap.size() && remap[id] != ir::IR_NO_BLOCK) ? remap[id]
+                                                                   : id;
+    };
+    for (ir::IrBlock &blk : laid) {
+        blk.id = rm(blk.id);
+        for (ir::IrBlockId &p : blk.preds) p = rm(p);
+        for (ir::IrBlockId &s : blk.succs) s = rm(s);
+        for (ir::IrInstr &in : blk.instrs) {
+            if (in.target_block != ir::IR_NO_BLOCK)
+                in.target_block = rm(in.target_block);
+            if (in.false_block != ir::IR_NO_BLOCK)
+                in.false_block = rm(in.false_block);
+            for (ir::IrPhiArg &a : in.phi_args) a.block = rm(a.block);
+        }
+    }
+    fn.blocks = std::move(laid);
+    return true;
+}
+
+/** @brief True si la funcion tiene >=1 arista (pred BR_COND de 2 vias) hacia
+ *  un bloque con PHIs (solo entonces hace falta copiar la funcion + split). */
+inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
+    const size_t NB0 = fn.blocks.size();
+    for (size_t b = 0; b < NB0; ++b) {
+        ir::IrBlockId tt = ir::IR_NO_BLOCK, tf = ir::IR_NO_BLOCK;
+        for (auto it = fn.blocks[b].instrs.rbegin();
+             it != fn.blocks[b].instrs.rend(); ++it) {
+            if (it->op == ir::IrOp::BR_COND) {
+                tt = it->target_block;
+                tf = it->false_block;
+                break;
+            }
+            if (it->op == ir::IrOp::BR || it->op == ir::IrOp::RET ||
+                it->op == ir::IrOp::THROW || it->op == ir::IrOp::TAILCALL)
+                break;
+        }
+        if (tt == ir::IR_NO_BLOCK || tt == tf) continue; // no 2-via
+        for (ir::IrBlockId succ : {tt, tf}) {
+            if (succ >= NB0) continue;
+            if (block_has_phi(fn.blocks[succ])) return true;
+        }
+    }
+    return false;
+}
+
+/**
  * @brief Phase AS inc.5: mapea un nombre de registro CANONICO de 64
  *        bits (de @c vex::asm_canonical_reg) al id de @c MReg GP (0..15),
  *        o -1 si no es un GP usable como pin de inline-asm.
@@ -233,11 +392,40 @@ inline int canon_gp_to_mreg(const std::string &c) {
 
 } // namespace
 
-bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
+bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_call, const VregEntries &ent,
                  const CallResolver &resolve_native,
                  const CallResolver &resolve_symbol, bool pic, bool target_sysv,
                  bool mode32, FloatIsa fisa) {
+    /* CRITICAL-EDGE SPLITTING (out-of-SSA): si hay >=1 arista critica que
+     * entra a un bloque con PHIs, trabajamos sobre una COPIA de la funcion
+     * con los puentes insertados (zero-cost para el caso comun sin aristas
+     * criticas, que ni copia ni recorre de nuevo).  El resto del selector
+     * usa @c fn (que apunta a la copia o al original). */
+    ir::IrFunction fn_storage;
+    const ir::IrFunction *fn_ptr = &fn_in;
+    static const bool no_split = [] {
+        const char *v = std::getenv("VESTA_VREG_NO_SPLIT");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    /* El split se aplica en el path AOT (HOST_LEAF), donde es el bloqueante
+     * real (un `if(c){n=v}` con PHI en el merge no compilaba) y el codegen es
+     * el ABI nativo del target sin traduccion vm_mem -> seguro (validado por
+     * ejecucion).  En VM_ABI (JIT en proceso) se MANTIENE el comportamiento
+     * previo (rechazo de la arista critica -> fallback al selector de slots):
+     * habilitar vreg en VM_ABI para estas funciones destapa un bug LATENTE,
+     * INDEPENDIENTE del split, del paso de punteros a ALLOCA de la VM-stack
+     * entre funciones vreg (reproducible sin el split); ese fix es de otro
+     * sprint.  Asi el JIT no regresiona (las funciones que antes caian a
+     * slots siguen cayendo) y el AOT gana las aristas criticas. */
+    if (!no_split && abi == AbiKind::HOST_LEAF &&
+        has_critical_edge_to_phi(fn_in)) {
+        fn_storage = fn_in;
+        split_critical_edges(fn_storage);
+        fn_ptr = &fn_storage;
+    }
+    const ir::IrFunction &fn = *fn_ptr;
+
     /* HOST_LEAF (AOT): arg_regs del ABI del TARGET (SysV para ELF, Win64 para
      * PE), NO del host -> permite cross-target (ELF en Windows, PE en Linux).
      * x86-32 (mode32): regparm(3) (EAX/EDX/ECX).  En VM_ABI (JIT en proceso)
@@ -1100,10 +1288,15 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out, AbiKind abi,
                 if (in.operands.size() != 1) return false;
                 const ir::IrBlockId tt = in.target_block; // true
                 const ir::IrBlockId tf = in.false_block;  // false
-                /* Arista critica (target con PHIs) no soportada en 4c. */
-                if (block_has_phi(fn.blocks[tt]) ||
-                    block_has_phi(fn.blocks[tf]))
+                /* Tras el critical-edge splitting, ningun target de un
+                 * BR_COND de 2 vias tiene PHIs (los puentes los absorben).
+                 * Defensa: si por construccion quedara uno (no deberia),
+                 * caer a fallback en vez de emitir copias incorrectas. */
+                if (tt != tf && (block_has_phi(fn.blocks[tt]) ||
+                                 block_has_phi(fn.blocks[tf]))) {
+                    vreg_dbg(fn.name.c_str(), "br_cond-phi-target");
                     return false;
+                }
                 const ir::IrValueId cond = in.operands[0];
 
                 if (has_pend && pend_dst == cond) {
