@@ -1434,6 +1434,14 @@ struct FunctionDecl : Node {
     /// (y `!=` via negacion) entre dos strings.  Firma esperada:
     /// fn(string, string) -> bool.  Aplica en native_poo_ (AOT) y Full.
     bool is_string_eq_override = false;
+    /// CPU dispatch Inc 4: @HelperOverride(<helper>) -- esta fn libre
+    /// reemplaza el helper multi-versionado del build.  @c
+    /// helper_override_target guarda el nombre del helper objetivo
+    /// (hoy solo "memcpy"; escala a strcmp/strlen/itoa en el futuro).
+    /// Vacio => no es override.  Solo aplica en native_poo_ (AOT): el
+    /// dispatch por cpuid se salta y el fp apunta a esta fn.  Firma
+    /// esperada para "memcpy": void(u8*, u8*, u64).
+    std::string helper_override_target;
     /// Subsistema de coste (modo --analyze): `@complexity(O(...))`.
     /// Metadata PURA -- NO afecta el codegen.  La consume el analizador
     /// estatico (analyze::bigo) como contrato a validar contra la
