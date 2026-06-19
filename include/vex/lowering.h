@@ -1066,6 +1066,80 @@ class Lowering {
     ir::IrValueId load_native_string_field(ir::IrValueId v_slot,
                                            uint64_t byte_off, bool as_host,
                                            uint32_t source_line);
+    /// String Inc 5 (SSO): accesores flag-aware del value-string nativo.
+    /// Layout union de 24 bytes con flag en el bit alto (0x80) del byte
+    /// [23]:
+    ///   HEAP (byte[23]&0x80 != 0): ptr@0 (8B), len@8 (8B), cap en
+    ///     bytes[16..22] (56 bits), byte[23] bit alto=1.
+    ///   SSO  (byte[23]&0x80 == 0): data en bytes[0..21] (max 22), nul en
+    ///     byte[len], len en byte[23] bits bajos (0..22).
+    /// @c emit_native_str_is_heap devuelve un I64 (0 o 1) = (byte[23]>>7).
+    /// @c emit_native_str_data_ptr devuelve el host_ptr a los bytes: si
+    /// HEAP -> LOAD ptr@0; si SSO -> &slot (la data vive inline en
+    /// offset 0).  Branchless via mascara (slot + is_heap*(ptr0 - slot)).
+    /// @c emit_native_str_len devuelve la longitud: si HEAP -> LOAD len@8;
+    /// si SSO -> byte[23]&0x7F.  Branchless.  TODAS las ops de string
+    /// usan estos accesores en vez de leer ptr@0/len@8 crudos.
+    ir::IrValueId emit_native_str_is_heap(ir::IrValueId v_slot,
+                                          uint32_t source_line);
+    ir::IrValueId emit_native_str_data_ptr(ir::IrValueId v_slot,
+                                           uint32_t source_line);
+    ir::IrValueId emit_native_str_len(ir::IrValueId v_slot,
+                                      uint32_t source_line);
+    /// String Inc 5 (SSO): libera el buffer del value-string SOLO si esta
+    /// en modo HEAP (la data SSO es inline, no se libera).  Branchless:
+    /// RAW_FREE(ptr0 * is_heap); free(0) es no-op.  Reemplaza el patron
+    /// directo RAW_FREE(LOAD ptr@0) en TODOS los sitios de liberacion de
+    /// strings nativos (cleanup STRING_FREE + frees de temporales).
+    void emit_native_str_free_if_heap(ir::IrValueId v_slot,
+                                      uint32_t source_line);
+    /// String Inc 5 (SSO): tras un MOVE de @p v_slot (la data ya se copio
+    /// al destino), invalida la fuente para evitar doble-free.  Si era
+    /// HEAP -> escribe ptr@0=0 (su free posterior sera no-op); si era SSO
+    /// -> deja byte[0..7] intacto (es data inline; no hay buffer que
+    /// liberar y su free-if-heap ya salta).  Branchless: escribe
+    /// ptr@0 = old_ptr0 & (is_heap - 1)  (HEAP: &0 -> 0; SSO: &~0 -> sin
+    /// cambio).
+    void emit_native_str_invalidate_moved(ir::IrValueId v_slot,
+                                          uint32_t source_line);
+    /// String Inc 5 (SSO): zero-inicializa los 24 bytes del slot
+    /// value-string (3 STORE i64 = 0).  Evita que los accesores
+    /// flag-aware lean bytes no inicializados del slot (ptr@0/len@8) en
+    /// modo SSO -- valgrind los marcaria como "uninitialised value" aunque
+    /// el resultado enmascarado sea correcto.  Llamar tras cada ALLOCA de
+    /// 24 bytes de un value-string ANTES de escribir la data.
+    void emit_zero_native_str_slot(ir::IrValueId v_slot, uint32_t source_line);
+    /// String Inc 5 (SSO): escribe qword2 (bytes 16..23) del slot con UN
+    /// STORE i64 entero -- evita el solape parcial i64(cap)+u8(flag) que el
+    /// store-forwarding del optimizer mal-resuelve al hacer el move (LOAD
+    /// i64 de offset 16).  @c emit_str_meta_sso pone (len << 56): byte[23]=
+    /// len, bit alto 0 (SSO), bytes 16..22 = 0.  @c emit_str_meta_heap pone
+    /// (cap & 0x00FFFFFFFFFFFFFF) | (0x80 << 56): cap en bytes 16..22 (56b),
+    /// byte[23]=0x80 (flag HEAP).  @p v_len_or_cap es un IrValue I64.
+    void emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
+                           uint32_t source_line);
+    void emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
+                            uint32_t source_line);
+    /// String Inc 5 (SSO): copia los 24 bytes de un value-string de
+    /// @p v_src_slot a @p v_dst_slot via MEMCPY (rep movsb) en vez de 3
+    /// LOAD/STORE i64.  Evita el store-forwarding del optimizer sobre
+    /// qword2 (data inline + byte[23] escritos con stores parciales) que
+    /// los i64 LOADs mal-resolvian (perdian la longitud SSO en el move).
+    void emit_native_str_move_copy(ir::IrValueId v_dst_slot,
+                                   ir::IrValueId v_src_slot,
+                                   uint32_t source_line);
+    /// String Inc 5 (SSO): rellena el slot value-string @p v_slot (24
+    /// bytes ya alocados) a partir de unos bytes recien producidos:
+    /// @p v_src_ptr (host_ptr a la fuente) + @p v_len (longitud runtime).
+    /// Decide SSO vs HEAP EN RUNTIME via branch: si len <= 22 copia la
+    /// data INLINE a bytes[0..len) + nul + byte[23]=len (cero malloc); si
+    /// len > 22 hace RAW_ALLOC(len+1), MEMCPY, nul, set ptr@0/len@8/
+    /// cap@16 + byte[23] bit alto.  Usado por concat/slice/append/interp
+    /// para obtener SSO en resultados runtime cortos.  Solo native_poo_.
+    void build_native_string_finalize(ir::IrValueId v_slot,
+                                      ir::IrValueId v_src_ptr,
+                                      ir::IrValueId v_len,
+                                      uint32_t source_line);
     /// Vex Embed Inc 1: concatena dos value-strings nativos @p v_a y
     /// @p v_b produciendo un NUEVO string owned (slot de 24 bytes en
     /// stack + buffer fresco en heap de total+1 bytes con ambos

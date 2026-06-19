@@ -1295,6 +1295,35 @@ void X86Encoder::emit_test(MFunction & /*fn*/, const MInstr &mi,
         put32(out, static_cast<uint32_t>(src.value));
         return;
     }
+    /* TEST reg, [mem]: REX.W + 0x85 /r con el mem como r/m.  TEST es
+     * simetrico (a AND b sin escribir resultado), asi que `TEST reg, mem`
+     * se codifica con el reg en el campo reg y el mem en r/m.  Necesario
+     * cuando el regalloc spillea el operando (p.ej. el cond de un BR_COND
+     * spilled: `TEST scrN, [slot]`).  Sin esto el rewrite producia un
+     * TEST reg,mem que caia al INT3 de abajo. */
+    if (dst.kind == MOperandKind::REG && src.kind == MOperandKind::MEM) {
+        const uint8_t base = src.reg;
+        const uint8_t index = static_cast<uint8_t>(src.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex =
+            rex_byte(true, dst.reg, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0x85);
+        emit_modrm_mem(src, dst.reg & 7, out);
+        return;
+    }
+    /* TEST [mem], reg: misma simetria; reg en campo reg, mem en r/m. */
+    if (dst.kind == MOperandKind::MEM && src.kind == MOperandKind::REG) {
+        const uint8_t base = dst.reg;
+        const uint8_t index = static_cast<uint8_t>(dst.mem_index());
+        const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
+        const uint8_t rex =
+            rex_byte(true, src.reg, base, has_index ? index : 0);
+        if (rex) put8(out, rex);
+        put8(out, 0x85);
+        emit_modrm_mem(dst, src.reg & 7, out);
+        return;
+    }
     put8(out, 0xCC);
 }
 
