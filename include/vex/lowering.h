@@ -1082,10 +1082,29 @@ class Lowering {
     /// usan estos accesores en vez de leer ptr@0/len@8 crudos.
     ir::IrValueId emit_native_str_is_heap(ir::IrValueId v_slot,
                                           uint32_t source_line);
+    /// @c emit_native_str_data_ptr / @c emit_native_str_len emiten una CALL a
+    /// los helpers @c __vex_strdata / @c __vex_strlen (una sola instruccion por
+    /// uso).  La logica branchless (AND-mask heap/SSO) vive en el cuerpo del
+    /// helper (@c *_inline), NO inline en cada call site: cada accesor inline
+    /// expandia ~10 instrs, y sumar 4 longitudes + 4 punteros en una funcion
+    /// reventaba el regalloc SysV (menos callee-saved que Win64) -> resultado
+    /// erroneo en ELF.  Mismo patron que @c __vex_strcmp / itoa.  Los helpers
+    /// estan en el blacklist del inliner (prefijo @c __vex_str) para no
+    /// re-inlinearse.
     ir::IrValueId emit_native_str_data_ptr(ir::IrValueId v_slot,
                                            uint32_t source_line);
     ir::IrValueId emit_native_str_len(ir::IrValueId v_slot,
                                       uint32_t source_line);
+    /// Cuerpos branchless de los accesores (emitidos dentro del helper).
+    ir::IrValueId emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
+                                                  uint32_t source_line);
+    ir::IrValueId emit_native_str_len_inline(ir::IrValueId v_slot,
+                                             uint32_t source_line);
+    /// Construyen (lazy, una vez) los helpers @c __vex_strdata / @c __vex_strlen
+    /// y devuelven su nombre.  Firma: @c u8* __vex_strdata(u8* s) /
+    /// @c i64 __vex_strlen(u8* s).
+    std::string ensure_strdata_helper();
+    std::string ensure_strlen_helper();
     /// String Inc 5 (SSO): libera el buffer del value-string SOLO si esta
     /// en modo HEAP (la data SSO es inline, no se libera).  Branchless:
     /// RAW_FREE(ptr0 * is_heap); free(0) es no-op.  Reemplaza el patron
@@ -1245,6 +1264,8 @@ class Lowering {
     /// @c native_poo_.
     std::string ensure_strcmp_helper();
     bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
+    bool strdata_helper_emitted_ = false; ///< El helper __vex_strdata emitido.
+    bool strlen_helper_emitted_ = false; ///< El helper __vex_strlen emitido.
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);

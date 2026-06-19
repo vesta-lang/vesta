@@ -24939,8 +24939,8 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
     return v_is_heap;
 }
 
-ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
-                                                 uint32_t source_line) {
+ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
+                                                        uint32_t source_line) {
     // data_ptr = is_heap ? LOAD ptr@0 : &slot.
     // Branchless: slot + is_heap*(ptr0 - slot).
     //   - SSO  (is_heap=0): slot + 0 = slot           (data inline @0).
@@ -25018,8 +25018,8 @@ ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
     return v_data;
 }
 
-ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
-                                            uint32_t source_line) {
+ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
+                                                   uint32_t source_line) {
     // len = is_heap ? LOAD len@8 : (byte[23] & 0x7F).
     // Branchless: sso_len + (diff & -is_heap), donde diff = heap_len -
     // sso_len.
@@ -25106,6 +25106,122 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
         fn_->append(current_block_, std::move(ad));
     }
     return v_len;
+}
+
+ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
+                                                 uint32_t source_line) {
+    // CALL __vex_strdata(s) -> u8* (la logica branchless vive en el helper;
+    // ver ensure_strdata_helper / el comentario del blacklist del inliner).
+    const std::string name = ensure_strdata_helper();
+    ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v].is_host_ptr = true;
+    ir::IrInstr ca{};
+    ca.op = ir::IrOp::CALL;
+    ca.type = ir::IrType::PTR;
+    ca.dst = v;
+    ca.func_name = name;
+    ca.operands = {v_slot};
+    ca.source_line = source_line;
+    fn_->append(current_block_, std::move(ca));
+    return v;
+}
+
+ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
+                                            uint32_t source_line) {
+    // CALL __vex_strlen(s) -> i64.
+    const std::string name = ensure_strlen_helper();
+    ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ca{};
+    ca.op = ir::IrOp::CALL;
+    ca.type = ir::IrType::I64;
+    ca.dst = v;
+    ca.func_name = name;
+    ca.operands = {v_slot};
+    ca.source_line = source_line;
+    fn_->append(current_block_, std::move(ca));
+    return v;
+}
+
+std::string Lowering::ensure_strdata_helper() {
+    // u8* __vex_strdata(u8* s): data_ptr branchless (is_heap ? ptr@0 : &s).
+    // Funcion APARTE (no inline) -> una sola CALL por uso; el blacklist del
+    // inliner (prefijo __vex_str) impide re-inlinearla.
+    const std::string name = "__vex_strdata";
+    if (strdata_helper_emitted_) return name;
+    strdata_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::PTR;
+    const ir::IrValueId p_s = hf.new_value(ir::IrType::PTR, "%s");
+    hf.values[p_s].is_param = true;
+    hf.values[p_s].is_host_ptr = true;
+    hf.params.push_back(p_s);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    ir::IrValueId v_data = emit_native_str_data_ptr_inline(p_s, 0);
+    {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::PTR;
+        rt.operands.push_back(v_data);
+        rt.source_line = 0;
+        fn_->append(current_block_, std::move(rt));
+    }
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+std::string Lowering::ensure_strlen_helper() {
+    // i64 __vex_strlen(u8* s): len branchless (is_heap ? len@8 : byte[23]&0x7F).
+    const std::string name = "__vex_strlen";
+    if (strlen_helper_emitted_) return name;
+    strlen_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_s = hf.new_value(ir::IrType::PTR, "%s");
+    hf.values[p_s].is_param = true;
+    hf.values[p_s].is_host_ptr = true;
+    hf.params.push_back(p_s);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    ir::IrValueId v_len = emit_native_str_len_inline(p_s, 0);
+    {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.operands.push_back(v_len);
+        rt.source_line = 0;
+        fn_->append(current_block_, std::move(rt));
+    }
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
 }
 
 void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
