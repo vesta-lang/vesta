@@ -12959,6 +12959,100 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // Reusamos lower_index_addr para calcular el puntero del elemento.
     if (e->target->kind == ast::NodeKind::IndexExpr) {
         auto *ix = static_cast<ast::IndexExpr *>(e->target.get());
+        // Operator overloading (escritura): el type checker marco
+        // @c ix->index_set_method cuando @c base es CLASS o STRUCT con
+        // @c __index_set__(index, value).  Construimos un CallExpr
+        // sintetico @c `base.__index_set__(index, value)` y delegamos en
+        // la maquinaria de metodos (CALLVIRT para CLASS, CALL para
+        // STRUCT).  Robamos los hijos del AST y los restauramos despues.
+        if (!ix->index_set_method.empty() && ix->base && ix->index &&
+            e->value && e->op == ast::AssignOp::Assign) {
+            const bool recv_is_struct =
+                (ix->base->result_type.kind == PrimitiveKind::STRUCT);
+            ast::CallExpr synth;
+            synth.loc = e->loc;
+            auto fa = std::make_unique<ast::FieldAccessExpr>();
+            fa->loc = e->loc;
+            fa->field_name = ix->index_set_method;
+            fa->base = std::move(ix->base); // receptor (CLASS o STRUCT)
+            synth.callee = std::move(fa);
+            synth.args.push_back(std::move(ix->index)); // arg 0: indice
+            synth.args.push_back(std::move(e->value));   // arg 1: valor
+            ir::IrValueId v_call = recv_is_struct
+                                       ? lower_struct_method_call(&synth)
+                                       : lower_class_method_call(&synth);
+            // Restaurar los hijos a sus nodos originales.
+            auto *fa_back =
+                static_cast<ast::FieldAccessExpr *>(synth.callee.get());
+            ix->base = std::move(fa_back->base);
+            ix->index = std::move(synth.args[0]);
+            e->value = std::move(synth.args[1]);
+            return v_call;
+        }
+        // String Inc (native_poo_): `s[i] = c` muta el byte i del
+        // value-string in-place.  Calculamos data_ptr via el accesor
+        // flag-aware (SSO vs HEAP, ya cubre ambos layouts) + STORE u8
+        // del char (truncado a byte) en [data + i].  Sin bounds-check
+        // (C-style, coherente con `s[i]` lectura).  No altera len.
+        if (ix->base &&
+            ix->base->result_type.kind == PrimitiveKind::STRING &&
+            !ix->is_range) {
+            if (!native_poo_) {
+                error_at(e->loc,
+                         "escritura indexada de string (s[i]=c) solo "
+                         "soportada en compilacion nativa (AOT Embed/Bare) "
+                         "por ahora");
+                return ir::IR_NO_VALUE;
+            }
+            if (!ix->index) {
+                error_at(e->loc, "escritura indexada de string sin indice");
+                return ir::IR_NO_VALUE;
+            }
+            const ir::IrValueId v_src = lower_expr(ix->base.get());
+            if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            ir::IrValueId v_idx = lower_expr(ix->index.get());
+            if (v_idx == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            v_idx = cast_if_needed(v_idx, fn_->values[v_idx].type,
+                                   ir::IrType::I64, e->loc.line);
+            ir::IrValueId v_val = lower_expr(e->value.get());
+            if (v_val == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            // Compound `s[i] += c`: leer el byte actual, aplicar el op.
+            if (e->op != ast::AssignOp::Assign) {
+                const ir::IrValueId v_old =
+                    build_native_string_index_char(v_src, v_idx, e->loc.line);
+                if (v_old == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                const ast::BinOp bop = compound_assign_op_to_binop(e->op);
+                v_val = emit_binop_ir(bop, v_old, v_val, PrimitiveKind::U8,
+                                      e->loc);
+            }
+            // data_ptr (flag-aware) + i -> direccion del byte.
+            ir::IrValueId v_ptr =
+                emit_native_str_data_ptr(v_src, e->loc.line);
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = v_addr;
+                ad.operands = {v_ptr, v_idx};
+                ad.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ad));
+            }
+            // STORE u8: el char rhs se guarda truncado a 1 byte.
+            v_val = cast_if_needed(v_val, fn_->values[v_val].type,
+                                   ir::IrType::U8, e->loc.line);
+            {
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::U8;
+                st.dst = ir::IR_NO_VALUE;
+                st.operands = {v_val, v_addr};
+                st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+            return v_val;
+        }
         const ir::IrValueId addr = lower_index_addr(ix);
         if (addr == ir::IR_NO_VALUE) {
             (void)lower_expr(e->value.get());

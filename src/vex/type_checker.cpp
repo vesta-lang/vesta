@@ -7265,6 +7265,71 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
     // que para Deref.
     if (e->target->kind == ast::NodeKind::IndexExpr) {
         auto *ix = static_cast<ast::IndexExpr *>(e->target.get());
+        // Operator overloading (escritura): `base[i] = v` ->
+        // base.__index_set__(i, v) cuando @c base es CLASS o STRUCT que
+        // declara @c __index_set__(index, value).  Lo detectamos ANTES de
+        // check_index porque check_index marcaria @c __index__ (lectura) y
+        // resolveria el tipo del elemento al return type del getter, no al
+        // tipo del value.  Validamos los tipos de los 2 parametros y, si
+        // matchea, marcamos @c ix->index_set_method y devolvemos el tipo
+        // del value.  Si NO existe el dunder y @c base es CLASS/STRUCT
+        // (no array/ptr/string nativo), emitimos un error claro.
+        if (ix->base && !ix->is_range) {
+            const Type bt = check_expr(ix->base.get());
+            ix->base->result_type = bt;
+            const std::vector<ClassMethodInfo> *methods = nullptr;
+            bool base_is_class_or_struct = false;
+            if (bt.kind == PrimitiveKind::CLASS && !bt.struct_name.empty()) {
+                auto it_c = class_layouts_.find(bt.struct_name);
+                if (it_c != class_layouts_.end()) {
+                    methods = &it_c->second.methods;
+                    base_is_class_or_struct = true;
+                }
+            } else if (bt.kind == PrimitiveKind::STRUCT &&
+                       !bt.struct_name.empty()) {
+                auto it_s = struct_layouts_.find(bt.struct_name);
+                if (it_s != struct_layouts_.end()) {
+                    methods = &it_s->second.methods;
+                    base_is_class_or_struct = true;
+                }
+            }
+            if (base_is_class_or_struct) {
+                // Tipo del indice y del value para validar la firma.
+                const Type it = ix->index ? check_expr(ix->index.get())
+                                          : Type{};
+                if (ix->index) ix->index->result_type = it;
+                const Type vt = check_expr(e->value.get());
+                e->value->result_type = vt;
+                const ClassMethodInfo *setter = nullptr;
+                if (methods) {
+                    for (const auto &m : *methods) {
+                        if (m.is_constructor || m.is_static) continue;
+                        if (m.name != "__index_set__") continue;
+                        if (m.param_types.size() != 2) continue;
+                        if (!types_assignable(m.param_types[0], it)) continue;
+                        if (!types_assignable(m.param_types[1], vt) &&
+                            !class_is_assignable(m.param_types[1], vt))
+                            continue;
+                        setter = &m;
+                        break;
+                    }
+                }
+                if (setter) {
+                    ix->index_set_method = "__index_set__";
+                    ix->result_type = setter->param_types[1];
+                    return setter->param_types[1];
+                }
+                // No hay __index_set__ aplicable: para CLASS/STRUCT no hay
+                // forma clasica de escribir un slot subscript, asi que es
+                // un error claro (a diferencia de array/ptr/string).
+                diags_.error(
+                    e->loc,
+                    std::string("la clase/struct '") + bt.struct_name +
+                        "' no declara `__index_set__(indice, valor)` para "
+                        "soportar `base[i] = valor`");
+                return Type{PrimitiveKind::VOID};
+            }
+        }
         const Type tt = check_index(ix);
         ix->result_type = tt;
         const Type tv = check_expr(e->value.get());
