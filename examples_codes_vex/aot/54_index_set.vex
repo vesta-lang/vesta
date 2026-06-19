@@ -14,12 +14,12 @@
 //   vm --vex examples_codes_vex/aot/54_index_set.vex -m aot --emit exe -o idxset.exe
 //   ./idxset.exe ; echo $?          (exit-code == 42)
 //
-// NOTA: el operator overloading sobre struct/class (parte A) y la mutacion
-// del value-string (parte B) son features de la ruta NATIVA (native_poo_/
-// AOT).  En interp/Full el operator overloading de structs no esta
-// soportado todavia (mismo limite preexistente que el index-READ de C-2,
-// ver ejemplo 44) y `s[i]=c` solo existe en native -> este ejemplo se
-// valida en AOT, no con `vm --run`.
+// NOTA: la parte A (operator overloading o[i]=v sobre struct/class) funciona
+// en TODOS los modos (interp/JIT/AOT).  La parte B (mutacion del value-string
+// s[i]=c y slice s[a..b]) es de la ruta NATIVA (native_poo_/AOT): en Full el
+// `string` es GC-inmutable, asi que ese subconjunto solo existe en native.
+// Por eso este ejemplo COMPLETO se valida en AOT (la parte B no compila en
+// interp y emite error claro).
 //
 // Resultado esperado (AOT): 42.
 
