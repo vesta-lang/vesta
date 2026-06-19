@@ -1,0 +1,126 @@
+// CPU dispatch (Inc 5a): strcmp/strlen despachados por tabla de punteros +
+// @HelperOverride(strcmp).  Foundation para que una libreria stdlib provea
+// variantes SIMD via @HelperOverride; aqui el compilador solo provee el
+// BASELINE escalar (__vex_strcmp_base / __vex_strlen_base) y el usuario
+// reemplaza strcmp con su propia funcion.
+//
+// Sin override, __vex_strdisp_init apunta los fp a los baselines.  CON
+// @HelperOverride(strcmp), el fp __vex_strcmp_fp apunta DIRECTO a my_strcmp ->
+// toda comparacion de strings (< > <= >= == !=) llama a my_strcmp.
+//
+// El override DEBE comparar correctamente (los resultados de las comparaciones
+// deben quedar bien) Y ademas incrementa un contador observable en .ovrctr para
+// PROBAR que el override se invoco.  strlen se sigue despachando al baseline
+// (sin override de strlen aqui) -> .length() correcto via fp.
+//
+// NOTA 1: dispatch/override es native-only.  En interp/JIT/Full strcmp/strlen
+// usan el helper directo, sin tabla de punteros -- por diseno (los fp solo
+// existen en native_poo_).
+//
+// NOTA 2: las comparaciones usan VARIABLES (string a = ...), NO literales
+// directos (`"x" < "y"`), para que los operandos no se internen en .rodata.
+// Asi el ejecutable PE queda en 4 secciones (.text/.data/.ovrctr/.idata): el
+// emisor PE EXEC propio tiene una limitacion PRE-EXISTENTE con 5 secciones
+// (.text+.data+.rodata+.ovrctr+.idata) -- ajena a Inc 5a (un programa SIN
+// dispatch que combine literales + @section tambien la dispara).  ELF + el .o
+// linkado con gcc no tienen el limite.
+//
+//   vm -m aot --vex examples_codes_vex/aot/58_strcmp_dispatch.vex \
+//      -o sc.exe --format pe --emit exe ; ./sc.exe ; echo $?   # -> 42
+
+// Contador global en .ovrctr (writable).  my_strcmp lo incrementa en cada
+// invocacion; main lo lee al final para confirmar el uso del override.
+@section(".ovrctr", "rw")
+bytes g_calls {
+    dq 0
+}
+
+// Override del strcmp del build: comparacion lexicografica byte-a-byte
+// (correcta para cualquier par de strings) + cuenta la invocacion.  Firma
+// i64(u8*, i64, u8*, i64) como exige el helper.  Devuelve -1/0/1.
+@HelperOverride(strcmp)
+i64 my_strcmp(u8* a, i64 la, u8* b, i64 lb) {
+    // Registrar la invocacion en el contador global.
+    u64* ctr = (u64*) section_start(".ovrctr");
+    *ctr = *ctr + 1;
+    // min = (la < lb) ? la : lb.
+    i64 min = la;
+    if (lb < la) { min = lb; }
+    // Comparar prefijo comun byte-a-byte (unsigned 0..255).
+    i64 i = 0;
+    while (i < min) {
+        i64 ca = (i64) a[i];
+        i64 cb = (i64) b[i];
+        if (ca < cb) { return -1; }
+        if (ca > cb) { return 1; }
+        i = i + 1;
+    }
+    // Prefijos iguales: el mas corto es menor.
+    if (la < lb) { return -1; }
+    if (la > lb) { return 1; }
+    return 0;
+}
+
+i32 main() {
+    // Variables (no literales directos en las comparaciones, ver NOTA 2).
+    string abc = "abc";
+    string abd = "abd";
+    string ab  = "ab";
+    string alpha = "alpha";
+    string beta  = "beta";
+    string mango = "mango";
+    string naranja = "naranja";
+    string go = "go";
+    string gopher = "gopher";
+
+    i64 n = 0;
+
+    // --- Orden por primer byte distinto ---
+    n = n + (i64)(abc < abd);    // T: 'c'(99) < 'd'(100)
+    n = n + (i64)(abd < abc);    // F
+    n = n + (i64)(abd > abc);    // T
+
+    // --- Prefijos: el mas corto es menor ---
+    n = n + (i64)(ab < abc);     // T: "ab" prefijo de "abc"
+    n = n + (i64)(abc < ab);     // F
+    n = n + (i64)(abc > ab);     // T
+
+    // --- Iguales ---
+    n = n + (i64)(abc < abc);    // F
+    n = n + (i64)(abc <= abc);   // T
+    n = n + (i64)(abc >= abc);   // T
+    n = n + (i64)(abc == abc);   // T
+    n = n + (i64)(abc != abc);   // F
+
+    // --- alpha vs beta ---
+    n = n + (i64)(alpha < beta); // T: 'a'(97) < 'b'(98)
+    n = n + (i64)(beta > alpha); // T
+    n = n + (i64)(alpha >= beta);// F
+    n = n + (i64)(alpha != beta);// T
+
+    // --- mango vs naranja ---
+    n = n + (i64)(mango < naranja);   // T: 'm'(109) < 'n'(110)
+    n = n + (i64)(naranja > mango);   // T
+
+    // --- go vs gopher (prefijo comun) ---
+    n = n + (i64)(go < gopher);  // T: "go" prefijo de "gopher"
+    n = n + (i64)(go <= gopher); // T
+
+    // Conteo de true (igual que el ej. 51): 7 + 3 + 2 + 2 = 14.
+    i32 cmp_ok = (i32)(n == 14);
+
+    // strlen despachado (sin override -> baseline): suma de longitudes via
+    // .length() de varios value-strings.
+    i64 lensum = alpha.length() + gopher.length() + ab.length();  // 5 + 6 + 2 = 13
+    i32 len_ok = (i32)(lensum == 13);
+
+    // El override de strcmp SE invoco (g_calls > 0).
+    u64* ctr = (u64*) section_start(".ovrctr");
+    i32 used_ok = (i32)(*ctr > 0);
+
+    // 42 solo si: comparaciones correctas Y longitudes correctas Y override usado.
+    if (cmp_ok == 1 && len_ok == 1 && used_ok == 1) {
+        return 42;
+    }
+    return 1;
+}
