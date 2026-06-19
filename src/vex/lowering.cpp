@@ -1201,6 +1201,32 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         m.sym_refs = std::move(kept);
     }
 
+    // CPU dispatch (cimiento): si algun cpu_features() se uso, prepender
+    // `call __vex_cpu_init` al ENTRY de main para que la deteccion corra UNA
+    // VEZ antes de cualquier codigo del usuario.  Se hace AQUI (post-lowering)
+    // y no en lower_function porque main se baja ANTES que el resto: un
+    // cpu_features() en una funcion no-main marca cpu_features_used_ DESPUES
+    // de cerrar main.  Solo en native_poo_ (AOT): el helper usa INLINE_ASM
+    // (PURE_NATIVE) + el wiring no toca el stub _start.
+    if (native_poo_ && cpu_features_used_) {
+        // Asegurar que el global + el helper existan (idempotente).
+        (void)ensure_cpu_features_global();
+        // Localizar main y prepender la CALL a su bloque de entrada.
+        for (auto &f : out_module.functions) {
+            if (f.name != "main") continue;
+            if (f.blocks.empty()) break;
+            ir::IrInstr call_init{};
+            call_init.op = ir::IrOp::CALL;
+            call_init.type = ir::IrType::VOID;
+            call_init.dst = ir::IR_NO_VALUE;
+            call_init.func_name = "__vex_cpu_init";
+            call_init.source_line = 0;
+            auto &ins = f.blocks[0].instrs;
+            ins.insert(ins.begin(), std::move(call_init));
+            break;
+        }
+    }
+
     return diags_.error_count() == initial_errors;
 }
 
@@ -14621,6 +14647,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_wait = (name == "wait");
     const bool is_notify = (name == "notify");
     const bool is_notifyAll = (name == "notifyAll");
+    // CPU dispatch (cimiento): consulta runtime de features.
+    const bool is_cpu_features = (name == "cpu_features");
     // procesos / IPC builtins.
     const bool is_pid = (name == "pid");
     const bool is_msgsend = (name == "msgsend");
@@ -14766,6 +14794,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_newInstance || is_invoke || is_proceed || is_isPresent ||
         is_unwrap || is_Some || is_None || is_Ok || is_Err || is_isOk ||
         is_value || is_error || is_wait || is_notify || is_notifyAll ||
+        is_cpu_features ||
         is_pid || is_msgsend || is_msgrecv || is_args_count || is_args_get ||
         is_getMethods || is_getMethodAt || is_getFields || is_getFieldAt ||
         is_term_clear || is_term_clear_line || is_term_move ||
@@ -19053,6 +19082,49 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         out_value = emit_getpid(e->loc.line);
+        return true;
+    }
+
+    // ----- cpu_features() -> u64 (CPU dispatch, cimiento) -----
+    // En native_poo_ (AOT): marca el uso (para wirear __vex_cpu_init en main),
+    // asegura el global, y emite STR_LIT_ADDR(slot) + LOAD u64 (lectura del
+    // bitmask que __vex_cpu_init dejo escrito al arranque).  En Full/interp
+    // no hay cpuid native disponible -> devuelve 0 (consistente, sin error).
+    if (is_cpu_features) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "cpu_features: no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        if (!native_poo_) {
+            // Path Full/interp: el global solo se materializa en AOT.
+            out_value = emit_const(ir::IrType::U64, 0, e->loc.line);
+            return true;
+        }
+        cpu_features_used_ = true;
+        const uint64_t slot = ensure_cpu_features_global();
+        const int ln = e->loc.line;
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr is{};
+            is.op = ir::IrOp::STR_LIT_ADDR;
+            is.type = ir::IrType::PTR;
+            is.dst = v_addr;
+            is.imm = slot;
+            is.source_line = ln;
+            fn_->append(current_block_, std::move(is));
+        }
+        ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::U64;
+            ld.dst = v_feat;
+            ld.operands = {v_addr};
+            ld.source_line = ln;
+            fn_->append(current_block_, std::move(ld));
+        }
+        out_value = v_feat;
         return true;
     }
 
@@ -24128,6 +24200,244 @@ std::string Lowering::ensure_btoa_helper() {
     block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
+}
+
+// ---------------------------------------------------------------------
+// CPU dispatch (cimiento): global __vex_cpu_features + helper __vex_cpu_init.
+//
+// Detecta las features de la CPU via `cpuid` UNA VEZ al arranque (el wiring
+// prepone `call __vex_cpu_init` al entry de main, solo native_poo_) y guarda
+// un bitmask en el slot static_data del global.  El builtin cpu_features()
+// lo lee (STR_LIT_ADDR + LOAD).  Sienta la base del despacho de helpers por
+// CPU + del override por el usuario.
+//
+// Detalle critico: en AOT HOST_LEAF rbx esta RESERVADO (frame).  `cpuid`
+// pisa eax/ebx/ecx/edx; ebx lleva las features de leaf 7 (AVX2/BMI/AVX512).
+// El selector vreg (vreg_select.cpp) ya SALVA/RESTAURA rbx alrededor del
+// bloque INLINE_ASM cuando rbx aparece en sus clobbers (asm_effects declara
+// que cpuid clobbea rax/rbx/rcx/rdx).  Por eso TODA la deteccion + el
+// empaquetado de bits viven DENTRO de un solo bloque asm: leemos ebx ahi
+// (entre el push y el pop de rbx) y solo SACAMOS el bitmask final en rax.
+// Asi nunca exponemos ebx al IR (no podriamos: rbx no es asignable).
+//
+// rsi/rdi se usan como scratch porque cpuid NO los pisa (sobreviven entre
+// las dos llamadas a cpuid): rsi acumula el bitmask, rdi extrae cada bit.
+// Numeros en HEX explicito: el bloque se ensambla con Keystone (que toma los
+// enteros BARE como hex) sin pasar por asm_normalize_numbers (eso solo corre
+// en lower_asm, no en helpers sinteticos).
+// ---------------------------------------------------------------------
+uint64_t Lowering::ensure_cpu_features_global() {
+    // Idempotente: si ya esta emitido, devolver el slot existente.
+    if (cpu_features_slot_ != UINT64_MAX) return cpu_features_slot_;
+
+    // 1. Slot static_data de 8 bytes zero-init para el global.  Va a `.data`
+    //    (WRITABLE): __vex_cpu_init le hace STORE en runtime.  El default de
+    //    STR_LIT_ADDR es `.rodata` (read-only) -> un STORE ahi fallaria.
+    //    NON_DEDUP para que el merge cross-module no lo colapse con otro
+    //    all-zero; FORCE_EMIT para garantizar su presencia aunque el optimizer
+    //    toque los relocs.
+    std::vector<uint8_t> zero(8, 0);
+    const uint64_t slot =
+        static_cast<uint64_t>(out_mod_->static_data.push_back(std::move(zero)));
+    {
+        auto &m = out_mod_->static_data.meta_at(slot);
+        m.section_name = ".data";
+        m.flags |=
+            ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
+    }
+    cpu_features_slot_ = slot;
+
+    if (cpu_init_emitted_) return slot;
+    cpu_init_emitted_ = true;
+
+    // 2. Helper __vex_cpu_init(): un bloque asm que detecta features y un
+    //    STORE del bitmask al slot.  Construido como IrFunction aparte.
+    const std::string name = "__vex_cpu_init";
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::VOID;
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+    const uint32_t ln = 0;
+
+    // --- binding register("rax") u64 feat;  (output only) ---
+    // ALLOCA estable + AsmRegBinding -> el selector lo precolorea a rax.
+    const ir::IrValueId rax_slot = fn_->new_value(ir::IrType::PTR);
+    fn_->values[rax_slot].is_host_ptr = true;
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = rax_slot;
+        al.imm = 8;
+        al.host_alloca = true;
+        al.source_line = ln;
+        fn_->append(current_block_, std::move(al));
+    }
+    fn_->asm_reg_bindings.push_back(
+        ir::AsmRegBinding{rax_slot, "rax", ir::IrType::U64, false, "__cpu_feat"});
+
+    // --- bloque INLINE_ASM: deteccion + empaquetado completo, bitmask en rax ---
+    // bit0=SSE2(L1.EDX.26) bit1=SSE4.2(L1.ECX.20) bit2=POPCNT(L1.ECX.23)
+    // bit3=AVX(L1.ECX.28) bit4=AVX2(L7.EBX.5) bit5=BMI1(L7.EBX.3)
+    // bit6=BMI2(L7.EBX.8) bit7=AVX512F(L7.EBX.16) bit8=ERMS(L7.EBX.9).
+    const std::string asm_body =
+        "xor rsi, rsi\n"           // acumulador = 0
+        // ----- leaf 1 -----
+        "mov rax, 0x1\n"
+        "xor rcx, rcx\n"
+        "cpuid\n"                  // -> ecx, edx
+        // SSE2 = EDX bit26 -> acc bit0
+        "mov rdi, rdx\n"
+        "shr rdi, 0x1a\n"
+        "and rdi, 0x1\n"
+        "or rsi, rdi\n"
+        // SSE4.2 = ECX bit20 -> acc bit1
+        "mov rdi, rcx\n"
+        "shr rdi, 0x14\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x1\n"
+        "or rsi, rdi\n"
+        // POPCNT = ECX bit23 -> acc bit2
+        "mov rdi, rcx\n"
+        "shr rdi, 0x17\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x2\n"
+        "or rsi, rdi\n"
+        // AVX = ECX bit28 -> acc bit3
+        "mov rdi, rcx\n"
+        "shr rdi, 0x1c\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x3\n"
+        "or rsi, rdi\n"
+        // ----- leaf 7 subleaf 0 -----
+        "mov rax, 0x7\n"
+        "xor rcx, rcx\n"
+        "cpuid\n"                  // -> ebx, ecx, edx
+        // AVX2 = EBX bit5 -> acc bit4
+        "mov rdi, rbx\n"
+        "shr rdi, 0x5\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x4\n"
+        "or rsi, rdi\n"
+        // BMI1 = EBX bit3 -> acc bit5
+        "mov rdi, rbx\n"
+        "shr rdi, 0x3\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x5\n"
+        "or rsi, rdi\n"
+        // BMI2 = EBX bit8 -> acc bit6
+        "mov rdi, rbx\n"
+        "shr rdi, 0x8\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x6\n"
+        "or rsi, rdi\n"
+        // AVX512F = EBX bit16 -> acc bit7
+        "mov rdi, rbx\n"
+        "shr rdi, 0x10\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x7\n"
+        "or rsi, rdi\n"
+        // ERMS = EBX bit9 -> acc bit8
+        "mov rdi, rbx\n"
+        "shr rdi, 0x9\n"
+        "and rdi, 0x1\n"
+        "shl rdi, 0x8\n"
+        "or rsi, rdi\n"
+        // resultado -> rax (binding de salida)
+        "mov rax, rsi\n";
+
+    {
+        ir::IrInstr ia{};
+        ia.op = ir::IrOp::INLINE_ASM;
+        ia.type = ir::IrType::VOID;
+        ia.dst = ir::IR_NO_VALUE;
+        ia.source_line = ln;
+        ia.func_name = asm_body;
+        ia.preserve = true; // volatile: nunca eliminar/reordenar.
+
+        // Listar el slot del binding como operando (lo mantiene vivo + lo
+        // clasifica como output via el LOAD posterior).
+        ia.operands.push_back(rax_slot);
+
+        // Clobbers explicitos: cpuid pisa rax/rbx/rcx/rdx; ademas usamos
+        // rsi/rdi como scratch.  El selector excluye los GP usables de los
+        // vregs no-binding vivos (no hay ninguno aqui) y SALVA/RESTAURA rbx
+        // (reservado) alrededor del bloque.  flags: memory=0 (no toca mem),
+        // flags=1 (cpuid/and/shr afectan flags).
+        std::vector<std::string> clob = {"rbx", "rcx", "rdx", "rsi", "rdi"};
+        uint64_t q = 0;
+        q |= 1ull << 0; // volatile
+        q |= 1ull << 5; // clobbers flags
+        const uint64_t asm_id = (uint64_t)fn_->asm_clobber_lists.size();
+        fn_->asm_clobber_lists.push_back(std::move(clob));
+        q |= (asm_id & 0xFFFFFFull) << 8;
+        ia.imm = q;
+        fn_->append(current_block_, std::move(ia));
+    }
+
+    // --- LOAD del binding (lee rax) -> bitmask u64 ---
+    const ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U64;
+        ld.dst = v_feat;
+        ld.operands = {rax_slot};
+        ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+    }
+
+    // --- STORE del bitmask al slot global __vex_cpu_features ---
+    const ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr is{};
+        is.op = ir::IrOp::STR_LIT_ADDR;
+        is.type = ir::IrType::PTR;
+        is.dst = v_gaddr;
+        is.imm = slot;
+        is.source_line = ln;
+        fn_->append(current_block_, std::move(is));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_feat, v_gaddr};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    }
+
+    // --- RET void ---
+    {
+        ir::IrInstr ret{};
+        ret.op = ir::IrOp::RET;
+        ret.type = ir::IrType::VOID;
+        ret.dst = ir::IR_NO_VALUE;
+        ret.source_line = ln;
+        fn_->append(current_block_, std::move(ret));
+    }
+    block_terminated_ = true;
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+
+    // Registrar el import nativo del runner de inline asm (igual que lower_asm)
+    // para el path bytecode/interp; en native_poo_ no se usa, pero es
+    // idempotente y mantiene la coherencia.
+    out_mod_->register_native_import("vrt", "inline_asm_exec");
+    return slot;
 }
 
 std::string Lowering::ensure_strcmp_helper() {
