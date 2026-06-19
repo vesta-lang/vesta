@@ -3505,79 +3505,28 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 vd->init->result_type.kind == PrimitiveKind::STRING) {
                 const ir::IrValueId v_src = lower_expr(vd->init.get());
                 if (v_src != ir::IR_NO_VALUE) {
-                    // Nuevo slot de 24 bytes para `b`.
+                    // Nuevo slot de 24 bytes para `b` (host stack en native).
                     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+                    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
                     {
                         ir::IrInstr al{};
                         al.op = ir::IrOp::ALLOCA;
                         al.type = ir::IrType::I8;
                         al.dst = v_slot;
                         al.imm = 24;
+                        al.host_alloca = native_poo_;
                         al.source_line = vd->loc.line;
                         fn_->append(current_block_, std::move(al));
                     }
-                    // Copiar los 3 qwords del slot fuente al destino.
-                    for (uint64_t q = 0; q < 3; ++q) {
-                        ir::IrValueId v_s = v_src;
-                        ir::IrValueId v_d = v_slot;
-                        if (q > 0) {
-                            const uint64_t off = q * 8;
-                            ir::IrValueId v_off =
-                                emit_const(ir::IrType::I64, off, vd->loc.line);
-                            v_s = fn_->new_value(ir::IrType::PTR);
-                            {
-                                ir::IrInstr ad{};
-                                ad.op = ir::IrOp::ADD;
-                                ad.type = ir::IrType::I64;
-                                ad.dst = v_s;
-                                ad.operands = {v_src, v_off};
-                                ad.source_line = vd->loc.line;
-                                fn_->append(current_block_, std::move(ad));
-                            }
-                            v_d = fn_->new_value(ir::IrType::PTR);
-                            {
-                                ir::IrInstr ad{};
-                                ad.op = ir::IrOp::ADD;
-                                ad.type = ir::IrType::I64;
-                                ad.dst = v_d;
-                                ad.operands = {v_slot, v_off};
-                                ad.source_line = vd->loc.line;
-                                fn_->append(current_block_, std::move(ad));
-                            }
-                        }
-                        ir::IrValueId v_w = fn_->new_value(ir::IrType::I64);
-                        {
-                            ir::IrInstr ld{};
-                            ld.op = ir::IrOp::LOAD;
-                            ld.type = ir::IrType::I64;
-                            ld.dst = v_w;
-                            ld.operands = {v_s};
-                            ld.source_line = vd->loc.line;
-                            fn_->append(current_block_, std::move(ld));
-                        }
-                        {
-                            ir::IrInstr st{};
-                            st.op = ir::IrOp::STORE;
-                            st.type = ir::IrType::I64;
-                            st.dst = ir::IR_NO_VALUE;
-                            st.operands = {v_w, v_d};
-                            st.source_line = vd->loc.line;
-                            fn_->append(current_block_, std::move(st));
-                        }
-                    }
-                    // Zerar ptr@0 del slot fuente (move-out): su cleanup
-                    // hara free(0) = no-op.  El buffer ahora lo posee `b`.
-                    {
-                        ir::IrValueId v_zero =
-                            emit_const(ir::IrType::I64, 0, vd->loc.line);
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.dst = ir::IR_NO_VALUE;
-                        st.operands = {v_zero, v_src};
-                        st.source_line = vd->loc.line;
-                        fn_->append(current_block_, std::move(st));
-                    }
+                    // String Inc 5 (SSO): copiar los 24 bytes via MEMCPY
+                    // (no 3 LOAD/STORE i64) -> evita el store-forwarding
+                    // sobre qword2 que perdia la longitud SSO.
+                    emit_native_str_move_copy(v_slot, v_src, vd->loc.line);
+                    // Invalidar el slot fuente (move-out).  Inc 5 (SSO):
+                    // si era HEAP -> ptr@0=0 (su cleanup hara free(0)=
+                    // no-op; el buffer ahora lo posee `b`); si era SSO ->
+                    // sin cambio (data inline, no hay buffer compartido).
+                    emit_native_str_invalidate_moved(v_src, vd->loc.line);
                     bind(vd->name, v_slot);
                     // RAII para `b` (poseedor del buffer tras el move).
                     if (escaping_locals_.find(vd->name) ==
@@ -4850,6 +4799,22 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             block_terminated_ = true;
             return;
         }
+        // String Inc 5 (SSO): el retorno de un value-string por valor copia
+        // los 24 bytes via MEMCPY (rep movsb) en lugar de 3 LOAD/STORE i64.
+        // Los i64 LOADs de qword2 mal-resolvian el store-forwarding (data
+        // inline SSO + byte[23]) -> el retbuf perdia la longitud.  MEMCPY
+        // lee la memoria directamente.  Solo aplica al value-string nativo
+        // (host buffers); Optional/Result/enum siguen con el loop qword.
+        if (v_local != ir::IR_NO_VALUE && native_poo_ &&
+            current_fn_sret_str_value_) {
+            emit_native_str_move_copy(sret_retbuf_, v_local, s->loc.line);
+            // Invalidar la fuente si es un ident (move por valor).
+            if (s->value->kind == ast::NodeKind::IdentExpr) {
+                emit_native_str_invalidate_moved(v_local, s->loc.line);
+            }
+            // Saltar el loop qword + el zero-de-ptr@0 de abajo (ya hechos).
+            v_local = ir::IR_NO_VALUE;
+        }
         if (v_local != ir::IR_NO_VALUE) {
             // Copia qword-a-qword (16 bytes = 2 qwords; 24 = 3).
             // No usamos MEMCPY/vmcopy porque vmcopy es VM->host y
@@ -4932,15 +4897,11 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             // ident) -> no se zera nada (no hay aliasing).
             if (current_fn_sret_str_value_ && v_local != ir::IR_NO_VALUE &&
                 s->value->kind == ast::NodeKind::IdentExpr) {
-                ir::IrValueId v_zero =
-                    emit_const(ir::IrType::I64, 0, s->loc.line);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_zero, v_local};
-                st.source_line = s->loc.line;
-                fn_->append(current_block_, std::move(st));
+                // Inc 5 (SSO): invalidar la fuente flag-aware.  HEAP ->
+                // ptr@0=0 (el caller posee el buffer via retbuf, sin
+                // doble-free); SSO -> sin cambio (data inline ya copiada
+                // al retbuf; no hay buffer compartido).
+                emit_native_str_invalidate_moved(v_local, s->loc.line);
             }
         }
         // ejecutar cleanups (e.g. monexit de synchronized
@@ -6320,22 +6281,12 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             break;
         }
         case CleanupAction::Kind::STRING_FREE: {
-            // Vex Embed Inc 0: liberar el buffer de un string value-type
-            // al exit del scope.  opnds[0] = PTR al slot {ptr,len,cap}.
-            // LOAD ptr@[slot+0] (host) + RAW_FREE(ptr).  aot_lower lo baja
-            // a call free; free(0) es no-op -> seguro tras un move-out
-            // (el slot fuente quedo con ptr=0), sin doble-free.
-            const ir::IrValueId v_slot = opnds[0];
-            const ir::IrValueId v_ptr =
-                load_native_string_field(v_slot, 0, /*as_host=*/true,
-                                         it->source_line);
-            ir::IrInstr rf{};
-            rf.op = ir::IrOp::RAW_FREE;
-            rf.type = ir::IrType::VOID;
-            rf.dst = ir::IR_NO_VALUE;
-            rf.operands = {v_ptr};
-            rf.source_line = it->source_line;
-            fn_->append(current_block_, std::move(rf));
+            // Vex Embed Inc 0 / Inc 5 (SSO): liberar el buffer de un
+            // string value-type al exit del scope.  opnds[0] = PTR al slot
+            // de 24 bytes.  emit_native_str_free_if_heap libera SOLO si el
+            // slot esta en modo HEAP (la data SSO es inline, no se libera)
+            // y free(0) es no-op -> seguro tras un move-out.
+            emit_native_str_free_if_heap(opnds[0], it->source_line);
             break;
         }
         case CleanupAction::Kind::RAW_ASM: {
@@ -10725,23 +10676,12 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 return ir::IR_NO_VALUE;
             ir::IrValueId v_res =
                 build_native_string_concat(v_na, v_nb, e->loc.line);
-            // Liberar los buffers de los operandos LITERAL temporales
-            // (sus bytes ya estan copiados en el resultado).  Los
-            // operandos que son slots de variables NO se liberan aqui
-            // (su RAII los libera al exit del scope dueno).
-            auto free_temp = [&](ir::IrValueId v_slot) {
-                ir::IrValueId v_ptr = load_native_string_field(
-                    v_slot, 0, /*as_host=*/true, e->loc.line);
-                ir::IrInstr rf{};
-                rf.op = ir::IrOp::RAW_FREE;
-                rf.type = ir::IrType::VOID;
-                rf.dst = ir::IR_NO_VALUE;
-                rf.operands = {v_ptr};
-                rf.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(rf));
-            };
-            if (a_temp) free_temp(v_na);
-            if (b_temp) free_temp(v_nb);
+            // Liberar los buffers de los operandos temporales (sus bytes
+            // ya estan copiados en el resultado).  Inc 5 (SSO): solo
+            // libera si el operando estaba en HEAP.  Los operandos que son
+            // slots de variables NO se liberan aqui (su RAII manda).
+            if (a_temp) emit_native_str_free_if_heap(v_na, e->loc.line);
+            if (b_temp) emit_native_str_free_if_heap(v_nb, e->loc.line);
             return v_res;
         }
         // Vex Embed Inc 4: comparacion native de strings value-type via
@@ -10809,10 +10749,9 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     is_temp = true;
                 ir::IrValueId v_slot = lower_expr(ex);
                 if (v_slot == ir::IR_NO_VALUE) return r; // error -> r vacio
-                r.ptr = load_native_string_field(v_slot, 0, /*as_host=*/true,
-                                                 e->loc.line);
-                r.len = load_native_string_field(v_slot, 8, /*as_host=*/false,
-                                                 e->loc.line);
+                // Inc 5 (SSO): (ptr, len) via accesores flag-aware.
+                r.ptr = emit_native_str_data_ptr(v_slot, e->loc.line);
+                r.len = emit_native_str_len(v_slot, e->loc.line);
                 if (is_temp) r.temp_slot = v_slot;
                 return r;
             };
@@ -10834,20 +10773,12 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 fn_->append(current_block_, std::move(ca));
             }
             // Liberar buffers de operandos temporales (concat / cast).  El
-            // CALL ya leyo sus bytes -> sin uso posterior, sin leak.  Los
-            // literales (.rodata) NO se liberan; las variables tampoco (su
-            // RAII las libera al exit del scope).
+            // CALL ya leyo sus bytes -> sin uso posterior, sin leak.  Inc 5
+            // (SSO): solo libera si estaba en HEAP.  Los literales (.rodata)
+            // NO se liberan; las variables tampoco (su RAII manda).
             auto free_temp = [&](ir::IrValueId v_slot) {
                 if (v_slot == ir::IR_NO_VALUE) return;
-                ir::IrValueId v_ptr = load_native_string_field(
-                    v_slot, 0, /*as_host=*/true, e->loc.line);
-                ir::IrInstr rf{};
-                rf.op = ir::IrOp::RAW_FREE;
-                rf.type = ir::IrType::VOID;
-                rf.dst = ir::IR_NO_VALUE;
-                rf.operands = {v_ptr};
-                rf.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(rf));
+                emit_native_str_free_if_heap(v_slot, e->loc.line);
             };
             free_temp(ra.temp_slot);
             free_temp(rb.temp_slot);
@@ -12348,17 +12279,10 @@ skip_comptime_eval_for_macro_to_macro:
     ins.source_line = e->loc.line;
     fn_->append(current_block_, std::move(ins));
     // native_poo_: liberar los buffers de los args value-string temporales
-    // (ya copiados/usados por el callee).  RAW_FREE(ptr@0); free(0)=no-op.
+    // (ya copiados/usados por el callee).  Inc 5 (SSO): solo libera si el
+    // arg estaba en HEAP; free(0)=no-op.
     for (ir::IrValueId v_tmp : tmp_str_args_to_free) {
-        const ir::IrValueId v_ptr = load_native_string_field(
-            v_tmp, 0, /*as_host=*/true, e->loc.line);
-        ir::IrInstr rf{};
-        rf.op = ir::IrOp::RAW_FREE;
-        rf.type = ir::IrType::VOID;
-        rf.dst = ir::IR_NO_VALUE;
-        rf.operands = {v_ptr};
-        rf.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(rf));
+        emit_native_str_free_if_heap(v_tmp, e->loc.line);
     }
     return callee_is_sret ? v_call_retbuf : dst;
 }
@@ -13397,21 +13321,17 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             if (e->value->kind != ast::NodeKind::IdentExpr) free_src_buf = true;
         }
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-        ir::IrValueId v_sptr =
-            load_native_string_field(v_src, 0, /*as_host=*/true, ln);
-        ir::IrValueId v_slen =
-            load_native_string_field(v_src, 8, /*as_host=*/false, ln);
+        // Inc 5 (SSO): (ptr, len) de la fuente via accesores flag-aware.
+        // Calcularlos ANTES del append (que muta current_block_ con su
+        // branch SSO/HEAP).
+        ir::IrValueId v_sptr = emit_native_str_data_ptr(v_src, ln);
+        ir::IrValueId v_slen = emit_native_str_len(v_src, ln);
         build_native_string_append_inplace(v_slot, v_sptr, v_slen, ln);
         if (free_src_buf) {
-            // RAW_FREE del buffer fuente temporal (ptr@0).  El append ya
-            // copio los bytes a un buffer fresco propio del destino.
-            ir::IrInstr rf{};
-            rf.op = ir::IrOp::RAW_FREE;
-            rf.type = ir::IrType::VOID;
-            rf.dst = ir::IR_NO_VALUE;
-            rf.operands = {v_sptr};
-            rf.source_line = ln;
-            fn_->append(current_block_, std::move(rf));
+            // Liberar el buffer fuente temporal SOLO si estaba en HEAP
+            // (SSO no tiene buffer que liberar).  El append ya copio los
+            // bytes a un buffer/inline propio del destino.
+            emit_native_str_free_if_heap(v_src, ln);
         }
         return v_slot;
     }
@@ -16733,13 +16653,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         if (is_str_length) {
-            out_value =
-                load_native_string_field(v_slot, 8, /*as_host=*/false,
-                                         e->loc.line);
+            // String Inc 5 (SSO): len via accesor flag-aware.
+            out_value = emit_native_str_len(v_slot, e->loc.line);
         } else { // is_str_cstr
-            out_value =
-                load_native_string_field(v_slot, 0, /*as_host=*/true,
-                                         e->loc.line);
+            // String Inc 5 (SSO): data_ptr flag-aware (SSO -> &slot ya
+            // nul-terminado; HEAP -> ptr@0).
+            out_value = emit_native_str_data_ptr(v_slot, e->loc.line);
         }
         return true;
     }
@@ -16887,19 +16806,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             ir::IrValueId v_res =
                 build_native_string_concat(v_na, v_nb, e->loc.line);
-            auto free_temp = [&](ir::IrValueId v_slot) {
-                ir::IrValueId v_ptr = load_native_string_field(
-                    v_slot, 0, /*as_host=*/true, e->loc.line);
-                ir::IrInstr rf{};
-                rf.op = ir::IrOp::RAW_FREE;
-                rf.type = ir::IrType::VOID;
-                rf.dst = ir::IR_NO_VALUE;
-                rf.operands = {v_ptr};
-                rf.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(rf));
-            };
-            if (a_temp) free_temp(v_na);
-            if (b_temp) free_temp(v_nb);
+            // Inc 5 (SSO): liberar operandos temporales SOLO si HEAP.
+            if (a_temp) emit_native_str_free_if_heap(v_na, e->loc.line);
+            if (b_temp) emit_native_str_free_if_heap(v_nb, e->loc.line);
             out_value = v_res;
             return true;
         }
@@ -22664,21 +22573,9 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
         ins.source_line = source_line;
         fn_->append(current_block_, std::move(ins));
         // Liberar operandos temporales (bytes ya copiados por la callee).
-        if (a_temp || b_temp) {
-            auto free_temp = [&](ir::IrValueId v_slot) {
-                ir::IrValueId v_ptr = load_native_string_field(
-                    v_slot, 0, /*as_host=*/true, source_line);
-                ir::IrInstr rf{};
-                rf.op = ir::IrOp::RAW_FREE;
-                rf.type = ir::IrType::VOID;
-                rf.dst = ir::IR_NO_VALUE;
-                rf.operands = {v_ptr};
-                rf.source_line = source_line;
-                fn_->append(current_block_, std::move(rf));
-            };
-            if (a_temp) free_temp(v_a);
-            if (b_temp) free_temp(v_b);
-        }
+        // Inc 5 (SSO): solo libera si estaba en HEAP.
+        if (a_temp) emit_native_str_free_if_heap(v_a, source_line);
+        if (b_temp) emit_native_str_free_if_heap(v_b, source_line);
         // El "valor" del override es el retbuf (PTR al value-string).
         return v_retbuf;
     }
@@ -22694,22 +22591,11 @@ ir::IrValueId Lowering::emit_string_override_call(const std::string &fn_name,
     fn_->append(current_block_, std::move(ins));
 
     // Liberar los operandos LITERAL/expr-temporales en native (sus bytes
-    // ya estan copiados por la callee).  Las variables NO se liberan aqui.
+    // ya estan copiados por la callee).  Inc 5 (SSO): solo libera si
+    // estaba en HEAP.  Las variables NO se liberan aqui.
     if (native_poo_) {
-        auto free_temp = [&](ir::IrValueId v_slot) {
-            ir::IrValueId v_ptr =
-                load_native_string_field(v_slot, 0, /*as_host=*/true,
-                                         source_line);
-            ir::IrInstr rf{};
-            rf.op = ir::IrOp::RAW_FREE;
-            rf.type = ir::IrType::VOID;
-            rf.dst = ir::IR_NO_VALUE;
-            rf.operands = {v_ptr};
-            rf.source_line = source_line;
-            fn_->append(current_block_, std::move(rf));
-        };
-        if (a_temp) free_temp(v_a);
-        if (b_temp) free_temp(v_b);
+        if (a_temp) emit_native_str_free_if_heap(v_a, source_line);
+        if (b_temp) emit_native_str_free_if_heap(v_b, source_line);
     }
 
     // Para `!=` sobre @StringEq: negar el bool resultante.
@@ -22825,7 +22711,81 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         al.source_line = source_line;
         fn_->append(current_block_, std::move(al));
     }
+    // String Inc 5 (SSO): zero-init el slot (bytes no usados definidos).
+    emit_zero_native_str_slot(v_slot, source_line);
 
+    // Helpers comunes (STORE empaquetado al buf en una direccion off).
+    auto buf_store_at = [&](ir::IrValueId v_base, uint64_t off, uint64_t val,
+                            ir::IrType ty) {
+        ir::IrValueId v_dst = v_base;
+        if (off != 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            v_dst = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_dst].is_host_ptr = true;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_dst;
+            ad.operands = {v_base, v_off};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        ir::IrValueId v_val = emit_const(ty, val, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_dst};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    auto pack = [&](const std::vector<uint8_t> &data, uint64_t pos,
+                    int n) -> uint64_t {
+        uint64_t v = 0;
+        for (int k = 0; k < n; ++k)
+            v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
+        return v;
+    };
+    // Helper: escribir `data` (incluye el nul final) byte-a-byte agrupado
+    // en qwords/dword/word/byte a partir de @p v_base + base_off.
+    auto write_packed = [&](ir::IrValueId v_base, uint64_t base_off,
+                            const std::vector<uint8_t> &data) {
+        uint64_t pos = 0;
+        const uint64_t total_w = data.size();
+        for (; pos + 8 <= total_w; pos += 8)
+            buf_store_at(v_base, base_off + pos, pack(data, pos, 8),
+                         ir::IrType::I64);
+        if (pos + 4 <= total_w) {
+            buf_store_at(v_base, base_off + pos, pack(data, pos, 4),
+                         ir::IrType::I32);
+            pos += 4;
+        }
+        if (pos + 2 <= total_w) {
+            buf_store_at(v_base, base_off + pos, pack(data, pos, 2),
+                         ir::IrType::I16);
+            pos += 2;
+        }
+        if (pos + 1 <= total_w) {
+            buf_store_at(v_base, base_off + pos, pack(data, pos, 1),
+                         ir::IrType::U8);
+            pos += 1;
+        }
+    };
+
+    // String Inc 5 (SSO): si el literal cabe inline (<= 22 bytes), lo
+    // construimos en SSO -> CERO malloc.  Escribimos data + nul INLINE en
+    // bytes[0..len] y el len en byte[23] (flag SSO=0 en el bit alto).
+    if (len <= 22) {
+        std::vector<uint8_t> data(lit.begin(), lit.end());
+        data.push_back(0); // nul; data.size() == len+1, cabe en [0..22].
+        write_packed(v_slot, 0, data);
+        // qword2 = (len << 56): byte[23]=len (SSO), bytes 16..22=0.
+        emit_str_meta_sso(v_slot, emit_const(ir::IrType::I64, len, source_line),
+                          source_line);
+        return v_slot;
+    }
+
+    // --- Literal largo (> 22 bytes): modo HEAP ---
     // 2. Buffer en heap: RAW_ALLOC(cap).  aot_lower lo baja a call malloc.
     //    Resultado is_host_ptr para que los LOAD/STORE posteriores usen
     //    memoria host.
@@ -22939,7 +22899,9 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     };
     store_field(0, v_buf);
     store_field(8, emit_const(ir::IrType::I64, len, source_line));
-    store_field(16, emit_const(ir::IrType::I64, cap, source_line));
+    // qword2 = cap (bytes 16..22) | flag HEAP (byte[23]=0x80), un solo i64.
+    emit_str_meta_heap(v_slot, emit_const(ir::IrType::I64, cap, source_line),
+                       source_line);
 
     return v_slot;
 }
@@ -22947,97 +22909,56 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
 ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
                                                       uint32_t source_line) {
     // Vex Embed: cast (string)<char> -> value-string de UN caracter.
-    // Repr {ptr@0, len@8, cap@16} en stack (ALLOCA 24) + buffer de 2
-    // bytes en heap (el char + nul), igual patron que
-    // build_native_string_from_literal pero con 1 byte runtime.
+    // String Inc 5 (SSO): un solo char (len=1 <= 22) SIEMPRE es SSO ->
+    // CERO malloc.  La data inline en bytes[0..1]: byte[0]=char, byte[1]=
+    // nul, byte[23]=1 (flag SSO=0).
 
     // 1. Slot de 24 bytes en stack.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
         al.dst = v_slot;
         al.imm = 24;
+        al.host_alloca = native_poo_;
         al.source_line = source_line;
         fn_->append(current_block_, std::move(al));
     }
+    emit_zero_native_str_slot(v_slot, source_line);
 
-    // 2. Buffer en heap: RAW_ALLOC(2) (char + nul).  is_host_ptr para
-    //    que los STORE posteriores usen memoria host.
-    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf].is_host_ptr = true;
-    {
-        ir::IrValueId v_cap = emit_const(ir::IrType::I64, 2, source_line);
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::RAW_ALLOC;
-        ra.type = ir::IrType::PTR;
-        ra.dst = v_buf;
-        ra.operands = {v_cap};
-        ra.source_line = source_line;
-        fn_->append(current_block_, std::move(ra));
-    }
-
-    // 3. Escribir el byte del char en buf[0].  El char ya es un valor
-    //    u8 (0-255); el STORE U8 toma el byte bajo.
-    {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_char, v_buf};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    }
-
-    // 4. Nul terminador en buf[1].
-    {
-        ir::IrValueId v_off = emit_const(ir::IrType::I64, 1, source_line);
+    auto ptr_add = [&](uint64_t off) -> ir::IrValueId {
+        if (off == 0) return v_slot;
+        ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_dst].is_host_ptr = true;
+        fn_->values[v_dst].is_host_ptr = fn_->values[v_slot].is_host_ptr;
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
         ad.type = ir::IrType::I64;
         ad.dst = v_dst;
-        ad.operands = {v_buf, v_off};
+        ad.operands = {v_slot, v_off};
         ad.source_line = source_line;
         fn_->append(current_block_, std::move(ad));
-
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
+        return v_dst;
+    };
+    auto store_u8 = [&](ir::IrValueId v_addr, ir::IrValueId v_val) {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_dst};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    }
-
-    // 5. Escribir los 3 campos del slot: ptr@0, len@8=1, cap@16=2.
-    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
-        ir::IrValueId v_addr = v_slot;
-        if (off > 0) {
-            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {v_slot, v_off};
-            ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
-        }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_val, v_addr};
         st.source_line = source_line;
         fn_->append(current_block_, std::move(st));
     };
-    store_field(0, v_buf);
-    store_field(8, emit_const(ir::IrType::I64, 1, source_line));
-    store_field(16, emit_const(ir::IrType::I64, 2, source_line));
+
+    // byte[0] = char.
+    store_u8(v_slot, v_char);
+    // byte[1] = nul.
+    store_u8(ptr_add(1), emit_const(ir::IrType::U8, 0, source_line));
+    // qword2 = (1 << 56): byte[23]=1 (SSO len 1), bytes 16..22=0.
+    emit_str_meta_sso(v_slot, emit_const(ir::IrType::I64, 1, source_line),
+                      source_line);
 
     return v_slot;
 }
@@ -23045,15 +22966,12 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
 ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
                                                    ir::IrValueId v_b,
                                                    uint32_t source_line) {
-    // Vex Embed Inc 1: a + b -> nuevo string owned.  Repr value-string
-    // {ptr@0,len@8,cap@16} de 24 bytes en stack, buffer fresco en heap
-    // con los bytes de a seguidos de los de b + nul final.  v_a / v_b
-    // son PTR a slots value-string (no se consumen).  Longitudes
-    // dinamicas -> copia por loop runtime byte-a-byte (mismas ops
-    // PURE_NATIVE que el Inc 0: LOAD/STORE/ADD/CMP/BR; sin MEMCPY que
-    // el codegen vreg-native no soporta todavia).
+    // Vex Embed Inc 1: a + b -> nuevo string owned.  String Inc 5 (SSO):
+    // si el total cabe inline (<= 22) construye SSO (cero malloc); si no,
+    // HEAP.  v_a / v_b son PTR a slots value-string (no se consumen);
+    // leemos su (ptr, len) via los accesores flag-aware.  Branch real
+    // porque el malloc debe ser condicional.
 
-    // Helper local: emite addr = base + off (off es un IrValue I64).
     auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_addr].is_host_ptr = true;
@@ -23066,18 +22984,33 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         fn_->append(current_block_, std::move(ad));
         return v_addr;
     };
+    auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
+                           ir::IrValueId len) {
+        ir::IrInstr mc{};
+        mc.op = ir::IrOp::MEMCPY;
+        mc.type = ir::IrType::I8;
+        mc.dst = ir::IR_NO_VALUE;
+        mc.operands = {dst, src, len};
+        mc.source_line = source_line;
+        fn_->append(current_block_, std::move(mc));
+    };
+    auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {val, addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
 
-    // 1. Cargar ptr/len de ambos operandos.
-    ir::IrValueId v_a_ptr = load_native_string_field(v_a, 0, /*as_host=*/true,
-                                                     source_line);
-    ir::IrValueId v_a_len = load_native_string_field(v_a, 8, /*as_host=*/false,
-                                                     source_line);
-    ir::IrValueId v_b_ptr = load_native_string_field(v_b, 0, /*as_host=*/true,
-                                                     source_line);
-    ir::IrValueId v_b_len = load_native_string_field(v_b, 8, /*as_host=*/false,
-                                                     source_line);
+    // 1. (ptr, len) de ambos operandos via accesores flag-aware.
+    ir::IrValueId v_a_ptr = emit_native_str_data_ptr(v_a, source_line);
+    ir::IrValueId v_a_len = emit_native_str_len(v_a, source_line);
+    ir::IrValueId v_b_ptr = emit_native_str_data_ptr(v_b, source_line);
+    ir::IrValueId v_b_len = emit_native_str_len(v_b, source_line);
 
-    // 2. total = la + lb ; cap = total + 1.
+    // 2. total = la + lb.
     ir::IrValueId v_total = fn_->new_value(ir::IrType::I64);
     {
         ir::IrInstr ad{};
@@ -23088,100 +23021,113 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         ad.source_line = source_line;
         fn_->append(current_block_, std::move(ad));
     }
-    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_cap;
-        ad.operands = {v_total, v_one};
-        ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
-    }
 
-    // 3. Slot de 24 bytes del resultado + buffer heap (RAW_ALLOC cap).
+    // 3. Slot de 24 bytes del resultado.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
     {
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
         al.dst = v_slot;
         al.imm = 24;
+        al.host_alloca = native_poo_;
         al.source_line = source_line;
         fn_->append(current_block_, std::move(al));
     }
-    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf].is_host_ptr = true;
+    emit_zero_native_str_slot(v_slot, source_line);
+
+    // 4. cond = (total > 22) -> HEAP.
+    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
     {
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::RAW_ALLOC;
-        ra.type = ir::IrType::PTR;
-        ra.dst = v_buf;
-        ra.operands = {v_cap};
-        ra.source_line = source_line;
-        fn_->append(current_block_, std::move(ra));
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_GT;
+        c.type = ir::IrType::I64;
+        c.dst = v_cond;
+        c.operands = {v_total, v_22};
+        c.source_line = source_line;
+        fn_->append(current_block_, std::move(c));
+    }
+    const ir::IrBlockId heap_bb = fn_->new_block("concat_heap");
+    const ir::IrBlockId sso_bb = fn_->new_block("concat_sso");
+    const ir::IrBlockId merge_bb = fn_->new_block("concat_merge");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands.push_back(v_cond);
+        br.target_block = heap_bb;
+        br.false_block = sso_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(heap_bb);
+        fn_->blocks[current_block_].succs.push_back(sso_bb);
+        fn_->blocks[heap_bb].preds.push_back(current_block_);
+        fn_->blocks[sso_bb].preds.push_back(current_block_);
     }
 
-    // 4. Copia de los contenidos via MEMCPY (baja a `rep movsb` en el
-    //    codegen vreg-native: la instruccion x86 de copia mas rapida,
-    //    fast-string-ops/ERMSB).  En el interp baja a `vmcopy`.  Todas
-    //    las ops son PURE_NATIVE/LIBC-free.  Helper local emit_memcpy.
-    auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
-                           ir::IrValueId len) {
-        ir::IrInstr mc{};
-        mc.op = ir::IrOp::MEMCPY;
-        mc.type = ir::IrType::I8;
-        mc.dst = ir::IR_NO_VALUE;
-        mc.operands = {dst, src, len}; // [0]=dst_ptr [1]=src_ptr [2]=len
-        mc.source_line = source_line;
-        fn_->append(current_block_, std::move(mc));
-    };
-    // 4a. Copiar bytes de a a buf[0..la).
-    emit_memcpy(v_buf, v_a_ptr, v_a_len);
-    // 4b. Copiar bytes de b a buf[la..la+lb).  dst_base = buf + la.
-    ir::IrValueId v_buf_off = ptr_add(v_buf, v_a_len);
-    emit_memcpy(v_buf_off, v_b_ptr, v_b_len);
-
-    // 5. Nul terminador en buf[total].
+    // --- HEAP: total > 22 ---
+    current_block_ = heap_bb;
     {
-        ir::IrValueId v_dst = ptr_add(v_buf, v_total);
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_dst};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    }
-
-    // 6. Escribir los 3 campos del slot resultado: ptr@0, len@8, cap@16.
-    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
-        ir::IrValueId v_addr = v_slot;
-        if (off > 0) {
-            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
+        ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
+        ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
+        {
             ir::IrInstr ad{};
             ad.op = ir::IrOp::ADD;
             ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {v_slot, v_off};
+            ad.dst = v_cap;
+            ad.operands = {v_total, v_one};
             ad.source_line = source_line;
             fn_->append(current_block_, std::move(ad));
         }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    };
-    store_field(0, v_buf);
-    store_field(8, v_total);
-    store_field(16, v_cap);
+        ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr ra{};
+            ra.op = ir::IrOp::RAW_ALLOC;
+            ra.type = ir::IrType::PTR;
+            ra.dst = v_buf;
+            ra.operands = {v_cap};
+            ra.source_line = source_line;
+            fn_->append(current_block_, std::move(ra));
+        }
+        emit_memcpy(v_buf, v_a_ptr, v_a_len);
+        emit_memcpy(ptr_add(v_buf, v_a_len), v_b_ptr, v_b_len);
+        store_at(ptr_add(v_buf, v_total),
+                 emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
+        store_at(v_slot, v_buf, ir::IrType::I64);
+        store_at(ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line)),
+                 v_total, ir::IrType::I64);
+        // qword2 = cap | flag HEAP (un solo i64).
+        emit_str_meta_heap(v_slot, v_cap, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = merge_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(merge_bb);
+        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    }
 
+    // --- SSO: total <= 22 ---
+    current_block_ = sso_bb;
+    {
+        emit_memcpy(v_slot, v_a_ptr, v_a_len);
+        emit_memcpy(ptr_add(v_slot, v_a_len), v_b_ptr, v_b_len);
+        store_at(ptr_add(v_slot, v_total),
+                 emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
+        // qword2 = (total << 56): byte[23]=total (SSO).
+        emit_str_meta_sso(v_slot, v_total, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = merge_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(merge_bb);
+        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    }
+
+    current_block_ = merge_bb;
     return v_slot;
 }
 
@@ -23232,9 +23178,9 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         return v;
     };
 
-    // 1. Cargar ptr del slot fuente (los limites a/b ya estan en regs).
-    ir::IrValueId v_src_ptr =
-        load_native_string_field(v_src, 0, /*as_host=*/true, source_line);
+    // 1. Cargar el data_ptr del slot fuente via accesor flag-aware (SSO
+    //    o HEAP).  Los limites a/b ya estan en regs.
+    ir::IrValueId v_src_ptr = emit_native_str_data_ptr(v_src, source_line);
 
     // 2. len = b - a  (o  b - a + 1  si es `..=` inclusivo).
     ir::IrValueId v_len = emit_sub(v_hi, v_lo);
@@ -23242,11 +23188,8 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
         v_len = emit_add(v_len, v_one);
     }
-    // cap = len + 1 (el nul terminador).
-    ir::IrValueId v_one2 = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_cap = emit_add(v_len, v_one2);
 
-    // 3. Slot de 24 bytes del resultado + buffer heap (RAW_ALLOC cap).
+    // 3. Slot de 24 bytes del resultado.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
     if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
     {
@@ -23259,69 +23202,12 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
         al.source_line = source_line;
         fn_->append(current_block_, std::move(al));
     }
-    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf].is_host_ptr = true;
-    {
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::RAW_ALLOC;
-        ra.type = ir::IrType::PTR;
-        ra.dst = v_buf;
-        ra.operands = {v_cap};
-        ra.source_line = source_line;
-        fn_->append(current_block_, std::move(ra));
-    }
+    emit_zero_native_str_slot(v_slot, source_line);
 
-    // 4. Copiar len bytes desde src.ptr + a a buf[0..len) via MEMCPY.
+    // 4. src_off = src.data + a.  String Inc 5 (SSO): finalize decide
+    //    SSO vs HEAP runtime (cero malloc si el slice cabe inline).
     ir::IrValueId v_src_off = ptr_add(v_src_ptr, v_lo);
-    {
-        ir::IrInstr mc{};
-        mc.op = ir::IrOp::MEMCPY;
-        mc.type = ir::IrType::I8;
-        mc.dst = ir::IR_NO_VALUE;
-        mc.operands = {v_buf, v_src_off, v_len}; // [0]=dst [1]=src [2]=len
-        mc.source_line = source_line;
-        fn_->append(current_block_, std::move(mc));
-    }
-
-    // 5. Nul terminador en buf[len].
-    {
-        ir::IrValueId v_dst = ptr_add(v_buf, v_len);
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_dst};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    }
-
-    // 6. Escribir los 3 campos del slot resultado: ptr@0, len@8, cap@16.
-    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
-        ir::IrValueId v_addr = v_slot;
-        if (off > 0) {
-            ir::IrValueId v_off =
-                emit_const(ir::IrType::I64, off, source_line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {v_slot, v_off};
-            ad.source_line = source_line;
-            fn_->append(current_block_, std::move(ad));
-        }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        fn_->append(current_block_, std::move(st));
-    };
-    store_field(0, v_buf);
-    store_field(8, v_len);
-    store_field(16, v_cap);
+    build_native_string_finalize(v_slot, v_src_off, v_len, source_line);
 
     return v_slot;
 }
@@ -23330,11 +23216,10 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
                                                        ir::IrValueId v_idx,
                                                        uint32_t source_line) {
     // String Inc 3: `s[i]` -> el byte en la posicion i del value-string.
-    // Carga ptr@0 del slot + LOAD u8 de [ptr+i].  El resultado es un U8
-    // zero-extended (0-255) que el type checker marca como char.  v1
-    // asume i valido (0 <= i < src.len).
-    ir::IrValueId v_ptr =
-        load_native_string_field(v_src, 0, /*as_host=*/true, source_line);
+    // String Inc 5 (SSO): data_ptr via accesor flag-aware + LOAD u8 de
+    // [data+i].  El resultado es un U8 zero-extended (0-255) que el type
+    // checker marca como char.  v1 asume i valido (0 <= i < src.len).
+    ir::IrValueId v_ptr = emit_native_str_data_ptr(v_src, source_line);
     // addr = ptr + i (host_ptr).
     ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_addr].is_host_ptr = true;
@@ -23361,38 +23246,24 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
     return v_byte;
 }
 
-void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
-                                                  ir::IrValueId v_app_ptr,
-                                                  ir::IrValueId v_app_len,
-                                                  uint32_t source_line) {
-    // Vex Embed Inc 2: `s += t` (y append de interpolacion).  Muta el
-    // value-string {ptr@0,len@8,cap@16} apuntado por @p v_dst_slot in
-    // place.  Estrategia SIEMPRE-REALLOC (sin branch "cabe?"): alocar
-    // buffer fresco de (old_len + app_len + 1), copiar lo viejo + lo
-    // nuevo via MEMCPY (rep movsb), nul-terminar, liberar el buffer
-    // viejo, y reescribir ptr@0/len@8/cap@16.  free(old) siempre libera
-    // exactamente el buffer previo (sin double-free; el slot ya no lo
-    // referencia).  Correcto aunque app_len sea 0.  Todas las ops son
-    // PURE_NATIVE/LIBC (RAW_ALLOC=malloc, RAW_FREE=free, MEMCPY=rep movsb).
+void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
+                                            ir::IrValueId v_src_ptr,
+                                            ir::IrValueId v_len,
+                                            uint32_t source_line) {
+    // String Inc 5 (SSO): rellena el slot value-string ya alocado (24
+    // bytes) decidiendo SSO vs HEAP EN RUNTIME segun la longitud.  Si
+    // len <= 22 -> SSO (data inline, cero malloc); si len > 22 -> HEAP
+    // (RAW_ALLOC + MEMCPY + ptr@0/len@8/cap@16 + flag).  Branch real
+    // porque el malloc debe ser condicional (no alocar en el caso SSO).
+    // Cada rama finaliza COMPLETAMENTE el slot -> no necesita PHI.
     auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_addr].is_host_ptr = true;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr;
-        ad.operands = {base, off};
-        ad.source_line = source_line;
-        fn_->append(current_block_, std::move(ad));
-        return v_addr;
-    };
-    auto emit_add = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = true;
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
         ad.type = ir::IrType::I64;
         ad.dst = v;
-        ad.operands = {a, b};
+        ad.operands = {base, off};
         ad.source_line = source_line;
         fn_->append(current_block_, std::move(ad));
         return v;
@@ -23407,78 +23278,278 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         mc.source_line = source_line;
         fn_->append(current_block_, std::move(mc));
     };
-    auto store_field = [&](uint64_t off, ir::IrValueId v_val) {
-        ir::IrValueId v_addr = v_dst_slot;
-        if (off > 0) v_addr = ptr_add(v_dst_slot, emit_const(ir::IrType::I64,
-                                                             off, source_line));
+    auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
+        st.type = ty;
         st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
+        st.operands = {val, addr};
         st.source_line = source_line;
         fn_->append(current_block_, std::move(st));
     };
 
-    // 1. Cargar ptr/len del destino.
-    ir::IrValueId v_old_ptr = load_native_string_field(v_dst_slot, 0,
-                                                       /*as_host=*/true,
-                                                       source_line);
-    ir::IrValueId v_old_len = load_native_string_field(v_dst_slot, 8,
-                                                       /*as_host=*/false,
-                                                       source_line);
-    // 2. new_len = old_len + app_len ; new_cap = new_len + 1.
-    ir::IrValueId v_new_len = emit_add(v_old_len, v_app_len);
-    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_new_cap = emit_add(v_new_len, v_one);
-    // 3. Buffer fresco de new_cap bytes.
-    ir::IrValueId v_new_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_new_buf].is_host_ptr = true;
+    // cond = (len > 22)  -> usar HEAP.
+    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
     {
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::RAW_ALLOC;
-        ra.type = ir::IrType::PTR;
-        ra.dst = v_new_buf;
-        ra.operands = {v_new_cap};
-        ra.source_line = source_line;
-        fn_->append(current_block_, std::move(ra));
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_GT;
+        c.type = ir::IrType::I64;
+        c.dst = v_cond;
+        c.operands = {v_len, v_22};
+        c.source_line = source_line;
+        fn_->append(current_block_, std::move(c));
     }
-    // 4a. Copiar lo viejo: new_buf[0..old_len) <- old_ptr.
-    emit_memcpy(v_new_buf, v_old_ptr, v_old_len);
-    // 4b. Copiar lo nuevo: new_buf[old_len..) <- app_ptr (app_len bytes).
-    ir::IrValueId v_dst_tail = ptr_add(v_new_buf, v_old_len);
-    emit_memcpy(v_dst_tail, v_app_ptr, v_app_len);
-    // 5. Nul terminador en new_buf[new_len].
+
+    const ir::IrBlockId heap_bb = fn_->new_block("strfin_heap");
+    const ir::IrBlockId sso_bb = fn_->new_block("strfin_sso");
+    const ir::IrBlockId merge_bb = fn_->new_block("strfin_merge");
     {
-        ir::IrValueId v_nul_at = ptr_add(v_new_buf, v_new_len);
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands.push_back(v_cond);
+        br.target_block = heap_bb;
+        br.false_block = sso_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(heap_bb);
+        fn_->blocks[current_block_].succs.push_back(sso_bb);
+        fn_->blocks[heap_bb].preds.push_back(current_block_);
+        fn_->blocks[sso_bb].preds.push_back(current_block_);
+    }
+
+    // --- Rama HEAP: len > 22 ---
+    current_block_ = heap_bb;
+    {
+        // cap = len + 1.
+        ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
+        ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_cap;
+            ad.operands = {v_len, v_one};
+            ad.source_line = source_line;
+            fn_->append(current_block_, std::move(ad));
+        }
+        // buf = RAW_ALLOC(cap).
+        ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr ra{};
+            ra.op = ir::IrOp::RAW_ALLOC;
+            ra.type = ir::IrType::PTR;
+            ra.dst = v_buf;
+            ra.operands = {v_cap};
+            ra.source_line = source_line;
+            fn_->append(current_block_, std::move(ra));
+        }
+        // MEMCPY buf <- src (len bytes).
+        emit_memcpy(v_buf, v_src_ptr, v_len);
+        // nul en buf[len].
+        store_at(ptr_add(v_buf, v_len),
+                 emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
+        // Campos: ptr@0 = buf, len@8 = len, qword2 = cap | flag HEAP.
+        store_at(v_slot, v_buf, ir::IrType::I64);
+        store_at(ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line)),
+                 v_len, ir::IrType::I64);
+        emit_str_meta_heap(v_slot, v_cap, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = merge_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(merge_bb);
+        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    }
+
+    // --- Rama SSO: len <= 22 ---
+    current_block_ = sso_bb;
+    {
+        // MEMCPY slot <- src (len bytes; data inline en bytes[0..len)).
+        // v_slot es PTR al inicio del struct; lo usamos como dst directo.
+        emit_memcpy(v_slot, v_src_ptr, v_len);
+        // nul en slot[len].
+        store_at(ptr_add(v_slot, v_len),
+                 emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
+        // qword2 = (len << 56): byte[23]=len (SSO).
+        emit_str_meta_sso(v_slot, v_len, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = merge_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(merge_bb);
+        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    }
+
+    current_block_ = merge_bb;
+}
+
+void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
+                                                  ir::IrValueId v_app_ptr,
+                                                  ir::IrValueId v_app_len,
+                                                  uint32_t source_line) {
+    // Vex Embed Inc 2: `s += t` (y append de interpolacion).  Muta el
+    // value-string apuntado por @p v_dst_slot in place.  String Inc 5
+    // (SSO): branch en new_len > 22.  Como un HEAP nunca decrece
+    // (new_len >= old_len), HEAP solo transiciona a HEAP; SSO puede
+    // crecer SSO->SSO (cero malloc, data inline) o SSO->HEAP (alocar +
+    // copiar la data inline al heap).  El free del buffer viejo solo se
+    // hace si el slot estaba en HEAP (la data SSO es inline, no se libera).
+    // Todas las ops son PURE_NATIVE/LIBC.
+    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_addr].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {base, off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v_addr;
+    };
+    auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
+                           ir::IrValueId len) {
+        ir::IrInstr mc{};
+        mc.op = ir::IrOp::MEMCPY;
+        mc.type = ir::IrType::I8;
+        mc.dst = ir::IR_NO_VALUE;
+        mc.operands = {dst, src, len};
+        mc.source_line = source_line;
+        fn_->append(current_block_, std::move(mc));
+    };
+    auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
+        st.type = ty;
         st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_nul_at};
+        st.operands = {val, addr};
         st.source_line = source_line;
         fn_->append(current_block_, std::move(st));
-    }
-    // 6. Liberar el buffer viejo.  free(old_ptr): nunca apunta al nuevo
-    //    -> sin double-free.  Si el slot venia recien creado con un
-    //    buffer real, se libera; si venia de un move-out (ptr=0),
-    //    free(0) es no-op.
+    };
+
+    // 1. Estado actual del slot via accesores flag-aware.  v_old_data es
+    //    el host_ptr a los bytes (SSO -> &slot; HEAP -> ptr@0).
+    ir::IrValueId v_old_data = emit_native_str_data_ptr(v_dst_slot, source_line);
+    ir::IrValueId v_old_len = emit_native_str_len(v_dst_slot, source_line);
+    // 2. new_len = old_len + app_len ; new_cap = new_len + 1.
+    ir::IrValueId v_new_len = fn_->new_value(ir::IrType::I64);
     {
-        ir::IrInstr rf{};
-        rf.op = ir::IrOp::RAW_FREE;
-        rf.type = ir::IrType::VOID;
-        rf.dst = ir::IR_NO_VALUE;
-        rf.operands = {v_old_ptr};
-        rf.source_line = source_line;
-        fn_->append(current_block_, std::move(rf));
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_new_len;
+        ad.operands = {v_old_len, v_app_len};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
     }
-    // 7. Reescribir los campos del slot: ptr@0=new_buf, len@8=new_len,
-    //    cap@16=new_cap.  El slot ahora posee el buffer fresco; su
-    //    STRING_FREE existente (registrado al declarar `s`) lo liberara.
-    store_field(0, v_new_buf);
-    store_field(8, v_new_len);
-    store_field(16, v_new_cap);
+    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
+    ir::IrValueId v_new_cap = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_new_cap;
+        ad.operands = {v_new_len, v_one};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+
+    // 3. Branch new_len > 22.  HEAP nunca decrece (new_len >= old_len) ->
+    //    HEAP solo transiciona a HEAP; SSO crece SSO->SSO (cero malloc,
+    //    data inline) o SSO->HEAP.  El free del buffer viejo se hace en la
+    //    rama HEAP (solo si era HEAP).
+    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_GT;
+        c.type = ir::IrType::I64;
+        c.dst = v_cond;
+        c.operands = {v_new_len, v_22};
+        c.source_line = source_line;
+        fn_->append(current_block_, std::move(c));
+    }
+    const ir::IrBlockId heap_bb = fn_->new_block("append_heap");
+    const ir::IrBlockId sso_bb = fn_->new_block("append_sso");
+    const ir::IrBlockId merge_bb = fn_->new_block("append_merge");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands.push_back(v_cond);
+        br.target_block = heap_bb;
+        br.false_block = sso_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(heap_bb);
+        fn_->blocks[current_block_].succs.push_back(sso_bb);
+        fn_->blocks[heap_bb].preds.push_back(current_block_);
+        fn_->blocks[sso_bb].preds.push_back(current_block_);
+    }
+
+    // --- HEAP: new_len > 22 (SSO->HEAP o HEAP->HEAP) ---
+    current_block_ = heap_bb;
+    {
+        ir::IrValueId v_new_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_new_buf].is_host_ptr = true;
+        {
+            ir::IrInstr ra{};
+            ra.op = ir::IrOp::RAW_ALLOC;
+            ra.type = ir::IrType::PTR;
+            ra.dst = v_new_buf;
+            ra.operands = {v_new_cap};
+            ra.source_line = source_line;
+            fn_->append(current_block_, std::move(ra));
+        }
+        // Copiar lo viejo (old_data: inline o heap) + lo nuevo ANTES de
+        // liberar y de tocar los campos.
+        emit_memcpy(v_new_buf, v_old_data, v_old_len);
+        emit_memcpy(ptr_add(v_new_buf, v_old_len), v_app_ptr, v_app_len);
+        store_at(ptr_add(v_new_buf, v_new_len),
+                 emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
+        // Liberar el buffer viejo SOLO si era HEAP (lee el flag/ptr0 del
+        // slot AQUI, antes de los stores).  new_buf es malloc fresco que
+        // nunca aliasa el viejo -> sin doble-free.
+        emit_native_str_free_if_heap(v_dst_slot, source_line);
+        store_at(v_dst_slot, v_new_buf, ir::IrType::I64);
+        store_at(ptr_add(v_dst_slot, emit_const(ir::IrType::I64, 8,
+                                                source_line)),
+                 v_new_len, ir::IrType::I64);
+        // qword2 = cap | flag HEAP (un solo i64).
+        emit_str_meta_heap(v_dst_slot, v_new_cap, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = merge_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(merge_bb);
+        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    }
+
+    // --- SSO: new_len <= 22 (siempre SSO->SSO; la data vieja ya esta
+    //     inline en slot[0..old_len), solo appendeamos lo nuevo) ---
+    current_block_ = sso_bb;
+    {
+        // app -> slot[old_len..old_len+app_len).  old_data == &slot, asi
+        // que la data vieja ya esta en su sitio; solo copiamos lo nuevo.
+        emit_memcpy(ptr_add(v_dst_slot, v_old_len), v_app_ptr, v_app_len);
+        store_at(ptr_add(v_dst_slot, v_new_len),
+                 emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
+        // qword2 = (new_len << 56): byte[23]=new_len (SSO).
+        emit_str_meta_sso(v_dst_slot, v_new_len, source_line);
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = merge_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(merge_bb);
+        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    }
+
+    current_block_ = merge_bb;
 }
 
 ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
@@ -24259,9 +24330,10 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         return v;
     };
 
-    // 1. Slot resultado vacio: ALLOCA 24, buffer de 1 byte (solo nul),
-    //    ptr=buf, len=0, cap=1.  El slot vive en host stack (coherente
-    //    con el resto del modelo native: host_alloca + is_host_ptr).
+    // 1. Slot resultado vacio.  String Inc 5 (SSO): arrancamos como SSO
+    //    vacio (len=0) -> CERO malloc inicial.  Los appends posteriores
+    //    crecen inline (SSO) o transicionan a HEAP via
+    //    build_native_string_append_inplace.  El slot vive en host stack.
     const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
     if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
     {
@@ -24274,44 +24346,11 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         al.source_line = ln;
         fn_->append(current_block_, std::move(al));
     }
-    const ir::IrValueId v_buf0 = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf0].is_host_ptr = true;
-    {
-        ir::IrValueId v_cap = emit_const(ir::IrType::I64, 1, ln);
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::RAW_ALLOC;
-        ra.type = ir::IrType::PTR;
-        ra.dst = v_buf0;
-        ra.operands = {v_cap};
-        ra.source_line = ln;
-        fn_->append(current_block_, std::move(ra));
-    }
-    {
-        // buf0[0] = nul.
-        ir::IrValueId v_zero = emit_const(ir::IrType::U8, 0, ln);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_buf0};
-        st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
-    }
-    auto store_slot_field = [&](uint64_t off, ir::IrValueId v_val) {
-        ir::IrValueId v_addr = v_slot;
-        if (off > 0) v_addr = ptr_add(v_slot,
-                                      emit_const(ir::IrType::I64, off, ln));
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = ln;
-        fn_->append(current_block_, std::move(st));
-    };
-    store_slot_field(0, v_buf0);
-    store_slot_field(8, emit_const(ir::IrType::I64, 0, ln));
-    store_slot_field(16, emit_const(ir::IrType::I64, 1, ln));
+    // String Inc 5 (SSO): zero-init qword0/1 + qword2 = (0 << 56) -> SSO
+    // vacio (len 0, flag bit alto 0, data inline definida).  Los appends
+    // crecen desde aqui.  Cubre los 24 bytes (sin uninitialised reads).
+    emit_zero_native_str_slot(v_slot, ln);
+    emit_str_meta_sso(v_slot, emit_const(ir::IrType::I64, 0, ln), ln);
 
     // Helper: appendear un literal de compile-time conocido.  Escribimos
     // sus bytes a un buffer scratch en stack (ALLOCA) y appendeamos via
@@ -24379,14 +24418,12 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         }
         const PrimitiveKind ek = ex->result_type.kind;
         if (ek == PrimitiveKind::STRING) {
-            // El expr produce un value-string (PTR a slot).  Append de
-            // sus bytes.
+            // El expr produce un value-string (PTR a slot).  Inc 5 (SSO):
+            // (ptr, len) via accesores flag-aware.  Append de sus bytes.
             ir::IrValueId v_src = lower_expr(ex);
             if (v_src == ir::IR_NO_VALUE) return false;
-            ir::IrValueId v_sptr = load_native_string_field(v_src, 0,
-                                                            /*as_host=*/true, ln);
-            ir::IrValueId v_slen = load_native_string_field(v_src, 8,
-                                                            /*as_host=*/false, ln);
+            ir::IrValueId v_sptr = emit_native_str_data_ptr(v_src, ln);
+            ir::IrValueId v_slen = emit_native_str_len(v_src, ln);
             build_native_string_append_inplace(v_slot, v_sptr, v_slen, ln);
             return true;
         }
@@ -24848,6 +24885,464 @@ ir::IrValueId Lowering::load_native_string_field(ir::IrValueId v_slot,
     ld.source_line = source_line;
     fn_->append(current_block_, std::move(ld));
     return v_val;
+}
+
+// -----------------------------------------------------------------------
+// String Inc 5 (SSO): accesores flag-aware del value-string nativo.
+//
+// Layout union de 24 bytes con flag en el bit alto del byte [23]:
+//   HEAP (byte[23]&0x80 != 0): ptr@0, len@8, cap en bytes[16..22] (56b).
+//   SSO  (byte[23]&0x80 == 0): data inline en bytes[0..21], len en
+//                              byte[23]&0x7F, nul en byte[len].
+// Los accesores son BRANCHLESS (mascara aritmetica) -> sin CFG, barato y
+// robusto en el regalloc (sin PHIs).
+// -----------------------------------------------------------------------
+
+ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
+                                                uint32_t source_line) {
+    // is_heap = (byte[23] >> 7) & 1.  Cargamos el byte [23] (u8
+    // zero-extended) y lo desplazamos 7 bits.  Resultado I64 0 o 1.
+    ir::IrValueId v_off = emit_const(ir::IrType::I64, 23, source_line);
+    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_addr].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr;
+        ad.operands = {v_slot, v_off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v_b23;
+        ld.operands = {v_addr};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // is_heap = b23 >> 7  (logico; b23 es 0..255 zero-extended).
+    ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
+    ir::IrValueId v_is_heap = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr sh{};
+        sh.op = ir::IrOp::SHR;
+        sh.type = ir::IrType::I64;
+        sh.dst = v_is_heap;
+        sh.operands = {v_b23, v_seven};
+        sh.source_line = source_line;
+        fn_->append(current_block_, std::move(sh));
+    }
+    return v_is_heap;
+}
+
+ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
+                                                 uint32_t source_line) {
+    // data_ptr = is_heap ? LOAD ptr@0 : &slot.
+    // Branchless: slot + is_heap*(ptr0 - slot).
+    //   - SSO  (is_heap=0): slot + 0 = slot           (data inline @0).
+    //   - HEAP (is_heap=1): slot + (ptr0 - slot) = ptr0.
+    ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
+    // ptr0 cargado SIEMPRE (slot+0 es memoria valida en ambos modos; en
+    // SSO son bytes de data, pero solo los usamos si is_heap=1).  Lo
+    // tratamos como I64 para la aritmetica de mascara.
+    ir::IrValueId v_ptr0 = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ptr0;
+        ld.operands = {v_slot};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // slot como I64 (la direccion del slot).  BITCAST PTR->I64.
+    ir::IrValueId v_slot_i = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr bc{};
+        bc.op = ir::IrOp::BITCAST;
+        bc.type = ir::IrType::I64;
+        bc.dst = v_slot_i;
+        bc.operands = {v_slot};
+        bc.source_line = source_line;
+        fn_->append(current_block_, std::move(bc));
+    }
+    // diff = ptr0 - slot.
+    ir::IrValueId v_diff = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr s{};
+        s.op = ir::IrOp::SUB;
+        s.type = ir::IrType::I64;
+        s.dst = v_diff;
+        s.operands = {v_ptr0, v_slot_i};
+        s.source_line = source_line;
+        fn_->append(current_block_, std::move(s));
+    }
+    // masked = diff & (-is_heap)  (AND, no MUL: valgrind sabe x&0=0 es
+    // definido aunque diff use ptr0 con bits de data inline SSO).
+    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ng{};
+        ng.op = ir::IrOp::NEG;
+        ng.type = ir::IrType::I64;
+        ng.dst = v_mask;
+        ng.operands = {v_is_heap};
+        ng.source_line = source_line;
+        fn_->append(current_block_, std::move(ng));
+    }
+    ir::IrValueId v_masked = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr an{};
+        an.op = ir::IrOp::AND;
+        an.type = ir::IrType::I64;
+        an.dst = v_masked;
+        an.operands = {v_diff, v_mask};
+        an.source_line = source_line;
+        fn_->append(current_block_, std::move(an));
+    }
+    // data = slot + masked.
+    ir::IrValueId v_data = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_data].is_host_ptr = true;
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_data;
+        ad.operands = {v_slot_i, v_masked};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    return v_data;
+}
+
+ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
+                                            uint32_t source_line) {
+    // len = is_heap ? LOAD len@8 : (byte[23] & 0x7F).
+    // Branchless: sso_len + (diff & -is_heap), donde diff = heap_len -
+    // sso_len.
+    ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
+    // sso_len = byte[23] & 0x7F.
+    ir::IrValueId v_off23 = emit_const(ir::IrType::I64, 23, source_line);
+    ir::IrValueId v_addr23 = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_addr23].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr23;
+        ad.operands = {v_slot, v_off23};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::U8;
+        ld.dst = v_b23;
+        ld.operands = {v_addr23};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    ir::IrValueId v_mask7f = emit_const(ir::IrType::I64, 0x7F, source_line);
+    ir::IrValueId v_sso_len = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr an{};
+        an.op = ir::IrOp::AND;
+        an.type = ir::IrType::I64;
+        an.dst = v_sso_len;
+        an.operands = {v_b23, v_mask7f};
+        an.source_line = source_line;
+        fn_->append(current_block_, std::move(an));
+    }
+    // heap_len = LOAD len@8.
+    ir::IrValueId v_heap_len =
+        load_native_string_field(v_slot, 8, /*as_host=*/false, source_line);
+    // diff = heap_len - sso_len.
+    ir::IrValueId v_diff = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr s{};
+        s.op = ir::IrOp::SUB;
+        s.type = ir::IrType::I64;
+        s.dst = v_diff;
+        s.operands = {v_heap_len, v_sso_len};
+        s.source_line = source_line;
+        fn_->append(current_block_, std::move(s));
+    }
+    // masked = diff & (-is_heap)  (AND, no MUL: heap_len puede ser un
+    // LOAD de bytes no inicializados en modo SSO; x&0=0 es definido).
+    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ng{};
+        ng.op = ir::IrOp::NEG;
+        ng.type = ir::IrType::I64;
+        ng.dst = v_mask;
+        ng.operands = {v_is_heap};
+        ng.source_line = source_line;
+        fn_->append(current_block_, std::move(ng));
+    }
+    ir::IrValueId v_masked = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr an{};
+        an.op = ir::IrOp::AND;
+        an.type = ir::IrType::I64;
+        an.dst = v_masked;
+        an.operands = {v_diff, v_mask};
+        an.source_line = source_line;
+        fn_->append(current_block_, std::move(an));
+    }
+    // len = sso_len + masked.
+    ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_len;
+        ad.operands = {v_sso_len, v_masked};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    return v_len;
+}
+
+void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
+                                            uint32_t source_line) {
+    // free(is_heap ? ptr@0 : 0).  Branchless via AND-mask:
+    //   mask = -is_heap   (SSO: 0 ; HEAP: ~0)
+    //   to_free = ptr0 & mask  (SSO: ptr0 & 0 = 0 ; HEAP: ptr0).
+    // Usamos AND (no MUL) porque valgrind sabe que `x & 0 = 0` es definido
+    // aunque x tenga bits no inicializados (en SSO ptr0 = data inline);
+    // MUL propagaba la indefinicion a free() -> "Conditional jump depends
+    // on uninitialised value".  free(0) es no-op -> seguro para SSO y
+    // move-out.
+    ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
+    ir::IrValueId v_ptr0 = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ptr0;
+        ld.operands = {v_slot};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // mask = -is_heap  (0 - is_heap): 0 -> 0 ; 1 -> ~0.
+    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ng{};
+        ng.op = ir::IrOp::NEG;
+        ng.type = ir::IrType::I64;
+        ng.dst = v_mask;
+        ng.operands = {v_is_heap};
+        ng.source_line = source_line;
+        fn_->append(current_block_, std::move(ng));
+    }
+    ir::IrValueId v_to_free_i = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr an{};
+        an.op = ir::IrOp::AND;
+        an.type = ir::IrType::I64;
+        an.dst = v_to_free_i;
+        an.operands = {v_ptr0, v_mask};
+        an.source_line = source_line;
+        fn_->append(current_block_, std::move(an));
+    }
+    ir::IrValueId v_to_free = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_to_free].is_host_ptr = true;
+    {
+        ir::IrInstr bc{};
+        bc.op = ir::IrOp::BITCAST;
+        bc.type = ir::IrType::PTR;
+        bc.dst = v_to_free;
+        bc.operands = {v_to_free_i};
+        bc.source_line = source_line;
+        fn_->append(current_block_, std::move(bc));
+    }
+    ir::IrInstr rf{};
+    rf.op = ir::IrOp::RAW_FREE;
+    rf.type = ir::IrType::VOID;
+    rf.dst = ir::IR_NO_VALUE;
+    rf.operands = {v_to_free};
+    rf.source_line = source_line;
+    fn_->append(current_block_, std::move(rf));
+}
+
+void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
+                                         uint32_t source_line) {
+    // Zerar los bytes 0..22 del slot DEJANDO byte[23] para el caller.
+    // Cubre todo lo que el move (copia de los 3 qwords) y los accesores
+    // flag-aware podrian leer no inicializado en modo SSO:
+    //   - qword0 (ptr@0 / data[0..7])  via STORE i64=0.
+    //   - qword1 (len@8 / data[8..15]) via STORE i64=0.
+    //   - bytes 16..22 (cap-low en HEAP / padding SSO) via I32+I16+U8.
+    // byte[23] (flag/len SSO) NO se toca aqui: lo escribe el caller con un
+    // STORE U8.  CRITICO: nunca usamos un STORE i64 a offset 16 porque el
+    // patch U8 posterior a byte[23] crearia un solape parcial que el
+    // store-forwarding del optimizer mal-resuelve (un LOAD i64 de offset
+    // 16 forwarda el i64=0 e ignora el U8) -- rompia el MOVE de SSO.  Con
+    // I32+I16+U8 (sin i64 que cubra byte[23]) el move lee bytes 16..22=0 +
+    // byte[23]=len -> definido y correcto.
+    auto ptr_add = [&](uint64_t off) -> ir::IrValueId {
+        if (off == 0) return v_slot;
+        ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v;
+        ad.operands = {v_slot, v_off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v;
+    };
+    auto store0 = [&](uint64_t off, ir::IrType ty) {
+        ir::IrValueId v_z = emit_const(ty, 0, source_line);
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_z, ptr_add(off)};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    store0(0, ir::IrType::I64);  // bytes 0..7   (ptr@0 / data)
+    store0(8, ir::IrType::I64);  // bytes 8..15  (len@8 / data)
+    store0(16, ir::IrType::I32); // bytes 16..19 (cap-lo HEAP / data SSO)
+    store0(20, ir::IrType::I16); // bytes 20..21
+    store0(22, ir::IrType::U8);  // byte  22  (byte[23] lo pone el caller)
+    // byte[23] (flag/len) lo escribe el caller con un STORE U8.  El move
+    // usa MEMCPY (emit_native_str_move_copy), no i64 LOADs, asi que el
+    // solape parcial de los stores no afecta la copia (lee la memoria).
+}
+
+void Lowering::emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
+                                 uint32_t source_line) {
+    // SSO: byte[23] = len (flag bit alto 0).  STORE U8 -- NO toca bytes
+    // 16..22 (que pueden contener DATA inline para len > 16).  El
+    // store-forwarding del move se resuelve via MEMCPY (no i64 LOADs),
+    // ver emit_native_str_move_copy.
+    ir::IrValueId v_addr23 = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_addr23].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+    {
+        ir::IrValueId v_off = emit_const(ir::IrType::I64, 23, source_line);
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v_addr23;
+        ad.operands = {v_slot, v_off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+    }
+    ir::IrInstr st{};
+    st.op = ir::IrOp::STORE;
+    st.type = ir::IrType::U8;
+    st.dst = ir::IR_NO_VALUE;
+    st.operands = {v_len, v_addr23};
+    st.source_line = source_line;
+    fn_->append(current_block_, std::move(st));
+}
+
+void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
+                                  uint32_t source_line) {
+    // HEAP: cap en bytes 16..22, byte[23] = 0x80 (flag HEAP).  En HEAP
+    // qword2 no contiene data -> escribimos cap como i64 a offset 16 (que
+    // toca byte[23]=0 si cap < 2^56) y luego byte[23]=0x80 (U8).  El move
+    // de un HEAP usa MEMCPY (no i64 LOADs) -> sin solape de forwarding.
+    auto ptr_add = [&](uint64_t off) -> ir::IrValueId {
+        ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = v;
+        ad.operands = {v_slot, v_off};
+        ad.source_line = source_line;
+        fn_->append(current_block_, std::move(ad));
+        return v;
+    };
+    auto store = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {val, addr};
+        st.source_line = source_line;
+        fn_->append(current_block_, std::move(st));
+    };
+    store(ptr_add(16), v_cap, ir::IrType::I64);
+    store(ptr_add(23), emit_const(ir::IrType::U8, 0x80, source_line),
+          ir::IrType::U8);
+}
+
+void Lowering::emit_native_str_move_copy(ir::IrValueId v_dst_slot,
+                                         ir::IrValueId v_src_slot,
+                                         uint32_t source_line) {
+    // Copia los 24 bytes del value-string @p v_src_slot a @p v_dst_slot
+    // via MEMCPY (rep movsb), NO via 3 LOAD/STORE i64.  Asi evita el
+    // store-forwarding del optimizer sobre qword2 (que mezcla data inline
+    // + byte[23] via stores parciales) -- los i64 LOADs lo mal-resolvian
+    // (perdian la longitud SSO).  MEMCPY lee la MEMORIA directamente.
+    ir::IrValueId v_24 = emit_const(ir::IrType::I64, 24, source_line);
+    ir::IrInstr mc{};
+    mc.op = ir::IrOp::MEMCPY;
+    mc.type = ir::IrType::I8;
+    mc.dst = ir::IR_NO_VALUE;
+    mc.operands = {v_dst_slot, v_src_slot, v_24};
+    mc.source_line = source_line;
+    fn_->append(current_block_, std::move(mc));
+}
+
+void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
+                                                uint32_t source_line) {
+    // ptr@0 = old_ptr0 & (is_heap - 1).
+    //   HEAP (is_heap=1): mask = 0     -> ptr@0 = 0  (free posterior no-op).
+    //   SSO  (is_heap=0): mask = ~0    -> ptr@0 sin cambio (data inline).
+    ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
+    ir::IrValueId v_old_ptr0 = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_old_ptr0;
+        ld.operands = {v_slot};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // mask = is_heap - 1.
+    ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
+    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr s{};
+        s.op = ir::IrOp::SUB;
+        s.type = ir::IrType::I64;
+        s.dst = v_mask;
+        s.operands = {v_is_heap, v_one};
+        s.source_line = source_line;
+        fn_->append(current_block_, std::move(s));
+    }
+    // new_ptr0 = old_ptr0 & mask.
+    ir::IrValueId v_new = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr an{};
+        an.op = ir::IrOp::AND;
+        an.type = ir::IrType::I64;
+        an.dst = v_new;
+        an.operands = {v_old_ptr0, v_mask};
+        an.source_line = source_line;
+        fn_->append(current_block_, std::move(an));
+    }
+    ir::IrInstr st{};
+    st.op = ir::IrOp::STORE;
+    st.type = ir::IrType::I64;
+    st.dst = ir::IR_NO_VALUE;
+    st.operands = {v_new, v_slot};
+    st.source_line = source_line;
+    fn_->append(current_block_, std::move(st));
 }
 
 ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
