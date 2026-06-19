@@ -137,6 +137,23 @@ class Lowering {
         memcpy_override_ = fn_name;
     }
 
+    /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
+    /// @HelperOverride(strcmp).  Cuando NO esta vacio, __vex_strdisp_init
+    /// apunta el fp __vex_strcmp_fp a esta fn (INCONDICIONAL).  El default es
+    /// __vex_strcmp_base (la impl escalar del compilador).  Solo native_poo_.
+    /// Firma esperada: i64(u8*, i64, u8*, i64).
+    void set_strcmp_override(const std::string &fn_name) {
+        strcmp_override_ = fn_name;
+    }
+
+    /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
+    /// @HelperOverride(strlen).  Cuando NO esta vacio, __vex_strdisp_init
+    /// apunta el fp __vex_strlen_fp a esta fn (INCONDICIONAL).  El default es
+    /// __vex_strlen_base.  Solo native_poo_.  Firma esperada: i64(u8*).
+    void set_strlen_override(const std::string &fn_name) {
+        strlen_override_ = fn_name;
+    }
+
     /// Wrapper publico para que helpers estaticos del modulo (e.g.
     /// @c collect_spawn_captures_in_expr) puedan resolver un nombre
     /// recorriendo todos los scopes activos del lowering.
@@ -1313,6 +1330,33 @@ class Lowering {
     void emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
                                 ir::IrValueId len, uint32_t line);
 
+    /// CPU dispatch Inc 5a: despacho de strcmp/strlen via tabla de punteros,
+    /// foundation para que una libreria stdlib provea variantes SIMD via
+    /// @HelperOverride.  Asegura (idempotente, una sola vez):
+    ///   - global @c __vex_strcmp_fp (slot 8 B en ".data").
+    ///   - global @c __vex_strlen_fp (slot 8 B en ".data").
+    ///   - los helpers BASELINE @c __vex_strcmp_base / @c __vex_strlen_base
+    ///     (la impl escalar del compilador; el dispatch los usa por defecto y
+    ///     son llamables por nombre desde Vex para que un override delegue).
+    ///   - el helper @c __vex_strdisp_init() que setea ambos fp (override del
+    ///     usuario si existe, si no el baseline).  El compilador NO hace cpuid
+    ///     aqui: el default es baseline; la SIMD vendra de la lib importada.
+    /// Marca @c cpu_dispatch_used_ para que @c run() prepone el init en main.
+    /// Solo en @c native_poo_ (AOT).
+    void ensure_strdisp();
+    bool strdisp_emitted_ =
+        false; ///< Los fp + baselines + init ya estan emitidos.
+    uint64_t strcmp_fp_slot_ =
+        UINT64_MAX; ///< Slot static_data del global __vex_strcmp_fp.
+    uint64_t strlen_fp_slot_ =
+        UINT64_MAX; ///< Slot static_data del global __vex_strlen_fp.
+
+    /// Emite strcmp(pa, la, pb, lb) -> i64 (-1/0/1) DESPACHADO por la tabla de
+    /// punteros (LOAD __vex_strcmp_fp + CALLIND).  Solo @c native_poo_.
+    ir::IrValueId emit_strcmp_dispatched(ir::IrValueId pa, ir::IrValueId la,
+                                         ir::IrValueId pb, ir::IrValueId lb,
+                                         uint32_t source_line);
+
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findfield(ir::IrValueId v_params, uint32_t line);
@@ -1394,6 +1438,10 @@ class Lowering {
     /// CPU dispatch Inc 4: fn libre @HelperOverride(memcpy) (vacio => sin
     /// override; el fp se elige por cpuid en __vex_memcpy_init).
     std::string memcpy_override_;
+    /// CPU dispatch Inc 5a: fn libre @HelperOverride(strcmp) / (strlen)
+    /// (vacio => sin override; el fp apunta al baseline en __vex_strdisp_init).
+    std::string strcmp_override_;
+    std::string strlen_override_;
 
     /// C-3: emite una CALL a una funcion libre override del string
     /// built-in (@StringConcat / @StringEq).  @p lhs / @p rhs son las

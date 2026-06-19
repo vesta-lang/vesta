@@ -1212,21 +1212,31 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         // Asegurar que el global de features + el helper __vex_cpu_init existan
         // (idempotente).  El cpuid corre primero: el dispatch lee el bitmask.
         (void)ensure_cpu_features_global();
-        // Si se uso despacho por tabla de punteros (memcpy multi-versionado),
-        // asegurar el global fp + variantes + el helper __vex_memcpy_init que
-        // setea el fp segun el bit AVX2.
-        const bool dispatch = cpu_dispatch_used_;
-        if (dispatch) (void)ensure_memcpy_dispatch();
+        // Cada init se prepone SOLO si su mecanismo de dispatch se emitio
+        // (evita arrastrar la maquinaria memcpy a un programa que solo usa
+        // strcmp/strlen, y viceversa).  Inc 5a: el strdisp_init setea los fp
+        // de strcmp/strlen (override del usuario o baseline; sin cpuid).
+        const bool mc_disp = memcpy_helpers_emitted_;
+        const bool sd_disp = strdisp_emitted_;
         // Localizar main y prepender las CALL a su bloque de entrada.  El
         // ORDEN final de ejecucion debe ser:  __vex_cpu_init (cpuid) ->
-        // __vex_memcpy_init (lee el bitmask, setea fp) -> codigo del usuario.
-        // insert(begin()) prepende, asi que insertamos PRIMERO el memcpy_init
-        // y DESPUES el cpu_init para que cpu_init quede de primero.
+        // __vex_memcpy_init -> __vex_strdisp_init -> codigo del usuario.
+        // insert(begin()) prepende, asi que insertamos en orden inverso:
+        // strdisp_init, luego memcpy_init, luego cpu_init (queda de primero).
         for (auto &f : out_module.functions) {
             if (f.name != "main") continue;
             if (f.blocks.empty()) break;
             auto &ins = f.blocks[0].instrs;
-            if (dispatch) {
+            if (sd_disp) {
+                ir::IrInstr call_sd{};
+                call_sd.op = ir::IrOp::CALL;
+                call_sd.type = ir::IrType::VOID;
+                call_sd.dst = ir::IR_NO_VALUE;
+                call_sd.func_name = "__vex_strdisp_init";
+                call_sd.source_line = 0;
+                ins.insert(ins.begin(), std::move(call_sd));
+            }
+            if (mc_disp) {
                 ir::IrInstr call_mc{};
                 call_mc.op = ir::IrOp::CALL;
                 call_mc.type = ir::IrType::VOID;
@@ -10804,19 +10814,12 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             OperandRef rb = get_operand(e->rhs.get());
             if (ra.ptr == ir::IR_NO_VALUE || rb.ptr == ir::IR_NO_VALUE)
                 return ir::IR_NO_VALUE;
-            // CALL __vex_strcmp(pa, la, pb, lb) -> i64 (-1/0/1).
-            const std::string strcmp_fn = ensure_strcmp_helper();
-            ir::IrValueId v_cmp = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ca{};
-                ca.op = ir::IrOp::CALL;
-                ca.type = ir::IrType::I64;
-                ca.dst = v_cmp;
-                ca.func_name = strcmp_fn;
-                ca.operands = {ra.ptr, ra.len, rb.ptr, rb.len};
-                ca.source_line = e->loc.line;
-                fn_->append(current_block_, std::move(ca));
-            }
+            // CPU dispatch Inc 5a: strcmp(pa, la, pb, lb) -> i64 (-1/0/1)
+            // DESPACHADO por tabla de punteros: `call [__vex_strcmp_fp]`.  El
+            // fp apunta al baseline o al @HelperOverride(strcmp) del usuario.
+            const ir::IrValueId v_cmp =
+                emit_strcmp_dispatched(ra.ptr, ra.len, rb.ptr, rb.len,
+                                       e->loc.line);
             // Liberar buffers de operandos temporales (concat / cast).  El
             // CALL ya leyo sus bytes -> sin uso posterior, sin leak.  Inc 5
             // (SSO): solo libera si estaba en HEAP.  Los literales (.rodata)
@@ -24936,6 +24939,111 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
     fn_->append(current_block_, std::move(ci));
 }
 
+// ---------------------------------------------------------------------
+// CPU dispatch (Inc 5a): strcmp/strlen multi-versionados por tabla de
+// punteros.  Foundation para que una libreria stdlib provea variantes SIMD
+// via @HelperOverride(strcmp)/(strlen).  A DIFERENCIA de memcpy, el
+// compilador NO hace cpuid aqui: el default es el BASELINE escalar
+// (__vex_strcmp_base / __vex_strlen_base, la impl actual del compilador);
+// la variante SIMD vendra de una lib importada (Inc 5c) via @HelperOverride.
+//
+// Tres piezas:
+//   1. Globals __vex_strcmp_fp / __vex_strlen_fp (u64 en ".data").
+//   2. Baselines __vex_strcmp_base / __vex_strlen_base (los renombrados
+//      ensure_strcmp_helper / ensure_strlen_helper; siempre presentes,
+//      llamables por nombre para que un override delegue a ellos).
+//   3. __vex_strdisp_init(): setea cada fp al override del usuario (si
+//      declarado @HelperOverride) o al baseline.
+//
+// run() prepone `call __vex_strdisp_init` al entry de main (junto al resto
+// de inits).  Los call sites de strcmp/strlen bajan a `call [fp]` (CALLIND)
+// en native_poo_.  Todo PURE_NATIVE (CALL/CALLIND/LABEL_ADDR/LOAD/STORE).
+// ---------------------------------------------------------------------
+void Lowering::ensure_strdisp() {
+    cpu_dispatch_used_ = true;
+    if (strdisp_emitted_) return;
+    strdisp_emitted_ = true;
+
+    // 1. Globals fp (8 bytes zero-init) en ".data" (writable: el init les
+    //    hace STORE en runtime).  NON_DEDUP + FORCE_EMIT como los demas fp.
+    auto make_fp_slot = [&]() -> uint64_t {
+        std::vector<uint8_t> zero(8, 0);
+        const uint64_t slot = static_cast<uint64_t>(
+            out_mod_->static_data.push_back(std::move(zero)));
+        auto &m = out_mod_->static_data.meta_at(slot);
+        m.section_name = ".data";
+        m.flags |=
+            ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
+        return slot;
+    };
+    strcmp_fp_slot_ = make_fp_slot();
+    strlen_fp_slot_ = make_fp_slot();
+
+    // 2. Asegurar los baselines (emiten __vex_strcmp_base / __vex_strlen_base).
+    (void)ensure_strcmp_helper();
+    (void)ensure_strlen_helper();
+
+    // 3. __vex_strdisp_init(): para cada fp, STORE &<variante> al global.
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    const uint32_t ln = 0;
+
+    ir::IrFunction hf;
+    hf.name = "__vex_strdisp_init";
+    hf.ret_type = ir::IrType::VOID;
+    const ir::IrBlockId e = hf.new_block("entry");
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    // STORE &<fn_name> al global fp del slot dado.
+    auto emit_store_fp = [&](uint64_t fp_slot, const std::string &fn_name) {
+        ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
+        ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_gaddr].is_host_ptr = true;
+        {
+            ir::IrInstr la{};
+            la.op = ir::IrOp::STR_LIT_ADDR;
+            la.type = ir::IrType::PTR;
+            la.dst = v_gaddr;
+            la.imm = fp_slot;
+            la.source_line = ln;
+            fn_->append(current_block_, std::move(la));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_addr, v_gaddr};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    };
+
+    // fp = override del usuario si lo hay; si no, el baseline.
+    emit_store_fp(strcmp_fp_slot_, strcmp_override_.empty()
+                                       ? std::string("__vex_strcmp_base")
+                                       : strcmp_override_);
+    emit_store_fp(strlen_fp_slot_, strlen_override_.empty()
+                                       ? std::string("__vex_strlen_base")
+                                       : strlen_override_);
+
+    {
+        ir::IrInstr ret{};
+        ret.op = ir::IrOp::RET;
+        ret.type = ir::IrType::VOID;
+        ret.dst = ir::IR_NO_VALUE;
+        ret.source_line = ln;
+        fn_->append(current_block_, std::move(ret));
+    }
+    block_terminated_ = true;
+    out_mod_->add_function(std::move(hf));
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+}
+
 std::string Lowering::ensure_strcmp_helper() {
     // Vex Embed Inc 4: helper de comparacion lexicografica de strings
     // value-type nativos.  Firma:
@@ -24952,7 +25060,11 @@ std::string Lowering::ensure_strcmp_helper() {
     // el inliner no la re-inlinea (is_inlineable exige 1 bloque).  Usa
     // slots ALLOCA para el indice (mem2reg los promueve en O2) y evita
     // PHIs manuales.  Todas las ops son PURE_NATIVE.
-    const std::string name = "__vex_strcmp";
+    //
+    // CPU dispatch Inc 5a: este es el BASELINE escalar (`__vex_strcmp_base`)
+    // al que apunta __vex_strcmp_fp por defecto.  Es llamable por nombre desde
+    // Vex (un override puede delegar a el).
+    const std::string name = "__vex_strcmp_base";
     if (strcmp_helper_emitted_) return name;
     strcmp_helper_emitted_ = true;
 
@@ -26028,17 +26140,109 @@ ir::IrValueId Lowering::emit_native_str_data_ptr(ir::IrValueId v_slot,
 
 ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
                                             uint32_t source_line) {
-    // CALL __vex_strlen(s) -> i64.
-    const std::string name = ensure_strlen_helper();
+    // Fuera de native_poo_ (no deberia ocurrir: el value-string solo existe
+    // en AOT native) -> CALL directo al baseline, sin dispatch (el init NO se
+    // prepone en main no-native, asi que el fp quedaria a null).
+    if (!native_poo_) {
+        const std::string name = ensure_strlen_helper();
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = ir::IrType::I64;
+        ca.dst = v;
+        ca.func_name = name;
+        ca.operands = {v_slot};
+        ca.source_line = source_line;
+        fn_->append(current_block_, std::move(ca));
+        return v;
+    }
+    // CPU dispatch Inc 5a: strlen(s) -> i64 DESPACHADO por tabla de punteros:
+    // `call [__vex_strlen_fp]`.  El fp apunta al baseline (__vex_strlen_base)
+    // o al @HelperOverride(strlen) del usuario.  ensure_strdisp() es
+    // idempotente y marca cpu_dispatch_used_ para wirear el init en main.
+    ensure_strdisp();
+    const uint64_t fp_slot = strlen_fp_slot_;
+    // v_fpaddr = &__vex_strlen_fp ; v_fp = LOAD i64 [v_fpaddr].
+    ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_fpaddr].is_host_ptr = true;
+    {
+        ir::IrInstr la{};
+        la.op = ir::IrOp::STR_LIT_ADDR;
+        la.type = ir::IrType::PTR;
+        la.dst = v_fpaddr;
+        la.imm = fp_slot;
+        la.source_line = source_line;
+        fn_->append(current_block_, std::move(la));
+    }
+    ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_fp].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_fp;
+        ld.operands = {v_fpaddr};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // CALLIND v_fp(s) -> i64.
     ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-    ir::IrInstr ca{};
-    ca.op = ir::IrOp::CALL;
-    ca.type = ir::IrType::I64;
-    ca.dst = v;
-    ca.func_name = name;
-    ca.operands = {v_slot};
-    ca.source_line = source_line;
-    fn_->append(current_block_, std::move(ca));
+    ir::IrInstr ci{};
+    ci.op = ir::IrOp::CALLIND;
+    ci.type = ir::IrType::I64;
+    ci.dst = v;
+    ci.func_ptr = v_fp;
+    ci.operands = {v_slot};
+    ci.source_line = source_line;
+    fn_->append(current_block_, std::move(ci));
+    return v;
+}
+
+ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
+                                               ir::IrValueId la,
+                                               ir::IrValueId pb,
+                                               ir::IrValueId lb,
+                                               uint32_t source_line) {
+    // CPU dispatch Inc 5a: strcmp(pa, la, pb, lb) -> i64 (-1/0/1) DESPACHADO
+    // por tabla de punteros: `call [__vex_strcmp_fp]`.  El fp apunta al
+    // baseline (__vex_strcmp_base) o al @HelperOverride(strcmp) del usuario.
+    // Solo se llama desde el path native_poo_ de lower_binary.  Idempotente +
+    // marca cpu_dispatch_used_ para wirear el init en main.
+    ensure_strdisp();
+    const uint64_t fp_slot = strcmp_fp_slot_;
+    // v_fpaddr = &__vex_strcmp_fp ; v_fp = LOAD i64 [v_fpaddr].
+    ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_fpaddr].is_host_ptr = true;
+    {
+        ir::IrInstr la_i{};
+        la_i.op = ir::IrOp::STR_LIT_ADDR;
+        la_i.type = ir::IrType::PTR;
+        la_i.dst = v_fpaddr;
+        la_i.imm = fp_slot;
+        la_i.source_line = source_line;
+        fn_->append(current_block_, std::move(la_i));
+    }
+    ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_fp].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_fp;
+        ld.operands = {v_fpaddr};
+        ld.source_line = source_line;
+        fn_->append(current_block_, std::move(ld));
+    }
+    // CALLIND v_fp(pa, la, pb, lb) -> i64.
+    ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ci{};
+    ci.op = ir::IrOp::CALLIND;
+    ci.type = ir::IrType::I64;
+    ci.dst = v;
+    ci.func_ptr = v_fp;
+    ci.operands = {pa, la, pb, lb};
+    ci.source_line = source_line;
+    fn_->append(current_block_, std::move(ci));
     return v;
 }
 
@@ -26085,8 +26289,12 @@ std::string Lowering::ensure_strdata_helper() {
 }
 
 std::string Lowering::ensure_strlen_helper() {
-    // i64 __vex_strlen(u8* s): len branchless (is_heap ? len@8 : byte[23]&0x7F).
-    const std::string name = "__vex_strlen";
+    // i64 __vex_strlen_base(u8* s): len branchless (is_heap ? len@8 :
+    // byte[23]&0x7F).
+    //
+    // CPU dispatch Inc 5a: BASELINE escalar al que apunta __vex_strlen_fp por
+    // defecto.  Llamable por nombre desde Vex (un override puede delegar a el).
+    const std::string name = "__vex_strlen_base";
     if (strlen_helper_emitted_) return name;
     strlen_helper_emitted_ = true;
 
