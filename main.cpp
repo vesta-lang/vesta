@@ -2460,11 +2460,25 @@ int main(int argc, char *argv[]) {
                 // (libc/runtime, resueltos por el linker): no se encolan, se
                 // emiten como relocs externas en PASS 2.
                 for (const jit::NativeReloc &r : compiled.back().relocs) {
-                    if (r.kind != jit::NativeReloc::Kind::CALL_REL32) continue;
-                    if (queued.count(r.symbol)) continue;
-                    if (!fn_by_name.count(r.symbol)) continue; // externo
-                    queued[r.symbol] = true;
-                    work.push_back(r.symbol);
+                    // CALL directo a un callee del modulo -> encolar.
+                    if (r.kind == jit::NativeReloc::Kind::CALL_REL32) {
+                        if (queued.count(r.symbol)) continue;
+                        if (!fn_by_name.count(r.symbol)) continue; // externo
+                        queued[r.symbol] = true;
+                        work.push_back(r.symbol);
+                        continue;
+                    }
+                    // Referencia a la DIRECCION de una funcion ("fnsym:<name>",
+                    // de LABEL_ADDR: puntero de funcion para CALLIND, p.ej. el
+                    // despacho de helpers multi-versionados o as_native_callback)
+                    // -> encolar el target tambien (no llega por CALL directo).
+                    if (r.symbol.rfind("fnsym:", 0) == 0) {
+                        const std::string tgt = r.symbol.substr(6);
+                        if (queued.count(tgt)) continue;
+                        if (!fn_by_name.count(tgt)) continue; // externo
+                        queued[tgt] = true;
+                        work.push_back(tgt);
+                    }
                 }
             }
             if (!aot_codegen_ok) return EXIT_FAILURE;
@@ -2637,6 +2651,8 @@ int main(int argc, char *argv[]) {
                     if (r.kind == jit::NativeReloc::Kind::CALL_REL32) continue;
                     if (r.symbol.rfind("secsym:", 0) == 0)
                         continue; // simbolo de seccion (pass 2)
+                    if (r.symbol.rfind("fnsym:", 0) == 0)
+                        continue; // direccion de funcion (pass 2, sin dato)
                     if (r.symbol.rfind("rodata.", 0) != 0) {
                         std::cerr
                             << "[aot] reloc de dato con simbolo inesperado: '"
@@ -2810,6 +2826,27 @@ int main(int argc, char *argv[]) {
                                         rel ? aot::RelocKind::REL32
                                             : aot::RelocKind::ABS64);
                         }
+                    } else if (r.symbol.rfind("fnsym:", 0) == 0) {
+                        // Direccion de una FUNCION del modulo ("fnsym:<name>",
+                        // de LABEL_ADDR): puntero de funcion para CALLIND.  Se
+                        // resuelve contra el offset de la funcion en su seccion
+                        // (REL32 si RIP-rel, ABS64 si --no-pie).
+                        const std::string tgt = r.symbol.substr(6);
+                        auto fit = fn_loc.find(tgt);
+                        if (fit == fn_loc.end()) {
+                            std::cerr
+                                << "[aot] direccion de funcion no resuelta: '"
+                                << tgt << "' (referenciada como puntero).\n";
+                            return EXIT_FAILURE;
+                        }
+                        const aot::RelocKind k =
+                            (r.kind == jit::NativeReloc::Kind::DATA_REL32)
+                                ? aot::RelocKind::REL32
+                                : aot::RelocKind::ABS64;
+                        w.add_reloc(fl.sec, site,
+                                    aot::RelocTarget::addr(fit->second.sec,
+                                                           fit->second.off),
+                                    k);
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));

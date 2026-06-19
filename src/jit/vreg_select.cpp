@@ -3000,6 +3000,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "label_addr(no-func_name)");
                     return false;
                 }
+                /* AOT (HOST_LEAF): la direccion de la funcion no se conoce
+                 * en codegen (cada funcion se compila aislada).  Emitimos una
+                 * referencia por NOMBRE "fnsym:<func_name>" que el driver
+                 * resuelve contra el offset de la funcion en .text tras el
+                 * layout (igual que rodata.<N> para datos).  PIC -> lea
+                 * [rip+disp32] (DATA_REL32); --no-pie -> mov reg,imm64
+                 * (ABS64).  Es un host-addr real (codigo nativo): un puntero
+                 * de funcion valido para CALLIND.  Base del despacho de
+                 * helpers multi-versionados por CPU (Inc 2). */
+                if (abi == AbiKind::HOST_LEAF) {
+                    const uint32_t sidx =
+                        out.intern_reloc_symbol("fnsym:" + in.func_name);
+                    if (pic)
+                        O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
+                    else
+                        O.push_back(MInstr::make_mov_sym(vr(in.dst), sidx));
+                    break;
+                }
+                /* VM/JIT: resolvemos via resolve_symbol (Phase D.3-H). */
                 uint64_t addr = 0;
                 if (resolve_symbol)
                     addr = resolve_symbol("code." + in.func_name);

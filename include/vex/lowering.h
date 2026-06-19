@@ -1281,6 +1281,29 @@ class Lowering {
         false; ///< Algun cpu_features() se uso -> wirear init en main.
     uint64_t cpu_features_slot_ =
         UINT64_MAX; ///< Slot static_data del global (UINT64_MAX = sin crear).
+    bool cpu_dispatch_used_ =
+        false; ///< Se uso ALGUN helper multi-versionado (memcpy dispatch) ->
+               ///< wirear __vex_cpu_init en main aunque no se llame
+               ///< cpu_features() (el init setea los fp).
+
+    /// CPU dispatch (Inc 2): mecanismo de despacho por TABLA DE PUNTEROS.
+    /// Asegura el global @c __vex_memcpy_fp (slot @c static_data de 8 bytes,
+    /// seccion ".data") + las dos variantes @c __vex_memcpy_base (rep movsb,
+    /// segura) y @c __vex_memcpy_avx2 (AVX2 32B + cola byte-a-byte).  El helper
+    /// @c __vex_cpu_init setea el fp a la mejor variante segun el bit AVX2.
+    /// Devuelve el indice del slot del global @c __vex_memcpy_fp.  Idempotente.
+    /// Solo en @c native_poo_ (AOT).  Marca @c cpu_dispatch_used_.
+    uint64_t ensure_memcpy_dispatch();
+    bool memcpy_helpers_emitted_ =
+        false; ///< Las variantes + el global fp ya estan emitidos.
+    uint64_t memcpy_fp_slot_ =
+        UINT64_MAX; ///< Slot static_data del global __vex_memcpy_fp.
+
+    /// Emite un memcpy(dst, src, len) DESPACHADO por la tabla de punteros:
+    /// LOAD el fp del global + CALLIND.  Solo @c native_poo_.  En interp/JIT/
+    /// Full el caller usa MEMCPY inline (rep movsb), sin cambio.
+    void emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
+                                ir::IrValueId len, uint32_t line);
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
