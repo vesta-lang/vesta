@@ -727,6 +727,48 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    // === Validacion temprana de combinaciones de flags ===
+    // Sin esto, flags incompatibles o mal escritas se ignoraban en silencio
+    // por el orden de dispatch.  Ejemplos reales detectados:
+    //   - `--run x.velb -m aot --emit exe --format exe`: el dispatch de --run
+    //     ganaba y ejecutaba el .velb, ignorando -m aot/--emit/--format.
+    //   - `--vex x.vex --emit exe` (sin -m aot): --emit se ignoraba en silencio.
+    // Falla cerrado con mensaje claro en vez de hacer algo distinto a lo pedido.
+    {
+        // (1) Acciones primarias mutuamente excluyentes: solo una a la vez.
+        static const char *const kPrimaryActions[] = {
+            "run",      "worker",       "driver", "build",
+            "vex",      "asm-file",     "disasm-file", "script"};
+        std::vector<std::string> present;
+        for (const char *a : kPrimaryActions)
+            if (result.count(a)) present.emplace_back(std::string("--") + a);
+        if (present.size() > 1) {
+            std::cerr << "[cli] acciones incompatibles: ";
+            for (size_t i = 0; i < present.size(); ++i)
+                std::cerr << (i ? ", " : "") << present[i];
+            std::cerr << " -- elige solo una.\n";
+            return EXIT_FAILURE;
+        }
+
+        // (2) -m aot solo tiene sentido compilando un .vex a binario nativo.
+        if (aot_mode && !result.count("vex")) {
+            std::cerr << "[cli] -m aot requiere --vex <archivo.vex> "
+                         "(compilacion nativa desde fuente Vex).\n";
+            if (result.count("run"))
+                std::cerr << "[cli]   nota: --run ejecuta un .velb en la VM; "
+                             "es incompatible con -m aot.\n";
+            return EXIT_FAILURE;
+        }
+
+        // (3) --emit / --format solo aplican a la compilacion AOT (-m aot).
+        //     Fuera de AOT se ignoraban sin avisar.
+        if ((result.count("emit") || result.count("format")) && !aot_mode) {
+            std::cerr << "[cli] --emit/--format solo aplican con -m aot "
+                         "(compilacion nativa standalone).\n";
+            return EXIT_FAILURE;
+        }
+    }
+
     // Phase M.L28: firmas digitales del .velb (independientes del flujo
     // de compile / run / etc.).  Ambos comandos retornan al usuario al
     // terminar; no continuan al resto del flow.
