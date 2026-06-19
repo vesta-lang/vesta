@@ -19097,8 +19097,24 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         if (!native_poo_) {
-            // Path Full/interp: el global solo se materializa en AOT.
-            out_value = emit_const(ir::IrType::U64, 0, e->loc.line);
+            // Path Full/interp/JIT: la VM corre sobre la CPU real -> emitimos
+            // CALLN a la fn nativa `vesta_runtime:cpu_features` (registrada en
+            // el virtual_lib_registry, sin DLL), que corre cpuid en el host y
+            // devuelve el bitmask con el MISMO layout que el __vex_cpu_init de
+            // AOT.  Resuelve igual en interp (loader/native_ffi) y en JIT
+            // (auto_jit).  0 args, retorno u64 en R0.
+            const int ln = e->loc.line;
+            out_mod_->register_native_import("vesta_runtime", "cpu_features");
+            ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
+            ir::IrInstr cl{};
+            cl.op = ir::IrOp::CALLN;
+            cl.type = ir::IrType::U64;
+            cl.dst = v_feat;
+            cl.func_name = "vesta_runtime:cpu_features";
+            cl.operands = {};
+            cl.source_line = ln;
+            fn_->append(current_block_, std::move(cl));
+            out_value = v_feat;
             return true;
         }
         cpu_features_used_ = true;
