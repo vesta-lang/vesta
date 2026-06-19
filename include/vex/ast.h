@@ -773,6 +773,14 @@ struct IndexExpr : Expr {
     /// @c `base[index]` a la llamada @c `base.__index__(index)`.  Cadena
     /// vacia = comportamiento clasico (subscript de puntero/array).
     std::string overload_method;
+    /// Operator overloading (escritura): cuando este IndexExpr es el
+    /// destino de un @c AssignExpr (@c `base[index] = value`) y @c base
+    /// es CLASS o STRUCT que declara @c __index_set__(index, value), el
+    /// type checker deja aqui @c "__index_set__".  El lowering del assign
+    /// desugara @c `base[index] = value` a la llamada
+    /// @c `base.__index_set__(index, value)`.  Cadena vacia = sin
+    /// sobrecarga de escritura (subscript clasico de puntero/array).
+    std::string index_set_method;
     /// String Inc 3 (native_poo_): slice `s[a..b]` (exclusivo) o
     /// `s[a..=b]` (inclusivo).  Cuando @c is_range es true, @c index
     /// es el limite inferior @c a y @c range_hi es el limite superior
