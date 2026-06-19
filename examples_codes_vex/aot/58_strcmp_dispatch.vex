@@ -17,13 +17,9 @@
 // usan el helper directo, sin tabla de punteros -- por diseno (los fp solo
 // existen en native_poo_).
 //
-// NOTA 2: las comparaciones usan VARIABLES (string a = ...), NO literales
-// directos (`"x" < "y"`), para que los operandos no se internen en .rodata.
-// Asi el ejecutable PE queda en 4 secciones (.text/.data/.ovrctr/.idata): el
-// emisor PE EXEC propio tiene una limitacion PRE-EXISTENTE con 5 secciones
-// (.text+.data+.rodata+.ovrctr+.idata) -- ajena a Inc 5a (un programa SIN
-// dispatch que combine literales + @section tambien la dispara).  ELF + el .o
-// linkado con gcc no tienen el limite.
+// NOTA 2: las comparaciones usan variables (string a = ...).  El emisor PE
+// EXEC soporta cualquier numero de secciones (el limite de 5+ secciones se
+// arreglo en LibPEparse: re-layout de PointerToRawData con el conteo final).
 //
 //   vm -m aot --vex examples_codes_vex/aot/58_strcmp_dispatch.vex \
 //      -o sc.exe --format pe --emit exe ; ./sc.exe ; echo $?   # -> 42
