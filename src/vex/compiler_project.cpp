@@ -68,6 +68,12 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+// windows.h define VOID como macro -> colisiona con PrimitiveKind::VOID que
+// usamos en la validacion de firma de @HelperOverride.  Lo deshacemos aqui
+// (este TU no usa el macro VOID de WinAPI).
+#ifdef VOID
+#undef VOID
+#endif
 #else
 #include <unistd.h>
 #endif
@@ -665,6 +671,110 @@ CompileResult compile_vex_project(const std::string &root_path,
                   << (max_level + 1) << " niveles, " << parallel_opportunities
                   << " modulos paralelizables\n";
     }
+    // CPU dispatch Inc 5b: pre-pase de escaneo de @HelperOverride
+    // CROSS-MODULE.  A diferencia del path single-file (compiler.cpp), aqui
+    // un modulo IMPORTADO puede declarar el override (la "lib" hereda su
+    // implementacion al consumidor via import).  El override debe resolverse
+    // ANTES de lowerear el ROOT, porque es el root quien genera los inits
+    // (__vex_memcpy_init / __vex_strdisp_init) que apuntan el fp a la fn del
+    // override.  Estrategia: recorrer el AST de TODOS los modulos (root +
+    // imports) recolectando un map agregado target->fn_name; luego, cuando se
+    // lowerea el root, aplicarlo via lo.set_*_override.  El fn_name resuelve
+    // contra el simbolo del IR mergeado (las fns top-level conservan su
+    // nombre; los imports mantienen su nombre LOCAL via el mangle, pero el
+    // override referencia el nombre tal cual aparece en su modulo -> hay que
+    // capturar el nombre ya manglado para que el reloc fnsym lo resuelva).
+    //
+    // Precedencia: si el ROOT y un import overriden el MISMO target, gana el
+    // ROOT (es codigo directo del usuario; el import es la lib heredada).
+    std::unordered_map<std::string, std::string> aot_helper_override_syms;
+    {
+        // Set de targets cuyo override provino del ROOT (para precedencia).
+        std::unordered_set<std::string> from_root;
+        for (size_t mi = 0; mi < work.size(); ++mi) {
+            auto &pm = work[mi];
+            if (!pm.ast) continue; // cache hit con AST conservado igual sirve
+            const bool is_root = (mi + 1 == work.size());
+            for (auto &decl : pm.ast->decls) {
+                if (!decl || decl->kind != ast::NodeKind::FunctionDecl)
+                    continue;
+                auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+                if (fd->helper_override_target.empty()) continue;
+                const std::string &tgt = fd->helper_override_target;
+                const bool is_multiversioned =
+                    (tgt == "memcpy" || tgt == "strcmp" || tgt == "strlen");
+                if (!is_multiversioned) {
+                    pm.diags.warning(
+                        fd->loc,
+                        "@HelperOverride: helper '" + tgt +
+                            "' no es multi-versionado (solo 'memcpy', 'strcmp', "
+                            "'strlen' por ahora); la anotacion se ignora");
+                    continue;
+                }
+                // El nombre del simbolo: en modulos NO-root las fns top-level
+                // se manglan con prefijo `<module>__` (ver mangle_top_level_
+                // mas abajo).  Aqui aun no se ha manglado el AST (eso ocurre
+                // dentro de compile_one_module), asi que construimos el nombre
+                // manglado a mano para que coincida con el simbolo del IR
+                // mergeado.  El root conserva su nombre tal cual.
+                const std::string sym_name =
+                    is_root ? fd->name : (pm.module_name + "__" + fd->name);
+                // Validacion de firma (no fatal, el usuario manda).
+                bool ret_void =
+                    !fd->return_type ||
+                    (fd->return_type->kind ==
+                         ast::NodeKind::PrimitiveTypeNode &&
+                     static_cast<ast::PrimitiveTypeNode *>(
+                         fd->return_type.get())
+                             ->prim == PrimitiveKind::VOID);
+                bool sig_ok = true;
+                std::string expected;
+                if (tgt == "memcpy") {
+                    sig_ok = (fd->params.size() == 3 && ret_void);
+                    expected = "void(u8*, u8*, u64)";
+                } else if (tgt == "strcmp") {
+                    sig_ok = (fd->params.size() == 4 && !ret_void);
+                    expected = "i64(u8*, i64, u8*, i64)";
+                } else { // strlen
+                    sig_ok = (fd->params.size() == 1 && !ret_void);
+                    expected = "i64(u8*)";
+                }
+                if (!sig_ok) {
+                    pm.diags.warning(
+                        fd->loc,
+                        "@HelperOverride(" + tgt + "): firma esperada " +
+                            expected +
+                            "; la del override puede ser incompatible");
+                }
+                // Precedencia + deteccion de conflicto.
+                auto existing = aot_helper_override_syms.find(tgt);
+                if (existing != aot_helper_override_syms.end()) {
+                    const bool prev_from_root = from_root.count(tgt) != 0;
+                    if (is_root && !prev_from_root) {
+                        // El root pisa al import: gana el root.
+                        existing->second = sym_name;
+                        from_root.insert(tgt);
+                    } else if (!is_root && prev_from_root) {
+                        // Ya teniamos el del root: el import se ignora.
+                    } else {
+                        // Conflicto real: dos modulos del MISMO nivel de
+                        // precedencia (ambos imports, o el caso imposible de
+                        // dos roots) overriden el mismo target -> error.
+                        res.ok = false;
+                        res.diagnostics.error(
+                            fd->loc,
+                            "multiples @HelperOverride(" + tgt + ") cross-module: '" +
+                                existing->second + "' y '" + sym_name + "'");
+                        return res;
+                    }
+                } else {
+                    aot_helper_override_syms[tgt] = sym_name;
+                    if (is_root) from_root.insert(tgt);
+                }
+            }
+        }
+    }
+
     // Phase M8: refactor del loop body a lambda para enable dispatch paralelo
     // por nivel topo.  La lambda captura todo el entorno por referencia.
     // Cada thread tiene su propio @c pm = work[i] por diseno (slots distintos
@@ -972,6 +1082,23 @@ CompileResult compile_vex_project(const std::string &root_path,
         // modulos del proyecto (no solo al single-file).  Sin esto los deps
         // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.
         lo.set_native_poo(opts.native_poo);
+        // CPU dispatch Inc 5b: aplicar los @HelperOverride agregados (root +
+        // imports, ya resueltos por precedencia en el pre-pase) SOLO al
+        // modulo ROOT, que es quien emite __vex_memcpy_init / __vex_strdisp_init.
+        // El fp de cada init apunta entonces a la fn del override (que puede
+        // vivir en un modulo importado; su simbolo se resuelve en el IR
+        // mergeado via el reloc fnsym del LABEL_ADDR).
+        if (is_root) {
+            auto itmc = aot_helper_override_syms.find("memcpy");
+            if (itmc != aot_helper_override_syms.end())
+                lo.set_memcpy_override(itmc->second);
+            auto itsc = aot_helper_override_syms.find("strcmp");
+            if (itsc != aot_helper_override_syms.end())
+                lo.set_strcmp_override(itsc->second);
+            auto itsl = aot_helper_override_syms.find("strlen");
+            if (itsl != aot_helper_override_syms.end())
+                lo.set_strlen_override(itsl->second);
+        }
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             lo.set_instrument_mode(opts.instrument_mode);
         }

@@ -1,0 +1,62 @@
+// CPU dispatch (Inc 5b): consumidor que HEREDA el override de strcmp via import.
+//
+// `import "simdlib";` trae la lib que declara @HelperOverride(strcmp).  El
+// pre-pase del compilador multi-modulo detecta el override en el modulo
+// IMPORTADO y lo aplica al ROOT (este main), que es quien genera
+// __vex_strdisp_init.  Resultado: toda comparacion de strings de este main
+// usa lib_strcmp (la de la lib) en lugar del baseline del build.
+//
+// Retorna 42 SOLO si: (1) las comparaciones dan el resultado correcto Y
+// (2) el contador g_calls de la lib quedo > 0 (PRUEBA de que el override
+// cross-module se invoco realmente).
+//
+//   vm -m aot --vex examples_codes_vex/aot/inc5b/main5b.vex \
+//      -o m5b.exe --format pe --emit exe ; ./m5b.exe ; echo $?   # -> 42
+
+import "simdlib";
+
+i32 main() {
+    // Comparaciones de strings via variables (no literales-en-comparacion).
+    string abc = "abc";
+    string abd = "abd";
+    string ab  = "ab";
+    string alpha = "alpha";
+    string beta  = "beta";
+    string go = "go";
+    string gopher = "gopher";
+
+    i64 n = 0;
+
+    // --- Orden por primer byte distinto ---
+    n = n + (i64)(abc < abd);    // T: 'c'(99) < 'd'(100)
+    n = n + (i64)(abd > abc);    // T
+
+    // --- Prefijos: el mas corto es menor ---
+    n = n + (i64)(ab < abc);     // T
+    n = n + (i64)(abc > ab);     // T
+
+    // --- Iguales ---
+    n = n + (i64)(abc <= abc);   // T
+    n = n + (i64)(abc == abc);   // T
+
+    // --- alpha vs beta ---
+    n = n + (i64)(alpha < beta); // T
+    n = n + (i64)(beta > alpha); // T
+
+    // --- go vs gopher (prefijo comun) ---
+    n = n + (i64)(go < gopher);  // T
+    n = n + (i64)(go <= gopher); // T
+
+    // 10 comparaciones, todas T -> n == 10.
+    i32 cmp_ok = (i32)(n == 10);
+
+    // El override de la lib (cross-module) SE invoco: g_calls > 0.
+    u64* ctr = (u64*) section_start(".ovrctr");
+    i32 used_ok = (i32)(*ctr > 0);
+
+    // 42 solo si las comparaciones son correctas Y el override heredado se uso.
+    if (cmp_ok == 1 && used_ok == 1) {
+        return 42;
+    }
+    return 1;
+}
