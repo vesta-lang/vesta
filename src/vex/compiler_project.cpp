@@ -968,6 +968,10 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
 
         Lowering lo(*pm.ast, *pm.tc, pm.diags);
+        // Phase AOT multi-modulo: propagar POO/strings nativos a TODOS los
+        // modulos del proyecto (no solo al single-file).  Sin esto los deps
+        // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.
+        lo.set_native_poo(opts.native_poo);
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             lo.set_instrument_mode(opts.instrument_mode);
         }
@@ -1516,6 +1520,11 @@ CompileResult compile_vex_project(const std::string &root_path,
     }
     res.vel_text = std::move(eres.vel_text);
     res.ir_section_bytes = ir::emit_ir_section(merged.functions);
+    // Phase AOT multi-modulo: exponer el IR mergeado (functions + static_data
+    // + globals) como module_cache para que el path -m aot lo consuma.  El
+    // single-file lo rellena en compile_vex_source; aqui lo rellenamos desde
+    // el modulo mergeado de todos los .vex del proyecto.
+    res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
     res.ok = !res.diagnostics.has_errors();
 
     // Diagramas (Mermaid / Graphviz) del AST del root + IR mergeado +
