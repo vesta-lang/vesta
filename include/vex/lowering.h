@@ -129,6 +129,14 @@ class Lowering {
         string_eq_override_ = eq;
     }
 
+    /// CPU dispatch Inc 4: registra el nombre de la fn libre marcada con
+    /// @HelperOverride(memcpy).  Cuando NO esta vacio, __vex_memcpy_init
+    /// apunta el fp directamente a esta fn (INCONDICIONAL, sin leer el
+    /// bitmask de cpuid).  Solo aplica en native_poo_ (AOT).
+    void set_memcpy_override(const std::string &fn_name) {
+        memcpy_override_ = fn_name;
+    }
+
     /// Wrapper publico para que helpers estaticos del modulo (e.g.
     /// @c collect_spawn_captures_in_expr) puedan resolver un nombre
     /// recorriendo todos los scopes activos del lowering.
@@ -1383,6 +1391,9 @@ class Lowering {
     /// C-3: nombres de los override del string built-in (vacios => default).
     std::string string_concat_override_;
     std::string string_eq_override_;
+    /// CPU dispatch Inc 4: fn libre @HelperOverride(memcpy) (vacio => sin
+    /// override; el fp se elige por cpuid en __vex_memcpy_init).
+    std::string memcpy_override_;
 
     /// C-3: emite una CALL a una funcion libre override del string
     /// built-in (@StringConcat / @StringEq).  @p lhs / @p rhs son las

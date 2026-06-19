@@ -24736,6 +24736,50 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         current_block_ = e;
         block_terminated_ = false;
 
+        // Helper local: STORE &<fn_name> al global fp en el bloque actual.
+        // (Sin BR; el caller decide el terminador.)  Reusado por el camino
+        // de override (RET directo) y por las ramas del dispatch cpuid.
+        auto emit_store_fp = [&](const std::string &fn_name) {
+            ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
+            ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_gaddr].is_host_ptr = true;
+            {
+                ir::IrInstr la{};
+                la.op = ir::IrOp::STR_LIT_ADDR;
+                la.type = ir::IrType::PTR;
+                la.dst = v_gaddr;
+                la.imm = fp_slot;
+                la.source_line = ln;
+                fn_->append(current_block_, std::move(la));
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_addr, v_gaddr};
+            st.source_line = ln;
+            fn_->append(current_block_, std::move(st));
+        };
+
+        // CPU dispatch Inc 4: si el usuario declaro @HelperOverride(memcpy),
+        // el fp apunta a SU funcion de forma INCONDICIONAL (sin leer cpuid).
+        // Esto reemplaza el memcpy del build entero por el del usuario.
+        if (!memcpy_override_.empty()) {
+            emit_store_fp(memcpy_override_);
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ir::IrType::VOID;
+            ret.dst = ir::IR_NO_VALUE;
+            ret.source_line = ln;
+            fn_->append(current_block_, std::move(ret));
+            block_terminated_ = true;
+            out_mod_->add_function(std::move(hf));
+            fn_ = saved_fn;
+            current_block_ = saved_block;
+            block_terminated_ = saved_terminated;
+            return fp_slot;
+        }
+
         // feat = LOAD i64 [__vex_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
         ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
@@ -24816,27 +24860,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
 
         // Helper: en el bloque actual, STORE &<fn_name> al global fp + BR join.
         auto store_fp_and_join = [&](const std::string &fn_name) {
-            ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
-            ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_gaddr].is_host_ptr = true;
-            {
-                ir::IrInstr la{};
-                la.op = ir::IrOp::STR_LIT_ADDR;
-                la.type = ir::IrType::PTR;
-                la.dst = v_gaddr;
-                la.imm = fp_slot;
-                la.source_line = ln;
-                fn_->append(current_block_, std::move(la));
-            }
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_addr, v_gaddr};
-                st.source_line = ln;
-                fn_->append(current_block_, std::move(st));
-            }
+            emit_store_fp(fn_name);
             ir::IrInstr br{};
             br.op = ir::IrOp::BR;
             br.type = ir::IrType::VOID;

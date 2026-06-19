@@ -27,6 +27,7 @@
 #ifndef VEX_COMPILER_H
 #define VEX_COMPILER_H
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -164,6 +165,11 @@ struct CompileResult {
     /// Vacios => comportamiento por defecto (STRCAT/STRCMP o value-string).
     std::string string_concat_override;
     std::string string_eq_override;
+    /// CPU dispatch Inc 4: @HelperOverride(<helper>) -- mapea el nombre del
+    /// helper objetivo (hoy solo "memcpy") al nombre de la fn libre del
+    /// usuario que lo reemplaza.  Vacio => sin override (dispatch por cpuid).
+    /// Disenado para escalar a strcmp/strlen/itoa sin tocar el schema.
+    std::map<std::string, std::string> aot_helper_override_syms;
     /// Diagrama Mermaid del AST post type-check.  Llenado solo si
     /// @c CompileOptions::dump_mermaid_ast == true.  Vacio en caso
     /// contrario para no pagar el coste de generacion en builds prod.

@@ -722,6 +722,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
+    /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
+       helper objetivo (hoy "memcpy"); vacio => no es override. */
+    std::string top_helper_override_target;
     bool top_is_introspect = false;
     bool top_is_macro = false;    /* A.43.16: @Macro */
     bool top_is_pure = false;     /* A.43.20: @Pure -- memoizable */
@@ -821,6 +824,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
             const bool is_order = (current_.lexeme == "order");
             const bool is_bits = (current_.lexeme == "bits");
             const bool is_complexity = (current_.lexeme == "complexity");
+            // CPU dispatch Inc 4: @HelperOverride(<helper>).
+            const bool is_helper_override =
+                (current_.lexeme == "HelperOverride");
             (void)consume();
             // @complexity(O(...)[, n = <expr>]): contrato de coste para el
             // modo --analyze.  Se captura el texto RAW entre los parens y se
@@ -1032,6 +1038,25 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 }
                 (void)expect(TokenKind::RPAREN,
                              "se esperaba ')' tras N en @bits(N)");
+                continue;
+            }
+            if (is_helper_override) {
+                // @HelperOverride(<helper>): el usuario reemplaza el helper
+                // multi-versionado del build (hoy "memcpy").  El argumento es
+                // un identificador (no string) por consistencia con el nombre
+                // del helper.  Disenado para escalar a strcmp/strlen/itoa.
+                (void)expect(TokenKind::LPAREN,
+                             "se esperaba '(' tras @HelperOverride");
+                if (current_.kind != TokenKind::IDENTIFIER) {
+                    error_here("@HelperOverride(<helper>) requiere el nombre "
+                               "del helper (p.ej. memcpy)");
+                } else {
+                    top_helper_override_target = current_.lexeme;
+                    (void)consume();
+                }
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras el helper en "
+                             "@HelperOverride(...)");
                 continue;
             }
             if (is_target) {
@@ -1403,6 +1428,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
+        if (fd && !top_helper_override_target.empty())
+            fd->helper_override_target = top_helper_override_target;
         // Subsistema de coste: propagar el contrato @complexity al AST.
         // @c complexity_expr (forma posicional) es azucar de total_post: si
         // no se declaro total_post nombrado, lo usamos como tal.
