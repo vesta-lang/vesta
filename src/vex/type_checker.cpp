@@ -1946,6 +1946,13 @@ void TypeChecker::collect_globals() {
                 {PrimitiveKind::I64});
     reg_builtin("free", Type{PrimitiveKind::VOID}, {PrimitiveKind::PTR});
 
+    // CPU dispatch (cimiento): cpu_features() -> u64 devuelve el bitmask de
+    // features de la CPU detectadas via cpuid al arranque.  Base del despacho
+    // de helpers por hardware + del override por el usuario.  Sin args.
+    // Bits: bit0=SSE2 bit1=SSE4.2 bit2=POPCNT bit3=AVX bit4=AVX2 bit5=BMI1
+    // bit6=BMI2 bit7=AVX512F bit8=ERMS.
+    reg_builtin("cpu_features", Type{PrimitiveKind::U64}, {});
+
     // Alias predefinido `cstring` = `char*`.  Permite
     // declarar `cstring p` para FFI con char* sin tener que escribir
     // `char* p`.  Se registra como type alias (typedef) global; el

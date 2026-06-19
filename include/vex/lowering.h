@@ -1267,6 +1267,21 @@ class Lowering {
     bool strdata_helper_emitted_ = false; ///< El helper __vex_strdata emitido.
     bool strlen_helper_emitted_ = false; ///< El helper __vex_strlen emitido.
 
+    /// CPU dispatch (cimiento): asegura que existan el global
+    /// @c __vex_cpu_features (slot @c static_data de 8 bytes zero-init) y el
+    /// helper @c __vex_cpu_init() que ejecuta @c cpuid al arranque y empaqueta
+    /// un bitmask de features en ese slot.  Devuelve el indice del slot del
+    /// global (para que @c cpu_features() lo lea via STR_LIT_ADDR + LOAD).
+    /// Idempotente.  Solo en @c native_poo_ (AOT Bare/Embed): usa INLINE_ASM
+    /// que es PURE_NATIVE.  El bitmask: bit0=SSE2 bit1=SSE4.2 bit2=POPCNT
+    /// bit3=AVX bit4=AVX2 bit5=BMI1 bit6=BMI2 bit7=AVX512F bit8=ERMS.
+    uint64_t ensure_cpu_features_global();
+    bool cpu_init_emitted_ = false; ///< El helper __vex_cpu_init ya emitido.
+    bool cpu_features_used_ =
+        false; ///< Algun cpu_features() se uso -> wirear init en main.
+    uint64_t cpu_features_slot_ =
+        UINT64_MAX; ///< Slot static_data del global (UINT64_MAX = sin crear).
+
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
     ir::IrValueId emit_findfield(ir::IrValueId v_params, uint32_t line);
