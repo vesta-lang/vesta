@@ -225,6 +225,17 @@ size_t build_stack_trace(ProcessVM *vm, char *out, size_t out_size);
 void install_host_av_handler() noexcept;
 
 /**
+ * @brief Retira el handler global de access violations.
+ *
+ * Imprescindible cuando la VM se embebe en una libreria dinamica (libvesta) que
+ * puede descargarse en caliente (FreeLibrary / dlclose): sin retirarlo, la
+ * cadena de manejadores del SO conserva un puntero a codigo ya desmapeado y el
+ * cierre del proceso o la siguiente excepcion salta a esa direccion (segfault).
+ * Idempotente.  La descarga de libvesta lo invoca desde su destructor de DLL.
+ */
+void uninstall_host_av_handler() noexcept;
+
+/**
  * @brief Setea (o limpia con nullptr) el ProcessVM cuyo bytecode
  *        esta corriendo en el thread actual.  Lo llama el scheduler
  *        antes y despues de cada batch de instrucciones.
