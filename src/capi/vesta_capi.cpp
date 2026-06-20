@@ -42,6 +42,7 @@
 #include "ir/ir_emitter.h"
 #include "ir/ssa_ir.h"
 #include "loader/loader.h"
+#include "runtime/exception_runtime.h"
 #include "runtime/manager_runtime.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h"
@@ -53,6 +54,18 @@
 #include <capstone/capstone.h>
 #include <json.hpp>
 #include <sqlite3.h>
+
+// Al descargar libvesta (FreeLibrary / dlclose) hay que retirar el handler
+// global de access violations que instala la VM (un VEH en Windows): si la DLL
+// se desmapea con el handler aun registrado, la cadena de manejadores del SO
+// conserva un puntero a codigo muerto y el cierre del proceso (o la siguiente
+// excepcion) salta a esa direccion -> segfault.  Este destructor del modulo
+// corre en DLL_PROCESS_DETACH (tanto al descargar en caliente como al salir).
+#if defined(__GNUC__)
+__attribute__((destructor)) static void vesta_dll_on_unload(void) {
+    runtime::uninstall_host_av_handler();
+}
+#endif
 
 namespace {
 
