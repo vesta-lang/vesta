@@ -80,10 +80,112 @@ def load_api(path: str) -> ctypes.CDLL:
         ctypes.POINTER(ctypes.c_char_p),  # out_err
     ]
 
+    lib.vesta_compile_to_vel.restype = ctypes.c_int
+    lib.vesta_compile_to_vel.argtypes = [
+        ctypes.c_char_p,  # src
+        ctypes.c_char_p,  # unit_name
+        ctypes.POINTER(ctypes.c_char_p),  # out_vel
+        ctypes.POINTER(ctypes.c_char_p),  # out_err
+    ]
+
+    lib.vesta_compile_to_ir.restype = ctypes.c_int
+    lib.vesta_compile_to_ir.argtypes = [
+        ctypes.c_char_p,  # src
+        ctypes.c_char_p,  # unit_name
+        ctypes.POINTER(ctypes.c_char_p),  # out_ir
+        ctypes.POINTER(ctypes.c_char_p),  # out_err
+    ]
+
+    lib.vesta_disasm.restype = ctypes.c_int
+    lib.vesta_disasm.argtypes = [
+        ctypes.POINTER(ctypes.c_ubyte),  # bytes
+        ctypes.c_size_t,  # len
+        ctypes.c_char_p,  # arch
+        ctypes.POINTER(ctypes.c_char_p),  # out_text
+        ctypes.POINTER(ctypes.c_char_p),  # out_err
+    ]
+
+    lib.vesta_diagram.restype = ctypes.c_int
+    lib.vesta_diagram.argtypes = [
+        ctypes.c_char_p,  # src
+        ctypes.c_char_p,  # unit_name
+        ctypes.c_char_p,  # kind
+        ctypes.c_char_p,  # format
+        ctypes.POINTER(ctypes.c_char_p),  # out_text
+        ctypes.POINTER(ctypes.c_char_p),  # out_err
+    ]
+
+    lib.vesta_vsh_eval.restype = ctypes.c_int
+    lib.vesta_vsh_eval.argtypes = [
+        ctypes.c_char_p,  # script
+        ctypes.POINTER(ctypes.c_int),  # out_rc
+        ctypes.POINTER(ctypes.c_char_p),  # out_err
+    ]
+
     lib.vesta_free.restype = None
     lib.vesta_free.argtypes = [ctypes.c_void_p]
 
     return lib
+
+
+def _call_text(lib, fn, *args):
+    """Invoca una fn (...) -> 0/err que devuelve UNA cadena por out_text.
+
+    args = los argumentos previos a (out_text, out_err).  Devuelve la
+    cadena resultante (str) liberando el buffer con vesta_free.
+    """
+    out_text = ctypes.c_char_p()
+    out_err = ctypes.c_char_p()
+    rc = fn(*args, ctypes.byref(out_text), ctypes.byref(out_err))
+    if rc != 0:
+        msg = out_err.value.decode("utf-8") if out_err.value else "(sin mensaje)"
+        lib.vesta_free(out_err)
+        raise RuntimeError(f"{fn.__name__} fallo (rc={rc}): {msg}")
+    text = out_text.value.decode("utf-8") if out_text.value else ""
+    lib.vesta_free(out_text)
+    return text
+
+
+def compile_to_ir(lib, src, unit):
+    """Vex -> texto del IR SSA."""
+    return _call_text(
+        lib, lib.vesta_compile_to_ir, src.encode("utf-8"), unit.encode("utf-8")
+    )
+
+
+def diagram(lib, src, unit, kind, fmt):
+    """Vex -> diagrama del pipeline (mermaid|graphviz|html)."""
+    return _call_text(
+        lib,
+        lib.vesta_diagram,
+        src.encode("utf-8"),
+        unit.encode("utf-8"),
+        kind.encode("utf-8"),
+        fmt.encode("utf-8"),
+    )
+
+
+def disasm(lib, code: bytes, arch: str):
+    """Desensambla un buffer de bytes nativos."""
+    buf = (ctypes.c_ubyte * len(code)).from_buffer_copy(code)
+    return _call_text(
+        lib, lib.vesta_disasm, buf, ctypes.c_size_t(len(code)), arch.encode("utf-8")
+    )
+
+
+def vsh_eval(lib, script: str) -> int:
+    """Ejecuta un script VestaShellScript; devuelve out_rc."""
+    out_rc = ctypes.c_int(0)
+    out_err = ctypes.c_char_p()
+    rc = lib.vesta_vsh_eval(
+        script.encode("utf-8"), ctypes.byref(out_rc), ctypes.byref(out_err)
+    )
+    if rc != 0:
+        msg = out_err.value.decode("utf-8") if out_err.value else "(sin mensaje)"
+        lib.vesta_free(out_err)
+        raise RuntimeError(f"vesta_vsh_eval fallo (rc={rc}): {msg}")
+    lib.vesta_free(out_err)
+    return out_rc.value
 
 
 def vesta_eval(lib: ctypes.CDLL, src: str, unit: str) -> int:
@@ -116,6 +218,29 @@ def main() -> int:
     r = vesta_eval(lib, "i32 main() { return 6 * 7; }", "py_mul")
     print(f"vesta_eval(6 * 7) -> {r}")
     assert r == 42, f"esperado 42, obtenido {r}"
+
+    # --- compile_to_ir ---
+    ir = compile_to_ir(lib, "i32 main() { return 6 * 7; }", "py_ir")
+    print("\n--- IR (head) ---")
+    print(ir[:200] + (" [...]" if len(ir) > 200 else ""))
+    assert "@module" in ir, "IR sin cabecera @module"
+
+    # --- diagram (Mermaid del IR post-opt) ---
+    mmd = diagram(lib, "i32 main() { return 6 * 7; }", "py_diag", "ir-post", "mermaid")
+    print("\n--- diagrama Mermaid ir-post (head) ---")
+    print(mmd[:160] + (" [...]" if len(mmd) > 160 else ""))
+    assert "mermaid" in mmd.lower(), "diagrama Mermaid invalido"
+
+    # --- disasm (mov eax,42 ; ret) ---
+    text = disasm(lib, b"\xB8\x2A\x00\x00\x00\xC3", "X86-64")
+    print("\n--- desensamblado X86-64 ---")
+    print(text, end="")
+    assert "mov" in text and "ret" in text, "desensamblado inesperado"
+
+    # --- vsh_eval (script VestaShellScript) ---
+    rc = vsh_eval(lib, 'print("hola desde VSH via FFI")\n')
+    print(f"\nvesta_vsh_eval -> rc={rc}")
+    assert rc == 0, f"VSH rc inesperado: {rc}"
 
     print("\nTODOS LOS CASOS OK")
     return 0

@@ -84,6 +84,102 @@ int main(void) {
         }
     }
 
+    /* --- Caso 3: vesta_compile_to_vel (Vex -> texto .vel) --- */
+    {
+        char *vel = NULL, *err = NULL;
+        int rc = vesta_compile_to_vel(SRC_42, "c_vel", &vel, &err);
+        if (rc != 0) {
+            fprintf(stderr, "vesta_compile_to_vel fallo (rc=%d): %s\n", rc,
+                    err ? err : "(sin mensaje)");
+            vesta_free(err);
+            fallos++;
+        } else {
+            printf("\n--- .vel de SRC_42 (primeras lineas) ---\n");
+            /* Imprimir solo un fragmento para no saturar la salida. */
+            printf("%.200s%s\n", vel,
+                   (vel && vel[0] && vel[199]) ? " [...]" : "");
+            vesta_free(vel);
+        }
+    }
+
+    /* --- Caso 4: vesta_compile_to_ir (Vex -> texto IR SSA) --- */
+    {
+        char *ir = NULL, *err = NULL;
+        int rc = vesta_compile_to_ir(SRC_MUL, "c_ir", &ir, &err);
+        if (rc != 0) {
+            fprintf(stderr, "vesta_compile_to_ir fallo (rc=%d): %s\n", rc,
+                    err ? err : "(sin mensaje)");
+            vesta_free(err);
+            fallos++;
+        } else {
+            printf("\n--- IR de SRC_MUL (primeras lineas) ---\n");
+            printf("%.300s%s\n", ir,
+                   (ir && ir[0] && ir[299]) ? " [...]" : "");
+            vesta_free(ir);
+        }
+    }
+
+    /* --- Caso 5: vesta_assemble (texto .vel -> bytes .velb) --- */
+    {
+        char *vel = NULL, *verr = NULL;
+        if (vesta_compile_to_vel(SRC_42, "c_asm", &vel, &verr) == 0) {
+            unsigned char *velb = NULL;
+            size_t velb_len = 0;
+            char *aerr = NULL;
+            int rc = vesta_assemble(vel, &velb, &velb_len, &aerr);
+            if (rc != 0) {
+                fprintf(stderr, "vesta_assemble fallo (rc=%d): %s\n", rc,
+                        aerr ? aerr : "(sin mensaje)");
+                vesta_free(aerr);
+                fallos++;
+            } else {
+                printf("\nvesta_assemble(.vel) -> %zu bytes de .velb\n",
+                       velb_len);
+                if (velb_len == 0) fallos++;
+                vesta_free(velb);
+            }
+            vesta_free(vel);
+        } else {
+            vesta_free(verr);
+            fallos++;
+        }
+    }
+
+    /* --- Caso 6: vesta_disasm (desensamblar un buffer x86-64) --- */
+    {
+        /* mov eax, 42 ; ret  -> debe desensamblarse a "mov" + "ret". */
+        unsigned char code[] = {0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3};
+        char *text = NULL, *err = NULL;
+        int rc = vesta_disasm(code, sizeof(code), "X86-64", &text, &err);
+        if (rc != 0) {
+            fprintf(stderr, "vesta_disasm fallo (rc=%d): %s\n", rc,
+                    err ? err : "(sin mensaje)");
+            vesta_free(err);
+            fallos++;
+        } else {
+            printf("\n--- desensamblado de [B8 2A 00 00 00 C3] ---\n%s", text);
+            vesta_free(text);
+        }
+    }
+
+    /* --- Caso 7: vesta_diagram (Mermaid del IR post-opt) --- */
+    {
+        char *diag = NULL, *err = NULL;
+        int rc = vesta_diagram(SRC_MUL, "c_diag", "ir-post", "mermaid", &diag,
+                               &err);
+        if (rc != 0) {
+            fprintf(stderr, "vesta_diagram fallo (rc=%d): %s\n", rc,
+                    err ? err : "(sin mensaje)");
+            vesta_free(err);
+            fallos++;
+        } else {
+            printf("\n--- diagrama Mermaid (ir-post) primeras lineas ---\n");
+            printf("%.200s%s\n", diag,
+                   (diag && diag[0] && diag[199]) ? " [...]" : "");
+            vesta_free(diag);
+        }
+    }
+
     if (fallos == 0) {
         printf("\nTODOS LOS CASOS OK\n");
         return 0;
