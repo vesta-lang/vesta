@@ -1,0 +1,96 @@
+// Vex Embed String Inc 5 (SSO): cadenas cortas viven INLINE en los 24
+// bytes del value-string (CERO malloc); las largas en heap como antes.
+//
+// Layout union de 24 bytes con flag en el bit alto (0x80) del byte [23]:
+//   SSO  (byte[23]&0x80 == 0): data inline en bytes[0..21] (max 22), nul
+//        en byte[len], len en byte[23] bits bajos (0..22).
+//   HEAP (byte[23]&0x80 != 0): ptr@0, len@8, cap en bytes[16..22] (56b),
+//        byte[23] bit alto = 1.
+// Accesores flag-aware centralizados (data_ptr, len, free-if-heap) hacen
+// que TODAS las ops (concat/slice/index/compare/length/cstr/move/return/
+// free) funcionen en ambos modos sin branch por op.
+//
+// Validacion (por ejecucion + valgrind):
+//   - corto (<=22): SSO, CERO malloc.  Casos 1, 2, 4, 5, 6.
+//   - largo (>22): HEAP, 1 malloc.  Casos 3, 7.
+//   - concat corto -> SSO; concat largo -> heap.
+//   - slice corto -> SSO.
+//   - move de SSO: la data viaja inline; sin corromper; fuente invalidada.
+//   - return de SSO por valor: correcto.
+// Exit-code 77 confirma los casos.  Cada fallo devuelve un codigo distinto.
+
+// Helper: retorna un string corto POR VALOR (SSO) -> prueba el SRET de SSO.
+string make_short() {
+    string r = "abc";    // SSO len 3
+    return r;            // MOVE de SSO por valor (data inline al retbuf)
+}
+
+i32 main() {
+    // (1) corto SSO: "hola" len 4 (<=22) -> CERO malloc.
+    string s = "hola";
+    char* cs = s.cstr();
+    if (s.length() != 4) { return 1; }
+    if (cs[0] != 104) { return 2; }   // 'h'
+    if (cs[3] != 97) { return 3; }    // 'a'
+
+    // (2) limite EXACTO 22 chars -> SSO, 0 malloc.
+    string s22 = "0123456789012345678901";   // 22 chars
+    if (s22.length() != 22) { return 4; }
+    char* c22 = s22.cstr();
+    if (c22[21] != 49) { return 5; }  // '1' (ultimo char)
+
+    // (3) 23 chars -> HEAP (1 malloc), liberado por RAII.
+    string s23 = "01234567890123456789012";  // 23 chars
+    if (s23.length() != 23) { return 6; }
+    char* c23 = s23.cstr();
+    if (c23[22] != 50) { return 7; }  // '2'
+
+    // (4) concat que da CORTO -> SSO.  "ab" + "cd" = "abcd" len 4.
+    string a = "ab";
+    string b = "cd";
+    string sc = a + b;
+    if (sc.length() != 4) { return 8; }
+    char* csc = sc.cstr();
+    if (csc[2] != 99) { return 9; }   // 'c'
+
+    // (5) concat que da LARGO -> HEAP.  Dos strings de 12 = 24 (>22).
+    string la = "abcdefghijkl";   // 12 (SSO)
+    string lb = "mnopqrstuvwx";   // 12 (SSO)
+    string lc = la + lb;          // 24 -> HEAP
+    if (lc.length() != 24) { return 10; }
+    char* clc = lc.cstr();
+    if (clc[23] != 120) { return 11; } // 'x'
+    if (clc[0] != 97) { return 12; }   // 'a'
+
+    // (6) `+=` que cruza el limite 22: SSO fuente -> HEAP resultado.
+    //     RAII libera el heap, sin leak/doble-free.
+    string g = "12345678901234567890";  // 20 (SSO)
+    g += "abcde";                         // 25 -> HEAP
+    if (g.length() != 25) { return 13; }
+    char* cg = g.cstr();
+    if (cg[24] != 101) { return 14; }  // 'e'
+    if (cg[0] != 49) { return 15; }    // '1'
+
+    // (7) move de SSO: `string m = mv` con mv corto -> data inline viaja.
+    string mv = "xyz";
+    string m = mv;               // MOVE de SSO (mv invalidado)
+    if (m.length() != 3) { return 16; }
+    char* cm = m.cstr();
+    if (cm[0] != 120) { return 17; }  // 'x'
+    if (cm[2] != 122) { return 18; }  // 'z'
+
+    // (8) return de SSO por valor.
+    string rs = make_short();
+    if (rs.length() != 3) { return 19; }
+    char* crs = rs.cstr();
+    if (crs[0] != 97) { return 20; }  // 'a'
+
+    // (9) slice corto -> SSO.  "abcdefgh"[1..4) = "bcd" len 3.
+    string src = "abcdefgh";
+    string sl = src[1..4];
+    if (sl.length() != 3) { return 21; }
+    char* csl = sl.cstr();
+    if (csl[0] != 98) { return 22; }  // 'b'
+
+    return 77;   // todos los casos pasaron
+}

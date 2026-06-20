@@ -180,6 +180,10 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/port/")
 # de diagramas (tambien en vex_lib) puedan anotar el coste por funcion.  Solo
 # depende de ir::IrModule.  Excluir aqui para evitar definicion duplicada.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
+# La API C embebible (src/capi/) solo forma parte de la libreria compartida
+# vesta_ffi (con VESTA_BUILD_DLL); excluirla del ejecutable `vm` y de vmcore
+# para no compilar sus definiciones dllexport/dllimport fuera de contexto.
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/capi/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
@@ -444,6 +448,76 @@ if (WIN32)
     target_link_libraries(vmcore PRIVATE libssl libcrypto ws2_32 synchronization applink)
 else ()
     target_link_libraries(vmcore PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif ()
+
+# ---------------------------------------------------------------------------
+# libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
+# lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone
+# vesta_compile / vesta_run / vesta_eval / vesta_version / vesta_free.
+#
+# Se construye a partir del MISMO conjunto de fuentes del ejecutable `vm`
+# (VM_SOURCES) PERO sin main.cpp (un main() en una libreria compartida no
+# tiene sentido y colisiona con el CRT) + el wrapper C de la API.  Enlaza
+# exactamente las mismas dependencias que el target `vm`.
+# ---------------------------------------------------------------------------
+option(VESTA_BUILD_FFI "Construir libvesta (DLL/.so con C-ABI)" ON)
+if (VESTA_BUILD_FFI)
+    # Lista de fuentes = VM_SOURCES menos main.cpp (no queremos un entry
+    # point en la libreria compartida).
+    set(VESTA_FFI_SOURCES ${VM_SOURCES})
+    list(REMOVE_ITEM VESTA_FFI_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
+
+    add_library(vesta_ffi SHARED
+            ${VESTA_FFI_SOURCES}
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/capi/vesta_capi.cpp
+    )
+
+    # OUTPUT_NAME "vesta" -> vesta.dll (Windows) / libvesta.so (POSIX).
+    set_target_properties(vesta_ffi PROPERTIES OUTPUT_NAME "vesta")
+
+    # VESTA_BUILD_DLL activa __declspec(dllexport) en la cabecera publica.
+    target_compile_definitions(vesta_ffi PRIVATE VESTA_BUILD_DLL)
+
+    # exec_instruction_float.cpp tambien aqui necesita IEEE estricto (igual
+    # que en el target `vm`).
+    set_source_files_properties(
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
+            PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
+    )
+
+    target_include_directories(vesta_ffi PRIVATE ${VM_INCLUDES})
+
+    target_link_libraries(vesta_ffi
+            PRIVATE sqlite3
+            PRIVATE capstone
+            PRIVATE keystone
+            PRIVATE vex_lib
+            PRIVATE aot_emit
+            PRIVATE vesta_install
+    )
+    if (VESTA_BUILD_PREPROCESSOR)
+        target_link_libraries(vesta_ffi PRIVATE vpp_lib)
+        target_compile_definitions(vesta_ffi PRIVATE VESTA_HAS_PREPROCESSOR=1)
+    endif ()
+
+    if (WIN32)
+        target_include_directories(vesta_ffi PRIVATE ${OPENSSL_INCLUDE_DIR})
+        target_link_directories(vesta_ffi PRIVATE ${OPENSSL_LIB_DIR})
+        target_link_libraries(vesta_ffi PRIVATE
+                libssl libcrypto ws2_32 synchronization applink)
+        # DLL autocontenido: enlazar estaticamente libgcc/libstdc++ para que
+        # el consumidor no necesite los runtime DLLs de MinGW.  OpenSSL sigue
+        # siendo DLL (libssl-3-x64.dll / libcrypto-3-x64.dll deben acompanar).
+        target_link_options(vesta_ffi PRIVATE
+                -static-libgcc -static-libstdc++)
+    else ()
+        target_link_libraries(vesta_ffi PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+    endif ()
+
+    # Auto-build: construir el ejecutable `vm` arrastra la construccion de
+    # libvesta.  Asi `cmake --build . --target vm` produce SIEMPRE el DLL/.so
+    # junto al .exe sin que el usuario tenga que pedir el target explicito.
+    add_dependencies(vm vesta_ffi)
 endif ()
 
 # ---------------------------------------------------------------------------

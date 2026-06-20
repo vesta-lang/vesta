@@ -187,9 +187,90 @@ CompileResult compile_vex_source(const std::string &source,
             }
             res.string_eq_override = fd->name;
         }
+        // CPU dispatch Inc 4: @HelperOverride(<helper>).  Debe resolverse
+        // ANTES del lowering porque afecta a la construccion de
+        // __vex_memcpy_init (apunta el fp a la fn del usuario, saltando el
+        // dispatch por cpuid).  El map escala a futuros helpers sin tocar el
+        // schema; hoy solo "memcpy" es multi-versionado.
+        if (!fd->helper_override_target.empty()) {
+            const std::string &tgt = fd->helper_override_target;
+            // CPU dispatch Inc 5a: helpers multi-versionados soportados.
+            const bool is_multiversioned =
+                (tgt == "memcpy" || tgt == "strcmp" || tgt == "strlen");
+            if (!is_multiversioned) {
+                // No-fatal: el helper objetivo no es (todavia) multi-
+                // versionado.  Avisamos pero seguimos (el resto compila).
+                res.diagnostics.warning(
+                    fd->loc,
+                    "@HelperOverride: helper '" + tgt +
+                        "' no es multi-versionado (solo 'memcpy', 'strcmp', "
+                        "'strlen' por ahora); la anotacion se ignora");
+            } else {
+                if (res.aot_helper_override_syms.count(tgt)) {
+                    res.ok = false;
+                    res.diagnostics.error(
+                        fd->loc,
+                        "multiples @HelperOverride(" + tgt + "): '" +
+                            res.aot_helper_override_syms[tgt] + "' y '" +
+                            fd->name + "'");
+                    return res;
+                }
+                // Validacion de firma compatible por helper.  No es fatal (el
+                // usuario manda), pero avisamos si no cuadra:
+                //   memcpy -> void(u8*, u8*, u64)
+                //   strcmp -> i64(u8*, i64, u8*, i64)
+                //   strlen -> i64(u8*)
+                bool ret_void =
+                    !fd->return_type ||
+                    (fd->return_type->kind ==
+                         ast::NodeKind::PrimitiveTypeNode &&
+                     static_cast<ast::PrimitiveTypeNode *>(
+                         fd->return_type.get())
+                             ->prim == PrimitiveKind::VOID);
+                bool sig_ok = true;
+                std::string expected;
+                if (tgt == "memcpy") {
+                    sig_ok = (fd->params.size() == 3 && ret_void);
+                    expected = "void(u8*, u8*, u64)";
+                } else if (tgt == "strcmp") {
+                    sig_ok = (fd->params.size() == 4 && !ret_void);
+                    expected = "i64(u8*, i64, u8*, i64)";
+                } else { // strlen
+                    sig_ok = (fd->params.size() == 1 && !ret_void);
+                    expected = "i64(u8*)";
+                }
+                if (!sig_ok) {
+                    res.diagnostics.warning(
+                        fd->loc,
+                        "@HelperOverride(" + tgt + "): firma esperada " +
+                            expected +
+                            "; la del override puede ser incompatible");
+                }
+                res.aot_helper_override_syms[tgt] = fd->name;
+            }
+        }
     }
     lo.set_string_op_overrides(res.string_concat_override,
                                res.string_eq_override);
+    // CPU dispatch Inc 4: pasar el override de "memcpy" (si lo hay) al
+    // lowering para que __vex_memcpy_init apunte el fp a la fn del usuario.
+    {
+        auto it = res.aot_helper_override_syms.find("memcpy");
+        if (it != res.aot_helper_override_syms.end())
+            lo.set_memcpy_override(it->second);
+    }
+    // CPU dispatch Inc 5a: idem para strcmp / strlen (el __vex_strdisp_init
+    // apunta cada fp a la fn del usuario en lugar del baseline).
+    {
+        auto it = res.aot_helper_override_syms.find("strcmp");
+        if (it != res.aot_helper_override_syms.end())
+            lo.set_strcmp_override(it->second);
+    }
+    {
+        auto it = res.aot_helper_override_syms.find("strlen");
+        if (it != res.aot_helper_override_syms.end())
+            lo.set_strlen_override(it->second);
+    }
     const std::string mod_name =
         opts.module_name.empty() ? std::string("main") : opts.module_name;
     if (!lo.run(irmod, mod_name)) {

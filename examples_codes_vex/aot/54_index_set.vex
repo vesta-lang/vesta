@@ -1,0 +1,104 @@
+// examples_codes_vex/aot/54_index_set.vex
+//
+// Operator overloading (escritura) + mutacion indexada de value-strings.
+//
+//   (A) `o[i] = v`  ->  o.__index_set__(i, v)  para STRUCT y CLASS.
+//       Simetrico al index-READ (`__index__`) de C-2.  STRUCT despacha
+//       a CALL directo, CLASS a CALLVIRT.
+//   (B) `s[i] = c`  ->  muta el byte i del value-string nativo in-place
+//       (native_poo_ / AOT).  Cubre el caso SSO (cadena corta, data
+//       inline en el slot de 24 bytes) y el caso HEAP (cadena larga,
+//       data en buffer malloc).  Sin bounds-check (C-style).
+//
+// Compilar nativo (AOT) -- validado en este modo (Vex Embed):
+//   vm --vex examples_codes_vex/aot/54_index_set.vex -m aot --emit exe -o idxset.exe
+//   ./idxset.exe ; echo $?          (exit-code == 42)
+//
+// NOTA: la parte A (operator overloading o[i]=v sobre struct/class) funciona
+// en TODOS los modos (interp/JIT/AOT).  La parte B (mutacion del value-string
+// s[i]=c y slice s[a..b]) es de la ruta NATIVA (native_poo_/AOT): en Full el
+// `string` es GC-inmutable, asi que ese subconjunto solo existe en native.
+// Por eso este ejemplo COMPLETO se valida en AOT (la parte B no compila en
+// interp y emite error claro).
+//
+// Resultado esperado (AOT): 42.
+
+// (A) STRUCT con __index_set__ (escritura) + __index__ (lectura).
+struct Triple {
+    i32 a;
+    i32 b;
+    i32 c;
+
+    // Lectura: 0 -> a, 1 -> b, otro -> c.
+    i32 __index__(i32 i) {
+        if (i == 0) { return this.a; }
+        if (i == 1) { return this.b; }
+        return this.c;
+    }
+
+    // Escritura: 0 -> a, 1 -> b, otro -> c.
+    void __index_set__(i32 i, i32 v) {
+        if (i == 0) { this.a = v; return; }
+        if (i == 1) { this.b = v; return; }
+        this.c = v;
+    }
+}
+
+// (A) CLASS con __index_set__ (escritura) + __index__ (lectura).
+class Pair {
+    i32 lo;
+    i32 hi;
+
+    i32 __index__(i32 i) {
+        if (i == 0) { return this.lo; }
+        return this.hi;
+    }
+
+    void __index_set__(i32 i, i32 v) {
+        if (i == 0) { this.lo = v; return; }
+        this.hi = v;
+    }
+}
+
+i32 main() {
+    // (B) value-string SSO: "cat" (3 bytes, inline). Mutar s[0] y s[2].
+    string s = "cat";
+    s[0] = 'b';                // "bat"
+    s[2] = 't';                // "bat" (sin cambio real, valida store)
+    // s[0]='b'(98), s[1]='a'(97), s[2]='t'(116).
+    i32 str_sso = (i32) s[0] + (i32) s[1] + (i32) s[2];   // 98+97+116 = 311
+
+    // (B) value-string HEAP: cadena > 22 chars (buffer malloc). Mutar
+    // un char del medio in-place; no cambia la longitud.
+    string h = "0123456789abcdefghijklmnopqrst";   // 30 chars -> HEAP
+    h[10] = 'Z';               // posicion 10 ('a') -> 'Z'(90)
+    i32 str_heap = (i32) h[10];                          // 90
+
+    // (A) STRUCT index-set.
+    Triple t;
+    t[0] = 11;                 // a = 11
+    t[1] = 22;                 // b = 22
+    t[2] = 33;                 // c = 33
+    i32 st_struct = t[0] + t[1] + t[2];                  // 11+22+33 = 66
+
+    // (A) CLASS index-set.
+    Pair p = new Pair();
+    p[0] = 5;                  // lo = 5
+    p[1] = 9;                  // hi = 9
+    i32 st_class = p[0] + p[1];                          // 5+9 = 14
+
+    // FALLBACK: subscript de array nativo (sin overload) intacto.
+    i32 arr[3] = {1, 2, 3};
+    arr[1] = 99;
+    i32 fb = arr[0] + arr[1] + arr[2];                   // 1+99+3 = 103
+
+    // Validacion:
+    //   str_sso  == 311
+    //   str_heap == 90
+    //   st_struct == 66
+    //   st_class == 14
+    //   fb == 103
+    i32 ok = (i32)(str_sso == 311 && str_heap == 90 &&
+                   st_struct == 66 && st_class == 14 && fb == 103);  // 1
+    return 42 * ok;            // 42
+}

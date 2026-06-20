@@ -129,6 +129,31 @@ class Lowering {
         string_eq_override_ = eq;
     }
 
+    /// CPU dispatch Inc 4: registra el nombre de la fn libre marcada con
+    /// @HelperOverride(memcpy).  Cuando NO esta vacio, __vex_memcpy_init
+    /// apunta el fp directamente a esta fn (INCONDICIONAL, sin leer el
+    /// bitmask de cpuid).  Solo aplica en native_poo_ (AOT).
+    void set_memcpy_override(const std::string &fn_name) {
+        memcpy_override_ = fn_name;
+    }
+
+    /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
+    /// @HelperOverride(strcmp).  Cuando NO esta vacio, __vex_strdisp_init
+    /// apunta el fp __vex_strcmp_fp a esta fn (INCONDICIONAL).  El default es
+    /// __vex_strcmp_base (la impl escalar del compilador).  Solo native_poo_.
+    /// Firma esperada: i64(u8*, i64, u8*, i64).
+    void set_strcmp_override(const std::string &fn_name) {
+        strcmp_override_ = fn_name;
+    }
+
+    /// CPU dispatch Inc 5a: registra el nombre de la fn libre marcada con
+    /// @HelperOverride(strlen).  Cuando NO esta vacio, __vex_strdisp_init
+    /// apunta el fp __vex_strlen_fp a esta fn (INCONDICIONAL).  El default es
+    /// __vex_strlen_base.  Solo native_poo_.  Firma esperada: i64(u8*).
+    void set_strlen_override(const std::string &fn_name) {
+        strlen_override_ = fn_name;
+    }
+
     /// Wrapper publico para que helpers estaticos del modulo (e.g.
     /// @c collect_spawn_captures_in_expr) puedan resolver un nombre
     /// recorriendo todos los scopes activos del lowering.
@@ -1066,6 +1091,99 @@ class Lowering {
     ir::IrValueId load_native_string_field(ir::IrValueId v_slot,
                                            uint64_t byte_off, bool as_host,
                                            uint32_t source_line);
+    /// String Inc 5 (SSO): accesores flag-aware del value-string nativo.
+    /// Layout union de 24 bytes con flag en el bit alto (0x80) del byte
+    /// [23]:
+    ///   HEAP (byte[23]&0x80 != 0): ptr@0 (8B), len@8 (8B), cap en
+    ///     bytes[16..22] (56 bits), byte[23] bit alto=1.
+    ///   SSO  (byte[23]&0x80 == 0): data en bytes[0..21] (max 22), nul en
+    ///     byte[len], len en byte[23] bits bajos (0..22).
+    /// @c emit_native_str_is_heap devuelve un I64 (0 o 1) = (byte[23]>>7).
+    /// @c emit_native_str_data_ptr devuelve el host_ptr a los bytes: si
+    /// HEAP -> LOAD ptr@0; si SSO -> &slot (la data vive inline en
+    /// offset 0).  Branchless via mascara (slot + is_heap*(ptr0 - slot)).
+    /// @c emit_native_str_len devuelve la longitud: si HEAP -> LOAD len@8;
+    /// si SSO -> byte[23]&0x7F.  Branchless.  TODAS las ops de string
+    /// usan estos accesores en vez de leer ptr@0/len@8 crudos.
+    ir::IrValueId emit_native_str_is_heap(ir::IrValueId v_slot,
+                                          uint32_t source_line);
+    /// @c emit_native_str_data_ptr / @c emit_native_str_len emiten una CALL a
+    /// los helpers @c __vex_strdata / @c __vex_strlen (una sola instruccion por
+    /// uso).  La logica branchless (AND-mask heap/SSO) vive en el cuerpo del
+    /// helper (@c *_inline), NO inline en cada call site: cada accesor inline
+    /// expandia ~10 instrs, y sumar 4 longitudes + 4 punteros en una funcion
+    /// reventaba el regalloc SysV (menos callee-saved que Win64) -> resultado
+    /// erroneo en ELF.  Mismo patron que @c __vex_strcmp / itoa.  Los helpers
+    /// estan en el blacklist del inliner (prefijo @c __vex_str) para no
+    /// re-inlinearse.
+    ir::IrValueId emit_native_str_data_ptr(ir::IrValueId v_slot,
+                                           uint32_t source_line);
+    ir::IrValueId emit_native_str_len(ir::IrValueId v_slot,
+                                      uint32_t source_line);
+    /// Cuerpos branchless de los accesores (emitidos dentro del helper).
+    ir::IrValueId emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
+                                                  uint32_t source_line);
+    ir::IrValueId emit_native_str_len_inline(ir::IrValueId v_slot,
+                                             uint32_t source_line);
+    /// Construyen (lazy, una vez) los helpers @c __vex_strdata / @c __vex_strlen
+    /// y devuelven su nombre.  Firma: @c u8* __vex_strdata(u8* s) /
+    /// @c i64 __vex_strlen(u8* s).
+    std::string ensure_strdata_helper();
+    std::string ensure_strlen_helper();
+    /// String Inc 5 (SSO): libera el buffer del value-string SOLO si esta
+    /// en modo HEAP (la data SSO es inline, no se libera).  Branchless:
+    /// RAW_FREE(ptr0 * is_heap); free(0) es no-op.  Reemplaza el patron
+    /// directo RAW_FREE(LOAD ptr@0) en TODOS los sitios de liberacion de
+    /// strings nativos (cleanup STRING_FREE + frees de temporales).
+    void emit_native_str_free_if_heap(ir::IrValueId v_slot,
+                                      uint32_t source_line);
+    /// String Inc 5 (SSO): tras un MOVE de @p v_slot (la data ya se copio
+    /// al destino), invalida la fuente para evitar doble-free.  Si era
+    /// HEAP -> escribe ptr@0=0 (su free posterior sera no-op); si era SSO
+    /// -> deja byte[0..7] intacto (es data inline; no hay buffer que
+    /// liberar y su free-if-heap ya salta).  Branchless: escribe
+    /// ptr@0 = old_ptr0 & (is_heap - 1)  (HEAP: &0 -> 0; SSO: &~0 -> sin
+    /// cambio).
+    void emit_native_str_invalidate_moved(ir::IrValueId v_slot,
+                                          uint32_t source_line);
+    /// String Inc 5 (SSO): zero-inicializa los 24 bytes del slot
+    /// value-string (3 STORE i64 = 0).  Evita que los accesores
+    /// flag-aware lean bytes no inicializados del slot (ptr@0/len@8) en
+    /// modo SSO -- valgrind los marcaria como "uninitialised value" aunque
+    /// el resultado enmascarado sea correcto.  Llamar tras cada ALLOCA de
+    /// 24 bytes de un value-string ANTES de escribir la data.
+    void emit_zero_native_str_slot(ir::IrValueId v_slot, uint32_t source_line);
+    /// String Inc 5 (SSO): escribe qword2 (bytes 16..23) del slot con UN
+    /// STORE i64 entero -- evita el solape parcial i64(cap)+u8(flag) que el
+    /// store-forwarding del optimizer mal-resuelve al hacer el move (LOAD
+    /// i64 de offset 16).  @c emit_str_meta_sso pone (len << 56): byte[23]=
+    /// len, bit alto 0 (SSO), bytes 16..22 = 0.  @c emit_str_meta_heap pone
+    /// (cap & 0x00FFFFFFFFFFFFFF) | (0x80 << 56): cap en bytes 16..22 (56b),
+    /// byte[23]=0x80 (flag HEAP).  @p v_len_or_cap es un IrValue I64.
+    void emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
+                           uint32_t source_line);
+    void emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
+                            uint32_t source_line);
+    /// String Inc 5 (SSO): copia los 24 bytes de un value-string de
+    /// @p v_src_slot a @p v_dst_slot via MEMCPY (rep movsb) en vez de 3
+    /// LOAD/STORE i64.  Evita el store-forwarding del optimizer sobre
+    /// qword2 (data inline + byte[23] escritos con stores parciales) que
+    /// los i64 LOADs mal-resolvian (perdian la longitud SSO en el move).
+    void emit_native_str_move_copy(ir::IrValueId v_dst_slot,
+                                   ir::IrValueId v_src_slot,
+                                   uint32_t source_line);
+    /// String Inc 5 (SSO): rellena el slot value-string @p v_slot (24
+    /// bytes ya alocados) a partir de unos bytes recien producidos:
+    /// @p v_src_ptr (host_ptr a la fuente) + @p v_len (longitud runtime).
+    /// Decide SSO vs HEAP EN RUNTIME via branch: si len <= 22 copia la
+    /// data INLINE a bytes[0..len) + nul + byte[23]=len (cero malloc); si
+    /// len > 22 hace RAW_ALLOC(len+1), MEMCPY, nul, set ptr@0/len@8/
+    /// cap@16 + byte[23] bit alto.  Usado por concat/slice/append/interp
+    /// para obtener SSO en resultados runtime cortos.  Solo native_poo_.
+    void build_native_string_finalize(ir::IrValueId v_slot,
+                                      ir::IrValueId v_src_ptr,
+                                      ir::IrValueId v_len,
+                                      uint32_t source_line);
     /// Vex Embed Inc 1: concatena dos value-strings nativos @p v_a y
     /// @p v_b produciendo un NUEVO string owned (slot de 24 bytes en
     /// stack + buffer fresco en heap de total+1 bytes con ambos
@@ -1159,6 +1277,85 @@ class Lowering {
     /// Devuelve el nombre del helper.  Solo en @c native_poo_.
     std::string ensure_btoa_helper();
     bool btoa_helper_emitted_ = false; ///< El helper btoa ya esta emitido.
+    /// Vex Embed Inc 4: helper de comparacion lexicografica de strings
+    /// value-type nativos.  Firma:
+    /// @c i64 __vex_strcmp(u8* pa, i64 la, u8* pb, i64 lb).
+    /// Devuelve -1/0/1 (memcmp + tie-break por longitud: a la izquierda
+    /// del primer byte distinto decide; si un prefijo coincide, el mas
+    /// corto es menor).  Como funcion APARTE con loop -> el optimizer no
+    /// foldea la comparacion byte-a-byte mid-expression con operandos
+    /// constantes (mismo motivo que itoa/btoa) y el inliner no la re-inlinea
+    /// (is_inlineable exige 1 bloque).  Devuelve el nombre.  Solo en
+    /// @c native_poo_.
+    std::string ensure_strcmp_helper();
+    bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
+    bool strdata_helper_emitted_ = false; ///< El helper __vex_strdata emitido.
+    bool strlen_helper_emitted_ = false; ///< El helper __vex_strlen emitido.
+
+    /// CPU dispatch (cimiento): asegura que existan el global
+    /// @c __vex_cpu_features (slot @c static_data de 8 bytes zero-init) y el
+    /// helper @c __vex_cpu_init() que ejecuta @c cpuid al arranque y empaqueta
+    /// un bitmask de features en ese slot.  Devuelve el indice del slot del
+    /// global (para que @c cpu_features() lo lea via STR_LIT_ADDR + LOAD).
+    /// Idempotente.  Solo en @c native_poo_ (AOT Bare/Embed): usa INLINE_ASM
+    /// que es PURE_NATIVE.  El bitmask: bit0=SSE2 bit1=SSE4.2 bit2=POPCNT
+    /// bit3=AVX bit4=AVX2 bit5=BMI1 bit6=BMI2 bit7=AVX512F bit8=ERMS.
+    uint64_t ensure_cpu_features_global();
+    bool cpu_init_emitted_ = false; ///< El helper __vex_cpu_init ya emitido.
+    bool cpu_features_used_ =
+        false; ///< Algun cpu_features() se uso -> wirear init en main.
+    uint64_t cpu_features_slot_ =
+        UINT64_MAX; ///< Slot static_data del global (UINT64_MAX = sin crear).
+    bool cpu_dispatch_used_ =
+        false; ///< Se uso ALGUN helper multi-versionado (memcpy dispatch) ->
+               ///< wirear __vex_cpu_init en main aunque no se llame
+               ///< cpu_features() (el init setea los fp).
+
+    /// CPU dispatch (Inc 2): mecanismo de despacho por TABLA DE PUNTEROS.
+    /// Asegura el global @c __vex_memcpy_fp (slot @c static_data de 8 bytes,
+    /// seccion ".data") + las dos variantes @c __vex_memcpy_base (rep movsb,
+    /// segura) y @c __vex_memcpy_avx2 (AVX2 32B + cola byte-a-byte).  El helper
+    /// @c __vex_cpu_init setea el fp a la mejor variante segun el bit AVX2.
+    /// Devuelve el indice del slot del global @c __vex_memcpy_fp.  Idempotente.
+    /// Solo en @c native_poo_ (AOT).  Marca @c cpu_dispatch_used_.
+    uint64_t ensure_memcpy_dispatch();
+    bool memcpy_helpers_emitted_ =
+        false; ///< Las variantes + el global fp ya estan emitidos.
+    uint64_t memcpy_fp_slot_ =
+        UINT64_MAX; ///< Slot static_data del global __vex_memcpy_fp.
+
+    /// Emite un memcpy(dst, src, len) DESPACHADO por la tabla de punteros:
+    /// LOAD el fp del global + CALLIND.  Solo @c native_poo_.  En interp/JIT/
+    /// Full el caller usa MEMCPY inline (rep movsb), sin cambio.
+    void emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
+                                ir::IrValueId len, uint32_t line);
+
+    /// CPU dispatch Inc 5a: despacho de strcmp/strlen via tabla de punteros,
+    /// foundation para que una libreria stdlib provea variantes SIMD via
+    /// @HelperOverride.  Asegura (idempotente, una sola vez):
+    ///   - global @c __vex_strcmp_fp (slot 8 B en ".data").
+    ///   - global @c __vex_strlen_fp (slot 8 B en ".data").
+    ///   - los helpers BASELINE @c __vex_strcmp_base / @c __vex_strlen_base
+    ///     (la impl escalar del compilador; el dispatch los usa por defecto y
+    ///     son llamables por nombre desde Vex para que un override delegue).
+    ///   - el helper @c __vex_strdisp_init() que setea ambos fp (override del
+    ///     usuario si existe, si no el baseline).  El compilador NO hace cpuid
+    ///     aqui: el default es baseline; la SIMD vendra de la lib importada.
+    /// Marca @c cpu_dispatch_used_ para que @c run() prepone el init en main.
+    /// Solo en @c native_poo_ (AOT).
+    void ensure_strdisp();
+    bool strdisp_emitted_ =
+        false; ///< Los fp + baselines + init ya estan emitidos.
+    uint64_t strcmp_fp_slot_ =
+        UINT64_MAX; ///< Slot static_data del global __vex_strcmp_fp.
+    uint64_t strlen_fp_slot_ =
+        UINT64_MAX; ///< Slot static_data del global __vex_strlen_fp.
+
+    /// Emite strcmp(pa, la, pb, lb) -> i64 (-1/0/1) DESPACHADO por la tabla de
+    /// punteros (LOAD __vex_strcmp_fp + CALLIND).  Solo @c native_poo_.
+    ir::IrValueId emit_strcmp_dispatched(ir::IrValueId pa, ir::IrValueId la,
+                                         ir::IrValueId pb, ir::IrValueId lb,
+                                         uint32_t source_line);
 
     // --- Reflexion / meta-OOP / Phase Z extras ---
     ir::IrValueId emit_findmethod(ir::IrValueId v_params, uint32_t line);
@@ -1238,6 +1435,13 @@ class Lowering {
     /// C-3: nombres de los override del string built-in (vacios => default).
     std::string string_concat_override_;
     std::string string_eq_override_;
+    /// CPU dispatch Inc 4: fn libre @HelperOverride(memcpy) (vacio => sin
+    /// override; el fp se elige por cpuid en __vex_memcpy_init).
+    std::string memcpy_override_;
+    /// CPU dispatch Inc 5a: fn libre @HelperOverride(strcmp) / (strlen)
+    /// (vacio => sin override; el fp apunta al baseline en __vex_strdisp_init).
+    std::string strcmp_override_;
+    std::string strlen_override_;
 
     /// C-3: emite una CALL a una funcion libre override del string
     /// built-in (@StringConcat / @StringEq).  @p lhs / @p rhs son las

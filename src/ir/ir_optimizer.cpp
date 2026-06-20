@@ -5513,6 +5513,14 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* rspawn body helpers. */
         if (name.size() > 9 && name.compare(0, 9, "__rspawn_") == 0)
             return true;
+        /* Helpers de string value-type (Vex Embed): __vex_strlen, __vex_strdata,
+         * __vex_strcmp.  Se mantienen como funciones APARTE: cada accesor de
+         * longitud/data inline expandia ~10 instrs (AND-mask select heap/SSO);
+         * sumar varias en una funcion reventaba el regalloc SysV (4 callee-saved
+         * vs 6 en Win64) -> resultado erroneo en ELF.  Una sola CALL por uso
+         * elimina la presion y unifica el codegen PE/ELF. */
+        if (name.size() > 9 && name.compare(0, 9, "__vex_str") == 0)
+            return true;
         return false;
     };
 

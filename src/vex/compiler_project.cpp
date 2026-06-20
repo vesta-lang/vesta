@@ -68,6 +68,12 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+// windows.h define VOID como macro -> colisiona con PrimitiveKind::VOID que
+// usamos en la validacion de firma de @HelperOverride.  Lo deshacemos aqui
+// (este TU no usa el macro VOID de WinAPI).
+#ifdef VOID
+#undef VOID
+#endif
 #else
 #include <unistd.h>
 #endif
@@ -569,6 +575,26 @@ CompileResult compile_vex_project(const std::string &root_path,
     ModuleGraph graph(res.diagnostics);
     // Permitir override del directorio de busqueda via env var VEX_PATH.
     graph.add_vex_path_env();
+    // Cablear el directorio de la stdlib Vex (stdlib/vex).  Permite que
+    // `import "simd_string"` (y futuras libs Vex de la stdlib) resuelva sin
+    // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por
+    // candidatos comunes desde el cwd (override via env var VEX_STDLIB_DIR).
+    {
+        std::string sd;
+        if (const char *env = std::getenv("VEX_STDLIB_DIR")) sd = env;
+        if (sd.empty()) {
+            static const char *cands[] = {"stdlib/vex", "../stdlib/vex",
+                                          "../../stdlib/vex"};
+            for (const char *c : cands) {
+                std::ifstream test(std::string(c) + "/simd_string.vex");
+                if (test.good()) {
+                    sd = c;
+                    break;
+                }
+            }
+        }
+        if (!sd.empty()) graph.set_stdlib_dir(sd);
+    }
     // Anyadir como search path implicito la carpeta del modulo root.  Asi
     // los modulos hermanos pueden importarse con paths relativos al root
     // (`import "modules/foo"` desde @c src/modules/bar.vex resuelve a
@@ -665,6 +691,110 @@ CompileResult compile_vex_project(const std::string &root_path,
                   << (max_level + 1) << " niveles, " << parallel_opportunities
                   << " modulos paralelizables\n";
     }
+    // CPU dispatch Inc 5b: pre-pase de escaneo de @HelperOverride
+    // CROSS-MODULE.  A diferencia del path single-file (compiler.cpp), aqui
+    // un modulo IMPORTADO puede declarar el override (la "lib" hereda su
+    // implementacion al consumidor via import).  El override debe resolverse
+    // ANTES de lowerear el ROOT, porque es el root quien genera los inits
+    // (__vex_memcpy_init / __vex_strdisp_init) que apuntan el fp a la fn del
+    // override.  Estrategia: recorrer el AST de TODOS los modulos (root +
+    // imports) recolectando un map agregado target->fn_name; luego, cuando se
+    // lowerea el root, aplicarlo via lo.set_*_override.  El fn_name resuelve
+    // contra el simbolo del IR mergeado (las fns top-level conservan su
+    // nombre; los imports mantienen su nombre LOCAL via el mangle, pero el
+    // override referencia el nombre tal cual aparece en su modulo -> hay que
+    // capturar el nombre ya manglado para que el reloc fnsym lo resuelva).
+    //
+    // Precedencia: si el ROOT y un import overriden el MISMO target, gana el
+    // ROOT (es codigo directo del usuario; el import es la lib heredada).
+    std::unordered_map<std::string, std::string> aot_helper_override_syms;
+    {
+        // Set de targets cuyo override provino del ROOT (para precedencia).
+        std::unordered_set<std::string> from_root;
+        for (size_t mi = 0; mi < work.size(); ++mi) {
+            auto &pm = work[mi];
+            if (!pm.ast) continue; // cache hit con AST conservado igual sirve
+            const bool is_root = (mi + 1 == work.size());
+            for (auto &decl : pm.ast->decls) {
+                if (!decl || decl->kind != ast::NodeKind::FunctionDecl)
+                    continue;
+                auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+                if (fd->helper_override_target.empty()) continue;
+                const std::string &tgt = fd->helper_override_target;
+                const bool is_multiversioned =
+                    (tgt == "memcpy" || tgt == "strcmp" || tgt == "strlen");
+                if (!is_multiversioned) {
+                    pm.diags.warning(
+                        fd->loc,
+                        "@HelperOverride: helper '" + tgt +
+                            "' no es multi-versionado (solo 'memcpy', 'strcmp', "
+                            "'strlen' por ahora); la anotacion se ignora");
+                    continue;
+                }
+                // El nombre del simbolo: en modulos NO-root las fns top-level
+                // se manglan con prefijo `<module>__` (ver mangle_top_level_
+                // mas abajo).  Aqui aun no se ha manglado el AST (eso ocurre
+                // dentro de compile_one_module), asi que construimos el nombre
+                // manglado a mano para que coincida con el simbolo del IR
+                // mergeado.  El root conserva su nombre tal cual.
+                const std::string sym_name =
+                    is_root ? fd->name : (pm.module_name + "__" + fd->name);
+                // Validacion de firma (no fatal, el usuario manda).
+                bool ret_void =
+                    !fd->return_type ||
+                    (fd->return_type->kind ==
+                         ast::NodeKind::PrimitiveTypeNode &&
+                     static_cast<ast::PrimitiveTypeNode *>(
+                         fd->return_type.get())
+                             ->prim == PrimitiveKind::VOID);
+                bool sig_ok = true;
+                std::string expected;
+                if (tgt == "memcpy") {
+                    sig_ok = (fd->params.size() == 3 && ret_void);
+                    expected = "void(u8*, u8*, u64)";
+                } else if (tgt == "strcmp") {
+                    sig_ok = (fd->params.size() == 4 && !ret_void);
+                    expected = "i64(u8*, i64, u8*, i64)";
+                } else { // strlen
+                    sig_ok = (fd->params.size() == 1 && !ret_void);
+                    expected = "i64(u8*)";
+                }
+                if (!sig_ok) {
+                    pm.diags.warning(
+                        fd->loc,
+                        "@HelperOverride(" + tgt + "): firma esperada " +
+                            expected +
+                            "; la del override puede ser incompatible");
+                }
+                // Precedencia + deteccion de conflicto.
+                auto existing = aot_helper_override_syms.find(tgt);
+                if (existing != aot_helper_override_syms.end()) {
+                    const bool prev_from_root = from_root.count(tgt) != 0;
+                    if (is_root && !prev_from_root) {
+                        // El root pisa al import: gana el root.
+                        existing->second = sym_name;
+                        from_root.insert(tgt);
+                    } else if (!is_root && prev_from_root) {
+                        // Ya teniamos el del root: el import se ignora.
+                    } else {
+                        // Conflicto real: dos modulos del MISMO nivel de
+                        // precedencia (ambos imports, o el caso imposible de
+                        // dos roots) overriden el mismo target -> error.
+                        res.ok = false;
+                        res.diagnostics.error(
+                            fd->loc,
+                            "multiples @HelperOverride(" + tgt + ") cross-module: '" +
+                                existing->second + "' y '" + sym_name + "'");
+                        return res;
+                    }
+                } else {
+                    aot_helper_override_syms[tgt] = sym_name;
+                    if (is_root) from_root.insert(tgt);
+                }
+            }
+        }
+    }
+
     // Phase M8: refactor del loop body a lambda para enable dispatch paralelo
     // por nivel topo.  La lambda captura todo el entorno por referencia.
     // Cada thread tiene su propio @c pm = work[i] por diseno (slots distintos
@@ -968,6 +1098,27 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
 
         Lowering lo(*pm.ast, *pm.tc, pm.diags);
+        // Phase AOT multi-modulo: propagar POO/strings nativos a TODOS los
+        // modulos del proyecto (no solo al single-file).  Sin esto los deps
+        // se bajaban en modo Full (GC) y el IR mergeado no era AOT-compatible.
+        lo.set_native_poo(opts.native_poo);
+        // CPU dispatch Inc 5b: aplicar los @HelperOverride agregados (root +
+        // imports, ya resueltos por precedencia en el pre-pase) SOLO al
+        // modulo ROOT, que es quien emite __vex_memcpy_init / __vex_strdisp_init.
+        // El fp de cada init apunta entonces a la fn del override (que puede
+        // vivir en un modulo importado; su simbolo se resuelve en el IR
+        // mergeado via el reloc fnsym del LABEL_ADDR).
+        if (is_root) {
+            auto itmc = aot_helper_override_syms.find("memcpy");
+            if (itmc != aot_helper_override_syms.end())
+                lo.set_memcpy_override(itmc->second);
+            auto itsc = aot_helper_override_syms.find("strcmp");
+            if (itsc != aot_helper_override_syms.end())
+                lo.set_strcmp_override(itsc->second);
+            auto itsl = aot_helper_override_syms.find("strlen");
+            if (itsl != aot_helper_override_syms.end())
+                lo.set_strlen_override(itsl->second);
+        }
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             lo.set_instrument_mode(opts.instrument_mode);
         }
@@ -1388,6 +1539,98 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
     }
 
+    // CPU dispatch cross-module: los globals fp-table (__vex_*_fp,
+    // __vex_cpu_features) son program-globales (unificados arriba por
+    // shared_key), pero los `__vex_*_init` que los inicializan se preponen
+    // a `main` SOLO en el modulo que baja `main` (Lowering::run).  Si el
+    // ROOT no usa dispatch pero un DEP si (p.ej. el dep llama s.length()
+    // -> __vex_strlen_fp), el init existe como funcion pero nunca se
+    // llama -> el slot queda en 0 -> call a fp nulo -> SEGV.  Aqui, sobre
+    // el modulo mergeado, prepondemos a `main` las CALLs a los inits que
+    // existan y que main aun no invoque (idempotente: si el root ya las
+    // prepuso, se detectan y no se duplican).  Orden de ejecucion:
+    // __vex_cpu_init (cpuid) -> __vex_memcpy_init -> __vex_strdisp_init.
+    {
+        // Que inits existen tras el merge.
+        bool has_cpu = false, has_mc = false, has_sd = false;
+        for (const auto &fn : merged.functions) {
+            if (fn.name == "__vex_cpu_init")
+                has_cpu = true;
+            else if (fn.name == "__vex_memcpy_init")
+                has_mc = true;
+            else if (fn.name == "__vex_strdisp_init")
+                has_sd = true;
+        }
+        if (has_cpu || has_mc || has_sd) {
+            for (auto &fn : merged.functions) {
+                if (fn.name != "main" || fn.blocks.empty()) continue;
+                auto &ins = fn.blocks.front().instrs;
+                // Detectar inits ya presentes (idempotencia).
+                bool have_cpu = false, have_mc = false, have_sd = false;
+                for (const auto &x : ins) {
+                    if (x.op != ir::IrOp::CALL) continue;
+                    if (x.func_name == "__vex_cpu_init")
+                        have_cpu = true;
+                    else if (x.func_name == "__vex_memcpy_init")
+                        have_mc = true;
+                    else if (x.func_name == "__vex_strdisp_init")
+                        have_sd = true;
+                }
+                // Prepend en orden inverso (insert(begin) invierte): primero
+                // strdisp, luego memcpy, luego cpu -> cpu queda de primero.
+                auto prepend_call = [&](const char *name) {
+                    ir::IrInstr c{};
+                    c.op = ir::IrOp::CALL;
+                    c.type = ir::IrType::VOID;
+                    c.dst = ir::IR_NO_VALUE;
+                    c.func_name = name;
+                    c.source_line = 0;
+                    ins.insert(ins.begin(), std::move(c));
+                };
+                if (has_sd && !have_sd) prepend_call("__vex_strdisp_init");
+                if (has_mc && !have_mc) prepend_call("__vex_memcpy_init");
+                if (has_cpu && !have_cpu) prepend_call("__vex_cpu_init");
+                break;
+            }
+        }
+    }
+
+    // Dedup de las funciones synthetic del CPU dispatch (`__vex_*`): el
+    // root y cada dep emiten su propio juego de helpers (__vex_strlen_base,
+    // __vex_memcpy_init, etc.) con nombres identicos.  Tras el merge habria
+    // colision de simbolos en el linker AOT.  Mantener la PRIMERA aparicion
+    // (root primero, luego deps) y descartar las siguientes con el mismo
+    // nombre.  Solo afecta a los synthetic `__vex_*` (los simbolos de
+    // usuario ya estan mangled con prefijo de modulo, no colisionan).
+    {
+        // Primera pasada: detectar si hay duplicados (sin mover nada).
+        std::unordered_set<std::string> seen_vex_fns;
+        bool has_dup = false;
+        for (const auto &fn : merged.functions) {
+            if (fn.name.rfind("__vex_", 0) == 0) {
+                if (!seen_vex_fns.insert(fn.name).second) {
+                    has_dup = true;
+                    break;
+                }
+            }
+        }
+        // Segunda pasada: reconstruir solo si hubo duplicados (preserva la
+        // PRIMERA aparicion; root primero, luego deps).
+        if (has_dup) {
+            seen_vex_fns.clear();
+            std::vector<ir::IrFunction> kept;
+            kept.reserve(merged.functions.size());
+            for (auto &fn : merged.functions) {
+                if (fn.name.rfind("__vex_", 0) == 0 &&
+                    !seen_vex_fns.insert(fn.name).second) {
+                    continue; // ya presente: descartar duplicado
+                }
+                kept.push_back(std::move(fn));
+            }
+            merged.functions = std::move(kept);
+        }
+    }
+
     // M.staticdata-pool full: dedup de @c static_data por content_hash
     // + remap de STR_LIT_ADDR.imm a los indices unificados.  Indices
     // estables y deterministicos: dos builds del mismo source producen el
@@ -1399,6 +1642,11 @@ CompileResult compile_vex_project(const std::string &root_path,
         const size_t N = merged.static_data.size();
         std::vector<uint64_t> remap(N);
         std::unordered_map<uint64_t, uint64_t> first_by_hash;
+        // Globals de programa (CPU dispatch fp-table): un slot por
+        // shared_key en TODO el binario, aunque sean NON_DEDUP.  El init
+        // del root inicializa el slot unificado que leen las funciones de
+        // los modulos dependientes.
+        std::unordered_map<std::string, uint64_t> first_by_shared_key;
         ir::IrModule::StaticDataStore new_store;
         new_store.alignment_default = merged.static_data.alignment_default;
         new_store.reserve(N);
@@ -1426,9 +1674,25 @@ CompileResult compile_vex_project(const std::string &root_path,
             // marca como "siempre distintos" para preservar storage real.
             const uint64_t hkey = m.content_hash;
             bool merged_in = false;
+            // Prioridad maxima: shared_key (global de programa).  Unifica
+            // todas las entries con la misma clave en un solo slot,
+            // independientemente de NON_DEDUP / bytes.
+            if (!m.shared_key.empty()) {
+                auto it = first_by_shared_key.find(m.shared_key);
+                if (it != first_by_shared_key.end()) {
+                    remap[i] = it->second;
+                    merged_in = true;
+                } else {
+                    const uint64_t new_idx = new_store.push_back(bp, bn);
+                    new_store.meta_at(new_idx) = m;
+                    first_by_shared_key.emplace(m.shared_key, new_idx);
+                    remap[i] = new_idx;
+                    merged_in = true;
+                }
+            }
             const bool is_non_dedup =
                 (m.flags & ir::IrModule::SD_FLAG_NON_DEDUP) != 0;
-            if (!is_non_dedup) {
+            if (!merged_in && !is_non_dedup) {
                 auto it = first_by_hash.find(hkey);
                 if (it != first_by_hash.end()) {
                     const uint64_t prev_idx = it->second;
@@ -1516,6 +1780,11 @@ CompileResult compile_vex_project(const std::string &root_path,
     }
     res.vel_text = std::move(eres.vel_text);
     res.ir_section_bytes = ir::emit_ir_section(merged.functions);
+    // Phase AOT multi-modulo: exponer el IR mergeado (functions + static_data
+    // + globals) como module_cache para que el path -m aot lo consuma.  El
+    // single-file lo rellena en compile_vex_source; aqui lo rellenamos desde
+    // el modulo mergeado de todos los .vex del proyecto.
+    res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
     res.ok = !res.diagnostics.has_errors();
 
     // Diagramas (Mermaid / Graphviz) del AST del root + IR mergeado +

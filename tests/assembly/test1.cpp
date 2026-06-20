@@ -36,9 +36,11 @@ int main() {
     }
 
     const char *assembly = "mov eax, 0x1234\nadd eax, 0x1";
-    err = ks_asm(ks, assembly, 0, &encode, &size, &count);
-    if (err != KS_ERR_OK) {
-        std::cerr << "Keystone assembly error: " << ks_strerror(err) << "\n";
+    // ks_asm devuelve int (0 = ok, -1 = fallo); el codigo de error real se
+    // consulta con ks_errno(ks) -- NO es asignable directo a un ks_err.
+    if (ks_asm(ks, assembly, 0, &encode, &size, &count) != 0) {
+        std::cerr << "Keystone assembly error: " << ks_strerror(ks_errno(ks))
+                  << "\n";
         return -1;
     }
 

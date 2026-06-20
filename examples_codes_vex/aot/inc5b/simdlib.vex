@@ -1,0 +1,44 @@
+// CPU dispatch (Inc 5b): la "libreria" que provee el override de strcmp.
+//
+// Esta es la pieza CROSS-MODULE: un modulo IMPORTADO declara
+// @HelperOverride(strcmp).  El consumidor que haga `import "simdlib";` HEREDA
+// la implementacion -- su __vex_strdisp_init (generado en el root) apunta el
+// fp __vex_strcmp_fp a lib_strcmp, asi toda comparacion de strings del root
+// usa esta funcion.  Foundation para la futura stdlib SIMD: la lib se escribe
+// una vez con su variante optima y cualquier programa la hereda con un import.
+//
+// El override compara CORRECTAMENTE byte-a-byte (lexicografico) e incrementa
+// un contador global observable en .ovrctr para PROBAR por ejecucion que el
+// override cross-module se aplico (g_calls > 0 desde el main del consumidor).
+
+// Contador global en .ovrctr (writable).  lib_strcmp lo incrementa en cada
+// invocacion; el main del consumidor lo lee al final via section_start.
+@section(".ovrctr", "rw")
+bytes g_calls {
+    dq 0
+}
+
+// Override del strcmp del build (declarado en ESTE modulo importado).  Firma
+// i64(u8*, i64, u8*, i64) como exige el helper.  Devuelve -1/0/1.
+@HelperOverride(strcmp)
+public i64 lib_strcmp(u8* a, i64 la, u8* b, i64 lb) {
+    // Registrar la invocacion en el contador global cross-module.
+    u64* ctr = (u64*) section_start(".ovrctr");
+    *ctr = *ctr + 1;
+    // min = (la < lb) ? la : lb.
+    i64 min = la;
+    if (lb < la) { min = lb; }
+    // Comparar prefijo comun byte-a-byte (unsigned 0..255).
+    i64 i = 0;
+    while (i < min) {
+        i64 ca = (i64) a[i];
+        i64 cb = (i64) b[i];
+        if (ca < cb) { return -1; }
+        if (ca > cb) { return 1; }
+        i = i + 1;
+    }
+    // Prefijos iguales: el mas corto es menor.
+    if (la < lb) { return -1; }
+    if (la > lb) { return 1; }
+    return 0;
+}

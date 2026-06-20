@@ -1,0 +1,62 @@
+// Vex Embed Inc 4: comparacion lexicografica de strings value-type
+// (native_poo_, AOT, sin GC).  Sugar syntax via operadores < > <= >= == !=.
+// La ordenacion es byte-a-byte: el primer byte distinto decide (unsigned
+// 0-255); si un prefijo coincide, el string mas CORTO es menor.
+// Implementacion: helper __vex_strcmp(pa, la, pb, lb) -> -1/0/1, generado
+// una vez por modulo (no inline -> el optimizer no foldea mal el loop con
+// operandos constantes).  Literales -> .rodata + len constante (sin malloc);
+// variables -> ptr/len del value-string.
+//
+//   vm -m aot --vex examples_codes_vex/aot/51_string_compare.vex \
+//      --emit exe --format pe -o cmp.exe
+//
+// Se acumula cada comparacion true como (i64)bool (sin branch -> sin PHI de
+// merge, que el codegen vreg-native aun no soporta).  Conteo esperado = 14.
+
+i32 main() {
+    i64 n = 0;
+
+    // --- Literales: orden por primer byte distinto ---
+    n = n + (i64)("abc" < "abd");    // T: 'c'(99) < 'd'(100)
+    n = n + (i64)("abd" < "abc");    // F
+    n = n + (i64)("abd" > "abc");    // T
+
+    // --- Prefijos: el mas corto es menor ---
+    n = n + (i64)("ab" < "abc");     // T: "ab" prefijo de "abc"
+    n = n + (i64)("abc" < "ab");     // F
+    n = n + (i64)("abc" > "ab");     // T
+
+    // --- Iguales ---
+    n = n + (i64)("abc" < "abc");    // F
+    n = n + (i64)("abc" <= "abc");   // T
+    n = n + (i64)("abc" >= "abc");   // T
+    n = n + (i64)("abc" == "abc");   // T
+    n = n + (i64)("abc" != "abc");   // F
+
+    // --- Con variables y runtime ---
+    string a = "alpha";
+    string b = "beta";
+    n = n + (i64)(a < b);            // T: 'a'(97) < 'b'(98)
+    n = n + (i64)(b > a);            // T
+    n = n + (i64)(a >= b);           // F
+    n = n + (i64)(a != b);           // T
+
+    // --- Variable vs literal (literal en .rodata) ---
+    string c = "mango";
+    n = n + (i64)(c < "naranja");    // T: 'm'(109) < 'n'(110)
+    n = n + (i64)("naranja" > c);    // T
+
+    // --- Distinto por longitud con prefijo comun en runtime ---
+    string d = "go";
+    string e = "gopher";
+    n = n + (i64)(d < e);            // T: "go" prefijo de "gopher"
+    n = n + (i64)(d <= e);           // T
+
+    // Conteo de true:
+    //  literales:  T,F,T, T,F,T, F,T,T,T,F  -> 7 true
+    //  variables:  T,T,F,T                  -> 3 true
+    //  var/lit:    T,T                       -> 2 true
+    //  longitud:   T,T                       -> 2 true
+    //  total esperado = 7 + 3 + 2 + 2 = 14
+    return (i32)n;
+}

@@ -773,6 +773,14 @@ struct IndexExpr : Expr {
     /// @c `base[index]` a la llamada @c `base.__index__(index)`.  Cadena
     /// vacia = comportamiento clasico (subscript de puntero/array).
     std::string overload_method;
+    /// Operator overloading (escritura): cuando este IndexExpr es el
+    /// destino de un @c AssignExpr (@c `base[index] = value`) y @c base
+    /// es CLASS o STRUCT que declara @c __index_set__(index, value), el
+    /// type checker deja aqui @c "__index_set__".  El lowering del assign
+    /// desugara @c `base[index] = value` a la llamada
+    /// @c `base.__index_set__(index, value)`.  Cadena vacia = sin
+    /// sobrecarga de escritura (subscript clasico de puntero/array).
+    std::string index_set_method;
     /// String Inc 3 (native_poo_): slice `s[a..b]` (exclusivo) o
     /// `s[a..=b]` (inclusivo).  Cuando @c is_range es true, @c index
     /// es el limite inferior @c a y @c range_hi es el limite superior
@@ -1426,6 +1434,14 @@ struct FunctionDecl : Node {
     /// (y `!=` via negacion) entre dos strings.  Firma esperada:
     /// fn(string, string) -> bool.  Aplica en native_poo_ (AOT) y Full.
     bool is_string_eq_override = false;
+    /// CPU dispatch Inc 4: @HelperOverride(<helper>) -- esta fn libre
+    /// reemplaza el helper multi-versionado del build.  @c
+    /// helper_override_target guarda el nombre del helper objetivo
+    /// (hoy solo "memcpy"; escala a strcmp/strlen/itoa en el futuro).
+    /// Vacio => no es override.  Solo aplica en native_poo_ (AOT): el
+    /// dispatch por cpuid se salta y el fp apunta a esta fn.  Firma
+    /// esperada para "memcpy": void(u8*, u8*, u64).
+    std::string helper_override_target;
     /// Subsistema de coste (modo --analyze): `@complexity(O(...))`.
     /// Metadata PURA -- NO afecta el codegen.  La consume el analizador
     /// estatico (analyze::bigo) como contrato a validar contra la
