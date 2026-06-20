@@ -11693,6 +11693,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             std::vector<ir::IrValueId> arg_vals;
             arg_vals.reserve(e->args.size() + (callee_is_sret_ns ? 1 : 0));
             if (callee_is_sret_ns) arg_vals.push_back(v_call_retbuf_ns);
+            // value-strings TEMPORALES creados aqui (literal promovido) que
+            // hay que liberar tras el CALL si quedaron en HEAP (SSO = no-op),
+            // igual que el path same-module (tmp_str_args_to_free).  Sin esto
+            // un literal HEAP (>22 chars) pasado cross-module fugaba.
+            std::vector<ir::IrValueId> ns_tmp_str_to_free;
             // Auto-promotion literal -> StringObject cuando el
             // parametro espera STRING.  Mismo patron que el local
             // IdentExpr-callee path (lower_call lineas ~10125+).
@@ -11709,8 +11714,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     if (native_poo_) {
                         // Vex Embed cross-module: value-string nativo (24B),
                         // no StringObject GC (mismo fix que el path regular).
-                        arg_vals.push_back(build_native_string_from_literal(
-                            slit, slit->loc.line));
+                        ir::IrValueId v_lit = build_native_string_from_literal(
+                            slit, slit->loc.line);
+                        arg_vals.push_back(v_lit);
+                        if (v_lit != ir::IR_NO_VALUE)
+                            ns_tmp_str_to_free.push_back(v_lit);
                     } else {
                         arg_vals.push_back(
                             lower_string_literal_to_string_object(slit));
@@ -11737,6 +11745,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             ins.func_name = mangled_label;
             ins.source_line = e->loc.line;
             fn_->append(current_block_, std::move(ins));
+            // Liberar los value-strings temporales (literales promovidos):
+            // el callee ya copio/uso sus bytes; libera el buffer HEAP si lo
+            // hubo (SSO corto = no-op).  Evita la fuga cross-module.
+            for (ir::IrValueId v_free : ns_tmp_str_to_free)
+                emit_native_str_free_if_heap(v_free, e->loc.line);
             return callee_is_sret_ns ? v_call_retbuf_ns : dst;
         }
     }
