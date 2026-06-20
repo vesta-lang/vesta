@@ -392,7 +392,9 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     size_t capacity =
         (total_data + 64 * AOT_ELF_PAGE + AOT_ELF_PAGE) & ~(AOT_ELF_PAGE - 1);
 
-    ElfBuilder *b = elf_builder_create_exec64(capacity, /*num_phdrs=*/2);
+    /* 3 phdrs: PT_LOAD R+X (codigo/rodata), PT_LOAD R+W (.data), PT_GNU_STACK
+     * (stack RW).  El R+W puede quedar vacio (filesz 0) si no hay writable. */
+    ElfBuilder *b = elf_builder_create_exec64(capacity, /*num_phdrs=*/3);
     if (!b) {
         set_err(err, err_cap, "aot_emit_elf: create_exec64 fallo");
         return 0;
@@ -412,42 +414,81 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
         sec_seen = (uint8_t *)calloc((size_t)num_secs, sizeof(uint8_t));
     }
 
-    /* Agregar las secciones con datos (todas en el unico segmento R+X). */
-    for (int i = 0; i < num_secs; ++i) {
-        const AotSection *s = &secs[i];
-        if ((s->flags & AOT_SEC_BSS) || s->size == 0) {
-            /* BSS en ELF freestanding v1 no soportado (ver doc). */
-            continue;
+    /* Agregar las secciones con datos en DOS pasadas para separar permisos:
+     * (1) el segmento ejecutable: TODO lo que tenga EXEC (codigo, incluido
+     * `.boot` rwx) MAS el rodata no-writable, y (2) un segmento R+W aparte
+     * para los datos writable NO-ejecutables (`.data` puro).  Sin esta
+     * separacion, un STORE a un global writable (e.g. __vex_cpu_features)
+     * caeria en una pagina R-X y segfaultearia; e inversamente, mandar una
+     * seccion rwx al segmento R+W (sin X) haria segfaultear su EJECUCION.
+     * El criterio de particion es EXEC (no WRITE): el grupo 1 puede contener
+     * secciones writable (rwx) -> en ese caso el segmento toma tambien W.
+     * El emisor pone vaddr = base + file_off, asi que basta con alinear a
+     * pagina entre las dos pasadas para que cada region empiece en un limite
+     * de pagina (requisito de mmap del loader del kernel). */
+    uint64_t rx_end_off = 0;     /* fin (offset-en-fichero) del segmento exec */
+    uint64_t rw_start_off = 0;   /* inicio del segmento R+W (0 = sin datos rw) */
+    uint64_t rw_end_off = 0;     /* fin del segmento R+W */
+    int exec_seg_writable = 0;   /* alguna seccion exec es tambien writable? */
+    for (int pass = 0; pass < 2; ++pass) {
+        /* Pasada 0 = grupo EXEC (+ rodata); pasada 1 = data writable no-exec. */
+        const int want_rwseg = (pass == 1);
+        if (want_rwseg) {
+            /* Cerrar el segmento exec y abrir el R+W en un limite de pagina. */
+            rx_end_off = b->size;
+            if (b->size % AOT_ELF_PAGE != 0) {
+                size_t pad = AOT_ELF_PAGE - (b->size % AOT_ELF_PAGE);
+                memset(b->mem + b->size, 0, pad);
+                b->size += pad;
+            }
+            rw_start_off = b->size;
         }
-        if (b->size % AOT_ELF_PAGE != 0) {
-            size_t pad = AOT_ELF_PAGE - (b->size % AOT_ELF_PAGE);
-            memset(b->mem + b->size, 0, pad);
-            b->size += pad;
+        for (int i = 0; i < num_secs; ++i) {
+            const AotSection *s = &secs[i];
+            if ((s->flags & AOT_SEC_BSS) || s->size == 0) {
+                /* BSS en ELF freestanding v1 no soportado (ver doc). */
+                continue;
+            }
+            const int is_exec = (s->flags & AOT_SEC_EXEC) ? 1 : 0;
+            const int is_write = (s->flags & AOT_SEC_WRITE) ? 1 : 0;
+            /* El grupo 1 (segmento exec) recibe TODO lo no-writable (rodata)
+             * Y todo lo ejecutable (aunque sea writable: rwx).  El grupo 2
+             * (R+W) recibe solo lo writable NO-ejecutable. */
+            const int goes_rwseg = (is_write && !is_exec);
+            if (goes_rwseg != want_rwseg) continue;
+            if (!want_rwseg && is_write) exec_seg_writable = 1;
+            if (b->size % AOT_ELF_PAGE != 0) {
+                size_t pad = AOT_ELF_PAGE - (b->size % AOT_ELF_PAGE);
+                memset(b->mem + b->size, 0, pad);
+                b->size += pad;
+            }
+            uint64_t sh_flags = SHF_ALLOC;
+            if (s->flags & AOT_SEC_EXEC) sh_flags |= SHF_EXECINSTR;
+            if (s->flags & AOT_SEC_WRITE) sh_flags |= SHF_WRITE;
+            uint64_t align_use = s->align ? s->align : AOT_ELF_PAGE;
+            size_t off_out = 0;
+            uint64_t vaddr_out = 0;
+            size_t idx = elf_builder_add_section_ex(
+                b, s->name, SHT_PROGBITS, sh_flags, s->data, s->size,
+                base + b->size, align_use, &off_out, &vaddr_out, 0, 0, 0);
+            if (idx == 0) {
+                free(sec_va);
+                free(sec_foff);
+                free(sec_seen);
+                elf_builder_free(b);
+                set_err(err, err_cap, "aot_emit_elf: fallo anyadiendo seccion");
+                return 0;
+            }
+            if (sec_va) {
+                sec_va[i] = vaddr_out;
+                sec_foff[i] = off_out;
+                sec_seen[i] = 1;
+            }
+            if (i == entry_sec) entry_vaddr = vaddr_out;
         }
-        uint64_t sh_flags = SHF_ALLOC;
-        if (s->flags & AOT_SEC_EXEC) sh_flags |= SHF_EXECINSTR;
-        if (s->flags & AOT_SEC_WRITE) sh_flags |= SHF_WRITE;
-        uint64_t align_use = s->align ? s->align : AOT_ELF_PAGE;
-        size_t off_out = 0;
-        uint64_t vaddr_out = 0;
-        size_t idx = elf_builder_add_section_ex(
-            b, s->name, SHT_PROGBITS, sh_flags, s->data, s->size,
-            base + b->size, align_use, &off_out, &vaddr_out, 0, 0, 0);
-        if (idx == 0) {
-            free(sec_va);
-            free(sec_foff);
-            free(sec_seen);
-            elf_builder_free(b);
-            set_err(err, err_cap, "aot_emit_elf: fallo anyadiendo seccion");
-            return 0;
-        }
-        if (sec_va) {
-            sec_va[i] = vaddr_out;
-            sec_foff[i] = off_out;
-            sec_seen[i] = 1;
-        }
-        if (i == entry_sec) entry_vaddr = vaddr_out;
     }
+    rw_end_off = b->size;
+    if (rx_end_off == 0) rx_end_off = b->size; /* no hubo seccion writable */
     if (entry_vaddr == 0) {
         free(sec_va);
         free(sec_foff);
@@ -542,24 +583,52 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                                sizeof(symtab), 0, 8, &sy_off, &sy_va,
                                (uint32_t)idx_strtab, 1, sizeof(Elf64_Sym));
 
-    /* Program headers. */
+    /* Program headers.  Los filesz usan rx_end_off / rw_end_off (capturados
+     * ANTES de .strtab/.symtab, que no son ALLOC y no se mapean).  El
+     * .symtab/.strtab quedan al final del fichero, fuera de todo PT_LOAD. */
+    const int has_rw = (rw_end_off > rw_start_off);
+
+    /* PT_LOAD ejecutable: codigo + rodata.  R+X, y ademas W si contiene alguna
+     * seccion rwx (e.g. `.boot` de un kernel/bootloader que se auto-modifica). */
     phdr[0].p_type = PT_LOAD;
-    phdr[0].p_flags = PF_R | PF_X;
+    phdr[0].p_flags = PF_R | PF_X | (exec_seg_writable ? PF_W : 0);
     phdr[0].p_offset = 0;
     phdr[0].p_vaddr = base;
     phdr[0].p_paddr = base;
-    phdr[0].p_filesz = b->size;
-    phdr[0].p_memsz = (b->size + AOT_ELF_PAGE - 1) & ~(AOT_ELF_PAGE - 1);
+    phdr[0].p_filesz = rx_end_off;
+    phdr[0].p_memsz = (rx_end_off + AOT_ELF_PAGE - 1) & ~(AOT_ELF_PAGE - 1);
     phdr[0].p_align = AOT_ELF_PAGE;
 
+    /* PT_LOAD R+W: secciones writable (.data).  Si no hay, este phdr describe
+     * el stack RW (filesz 0) para no desperdiciar la entrada. */
     phdr[1].p_type = PT_LOAD;
     phdr[1].p_flags = PF_R | PF_W;
-    phdr[1].p_offset = 0;
-    phdr[1].p_vaddr = stack_vaddr;
-    phdr[1].p_paddr = stack_vaddr;
-    phdr[1].p_filesz = 0;
-    phdr[1].p_memsz = stack_size;
-    phdr[1].p_align = AOT_ELF_PAGE;
+    if (has_rw) {
+        phdr[1].p_offset = rw_start_off;
+        phdr[1].p_vaddr = base + rw_start_off;
+        phdr[1].p_paddr = base + rw_start_off;
+        phdr[1].p_filesz = rw_end_off - rw_start_off;
+        phdr[1].p_memsz = rw_end_off - rw_start_off;
+        phdr[1].p_align = AOT_ELF_PAGE;
+    } else {
+        phdr[1].p_offset = 0;
+        phdr[1].p_vaddr = stack_vaddr;
+        phdr[1].p_paddr = stack_vaddr;
+        phdr[1].p_filesz = 0;
+        phdr[1].p_memsz = stack_size;
+        phdr[1].p_align = AOT_ELF_PAGE;
+    }
+
+    /* PT_GNU_STACK: pila RW no-ejecutable.  Si el R+W ya describio .data,
+     * aqui reservamos ademas el stack como un PT_LOAD RW separado. */
+    phdr[2].p_type = PT_LOAD;
+    phdr[2].p_flags = PF_R | PF_W;
+    phdr[2].p_offset = 0;
+    phdr[2].p_vaddr = stack_vaddr;
+    phdr[2].p_paddr = stack_vaddr;
+    phdr[2].p_filesz = 0;
+    phdr[2].p_memsz = has_rw ? stack_size : 0;
+    phdr[2].p_align = AOT_ELF_PAGE;
 
     elf_builder_finalize_exec64(b, entry_vaddr + entry_off);
 

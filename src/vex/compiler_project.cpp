@@ -575,6 +575,26 @@ CompileResult compile_vex_project(const std::string &root_path,
     ModuleGraph graph(res.diagnostics);
     // Permitir override del directorio de busqueda via env var VEX_PATH.
     graph.add_vex_path_env();
+    // Cablear el directorio de la stdlib Vex (stdlib/vex).  Permite que
+    // `import "simd_string"` (y futuras libs Vex de la stdlib) resuelva sin
+    // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por
+    // candidatos comunes desde el cwd (override via env var VEX_STDLIB_DIR).
+    {
+        std::string sd;
+        if (const char *env = std::getenv("VEX_STDLIB_DIR")) sd = env;
+        if (sd.empty()) {
+            static const char *cands[] = {"stdlib/vex", "../stdlib/vex",
+                                          "../../stdlib/vex"};
+            for (const char *c : cands) {
+                std::ifstream test(std::string(c) + "/simd_string.vex");
+                if (test.good()) {
+                    sd = c;
+                    break;
+                }
+            }
+        }
+        if (!sd.empty()) graph.set_stdlib_dir(sd);
+    }
     // Anyadir como search path implicito la carpeta del modulo root.  Asi
     // los modulos hermanos pueden importarse con paths relativos al root
     // (`import "modules/foo"` desde @c src/modules/bar.vex resuelve a
