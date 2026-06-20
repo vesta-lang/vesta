@@ -11650,10 +11650,18 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     }
                 }
             }
+            // Vex Embed: un retorno `string` value-type (24B) tambien usa
+            // SRET en native_poo_ (igual que un struct); el retbuf vive en
+            // host stack.  Sin esto, una fn importada que devuelve string
+            // (p.ej. `string greet(...)`) escribia el value-string a R0 en
+            // vez del retbuf -> el caller leia basura y crasheaba.
+            const bool callee_is_str_value_sret_ns =
+                (native_poo_ && callee_kind_ns == PrimitiveKind::STRING);
             const bool callee_is_sret_ns =
                 (callee_kind_ns == PrimitiveKind::OPTIONAL ||
                  callee_kind_ns == PrimitiveKind::RESULT ||
-                 callee_is_enum_ret_ns || callee_is_struct_ret_ns);
+                 callee_is_enum_ret_ns || callee_is_struct_ret_ns ||
+                 callee_is_str_value_sret_ns);
             ir::IrValueId v_call_retbuf_ns = ir::IR_NO_VALUE;
             if (callee_is_sret_ns) {
                 uint64_t buf_bytes;
@@ -11661,6 +11669,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     buf_bytes = 24ULL;
                 } else if (callee_kind_ns == PrimitiveKind::OPTIONAL) {
                     buf_bytes = 16ULL;
+                } else if (callee_is_str_value_sret_ns) {
+                    buf_bytes = 24ULL;
                 } else {
                     buf_bytes = enum_struct_size_ns;
                 }
@@ -11670,6 +11680,12 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 al.type = ir::IrType::I8;
                 al.dst = v_call_retbuf_ns;
                 al.imm = buf_bytes;
+                if (callee_is_str_value_sret_ns) {
+                    // value-string vive en host stack (igual que el path
+                    // same-module callee_is_str_value_sret).
+                    al.host_alloca = true;
+                    fn_->values[v_call_retbuf_ns].is_host_ptr = true;
+                }
                 al.source_line = e->loc.line;
                 fn_->append(current_block_, std::move(al));
             }
@@ -11690,8 +11706,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                     ns_param_types[ai].kind == PrimitiveKind::STRING && a &&
                     a->kind == ast::NodeKind::StringLitExpr) {
                     auto *slit = static_cast<ast::StringLitExpr *>(a.get());
-                    arg_vals.push_back(
-                        lower_string_literal_to_string_object(slit));
+                    if (native_poo_) {
+                        // Vex Embed cross-module: value-string nativo (24B),
+                        // no StringObject GC (mismo fix que el path regular).
+                        arg_vals.push_back(build_native_string_from_literal(
+                            slit, slit->loc.line));
+                    } else {
+                        arg_vals.push_back(
+                            lower_string_literal_to_string_object(slit));
+                    }
                     promote = true;
                 }
                 if (!promote) {
@@ -12266,9 +12289,23 @@ skip_comptime_eval_for_macro_to_macro:
             callee_sig->param_types[i].kind == PrimitiveKind::STRING && ae &&
             ae->kind == ast::NodeKind::StringLitExpr) {
             auto *sl = static_cast<ast::StringLitExpr *>(ae);
-            // Tanto literales puros como interpolados: el helper
-            // construye el StringObject correcto.
-            arg_ids.push_back(lower_string_literal_to_string_object(sl));
+            if (native_poo_) {
+                // Vex Embed: el param espera un value-string nativo (24B),
+                // NO un StringObject GC.  Construimos el value-string desde
+                // el literal (mismo path que `string s = "..."`) en vez de
+                // STRMAKE.  Lo marcamos temporal -> liberar su buffer heap
+                // tras el CALL (SSO corto = no-op).  Sin esto, pasar un
+                // literal directo (`fn("hola")`) emitia strmake (GC) que el
+                // analyze AOT rechaza.
+                ir::IrValueId v =
+                    build_native_string_from_literal(sl, sl->loc.line);
+                arg_ids.push_back(v);
+                if (v != ir::IR_NO_VALUE) tmp_str_args_to_free.push_back(v);
+            } else {
+                // Tanto literales puros como interpolados: el helper
+                // construye el StringObject correcto.
+                arg_ids.push_back(lower_string_literal_to_string_object(sl));
+            }
             promote_to_string = true;
         }
         if (!promote_to_string) {
