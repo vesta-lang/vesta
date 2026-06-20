@@ -150,6 +150,12 @@ file(GLOB_RECURSE ALL_PROJECT_SOURCES
 )
 list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/runtime/exec_instruction_closure.cpp)
 
+# La API C embebible (src/capi/) solo forma parte de la libreria compartida
+# vesta_ffi (compilada con VESTA_BUILD_DLL).  Sin ese define, sus funciones
+# quedan marcadas dllimport y fallan al compilarse como definicion.  Excluirla
+# de los binarios de test.
+list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/capi/")
+
 # Fuentes del modulo distribuido (agregadas explicitamente porque GLOB_RECURSE
 # puede estar cacheado desde antes de que existiera el directorio src/distrib/)
 list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/mailbox.cpp)
