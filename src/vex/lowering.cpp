@@ -24338,6 +24338,8 @@ uint64_t Lowering::ensure_cpu_features_global() {
         m.section_name = ".data";
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
+        // Global de programa: unificar el slot cross-module en el merge.
+        m.shared_key = "__vex_cpu_features";
     }
     cpu_features_slot_ = slot;
 
@@ -24570,6 +24572,8 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         m.section_name = ".data";
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
+        // Global de programa: unificar el slot cross-module en el merge.
+        m.shared_key = "__vex_memcpy_fp";
         memcpy_fp_slot_ = slot;
     }
     const uint64_t fp_slot = memcpy_fp_slot_;
@@ -25003,7 +25007,7 @@ void Lowering::ensure_strdisp() {
 
     // 1. Globals fp (8 bytes zero-init) en ".data" (writable: el init les
     //    hace STORE en runtime).  NON_DEDUP + FORCE_EMIT como los demas fp.
-    auto make_fp_slot = [&]() -> uint64_t {
+    auto make_fp_slot = [&](const char *shared_key) -> uint64_t {
         std::vector<uint8_t> zero(8, 0);
         const uint64_t slot = static_cast<uint64_t>(
             out_mod_->static_data.push_back(std::move(zero)));
@@ -25011,10 +25015,12 @@ void Lowering::ensure_strdisp() {
         m.section_name = ".data";
         m.flags |=
             ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
+        // Global de programa: unificar el slot cross-module en el merge.
+        m.shared_key = shared_key;
         return slot;
     };
-    strcmp_fp_slot_ = make_fp_slot();
-    strlen_fp_slot_ = make_fp_slot();
+    strcmp_fp_slot_ = make_fp_slot("__vex_strcmp_fp");
+    strlen_fp_slot_ = make_fp_slot("__vex_strlen_fp");
 
     // 2. Asegurar los baselines (emiten __vex_strcmp_base / __vex_strlen_base).
     (void)ensure_strcmp_helper();

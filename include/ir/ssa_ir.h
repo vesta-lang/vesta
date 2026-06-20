@@ -1305,6 +1305,15 @@ struct IrModule {
             uint8_t is_rel = 0;  ///< 1 = PC-relativo; 0 = absoluto.
         };
         std::vector<SymRef> sym_refs; ///< vacio = sin refs (caso comun).
+        /// Clave de global compartido a nivel de PROGRAMA: cuando no esta
+        /// vacia, este slot es un unico global identificado por la clave en
+        /// todo el binario (aunque sea NON_DEDUP).  El merge cross-module
+        /// (compile_vex_project) unifica todas las entries con la misma
+        /// shared_key en UN solo slot.  Usado por los globals del CPU
+        /// dispatch (__vex_cpu_features, __vex_memcpy_fp, etc.) que deben
+        /// ser program-globales para que el init del root inicialice el slot
+        /// que leen las funciones de los modulos dependientes.
+        std::string shared_key;
     };
 
     /**

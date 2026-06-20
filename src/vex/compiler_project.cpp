@@ -1519,6 +1519,98 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
     }
 
+    // CPU dispatch cross-module: los globals fp-table (__vex_*_fp,
+    // __vex_cpu_features) son program-globales (unificados arriba por
+    // shared_key), pero los `__vex_*_init` que los inicializan se preponen
+    // a `main` SOLO en el modulo que baja `main` (Lowering::run).  Si el
+    // ROOT no usa dispatch pero un DEP si (p.ej. el dep llama s.length()
+    // -> __vex_strlen_fp), el init existe como funcion pero nunca se
+    // llama -> el slot queda en 0 -> call a fp nulo -> SEGV.  Aqui, sobre
+    // el modulo mergeado, prepondemos a `main` las CALLs a los inits que
+    // existan y que main aun no invoque (idempotente: si el root ya las
+    // prepuso, se detectan y no se duplican).  Orden de ejecucion:
+    // __vex_cpu_init (cpuid) -> __vex_memcpy_init -> __vex_strdisp_init.
+    {
+        // Que inits existen tras el merge.
+        bool has_cpu = false, has_mc = false, has_sd = false;
+        for (const auto &fn : merged.functions) {
+            if (fn.name == "__vex_cpu_init")
+                has_cpu = true;
+            else if (fn.name == "__vex_memcpy_init")
+                has_mc = true;
+            else if (fn.name == "__vex_strdisp_init")
+                has_sd = true;
+        }
+        if (has_cpu || has_mc || has_sd) {
+            for (auto &fn : merged.functions) {
+                if (fn.name != "main" || fn.blocks.empty()) continue;
+                auto &ins = fn.blocks.front().instrs;
+                // Detectar inits ya presentes (idempotencia).
+                bool have_cpu = false, have_mc = false, have_sd = false;
+                for (const auto &x : ins) {
+                    if (x.op != ir::IrOp::CALL) continue;
+                    if (x.func_name == "__vex_cpu_init")
+                        have_cpu = true;
+                    else if (x.func_name == "__vex_memcpy_init")
+                        have_mc = true;
+                    else if (x.func_name == "__vex_strdisp_init")
+                        have_sd = true;
+                }
+                // Prepend en orden inverso (insert(begin) invierte): primero
+                // strdisp, luego memcpy, luego cpu -> cpu queda de primero.
+                auto prepend_call = [&](const char *name) {
+                    ir::IrInstr c{};
+                    c.op = ir::IrOp::CALL;
+                    c.type = ir::IrType::VOID;
+                    c.dst = ir::IR_NO_VALUE;
+                    c.func_name = name;
+                    c.source_line = 0;
+                    ins.insert(ins.begin(), std::move(c));
+                };
+                if (has_sd && !have_sd) prepend_call("__vex_strdisp_init");
+                if (has_mc && !have_mc) prepend_call("__vex_memcpy_init");
+                if (has_cpu && !have_cpu) prepend_call("__vex_cpu_init");
+                break;
+            }
+        }
+    }
+
+    // Dedup de las funciones synthetic del CPU dispatch (`__vex_*`): el
+    // root y cada dep emiten su propio juego de helpers (__vex_strlen_base,
+    // __vex_memcpy_init, etc.) con nombres identicos.  Tras el merge habria
+    // colision de simbolos en el linker AOT.  Mantener la PRIMERA aparicion
+    // (root primero, luego deps) y descartar las siguientes con el mismo
+    // nombre.  Solo afecta a los synthetic `__vex_*` (los simbolos de
+    // usuario ya estan mangled con prefijo de modulo, no colisionan).
+    {
+        // Primera pasada: detectar si hay duplicados (sin mover nada).
+        std::unordered_set<std::string> seen_vex_fns;
+        bool has_dup = false;
+        for (const auto &fn : merged.functions) {
+            if (fn.name.rfind("__vex_", 0) == 0) {
+                if (!seen_vex_fns.insert(fn.name).second) {
+                    has_dup = true;
+                    break;
+                }
+            }
+        }
+        // Segunda pasada: reconstruir solo si hubo duplicados (preserva la
+        // PRIMERA aparicion; root primero, luego deps).
+        if (has_dup) {
+            seen_vex_fns.clear();
+            std::vector<ir::IrFunction> kept;
+            kept.reserve(merged.functions.size());
+            for (auto &fn : merged.functions) {
+                if (fn.name.rfind("__vex_", 0) == 0 &&
+                    !seen_vex_fns.insert(fn.name).second) {
+                    continue; // ya presente: descartar duplicado
+                }
+                kept.push_back(std::move(fn));
+            }
+            merged.functions = std::move(kept);
+        }
+    }
+
     // M.staticdata-pool full: dedup de @c static_data por content_hash
     // + remap de STR_LIT_ADDR.imm a los indices unificados.  Indices
     // estables y deterministicos: dos builds del mismo source producen el
@@ -1530,6 +1622,11 @@ CompileResult compile_vex_project(const std::string &root_path,
         const size_t N = merged.static_data.size();
         std::vector<uint64_t> remap(N);
         std::unordered_map<uint64_t, uint64_t> first_by_hash;
+        // Globals de programa (CPU dispatch fp-table): un slot por
+        // shared_key en TODO el binario, aunque sean NON_DEDUP.  El init
+        // del root inicializa el slot unificado que leen las funciones de
+        // los modulos dependientes.
+        std::unordered_map<std::string, uint64_t> first_by_shared_key;
         ir::IrModule::StaticDataStore new_store;
         new_store.alignment_default = merged.static_data.alignment_default;
         new_store.reserve(N);
@@ -1557,9 +1654,25 @@ CompileResult compile_vex_project(const std::string &root_path,
             // marca como "siempre distintos" para preservar storage real.
             const uint64_t hkey = m.content_hash;
             bool merged_in = false;
+            // Prioridad maxima: shared_key (global de programa).  Unifica
+            // todas las entries con la misma clave en un solo slot,
+            // independientemente de NON_DEDUP / bytes.
+            if (!m.shared_key.empty()) {
+                auto it = first_by_shared_key.find(m.shared_key);
+                if (it != first_by_shared_key.end()) {
+                    remap[i] = it->second;
+                    merged_in = true;
+                } else {
+                    const uint64_t new_idx = new_store.push_back(bp, bn);
+                    new_store.meta_at(new_idx) = m;
+                    first_by_shared_key.emplace(m.shared_key, new_idx);
+                    remap[i] = new_idx;
+                    merged_in = true;
+                }
+            }
             const bool is_non_dedup =
                 (m.flags & ir::IrModule::SD_FLAG_NON_DEDUP) != 0;
-            if (!is_non_dedup) {
+            if (!merged_in && !is_non_dedup) {
                 auto it = first_by_hash.find(hkey);
                 if (it != first_by_hash.end()) {
                     const uint64_t prev_idx = it->second;
