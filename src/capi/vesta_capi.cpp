@@ -37,6 +37,8 @@
 #include <string>
 #include <vector>
 
+#include "assembly/assembly.h"
+#include "cli/vsh.h"
 #include "loader/loader.h"
 #include "runtime/manager_runtime.h"
 #include "runtime/proceso_runtime.h"
@@ -44,6 +46,9 @@
 #include "util/assembler_multiprocess.h"
 #include "vex/compiler.h"
 #include "vex/diagnostic.h"
+
+#include <algorithm>
+#include <capstone/capstone.h>
 
 namespace {
 
@@ -181,6 +186,88 @@ bool compile_to_velb_bytes(const std::string &src, const std::string &unit_name,
 
     if (!read_ok || out_bytes.empty()) {
         err = "el .velb generado esta vacio o no se pudo leer";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Ensambla + linka texto .vel a bytes .velb (logica interna).
+ *
+ * Replica el path @c --worker: escribe el texto a un temporal, invoca
+ * @c run_worker y lee los bytes del @c .velb resultante.
+ *
+ * @param vel_text   Texto .vel.
+ * @param ir_bytes   IR serializado a embeber (NULL si no aplica).
+ * @param out_bytes  [salida] Bytes del .velb.
+ * @param err        [salida] Mensaje de error si retorna false.
+ * @return true si exito.
+ */
+bool assemble_vel_to_velb(const std::string &vel_text,
+                          const std::vector<uint8_t> *ir_bytes,
+                          std::vector<uint8_t> &out_bytes, std::string &err) {
+    const std::string prefix = make_temp_prefix();
+    const std::string vel_path = prefix + ".vel";
+    const std::string velb_path = prefix + ".velb";
+
+    {
+        std::ofstream ofs(vel_path);
+        if (!ofs.is_open()) {
+            err = "no se pudo crear el temporal: " + vel_path;
+            return false;
+        }
+        ofs << vel_text;
+    }
+
+    // El texto .vel ya esta desazucarado; saltar el preprocesador VPP.
+    int rc = asm_multi_process::run_worker(
+        vel_path, prefix,
+        /*skip_preprocessor=*/true,
+        /*keep_labels=*/false,
+        /*ir_section_bytes=*/const_cast<std::vector<uint8_t> *>(ir_bytes),
+        /*emit_map=*/false);
+
+    if (rc != 0) {
+        try_remove(vel_path);
+        try_remove(velb_path);
+        err = "fallo al ensamblar/linkar el .vel a .velb (run_worker rc=" +
+              std::to_string(rc) + ")";
+        return false;
+    }
+
+    bool read_ok = read_file_bytes(velb_path, out_bytes);
+    try_remove(vel_path);
+    try_remove(velb_path);
+
+    if (!read_ok || out_bytes.empty()) {
+        err = "el .velb generado esta vacio o no se pudo leer";
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Mapea el nombre de arquitectura al par (cs_arch, cs_mode).
+ *
+ * @param arch_name Nombre ("X86-32", "X86-64", "ARM", "AArch64").
+ * @param arch      [salida] cs_arch resultante.
+ * @param mode      [salida] cs_mode resultante.
+ * @return true si la arquitectura se reconoce.
+ */
+bool map_cs_arch(const std::string &arch_name, cs_arch &arch, cs_mode &mode) {
+    if (arch_name == "X86-32") {
+        arch = CS_ARCH_X86;
+        mode = CS_MODE_32;
+    } else if (arch_name == "X86-64") {
+        arch = CS_ARCH_X86;
+        mode = CS_MODE_64;
+    } else if (arch_name == "ARM") {
+        arch = CS_ARCH_ARM;
+        mode = CS_MODE_ARM;
+    } else if (arch_name == "AArch64") {
+        arch = static_cast<cs_arch>(_CS_ARCH_ARM64);
+        mode = CS_MODE_LITTLE_ENDIAN;
+    } else {
         return false;
     }
     return true;
@@ -358,6 +445,364 @@ VESTA_API int vesta_eval(const char *src, const char *unit_name, int *out_exit,
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_eval");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_compile_to_vel(const char *src, const char *unit_name,
+                                   char **out_vel, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_vel) *out_vel = nullptr;
+    if (!src || !out_vel) {
+        set_err(out_err, "argumentos invalidos (src/out_vel NULL)");
+        return 1;
+    }
+    try {
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+        *out_vel = dup_cstr(cr.vel_text);
+        if (!*out_vel) {
+            set_err(out_err, "sin memoria al copiar el .vel");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err, std::string("excepcion en vesta_compile_to_vel: ") +
+                             e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_to_vel");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_compile_to_ir(const char *src, const char *unit_name,
+                                  char **out_ir, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_ir) *out_ir = nullptr;
+    if (!src || !out_ir) {
+        set_err(out_err, "argumentos invalidos (src/out_ir NULL)");
+        return 1;
+    }
+    try {
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        copts.dump_ir = true; // habilita CompileResult::ir_text
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+        *out_ir = dup_cstr(cr.ir_text);
+        if (!*out_ir) {
+            set_err(out_err, "sin memoria al copiar el IR");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_to_ir: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_to_ir");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_assemble(const char *vel_text, unsigned char **out_velb,
+                             size_t *out_len, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_velb) *out_velb = nullptr;
+    if (out_len) *out_len = 0;
+    if (!vel_text || !out_velb || !out_len) {
+        set_err(out_err, "argumentos invalidos (vel_text/out_velb/out_len NULL)");
+        return 1;
+    }
+    try {
+        std::vector<uint8_t> bytes;
+        std::string err;
+        if (!assemble_vel_to_velb(vel_text, /*ir_bytes=*/nullptr, bytes, err)) {
+            set_err(out_err, err);
+            return 1;
+        }
+        unsigned char *buf =
+            static_cast<unsigned char *>(std::malloc(bytes.size()));
+        if (!buf) {
+            set_err(out_err, "sin memoria al copiar el .velb");
+            return 1;
+        }
+        std::memcpy(buf, bytes.data(), bytes.size());
+        *out_velb = buf;
+        *out_len = bytes.size();
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err, std::string("excepcion en vesta_assemble: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_assemble");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_disasm(const unsigned char *bytes, size_t len,
+                           const char *arch, char **out_text, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_text) *out_text = nullptr;
+    if (!bytes || len == 0 || !out_text) {
+        set_err(out_err, "argumentos invalidos (bytes/len/out_text)");
+        return 1;
+    }
+    try {
+        const std::string arch_name = arch ? arch : "X86-64";
+        cs_arch cs_a;
+        cs_mode cs_m;
+        if (!map_cs_arch(arch_name, cs_a, cs_m)) {
+            set_err(out_err, "arquitectura desconocida: " + arch_name);
+            return 1;
+        }
+        csh handle;
+        if (cs_open(cs_a, cs_m, &handle) != CS_ERR_OK) {
+            set_err(out_err, "error inicializando Capstone para " + arch_name);
+            return 1;
+        }
+        cs_insn *insn = nullptr;
+        // 0x1000 = direccion virtual base asumida (igual que disassemble_file).
+        size_t count = cs_disasm(handle, bytes, len, 0x1000, 0, &insn);
+        if (count == 0) {
+            cs_close(&handle);
+            set_err(out_err, "no se pudo desensamblar el buffer");
+            return 1;
+        }
+        std::ostringstream os;
+        for (size_t i = 0; i < count; ++i) {
+            os << "0x" << std::hex << insn[i].address << ":\t" << insn[i].mnemonic
+               << "\t" << insn[i].op_str << "\n";
+        }
+        cs_free(insn, count);
+        cs_close(&handle);
+        *out_text = dup_cstr(os.str());
+        if (!*out_text) {
+            set_err(out_err, "sin memoria al copiar el desensamblado");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err, std::string("excepcion en vesta_disasm: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_disasm");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_diagram(const char *src, const char *unit_name,
+                            const char *kind, const char *format,
+                            char **out_text, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_text) *out_text = nullptr;
+    if (!src || !kind || !format || !out_text) {
+        set_err(out_err, "argumentos invalidos (src/kind/format/out_text)");
+        return 1;
+    }
+    try {
+        const std::string k = kind;
+        const std::string f = format;
+        if (k != "ast" && k != "ir-pre" && k != "ir-post" && k != "vel") {
+            set_err(out_err, "kind desconocido: " + k +
+                                 " (usa ast|ir-pre|ir-post|vel)");
+            return 1;
+        }
+        if (f != "mermaid" && f != "graphviz" && f != "html") {
+            set_err(out_err, "format desconocido: " + f +
+                                 " (usa mermaid|graphviz|html)");
+            return 1;
+        }
+
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        // Activar solo el flag de la vista + formato pedidos.
+        const bool ast = (k == "ast");
+        const bool ir_pre = (k == "ir-pre");
+        const bool ir_post = (k == "ir-post");
+        const bool vel = (k == "vel");
+        if (f == "mermaid") {
+            copts.dump_mermaid_ast = ast;
+            copts.dump_mermaid_ir_pre = ir_pre;
+            copts.dump_mermaid_ir_post = ir_post;
+            copts.dump_mermaid_vel = vel;
+        } else if (f == "graphviz") {
+            copts.dump_graphviz_ast = ast;
+            copts.dump_graphviz_ir_pre = ir_pre;
+            copts.dump_graphviz_ir_post = ir_post;
+            copts.dump_graphviz_vel = vel;
+        } else { // html
+            copts.dump_html_ast = ast;
+            copts.dump_html_ir_pre = ir_pre;
+            copts.dump_html_ir_post = ir_post;
+            copts.dump_html_vel = vel;
+        }
+
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+
+        // Seleccionar el campo del CompileResult correspondiente.
+        const std::string *sel = nullptr;
+        if (f == "mermaid") {
+            sel = ast ? &cr.mermaid_ast
+                      : ir_pre ? &cr.mermaid_ir_pre
+                               : ir_post ? &cr.mermaid_ir_post : &cr.mermaid_vel;
+        } else if (f == "graphviz") {
+            sel = ast ? &cr.graphviz_ast
+                      : ir_pre ? &cr.graphviz_ir_pre
+                               : ir_post ? &cr.graphviz_ir_post
+                                         : &cr.graphviz_vel;
+        } else {
+            sel = ast ? &cr.html_ast
+                      : ir_pre ? &cr.html_ir_pre
+                               : ir_post ? &cr.html_ir_post : &cr.html_vel;
+        }
+        if (!sel || sel->empty()) {
+            set_err(out_err, "diagrama vacio para kind=" + k + " format=" + f);
+            return 1;
+        }
+        *out_text = dup_cstr(*sel);
+        if (!*out_text) {
+            set_err(out_err, "sin memoria al copiar el diagrama");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err, std::string("excepcion en vesta_diagram: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_diagram");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_vsh_eval(const char *script, int *out_rc, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_rc) *out_rc = 0;
+    if (!script) {
+        set_err(out_err, "argumentos invalidos (script NULL)");
+        return 1;
+    }
+    try {
+        vsh::VshInterpreter interp;
+        std::vector<std::string> argv = {"<capi>"};
+        interp.set_argv(argv);
+        interp.exec_string(script, "<capi>");
+        if (out_rc) *out_rc = 0;
+        return 0;
+    } catch (const vsh::VshRuntimeError &e) {
+        std::ostringstream os;
+        os << "VSH runtime error";
+        if (e.line > 0) os << " (linea " << e.line << ")";
+        os << ": " << e.what();
+        set_err(out_err, os.str());
+        if (out_rc) *out_rc = 1;
+        return 1;
+    } catch (const vsh::VshParseError &e) {
+        std::ostringstream os;
+        os << "VSH parse error";
+        if (e.line > 0) os << " (linea " << e.line << ")";
+        os << ": " << e.what();
+        set_err(out_err, os.str());
+        if (out_rc) *out_rc = 1;
+        return 1;
+    } catch (const std::exception &e) {
+        set_err(out_err, std::string("excepcion en vesta_vsh_eval: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_vsh_eval");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
+                                 char **out_vel, char **out_ir,
+                                 unsigned char **out_velb, size_t *out_velb_len,
+                                 char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_vel) *out_vel = nullptr;
+    if (out_ir) *out_ir = nullptr;
+    if (out_velb) *out_velb = nullptr;
+    if (out_velb_len) *out_velb_len = 0;
+    if (!src) {
+        set_err(out_err, "argumentos invalidos (src NULL)");
+        return 1;
+    }
+    if (out_velb && !out_velb_len) {
+        set_err(out_err, "out_velb requiere out_velb_len");
+        return 1;
+    }
+    try {
+        // Compilar una sola vez activando dump_ir.
+        vex::CompileOptions copts;
+        copts.module_name = unit_name ? unit_name : "main";
+        copts.dump_ir = (out_ir != nullptr);
+        vex::CompileResult cr = vex::compile_vex_source(
+            src, copts.module_name + ".vex", copts);
+        if (!cr.ok || cr.diagnostics.has_errors()) {
+            set_err(out_err,
+                    "fallo de compilacion Vex:\n" + format_diags(cr.diagnostics));
+            return 1;
+        }
+
+        if (out_vel) {
+            *out_vel = dup_cstr(cr.vel_text);
+            if (!*out_vel) {
+                set_err(out_err, "sin memoria al copiar el .vel");
+                return 1;
+            }
+        }
+        if (out_ir) {
+            *out_ir = dup_cstr(cr.ir_text);
+            if (!*out_ir) {
+                set_err(out_err, "sin memoria al copiar el IR");
+                return 1;
+            }
+        }
+        if (out_velb) {
+            std::vector<uint8_t> bytes;
+            std::string err;
+            // Embeber el IR para producir un .velb v3 igual que vesta_compile.
+            if (!assemble_vel_to_velb(cr.vel_text, &cr.ir_section_bytes, bytes,
+                                      err)) {
+                set_err(out_err, err);
+                return 1;
+            }
+            unsigned char *buf =
+                static_cast<unsigned char *>(std::malloc(bytes.size()));
+            if (!buf) {
+                set_err(out_err, "sin memoria al copiar el .velb");
+                return 1;
+            }
+            std::memcpy(buf, bytes.data(), bytes.size());
+            *out_velb = buf;
+            *out_velb_len = bytes.size();
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_compile_full: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_compile_full");
         return 2;
     }
 }

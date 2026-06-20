@@ -11,8 +11,18 @@ La cabecera publica es `include/capi/vesta.h`.
 La libreria se construye junto al resto del proyecto.  El target CMake se
 llama `vesta_ffi` y esta activado por defecto (opcion `VESTA_BUILD_FFI=ON`).
 
+**Auto-build:** construir el ejecutable `vm` arrastra `libvesta` de forma
+automatica (hay un `add_dependencies(vm vesta_ffi)`), asi que basta con:
+
 ```bash
 cmake -S . -B cmake-build-release
+cmake --build cmake-build-release --target vm -j4
+```
+
+y obtienes `vm.exe` **y** `libvesta.dll`/`.so` en el mismo directorio.  Si
+solo quieres la libreria puedes pedir su target directamente:
+
+```bash
 cmake --build cmake-build-release --target vesta_ffi -j4
 ```
 
@@ -34,6 +44,7 @@ build copia al directorio de salida:
 ```c
 const char *vesta_version(void);
 
+/* --- Compilar / ejecutar --- */
 int vesta_compile(const char *src, const char *unit_name,
                   unsigned char **out_velb, size_t *out_len, char **out_err);
 
@@ -43,8 +54,47 @@ int vesta_run(const unsigned char *velb, size_t len, int argc,
 int vesta_eval(const char *src, const char *unit_name,
                int *out_exit, char **out_err);
 
+/* --- Artefactos del pipeline --- */
+int vesta_compile_to_vel(const char *src, const char *unit_name,
+                         char **out_vel, char **out_err);
+
+int vesta_compile_to_ir(const char *src, const char *unit_name,
+                        char **out_ir, char **out_err);
+
+int vesta_assemble(const char *vel_text, unsigned char **out_velb,
+                   size_t *out_len, char **out_err);
+
+int vesta_disasm(const unsigned char *bytes, size_t len, const char *arch,
+                 char **out_text, char **out_err);
+
+int vesta_diagram(const char *src, const char *unit_name, const char *kind,
+                  const char *format, char **out_text, char **out_err);
+
+/* --- Conveniencia: vel + ir + velb en una compilacion --- */
+int vesta_compile_full(const char *src, const char *unit_name,
+                       char **out_vel, char **out_ir,
+                       unsigned char **out_velb, size_t *out_velb_len,
+                       char **out_err);
+
+/* --- VestaShellScript --- */
+int vesta_vsh_eval(const char *script, int *out_rc, char **out_err);
+
 void vesta_free(void *p);
 ```
+
+| Funcion | Que hace |
+| :------ | :------- |
+| `vesta_version` | Cadena de version (estatica, NO liberar). |
+| `vesta_compile` | Fuente Vex -> bytes `.velb` (con seccion `@ir` v3). |
+| `vesta_run` | Ejecuta bytes `.velb`; `out_exit` = R0 de `main`. |
+| `vesta_eval` | Compila + ejecuta en una llamada. |
+| `vesta_compile_to_vel` | Fuente Vex -> texto `.vel` (bytecode textual). |
+| `vesta_compile_to_ir` | Fuente Vex -> texto del IR SSA. |
+| `vesta_assemble` | Texto `.vel` -> bytes `.velb`. |
+| `vesta_disasm` | Buffer de bytes nativos -> listado (Capstone); `arch` = `"X86-32"`/`"X86-64"`/`"ARM"`/`"AArch64"` (NULL => `"X86-64"`). |
+| `vesta_diagram` | Fuente Vex -> diagrama; `kind` = `"ast"`/`"ir-pre"`/`"ir-post"`/`"vel"`, `format` = `"mermaid"`/`"graphviz"`/`"html"`. |
+| `vesta_compile_full` | Devuelve a la vez `.vel`, IR y `.velb` (cada salida opcional con NULL). |
+| `vesta_vsh_eval` | Ejecuta un script VestaShellScript desde una cadena. |
 
 Convenciones:
 
@@ -119,6 +169,52 @@ cd examples/ffi/python
 PATH="../../../cmake-build-release:$PATH" python test_ffi.py
 ```
 
+El script Python cubre `vesta_eval`, `vesta_compile_to_ir`, `vesta_diagram`
+(Mermaid) y `vesta_vsh_eval`.
+
+## Ejemplo en C++
+
+`cpp/test_ffi.cpp` usa RAII (`unique_ptr` con deleter = `vesta_free`) y cubre
+`vesta_compile_full` (vel + ir + velb en una compilacion), `vesta_run`,
+`vesta_disasm` y `vesta_diagram` (Graphviz).
+
+```bash
+cd examples/ffi/cpp
+g++ -std=c++17 test_ffi.cpp -I../../../include -L../../../cmake-build-release \
+    -lvesta -o test_ffi.exe
+PATH="../../../cmake-build-release:$PATH" ./test_ffi.exe
+```
+
+## Ejemplo en Vex (self-hosting)
+
+`vex/self_host.vex` es un programa Vex que, via el FFI runtime dinamico
+(`ffi_open` / `ffi_sym` / `ffi_call`), carga `libvesta` y llama a
+`vesta_eval` para **compilar y ejecutar otro snippet Vex desde dentro de
+Vex**.  Es decir: el lenguaje se ejecuta a si mismo a traves de su propia
+DLL.
+
+```vex
+i32 main() {
+    string snippet = "i32 main() { return 6 * 7; }";
+    i32* slot = malloc(4); slot[0] = 0;
+
+    i64 lib  = ffi_open("libvesta.dll");          // o "libvesta.so" en POSIX
+    i64 eval = ffi_sym(lib, "vesta_eval");
+    // vesta_eval(src, NULL, &out_exit, NULL)
+    ffi_call(eval, str_cstr(snippet), 0, slot, 0);
+
+    i32 inner = slot[0]; free(slot);
+    return inner;                                  // 42
+}
+```
+
+Compilar y ejecutar (con `libvesta.dll` junto al `.exe` o en el `PATH`):
+
+```bash
+vm --vex examples/ffi/vex/self_host.vex -o self_host
+vm --run self_host.velb --stats          # imprime R00=0x2a (42)
+```
+
 ## Ejemplo en Rust (esquema)
 
 Declarar las funciones `extern "C"` y enlazar contra `vesta`:
@@ -153,7 +249,11 @@ fn main() {
 - La VM usa estado global (registries, caches): las llamadas a la API **no**
   son thread-safe entre si.  Serializa el acceso desde el lado del llamante
   si compartes la libreria entre hilos.
-- El preprocesador VPP no se aplica a la fuente en `vesta_compile`/`vesta_eval`
-  (la fuente se compila directamente con el frontend Vex).
-- `vesta_compile` usa ficheros temporales para el paso de ensamblado/linkado
-  interno; se borran automaticamente.
+- El preprocesador VPP no se aplica a la fuente (se compila directamente con
+  el frontend Vex).
+- `vesta_compile` / `vesta_assemble` / `vesta_compile_full` usan ficheros
+  temporales para el paso de ensamblado/linkado interno; se borran solos.
+- `vesta_diagram` con `format="html"` produce una pagina HTML autocontenida
+  (CSS+JS embebidos) lista para abrir en el navegador.
+- `vesta_vsh_eval` ejecuta el interprete tree-walking de VestaShellScript;
+  la salida del script va al `stdout`/`stderr` del host.
