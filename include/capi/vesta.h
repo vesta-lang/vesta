@@ -216,6 +216,77 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
                                  char **out_err);
 
 /**
+ * @brief Genera bytecode .velb a partir de texto del IR SSA.
+ *
+ * Cierra el ciclo de manipulacion del IR: el llamante puede obtener el
+ * texto IR con @c vesta_compile_to_ir, transformarlo, y volver a producir
+ * bytecode ejecutable con esta funcion.  Internamente parsea el texto IR
+ * (@c ir::ir_parse), emite el @c .vel (@c ir::ir_emit_module) y lo ensambla
+ * + linka al @c .velb (mismo path que @c vesta_assemble).
+ *
+ * @param ir_text   Texto del IR SSA terminado en NUL.
+ * @param out_velb  [salida] Recibe el buffer con los bytes del .velb en heap
+ *                  (liberar con @c vesta_free).
+ * @param out_len   [salida] Recibe el tamano en bytes de @c out_velb.
+ * @param out_err   [salida, opcional] Mensaje de error en heap si falla
+ *                  (liberar con @c vesta_free).
+ * @return 0 si exito; distinto de 0 en caso de error.
+ */
+VESTA_API int vesta_ir_to_velb(const char *ir_text, unsigned char **out_velb,
+                               size_t *out_len, char **out_err);
+
+/**
+ * @brief Valida que una cadena es JSON sintacticamente correcto.
+ *
+ * Usa el parser de nlohmann::json.  No produce salida util mas alla del
+ * codigo de retorno; el error de parse (si lo hay) va en @c out_err.
+ *
+ * @param json_text Texto JSON terminado en NUL.
+ * @param out_err   [salida, opcional] Mensaje de error de parse en heap si
+ *                  el JSON es invalido (liberar con @c vesta_free).
+ * @return 0 si el JSON es valido; distinto de 0 si es invalido o hay error.
+ */
+VESTA_API int vesta_json_validate(const char *json_text, char **out_err);
+
+/**
+ * @brief Reformatea (pretty-print o minifica) una cadena JSON.
+ *
+ * Parsea el JSON y lo vuelve a serializar.  Si @c indent es negativo, el
+ * resultado es compacto (minificado, sin espacios).  Si @c indent es >= 0,
+ * el resultado es legible con esa sangria por nivel.
+ *
+ * @param json_text Texto JSON terminado en NUL.
+ * @param indent    Sangria por nivel: < 0 => compacto; >= 0 => pretty.
+ * @param out_text  [salida] Recibe el JSON reformateado en heap (liberar con
+ *                  @c vesta_free).
+ * @param out_err   [salida, opcional] Mensaje de error de parse en heap si
+ *                  falla (liberar con @c vesta_free).
+ * @return 0 si exito; distinto de 0 en caso de error.
+ */
+VESTA_API int vesta_json_format(const char *json_text, int indent,
+                                char **out_text, char **out_err);
+
+/**
+ * @brief Abre una base de datos SQLite, ejecuta SQL y devuelve filas en JSON.
+ *
+ * Abre @c db_path (acepta @c ":memory:" para una BD en memoria), ejecuta
+ * todas las sentencias del bloque @c sql, y recolecta las filas producidas
+ * por las sentencias @c SELECT en un array JSON de objetos
+ * @c {columna: valor}.  Si no hay filas, devuelve @c "[]".  La conexion se
+ * cierra siempre, incluso en error.
+ *
+ * @param db_path   Ruta del fichero de BD (o @c ":memory:").
+ * @param sql       Una o varias sentencias SQL terminadas en NUL.
+ * @param out_json  [salida] Recibe el array JSON de filas en heap (liberar
+ *                  con @c vesta_free).
+ * @param out_err   [salida, opcional] Mensaje de error de SQLite en heap si
+ *                  falla (liberar con @c vesta_free).
+ * @return 0 si exito; distinto de 0 en caso de error.
+ */
+VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
+                                char **out_json, char **out_err);
+
+/**
  * @brief Libera memoria devuelta por la API (@c out_velb, @c out_err).
  *
  * Aceptar NULL es seguro (no-op).
