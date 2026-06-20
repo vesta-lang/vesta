@@ -711,6 +711,8 @@ static void serialize_static_data(const IrModule::StaticDataStore &sd,
             write_u8(out, sr.is_rel);
             write_str(out, sr.sym);
         }
+        // Global compartido a nivel de programa (CPU dispatch fp-table).
+        write_str(out, e.meta.shared_key);
     }
 }
 
@@ -757,6 +759,8 @@ static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
             if (!read_str(in, off, sr.sym)) return false;
             e.meta.sym_refs.push_back(std::move(sr));
         }
+        // Global compartido a nivel de programa (CPU dispatch fp-table).
+        if (!read_str(in, off, e.meta.shared_key)) return false;
         // Validar que el rango cae dentro del pool.
         if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
             return false;
