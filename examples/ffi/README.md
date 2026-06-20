@@ -79,6 +79,19 @@ int vesta_compile_full(const char *src, const char *unit_name,
 /* --- VestaShellScript --- */
 int vesta_vsh_eval(const char *script, int *out_rc, char **out_err);
 
+/* --- IR -> bytecode (cierra el ciclo de manipulacion del IR) --- */
+int vesta_ir_to_velb(const char *ir_text, unsigned char **out_velb,
+                     size_t *out_len, char **out_err);
+
+/* --- JSON (nlohmann) --- */
+int vesta_json_validate(const char *json_text, char **out_err);
+int vesta_json_format(const char *json_text, int indent,
+                      char **out_text, char **out_err);
+
+/* --- SQLite --- */
+int vesta_sqlite_exec(const char *db_path, const char *sql,
+                      char **out_json, char **out_err);
+
 void vesta_free(void *p);
 ```
 
@@ -95,6 +108,10 @@ void vesta_free(void *p);
 | `vesta_diagram` | Fuente Vex -> diagrama; `kind` = `"ast"`/`"ir-pre"`/`"ir-post"`/`"vel"`, `format` = `"mermaid"`/`"graphviz"`/`"html"`. |
 | `vesta_compile_full` | Devuelve a la vez `.vel`, IR y `.velb` (cada salida opcional con NULL). |
 | `vesta_vsh_eval` | Ejecuta un script VestaShellScript desde una cadena. |
+| `vesta_ir_to_velb` | Texto IR SSA -> bytes `.velb`. Cierra el ciclo `vesta_compile_to_ir` -> (editar IR) -> `vesta_ir_to_velb` -> `vesta_run`. |
+| `vesta_json_validate` | Valida una cadena JSON (nlohmann); `0` = valido, mensaje de parse en `out_err`. |
+| `vesta_json_format` | Reformatea JSON: `indent < 0` => compacto/minificado, `indent >= 0` => pretty con esa sangria. |
+| `vesta_sqlite_exec` | Abre una BD SQLite (acepta `":memory:"`), ejecuta el SQL y devuelve las filas de los `SELECT` como array JSON `[{columna: valor}, ...]` (`"[]"` si no hay filas). |
 
 Convenciones:
 
@@ -141,6 +158,53 @@ POSIX:
 gcc test_ffi.c -I../../../include -L../../../cmake-build-release -lvesta \
     -Wl,-rpath,../../../cmake-build-release -o test_ffi
 ./test_ffi
+```
+
+## Funciones P1 (IR -> velb, JSON, SQLite)
+
+`c/test_ffi_p1.c` (y `python/test_ffi_p1.py`) cubren las cuatro funciones
+P1.  Snippets:
+
+```c
+/* 1. Cerrar el ciclo: fuente -> IR -> (editar) -> velb -> run. */
+char *ir = NULL, *err = NULL;
+vesta_compile_to_ir("i32 main() { return 7; }", "u", &ir, &err);
+unsigned char *velb = NULL; size_t len = 0;
+vesta_ir_to_velb(ir, &velb, &len, &err);     /* IR text -> .velb */
+int code = 0;
+vesta_run(velb, len, 0, NULL, &code, &err);  /* code == 7 */
+vesta_free(ir); vesta_free(velb);
+
+/* 2. Validar JSON. */
+if (vesta_json_validate("{\"a\":1}", &err) == 0) { /* valido */ }
+
+/* 3. Minificar / embellecer. */
+char *mini = NULL;   /* indent < 0 => compacto */
+vesta_json_format("{ \"x\" : 1 }", -1, &mini, &err);   /* {"x":1} */
+char *pretty = NULL; /* indent >= 0 => sangria */
+vesta_json_format("{\"x\":1}", 2, &pretty, &err);
+vesta_free(mini); vesta_free(pretty);
+
+/* 4. SQLite -> JSON de filas. */
+char *rows = NULL;
+vesta_sqlite_exec(":memory:",
+    "CREATE TABLE t(id INTEGER, name TEXT);"
+    "INSERT INTO t VALUES(1,'a'),(2,'b');"
+    "SELECT * FROM t;", &rows, &err);
+/* rows == "[{\"id\":1,\"name\":\"a\"},{\"id\":2,\"name\":\"b\"}]" */
+vesta_free(rows);
+```
+
+Compilar y ejecutar:
+
+```bash
+cd examples/ffi/c
+gcc test_ffi_p1.c -I../../../include -L../../../cmake-build-release -lvesta -o test_ffi_p1.exe
+PATH="../../../cmake-build-release:$PATH" ./test_ffi_p1.exe
+
+# Python (mismo cobertura):
+cd ../python
+PATH="../../../cmake-build-release:$PATH" python test_ffi_p1.py
 ```
 
 ## Ejemplo en Python (ctypes)

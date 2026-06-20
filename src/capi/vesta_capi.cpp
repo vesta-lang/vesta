@@ -39,6 +39,8 @@
 
 #include "assembly/assembly.h"
 #include "cli/vsh.h"
+#include "ir/ir_emitter.h"
+#include "ir/ssa_ir.h"
 #include "loader/loader.h"
 #include "runtime/manager_runtime.h"
 #include "runtime/proceso_runtime.h"
@@ -49,6 +51,8 @@
 
 #include <algorithm>
 #include <capstone/capstone.h>
+#include <json.hpp>
+#include <sqlite3.h>
 
 namespace {
 
@@ -803,6 +807,230 @@ VESTA_API int vesta_compile_full(const char *src, const char *unit_name,
         return 2;
     } catch (...) {
         set_err(out_err, "excepcion desconocida en vesta_compile_full");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_ir_to_velb(const char *ir_text, unsigned char **out_velb,
+                               size_t *out_len, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_velb) *out_velb = nullptr;
+    if (out_len) *out_len = 0;
+    if (!ir_text || !out_velb || !out_len) {
+        set_err(out_err, "argumentos invalidos (ir_text/out_velb/out_len NULL)");
+        return 1;
+    }
+    try {
+        // 1. Parsear el texto IR SSA a un IrModule.
+        ir::IrModule mod;
+        std::string parse_err;
+        if (!ir::ir_parse(ir_text, mod, parse_err)) {
+            set_err(out_err, "fallo al parsear el IR: " + parse_err);
+            return 1;
+        }
+
+        // 2. Emitir el texto .vel desde el IR (aplica optimizacion + regalloc).
+        ir::EmitResult er = ir::ir_emit_module(mod);
+        if (!er.ok) {
+            set_err(out_err, "fallo al emitir el .vel desde el IR: " + er.error);
+            return 1;
+        }
+
+        // 3. Ensamblar + linkar el .vel a .velb (mismo path que vesta_assemble).
+        std::vector<uint8_t> bytes;
+        std::string err;
+        if (!assemble_vel_to_velb(er.vel_text, /*ir_bytes=*/nullptr, bytes,
+                                  err)) {
+            set_err(out_err, err);
+            return 1;
+        }
+
+        // 4. Copiar los bytes a un buffer en heap (malloc) para el llamante.
+        unsigned char *buf =
+            static_cast<unsigned char *>(std::malloc(bytes.size()));
+        if (!buf) {
+            set_err(out_err, "sin memoria al copiar el .velb");
+            return 1;
+        }
+        std::memcpy(buf, bytes.data(), bytes.size());
+        *out_velb = buf;
+        *out_len = bytes.size();
+        return 0;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_ir_to_velb: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_ir_to_velb");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_json_validate(const char *json_text, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (!json_text) {
+        set_err(out_err, "argumentos invalidos (json_text NULL)");
+        return 1;
+    }
+    try {
+        // Parsear sin callback de errores => lanza nlohmann::json::parse_error.
+        nlohmann::json parsed = nlohmann::json::parse(json_text);
+        (void)parsed;
+        return 0;
+    } catch (const nlohmann::json::parse_error &e) {
+        set_err(out_err, std::string("JSON invalido: ") + e.what());
+        return 1;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_json_validate: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_json_validate");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_json_format(const char *json_text, int indent,
+                                char **out_text, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_text) *out_text = nullptr;
+    if (!json_text || !out_text) {
+        set_err(out_err, "argumentos invalidos (json_text/out_text NULL)");
+        return 1;
+    }
+    try {
+        nlohmann::json j = nlohmann::json::parse(json_text);
+        // indent < 0 => compacto (dump sin sangria); >= 0 => pretty.
+        std::string formatted = (indent < 0) ? j.dump() : j.dump(indent);
+        *out_text = dup_cstr(formatted);
+        if (!*out_text) {
+            set_err(out_err, "sin memoria al copiar el JSON formateado");
+            return 1;
+        }
+        return 0;
+    } catch (const nlohmann::json::parse_error &e) {
+        set_err(out_err, std::string("JSON invalido: ") + e.what());
+        return 1;
+    } catch (const std::exception &e) {
+        set_err(out_err,
+                std::string("excepcion en vesta_json_format: ") + e.what());
+        return 2;
+    } catch (...) {
+        set_err(out_err, "excepcion desconocida en vesta_json_format");
+        return 2;
+    }
+}
+
+VESTA_API int vesta_sqlite_exec(const char *db_path, const char *sql,
+                                char **out_json, char **out_err) {
+    if (out_err) *out_err = nullptr;
+    if (out_json) *out_json = nullptr;
+    if (!db_path || !sql || !out_json) {
+        set_err(out_err, "argumentos invalidos (db_path/sql/out_json NULL)");
+        return 1;
+    }
+
+    sqlite3 *db = nullptr;
+    try {
+        // Abrir la BD (acepta ":memory:" para una BD en memoria).
+        if (sqlite3_open(db_path, &db) != SQLITE_OK) {
+            std::string msg = "no se pudo abrir la BD: ";
+            msg += db ? sqlite3_errmsg(db) : "error desconocido";
+            set_err(out_err, msg);
+            if (db) sqlite3_close(db);
+            return 1;
+        }
+
+        // Acumulador de las filas del/los SELECT como array de objetos JSON.
+        nlohmann::json rows = nlohmann::json::array();
+
+        // Recorrer todas las sentencias del bloque SQL con prepare/step/finalize.
+        const char *cursor = sql;
+        while (cursor && *cursor) {
+            sqlite3_stmt *stmt = nullptr;
+            const char *tail = nullptr;
+            int rc = sqlite3_prepare_v2(db, cursor, -1, &stmt, &tail);
+            if (rc != SQLITE_OK) {
+                std::string msg = "error de prepare: ";
+                msg += sqlite3_errmsg(db);
+                set_err(out_err, msg);
+                if (stmt) sqlite3_finalize(stmt);
+                sqlite3_close(db);
+                return 1;
+            }
+            // prepare puede devolver stmt NULL si el segmento era solo espacios
+            // o un comentario; avanzar al siguiente segmento.
+            if (!stmt) {
+                cursor = tail;
+                continue;
+            }
+
+            const int ncols = sqlite3_column_count(stmt);
+            // Ejecutar la sentencia, recolectando filas si las produce.
+            while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+                nlohmann::json obj = nlohmann::json::object();
+                for (int c = 0; c < ncols; ++c) {
+                    const char *cname = sqlite3_column_name(stmt, c);
+                    const std::string key = cname ? cname : ("col" + std::to_string(c));
+                    // Mapear el tipo nativo de SQLite al tipo JSON adecuado.
+                    switch (sqlite3_column_type(stmt, c)) {
+                    case SQLITE_INTEGER:
+                        obj[key] = static_cast<std::int64_t>(
+                            sqlite3_column_int64(stmt, c));
+                        break;
+                    case SQLITE_FLOAT:
+                        obj[key] = sqlite3_column_double(stmt, c);
+                        break;
+                    case SQLITE_NULL:
+                        obj[key] = nullptr;
+                        break;
+                    case SQLITE_BLOB: {
+                        // Representar el blob como su longitud en bytes; el
+                        // contenido binario crudo no es JSON-serializable.
+                        int n = sqlite3_column_bytes(stmt, c);
+                        obj[key] = std::string("<blob ") + std::to_string(n) +
+                                   " bytes>";
+                        break;
+                    }
+                    case SQLITE_TEXT:
+                    default: {
+                        const unsigned char *txt = sqlite3_column_text(stmt, c);
+                        obj[key] = txt ? reinterpret_cast<const char *>(txt) : "";
+                        break;
+                    }
+                    }
+                }
+                rows.push_back(std::move(obj));
+            }
+            if (rc != SQLITE_DONE) {
+                std::string msg = "error de step: ";
+                msg += sqlite3_errmsg(db);
+                set_err(out_err, msg);
+                sqlite3_finalize(stmt);
+                sqlite3_close(db);
+                return 1;
+            }
+            sqlite3_finalize(stmt);
+            cursor = tail;
+        }
+
+        sqlite3_close(db);
+        db = nullptr;
+
+        *out_json = dup_cstr(rows.dump());
+        if (!*out_json) {
+            set_err(out_err, "sin memoria al copiar el JSON de filas");
+            return 1;
+        }
+        return 0;
+    } catch (const std::exception &e) {
+        if (db) sqlite3_close(db);
+        set_err(out_err,
+                std::string("excepcion en vesta_sqlite_exec: ") + e.what());
+        return 2;
+    } catch (...) {
+        if (db) sqlite3_close(db);
+        set_err(out_err, "excepcion desconocida en vesta_sqlite_exec");
         return 2;
     }
 }
