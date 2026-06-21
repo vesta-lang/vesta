@@ -29,7 +29,10 @@
 #include "analyze/bigo.h"
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
+#include "vex/ast.h"
 #include "vex/diagnostic.h"
+#include "vex/lexer.h"
+#include "vex/parser.h"
 
 namespace lsp {
 
@@ -135,6 +138,85 @@ void attach_complexity_warnings(vex::CompileResult &result,
     }
 }
 
+/**
+ * @brief Extrae los nombres de tipos/clases/structs/enums/funciones
+ *        declarados top-level en el fuente.
+ *
+ * Hace un lex+parse independiente (descartando los diagnosticos: ya los
+ * produce la compilacion principal) y recorre las declaraciones top-level
+ * del @c ModuleNode para poblar los sets de @p out.  Se ejecuta bajo
+ * try/catch externo en el caller; aqui ademas se ignora cualquier nodo
+ * inesperado para ser robusto frente a AST parciales (fuente a medio
+ * teclear).
+ *
+ * Este parse extra es necesario porque @c CompileResult no expone las
+ * tablas de tipos del type checker; el coste es pequeno (el lexer es
+ * O(N) y solo recorremos las declaraciones de primer nivel).
+ *
+ * @param text Texto fuente del documento.
+ * @param uri  URI logico (nombre del fichero para el lexer).
+ * @param out  DocAnalysis cuyos sets de nombres se rellenan.
+ */
+void extract_declared_names(const std::string &text, const std::string &uri,
+                            DocAnalysis &out) {
+    // Diagnosticos locales y descartables: solo queremos el AST.
+    vex::Diagnostics local_diags;
+    vex::Lexer lex(text, uri, local_diags);
+    vex::Parser parser(lex, local_diags);
+    std::unique_ptr<vex::ast::ModuleNode> mod = parser.parse_program();
+    if (!mod)
+        return;
+    // Recorrer SOLO las declaraciones top-level: nombres de tipos y funciones
+    // visibles para el resaltado.  Los miembros (campos/metodos) se refinaran
+    // en una fase futura (parametros/propiedades por posicion).
+    for (const auto &node : mod->decls) {
+        if (!node)
+            continue;
+        switch (node->kind) {
+        case vex::ast::NodeKind::ClassDecl: {
+            auto *d = static_cast<const vex::ast::ClassDecl *>(node.get());
+            if (!d->name.empty())
+                out.class_names.insert(d->name);
+            break;
+        }
+        case vex::ast::NodeKind::StructDecl: {
+            auto *d = static_cast<const vex::ast::StructDecl *>(node.get());
+            if (!d->name.empty())
+                out.struct_names.insert(d->name);
+            break;
+        }
+        case vex::ast::NodeKind::EnumDecl: {
+            auto *d = static_cast<const vex::ast::EnumDecl *>(node.get());
+            if (!d->name.empty())
+                out.enum_names.insert(d->name);
+            break;
+        }
+        case vex::ast::NodeKind::TypeAliasDecl: {
+            auto *d = static_cast<const vex::ast::TypeAliasDecl *>(node.get());
+            if (!d->name.empty())
+                out.type_names.insert(d->name);
+            break;
+        }
+        case vex::ast::NodeKind::FunctionDecl: {
+            auto *d = static_cast<const vex::ast::FunctionDecl *>(node.get());
+            if (!d->name.empty())
+                out.function_names.insert(d->name);
+            break;
+        }
+        case vex::ast::NodeKind::ExternFnDecl: {
+            // Las funciones extern (FFI declarativo) tambien se clasifican
+            // como funciones para el resaltado.
+            auto *d = static_cast<const vex::ast::ExternFnDecl *>(node.get());
+            if (!d->name.empty())
+                out.function_names.insert(d->name);
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
 } // namespace
 
 const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
@@ -158,6 +240,10 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         analysis->result = vex::compile_vex_source(text, uri, opts);
         // Enganchar (best-effort) el warning de discrepancia de @complexity.
         attach_complexity_warnings(analysis->result, uri);
+        // Poblar los sets de nombres declarados para el resaltado semantico.
+        // Best-effort: un fallo del parse extra no debe afectar a los
+        // diagnosticos (el catch externo cubre cualquier excepcion).
+        extract_declared_names(text, uri, *analysis);
     } catch (const std::exception &e) {
         // Un fallo del frontend NO debe tumbar el servidor: convertirlo en un
         // diagnostico de error interno en 0:0 para que el cliente lo vea.

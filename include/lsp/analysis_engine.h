@@ -39,6 +39,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "vex/compiler.h"
 
@@ -55,6 +56,20 @@ namespace lsp {
 struct DocAnalysis {
     uint64_t text_hash = 0;       ///< Hash FNV-1a del texto analizado.
     vex::CompileResult result;    ///< Resultado completo de la compilacion.
+
+    /// Nombres de clases declaradas top-level (para enriquecer el resaltado
+    /// semantico: un IDENTIFIER que coincide se clasifica como @c class).
+    std::unordered_set<std::string> class_names;
+    /// Nombres de structs declarados top-level (clasificados como @c struct).
+    std::unordered_set<std::string> struct_names;
+    /// Nombres de enums declarados top-level (clasificados como @c enum).
+    std::unordered_set<std::string> enum_names;
+    /// Nombres de alias de tipo (typedef/using) declarados (clasificados
+    /// como @c type).
+    std::unordered_set<std::string> type_names;
+    /// Nombres de funciones declaradas top-level (clasificadas como
+    /// @c function).
+    std::unordered_set<std::string> function_names;
 };
 
 /**
