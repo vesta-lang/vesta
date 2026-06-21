@@ -44,6 +44,7 @@
 #define VESTA_LSP_SYMBOL_INDEX_H
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -228,6 +229,20 @@ class WorkspaceIndex {
      * @return Vector de localizaciones (vacio si no hay).
      */
     std::vector<WorkspaceLocation> refs_for(const std::string &name) const;
+
+    /**
+     * @brief Recorre cada nombre definido en el workspace junto con el kind y
+     *        la firma de su primera definicion.
+     *
+     * Pensado para el autocompletado: permite ofrecer los simbolos de otros
+     * ficheros/librerias filtrando por prefijo en el caller, sin exponer la
+     * estructura interna del indice.  El callback recibe (nombre, kind, firma).
+     *
+     * @param fn Callback invocado una vez por nombre definido.
+     */
+    void for_each_def_name(
+        const std::function<void(const std::string &, SymbolKind,
+                                 const std::string &)> &fn) const;
 
     /// @brief true si las raices estan fijadas (hay donde indexar).
     bool has_roots() const { return !roots_.empty(); }

@@ -708,4 +708,18 @@ WorkspaceIndex::refs_for(const std::string &name) const {
     return it->second;
 }
 
+void WorkspaceIndex::for_each_def_name(
+    const std::function<void(const std::string &, SymbolKind,
+                             const std::string &)> &fn) const {
+    // Recorrer el mapa nombre -> [definiciones] y reportar la PRIMERA
+    // definicion de cada nombre (kind + firma).  El kind de un nombre puede
+    // variar entre ficheros homonimos; para el completado basta el primero.
+    for (const auto &kv : defs_) {
+        if (kv.second.empty())
+            continue;
+        const WorkspaceLocation &first = kv.second.front();
+        fn(kv.first, first.kind, first.signature);
+    }
+}
+
 } // namespace lsp

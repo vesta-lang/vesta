@@ -135,6 +135,27 @@ class LspServer {
     void handle_references(const nlohmann::json &msg);
 
     /**
+     * @brief Responde a @c textDocument/completion (Fase 5).
+     *
+     * Ofrece autocompletado pragmatico:
+     *   - COMPLETADO DE MIEMBRO tras @c '.': si el receptor (el identificador
+     *     antes del punto) es resoluble a un tipo clase/struct conocido (o es
+     *     directamente el nombre de un tipo), lista sus METODOS y CAMPOS
+     *     (tomados del indice por-documento, @c container == tipo).  Si el tipo
+     *     no se resuelve, devuelve lista vacia para el caso miembro (no inunda).
+     *   - COMPLETADO GENERAL (sin @c '.'): une palabras clave de Vex, tipos
+     *     primitivos, builtins comunes y simbolos del documento/workspace,
+     *     deduplicados por label y filtrados por el prefijo que se esta
+     *     escribiendo bajo el cursor.
+     *
+     * Acota el numero de resultados y, ante cualquier fallo, responde una lista
+     * vacia (nunca tumba el servidor).
+     *
+     * @param msg Mensaje completo (lleva @c id y @c params.position).
+     */
+    void handle_completion(const nlohmann::json &msg);
+
+    /**
      * @brief Resuelve el identificador bajo el cursor de una peticion de
      *        navegacion.
      *
