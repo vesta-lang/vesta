@@ -41,6 +41,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "analyze/bigo.h"
 #include "vex/compiler.h"
 
 namespace lsp {
@@ -70,6 +71,12 @@ struct DocAnalysis {
     /// Nombres de funciones declaradas top-level (clasificadas como
     /// @c function).
     std::unordered_set<std::string> function_names;
+
+    /// Coste/complejidad por funcion del modulo (PARCIAL + TOTAL
+    /// interprocedural), computado una sola vez sobre el IR post-opt cacheado.
+    /// Lo consume el hover para mostrar la complejidad Big-O de una funcion.
+    /// Vacio si el fuente no produjo IR (errores de compilacion).
+    analyze::ModuleCost cost;
 };
 
 /**

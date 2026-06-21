@@ -71,12 +71,14 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
 }
 
 /**
- * @brief Engancha el warning de discrepancia de @c @complexity.
+ * @brief Computa el coste/complejidad del modulo y engancha el warning de
+ *        discrepancia de @c @complexity.
  *
  * Deserializa el IR del modulo (post-opt) cacheado en el @c CompileResult,
- * corre el analisis de coste interprocedural y, por cada funcion cuyo
- * contrato @c @complexity no coincide de forma confirmada con la cota
- * inferida (@c contract_mismatch), emite un WARNING.
+ * corre el analisis de coste interprocedural, GUARDA el resultado en
+ * @p out_cost (para que el hover lo reutilice sin recomputar) y, por cada
+ * funcion cuyo contrato @c @complexity no coincide de forma confirmada con la
+ * cota inferida (@c contract_mismatch), emite un WARNING.
  *
  * Best-effort en la ubicacion: el IR no conserva una SourceLoc por
  * funcion, asi que el warning se situa en la primera linea conocida de la
@@ -87,12 +89,14 @@ uint32_t first_source_line(const ir::IrFunction &fn) {
  * silencio (el warning es informativo, no debe romper los diagnosticos
  * principales).
  *
- * @param result CompileResult con @c ir_module_cache_bytes; recibe los
- *               warnings en @c result.diagnostics.
+ * @param result   CompileResult con @c ir_module_cache_bytes; recibe los
+ *                 warnings en @c result.diagnostics.
  * @param filename Nombre logico del fichero para la SourceLoc.
+ * @param out_cost Destino del coste por funcion (queda vacio si no hubo IR).
  */
 void attach_complexity_warnings(vex::CompileResult &result,
-                                const std::string &filename) {
+                                const std::string &filename,
+                                analyze::ModuleCost &out_cost) {
     if (result.ir_module_cache_bytes.empty())
         return;
     try {
@@ -133,6 +137,8 @@ void attach_complexity_warnings(vex::CompileResult &result,
             msg += ")";
             result.diagnostics.warning(loc, msg);
         }
+        // Guardar el coste para que el hover lo reutilice sin recomputar.
+        out_cost = std::move(mc);
     } catch (...) {
         // El warning de complejidad es opcional: ignorar cualquier fallo.
     }
@@ -238,8 +244,9 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         vex::CompileOptions opts;
         opts.module_name = "main";
         analysis->result = vex::compile_vex_source(text, uri, opts);
-        // Enganchar (best-effort) el warning de discrepancia de @complexity.
-        attach_complexity_warnings(analysis->result, uri);
+        // Enganchar (best-effort) el warning de discrepancia de @complexity y
+        // cachear el coste/complejidad para el hover.
+        attach_complexity_warnings(analysis->result, uri, analysis->cost);
         // Poblar los sets de nombres declarados para el resaltado semantico.
         // Best-effort: un fallo del parse extra no debe afectar a los
         // diagnosticos (el catch externo cubre cualquier excepcion).

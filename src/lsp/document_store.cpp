@@ -94,6 +94,131 @@ uint32_t byte_column_to_utf16(const std::string &line_text,
     return utf16_units;
 }
 
+uint32_t lsp_position_to_byte_offset(const std::string &text, uint32_t line,
+                                     uint32_t character) {
+    const size_t n = text.size();
+    // 1) Localizar el inicio de la linea pedida contando saltos de linea.
+    size_t line_start = 0; // offset de byte donde empieza la linea actual.
+    uint32_t cur = 0;      // numero de linea actual (0-based).
+    size_t i = 0;
+    while (i < n && cur < line) {
+        if (text[i] == '\n') {
+            ++cur;
+            line_start = i + 1;
+        }
+        ++i;
+    }
+    // Si la linea pedida esta mas alla del final, devolver el final del texto.
+    if (cur < line)
+        return static_cast<uint32_t>(n);
+
+    // 2) Avanzar dentro de la linea decodificando UTF-8 hasta acumular
+    //    @p character unidades UTF-16 (o hasta el fin de la linea).
+    size_t j = line_start;          // offset de byte dentro de la linea.
+    uint32_t utf16_seen = 0;        // unidades UTF-16 ya consumidas.
+    while (j < n && text[j] != '\n' && utf16_seen < character) {
+        const unsigned char b = static_cast<unsigned char>(text[j]);
+        // Longitud de la secuencia UTF-8 segun el byte lider.
+        size_t seq = 1;
+        uint32_t cp = b;
+        if (b < 0x80) {
+            seq = 1;
+        } else if ((b & 0xE0) == 0xC0) {
+            seq = 2;
+            cp = b & 0x1F;
+        } else if ((b & 0xF0) == 0xE0) {
+            seq = 3;
+            cp = b & 0x0F;
+        } else if ((b & 0xF8) == 0xF0) {
+            seq = 4;
+            cp = b & 0x07;
+        } else {
+            seq = 1; // byte invalido: tratar como 1 unidad.
+        }
+        // Validar las continuaciones; si no caben o son invalidas, degradar.
+        if (seq > 1) {
+            if (j + seq > n) {
+                seq = 1;
+            } else {
+                bool ok = true;
+                for (size_t k = 1; k < seq; ++k) {
+                    const unsigned char cb =
+                        static_cast<unsigned char>(text[j + k]);
+                    if ((cb & 0xC0) != 0x80) {
+                        ok = false;
+                        break;
+                    }
+                    cp = (cp << 6) | (cb & 0x3F);
+                }
+                if (!ok)
+                    seq = 1;
+            }
+        }
+        // Unidades UTF-16 del code point: 2 si es plano astral.
+        const uint32_t units = (seq == 4 && cp >= 0x10000) ? 2u : 1u;
+        utf16_seen += units;
+        j += seq;
+    }
+    return static_cast<uint32_t>(j);
+}
+
+void byte_offset_to_lsp_position(const std::string &text, size_t byte_offset,
+                                 uint32_t &out_line, uint32_t &out_char) {
+    const size_t n = text.size();
+    if (byte_offset > n)
+        byte_offset = n;
+    uint32_t line = 0; // linea 0-based.
+    uint32_t col = 0;  // caracter 0-based en UTF-16.
+    size_t i = 0;
+    while (i < byte_offset && i < n) {
+        const unsigned char b = static_cast<unsigned char>(text[i]);
+        // Longitud de la secuencia UTF-8 segun el byte lider.
+        size_t seq = 1;
+        uint32_t cp = b;
+        if (b < 0x80) {
+            seq = 1;
+        } else if ((b & 0xE0) == 0xC0) {
+            seq = 2;
+            cp = b & 0x1F;
+        } else if ((b & 0xF0) == 0xE0) {
+            seq = 3;
+            cp = b & 0x0F;
+        } else if ((b & 0xF8) == 0xF0) {
+            seq = 4;
+            cp = b & 0x07;
+        } else {
+            seq = 1;
+        }
+        if (seq > 1) {
+            if (i + seq > n) {
+                seq = 1;
+            } else {
+                bool ok = true;
+                for (size_t k = 1; k < seq; ++k) {
+                    const unsigned char cb =
+                        static_cast<unsigned char>(text[i + k]);
+                    if ((cb & 0xC0) != 0x80) {
+                        ok = false;
+                        break;
+                    }
+                    cp = (cp << 6) | (cb & 0x3F);
+                }
+                if (!ok)
+                    seq = 1;
+            }
+        }
+        if (seq == 1 && b == '\n') {
+            ++line;
+            col = 0;
+        } else {
+            col += (seq == 4 && cp >= 0x10000) ? 2u : 1u;
+        }
+        i += seq;
+    }
+    out_line = line;
+    out_char = col;
+}
+
 void DocumentStore::open(const std::string &uri, std::string text) {
     // open y update comparten semantica (full sync): sobreescribir.
     docs_[uri] = std::move(text);
