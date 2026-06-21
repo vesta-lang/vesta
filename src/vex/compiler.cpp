@@ -126,6 +126,44 @@ CompileResult compile_vex_source(const std::string &source,
         res.macro_expectations.push_back(std::move(e));
     }
 
+    // 2.4. (opcional) Volcar los valores comptime computados.  Estrictamente
+    // gateado por @c dump_comptime_values (default false): si esta apagado,
+    // NADA cambia respecto al flujo historico.  Solo LEEMOS las constantes
+    // comptime top-level que el TypeChecker ya resolvio (sin tocar lowering
+    // ni la logica de macros).  Lo consume el metodo LSP vesta/comptimeValues.
+    if (opts.dump_comptime_values) {
+        // Renderiza un ComptimeConst a (type_kind, value_str) legible.
+        // Conservador: int -> decimal; string -> texto entre comillas;
+        // array -> resumen "[n elementos]"; struct -> "{n campos}";
+        // type -> nombre del tipo.
+        for (const auto &kv : tc.comptime_const_values()) {
+            const auto &name = kv.first;
+            const auto &c = kv.second;
+            CompileResult::ComptimeValueSnapshot snap;
+            snap.name = name;
+            snap.scope = ""; // top-level (global); best-effort.
+            if (c.is_type) {
+                snap.type_kind = "type";
+                snap.value_str = type_to_string(c.type_val);
+            } else if (c.is_str) {
+                snap.type_kind = "string";
+                snap.value_str = "\"" + c.str_value + "\"";
+            } else if (c.is_array) {
+                snap.type_kind = "array";
+                snap.value_str =
+                    "[" + std::to_string(c.array_vals.size()) + " elementos]";
+            } else if (c.is_struct) {
+                snap.type_kind = "struct";
+                snap.value_str =
+                    "{" + std::to_string(c.struct_fields.size()) + " campos}";
+            } else {
+                snap.type_kind = "int";
+                snap.value_str = std::to_string(c.value);
+            }
+            res.comptime_values.push_back(std::move(snap));
+        }
+    }
+
     // 2.5. (opcional) Diagrama Mermaid del AST post type-check.  Lo
     // generamos AHORA porque ya tenemos los result_type rellenos pero
     // antes de que el lowering altere el AST.  Util para ver la

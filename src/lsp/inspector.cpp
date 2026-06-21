@@ -560,4 +560,74 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     return out;
 }
 
+nlohmann::json Inspector::macro_expand(const std::string &uri) {
+    if (!docs_.has(uri))
+        return {{"error", "documento no abierto"}};
+    // Las expectaciones de @Macro y las razones de skip se pueblan en la
+    // compilacion normal: reutilizar el CompileResult cacheado por el motor.
+    const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
+    const vex::CompileResult &res = an.result;
+
+    nlohmann::json expansions = nlohmann::json::array();
+    for (const auto &e : res.macro_expectations) {
+        nlohmann::json je;
+        je["macro_name"] = e.macro_name;
+        je["call_site_loc"] = e.src_loc;
+        nlohmann::json jargs = nlohmann::json::array();
+        for (uint64_t a : e.args)
+            jargs.push_back(a);
+        je["args"] = std::move(jargs);
+        je["generated_code"] = e.expected_str;
+        expansions.push_back(std::move(je));
+    }
+
+    nlohmann::json skipped = nlohmann::json::array();
+    for (const auto &s : res.macro_skip_reasons) {
+        nlohmann::json js;
+        js["name"] = s.first;
+        js["reason"] = s.second;
+        skipped.push_back(std::move(js));
+    }
+
+    nlohmann::json out;
+    out["expansions"] = std::move(expansions);
+    out["skipped"] = std::move(skipped);
+    return out;
+}
+
+nlohmann::json Inspector::comptime_values(const std::string &uri) {
+    if (!docs_.has(uri))
+        return {{"error", "documento no abierto"}};
+    const std::string &text = docs_.text(uri);
+
+    // El snapshot de valores comptime exige recompilar con el flag
+    // dump_comptime_values (no se hace en el analyze por pulsacion).  Cachear
+    // el JSON por (uri, hash) para no recompilar peticiones identicas.
+    const uint64_t h = fnv1a_hash(text);
+    const std::string key = uri + "|" + std::to_string(h) + "|comptime-values";
+    auto it = view_cache_.find(key);
+    if (it != view_cache_.end())
+        return nlohmann::json::parse(it->second);
+
+    vex::CompileOptions opts;
+    opts.module_name = "main";
+    opts.dump_comptime_values = true;
+    vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+
+    nlohmann::json values = nlohmann::json::array();
+    for (const auto &v : res.comptime_values) {
+        nlohmann::json jv;
+        jv["name"] = v.name;
+        jv["scope"] = v.scope;
+        jv["type_kind"] = v.type_kind;
+        jv["value_str"] = v.value_str;
+        values.push_back(std::move(jv));
+    }
+
+    nlohmann::json out;
+    out["values"] = std::move(values);
+    view_cache_[key] = out.dump();
+    return out;
+}
+
 } // namespace lsp

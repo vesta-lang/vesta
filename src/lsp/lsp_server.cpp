@@ -86,7 +86,8 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     nlohmann::json experimental;
     experimental["vestaMethods"] = nlohmann::json::array(
         {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
-         "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm"});
+         "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
+         "vesta/macroExpand", "vesta/comptimeValues"});
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -274,6 +275,10 @@ bool LspServer::handle_vesta_request(const std::string &method,
         } else if (method == "vesta/aotAsm") {
             const std::string fn = params.value("function", std::string());
             result = inspector_.aot_asm(uri, fn);
+        } else if (method == "vesta/macroExpand") {
+            result = inspector_.macro_expand(uri);
+        } else if (method == "vesta/comptimeValues") {
+            result = inspector_.comptime_values(uri);
         } else {
             // Metodo vesta/* desconocido: no manejado aqui.
             return false;

@@ -162,6 +162,37 @@ class Inspector {
      */
     nlohmann::json aot_asm(const std::string &uri, const std::string &function);
 
+    /**
+     * @brief @c vesta/macroExpand: codigo que generan los @Macro del modulo.
+     *
+     * Lee las expectaciones de @Macro capturadas por el TypeChecker
+     * (@c CompileResult::macro_expectations, ya cacheadas por el motor: no
+     * requiere flag ni recompilar).  Cada entrada describe un call site con
+     * su nombre, args y el codigo Vex generado por la expansion.  Incluye
+     * tambien los @Macro que NO se pudieron expandir
+     * (@c macro_skip_reasons) y por que.
+     *
+     * @param uri URI del documento abierto.
+     * @return @c { "expansions": [ { macro_name, call_site_loc, args:[...],
+     *         generated_code } ], "skipped": [ { name, reason } ] } o
+     *         @c { "error": "..." }.  Listas vacias si no hay macros.
+     */
+    nlohmann::json macro_expand(const std::string &uri);
+
+    /**
+     * @brief @c vesta/comptimeValues: valores @c comptime computados.
+     *
+     * Recompila el documento con @c CompileOptions::dump_comptime_values
+     * (vista on-demand: NO se hace en el analyze por pulsacion) y cachea el
+     * JSON por (uri, hash) en @c view_cache_.  Devuelve el snapshot de las
+     * constantes @c comptime top-level que el compilador resolvio.
+     *
+     * @param uri URI del documento abierto.
+     * @return @c { "values": [ { name, scope, type_kind, value_str } ] } o
+     *         @c { "error": "..." }.  Lista vacia si no hay valores comptime.
+     */
+    nlohmann::json comptime_values(const std::string &uri);
+
   private:
     /// Estado opaco del subsistema JIT propio (CodeCache + RuntimeEntries +
     /// JitCompiler).  Inicializado perezosamente en la primera @c jit_asm.
