@@ -32,6 +32,7 @@
 
 #include "lsp/analysis_engine.h"
 #include "lsp/document_store.h"
+#include "lsp/inspector.h"
 #include "lsp/json_rpc.h"
 
 namespace lsp {
@@ -79,6 +80,24 @@ class LspServer {
      */
     void handle_semantic_tokens_full(const nlohmann::json &msg);
 
+    /**
+     * @brief Despacha una peticion a medida @c vesta/* (inspector del
+     *        ecosistema) y responde con su resultado.
+     *
+     * Cada metodo (bytecode/ir/complexity/diagram/functions/aotCompat/
+     * jitAsm/aotAsm) se sirve BAJO DEMANDA: el editor lo llama cuando el
+     * usuario pide ver esa fase.  Envuelve la llamada al @c Inspector en
+     * try/catch: ante un fallo responde un error JSON-RPC limpio en lugar
+     * de tumbar el servidor.
+     *
+     * @param method Nombre completo del metodo (e.g. "vesta/ir").
+     * @param msg    Mensaje completo (lleva @c id y @c params).
+     * @return true si @p method era una peticion @c vesta/* (manejada);
+     *         false si no lo es (el caller sigue con el dispatch normal).
+     */
+    bool handle_vesta_request(const std::string &method,
+                              const nlohmann::json &msg);
+
     /// --- Handlers de notificaciones (no responden) ---
     void handle_did_open(const nlohmann::json &params);
     void handle_did_change(const nlohmann::json &params);
@@ -100,6 +119,7 @@ class LspServer {
     JsonRpcTransport transport_; ///< Transporte de mensajes.
     DocumentStore docs_;         ///< Documentos abiertos.
     AnalysisEngine engine_;      ///< Motor de analisis reutilizable.
+    Inspector inspector_{engine_, docs_}; ///< Inspector del ecosistema (Fase 3).
     bool initialized_ = false;   ///< true tras un initialize correcto.
     bool shutdown_requested_ = false; ///< true tras shutdown (espera exit).
 };

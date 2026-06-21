@@ -17,6 +17,7 @@
 
 #include "lsp/lsp_server.h"
 
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -78,6 +79,15 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     sem["full"] = true;
     sem["range"] = false;
     caps["semanticTokensProvider"] = std::move(sem);
+
+    // Inspector del ecosistema (Fase 3): las peticiones a medida vesta/* no
+    // forman parte del LSP estandar, asi que se anuncian bajo el campo
+    // experimental para que un cliente que las conozca las descubra.
+    nlohmann::json experimental;
+    experimental["vestaMethods"] = nlohmann::json::array(
+        {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
+         "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm"});
+    caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
     result["capabilities"] = caps;
@@ -211,6 +221,76 @@ void LspServer::handle_semantic_tokens_full(const nlohmann::json &msg) {
     send_result(msg.at("id"), result);
 }
 
+bool LspServer::handle_vesta_request(const std::string &method,
+                                     const nlohmann::json &msg) {
+    // Toda peticion vesta/* lleva id (es request) y params con el uri.  Si
+    // falta algo, respondemos con un error en lugar de crashear.
+    if (!msg.contains("id"))
+        return false; // sin id no es una peticion: dejar pasar.
+    const nlohmann::json &id = msg.at("id");
+
+    // Helper local para responder un error con la forma { error: "..." }.
+    auto respond_error = [&](const std::string &what) {
+        nlohmann::json r;
+        r["error"] = what;
+        send_result(id, r);
+    };
+
+    try {
+        // Extraer params.uri (comun a todas las peticiones del inspector).
+        if (!msg.contains("params") || !msg.at("params").is_object()) {
+            respond_error("faltan params");
+            return true;
+        }
+        const nlohmann::json &params = msg.at("params");
+        const std::string uri = params.value("uri", std::string());
+        if (uri.empty()) {
+            respond_error("falta params.uri");
+            return true;
+        }
+
+        nlohmann::json result;
+        if (method == "vesta/bytecode") {
+            result = inspector_.bytecode(uri);
+        } else if (method == "vesta/ir") {
+            const std::string phase = params.value("phase", std::string("post"));
+            result = inspector_.ir(uri, phase);
+        } else if (method == "vesta/complexity") {
+            result = inspector_.complexity(uri);
+        } else if (method == "vesta/diagram") {
+            const std::string kind = params.value("kind", std::string("ir-post"));
+            const std::string format =
+                params.value("format", std::string("mermaid"));
+            const bool cost = params.value("cost", false);
+            result = inspector_.diagram(uri, kind, format, cost);
+        } else if (method == "vesta/functions") {
+            result = inspector_.functions(uri);
+        } else if (method == "vesta/aotCompat") {
+            const std::string tier = params.value("tier", std::string("bare"));
+            result = inspector_.aot_compat(uri, tier);
+        } else if (method == "vesta/jitAsm") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.jit_asm(uri, fn);
+        } else if (method == "vesta/aotAsm") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.aot_asm(uri, fn);
+        } else {
+            // Metodo vesta/* desconocido: no manejado aqui.
+            return false;
+        }
+        send_result(id, result);
+        return true;
+    } catch (const std::exception &e) {
+        // Cualquier fallo del inspector se convierte en un error de
+        // resultado: el servidor sigue sirviendo.
+        respond_error(std::string("excepcion en el inspector: ") + e.what());
+        return true;
+    } catch (...) {
+        respond_error("excepcion desconocida en el inspector");
+        return true;
+    }
+}
+
 void LspServer::dispatch(const nlohmann::json &msg) {
     // Todo mensaje LSP valido lleva un campo method (string).  Sin el, lo
     // ignoramos (puede ser una respuesta a una peticion nuestra, etc.).
@@ -236,6 +316,9 @@ void LspServer::dispatch(const nlohmann::json &msg) {
         handle_did_close(msg.at("params"));
     } else if (method == "textDocument/semanticTokens/full") {
         handle_semantic_tokens_full(msg);
+    } else if (method.rfind("vesta/", 0) == 0 &&
+               handle_vesta_request(method, msg)) {
+        // Peticion a medida del inspector (vesta/*) atendida.
     } else if (msg.contains("id")) {
         // Peticion de un metodo no soportado: responder error MethodNotFound
         // para cumplir el protocolo (las peticiones SIEMPRE deben responderse).
