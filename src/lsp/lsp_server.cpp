@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 
+#include "lsp/semantic_tokens.h"
 #include "vex/diagnostic.h"
 
 namespace lsp {
@@ -65,6 +66,18 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     // sitio para anunciar capacidades futuras (semanticTokens, hover, etc.).
     nlohmann::json caps;
     caps["textDocumentSync"] = 1; // TextDocumentSyncKind.Full
+
+    // Resaltado semantico (Fase 2): anunciar la leyenda (tokenTypes +
+    // tokenModifiers, en orden = indices) y soporte de documento completo.
+    // No se anuncia range/delta en esta fase.
+    nlohmann::json sem;
+    nlohmann::json legend;
+    legend["tokenTypes"] = semantic_token_types();
+    legend["tokenModifiers"] = semantic_token_modifiers();
+    sem["legend"] = std::move(legend);
+    sem["full"] = true;
+    sem["range"] = false;
+    caps["semanticTokensProvider"] = std::move(sem);
 
     nlohmann::json result;
     result["capabilities"] = caps;
@@ -173,6 +186,31 @@ void LspServer::publish_diagnostics(const std::string &uri) {
     transport_.write_message(note);
 }
 
+void LspServer::handle_semantic_tokens_full(const nlohmann::json &msg) {
+    // params.textDocument.uri identifica el documento.
+    const auto &params = msg.at("params");
+    const auto &td = params.at("textDocument");
+    const std::string uri = td.at("uri").get<std::string>();
+
+    // Calcular los tokens.  Si el documento no esta abierto, devolvemos una
+    // lista vacia (data: []) en lugar de un error: el cliente lo tolera.
+    nlohmann::json data = nlohmann::json::array();
+    if (docs_.has(uri)) {
+        const std::string &text = docs_.text(uri);
+        // Reusar el analisis cacheado (mismo punto que los diagnosticos) para
+        // enriquecer los identificadores con los nombres declarados.
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        std::vector<uint32_t> toks =
+            compute_semantic_tokens(text, uri, &an);
+        // Volcar el array plano de uint32 a JSON.
+        data = nlohmann::json(toks);
+    }
+
+    nlohmann::json result;
+    result["data"] = std::move(data);
+    send_result(msg.at("id"), result);
+}
+
 void LspServer::dispatch(const nlohmann::json &msg) {
     // Todo mensaje LSP valido lleva un campo method (string).  Sin el, lo
     // ignoramos (puede ser una respuesta a una peticion nuestra, etc.).
@@ -196,6 +234,8 @@ void LspServer::dispatch(const nlohmann::json &msg) {
         handle_did_change(msg.at("params"));
     } else if (method == "textDocument/didClose") {
         handle_did_close(msg.at("params"));
+    } else if (method == "textDocument/semanticTokens/full") {
+        handle_semantic_tokens_full(msg);
     } else if (msg.contains("id")) {
         // Peticion de un metodo no soportado: responder error MethodNotFound
         // para cumplir el protocolo (las peticiones SIEMPRE deben responderse).

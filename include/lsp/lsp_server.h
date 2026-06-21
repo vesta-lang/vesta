@@ -68,6 +68,17 @@ class LspServer {
     void handle_initialize(const nlohmann::json &msg);
     void handle_shutdown(const nlohmann::json &msg);
 
+    /**
+     * @brief Responde a @c textDocument/semanticTokens/full.
+     *
+     * Analiza (o reusa cache) el documento, calcula sus semantic tokens y
+     * responde con @c { data: [...] } (array plano de quintetos).  Si el
+     * documento no esta abierto, responde con @c data vacio.
+     *
+     * @param msg Mensaje completo (lleva @c id y @c params.textDocument.uri).
+     */
+    void handle_semantic_tokens_full(const nlohmann::json &msg);
+
     /// --- Handlers de notificaciones (no responden) ---
     void handle_did_open(const nlohmann::json &params);
     void handle_did_change(const nlohmann::json &params);
