@@ -137,6 +137,14 @@ struct CompileOptions {
     /// gc_deref_host).  Lo activa el driver @c -m aot.  Default false
     /// (ruta runtime historica, intacta para la VM/JIT).
     bool native_poo = false;
+
+    /// Fase 3.5 LSP: cuando true, @c compile_vex_source vuelca un snapshot
+    /// de los valores @c comptime computados (constantes top-level) a
+    /// @c CompileResult::comptime_values.  Estrictamente ADITIVO y gateado:
+    /// con el default false el flujo de compilacion es EXACTAMENTE el
+    /// historico (cero coste, cero cambio de codegen).  Lo consume el
+    /// metodo @c vesta/comptimeValues del LSP, on-demand.
+    bool dump_comptime_values = false;
 };
 
 /**
@@ -313,6 +321,25 @@ struct CompileResult {
      * @c compile_vex_source en lugar de @c compile_vex_project se uso.
      */
     std::vector<std::string> dep_paths;
+
+    /**
+     * @brief Fase 3.5 LSP: snapshot de los valores @c comptime computados.
+     *
+     * Cada entrada describe una constante @c comptime (top-level) con su
+     * nombre, el ambito donde vive (best-effort), la clase de valor y una
+     * representacion legible.  Llenado SOLO si
+     * @c CompileOptions::dump_comptime_values esta activo (default false,
+     * cero coste en builds normales).  Lo consume el metodo LSP
+     * @c vesta/comptimeValues para mostrar al usuario los valores que el
+     * compilador resolvio en tiempo de compilacion.
+     */
+    struct ComptimeValueSnapshot {
+        std::string name;      ///< Nombre de la constante comptime.
+        std::string scope;     ///< Ambito (best-effort; "" = global/desconocido).
+        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type".
+        std::string value_str; ///< Representacion legible del valor.
+    };
+    std::vector<ComptimeValueSnapshot> comptime_values;
 };
 
 /**
