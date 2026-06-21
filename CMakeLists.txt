@@ -184,6 +184,10 @@ list(FILTER VM_SOURCES EXCLUDE REGEX "/src/analyze/")
 # vesta_ffi (con VESTA_BUILD_DLL); excluirla del ejecutable `vm` y de vmcore
 # para no compilar sus definiciones dllexport/dllimport fuera de contexto.
 list(FILTER VM_SOURCES EXCLUDE REGEX "/src/capi/")
+# El servidor LSP (src/lsp/) es un binario aparte (vesta_lsp) con su propio
+# main(); excluirlo del ejecutable `vm` y de vmcore para no duplicar main ni
+# arrastrar el dispatcher LSP donde no se usa.
+list(FILTER VM_SOURCES EXCLUDE REGEX "/src/lsp/")
 # main.cpp se agrega explicitamente (GLOB_RECURSE con "main.cpp" encontraria
 # tambien preprocessor/src/main.cpp y causaria definicion multiple de main)
 list(APPEND VM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
@@ -449,6 +453,57 @@ if (WIN32)
 else ()
     target_link_libraries(vmcore PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif ()
+
+# ---------------------------------------------------------------------------
+# vesta_lsp: servidor Language Server Protocol para Vex (Fase 1).
+#
+# Binario independiente que habla LSP por stdio (JSON-RPC enmarcado por
+# Content-Length) y enlaza el core del compilador EN PROCESO para producir
+# diagnosticos en vivo.  Reutiliza:
+#   - vex_lib  -> compile_vex_source / compile_vex_project + analyze::bigo.
+#   - vmcore   -> ir:: (parse_ir_module_cache) + runtime que el frontend
+#                 arrastra transitivamente.
+#
+# El motor de analisis (src/lsp/analysis_engine.cpp) es el punto unico por el
+# que pasaran las futuras fases (semantic tokens, hover con Big-O, ver
+# IR/bytecode/JIT/AOT, diagramas), reutilizando el CompileResult cacheado.
+# ---------------------------------------------------------------------------
+add_executable(vesta_lsp
+        src/lsp/json_rpc.cpp
+        src/lsp/document_store.cpp
+        src/lsp/analysis_engine.cpp
+        src/lsp/lsp_server.cpp
+        src/lsp/lsp_main.cpp
+)
+target_include_directories(vesta_lsp PRIVATE ${VM_INCLUDES})
+target_link_libraries(vesta_lsp
+        PRIVATE vex_lib
+        PRIVATE vmcore
+        PRIVATE sqlite3
+        PRIVATE capstone
+        PRIVATE keystone
+        PRIVATE aot_emit
+)
+if (VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(vesta_lsp PRIVATE vpp_lib)
+    target_compile_definitions(vesta_lsp PRIVATE VESTA_HAS_PREPROCESSOR=1)
+endif ()
+if (WIN32)
+    target_include_directories(vesta_lsp PRIVATE ${OPENSSL_INCLUDE_DIR})
+    target_link_directories(vesta_lsp PRIVATE ${OPENSSL_LIB_DIR})
+    target_link_libraries(vesta_lsp PRIVATE
+            libssl libcrypto ws2_32 synchronization applink)
+else ()
+    target_link_libraries(vesta_lsp PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
+# Test unitario de la conversion de posiciones byte->UTF-16.  Solo necesita
+# document_store.cpp (autocontenido, sin deps del compilador).
+add_executable(test_lsp_position_conv
+        tests/lsp/test_position_conv.cpp
+        src/lsp/document_store.cpp
+)
+target_include_directories(test_lsp_position_conv PRIVATE ${VM_INCLUDES})
 
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
