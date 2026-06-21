@@ -132,6 +132,14 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     caps["definitionProvider"] = true;
     caps["referencesProvider"] = true;
 
+    // Autocompletado (Fase 5): se dispara al teclear o tras el punto '.'
+    // (acceso a miembros).  No resolvemos detalles diferidos (resolveProvider
+    // false): cada item llega ya completo.
+    nlohmann::json comp;
+    comp["triggerCharacters"] = nlohmann::json::array({"."});
+    comp["resolveProvider"] = false;
+    caps["completionProvider"] = std::move(comp);
+
     // Inspector del ecosistema (Fase 3): las peticiones a medida vesta/* no
     // forman parte del LSP estandar, asi que se anuncian bajo el campo
     // experimental para que un cliente que las conozca las descubra.
@@ -315,6 +323,226 @@ nlohmann::json make_location(const lsp::WorkspaceLocation &l) {
     j["uri"] = l.uri;
     j["range"] = make_range(l.start_line, l.start_char, l.end_line, l.end_char);
     return j;
+}
+
+// ---------------------------------------------------------------------------
+// Soporte de autocompletado (Fase 5).
+// ---------------------------------------------------------------------------
+
+/// Codigos @c CompletionItemKind del LSP usados aqui.
+enum class CompletionKind : int {
+    Method = 2,
+    Function = 3,
+    Field = 5,
+    Variable = 6,
+    Class = 7,
+    Enum = 13,
+    Keyword = 14,
+    Struct = 22,
+    TypeParameter = 25,
+};
+
+/**
+ * @brief Construye un @c CompletionItem LSP.
+ *
+ * @param label  Texto mostrado y a insertar.
+ * @param kind   Categoria LSP.
+ * @param detail Detalle opcional (firma o tipo); vacio para omitir.
+ * @return Objeto JSON del item.
+ */
+nlohmann::json make_completion_item(const std::string &label,
+                                    CompletionKind kind,
+                                    const std::string &detail) {
+    nlohmann::json it;
+    it["label"] = label;
+    it["kind"] = static_cast<int>(kind);
+    it["insertText"] = label;
+    if (!detail.empty())
+        it["detail"] = detail;
+    return it;
+}
+
+/// @brief Palabras clave de Vex ofrecidas en el completado general (curadas a
+///        partir del conjunto @c KW_* del lexer del frontend).
+const std::vector<std::string> &vex_keywords() {
+    static const std::vector<std::string> kws = {
+        // Declaraciones y modificadores.
+        "const", "static", "final", "nonnull", "typedef", "using", "namespace",
+        "struct", "class", "interface", "enum", "fn", "public", "private",
+        "protected", "import", "extern", "get", "set", "override",
+        // Control de flujo.
+        "if", "else", "while", "do", "for", "in", "break", "continue", "goto",
+        "return", "try", "catch", "finally", "throw", "match", "case",
+        // Objetos / memoria.
+        "new", "delete", "this", "super",
+        // Concurrencia / distribucion.
+        "synchronized", "monitor", "await", "spawn", "rspawn", "asm",
+        // Smart pointers / borrow.
+        "unique", "shared", "borrow", "borrow_mut",
+        // Literales.
+        "true", "false", "null",
+    };
+    return kws;
+}
+
+/// @brief Tipos (primitivos + alias + colecciones) ofrecidos en el completado.
+const std::vector<std::string> &vex_types() {
+    static const std::vector<std::string> tys = {
+        // Primitivos canonicos.
+        "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64",
+        "bool", "char", "void", "string",
+        // Alias estilo C.
+        "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t",
+        "uint32_t", "uint64_t", "float", "double",
+        // Colecciones (keywords del lenguaje).
+        "ArrayList", "HashMap", "HashSet", "Queue", "Deque", "TreeMap",
+        "TreeSet", "Stack",
+        // Builtins de tipo generico.
+        "Optional", "Result", "Future", "Array",
+    };
+    return tys;
+}
+
+/// @brief Builtins de funcion mas comunes (lista curada documentada).
+///
+/// El registro de builtins del type checker es privado y no se conserva en el
+/// analisis cacheado, asi que se ofrece una seleccion curada de los builtins
+/// documentados de uso habitual.  Best-effort: no pretende ser exhaustiva.
+const std::vector<std::string> &vex_builtins() {
+    static const std::vector<std::string> bs = {
+        // I/O.
+        "print", "println", "echo", "flush", "panic",
+        // Memoria.
+        "malloc", "free", "sizeof", "alignof",
+        // Strings.
+        "str_length", "str_bytes", "str_concat", "str_equals", "str_intern",
+        "to_str",
+        // Reflexion / introspeccion.
+        "forName", "getClass", "getField", "getMethod", "newInstance",
+        // Concurrencia.
+        "pid", "msgsend", "msgrecv", "loadmodule", "unloadmodule",
+    };
+    return bs;
+}
+
+/// @brief true si @p name empieza por @p prefix (case-sensitive).  Prefijo
+///        vacio coincide con todo.
+bool has_prefix(const std::string &name, const std::string &prefix) {
+    if (prefix.empty())
+        return true;
+    if (name.size() < prefix.size())
+        return false;
+    return name.compare(0, prefix.size(), prefix) == 0;
+}
+
+/// @brief true si @p c es valido dentro de un identificador de Vex.
+bool is_ident_char(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
+ * @brief Extrae el prefijo de identificador inmediatamente anterior a
+ *        @p byte_off (los caracteres [A-Za-z0-9_] que se estan escribiendo).
+ *
+ * @param text     Texto completo del documento.
+ * @param byte_off Offset de byte del cursor.
+ * @return Prefijo (posiblemente vacio) y, por referencia, su offset de inicio.
+ */
+std::string ident_prefix_before(const std::string &text, size_t byte_off,
+                                size_t &out_start) {
+    size_t i = byte_off;
+    while (i > 0 && is_ident_char(text[i - 1]))
+        --i;
+    out_start = i;
+    return text.substr(i, byte_off - i);
+}
+
+/**
+ * @brief Resuelve si el contexto del cursor es un acceso a miembro y, si lo es,
+ *        devuelve el identificador receptor (el que precede al @c '.').
+ *
+ * Salta espacios entre el receptor y el punto.  Solo reconoce receptores que
+ * son un identificador simple (no cadenas de @c a.b.c ni llamadas); v1
+ * pragmatico.
+ *
+ * @param text         Texto del documento.
+ * @param prefix_start Offset de inicio del prefijo que se escribe.
+ * @param out_receiver Salida: nombre del receptor si hay acceso a miembro.
+ * @return true si hay un @c '.' antes del prefijo con un receptor identificable.
+ */
+bool member_receiver_before(const std::string &text, size_t prefix_start,
+                            std::string &out_receiver) {
+    // Saltar espacios/tabuladores entre el prefijo y el posible punto.
+    size_t i = prefix_start;
+    while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
+        --i;
+    if (i == 0 || text[i - 1] != '.')
+        return false; // no es acceso a miembro.
+    --i;              // saltar el punto.
+    // Saltar espacios entre el receptor y el punto.
+    while (i > 0 && (text[i - 1] == ' ' || text[i - 1] == '\t'))
+        --i;
+    // El receptor es el identificador que termina en i.
+    size_t end = i;
+    while (i > 0 && is_ident_char(text[i - 1]))
+        --i;
+    if (i == end)
+        return false; // sin identificador receptor.
+    out_receiver = text.substr(i, end - i);
+    return !out_receiver.empty();
+}
+
+/**
+ * @brief Heuristica best-effort para deducir el tipo (clase/struct) de un
+ *        receptor a partir de su declaracion en el texto.
+ *
+ * Busca un patron de declaracion @c "<Tipo> <receptor>" donde @c <Tipo> es un
+ * nombre de clase o struct conocido (de @p known_types).  Recorre todas las
+ * apariciones del receptor como palabra completa y, para cada una, mira la
+ * palabra anterior: si es un tipo conocido, lo devuelve.  Devuelve cadena vacia
+ * si no logra resolverlo.
+ *
+ * @param text        Texto del documento.
+ * @param receiver    Nombre del receptor.
+ * @param known_types Conjunto de nombres de tipo (clases + structs).
+ * @return Nombre del tipo deducido, o cadena vacia.
+ */
+std::string deduce_receiver_type(
+    const std::string &text, const std::string &receiver,
+    const std::unordered_set<std::string> &known_types) {
+    const size_t n = text.size();
+    const size_t rlen = receiver.size();
+    if (rlen == 0)
+        return std::string();
+    for (size_t p = 0; p + rlen <= n;) {
+        // Localizar la siguiente aparicion del receptor.
+        size_t pos = text.find(receiver, p);
+        if (pos == std::string::npos)
+            break;
+        p = pos + 1; // avanzar para la siguiente busqueda.
+        // Exigir limites de palabra: lo anterior y lo posterior no deben ser
+        // caracteres de identificador.
+        bool left_ok = (pos == 0) || !is_ident_char(text[pos - 1]);
+        size_t after = pos + rlen;
+        bool right_ok = (after >= n) || !is_ident_char(text[after]);
+        if (!left_ok || !right_ok)
+            continue;
+        // Retroceder por espacios antes del receptor.
+        size_t j = pos;
+        while (j > 0 && (text[j - 1] == ' ' || text[j - 1] == '\t'))
+            --j;
+        // Extraer la palabra anterior (el candidato a tipo).
+        size_t word_end = j;
+        while (j > 0 && is_ident_char(text[j - 1]))
+            --j;
+        if (j == word_end)
+            continue; // no hay palabra previa.
+        std::string prev = text.substr(j, word_end - j);
+        if (known_types.count(prev) != 0)
+            return prev;
+    }
+    return std::string();
 }
 
 } // namespace
@@ -545,6 +773,155 @@ void LspServer::handle_references(const nlohmann::json &msg) {
     send_result(msg.at("id"), locs);
 }
 
+void LspServer::handle_completion(const nlohmann::json &msg) {
+    const auto &params = msg.at("params");
+    // Validar uri + documento abierto + posicion.  Sin ello respondemos lista
+    // vacia (valida para el protocolo).
+    if (!params.contains("textDocument") || !params.contains("position")) {
+        send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+    const std::string uri = params.at("textDocument").value("uri", std::string());
+    if (uri.empty() || !docs_.has(uri)) {
+        send_result(msg.at("id"), nlohmann::json::array());
+        return;
+    }
+    const auto &pos = params.at("position");
+    const uint32_t line = pos.value("line", 0u);
+    const uint32_t character = pos.value("character", 0u);
+
+    const std::string &text = docs_.text(uri);
+    // Offset de byte del cursor, prefijo que se esta escribiendo y su inicio.
+    const size_t cursor =
+        lsp_position_to_byte_offset(text, line, character);
+    size_t prefix_start = cursor;
+    const std::string prefix = ident_prefix_before(text, cursor, prefix_start);
+
+    // Tope de resultados para no devolver listas gigantes.
+    constexpr size_t kMaxItems = 500;
+    nlohmann::json items = nlohmann::json::array();
+    std::unordered_set<std::string> seen; // dedup por label.
+
+    auto add_item = [&](const std::string &label, CompletionKind kind,
+                        const std::string &detail) {
+        if (items.size() >= kMaxItems)
+            return;
+        if (label.empty() || seen.count(label) != 0)
+            return;
+        seen.insert(label);
+        items.push_back(make_completion_item(label, kind, detail));
+    };
+
+    // El analisis cacheado da los conjuntos de nombres declarados (clases,
+    // structs, enums, alias, funciones) del propio documento.
+    const DocAnalysis &an = engine_.analyze_document(uri, text);
+
+    // -- COMPLETADO DE MIEMBRO tras '.' --------------------------------------
+    std::string receiver;
+    if (member_receiver_before(text, prefix_start, receiver)) {
+        // Resolver el tipo del receptor:
+        //  (a) si el receptor ES directamente un nombre de clase/struct
+        //      conocido (acceso estilo Tipo.miembro), usar ese tipo;
+        //  (b) si no, deducirlo de su declaracion "<Tipo> receptor".
+        std::string type_name;
+        if (an.class_names.count(receiver) != 0 ||
+            an.struct_names.count(receiver) != 0) {
+            type_name = receiver;
+        } else {
+            std::unordered_set<std::string> known_types;
+            known_types.insert(an.class_names.begin(), an.class_names.end());
+            known_types.insert(an.struct_names.begin(), an.struct_names.end());
+            type_name = deduce_receiver_type(text, receiver, known_types);
+        }
+
+        if (!type_name.empty()) {
+            // Listar metodos y campos cuyo contenedor sea el tipo resuelto.
+            DocSymbols sym = build_doc_symbols(text, uri);
+            for (const auto &d : sym.defs) {
+                if (d.container != type_name)
+                    continue;
+                if (!has_prefix(d.name, prefix))
+                    continue;
+                if (d.kind == SymbolKind::Method) {
+                    add_item(d.name, CompletionKind::Method, d.signature);
+                } else if (d.kind == SymbolKind::Field) {
+                    add_item(d.name, CompletionKind::Field, type_name);
+                }
+            }
+        }
+        // Caso miembro: NO mezclamos el completado general (evitar inundar con
+        // todo el universo de nombres tras un punto).  Respondemos lo hallado
+        // (puede ser vacio si el tipo no se resolvio: best-effort documentado).
+        send_result(msg.at("id"), items);
+        return;
+    }
+
+    // -- COMPLETADO GENERAL (sin '.') ----------------------------------------
+    // Palabras clave.
+    for (const auto &kw : vex_keywords())
+        if (has_prefix(kw, prefix))
+            add_item(kw, CompletionKind::Keyword, std::string());
+    // Tipos (primitivos + alias + colecciones + genericos builtin).
+    for (const auto &ty : vex_types())
+        if (has_prefix(ty, prefix))
+            add_item(ty, CompletionKind::Class, "tipo");
+    // Builtins comunes (lista curada).
+    for (const auto &b : vex_builtins())
+        if (has_prefix(b, prefix))
+            add_item(b, CompletionKind::Function, "builtin");
+
+    // Simbolos del propio documento (con su firma como detalle cuando exista).
+    DocSymbols sym = build_doc_symbols(text, uri);
+    for (const auto &d : sym.defs) {
+        if (!has_prefix(d.name, prefix))
+            continue;
+        CompletionKind k;
+        switch (d.kind) {
+        case SymbolKind::Function: k = CompletionKind::Function; break;
+        case SymbolKind::Class: k = CompletionKind::Class; break;
+        case SymbolKind::Struct: k = CompletionKind::Struct; break;
+        case SymbolKind::Enum: k = CompletionKind::Enum; break;
+        case SymbolKind::TypeAlias: k = CompletionKind::Class; break;
+        case SymbolKind::Variable: k = CompletionKind::Variable; break;
+        case SymbolKind::Parameter: k = CompletionKind::Variable; break;
+        case SymbolKind::Method: k = CompletionKind::Method; break;
+        case SymbolKind::Field: k = CompletionKind::Field; break;
+        case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+        default: k = CompletionKind::Variable; break;
+        }
+        add_item(d.name, k, d.signature);
+    }
+
+    // Simbolos del workspace (otros ficheros / librerias importadas).  Solo si
+    // las raices estan fijadas; el indice se construye perezosamente.  El
+    // dedup por label evita duplicar los que ya aporto el documento.
+    if (items.size() < kMaxItems && workspace_.has_roots()) {
+        workspace_.ensure_built();
+        workspace_.for_each_def_name(
+            [&](const std::string &name, SymbolKind kind,
+                const std::string &signature) {
+                if (!has_prefix(name, prefix))
+                    return;
+                CompletionKind k;
+                switch (kind) {
+                case SymbolKind::Function: k = CompletionKind::Function; break;
+                case SymbolKind::Class: k = CompletionKind::Class; break;
+                case SymbolKind::Struct: k = CompletionKind::Struct; break;
+                case SymbolKind::Enum: k = CompletionKind::Enum; break;
+                case SymbolKind::TypeAlias: k = CompletionKind::Class; break;
+                case SymbolKind::Variable: k = CompletionKind::Variable; break;
+                case SymbolKind::Method: k = CompletionKind::Method; break;
+                case SymbolKind::Field: k = CompletionKind::Field; break;
+                case SymbolKind::EnumVariant: k = CompletionKind::Enum; break;
+                default: k = CompletionKind::Variable; break;
+                }
+                add_item(name, k, signature);
+            });
+    }
+
+    send_result(msg.at("id"), items);
+}
+
 bool LspServer::handle_vesta_request(const std::string &method,
                                      const nlohmann::json &msg) {
     // Toda peticion vesta/* lleva id (es request) y params con el uri.  Si
@@ -664,6 +1041,15 @@ void LspServer::dispatch(const nlohmann::json &msg) {
     } else if (method == "textDocument/references") {
         try {
             handle_references(msg);
+        } catch (...) {
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nlohmann::json::array());
+        }
+    } else if (method == "textDocument/completion") {
+        // Autocompletado (Fase 5): ante un fallo respondemos una lista vacia
+        // valida para cumplir el protocolo sin tumbar el servidor.
+        try {
+            handle_completion(msg);
         } catch (...) {
             if (msg.contains("id"))
                 send_result(msg.at("id"), nlohmann::json::array());
