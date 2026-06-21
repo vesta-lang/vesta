@@ -65,6 +65,45 @@ uint32_t byte_column_to_utf16(const std::string &line_text,
                               uint32_t byte_column_1based);
 
 /**
+ * @brief Conversion INVERSA: de una posicion LSP a un offset de byte absoluto
+ *        dentro del texto completo del documento.
+ *
+ * Necesaria para la navegacion (hover/definition/references): dada la
+ * posicion del cursor (linea 0-based + caracter UTF-16 0-based) localiza el
+ * byte exacto del fuente, lo que permite encontrar el token/identificador
+ * que esta bajo el cursor.
+ *
+ * Recorre el texto contando saltos @c \n para situar la linea y luego
+ * decodifica UTF-8 dentro de esa linea acumulando unidades UTF-16 hasta
+ * alcanzar @p character.  Robusto frente a posiciones fuera de rango: la
+ * linea se clampa al numero de lineas y el caracter al final de su linea.
+ *
+ * @param text      Texto completo del documento.
+ * @param line      Linea 0-based.
+ * @param character Caracter 0-based en unidades UTF-16 dentro de la linea.
+ * @return Offset de byte 0-based desde el inicio del texto.  Si la linea esta
+ *         fuera de rango devuelve @c text.size().
+ */
+uint32_t lsp_position_to_byte_offset(const std::string &text, uint32_t line,
+                                     uint32_t character);
+
+/**
+ * @brief Conversion INVERSA complementaria: de un offset de byte absoluto a la
+ *        posicion LSP (linea 0-based + caracter UTF-16 0-based).
+ *
+ * Usada para construir los rangos LSP de las definiciones/referencias a
+ * partir del @c offset/@c length en bytes que reportan los tokens del lexer,
+ * preservando la exactitud con UTF-8 multibyte y plano astral.
+ *
+ * @param text        Texto completo del documento.
+ * @param byte_offset Offset 0-based en bytes.
+ * @param out_line    Salida: linea 0-based.
+ * @param out_char    Salida: caracter 0-based en UTF-16.
+ */
+void byte_offset_to_lsp_position(const std::string &text, size_t byte_offset,
+                                 uint32_t &out_line, uint32_t &out_char);
+
+/**
  * @class DocumentStore
  * @brief Mapa URI -> texto completo del documento.
  *

@@ -146,6 +146,76 @@ int main() {
                  0);
     }
 
+    // --- Caso 6: conversion INVERSA posicion LSP -> offset de byte ---
+    {
+        using lsp::lsp_position_to_byte_offset;
+        // Documento de dos lineas: "hola\nmundo".
+        const std::string s = "hola\nmundo";
+        // Linea 0, caracter 0 -> offset 0 ('h').
+        check_eq("inv l0 c0", lsp_position_to_byte_offset(s, 0, 0), 0);
+        // Linea 0, caracter 4 -> offset 4 (el '\n').
+        check_eq("inv l0 c4", lsp_position_to_byte_offset(s, 0, 4), 4);
+        // Linea 1, caracter 0 -> offset 5 ('m').
+        check_eq("inv l1 c0", lsp_position_to_byte_offset(s, 1, 0), 5);
+        // Linea 1, caracter 3 -> offset 8 ('d').
+        check_eq("inv l1 c3", lsp_position_to_byte_offset(s, 1, 3), 8);
+        // Linea fuera de rango -> fin del texto.
+        check_eq("inv l9 (fuera)",
+                 lsp_position_to_byte_offset(s, 9, 0),
+                 static_cast<uint32_t>(s.size()));
+    }
+
+    // --- Caso 7: inversa con UTF-8 multibyte (e-acute = 2 bytes, 1 unidad) ---
+    {
+        using lsp::lsp_position_to_byte_offset;
+        // "a" + e-acute (C3 A9) + "b" en una sola linea.
+        std::string s;
+        s += 'a';
+        s += static_cast<char>(0xC3);
+        s += static_cast<char>(0xA9);
+        s += 'b';
+        // caracter 0 -> offset 0 ('a').
+        check_eq("inv 2b c0", lsp_position_to_byte_offset(s, 0, 0), 0);
+        // caracter 1 -> offset 1 (inicio de e-acute).
+        check_eq("inv 2b c1", lsp_position_to_byte_offset(s, 0, 1), 1);
+        // caracter 2 -> offset 3 ('b'): e-acute ocupa 2 bytes pero 1 unidad.
+        check_eq("inv 2b c2", lsp_position_to_byte_offset(s, 0, 2), 3);
+    }
+
+    // --- Caso 8: inversa con emoji (4 bytes, 2 unidades UTF-16) ---
+    {
+        using lsp::lsp_position_to_byte_offset;
+        // 'A' + emoji (F0 9F 98 80) + 'B'.
+        std::string s;
+        s += 'A';
+        s += static_cast<char>(0xF0);
+        s += static_cast<char>(0x9F);
+        s += static_cast<char>(0x98);
+        s += static_cast<char>(0x80);
+        s += 'B';
+        // caracter 1 -> offset 1 (inicio del emoji).
+        check_eq("inv emoji c1", lsp_position_to_byte_offset(s, 0, 1), 1);
+        // caracter 3 -> offset 5 ('B'): emoji = 2 unidades (1 + 2 = 3).
+        check_eq("inv emoji c3", lsp_position_to_byte_offset(s, 0, 3), 5);
+    }
+
+    // --- Caso 9: round-trip offset -> posicion -> offset ---
+    {
+        using lsp::byte_offset_to_lsp_position;
+        using lsp::lsp_position_to_byte_offset;
+        // Mezcla de lineas y multibyte.
+        std::string s = "uno\ndos";
+        s += static_cast<char>(0xC3); // empezamos otra linea con e-acute.
+        // Recorrer cada offset de inicio de code point y verificar el ciclo.
+        // Para los offsets ASCII el round-trip debe ser identidad.
+        for (uint32_t off : {0u, 1u, 2u, 3u, 4u, 5u, 6u}) {
+            uint32_t l = 0, c = 0;
+            byte_offset_to_lsp_position(s, off, l, c);
+            uint32_t back = lsp_position_to_byte_offset(s, l, c);
+            check_eq("round-trip ascii", back, off);
+        }
+    }
+
     // --- Resumen ---
     std::printf("test_position_conv: %d OK, %d FALLOS\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

@@ -34,6 +34,7 @@
 #include "lsp/document_store.h"
 #include "lsp/inspector.h"
 #include "lsp/json_rpc.h"
+#include "lsp/symbol_index.h"
 
 namespace lsp {
 
@@ -98,6 +99,58 @@ class LspServer {
     bool handle_vesta_request(const std::string &method,
                               const nlohmann::json &msg);
 
+    /**
+     * @brief Responde a @c textDocument/hover.
+     *
+     * Localiza el identificador bajo el cursor, lo resuelve a una definicion
+     * (prioridad: definiciones del propio fichero -> workspace) y devuelve un
+     * @c MarkupContent markdown con: el kind del simbolo, su firma/tipo
+     * best-effort y, si es una funcion, su complejidad Big-O (de la
+     * @c ModuleCost cacheada).  Devuelve @c null si no resuelve nada.
+     *
+     * @param msg Mensaje completo (lleva @c id y @c params.position).
+     */
+    void handle_hover(const nlohmann::json &msg);
+
+    /**
+     * @brief Responde a @c textDocument/definition.
+     *
+     * Devuelve la(s) @c Location de la definicion del identificador bajo el
+     * cursor (prioriza el propio fichero; si no, el workspace, incluyendo
+     * librerias/modulos importados).  Devuelve @c null si no hay ninguna.
+     *
+     * @param msg Mensaje completo (lleva @c id y @c params.position).
+     */
+    void handle_definition(const nlohmann::json &msg);
+
+    /**
+     * @brief Responde a @c textDocument/references.
+     *
+     * Devuelve TODAS las referencias del identificador bajo el cursor en el
+     * indice de workspace (todos los @c .vex, incluidas librerias).  Si
+     * @c context.includeDeclaration es true, anyade tambien las definiciones.
+     *
+     * @param msg Mensaje completo (lleva @c id y @c params).
+     */
+    void handle_references(const nlohmann::json &msg);
+
+    /**
+     * @brief Resuelve el identificador bajo el cursor de una peticion de
+     *        navegacion.
+     *
+     * Compartido por hover/definition/references: extrae uri+position, abre
+     * (o reusa) el indice por-documento, convierte la posicion a offset de
+     * byte y devuelve la referencia que el cursor toca (o nullptr).
+     *
+     * @param params       params del mensaje (lleva textDocument.uri + position).
+     * @param out_uri       Salida: uri del documento.
+     * @param out_word      Salida: nombre del identificador bajo el cursor.
+     * @return true si se localizo un identificador; false si no (o documento
+     *         no abierto / cursor sobre algo que no es identificador).
+     */
+    bool word_under_cursor(const nlohmann::json &params, std::string &out_uri,
+                           std::string &out_word);
+
     /// --- Handlers de notificaciones (no responden) ---
     void handle_did_open(const nlohmann::json &params);
     void handle_did_change(const nlohmann::json &params);
@@ -120,6 +173,7 @@ class LspServer {
     DocumentStore docs_;         ///< Documentos abiertos.
     AnalysisEngine engine_;      ///< Motor de analisis reutilizable.
     Inspector inspector_{engine_, docs_}; ///< Inspector del ecosistema (Fase 3).
+    WorkspaceIndex workspace_;   ///< Indice de simbolos del workspace (Fase 4).
     bool initialized_ = false;   ///< true tras un initialize correcto.
     bool shutdown_requested_ = false; ///< true tras shutdown (espera exit).
 };
