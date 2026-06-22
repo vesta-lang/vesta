@@ -4094,6 +4094,48 @@ void TypeChecker::compute_borrow_last_uses(ast::Stmt *body) {
     }
 }
 
+std::string TypeChecker::render_comptime_value(const ComptimeValue &v) {
+    // Acota el numero de elementos/campos serializados para no generar
+    // cadenas gigantes con tablas grandes.
+    static constexpr size_t kMaxItems = 16;
+    if (v.is_type) {
+        return type_to_string(v.type_val);
+    }
+    if (v.is_str) {
+        return "\"" + v.str + "\"";
+    }
+    if (v.is_array) {
+        std::string out = "[";
+        size_t n = v.array_vals.size();
+        size_t shown = n < kMaxItems ? n : kMaxItems;
+        for (size_t i = 0; i < shown; ++i) {
+            if (i) out += ", ";
+            out += v.array_vals[i] ? render_comptime_value(*v.array_vals[i])
+                                   : "?";
+        }
+        if (n > shown) out += ", ...";
+        out += "]";
+        return out;
+    }
+    if (v.is_struct) {
+        std::string out = "{";
+        size_t i = 0;
+        for (const auto &kv : v.struct_fields) {
+            if (i >= kMaxItems) {
+                out += ", ...";
+                break;
+            }
+            if (i) out += ", ";
+            out += kv.first + "=" +
+                   (kv.second ? render_comptime_value(*kv.second) : "?");
+            ++i;
+        }
+        out += "}";
+        return out;
+    }
+    return std::to_string(v.value);
+}
+
 void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
     if (!s) return;
     // F1 NLL: BlockStmt no cuenta como un stmt independiente (delegamos
@@ -4331,6 +4373,66 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
             if (ctrl.returned || ctrl.break_seen || ctrl.continue_seen) {
                 ctrl.returned = ctrl.break_seen = ctrl.continue_seen = false;
                 break;
+            }
+        }
+        // Captura LSP (gateada): justo antes del pop, los valores
+        // finales de las variables comptime locales del bloque viven
+        // en el scope top.  Los serializamos para vesta/comptimeValues.
+        // Cero coste cuando capture_comptime_block_locals_ esta off.
+        if (capture_comptime_block_locals_ &&
+            !comptime_const_locals_.empty()) {
+            const std::string scope =
+                "comptime@" + std::to_string(cb->loc.line);
+            for (const auto &kv : comptime_const_locals_.back()) {
+                const auto &c = kv.second;
+                ComptimeBlockSnapshot snap;
+                snap.name = kv.first;
+                snap.scope = scope;
+                if (c.is_type) {
+                    snap.type_kind = "type";
+                    snap.value_str = type_to_string(c.type_val);
+                } else if (c.is_str) {
+                    snap.type_kind = "string";
+                    snap.value_str = "\"" + c.str_value + "\"";
+                } else if (c.is_array) {
+                    snap.type_kind = "array";
+                    std::string out = "[";
+                    static constexpr size_t kMaxItems = 16;
+                    size_t n = c.array_vals.size();
+                    size_t shown = n < kMaxItems ? n : kMaxItems;
+                    for (size_t i = 0; i < shown; ++i) {
+                        if (i) out += ", ";
+                        out += c.array_vals[i]
+                                   ? render_comptime_value(*c.array_vals[i])
+                                   : "?";
+                    }
+                    if (n > shown) out += ", ...";
+                    out += "]";
+                    snap.value_str = std::move(out);
+                } else if (c.is_struct) {
+                    snap.type_kind = "struct";
+                    std::string out = "{";
+                    static constexpr size_t kMaxItems = 16;
+                    size_t i = 0;
+                    for (const auto &fkv : c.struct_fields) {
+                        if (i >= kMaxItems) {
+                            out += ", ...";
+                            break;
+                        }
+                        if (i) out += ", ";
+                        out += fkv.first + "=" +
+                               (fkv.second
+                                    ? render_comptime_value(*fkv.second)
+                                    : "?");
+                        ++i;
+                    }
+                    out += "}";
+                    snap.value_str = std::move(out);
+                } else {
+                    snap.type_kind = "int";
+                    snap.value_str = std::to_string(c.value);
+                }
+                comptime_block_snapshots_.push_back(std::move(snap));
             }
         }
         pop_comptime_scope();
