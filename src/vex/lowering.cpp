@@ -3422,7 +3422,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     vd->init->kind == ast::NodeKind::BoolLitExpr ||
                     vd->init->kind == ast::NodeKind::CharLitExpr ||
                     vd->init->kind == ast::NodeKind::NullLitExpr;
-                v0 = cast_if_needed(v0, vfrom, vt, vd->loc.line,
+                v0 = cast_if_needed(v0, vfrom, vt, vd->init->loc,
                                     /*is_explicit=*/init_is_literal);
             }
         }
@@ -3645,7 +3645,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 vd->init->kind == ast::NodeKind::BoolLitExpr ||
                 vd->init->kind == ast::NodeKind::CharLitExpr ||
                 vd->init->kind == ast::NodeKind::NullLitExpr;
-            v = cast_if_needed(v, vfrom, vt, vd->loc.line,
+            v = cast_if_needed(v, vfrom, vt, vd->init->loc,
                                /*is_explicit=*/init_is_literal);
         }
     } else {
@@ -8958,10 +8958,86 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // se omite: GCC valida en port-C.  Solo es validacion -- los bytes se
     // descartan (se usaran en inc.5 JIT).
     if (vex::g_asm_backend && !body_sub.empty()) {
+        // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
+        // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
         vex::AsmAssembleResult ar =
             vex::g_asm_backend->assemble(body_sub, vex::AsmArch::X86_64);
         if (!ar.ok) {
-            error_at(s->loc, "inline asm: sintaxis invalida: " + ar.error);
+            // Traducir el codigo de Keystone a un mensaje claro en espanol.
+            auto human_asm_error = [](const std::string &e) -> std::string {
+                auto has = [&](const char *s) {
+                    return e.find(s) != std::string::npos;
+                };
+                if (has("mnemonic") || has("Mnemonic"))
+                    return "instruccion desconocida (mnemonico no valido)";
+                if (has("operand") || has("Operand"))
+                    return "operando no valido para esta instruccion";
+                if (has("ymbol") || has("ndefined") || has("elocation"))
+                    return "simbolo o etiqueta no definido";
+                if (has("token") || has("Token") || has("xpression") ||
+                    has("expr"))
+                    return "token no reconocido (no es una instruccion valida)";
+                if (has("mmediate"))
+                    return "valor inmediato no valido o fuera de rango";
+                if (has("egister")) return "registro no valido";
+                if (has("refix")) return "prefijo de instruccion no valido";
+                // Sin traduccion conocida: generico en espanol (el detalle de
+                // Keystone se anexa aparte, asi no se duplica).
+                return "instruccion o sintaxis no valida";
+            };
+
+            // Localizar la LINEA del fallo: re-ensamblar cada linea por separado
+            // y quedarnos con la primera que falla por un motivo que NO sea
+            // "simbolo no definido" (en una linea aislada, un salto a una
+            // etiqueta de otra linea daria un falso positivo de simbolo).
+            SourceLoc eloc = s->body_loc;
+            std::string detail = ar.error;
+            {
+                size_t start = 0;
+                uint32_t line_rel = 0; // lineas desde el inicio del cuerpo
+                bool located = false;
+                for (size_t k = 0; k <= body_sub.size() && !located; ++k) {
+                    if (k == body_sub.size() || body_sub[k] == '\n') {
+                        // contenido util de la linea [a, e2) tras recortar
+                        size_t a = start, e2 = k;
+                        while (a < e2 &&
+                               (body_sub[a] == ' ' || body_sub[a] == '\t' ||
+                                body_sub[a] == '\r'))
+                            ++a;
+                        while (e2 > a &&
+                               (body_sub[e2 - 1] == ' ' ||
+                                body_sub[e2 - 1] == '\t' ||
+                                body_sub[e2 - 1] == '\r'))
+                            --e2;
+                        std::string ln = body_sub.substr(a, e2 - a);
+                        const bool is_comment =
+                            ln.empty() || ln[0] == ';' ||
+                            (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');
+                        if (!is_comment) {
+                            vex::AsmAssembleResult lr =
+                                vex::g_asm_backend->assemble(
+                                    ln, vex::AsmArch::X86_64);
+                            if (!lr.ok &&
+                                lr.error.find("ymbol") == std::string::npos &&
+                                lr.error.find("ndefined") == std::string::npos &&
+                                lr.error.find("elocation") == std::string::npos) {
+                                eloc.line = s->body_loc.line + line_rel;
+                                eloc.column =
+                                    (line_rel == 0)
+                                        ? s->body_loc.column +
+                                              (uint32_t)(a - start)
+                                        : (uint32_t)(a - start) + 1;
+                                detail = lr.error;
+                                located = true;
+                            }
+                        }
+                        ++line_rel;
+                        start = k + 1;
+                    }
+                }
+            }
+            error_at(eloc,
+                     "inline asm: " + human_asm_error(detail) + " -- " + detail);
             return;
         }
     }
@@ -12947,7 +13023,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             rhs = emit_binop_ir(bop, cur, rhs, fa->result_type.kind, e->loc);
         }
-        rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft, e->loc.line);
+        rhs = cast_if_needed(rhs, fn_->values[rhs].type, ft,
+                             e->value ? e->value->loc : e->loc);
 
         // WRITE de bit field: read-modify-write.  Si el campo es bit
         // field, leemos el storage word completo, le limpiamos los
@@ -13271,7 +13348,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             rhs = emit_binop_ir(bop, v_old, rhs, ix->result_type.kind, e->loc);
         }
-        rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt, e->loc.line);
+        rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt,
+                             e->value ? e->value->loc : e->loc);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = pt;
@@ -27099,6 +27177,19 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
 ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
                                        ir::IrType to, uint32_t source_line,
                                        bool is_explicit) {
+    // Overload de compatibilidad: sin SourceLoc completo, el warning apunta al
+    // inicio (columna 1) de la linea.  Los call sites de alto impacto pasan el
+    // SourceLoc de la expresion para apuntar a su columna real.
+    SourceLoc loc;
+    loc.file = current_file_;
+    loc.line = source_line;
+    loc.column = 1;
+    return cast_if_needed(v, from, to, loc, is_explicit);
+}
+
+ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
+                                       ir::IrType to, const SourceLoc &loc,
+                                       bool is_explicit) {
     if (from == to || v == ir::IR_NO_VALUE) return v;
     // Warning de seguridad para casts implicitos que pueden perder
     // informacion: narrowing entero, float -> int, int -> float (los
@@ -27165,10 +27256,6 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
             }
         }
         if (!warn_msg.empty()) {
-            SourceLoc loc;
-            loc.file = current_file_;
-            loc.line = source_line;
-            loc.column = 1;
             diags_.warning(loc, warn_msg);
         }
     }
@@ -27219,7 +27306,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
             ext.type = ir::IrType::I64;
             ext.dst = v_ext;
             ext.operands.push_back(v);
-            ext.source_line = source_line;
+            ext.source_line = loc.line;
             fn_->append(current_block_, std::move(ext));
             v = v_ext;
         }
@@ -27266,7 +27353,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     ins.type = to;
     ins.dst = dst;
     ins.operands = {v};
-    ins.source_line = source_line;
+    ins.source_line = loc.line;
     fn_->append(current_block_, std::move(ins));
     return dst;
 }

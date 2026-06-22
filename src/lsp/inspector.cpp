@@ -621,6 +621,12 @@ nlohmann::json Inspector::comptime_values(const std::string &uri) {
         jv["scope"] = v.scope;
         jv["type_kind"] = v.type_kind;
         jv["value_str"] = v.value_str;
+        // Ubicacion (1-based; 0 = sin ubicacion) y clase de builtin, para que
+        // el cliente pueda mostrar el valor inline (ghost text) sobre la
+        // expresion sizeof/kind/... en su linea.
+        jv["line"] = v.loc.line;
+        jv["column"] = v.loc.column;
+        jv["builtin_kind"] = v.builtin_kind;
         values.push_back(std::move(jv));
     }
 

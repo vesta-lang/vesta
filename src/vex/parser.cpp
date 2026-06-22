@@ -4454,6 +4454,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     // de cierre a profundidad 0.
     const std::string &src = lex_.source_buffer();
     const uint32_t start_off = current_.loc.offset;
+    s->body_loc = current_.loc; // inicio del cuerpo: base para mapear errores
     uint32_t end_off = start_off;
     int brace_depth = 1; // ya consumimos el '{' de apertura
     while (current_.kind != TokenKind::END_OF_FILE) {

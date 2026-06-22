@@ -181,6 +181,22 @@ CompileResult compile_vex_source(const std::string &source,
             snap.value_str = b.value_str;
             res.comptime_values.push_back(std::move(snap));
         }
+        // Y los valores que resolvieron los builtins de introspeccion
+        // (sizeof<T>, alignof<T>, kind<T>, type_id<T>, typename<T>), con su
+        // ubicacion para que el LSP los muestre por hover sobre la expresion.
+        for (const auto &h : tc.comptime_builtin_hits()) {
+            CompileResult::ComptimeValueSnapshot snap;
+            snap.name = h.name;
+            snap.scope = "";
+            snap.type_kind = h.type_kind;
+            snap.value_str = h.value_str;
+            snap.loc = h.loc;
+            // builtin_kind = el nombre antes del '<' (p.ej. "sizeof").
+            const size_t lt = h.name.find('<');
+            snap.builtin_kind =
+                (lt != std::string::npos) ? h.name.substr(0, lt) : h.name;
+            res.comptime_values.push_back(std::move(snap));
+        }
     }
 
     // 2.5. (opcional) Diagrama Mermaid del AST post type-check.  Lo
