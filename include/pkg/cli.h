@@ -5,7 +5,7 @@
  * Subcomandos soportados:
  *   init [--json]                       Crear vex.toml/vex.json en cwd
  *   add <name> [--git URL --rev R | --path P]
- *                                       Anyadir dep al manifest + lockfile
+ *                                       añadir dep al manifest + lockfile
  *   remove <name>                       Quitar dep
  *   install [--allow-unsigned]          Fetch + lockfile + install todo
  *   update                              Actualizar lockfile segun semver
@@ -14,7 +14,7 @@
  *   audit                               Auditoria comparativa
  *   convert toml|json                   Convertir formato del manifest
  *   trust list                          Mostrar trust pins
- *   trust add <fp> [--name N]           Anyadir pin
+ *   trust add <fp> [--name N]           añadir pin
  *   trust revoke <fp>                   Revocar pin
  *   keygen [--out PATH]                 Generar par de claves Ed25519
  *   sign <package_dir>                  Firmar paquete con clave privada

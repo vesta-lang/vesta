@@ -926,7 +926,7 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_ptr(uint64_t addr) {
  * significativos (los altos quedan a cero por convencion).  El formato
  * "<gc:N>" enfatiza que NO es una direccion sino un indice opaco en la
  * tabla del GC.  Si en el futuro queremos imprimir el class_name del
- * objeto referenciado, anyadir una variante @c vio_print_gcobj que tome
+ * objeto referenciado, añadir una variante @c vio_print_gcobj que tome
  * tambien el ProcessVM* y resuelva via GcHeap.
  */
 VESTA_PLUGIN_EXPORT uint64_t vio_print_gchandle(uint64_t handle) {

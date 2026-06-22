@@ -28,11 +28,11 @@
  * incrustarlas como inmediatos 64-bit o como @c call rel32 si el
  * code cache esta dentro del rango +-2GB del binario.
  *
- * = Anyadir un nuevo entry =
+ * = añadir un nuevo entry =
  *
  * 1. Declarar la funcion en @c vesta_rt/public.h.
  * 2. Implementarla en @c src/vesta_rt/public_wrapper.cpp.
- * 3. Anyadir un campo aqui en @c RuntimeEntries.
+ * 3. añadir un campo aqui en @c RuntimeEntries.
  * 4. Inicializar el campo en el constructor.
  * 5. Documentar la convencion (args + return) en su Doxygen.
  */

@@ -1088,7 +1088,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         if (vid == ir::IR_NO_VALUE) return;
         if (vid >= ir_fn.values.size()) return;
         if (!ir_fn.values[vid].is_gc_object) return;
-        /* Anyadir slot al set si no esta ya. */
+        /* añadir slot al set si no esta ya. */
         const int16_t off = static_cast<int16_t>(slot_offset(vid));
         for (const auto &s : live_gc_slots) {
             if (s.rbp_offset == off) return; /* ya marcado */
@@ -1160,7 +1160,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
     /* preservar regs callee-saved usados por regalloc.
      * Conteo PAR garantizado por @c compute_jit_regalloc para que el
      * alignment del frame no cambie (cada push es 8 bytes; 2 o 4
-     * pushes anyaden 16 o 32 bytes, ambos multiplos de 16). */
+     * pushes añaden 16 o 32 bytes, ambos multiplos de 16). */
     for (MReg cs_reg : regalloc.callee_saved_used) {
         mf.blocks[prologue].instrs.push_back(
             MInstr::make_unary(MOp::PUSH, {}, MOperand::make_reg(cs_reg)));
@@ -3011,7 +3011,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 mf.blocks.back().instrs.push_back(call_instr);
 
                 /* Resultado en RAX -> slot del dst.  Si dst es
-                 * GC, anyade el slot a live_gc_slots para futuros
+                 * GC, añade el slot a live_gc_slots para futuros
                  * stackmaps. */
                 if (ins.dst != ir::IR_NO_VALUE) {
                     store_op(mf, ins.dst, MReg::RAX);
@@ -3112,7 +3112,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                  * trajo ganancia neta porque register_alloc
                  * (new_handle) cuesta lo mismo que el call
                  * directo a vrt_newobj_handle.  Y el inline
-                 * anyade ~14 instrs por iter que CAUSAN
+                 * añade ~14 instrs por iter que CAUSAN
                  * regresion ~20-30% en hot loops de NEWOBJ.
                  *
                  * Forzar el path "directo" (call a
@@ -7304,7 +7304,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             }
 
             /* ==================================================
-             * Sprint JIT-cobertura (2026-06-01): IR ops anyadidos
+             * Sprint JIT-cobertura (2026-06-01): IR ops añadidos
              * para subir cobertura del JIT del 63% al ~85%+.
              *
              * Patron comun: CALL nativo a vrt_* con marshalling
@@ -7885,7 +7885,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 //
                 // El runtime intern hash cache (hash de contenido)
                 // ya cubre las STRMAKEs de literales -- ~50ns hit.
-                // El JIT IC anyadia ~5ns vs ~50ns, pero a costo de
+                // El JIT IC añadia ~5ns vs ~50ns, pero a costo de
                 // correctness.  Diferencia despreciable.
                 // Sprint string-perf-2 debug (2026-06-02): IC
                 // deshabilitado temporalmente para validar

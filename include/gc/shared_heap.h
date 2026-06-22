@@ -117,7 +117,7 @@ static constexpr uint32_t SHARED_SLOTS_PER_CLASS[SHARED_SIZE_CLASS_COUNT] = {
 };
 
 /**
- * @brief Maximo de chunks por slab.  Cada chunk anyade
+ * @brief Maximo de chunks por slab.  Cada chunk añade
  *        @c SHARED_SLOTS_PER_CLASS[i] slots al free list.
  *
  * Con 256 chunks y los slot counts default:
@@ -290,7 +290,7 @@ static_assert(alignof(SharedSlab) == SHARED_CACHE_LINE,
  * @endcode
  *
  * El heap NO incluye GC mark/sweep en Z.1; solo allocator base.
- * Mark/sweep se anyade en Z.4 (junto con cross-process roots).
+ * Mark/sweep se añade en Z.4 (junto con cross-process roots).
  */
 class SharedHeap {
   public:

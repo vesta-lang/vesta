@@ -16,7 +16,7 @@
  * (callee-saved), cuales estan reservados, la convencion de llamada y el
  * ancho de puntero.  Nunca usa literales @c MReg::* .
  *
- * Portar a x86-32 / ARMv7 / AArch64 / RISC-V = anyadir una funcion
+ * Portar a x86-32 / ARMv7 / AArch64 / RISC-V = añadir una funcion
  * @c target_<arch>() que devuelva su @c TargetRegInfo (mas su selector y
  * encoder, que son independientes del allocator).
  */

@@ -121,10 +121,10 @@ class ModuleGraph {
     explicit ModuleGraph(Diagnostics &diags);
 
     /**
-     * @brief Anyade un directorio al search path del resolver.
+     * @brief añade un directorio al search path del resolver.
      *
      * Se consultan en orden: (1) carpeta del fichero importador, (2)
-     * search paths anyadidos en orden de @c add_search_path, (3)
+     * search paths añadidos en orden de @c add_search_path, (3)
      * @c VEX_PATH env var, (4) stdlib bundled.
      *
      * Los paths se normalizan al estilo POSIX (forward slash) y se
@@ -133,7 +133,7 @@ class ModuleGraph {
     void add_search_path(const std::string &dir);
 
     /**
-     * @brief Anyade los directorios de VEX_PATH (separados por `:` POSIX
+     * @brief añade los directorios de VEX_PATH (separados por `:` POSIX
      * o `;` Windows).  Sin efecto si la env var no esta seteada.
      */
     void add_vex_path_env();
@@ -155,7 +155,7 @@ class ModuleGraph {
      *
      * El resolver intenta los candidatos en orden:
      *   1. <importer_dir>/<raw_path>.vex
-     *   2. cada search path anyadido / <raw_path>.vex
+     *   2. cada search path añadido / <raw_path>.vex
      *   3. <stdlib_dir>/<raw_path>.vex
      */
     ResolveResult resolve(const std::string &raw_path,

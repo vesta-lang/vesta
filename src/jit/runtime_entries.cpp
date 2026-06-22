@@ -28,7 +28,7 @@
  *      una secuencia de stores constantes (candidato a inlining trivial).
  *
  *   3. **Verificacion temprana**: @c all_resolved() recorre todos los
- *      campos y detecta nullptr.  Si alguien anyade un nuevo entry pero
+ *      campos y detecta nullptr.  Si alguien añade un nuevo entry pero
  *      olvida cablearlo en @c resolve(), el JIT crasheria al primer call
  *      con un @c segfault sin contexto.  Llamar @c all_resolved() al
  *      init nos da un fail-fast con mensaje claro.
@@ -46,7 +46,7 @@ namespace jit {
  * idealmente inlina esto a una secuencia de stores constantes
  * (todos los simbolos @c vrt_* tienen direccion conocida en link).
  *
- * Las categorias estan separadas con comentarios para que anyadir un
+ * Las categorias estan separadas con comentarios para que añadir un
  * nuevo entry sea localizable: mismo orden tanto aqui como en el
  * header y en @c all_resolved.
  */
@@ -169,14 +169,14 @@ void RuntimeEntries::resolve() {
 /**
  * @brief Verifica que TODOS los campos esten poblados (no-null).
  *
- * Llamar al init para detectar fail-fast un campo nuevo que se anyade
+ * Llamar al init para detectar fail-fast un campo nuevo que se añade
  * a la struct y se olvida en @c resolve.  El short-circuit @c && hace
  * que retorne false al primer null encontrado; idealmente la chain
  * completa es @c true en programas bien configurados.
  *
  * No es performance-critical (se llama una vez en init), asi que
  * preferimos la chain explicita sobre un loop con offsets reflectivos
- * (mas mantenible: anyadir un campo solo requiere anyadir un && aqui).
+ * (mas mantenible: añadir un campo solo requiere añadir un && aqui).
  */
 bool RuntimeEntries::all_resolved() const noexcept {
     return gc_alloc && gc_alloc_pinned && gc_deref && gc_handle_for_ptr &&

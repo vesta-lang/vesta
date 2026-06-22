@@ -42,7 +42,7 @@
  *
  * = Actualizaciones =
  *
- * Bumpear @c VRT_API_VERSION_MAJOR en @c public.h cuando se anyada,
+ * Bumpear @c VRT_API_VERSION_MAJOR en @c public.h cuando se añada,
  * elimine o reordene un campo de un struct cubierto aqui.  Cambios de
  * tipo (uint32_t -> uint64_t) tambien requieren bump major.
  */
@@ -318,7 +318,7 @@ extern const int32_t kProcRawAllocOffset;
  */
 #define VESTA_CLASSINFO_STATIC_DATA_OFFSET 96
 /* Offsets de los campos de dispatch de interfaz (itables) en ClassInfo.
- * Anyadidos al FINAL de la struct -> los offsets anteriores quedan intactos.
+ * añadidos al FINAL de la struct -> los offsets anteriores quedan intactos.
  * El JIT/AOT recorre @c itables (array de ItableEntry de 24 bytes:
  * iface@0, methods@8, count@16) comparando @c iface contra el ClassInfo* de
  * la interfaz (resuelto en compile-time del JIT) y carga @c methods[idx].

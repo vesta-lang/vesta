@@ -102,7 +102,7 @@ namespace jit {
  * El register allocator asigna cada clase de forma INDEPENDIENTE: un
  * vreg GP solo puede ir a un fisico GP, un vreg FP solo a un fisico FP.
  * Esto deja preparado el banco de coma flotante/vector (XMM en x86,
- * NEON en ARM) sin reescribir el core: anyadir floats = registrar la
+ * NEON en ARM) sin reescribir el core: añadir floats = registrar la
  * clase FP con sus fisicos.  En D.7 v1 solo se asignan registros GP;
  * los valores float siguen con memory-roundtrip hasta la fase XMM.
  */
@@ -364,7 +364,7 @@ static_assert(sizeof(MOperand) == 8, "MOperand debe ser 8 bytes");
  *
  * Cobertura v1: el subset minimo para que un C1
  * baseline JIT pueda compilar funciones de aritmetica + control
- * de flujo + calls.  Floats, SIMD y sync atomic se anyaden en
+ * de flujo + calls.  Floats, SIMD y sync atomic se añaden en
  * fases posteriores (D.3+ para floats, D.8 para SIMD).
  */
 enum class MOp : uint8_t {
@@ -1184,7 +1184,7 @@ struct MFunction {
     int fixed_of(uint32_t vid) const noexcept {
         return vid < vreg_fixed.size() ? vreg_fixed[vid] : -1;
     }
-    /** @brief Anyade un @c AsmBlob al pool y devuelve su indice. */
+    /** @brief añade un @c AsmBlob al pool y devuelve su indice. */
     uint32_t intern_asm_blob(AsmBlob b) {
         asm_blobs.push_back(std::move(b));
         return static_cast<uint32_t>(asm_blobs.size() - 1);
@@ -1216,7 +1216,7 @@ struct MFunction {
         return static_cast<uint32_t>(reloc_symbols.size() - 1);
     }
 
-    /** @brief Anyade un imm64 al pool y devuelve su indice. */
+    /** @brief añade un imm64 al pool y devuelve su indice. */
     uint32_t intern_imm64(uint64_t value) {
         /* O(n) lookup para deduplicar.  Aceptable para el v1: el
          * codigo Vex tipico tiene < 100 imm64 distintos por funcion. */

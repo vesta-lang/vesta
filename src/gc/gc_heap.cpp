@@ -1417,7 +1417,7 @@ void GcHeap::major_gc() {
 
     // precise scan de JIT frames (additive con
     // conservativo).  (no hay JIT funcs) la funcion sale
-    // de inmediato.  Cuando lance JIT real, anyade roots que
+    // de inmediato.  Cuando lance JIT real, añade roots que
     // el conservativo posiblemente cubrio por aproximacion.
     // Tracking conservativo: snapshot del tamano antes para
     // calcular cuantos roots vinieron de cada source.

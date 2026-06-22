@@ -41,7 +41,7 @@ inline constexpr uint32_t VEXI_MAGIC = 0x49584556u;
 
 /// Version del formato.  Incrementar al cambiar el layout binario.  El
 /// loader rechaza versiones distintas (no se intenta forward-compat).
-/// v2 (Phase M5.b): anyade `extern_lib_len` explicito en el payload
+/// v2 (Phase M5.b): añade `extern_lib_len` explicito en el payload
 /// FUNCTION (cierra L.5).
 /// v3 (M4.ext): dep_table para invalidacion transitiva del cache.
 /// v4 (.vexi-v4): **blob_pool** -- buffer contiguo para valores no

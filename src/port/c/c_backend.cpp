@@ -1275,7 +1275,7 @@ void CBackend::emit_str_lit_addr(EmitContext &ctx, ir::IrValueId dst,
 // -------- Tabla compartida de reconocimiento raw_asm --------
 //
 // Mantenemos las firmas exactas que emite el frontend Vex.  Cualquier
-// cambio en el lowering (ej. anyadir un atributo de instr) requiere
+// cambio en el lowering (ej. añadir un atributo de instr) requiere
 // actualizar esta tabla.  Compartido conceptualmente con el JIT
 // selector (D.3-G) -- la diferencia es el destino: aqui emit C,
 // alla emit MachineIR.

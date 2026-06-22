@@ -12,7 +12,7 @@
 // Quitar CUALQUIERA de (3), (4) o (5) hace que el test pase.  Eso
 // indica que el bug es del regalloc/save_live_regs cuando el host_ptr
 // `cur` debe sobrevivir a la secuencia de CALLs y aun se accede
-// despues.  Patron Heisenbug: anyadir CALLs intermedios o instrumentacion
+// despues.  Patron Heisenbug: añadir CALLs intermedios o instrumentacion
 // mueve el patron del bug.
 //
 // Sprint dedicado D.7-full (regalloc target-aware) requerido para fix.

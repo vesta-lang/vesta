@@ -595,7 +595,7 @@ CompileResult compile_vex_project(const std::string &root_path,
         }
         if (!sd.empty()) graph.set_stdlib_dir(sd);
     }
-    // Anyadir como search path implicito la carpeta del modulo root.  Asi
+    // añadir como search path implicito la carpeta del modulo root.  Asi
     // los modulos hermanos pueden importarse con paths relativos al root
     // (`import "modules/foo"` desde @c src/modules/bar.vex resuelve a
     // @c src/modules/foo.vex aunque el importer dir sea @c src/modules/).

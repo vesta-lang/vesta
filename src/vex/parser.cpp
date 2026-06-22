@@ -52,7 +52,7 @@ namespace vex {
  * CallExpr generico.  Sin esta restriccion, @c LT en posicion postfix
  * seria ambiguo con operadores de comparacion (@c foo < bar).
  *
- * Para anyadir nuevos builtins comptime: insertar el nombre aqui y en
+ * Para añadir nuevos builtins comptime: insertar el nombre aqui y en
  * el dispatcher del type checker.  El parser solo necesita el set
  * (un name no listado se trata como llamada normal sin type args, lo
  * cual no rompe codigo existente -- LT pasa al binary expr parser).
@@ -1974,7 +1974,7 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
                current_.lexeme == "VirtualPtr") {
         // Caso especial: VirtualPtr<T> es una direccion VM al contenido T.
         // Lo desazucaramos a PointerTypeNode con `is_virtual=true`.  Sin
-        // anyadir keyword nuevo: el lexer trata VirtualPtr como un
+        // añadir keyword nuevo: el lexer trata VirtualPtr como un
         // identificador comun, y parse_type lo intercepta aqui antes de
         // la rama generica de NamedTypeNode.
         const SourceLoc vloc = current_.loc;
@@ -2351,14 +2351,14 @@ std::unique_ptr<ast::TypeAliasDecl> Parser::parse_using_decl() {
 //   import "path" only A, B;
 //   import "path" only A as A2, B;
 //   import "path" as alias only A, B;     <- alias para namespace y only
-//                                            para seleccion no se anyaden
+//                                            para seleccion no se añaden
 //                                            al mismo namespace; el alias
 //                                            queda inactivo si hay only
 //   public import "path" [as alias] [only ...];
 //
 // El path es siempre un string literal sin interpolacion.  Por
 // consistencia con extern "lib.dll", loadmodule(path), y @Method.
-// El sufijo .vex se anyade automaticamente al resolver.
+// El sufijo .vex se añade automaticamente al resolver.
 // -----------------------------------------------------------------
 std::unique_ptr<ast::ImportDecl>
 Parser::parse_import_decl(bool is_public_reexport) {
@@ -2438,7 +2438,7 @@ Parser::parse_import_decl(bool is_public_reexport) {
 //
 // El contenido se parsea con parse_top_level_decl recursivamente; el
 // pre-pass de mangling (compiler_project.cpp::mangle_top_level_)
-// recorrera el AST anyadiendo el prefijo `foo__` a todos los nombres.
+// recorrera el AST añadiendo el prefijo `foo__` a todos los nombres.
 // -----------------------------------------------------------------
 std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     auto ns = std::make_unique<ast::NamespaceDecl>();

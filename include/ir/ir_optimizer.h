@@ -26,7 +26,7 @@
  * phi-fold
  *         - ir_pass_dead_alloc_elim purga news cuyo resultado no se usa
  *
- *   O2: anyade analisis de flujo + transformaciones globales:
+ *   O2: añade analisis de flujo + transformaciones globales:
  *         - ir_pass_const_fold      pliega aritmetica con operandos constantes
  *         - ir_pass_unreachable     poda bloques no alcanzables desde entry
  *         - ir_pass_strength_reduction  MUL/DIV/MOD por 2^k -> SHL/SHR/AND
@@ -40,7 +40,7 @@
  *         - ir_pass_devirt_monomorphic  CALLVIRT con clase conocida -> CALL
  * directo
  *
- *   O3: anyade pases de duplicacion / reordenacion mas agresivos:
+ *   O3: añade pases de duplicacion / reordenacion mas agresivos:
  *         - ir_pass_cse             dedup de subexpresiones comunes
  * (intra-block)
  *         - ir_pass_const_cse_entry hoist de CONSTs a entry block

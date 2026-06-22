@@ -124,7 +124,7 @@ CodeCache::~CodeCache() {
 }
 
 /**
- * @brief Reserva un nuevo chunk del SO y lo anyade a la lista.
+ * @brief Reserva un nuevo chunk del SO y lo añade a la lista.
  *
  * @return true si el SO atendio la peticion y aun cabe en el budget.
  *
@@ -370,7 +370,7 @@ void CodeCache::flush_icache(const uint8_t *ptr, size_t size) {
     // Compilador sin builtin: dejar como no-op confiando en que la
     // arquitectura es coherente (x86-64 antiguo, p.ej. con MSVC pre-
     // VS2017 sin clang fallback).  Si llegamos a soportar ARM
-    // explicitamente sin GCC/Clang, anyadir aqui asm volatile con
+    // explicitamente sin GCC/Clang, añadir aqui asm volatile con
     // las instrucciones de barrier apropiadas.
     (void)ptr;
     (void)size;

@@ -108,7 +108,7 @@ static IrFunction make_sum_loop() {
     const auto new_i = b.add(i_phi, one, IrType::I32);
     b.br(header);
 
-    /* Cerrar los PHIs anyadiendo el back-edge. */
+    /* Cerrar los PHIs añadiendo el back-edge. */
     /* Buscar el PHI por su dst id y agregar phi_args manualmente. */
     for (auto &ins : fn.blocks[header].instrs) {
         if (ins.op == IrOp::PHI && ins.dst == sum_phi) {

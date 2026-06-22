@@ -38,7 +38,7 @@ namespace vex {
  * @brief Codigos del builtin @c kind<T>().
  *
  * Devuelto como i32 al codigo Vex.  Los valores son ESTABLES entre
- * builds: si se anyade un kind nuevo, va al final de la lista para
+ * builds: si se añade un kind nuevo, va al final de la lista para
  * no romper codigo existente que cheque kinds via comparacion entera.
  */
 enum class ComptimeKind : int32_t {

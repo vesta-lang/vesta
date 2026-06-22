@@ -89,7 +89,7 @@ uint64_t vexi_fnv1a(const void *data, size_t len) noexcept {
 }
 
 // ===========================================================================
-// String pool builder con dedup.  Cada string se anyade una sola vez;
+// String pool builder con dedup.  Cada string se añade una sola vez;
 // segundo uso devuelve el mismo offset.
 // ===========================================================================
 class StringPoolBuilder {
@@ -101,7 +101,7 @@ class StringPoolBuilder {
         offsets_[""] = 0;
     }
 
-    /// Devuelve el offset del string en el pool.  Si no estaba, lo anyade.
+    /// Devuelve el offset del string en el pool.  Si no estaba, lo añade.
     uint32_t intern(const std::string &s) {
         if (s.empty()) return 0;
         auto it = offsets_.find(s);
@@ -187,7 +187,7 @@ static inline bool read_u64(const uint8_t *p, size_t cap, size_t &off,
 //   1. Construir string pool.
 //   2. Emitir payloads variables a un buffer separado.
 //   3. Emitir symbol entries (con offsets al pool + payload buffer).
-//   4. Anyadir header al inicio + payloads + pool.
+//   4. añadir header al inicio + payloads + pool.
 //   5. Calcular abi_hash sobre los simbolos serializados (sin header).
 //
 // El abi_hash incluye los bytes de TODAS las entries en orden + el pool.
@@ -439,7 +439,7 @@ std::vector<uint8_t> vexi_emit(const VexiModule &mod) {
 
     // 2. Construir el buffer final: header + symbol entries + payloads + deps
     //    + blob_pool + string_pool.
-    // .vexi v4: header crece de 48 a 64 bytes (anyade blob_pool_offset u32 +
+    // .vexi v4: header crece de 48 a 64 bytes (añade blob_pool_offset u32 +
     // blob_pool_size u32 + blob_pool_alignment u8 + 7 pad en offsets 48..63).
     const size_t HEADER_BYTES = 64;
     const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
@@ -704,7 +704,7 @@ static bool parse_payload_global(const uint8_t *data, size_t size,
 static bool parse_payload_function(const uint8_t *data, size_t size,
                                    uint32_t payload_off, uint32_t payload_len,
                                    uint32_t pool_start, VexiSymbol &out) {
-    // Phase M5.b L.5: format v2 anyade lib_len explicito.  Total fixed
+    // Phase M5.b L.5: format v2 añade lib_len explicito.  Total fixed
     // bytes en payload = 28 (vs 24 en v1): ret_off+ret_len+pc+
     // lib_off+lib_len+ml_off+ml_len = 7 u32 = 28 bytes.
     if (payload_len < 28) return false;
@@ -755,7 +755,7 @@ static bool parse_payload_struct_or_class(const uint8_t *data, size_t size,
                                           uint32_t payload_len,
                                           uint32_t pool_start,
                                           VexiSymbol &out) {
-    // Phase M6.b L.6: payload header crece a 28 bytes fijos (anyade
+    // Phase M6.b L.6: payload header crece a 28 bytes fijos (añade
     // method_count).
     if (payload_len < 28) return false;
     size_t off = payload_off;
@@ -1158,7 +1158,7 @@ const VexiBlobHeader *vexi_blob_read(const std::vector<uint8_t> &pool,
     // un buffer estatico per-thread.  Para acceso rapido del consumer,
     // el TypeChecker materializa estos campos a una estructura propia.
     // Devolvemos un puntero "casteado" suponiendo que el host es LE
-    // (la mayoria de targets actuales).  Para targets BE, anyadir
+    // (la mayoria de targets actuales).  Para targets BE, añadir
     // bytewise read y copia local.
     return reinterpret_cast<const VexiBlobHeader *>(pool.data() + offset);
 }

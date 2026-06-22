@@ -509,7 +509,7 @@ bool asmblk_assemble(
  * que no exista en el scope justo antes del loop.
  *
  * @param n   Nodo a inspeccionar (puede ser nullptr).
- * @param out Set destino al que se anyaden los nombres.
+ * @param out Set destino al que se añaden los nombres.
  */
 static void collect_assigned_vars(const ast::Node *n,
                                   std::set<std::string> &out) {
@@ -1041,7 +1041,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // Generar funciones auxiliares de POO:
     //  - __new_<X>(args) por cada clase: encapsula findclass+newobj+ctor.
     //  - __module_init(): registra todas las clases via defclass+...
-    // Estas se anyaden al modulo despues de las funciones de usuario;
+    // Estas se añaden al modulo despues de las funciones de usuario;
     // el prologo de main incluye una llamada a __module_init para
     // garantizar que las clases esten registradas antes del cuerpo.
     generate_new_helpers(out_module);
@@ -1113,7 +1113,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         //   (b) comptime array        -> sus elementos (cada uno del ancho).
         //   (c) simbolo de funcion     -> reloc ABS64 (requiere dq=8).
         // Los sym_refs vienen en orden de offset creciente (el parser los
-        // anyade segun avanza); reconstruimos de izquierda a derecha.
+        // añade segun avanza); reconstruimos de izquierda a derecha.
         const auto &ccv = tc_.comptime_const_values();
         std::vector<uint8_t> rebuilt;
         std::vector<ir::IrModule::StaticDataMeta::SymRef> kept;
@@ -1358,7 +1358,7 @@ void Lowering::emit_introspect_info_chunks() {
         introspect_idx_by_name_[lay.name] = idx;
     }
     /* Clases marcadas @Introspect.  No emitimos metodos por ahora
-     * (Sprint 4 MVP cubre solo fields; Sprint 5 anyade methods). */
+     * (Sprint 4 MVP cubre solo fields; Sprint 5 añade methods). */
     for (const auto &kv : tc_.class_layouts()) {
         const auto &lay = kv.second;
         if (!lay.is_introspect) continue;
@@ -2244,7 +2244,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     string_eq_override_ = saved_eq_ovr;
 
     // Cerrar la funcion: si la ultima instruccion no es terminador,
-    // anyadir RET con valor por defecto (0) en funciones no-void, o
+    // añadir RET con valor por defecto (0) en funciones no-void, o
     // RET sin valor en void.
     if (!block_terminated_) {
         // emitir cleanups de auto-free de colecciones antes
@@ -4045,7 +4045,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
     } else {
         // Sin else: el "branch else" es el propio entry, que cae
         // directo al merge sin pasar por else_bb.  Su pred del merge
-        // es el bloque del que venia el if (anyadido arriba via
+        // es el bloque del que venia el if (añadido arriba via
         // fn_->blocks[merge_bb].preds.push_back(current_block_)
         // antes de la rama then).  El else_pred en ese caso es ese
         // pred original (current_block_ ANTES del then).  Recuperamos
@@ -4081,7 +4081,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
         //
         // Notacion: scope_idx = nivel; tomamos como referencia el
         // depth original (entry_scopes.size()).  Si las ramas
-        // anyaden scopes nuevos, los ignoramos (variables locales a
+        // añaden scopes nuevos, los ignoramos (variables locales a
         // la rama).
         const size_t depth = entry_scopes.size();
         const size_t depth_then = then_scopes.size();
@@ -4164,7 +4164,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
 // El paso clave es identificar las variables que se modifican dentro
 // del cond+body y emitir un PHI por cada una en el header.  El primer
 // arg del PHI viene del entry (el valor previo al loop); el segundo
-// arg se anyade al final, una vez bajado el body, con el valor que
+// arg se añade al final, una vez bajado el body, con el valor que
 // queda en scope tras la ultima iteracion.
 //
 // Las variables NO modificadas no necesitan PHI: el lookup() las
@@ -4219,7 +4219,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     fn_->blocks[header_id].preds.push_back(entry_block);
 
     // 2. En el header, emitir un PHI por cada variable mutada.  Solo
-    //    se anyade el primer arg (entry); el back-edge se completa
+    //    se añade el primer arg (entry); el back-edge se completa
     //    despues de bajar el body.
     for (auto &vi : vars) {
         vi.phi_value = fn_->new_value(vi.type);
@@ -4302,7 +4302,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
         }
     }
 
-    // Si el body no termino con un return/break, anyadir el back-edge
+    // Si el body no termino con un return/break, añadir el back-edge
     //    al header.  Si fue break/continue, el lowering de esos statements
     //    ya emitio BR al target adecuado y marco @c block_terminated_.
     if (!block_terminated_) {
@@ -5261,7 +5261,7 @@ static ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
 // Multi-catch / finally: pendientes (deferidos en MVP).
 //
 // El handler PC se obtiene como @Absolute("code.<fn>_<handler.name>")
-// donde <handler.name> incluye el sufijo numerico que new_block anyade.
+// donde <handler.name> incluye el sufijo numerico que new_block añade.
 // Asi el linker resuelve la referencia sin necesitar metadata extra.
 // ---------------------------------------------------------------------
 
@@ -7197,7 +7197,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     }
 
     pop_scope();
-    // Guardar el helper en la cola pendiente; se anyadira a out_mod_
+    // Guardar el helper en la cola pendiente; se añadira a out_mod_
     // al final de run() para que main se mantenga como primera funcion
     // (el emisor IR la trata como entry point y termina con hlt).
     pending_spawn_helpers_.push_back(std::move(child_fn));
@@ -8990,7 +8990,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // Phase AS inc.4: INFERENCIA PROPIA de clobbers (sin Keystone).  Salvo
     // `noinfer`, analizamos el cuerpo y unimos los clobbers inferidos con
     // los explicitos.  `nomem`/`preserves_flags`/`pure` QUITAN memory/flags
-    // del set; `clobbers(...)` ANYADE.  Resultado final -> asm_clobber_lists
+    // del set; `clobbers(...)` añaDE.  Resultado final -> asm_clobber_lists
     // + bits 4/5 de imm (memory/flags).
     std::vector<std::string> final_clobbers = s->clobbers; // explicitos primero
     bool final_mem = s->clobbers_memory;
@@ -14057,7 +14057,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     return true;
                 }
                 /* Runtime string: para MVP devolvemos 0 (no soportado).
-                 * Sprint 5 anyade resolver sintetico. */
+                 * Sprint 5 añade resolver sintetico. */
                 error_at(e->loc,
                          "find_type: en MVP solo se soporta literal string "
                          "(runtime resolver pendiente en Sprint 5)");
@@ -16193,7 +16193,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         //       tiene un pre-pase que los convierte a CALLN equivalente.
         //   (c) El Selector JIT (futuro) emite sqrtsd/andpd/minsd/roundsd
         //       nativos sin tocar el frontend.
-        //   (d) Constant folding (cuando se anyada) funciona uniforme.
+        //   (d) Constant folding (cuando se añada) funciona uniforme.
         if (is_math_sqrt) return emit_float_irop(ir::IrOp::FSQRT, 1);
         if (is_math_fabs) return emit_float_irop(ir::IrOp::FABS, 1);
         if (is_math_fmin) return emit_float_irop(ir::IrOp::FMIN, 2);
@@ -18527,7 +18527,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // direccion vesta-callable, por lo que usamos 0 (sentinel)
         // y el cleanup local conoce el deleter por compile-time via
         // literal_deleter.  SRET return con extern deleter no
-        // preserva la info (futuro: anyadir tabla de deleter ids).
+        // preserva la info (futuro: añadir tabla de deleter ids).
         const ir::IrValueId v_deleter_addr = fn_->new_value(ir::IrType::I64);
         if (deleter_label.rfind("@extern:", 0) == 0) {
             // Extern: no podemos materializar direccion como Vesta
@@ -20620,7 +20620,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 ir::IrInstr ret{};
                 ret.op = ir::IrOp::RET;
                 ret.type = ir::IrType::PTR;
-                // No anyadimos operands; el emisor IR genera 'ret' simple y r0
+                // No añadimos operands; el emisor IR genera 'ret' simple y r0
                 // ya esta cargado por el RAW_ASM previo.  Para que el emisor no
                 // intente construir RET con un valor SSA, usamos VOID y luego
                 // dejamos un fall-through.  Mejor: ret sin operandos como void.
@@ -27521,7 +27521,7 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
 //   - arr[i]       = ident;    -> escapa via slot de array.
 //   - p->field     = ident;    -> escapa via field deref.
 //
-// Los locales detectados se anyaden a @c escaping_locals_; el cleanup
+// Los locales detectados se añaden a @c escaping_locals_; el cleanup
 // automatico los omite y queda como responsabilidad del caller (o del
 // futuro GC roots) liberar el handle.
 //

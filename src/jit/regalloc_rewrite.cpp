@@ -242,7 +242,7 @@ struct Lowerer {
         no_frame = !has_calls && ra.num_spill_slots == 0u &&
                    alloca_total == 0u && !has_vm_alloca &&
                    !jit_no_frameless() &&
-                   !jit_osr_count(); /* el trigger (1b) anyade un
+                   !jit_osr_count(); /* el trigger (1b) añade un
                   call -> necesita frame con rsp 16-alineado. */
         /* Las allocas viven debajo de los spill slots. */
         alloca_base = SZ * total_saved + SZ * ra.num_spill_slots;
@@ -251,7 +251,7 @@ struct Lowerer {
         /* Fase 2: reservar un qword para el VM-RSP salvado, debajo del
          * area de allocas host y por encima del shadow space.  El
          * offset es fijo desde RBP (independiente del shadow/align que
-         * se anyade despues, que solo crece el frame hacia abajo). */
+         * se añade despues, que solo crece el frame hacia abajo). */
         if (has_vm_alloca) {
             vm_rsp_save_off = -static_cast<int32_t>(
                 8u * total_saved + 8u * ra.num_spill_slots + alloca_total + 8u);

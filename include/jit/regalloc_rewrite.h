@@ -30,7 +30,7 @@
  *      frame para los spill slots.
  *
  * Cobertura commit 4a: MOV, ALU binario (ADD/SUB/AND/OR/XOR/IMUL), CMP/TEST,
- * RET, y passthrough de control (JMP/JCC/LABEL_DEF/NOP).  Resto: se anyade al
+ * RET, y passthrough de control (JMP/JCC/LABEL_DEF/NOP).  Resto: se añade al
  * migrar el selector (commit 4b/5).  ABI del prologue: funcion HOJA estilo
  * host (la integracion con la VM_ABI -- RBX=ProcessVM*, safepoints -- es el
  * commit 4b).

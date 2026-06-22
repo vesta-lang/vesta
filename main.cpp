@@ -3006,7 +3006,7 @@ int main(int argc, char *argv[]) {
                         seen.insert(cur.first);
                         auto it = previous.find(cur.first);
                         if (it == previous.end()) {
-                            std::cerr << "[mc-manifest] anyadido: " << cur.first
+                            std::cerr << "[mc-manifest] añadido: " << cur.first
                                       << "\n";
                             ++added;
                         } else if (it->second != cur.second) {
@@ -3024,7 +3024,7 @@ int main(int argc, char *argv[]) {
                     }
                     std::cerr << "[mc-manifest] total=" << current_hashes.size()
                               << " cambios=" << changed
-                              << " anyadidos=" << added << "\n";
+                              << " añadidos=" << added << "\n";
                 }
                 /* Escribir nuevo manifest. */
                 const std::string manifest_path = cache_prefix + ".manifest";

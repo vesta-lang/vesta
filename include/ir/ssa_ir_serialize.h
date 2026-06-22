@@ -121,7 +121,7 @@ static constexpr uint16_t IR_SECTION_VERSION =
  *            +12 [..] functions (concat de serialize_function output)
  *
  * @param functions IR functions a incluir en la seccion.
- * @return bytes serializados.  El caller los anyade al .velb y
+ * @return bytes serializados.  El caller los añade al .velb y
  *         escribe el offset/size en el header.
  */
 std::vector<uint8_t> emit_ir_section(const std::vector<IrFunction> &functions);

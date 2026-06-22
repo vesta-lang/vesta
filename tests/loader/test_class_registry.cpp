@@ -350,7 +350,7 @@ static void test_lifecycle_stress() {
             for (int m = 0; m < 4; ++m) {
                 (void)ClassRegistry::find_method(cls, "m" + std::to_string(m));
             }
-            // Anyadir un advice por cada metodo.
+            // añadir un advice por cada metodo.
             for (int m = 0; m < 4; ++m) {
                 MethodInfo *target =
                     ClassRegistry::find_method(cls, "m" + std::to_string(m));
@@ -360,7 +360,7 @@ static void test_lifecycle_stress() {
                     (void)reg.add_advice(target, ADVICE_BEFORE, advice);
                 }
             }
-            // Mutacion incremental: anyadir 2 fields mas tras el define.
+            // Mutacion incremental: añadir 2 fields mas tras el define.
             (void)reg.add_field(cls, {"extra1", FIELD_PRIMITIVE, nullptr, 8,
                                       FIELD_PUBLIC, false});
             (void)reg.add_field(cls, {"extra2", FIELD_PRIMITIVE, nullptr, 8,

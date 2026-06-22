@@ -183,7 +183,7 @@ AotCompatReport aot_analyze_module(const ir::IrModule &mod,
  * @brief Analiza una sola funcion IR para un target.
  * @param fn         Funcion IR.
  * @param target     Target objetivo.
- * @param out_issues Vector destino (se anyaden entradas, no se limpia).
+ * @param out_issues Vector destino (se añaden entradas, no se limpia).
  * @return true si la funcion es completamente compilable en el target.
  */
 bool aot_analyze_function(const ir::IrFunction &fn, const AotTarget &target,

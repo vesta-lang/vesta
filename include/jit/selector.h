@@ -43,7 +43,7 @@
  *
  * No soportados (caen al interprete via fallback en D.5):
  * - PHI (emit phi copies en preds aun no implementado)
- * - CALL/CALLVIRT/CALLN/CALLCLOSURE/TAILCALL (D.3 los anyade)
+ * - CALL/CALLVIRT/CALLN/CALLCLOSURE/TAILCALL (D.3 los añade)
  * - DIV/MOD (necesitan setup de RDX:RAX para IDIV)
  * - FADD/FSUB/FMUL/FDIV y otros float (D.3+)
  * - ALLOCA/STR_LIT_ADDR/etc.
@@ -216,7 +216,7 @@ struct SelectorOptions {
 
     /// Offset en bytes desde @c ProcessVM* hasta @c exc_free_list (head
     /// de la pila de @c ExceptionFrames reciclables).  Si != 0, el JIT
-    /// inlinea tryleave anyadiendo PUSH a este free list en lugar de
+    /// inlinea tryleave añadiendo PUSH a este free list en lugar de
     /// dejar el frame leaked.  Patron x86-64 emitido (7 instr total):
     ///
     ///     mov rax, [rbx + EXC_FRAME_OFF]       ; top
@@ -272,7 +272,7 @@ class Selector {
     /**
      * @brief Selecciona instrucciones para @p ir_fn.
      * @return @c MFunction listo para encoder.  Si encuentra un IR
-     *         op no soportado, anyade un @c MOp::INT3 como marker y
+     *         op no soportado, añade un @c MOp::INT3 como marker y
      *         pone @p out_unsupported a true.
      */
     MFunction select(const ir::IrFunction &ir_fn,
