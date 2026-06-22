@@ -183,6 +183,10 @@ void extract_declared_names(const std::string &text, const std::string &uri,
             auto *d = static_cast<const vex::ast::ClassDecl *>(node.get());
             if (!d->name.empty())
                 out.class_names.insert(d->name);
+            // Parametros de plantilla de una clase generica (class Box<T>).
+            for (const auto &tp : d->type_params)
+                if (!tp.empty())
+                    out.type_params.insert(tp);
             break;
         }
         case vex::ast::NodeKind::StructDecl: {
@@ -195,6 +199,10 @@ void extract_declared_names(const std::string &text, const std::string &uri,
             auto *d = static_cast<const vex::ast::EnumDecl *>(node.get());
             if (!d->name.empty())
                 out.enum_names.insert(d->name);
+            // Parametros de plantilla de un enum generico (enum Maybe<T>).
+            for (const auto &tp : d->type_params)
+                if (!tp.empty())
+                    out.type_params.insert(tp);
             break;
         }
         case vex::ast::NodeKind::TypeAliasDecl: {
@@ -207,6 +215,11 @@ void extract_declared_names(const std::string &text, const std::string &uri,
             auto *d = static_cast<const vex::ast::FunctionDecl *>(node.get());
             if (!d->name.empty())
                 out.function_names.insert(d->name);
+            // Parametros de plantilla de una funcion comptime generica
+            // (comptime <T> u32 vec_dim()).
+            for (const auto &tp : d->type_params)
+                if (!tp.empty())
+                    out.type_params.insert(tp);
             break;
         }
         case vex::ast::NodeKind::ExternFnDecl: {

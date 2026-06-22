@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <unordered_set>
 
 #include "lsp/analysis_engine.h"
 #include "vex/diagnostic.h"
@@ -278,12 +279,132 @@ bool is_operator(vex::TokenKind k) {
 }
 
 /**
- * @brief Clasifica un IDENTIFIER consultando los sets de nombres del
- *        analisis.  Sin analisis, o sin match, devuelve Variable.
+ * @brief Indica si @p name es un keyword CONTEXTUAL de Vex.
+ *
+ * El lexer emite estos nombres como IDENTIFIER (no hay un KW_* dedicado)
+ * porque su caracter de palabra reservada depende del contexto
+ * sintactico.  El parser los reconoce comparando el lexema (ver
+ * @c src/vex/parser.cpp).  Para el resaltado los tratamos siempre como
+ * keyword: es lo que el usuario espera ver coloreado.
+ *
+ * Lista derivada de las comparaciones @c current_.lexeme == "..." del
+ * parser.  Se EXCLUYEN los que ya son KW_* del lexer (import, extern,
+ * await, spawn, match, namespace, ...): esos llegan por su TokenKind y
+ * no como IDENTIFIER.  Tampoco se incluyen los nombres de anotaciones
+ * (Aspect, Async, Macro, ...): aparecen tras @c @ y se clasifican por su
+ * contexto en una fase futura.
+ */
+bool is_contextual_keyword(const std::string &name) {
+    static const std::unordered_set<std::string> kContextualKw = {
+        // Declaracion / inferencia de tipo.
+        "comptime", "auto", "var",
+        // Construcciones comptime / metaprogramacion.
+        "foreach", "lazy",
+        // Inline asm.
+        "register", "clobbers",
+        // Imports selectivos y typedef explicit.
+        "as", "only", "from",
+        // Concurrencia (hints de spawn).
+        "here", "on",
+        // Datos crudos estilo NASM en bloques bytes.
+        "times", "bits",
+        // Captura raw de expresion en macros.
+        "expr",
+    };
+    return kContextualKw.count(name) != 0;
+}
+
+/**
+ * @brief Indica si @p name es un builtin/intrinseco de Vex.
+ *
+ * Los builtins son IDENTIFIER que el frontend reconoce por nombre: o bien
+ * registrados en el type checker (@c reg_builtin en
+ * @c src/vex/type_checker.cpp), o evaluados como intrinsecos comptime
+ * (@c src/vex/comptime_introspect.cpp) o bajados especialmente en el
+ * lowering (@c src/vex/lowering.cpp: reflexion + introspeccion).  Los
+ * clasificamos como @c Function para que tengan el color de funcion.
+ */
+bool is_builtin_name(const std::string &name) {
+    static const std::unordered_set<std::string> kBuiltins = {
+        // --- I/O (vesta_io) ---
+        "print", "println", "echo", "flush", "print_int", "print_uint",
+        "print_hex", "print_float", "print_bool", "print_char", "print_color",
+        "print_cstr", "print_bin", "print_oct", "print_ptr", "print_gchandle",
+        "print_pad", "fopen", "fwrite", "fclose",
+        // --- Memoria cruda ---
+        "malloc", "free",
+        // --- CPU dispatch ---
+        "cpu_features",
+        // --- Strings (StringObject) ---
+        "str_length", "str_bytes", "str_cstr", "str_wstr", "str_hash",
+        "str_intern", "str_concat", "str_equals", "str_make", "str_convert",
+        // --- Excepciones / secciones / RAII ---
+        "panic", "section_start", "section_end", "section_size", "dispose",
+        // --- FFI runtime dinamico ---
+        "ffi_open", "ffi_sym", "ffi_call",
+        // --- Math (vesta_math) ---
+        "sqrt", "pow", "fabs", "floor", "ceil", "round", "fmin", "fmax", "log",
+        "log2", "log10", "sin", "cos", "tan", "abs", "imin", "imax", "clamp",
+        "trunc", "iminu", "imaxu", "ilog2", "popcount", "clz", "ctz", "bswap",
+        "rotl", "rotr",
+        // --- Callbacks nativos ---
+        "as_native_callback",
+        // --- Reflexion runtime ---
+        "forName", "getClass", "getField", "getMethod", "newInstance",
+        "getMethods", "invoke",
+        // --- Introspeccion comptime ---
+        "static_assert", "sizeof", "alignof", "typename", "type_id", "kind",
+        "field_count", "method_count", "is_class", "is_struct", "is_primitive",
+        "is_newtype", "offsetof", "has_field", "has_method", "is_subtype",
+        "is_same", "comptime_type", "parent_class", "element_type",
+        "error_type", "method_name", "method_return_type", "field_name",
+        "field_type", "field_type_at",
+        // --- Builtins comptime de string + utilidades ---
+        "comptime_concat", "comptime_streq", "comptime_strlen", "comptime_chr",
+        "comptime_ord", "comptime_substr", "comptime_repeat",
+        "comptime_replace", "comptime_contains", "gensym", "comptime_compile",
+        "comptime_to_str", "comptime_print",
+        // --- Smart pointers / borrow ---
+        "unique_box", "shared_box", "unique_with", "shared_with", "move",
+        "ptr_of", "use_count", "lend", "lend_mut", "read_borrow",
+        "write_borrow",
+        // --- Memoria compartida (Phase Z) ---
+        "share", "unshare", "is_shared", "shared_malloc", "shared_free",
+        "atomic_load_i64", "atomic_store_i64", "atomic_cas_i64",
+        "atomic_add_i64",
+        // --- Colecciones constructoras ---
+        "arraylist", "hashmap", "hashset", "queue", "deque", "treemap",
+        "treeset",
+        // --- Carga dinamica de modulos ---
+        "loadmodule", "unloadmodule",
+    };
+    return kBuiltins.count(name) != 0;
+}
+
+/**
+ * @brief Clasifica un IDENTIFIER consultando los sets del analisis.
+ *
+ * Prioridad (de mayor a menor):
+ *   1. keyword contextual (comptime, as, only, ...)  -> Keyword.
+ *   2. builtin/intrinseco (static_assert, sizeof, ...) -> Function.
+ *   3. nombre declarado (class/struct/enum/type/function) -> su tipo.
+ *   4. parametro de plantilla (T en class Box<T>)     -> TypeParameter.
+ *   5. resto                                          -> Variable.
+ *
+ * Un builtin no debe quedar tapado por un nombre declarado homonimo, de
+ * ahi que vaya antes que los sets del analisis.  Sin analisis, solo se
+ * aplican las reglas 1 y 2 (listas fijas).
  */
 SemTokenType classify_identifier(const std::string &name,
                                  const DocAnalysis *an) {
+    // 1) Keywords contextuales (lista fija, no depende del analisis).
+    if (is_contextual_keyword(name))
+        return SemTokenType::Keyword;
+    // 2) Builtins/intrinsecos (lista fija, no depende del analisis).
+    if (is_builtin_name(name))
+        return SemTokenType::Function;
     if (an != nullptr) {
+        // 3) Nombres declarados top-level en el documento.
         if (an->class_names.count(name))
             return SemTokenType::Class;
         if (an->struct_names.count(name))
@@ -294,6 +415,9 @@ SemTokenType classify_identifier(const std::string &name,
             return SemTokenType::Type;
         if (an->function_names.count(name))
             return SemTokenType::Function;
+        // 4) Parametros de plantilla genericos.
+        if (an->type_params.count(name))
+            return SemTokenType::TypeParameter;
     }
     return SemTokenType::Variable;
 }

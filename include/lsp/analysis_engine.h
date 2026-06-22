@@ -71,6 +71,13 @@ struct DocAnalysis {
     /// Nombres de funciones declaradas top-level (clasificadas como
     /// @c function).
     std::unordered_set<std::string> function_names;
+    /// Nombres de parametros de plantilla (genericos) declarados en el
+    /// documento: @c class Box<T>, @c comptime <T> u32 f(), enums
+    /// genericos, etc.  Un IDENTIFIER que coincide se clasifica como
+    /// @c typeParameter.  v1: set GLOBAL del documento (sin scope por
+    /// declaracion), trade-off aceptable: si un nombre de type-param
+    /// coincide con otro uso, se coloreara como typeParameter.
+    std::unordered_set<std::string> type_params;
 
     /// Coste/complejidad por funcion del modulo (PARCIAL + TOTAL
     /// interprocedural), computado una sola vez sobre el IR post-opt cacheado.
