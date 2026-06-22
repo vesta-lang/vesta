@@ -256,6 +256,10 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         // hace por si mismo; integrarlo es trabajo de una fase posterior).
         vex::CompileOptions opts;
         opts.module_name = "main";
+        // Capturar los valores comptime (consts + builtins sizeof/kind/...) con
+        // su ubicacion, para que el hover y el inspector los muestren.  Coste
+        // bajo (un vector pequeno) y solo en el analisis del LSP.
+        opts.dump_comptime_values = true;
         analysis->result = vex::compile_vex_source(text, uri, opts);
         // Enganchar (best-effort) el warning de discrepancia de @complexity y
         // cachear el coste/complejidad para el hover.

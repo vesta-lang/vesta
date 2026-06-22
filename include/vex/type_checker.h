@@ -914,6 +914,28 @@ class TypeChecker {
         return comptime_block_snapshots_;
     }
 
+    /**
+     * @struct ComptimeBuiltinHit
+     * @brief valor que un builtin de introspeccion (@c sizeof<T>,
+     *        @c alignof<T>, @c kind<T>, @c type_id<T>, @c typename<T>)
+     *        resolvio en tiempo de compilacion, con la ubicacion de la
+     *        expresion para que el LSP lo muestre en hover / inspector.
+     *
+     * Solo se rellena con @c capture_comptime_block_locals_ activo (lo
+     * activa el LSP via @c dump_comptime_values).  Cero coste normal.
+     */
+    struct ComptimeBuiltinHit {
+        SourceLoc loc;         ///< loc del nombre del builtin (para el hover).
+        std::string name;      ///< Expresion legible: "sizeof<i32>".
+        std::string type_kind; ///< "int"|"string".
+        std::string value_str; ///< Valor: "4", "0 (Primitive)", "\"i32\"".
+    };
+    /// Valores de builtins comptime resueltos (sizeof/alignof/kind/...).
+    const std::vector<ComptimeBuiltinHit> &
+    comptime_builtin_hits() const noexcept {
+        return comptime_builtin_hits_;
+    }
+
   private:
     /// Serializa un @c ComptimeValue (elemento de array / campo de
     /// struct) a texto legible, recursivo y acotado.
@@ -921,6 +943,19 @@ class TypeChecker {
 
     bool capture_comptime_block_locals_ = false;
     std::vector<ComptimeBlockSnapshot> comptime_block_snapshots_;
+    std::vector<ComptimeBuiltinHit> comptime_builtin_hits_;
+
+    /// Valor comptime (int/bool) de variables locales cuyo init es
+    /// comptime-evaluable, para evaluar despues la condicion de un `if`.
+    /// Solo se llena con @c capture_comptime_block_locals_ activo (LSP).
+    std::unordered_map<std::string, int64_t> lsp_var_values_;
+    /// Mini-evaluador comptime de enteros/bools: literales, variables conocidas
+    /// (@c lsp_var_values_), builtins escalares y operadores logicos/aritmeticos.
+    /// Devuelve true y escribe @p out si la expresion es evaluable.
+    bool lsp_eval_int(const ast::Expr *e, int64_t *out);
+    /// Evalua un builtin de introspeccion que da un escalar/bool (sizeof,
+    /// field_count, has_field, is_subtype, ...).  No cubre los que dan string.
+    bool lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out);
     std::unordered_map<std::string, ComptimeConst> comptime_const_values_;
     std::vector<std::unordered_map<std::string, ComptimeConst>>
         comptime_const_locals_;

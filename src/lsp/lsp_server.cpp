@@ -244,12 +244,45 @@ void LspServer::publish_diagnostics(const std::string &uri) {
         uint32_t line0 = loc.line > 0 ? loc.line - 1 : 0;
         // Texto de la linea para la conversion de columnas.
         std::string line_text = docs_.line(uri, line0);
-        // Caracter inicial en UTF-16.
-        uint32_t start_char = byte_column_to_utf16(line_text, loc.column);
-        // Caracter final: columna inicial + longitud del span (en bytes).
-        // La columna 1-based del extremo final es column + length.
-        uint32_t end_col_1based = loc.column + (loc.length > 0 ? loc.length : 1);
-        uint32_t end_char = byte_column_to_utf16(line_text, end_col_1based);
+        // Span en bytes 0-based dentro de la linea [span_start, span_end).
+        uint32_t span_start = loc.column > 0 ? loc.column - 1 : 0;
+        uint32_t span_end = span_start + (loc.length > 0 ? loc.length : 1);
+        // Si el span es de un solo byte (tipico cuando el diagnostico apunta a
+        // un simbolo suelto -- p.ej. el '(' de una llamada como static_assert),
+        // ensancharlo al token legible bajo esa posicion para que el subrayado
+        // sea visible y util en lugar de marcar un solo caracter.
+        if (span_end <= span_start + 1) {
+            auto is_ident = [](char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                       (c >= '0' && c <= '9') || c == '_';
+            };
+            const std::string &lt = line_text;
+            // Si el punto cae en la indentacion / espacios (diagnostico cuyo loc
+            // apunta al inicio de la sentencia), avanzar al primer token real de
+            // la linea: un subrayado sobre el hueco en blanco no se entiende.
+            while (span_start < lt.size() &&
+                   (lt[span_start] == ' ' || lt[span_start] == '\t'))
+                ++span_start;
+            span_end = span_start + 1;
+            if (span_start < lt.size() && is_ident(lt[span_start])) {
+                // Identificador bajo la posicion: extender hacia adelante hasta
+                // el final del identificador.
+                uint32_t e = span_start;
+                while (e < lt.size() && is_ident(lt[e])) ++e;
+                span_end = e;
+            } else if (span_start > 0 && span_start <= lt.size() &&
+                       is_ident(lt[span_start - 1])) {
+                // Simbolo precedido de un identificador (p.ej. "static_assert("):
+                // subrayar ese identificador anterior, que es lo significativo.
+                uint32_t s = span_start;
+                while (s > 0 && is_ident(lt[s - 1])) --s;
+                span_end = span_start;
+                span_start = s;
+            }
+        }
+        // Conversion de cada extremo (columna 1-based en bytes) a UTF-16.
+        uint32_t start_char = byte_column_to_utf16(line_text, span_start + 1);
+        uint32_t end_char = byte_column_to_utf16(line_text, span_end + 1);
 
         nlohmann::json range;
         range["start"] = {{"line", line0}, {"character", start_char}};
@@ -582,6 +615,43 @@ bool LspServer::word_under_cursor(const nlohmann::json &params,
 
 void LspServer::handle_hover(const nlohmann::json &msg) {
     const auto &params = msg.at("params");
+
+    // (0) ¿El cursor esta sobre un builtin de introspeccion comptime
+    // (sizeof<T>, alignof<T>, kind<T>, type_id<T>, typename<T>)?  Mostramos el
+    // VALOR que el compilador resolvio, aunque "sizeof" no sea un simbolo
+    // declarado.  Va antes del flujo normal porque esos builtins no estan en el
+    // indice de simbolos.
+    try {
+        const std::string huri =
+            params.at("textDocument").at("uri").get<std::string>();
+        const uint32_t pline = params.at("position").at("line").get<uint32_t>();
+        const uint32_t pchar =
+            params.at("position").at("character").get<uint32_t>();
+        const std::string &htext = docs_.text(huri);
+        const DocAnalysis &an = engine_.analyze_document(huri, htext);
+        const std::string line_text = docs_.line(huri, pline);
+        for (const auto &cv : an.result.comptime_values) {
+            if (cv.loc.line == 0 || cv.builtin_kind.empty()) continue;
+            if (cv.loc.line != pline + 1) continue; // 1-based vs 0-based
+            const uint32_t s = byte_column_to_utf16(line_text, cv.loc.column);
+            const uint32_t e =
+                byte_column_to_utf16(line_text, cv.loc.column + cv.loc.length);
+            if (pchar >= s && pchar < e) {
+                std::string md = "**" + cv.name + "**  _(comptime)_\n\n";
+                md += "= **" + cv.value_str +
+                      "**  _(resuelto en compilacion)_\n";
+                nlohmann::json result, contents;
+                contents["kind"] = "markdown";
+                contents["value"] = md;
+                result["contents"] = std::move(contents);
+                send_result(msg.at("id"), result);
+                return;
+            }
+        }
+    } catch (...) {
+        // params incompleto: continuar con el flujo normal de hover.
+    }
+
     std::string uri, word;
     if (!word_under_cursor(params, uri, word)) {
         // Sin identificador resoluble: devolver null (el cliente lo tolera).

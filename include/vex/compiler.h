@@ -338,6 +338,11 @@ struct CompileResult {
         std::string scope;     ///< Ambito (best-effort; "" = global/desconocido).
         std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type".
         std::string value_str; ///< Representacion legible del valor.
+        SourceLoc loc;         ///< Ubicacion de la expresion (para hover);
+                               ///< line==0 si no aplica (consts top-level).
+        std::string builtin_kind; ///< "sizeof"/"alignof"/"kind"/"type_id"/
+                                  ///< "typename" si proviene de un builtin; ""
+                                  ///< para constantes comptime normales.
     };
     std::vector<ComptimeValueSnapshot> comptime_values;
 };

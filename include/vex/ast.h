@@ -1326,6 +1326,8 @@ struct SynchronizedStmt : Stmt {
  */
 struct AsmStmt : Stmt {
     std::string body; ///< Cuerpo NASM Intel verbatim (raw-slice del source).
+    SourceLoc body_loc; ///< loc del primer token del cuerpo (para mapear el
+                        ///< error de ensamblado a la linea/columna exactas).
     bool q_volatile =
         true; ///< @c volatile (default): no optimizar/reordenar/eliminar.
     bool q_nomem = false; ///< @c nomem: el bloque no accede a memoria.

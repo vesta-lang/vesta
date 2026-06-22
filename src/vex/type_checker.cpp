@@ -4539,6 +4539,19 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // el comptime local registrado arriba; el VM/bytecode usa la
         // variable runtime con sus mutaciones aplicadas en orden.
     }
+    // Captura LSP: recordar el valor comptime de la variable cuando su init es
+    // una EXPRESION evaluable (builtin como field_count<T>, o combinacion de
+    // vars/builtins) -- no un literal puro, que podria reasignarse despues.
+    // Sirve para evaluar luego la condicion de los `if` que la usen.
+    if (capture_comptime_block_locals_ && vd->init) {
+        const ast::NodeKind k = vd->init->kind;
+        const bool is_literal = (k == ast::NodeKind::IntLitExpr ||
+                                 k == ast::NodeKind::BoolLitExpr ||
+                                 k == ast::NodeKind::CharLitExpr);
+        int64_t v;
+        if (!is_literal && lsp_eval_int(vd->init.get(), &v))
+            lsp_var_values_[vd->name] = v;
+    }
     /* `comptime const NAME = expr;` local.  Evalua el init en
      * compile-time y registra en el scope local de comptime const.
      * El lowering lo trata como no-op (no genera ALLOCA ni STORE);
@@ -4933,7 +4946,7 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
             default: break;
             }
             if (overflow) {
-                diags_.warning(vd->loc,
+                diags_.warning(vd->init ? vd->init->loc : vd->loc,
                                std::string("literal ") + std::to_string(sv) +
                                    " fuera del rango del tipo " +
                                    type_to_string(s.type) + " (" + range_msg +
@@ -4983,12 +4996,175 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
     }
 }
 
+bool TypeChecker::lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out) {
+    auto *id = dynamic_cast<const ast::IdentExpr *>(e->callee.get());
+    if (!id || e->type_args.empty()) return false;
+    const std::string &nm = id->name;
+    const Type t1 = type_from_node(e->type_args[0].get());
+    std::string str_arg;
+    if (!e->args.empty())
+        if (auto *sl = dynamic_cast<const ast::StringLitExpr *>(e->args[0].get()))
+            str_arg = sl->value;
+    if (nm == "sizeof") {
+        *out = (int64_t)comptime_type_size(*this, t1);
+        return true;
+    }
+    if (nm == "alignof") {
+        *out = (int64_t)comptime_type_align(*this, t1);
+        return true;
+    }
+    if (nm == "type_id") {
+        *out = (int64_t)comptime_type_id(*this, t1);
+        return true;
+    }
+    if (nm == "kind") {
+        *out = (int64_t)(int)comptime_type_kind(t1);
+        return true;
+    }
+    if (nm == "field_count") {
+        *out = (int64_t)comptime_field_count(*this, t1);
+        return true;
+    }
+    if (nm == "method_count") {
+        *out = (int64_t)comptime_method_count(*this, t1);
+        return true;
+    }
+    if (nm == "offsetof") {
+        *out = (int64_t)comptime_field_offset(*this, t1, str_arg);
+        return true;
+    }
+    if (nm == "has_field") {
+        *out = comptime_has_field(*this, t1, str_arg) ? 1 : 0;
+        return true;
+    }
+    if (nm == "has_method") {
+        *out = comptime_has_method(*this, t1, str_arg) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_class") {
+        *out = comptime_is_class(t1) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_struct") {
+        *out = comptime_is_struct(*this, t1) ? 1 : 0;
+        return true;
+    }
+    if (nm == "is_primitive") {
+        *out = comptime_is_primitive(t1) ? 1 : 0;
+        return true;
+    }
+    if ((nm == "is_subtype" || nm == "is_same") && e->type_args.size() == 2) {
+        const Type t2 = type_from_node(e->type_args[1].get());
+        *out = (nm == "is_subtype" ? comptime_is_subtype(*this, t1, t2)
+                                   : comptime_is_same(*this, t1, t2))
+                   ? 1
+                   : 0;
+        return true;
+    }
+    return false;
+}
+
+bool TypeChecker::lsp_eval_int(const ast::Expr *e, int64_t *out) {
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::IntLitExpr:
+        *out = (int64_t)static_cast<const ast::IntLitExpr *>(e)->value;
+        return true;
+    case ast::NodeKind::BoolLitExpr:
+        *out = static_cast<const ast::BoolLitExpr *>(e)->value ? 1 : 0;
+        return true;
+    case ast::NodeKind::CharLitExpr:
+        *out = (int64_t)static_cast<const ast::CharLitExpr *>(e)->codepoint;
+        return true;
+    case ast::NodeKind::IdentExpr: {
+        auto it =
+            lsp_var_values_.find(static_cast<const ast::IdentExpr *>(e)->name);
+        if (it == lsp_var_values_.end()) return false;
+        *out = it->second;
+        return true;
+    }
+    case ast::NodeKind::UnaryExpr: {
+        auto *u = static_cast<const ast::UnaryExpr *>(e);
+        int64_t v;
+        if (!lsp_eval_int(u->operand.get(), &v)) return false;
+        switch (u->op) {
+        case ast::UnOp::LogicalNot: *out = (v == 0) ? 1 : 0; return true;
+        case ast::UnOp::Neg: *out = -v; return true;
+        case ast::UnOp::BitNot: *out = ~v; return true;
+        case ast::UnOp::Pos: *out = v; return true;
+        default: return false;
+        }
+    }
+    case ast::NodeKind::BinaryExpr: {
+        auto *b = static_cast<const ast::BinaryExpr *>(e);
+        int64_t l;
+        if (!lsp_eval_int(b->lhs.get(), &l)) return false;
+        if (b->op == ast::BinOp::LogicalAnd && l == 0) {
+            *out = 0;
+            return true;
+        }
+        if (b->op == ast::BinOp::LogicalOr && l != 0) {
+            *out = 1;
+            return true;
+        }
+        int64_t r;
+        if (!lsp_eval_int(b->rhs.get(), &r)) return false;
+        switch (b->op) {
+        case ast::BinOp::Add: *out = l + r; return true;
+        case ast::BinOp::Sub: *out = l - r; return true;
+        case ast::BinOp::Mul: *out = l * r; return true;
+        case ast::BinOp::Div:
+            if (r == 0) return false;
+            *out = l / r;
+            return true;
+        case ast::BinOp::Mod:
+            if (r == 0) return false;
+            *out = l % r;
+            return true;
+        case ast::BinOp::Eq: *out = (l == r) ? 1 : 0; return true;
+        case ast::BinOp::Neq: *out = (l != r) ? 1 : 0; return true;
+        case ast::BinOp::Lt: *out = (l < r) ? 1 : 0; return true;
+        case ast::BinOp::Le: *out = (l <= r) ? 1 : 0; return true;
+        case ast::BinOp::Gt: *out = (l > r) ? 1 : 0; return true;
+        case ast::BinOp::Ge: *out = (l >= r) ? 1 : 0; return true;
+        case ast::BinOp::LogicalAnd: *out = (l != 0 && r != 0) ? 1 : 0; return true;
+        case ast::BinOp::LogicalOr: *out = (l != 0 || r != 0) ? 1 : 0; return true;
+        case ast::BinOp::BitAnd: *out = l & r; return true;
+        case ast::BinOp::BitOr: *out = l | r; return true;
+        case ast::BinOp::BitXor: *out = l ^ r; return true;
+        case ast::BinOp::Shl: *out = l << r; return true;
+        case ast::BinOp::Shr: *out = l >> r; return true;
+        default: return false;
+        }
+    }
+    case ast::NodeKind::CallExpr:
+        return lsp_eval_builtin_scalar(
+            static_cast<const ast::CallExpr *>(e), out);
+    default:
+        return false;
+    }
+}
+
 void TypeChecker::check_if(ast::IfStmt *s, const Type &fn_return_type) {
     if (s->cond) {
         Type tc = check_expr(s->cond.get());
         if (tc.kind != PrimitiveKind::BOOL && !is_numeric(tc.kind)) {
             diags_.error(s->cond->loc,
                          "condicion de 'if' debe ser numerica o bool");
+        }
+        // Captura LSP: si la condicion de un `if` normal es comptime-evaluable
+        // (variables con valor comptime conocido + literales + builtins +
+        // operadores), guardar true/false para mostrarlo inline en el IDE.
+        if (capture_comptime_block_locals_ && !s->is_comptime) {
+            int64_t v;
+            if (lsp_eval_int(s->cond.get(), &v)) {
+                ComptimeBuiltinHit hit;
+                hit.loc = s->cond->loc;
+                hit.name = "if"; // compiler.cpp deriva builtin_kind="if"
+                hit.type_kind = "int";
+                hit.value_str = (v != 0) ? "true" : "false";
+                comptime_builtin_hits_.push_back(std::move(hit));
+            }
         }
     }
     /* `comptime if (cond)` exige que cond sea evaluable
@@ -8443,6 +8619,57 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              * usable como init de `comptime const Type X = ...`. */
             rt = Type{PrimitiveKind::TYPE_META};
         }
+        // Captura para el LSP: si esta activa, guardar el VALOR que el builtin
+        // resuelve en compile-time (sizeof/alignof/kind/type_id/typename) con su
+        // ubicacion, para mostrarlo en hover / inspector.  Cero coste cuando el
+        // flag esta apagado (builds normales).
+        if (capture_comptime_block_locals_ && e->type_args.size() == 1) {
+            auto kind_name = [](ComptimeKind k) -> const char * {
+                switch (k) {
+                case ComptimeKind::Primitive: return "Primitive";
+                case ComptimeKind::Class: return "Class";
+                case ComptimeKind::Struct: return "Struct";
+                case ComptimeKind::Enum: return "Enum";
+                case ComptimeKind::Optional: return "Optional";
+                case ComptimeKind::Result: return "Result";
+                case ComptimeKind::Array: return "Array";
+                case ComptimeKind::Ptr: return "Ptr";
+                case ComptimeKind::Function: return "Function";
+                case ComptimeKind::String: return "String";
+                case ComptimeKind::Borrow: return "Borrow";
+                case ComptimeKind::Future: return "Future";
+                case ComptimeKind::Unique: return "Unique";
+                case ComptimeKind::Shared: return "Shared";
+                case ComptimeKind::Collection: return "Collection";
+                default: return "Unknown";
+                }
+            };
+            ComptimeBuiltinHit hit;
+            hit.loc = id->loc;
+            hit.loc.length = static_cast<uint32_t>(id->name.size());
+            hit.name = id->name + "<" + type_to_string(resolved) + ">";
+            hit.type_kind = "int";
+            if (id->name == "sizeof") {
+                hit.value_str =
+                    std::to_string(comptime_type_size(*this, resolved));
+            } else if (id->name == "alignof") {
+                hit.value_str =
+                    std::to_string(comptime_type_align(*this, resolved));
+            } else if (id->name == "type_id") {
+                hit.value_str =
+                    std::to_string(comptime_type_id(*this, resolved));
+            } else if (id->name == "kind") {
+                const ComptimeKind k = comptime_type_kind(resolved);
+                hit.value_str = std::to_string(static_cast<int>(k)) + " (" +
+                                kind_name(k) + ")";
+            } else if (id->name == "typename") {
+                hit.type_kind = "string";
+                hit.value_str =
+                    "\"" + comptime_type_name(*this, resolved) + "\"";
+            }
+            if (!hit.value_str.empty())
+                comptime_builtin_hits_.push_back(std::move(hit));
+        }
         e->result_type = rt;
         return rt;
     }
@@ -8663,6 +8890,79 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 /* has_field/has_method/is_subtype/is_same/is_class/
                  * is_struct/is_primitive -> BOOL. */
                 rt = Type{PrimitiveKind::BOOL};
+            }
+            // Captura para el LSP: guardar el VALOR que resuelve el builtin con
+            // su ubicacion, para mostrarlo inline / en hover.  Cubre los que dan
+            // un valor escalar/string (no los que devuelven Type).
+            if (capture_comptime_block_locals_ && !e->type_args.empty()) {
+                const Type t1 = type_from_node(e->type_args[0].get());
+                std::string str_arg, arg_disp;
+                uint32_t int_arg = 0;
+                if (one_targ_str_arg && !e->args.empty()) {
+                    auto *sl = dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
+                    if (sl) {
+                        str_arg = sl->value;
+                        arg_disp = "\"" + str_arg + "\"";
+                    }
+                } else if (one_targ_int_arg && !e->args.empty()) {
+                    auto *il = dynamic_cast<ast::IntLitExpr *>(e->args[0].get());
+                    if (il) {
+                        int_arg = static_cast<uint32_t>(il->value);
+                        arg_disp = std::to_string(int_arg);
+                    }
+                }
+                auto yn = [](bool b) -> std::string {
+                    return b ? "true" : "false";
+                };
+                ComptimeBuiltinHit hit;
+                hit.loc = id->loc;
+                hit.loc.length = static_cast<uint32_t>(nm.size());
+                hit.type_kind = "int";
+                if (nm == "field_count") {
+                    hit.value_str = std::to_string(comptime_field_count(*this, t1));
+                } else if (nm == "method_count") {
+                    hit.value_str =
+                        std::to_string(comptime_method_count(*this, t1));
+                } else if (nm == "offsetof") {
+                    hit.value_str =
+                        std::to_string(comptime_field_offset(*this, t1, str_arg));
+                } else if (nm == "has_field") {
+                    hit.value_str = yn(comptime_has_field(*this, t1, str_arg));
+                } else if (nm == "has_method") {
+                    hit.value_str = yn(comptime_has_method(*this, t1, str_arg));
+                } else if (nm == "is_class") {
+                    hit.value_str = yn(comptime_is_class(t1));
+                } else if (nm == "is_struct") {
+                    hit.value_str = yn(comptime_is_struct(*this, t1));
+                } else if (nm == "is_primitive") {
+                    hit.value_str = yn(comptime_is_primitive(t1));
+                } else if (nm == "field_name") {
+                    hit.type_kind = "string";
+                    hit.value_str =
+                        "\"" + comptime_field_name(*this, t1, int_arg) + "\"";
+                } else if (nm == "field_type") {
+                    hit.type_kind = "string";
+                    hit.value_str =
+                        "\"" + comptime_field_type_name(*this, t1, str_arg) + "\"";
+                } else if (two_targ_no_args && e->type_args.size() == 2) {
+                    const Type t2 = type_from_node(e->type_args[1].get());
+                    if (nm == "is_subtype")
+                        hit.value_str = yn(comptime_is_subtype(*this, t1, t2));
+                    else if (nm == "is_same")
+                        hit.value_str = yn(comptime_is_same(*this, t1, t2));
+                }
+                if (!hit.value_str.empty()) {
+                    if (two_targ_no_args && e->type_args.size() == 2) {
+                        hit.name = nm + "<" + type_to_string(t1) + "," +
+                                   type_to_string(
+                                       type_from_node(e->type_args[1].get())) +
+                                   ">";
+                    } else {
+                        hit.name = nm + "<" + type_to_string(t1) + ">";
+                        if (!arg_disp.empty()) hit.name += "(" + arg_disp + ")";
+                    }
+                    comptime_builtin_hits_.push_back(std::move(hit));
+                }
             }
             e->result_type = rt;
             return rt;

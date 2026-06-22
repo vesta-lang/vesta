@@ -19,6 +19,7 @@
  * @c Content-Length).  No toma argumentos en esta fase.
  */
 
+#include "jit/keystone_asm_backend.h"
 #include "lsp/json_rpc.h"
 #include "lsp/lsp_server.h"
 
@@ -30,6 +31,11 @@ int main() {
     // Imprescindible en Windows: stdin/stdout en binario para no corromper
     // los pares CRLF del framing del LSP.
     lsp::set_stdio_binary();
+    // Instalar el backend de ensamblado (Keystone) para que el analisis valide
+    // el inline asm (@Asm / asm{}) y reporte instrucciones invalidas como
+    // diagnosticos con linea/columna -- sin esto, lower_asm omite la validacion
+    // y el asm roto pasa silencioso.
+    jit::register_keystone_asm_backend();
     // Transporte por defecto = stdin/stdout.
     lsp::JsonRpcTransport transport;
     lsp::LspServer server(std::move(transport));

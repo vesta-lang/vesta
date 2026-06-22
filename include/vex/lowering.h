@@ -237,6 +237,15 @@ class Lowering {
     ir::IrValueId cast_if_needed(ir::IrValueId v, ir::IrType from,
                                  ir::IrType to, uint32_t source_line,
                                  bool is_explicit = false);
+    /**
+     * @brief Igual que el anterior pero con el @c SourceLoc completo de la
+     *        expresion culpable, para que el warning de conversion apunte a su
+     *        COLUMNA real (no al inicio de la linea).  El overload de
+     *        @c source_line delega en este con columna 1.
+     */
+    ir::IrValueId cast_if_needed(ir::IrValueId v, ir::IrType from,
+                                 ir::IrType to, const SourceLoc &loc,
+                                 bool is_explicit = false);
 
     // -----------------------------------------------------------------
     // Lowering por categoria.
