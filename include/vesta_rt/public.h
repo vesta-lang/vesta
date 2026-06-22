@@ -37,7 +37,7 @@
  *   necesita verificar retornos de error.
  *
  * - Ningun simbolo aqui puede cambiar de signatura sin bumpear el
- *   @c VRT_API_VERSION_MAJOR.  Bumps minor permiten ANYADIR funciones
+ *   @c VRT_API_VERSION_MAJOR.  Bumps minor permiten añaDIR funciones
  *   nuevas al final, jamas mutar las existentes.
  *
  * = Uso desde el JIT =
@@ -601,21 +601,21 @@ uint64_t vrt_register_alloc(vrt_proc *proc, uint8_t *raw);
 vrt_class *vrt_defclass(vrt_proc *proc, uint64_t params_vaddr);
 
 /**
- * @brief Anyade un field a una clase (deffield bytecode).
+ * @brief añade un field a una clase (deffield bytecode).
  *
  * @return 1 si OK, 0 si fallo.
  */
 int32_t vrt_deffield(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr);
 
 /**
- * @brief Anyade un metodo a una clase (defmethod bytecode).
+ * @brief añade un metodo a una clase (defmethod bytecode).
  *
  * @return vtable_index del metodo recien anadido, o UINT32_MAX si fallo.
  */
 uint32_t vrt_defmethod(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr);
 
 /**
- * @brief Anyade un advice a un metodo (addadvice bytecode).
+ * @brief añade un advice a un metodo (addadvice bytecode).
  *
  * @return 1 si OK, 0 si fallo.
  */

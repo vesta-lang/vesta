@@ -264,7 +264,7 @@ class Sidebar {
             this.is_expanded[i + child_count] = this.is_expanded[i];
             i = i - 1;
         }
-        // Anyadir hijos al names buffer y registrar.
+        // añadir hijos al names buffer y registrar.
         i32 child_depth = this.depths[idx] + 1;
         i = 0;
         while (i < child_count) {
@@ -331,7 +331,7 @@ class Sidebar {
         u8* spec = malloc(cwd_n + 8);
         i32 i = 0;
         while (i < cwd_n) { spec[i] = cwd_c[i]; i = i + 1; }
-        // Anyadir "\\*" (Windows) o "/*" (POSIX).  Usamos '\' por defecto.
+        // añadir "\\*" (Windows) o "/*" (POSIX).  Usamos '\' por defecto.
         spec[cwd_n]     = (u8) 92; // '\'
         spec[cwd_n + 1] = (u8) 42; // '*'
         spec[cwd_n + 2] = 0;
@@ -1156,25 +1156,25 @@ void duplicate_line(buffer.Buffer b) {
     if (next > start && b.data[next - 1] == 10) has_lf = 1;
     // Construir el buffer a insertar: la linea + \n garantizado.
     i32 line_len = next - start;
-    // Si la linea original no termina en \n (ultima sin LF), anyadir uno.
+    // Si la linea original no termina en \n (ultima sin LF), añadir uno.
     i32 ins_len = line_len;
     if (has_lf == 0) ins_len = line_len + 1;
     u8* tmp = malloc(ins_len + 1);
     i32 k = 0;
     while (k < line_len) { tmp[k] = b.data[start + k]; k = k + 1; }
-    if (has_lf == 0) { tmp[line_len] = 10; }   // anyadir LF al duplicado
+    if (has_lf == 0) { tmp[line_len] = 10; }   // añadir LF al duplicado
     // Posicionar cursor justo despues del LF de la linea original (o al final
     // si la original no tenia LF -- en ese caso insertamos LF antes).
     if (has_lf == 1) {
         b.cursor = next;
     } else {
-        // sin LF: primero hay que anyadir LF entre original y duplicado.
+        // sin LF: primero hay que añadir LF entre original y duplicado.
         b.cursor = next;
         u8* lf_buf = malloc(1);
         lf_buf[0] = 10;
         b.insert_bytes(lf_buf, 1);
         free(lf_buf);
-        ins_len = line_len;  // ya no anyadimos LF en el duplicado
+        ins_len = line_len;  // ya no añadimos LF en el duplicado
         // y reconstruir tmp sin el LF extra (ya esta insertado).
     }
     b.insert_bytes(tmp, ins_len);
@@ -1536,7 +1536,7 @@ i32 main() {
             if (indent_end > b.cursor) indent_end = b.cursor;
             i32 indent_n = indent_end - ls;
             // Smart-indent: si el ultimo char no-blanco de la linea anterior
-            // es `{`, anyade 4 spaces extra.  Soporta estilo C/Java/Rust/Vex.
+            // es `{`, añade 4 spaces extra.  Soporta estilo C/Java/Rust/Vex.
             i32 extra_indent = 0;
             i32 cur_cursor = b.cursor;
             i32 j = cur_cursor - 1;
@@ -1554,7 +1554,7 @@ i32 main() {
                 u8* src = b.data + ls;
                 b.insert_bytes(src, indent_n);
             }
-            // Anyadir indentacion extra (4 spaces si lineas-previa termina en `{`).
+            // añadir indentacion extra (4 spaces si lineas-previa termina en `{`).
             if (extra_indent > 0) {
                 u8* spaces = malloc(extra_indent + 1);
                 i32 k = 0;

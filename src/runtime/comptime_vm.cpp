@@ -175,7 +175,7 @@ void ComptimeRuntime::register_macro(const std::string &macro_name,
 
 bool ComptimeRuntime::try_invoke(const std::string &macro_name) noexcept {
     /*   : VM lifecycle bootstrap funcional pero la ejecucion
-     * real todavia no esta wired (  anyade load + marshalling +
+     * real todavia no esta wired (  añade load + marshalling +
      * call).  El caller debe seguir interpretando @c false como
      * "fallback al AST evaluator".
      *
@@ -298,7 +298,7 @@ static std::string build_memo_key(const std::string &macro_name,
         }
     }
     /* Hex-encode el hash para que sea un string utilizable como key
-     * en el unordered_map.  Tambien anyadimos el name para diag. */
+     * en el unordered_map.  Tambien añadimos el name para diag. */
     char buf[17];
     std::snprintf(buf, sizeof(buf), "%016llx",
                   static_cast<unsigned long long>(h));

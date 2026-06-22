@@ -34,7 +34,7 @@ namespace vex {
 namespace {
 
 constexpr uint32_t VPC_MAGIC = 0x4B435056; // 'VPCK' LE
-// v2 (M.L14+L15): anyade compiler_version_hash u64 tras opts_hash.
+// v2 (M.L14+L15): añade compiler_version_hash u64 tras opts_hash.
 constexpr uint16_t VPC_FORMAT_VERSION = 2;
 
 void write_u16_le(std::vector<uint8_t> &out, uint16_t v) {

@@ -551,9 +551,9 @@ enum class IrOp : uint16_t {
         0x74, ///< %dst = findclass %params        (lookup ClassInfo* by name)
     DEFCLASS =
         0x75, ///< %dst = defclass %params         (define clase en runtime)
-    DEFFIELD = 0x76, ///< deffield %cls, %params          (anyade field a clase)
+    DEFFIELD = 0x76, ///< deffield %cls, %params          (añade field a clase)
     DEFMETHOD =
-        0x77, ///< defmethod %cls, %params         (anyade metodo a clase)
+        0x77, ///< defmethod %cls, %params         (añade metodo a clase)
     ADDADVICE =
         0x78, ///< addadvice %target, %advice, kind  (AOP: BEFORE/AFTER/AROUND)
     FINDMETHOD =
@@ -1380,8 +1380,8 @@ struct IrModule {
             return equals(i, v.data(), v.size());
         }
 
-        /* ---- Mutaciones: anyadir entries ---- */
-        /// Anyade bytes al pool con padding de alineamiento.  Devuelve
+        /* ---- Mutaciones: añadir entries ---- */
+        /// añade bytes al pool con padding de alineamiento.  Devuelve
         /// el indice de la nueva entry.  La @c meta queda con defaults;
         /// llamar @c meta_at(i) para ajustarla.
         size_t push_back(const uint8_t *p, size_t n);
@@ -1466,7 +1466,7 @@ struct IrModule {
     /**
      * @brief Registra una importacion nativa, deduplicando.
      *
-     * Si la pareja (lib, name) ya esta en native_imports no se anyade
+     * Si la pareja (lib, name) ya esta en native_imports no se añade
      * de nuevo; el lowering puede llamarlo libremente desde cualquier
      * punto sin preocuparse de duplicados.
      */

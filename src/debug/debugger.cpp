@@ -2346,7 +2346,7 @@ void Debugger::handle_command(const std::string &json_msg, int client_fd) {
                 if (invalid_streak >= 3) {
                     // El comma + first=false ya se emitieron arriba
                     // (justo despues de leer bytes); aqui solo
-                    // anyadimos el item sentinel y rompemos el walk.
+                    // añadimos el item sentinel y rompemos el walk.
                     d << "{\"addr\":" << addr << ",\"opcode\":0,\"ext\":false,"
                       << "\"name\":\"(fin)\",\"size\":0,"
                       << "\"bytes\":\"\","
@@ -2837,7 +2837,7 @@ void Debugger::handle_command(const std::string &json_msg, int client_fd) {
          *
          * Estos comandos solo tienen sentido cuando la VM se arranca
          * con --server-mode (vm_persistent=true), pero son seguros de
-         * invocar en cualquier modo: load_velb anyade un nuevo proceso
+         * invocar en cualquier modo: load_velb añade un nuevo proceso
          * a un scheduler existente y kill_proc marca uno DEAD.
          * ============================================================ */
 

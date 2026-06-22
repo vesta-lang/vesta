@@ -126,7 +126,7 @@ struct LiveInterval {
     }
 
     /**
-     * @brief Anyade un rango [from, to).  Coalesce con rangos
+     * @brief añade un rango [from, to).  Coalesce con rangos
      *        existentes solapados/adyacentes manteniendo orden.
      */
     void add_range(uint32_t from, uint32_t to);

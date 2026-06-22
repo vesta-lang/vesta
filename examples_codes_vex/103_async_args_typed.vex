@@ -28,7 +28,7 @@ i32 sum_i32(i32 a, i32 b) {
 }
 
 // Caso 2: tres args i64, retorno i64.
-@Async
+@Asyncd
 i64 sum_three(i64 a, i64 b, i64 c) {
     return a + b + c;
 }

@@ -2018,7 +2018,7 @@ SrDom sr_compute_dom(const IrFunction &fn) {
     }
 
     /* Dominance frontier (Cytron): por cada bloque b con >=2 preds, por cada
-     * pred p, sube en el dom-tree desde p hasta idom[b] anyadiendo b al DF. */
+     * pred p, sube en el dom-tree desde p hasta idom[b] añadiendo b al DF. */
     for (IrBlockId b = 0; b < N; ++b) {
         if (d.preds[b].size() < 2) continue;
         for (IrBlockId p : d.preds[b]) {
@@ -2254,7 +2254,7 @@ bool sr_mem2reg_object(
 
     /* 2.5) Deteccion de loops (headers + bloques in-loop) desde back-edges.
      * Necesario para el COST-MODEL: un PHI in-loop que NO esta en un loop
-     * header (= escritura condicional de campo dentro de un loop) anyade copies
+     * header (= escritura condicional de campo dentro de un loop) añade copies
      * en el path no-tomado por iteracion.  Medido: regresiona el interp (16
      * registros VM -> presion + copies).  Los PHIs de loop-header (acumuladores
      * incondicionales) y los if-merge FUERA de loops (coste unico) SI son win.
@@ -2881,7 +2881,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
          *     insercion de PHI (Cytron) + renaming.
          *
          *     Default-on con COST-MODEL: el propio @c sr_mem2reg_object baila
-         * si promover anyadiria un if-merge PHI DENTRO de un loop (= escritura
+         * si promover añadiria un if-merge PHI DENTRO de un loop (= escritura
          *     condicional de campo en el loop), que pessimiza el interp (16
          *     registros VM -> copies + presion).  Los casos que SI promueve son
          *     win (acumuladores incondicionales en loop: +14..41% interp;
@@ -5696,13 +5696,13 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                 }
 
                 if (!inline_ok) {
-                    /* Cancelar el inline: revertir lo que anyadimos.
+                    /* Cancelar el inline: revertir lo que añadimos.
                      * Conservativo: push el CALL original. */
-                    /* Quitar las instrs recien anyadidas relacionadas con
+                    /* Quitar las instrs recien añadidas relacionadas con
                      * inline. Para simplicidad: NO retroceder; quedaria un mix
                      * incorrecto.  Marcar y emit CALL original al final. */
                     /* Reset estrategia: para evitar IR corrupto, hacemos un
-                     * passthrough simple: no haber comenzado a anyadir.
+                     * passthrough simple: no haber comenzado a añadir.
                      * Como ya empezamos, no podemos limpiar facilmente.
                      * Por seguridad: rebuild new_instrs desde scratch
                      * usando bb.instrs[0..i]. */
@@ -5971,7 +5971,7 @@ bool ir_pass_licm(IrFunction &fn) {
 
         /* Helper: instr es candidato para mover? */
         auto is_invariant_candidate = [&](const IrInstr &ins) -> bool {
-            /* Sprint mem-perf string_hot: anyadir STRMAKE/STRCAT/STRINTERN/
+            /* Sprint mem-perf string_hot: añadir STRMAKE/STRCAT/STRINTERN/
              * STRCONV/STRRESERVE como hoistables a pesar de side-effecting.
              * El alloc-identity no es observable; el contenido si.  Ver
              * @c is_licm_hoistable_alloc. */
@@ -6970,7 +6970,7 @@ bool ir_pass_schedule(IrFunction &fn) {
 
             if (is_barr) {
                 /* Barrera: depende de todo lo previo, bloquea todo lo
-                 * posterior. Conservador: anyadir edge desde TODOS los nodos
+                 * posterior. Conservador: añadir edge desde TODOS los nodos
                  * previos. */
                 for (size_t j = 0; j < i; ++j)
                     add_edge(j, i);
@@ -7305,7 +7305,7 @@ bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
         auto &hpreds = header.preds;
         hpreds.erase(std::remove(hpreds.begin(), hpreds.end(), body_id),
                      hpreds.end());
-        // Anyadir body a exit.preds si no esta.
+        // añadir body a exit.preds si no esta.
         IrBlock &exit_blk = fn.blocks[exit_id];
         if (std::find(exit_blk.preds.begin(), exit_blk.preds.end(), body_id) ==
             exit_blk.preds.end()) {

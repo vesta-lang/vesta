@@ -689,7 +689,7 @@ IrValueId IrBuilder::call_native(const std::string &lib_func,
 // =========================================================================
 
 /**
- * @brief Anyade una instruccion al final del bloque actual.
+ * @brief añade una instruccion al final del bloque actual.
  *
  * Politica defensiva: si no hay bloque activo (@c current_block_ ==
  * IR_NO_BLOCK o fuera de rango), descartamos silenciosamente la

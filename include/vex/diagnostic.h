@@ -101,7 +101,7 @@ struct Diagnostic {
  * @brief Contenedor mutable que acumula diagnosticos durante la compilacion.
  *
  * Optimizado para el patron tipico del compilador:
- *  - Se anyaden diagnosticos linealmente (push back O(1) amortizado).
+ *  - Se añaden diagnosticos linealmente (push back O(1) amortizado).
  *  - Se consulta @c has_errors() muchas veces para decidir si abortar.
  *  - Se itera al final con @c all() para emitir el reporte unificado.
  *
@@ -113,8 +113,8 @@ class Diagnostics {
     Diagnostics() = default;
 
     /**
-     * @brief Anyade un diagnostico copiando el objeto.
-     * @param d Diagnostico a anyadir.
+     * @brief añade un diagnostico copiando el objeto.
+     * @param d Diagnostico a añadir.
      */
     void emit(Diagnostic d) {
         // Actualizar el contador de errores antes de mover el diagnostico.

@@ -2,7 +2,7 @@
 // cada llamada baja a UN solo
 // IrOp::CONST (o STR_LIT_ADDR + STRMAKE para field_name/field_type).
 //
-// Builtins anyadidos:
+// Builtins añadidos:
 //   field_count<T>()        -> u32
 //   method_count<T>()       -> u32
 //   offsetof<T>("field")    -> u64

@@ -552,7 +552,7 @@ class Lowering {
 
     /**
      * @brief Genera la IrFunction auxiliar @c __new_<Class>(args) para
-     *        cada clase declarada en el modulo y la anyade a out.
+     *        cada clase declarada en el modulo y la añade a out.
      *        El cuerpo es un bloque RAW_ASM con findclass + newobj +
      *        callvirt 0 (ctor) + return GcHandle.
      */
@@ -1698,7 +1698,7 @@ class Lowering {
      */
     void lower_comptime_for(ast::ComptimeForStmt *s);
 
-    /// helpers de spawn pendientes de anyadir al modulo.  Las
+    /// helpers de spawn pendientes de añadir al modulo.  Las
     /// funciones se acumulan aqui durante el lowering del padre y se
     /// vuelcan a @c out_mod_ al final de @c run() para preservar el
     /// orden de funciones (main primero -> emisor IR la marca como

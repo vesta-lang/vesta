@@ -187,7 +187,7 @@ InstrRoles operand_roles(MOp op) noexcept {
 /* ===================================================================== */
 
 void LiveInterval::add_range(uint32_t from, uint32_t to) {
-    if (from >= to) return; // rango vacio: nada que anyadir
+    if (from >= to) return; // rango vacio: nada que añadir
     /* Caso comun (construccion backward): el nuevo rango toca o precede
      * al primer rango existente.  Coalesce con el front si solapan o son
      * adyacentes; si no, insercion ordenada general. */

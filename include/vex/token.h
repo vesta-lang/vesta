@@ -17,8 +17,8 @@
  * El conjunto de TokenKind declarado aqui cubre TODA la sintaxis cerrada
  * de Vex.  Esto evita renombres y reordenamientos del enum (que
  * invalidarian tablas planas indexadas por ordinal en el parser) cuando
- * se anyaden caracteristicas nuevas: cualquier futuro feature reusa
- * tokens existentes o anyade nuevos al final.
+ * se añaden caracteristicas nuevas: cualquier futuro feature reusa
+ * tokens existentes o añade nuevos al final.
  *
  * Reglas de diseno:
  *  - El enum se mantiene compacto (uint16_t suficiente).
@@ -52,14 +52,14 @@ namespace vex {
  * Los valores ordinales son estables: el parser y el reportador de
  * errores los usan como indice en tablas planas (operator precedence,
  * "expected after X" messages, etc.).  No reordenar entradas; al
- * anyadir nuevas hacerlo SIEMPRE al final del bloque correspondiente.
+ * añadir nuevas hacerlo SIEMPRE al final del bloque correspondiente.
  */
 enum class TokenKind : uint16_t {
     // ---------------------------------------------------------------
     // Categoria 0: control de flujo del lexer/parser.
     // ---------------------------------------------------------------
     END_OF_FILE = 0, ///< Fin de fichero.
-    UNKNOWN,         ///< Caracter no reconocido (acompanya a un diagnostico).
+    UNKNOWN,         ///< Caracter no reconocido (acompaña a un diagnostico).
 
     // ---------------------------------------------------------------
     // Categoria 1: literales.

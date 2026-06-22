@@ -553,7 +553,7 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
             ns.name = nd->name;
             collect_and_flatten_(nd->decls, nd->name, nd->name, ns, new_decls);
             namespaces.push_back(std::move(ns));
-            // El NamespaceDecl wrapper se descarta (no se anyade a new_decls).
+            // El NamespaceDecl wrapper se descarta (no se añade a new_decls).
             // Sus decls internos ya estan en new_decls con nombres mangled.
         } else {
             new_decls.push_back(std::move(d));

@@ -294,7 +294,7 @@ uint64_t RawAllocator::realloc(uint64_t ptr, size_t new_size) {
     stats_.freed_bytes += old_size;
 
     // Liberar el bloque viejo y eliminar su entrada de la tabla.  Solo
-    // despues anyadiremos el nuevo (en orden para que @c total_bytes_
+    // despues añadiremos el nuevo (en orden para que @c total_bytes_
     // refleje la transicion correctamente y el peak se actualice
     // contra el nuevo total).
     vm::free_memory(it->second.host_ptr, old_size);

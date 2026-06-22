@@ -195,7 +195,7 @@ class IPortBackend {
      * @brief Emite la firma de la funcion ("int32_t add(int32_t a, ...)").
      *
      * No incluye el cuerpo ni las llaves; solo @c "return_type name(params)".
-     * El transpiler base anyade @c " {" o @c "{\n" segun convencion.
+     * El transpiler base añade @c " {" o @c "{\n" segun convencion.
      */
     virtual void emit_fn_signature(EmitContext &ctx,
                                    const ir::IrFunction &fn) = 0;

@@ -61,7 +61,7 @@ namespace jit {
  *        @c mode (NATIVE_ABI para tests, VM_ABI para runtime real).
  *
  * Construye un @c SelectorOptions con el modo y, si el modo es VM_ABI
- * y hay safepoint handler resuelto, anyade su direccion para que el
+ * y hay safepoint handler resuelto, añade su direccion para que el
  * selector emita las llamadas correctamente.  Despues delega en
  * @c compile_with_opts que hace el trabajo real.
  */
@@ -75,7 +75,7 @@ CompileResult JitCompiler::compile(const ir::IrFunction &ir_fn,
     // tendria que resolver luego).
     opts.runtime = &rt_;
     // Solo si vamos a VM_ABI (codigo que correra como parte de un
-    // proceso VestaVM normal) anyadimos la direccion del handler de
+    // proceso VestaVM normal) añadimos la direccion del handler de
     // safepoint.  En NATIVE_ABI (tests aislados) los polls salen
     // como no-ops o se omiten.
     if (mode == SelectorMode::VM_ABI && rt_.safepoint_handler) {
@@ -156,7 +156,7 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     std::memcpy(code, bytes.data(), bytes.size());
 
     // Sprint fib-recursion (2026-06-02): patch de self-references.
-    // El encoder anyadio a @c mf.self_ref_byte_offsets las posiciones
+    // El encoder añadio a @c mf.self_ref_byte_offsets las posiciones
     // donde se emitio un MOV reg,imm64 con valor placeholder 0 que
     // referencia a la PROPIA funcion.  Ahora que conocemos la
     // direccion final del codigo (= @c code), escribimos esa

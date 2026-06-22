@@ -84,7 +84,7 @@ WaitTable::Entry *WaitTable::find_entry(Bucket &b, uint32_t handle,
 }
 
 // ------------------------------------------------------------------
-// push: anyadir waiter al final de la cola (handle, kind)
+// push: añadir waiter al final de la cola (handle, kind)
 // ------------------------------------------------------------------
 
 void WaitTable::push(uint32_t handle, WaitKind kind, uint64_t encoded_pid) {
@@ -102,7 +102,7 @@ void WaitTable::push(uint32_t handle, WaitKind kind, uint64_t encoded_pid) {
         e->next = b.chain;
         b.chain = e;
     }
-    // FIFO push: anyadir al final de la cola.
+    // FIFO push: añadir al final de la cola.
     e->queue.push_back(encoded_pid);
 
     unlock_bucket(b);

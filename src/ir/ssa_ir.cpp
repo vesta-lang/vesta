@@ -434,7 +434,7 @@ size_t IrModule::StaticDataStore::push_back(std::vector<uint8_t> &&v) {
 }
 
 void IrModule::StaticDataStore::append_raw_entries(StaticDataStore &&other) {
-    // Anyade los bytes de @c other.bytes al final del pool propio
+    // añade los bytes de @c other.bytes al final del pool propio
     // (con padding intermedio) y ajusta los offsets de las entries.
     if (other.entries.empty()) return;
     // Padding hasta alignment_default antes del bloque del dep.
@@ -458,7 +458,7 @@ void IrModule::StaticDataStore::append_raw_entries(StaticDataStore &&other) {
 uint64_t IrModule::intern_static_data(std::vector<uint8_t> bytes) {
     // Dedup lineal por bytes.  Para programas tipicos (decenas a
     // cientos de literales) el coste es despreciable; arquitectura
-    // futura podria anyadir un map<hash, idx> si el problema escala.
+    // futura podria añadir un map<hash, idx> si el problema escala.
     const uint64_t h = fnv1a_local_64(bytes.data(), bytes.size());
     for (size_t i = 0; i < static_data.size(); ++i) {
         if (static_data.meta_at(i).content_hash == h &&

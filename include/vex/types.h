@@ -26,7 +26,7 @@
  *
  * La estructura @c Type
  * ya esta disenyada como union etiquetada por extension futura: el
- * miembro discriminador @c kind permite anyadir variantes sin tocar
+ * miembro discriminador @c kind permite añadir variantes sin tocar
  * los call sites.
  *
  * Decision de hardware:
@@ -52,7 +52,7 @@ namespace vex {
  * @enum PrimitiveKind
  * @brief Tipos primitivos canonicos del lenguaje Vex.
  *
- * Los valores ordinales son estables.  Si se anyaden nuevos tipos,
+ * Los valores ordinales son estables.  Si se añaden nuevos tipos,
  * hacerlo SIEMPRE al final del enum para que las tablas planas
  * indexadas por (uint8_t)kind permanezcan validas.
  */

@@ -476,7 +476,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
                 free(sec_foff);
                 free(sec_seen);
                 elf_builder_free(b);
-                set_err(err, err_cap, "aot_emit_elf: fallo anyadiendo seccion");
+                set_err(err, err_cap, "aot_emit_elf: fallo añadiendo seccion");
                 return 0;
             }
             if (sec_va) {
@@ -2442,7 +2442,7 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
             if (!found) extn[n_extn++] = e;
         }
 
-    /* Secciones COFF (las relocs se anyaden con add_relocation). */
+    /* Secciones COFF (las relocs se añaden con add_relocation). */
     NewSection *ns = (NewSection *)calloc((size_t)num_secs, sizeof(NewSection));
     for (int i = 0; i < num_secs; ++i) {
         uint32_t chars = 0;

@@ -87,7 +87,7 @@ struct TrustPin {
 std::vector<TrustPin> load_trust_pins(const std::string &trust_file_path = "");
 
 /**
- * @brief Anyade un trust pin nuevo (preserva los existentes).
+ * @brief añade un trust pin nuevo (preserva los existentes).
  */
 bool add_trust_pin(const TrustPin &pin,
                    const std::string &trust_file_path = "");

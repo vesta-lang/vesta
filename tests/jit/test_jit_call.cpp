@@ -98,7 +98,7 @@ void test_call_no_args() {
     jit::RuntimeEntries rt;
     rt.resolve();
 
-    /* Necesitamos anyadir vrt_api_version a runtime_entries para
+    /* Necesitamos añadir vrt_api_version a runtime_entries para
      * que el resolver lo encuentre.  Como no esta en la tabla
      * por defecto, marcamos como unsupported y el test verifica
      * eso.  Sin embargo, la integracion real lo tendria.

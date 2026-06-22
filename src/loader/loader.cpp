@@ -186,7 +186,7 @@ void Loader::parse_velb_header(Executable &exe, ByteReader &reader) {
     // este file ya cumple, podemos leer estos campos sin riesgo.
     exe.header.offset_reloc_table = reader.read64();
     exe.header.size_reloc_table = reader.read32();
-    /* VERSION_VELB 0x3 anyade offset_ir_section + size_ir_section
+    /* VERSION_VELB 0x3 añade offset_ir_section + size_ir_section
      * en los mismos 12 bytes que antes eran _reloc_pad.  En binarios
      * v2 (donde _reloc_pad era zero-init) estos campos quedan a 0
      * -> no IR section, JIT deshabilitado para ese modulo.  Forward

@@ -847,7 +847,7 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
                         const std::string &cost_label = std::string()) {
     const std::string fn_id = "fn" + std::to_string(fn_idx);
     std::string title = fn.name;
-    // anyadir conteo de bloques + tipo retorno + n params
+    // añadir conteo de bloques + tipo retorno + n params
     title += " (";
     title += std::to_string(fn.blocks.size());
     title += " bb, ";
@@ -1717,7 +1717,7 @@ std::string mermaid_from_ast(const ast::ModuleNode &mod) {
         default:
             // Otros tipos top-level no comunes (TypeAliasDecl, etc.):
             // los omitimos del diagrama para no saturarlo.  Si en el
-            // futuro se quiere granularidad mayor, anyadir aqui.
+            // futuro se quiere granularidad mayor, añadir aqui.
             break;
         }
     }

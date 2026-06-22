@@ -80,7 +80,7 @@ public class Launcher {
         this.reload();
     }
 
-    // Recarga el listado del cwd actual.  Anyade ".." al inicio si hay
+    // Recarga el listado del cwd actual.  añade ".." al inicio si hay
     // directorio padre.  Dirs antes que ficheros (orden de listdir
     // nativo; Windows ya devuelve dirs primero la mayoria de veces).
     public void reload() {
@@ -89,7 +89,7 @@ public class Launcher {
         this.sel        = 0;
         this.scroll     = 0;
 
-        // 1. anyadir ".." si tiene sentido (cwd no es raiz).
+        // 1. añadir ".." si tiene sentido (cwd no es raiz).
         i32 cwd_n = (i32) str_bytes(this.cwd);
         if (cwd_n > 3) {
             if (this.names_used + 3 <= this.names_cap) {
@@ -157,7 +157,7 @@ public class Launcher {
         this.apply_filter();
     }
 
-    // Anyade una entry al pool.  Si name_p es null y nlen==-1, escribe
+    // añade una entry al pool.  Si name_p es null y nlen==-1, escribe
     // ".." literal (entry sintetica del padre).
     public void add_entry_bytes(u8* name_p, i32 nlen, i32 is_dir) {
         i32 actual_len = nlen;

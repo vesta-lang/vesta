@@ -702,7 +702,7 @@ static void emit_restore_all_gc_aware(EmitCtx &ctx, uint32_t call_pos,
 // como temp; con 2+ args spilled, el segundo load clobbeaba el primero, y
 // ambos terminaban con el mismo valor en moves[].  Fix: emitir spills tras
 // el parallel-move usando direct load `mov r_target, [slot]` (sin pasar por
-// scratch).  Para values is_gc_object spilled, anyade el gcderef+xchg que
+// scratch).  Para values is_gc_object spilled, añade el gcderef+xchg que
 // load_src haria normalmente.
 static void emit_load_spilled_arg(EmitCtx &ctx, int target_reg,
                                   ir::IrValueId vid) {

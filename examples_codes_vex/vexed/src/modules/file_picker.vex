@@ -116,7 +116,7 @@ public class FilePicker {
                     free(sub_dir);
                     free(sub_pre);
                 } else {
-                    // Fichero: anyadir con prefix/name.
+                    // Fichero: añadir con prefix/name.
                     i32 full_len = nlen;
                     if (pre_len > 0) full_len = pre_len + 1 + nlen;
                     if (this.names_used + full_len + 1 <= this.names_cap) {

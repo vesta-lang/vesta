@@ -100,7 +100,7 @@ class WaitTable {
     WaitTable &operator=(WaitTable &&) = delete;
 
     /**
-     * @brief Anyade @p encoded_pid al final de la cola @c (handle, kind).
+     * @brief añade @p encoded_pid al final de la cola @c (handle, kind).
      *
      * Lock-free a nivel global: solo el bucket correspondiente toma
      * spinlock.  Si dos threads llaman @c push sobre handles en
@@ -169,7 +169,7 @@ class WaitTable {
         // de 64 (el compilador rellena al final automaticamente).
         // No necesitamos @c _pad explicito; con @c std::atomic_flag (1B)
         // + implicit pad (7B) + Entry* (8B) = 16B utiles, el compilador
-        // anyade 48B de cola para alcanzar exactamente 64.
+        // añade 48B de cola para alcanzar exactamente 64.
     };
     // Verificacion ABI/cache: cada bucket debe ocupar exactamente
     // 64 bytes para que dos buckets consecutivos NO compartan

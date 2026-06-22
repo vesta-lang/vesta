@@ -690,7 +690,7 @@ void emit_instr_sib(const vm::Instruction *instruction_parser,
                     Assembler *assembly_ctx) {
     // Para MOV SIB el bit _signed_instruct (bit 5 del ctrl) selecciona
     // memoria HOST cuando se activa.  Reutilizamos la misma helper
-    // (is_signed) para ALU con signo y anyadimos is_host_sib() para los
+    // (is_signed) para ALU con signo y añadimos is_host_sib() para los
     // mnemonicos que mapean al modo host.  Los conjuntos son disjuntos.
     bool is_a_signed = is_signed(instruction_parser->opcode) ||
                        is_host_sib(instruction_parser->opcode);

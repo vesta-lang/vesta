@@ -48,7 +48,7 @@
  *
  * Los regs pinned (R12-R15) son callee-saved en ambos ABIs (SysV/Win64).
  * El selector ya hace @c push rbx + @c push rbp; con regalloc activo
- * anyadimos @c push r12/r13/r14/r15 (solo los usados) ANTES del @c push
+ * añadimos @c push r12/r13/r14/r15 (solo los usados) ANTES del @c push
  * @c rbp, y @c pop r15/r14/r13/r12 DESPUES del @c pop @c rbp en el
  * epilogue.  El alignment se mantiene (cada push es 8 bytes; 4 pushes
  * = 32 bytes = multiplo de 16).
@@ -113,7 +113,7 @@ JitRegalloc compute_jit_regalloc(const ir::IrFunction &fn);
  * base=RBP y disp coincidente con @c slot_offset(pinned_vid) se
  * reemplaza por un REG operand del reg asignado, preservando width.
  *
- * El caller es responsable de anyadir push/pop de
+ * El caller es responsable de añadir push/pop de
  * @c regalloc.callee_saved_used en prologue/epilogue.
  *
  * @param mf       MFunction post-selector.

@@ -42,7 +42,7 @@ def find_library() -> str:
 
 def load_api(path: str) -> ctypes.CDLL:
     """Carga el DLL/.so y declara las firmas de la API."""
-    # En Windows, anyadir el directorio del DLL al search path para que
+    # En Windows, añadir el directorio del DLL al search path para que
     # encuentre las dependencias (OpenSSL) en Python 3.8+.
     dll_dir = os.path.dirname(os.path.abspath(path))
     if hasattr(os, "add_dll_directory") and os.name == "nt":

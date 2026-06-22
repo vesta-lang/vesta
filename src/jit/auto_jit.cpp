@@ -830,7 +830,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         /* Fallo: marcar para no reintentar (igual que IR ausente).
          * res.unsupported = true significa que el Selector encontro
          * una IR op que no sabe lowerizar; printamos warning para
-         * que el dev sepa que IR op anyadir. */
+         * que el dev sepa que IR op añadir. */
         ++g_jit_unsupported_count;
         if (g_jit_warn_unsupported) {
             std::fprintf(
@@ -1493,7 +1493,7 @@ void maybe_compile_callvm_target(runtime::ProcessVM *vm,
         auto pn_it = pc_to_name.find(target_pc);
         if (pn_it == pc_to_name.end()) continue;
         std::string candidate_name = pn_it->second;
-        /* Sprint JIT-cross-fn 2026-06-01: el frontend Vex anyade
+        /* Sprint JIT-cross-fn 2026-06-01: el frontend Vex añade
          * sufijo `_entry_<N>` al label del bytecode (entry block).
          * El ir_lookup usa el nombre limpio.  Strip el sufijo si
          * existe para que el lookup matchee. */

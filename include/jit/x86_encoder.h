@@ -28,7 +28,7 @@
  *   - SHL/SHR/SAR reg/imm8
  *   - LEA reg/mem
  *
- * Floats (XMM ops) y SIMD se anyaden en sub-hito separado cuando
+ * Floats (XMM ops) y SIMD se añaden en sub-hito separado cuando
  * lo necesite.  Mientras tanto el JIT cae al interprete para
  * cualquier op no soportada.
  *
@@ -53,7 +53,7 @@
  *
  * @c X86Encoder::encode(fn, out) escribe los bytes del @c MFunction
  * @p fn en @p out.  Devuelve el numero total de bytes emitidos.
- * Si encuentra un opcode no soportado, anyade un comentario y un
+ * Si encuentra un opcode no soportado, añade un comentario y un
  * INT3 + retorna 0 (falla).  Tras la pasada principal, ejecuta
  * @c resolve_fixups que patchea los offsets relativos pendientes.
  */
@@ -86,7 +86,7 @@ class X86Encoder {
     bool mode32() const noexcept { return mode32_; }
 
     /**
-     * @brief Codifica @p fn en bytes y los anyade a @p out.
+     * @brief Codifica @p fn en bytes y los añade a @p out.
      * @return numero total de bytes emitidos para esta funcion, o 0
      *         si encontro un opcode no soportado (en cuyo caso
      *         @p out queda parcialmente escrito hasta el punto del

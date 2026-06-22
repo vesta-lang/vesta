@@ -80,7 +80,7 @@ extern "C" {
 #endif
 
 #define MAGIC_NUMBER_VELB 0x424C4556
-// bumped to 0x2 cuando se anyadio la tabla de relocations al header.
+// bumped to 0x2 cuando se añadio la tabla de relocations al header.
 // Loaders viejos (v1) no entenderan los campos nuevos; no es backward
 // compatible.  Las .velb existentes deben recompilarse.
 #define VERSION_VELB 0x3
