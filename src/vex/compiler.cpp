@@ -100,6 +100,13 @@ CompileResult compile_vex_source(const std::string &source,
                                          std::move(ns_sym));
         }
     }
+    // Si el LSP pidio volcar valores comptime, activamos la captura
+    // de las variables locales de los bloques `comptime { ... }`
+    // ANTES de run() (para que check_stmt las acumule al evaluarlos).
+    // Gateado: cero coste cuando dump_comptime_values esta off.
+    if (opts.dump_comptime_values) {
+        tc.set_capture_comptime_block_locals(true);
+    }
     if (!tc.run()) {
         res.ok = false;
         return res;
@@ -160,6 +167,18 @@ CompileResult compile_vex_source(const std::string &source,
                 snap.type_kind = "int";
                 snap.value_str = std::to_string(c.value);
             }
+            res.comptime_values.push_back(std::move(snap));
+        }
+        // Ademas de las constantes top-level, volcamos las variables
+        // locales que computaron los bloques `comptime { ... }` (arrays
+        // y structs poblados por loops, etc).  El TypeChecker las captura
+        // justo antes de salir de cada bloque.
+        for (const auto &b : tc.comptime_block_snapshots()) {
+            CompileResult::ComptimeValueSnapshot snap;
+            snap.name = b.name;
+            snap.scope = b.scope;
+            snap.type_kind = b.type_kind;
+            snap.value_str = b.value_str;
             res.comptime_values.push_back(std::move(snap));
         }
     }

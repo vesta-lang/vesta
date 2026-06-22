@@ -482,7 +482,7 @@ class TypeChecker {
                                   const std::vector<Type> &args,
                                   const SourceLoc &loc);
 
-    /// L2.3: ¿el nombre es un enum template generico?
+    /// L2.3: el nombre es un enum template generico?
     bool is_generic_enum_template(const std::string &name) const noexcept {
         return generic_enum_templates_.count(name) > 0;
     }
@@ -888,7 +888,39 @@ class TypeChecker {
         return false;
     }
 
+    /**
+     * @struct ComptimeBlockSnapshot
+     * @brief valor capturado de una variable local (o assert) de un
+     *        bloque @c comptime { ... } tras evaluarlo.
+     *
+     * Solo se rellena cuando @c capture_comptime_block_locals esta
+     * activo (lo activa el LSP via @c dump_comptime_values).  Cero
+     * coste en builds normales.
+     */
+    struct ComptimeBlockSnapshot {
+        std::string name;      ///< Nombre de la variable o "static_assert".
+        std::string scope;     ///< Ambito; e.g. "comptime@<linea>".
+        std::string type_kind; ///< "int"|"string"|"array"|"struct"|"type"|"assert".
+        std::string value_str; ///< Representacion legible del valor.
+    };
+
+    /// Activa/desactiva la captura de locales de bloques comptime.
+    void set_capture_comptime_block_locals(bool on) noexcept {
+        capture_comptime_block_locals_ = on;
+    }
+    /// Snapshots acumulados de los bloques @c comptime { ... }.
+    const std::vector<ComptimeBlockSnapshot> &
+    comptime_block_snapshots() const noexcept {
+        return comptime_block_snapshots_;
+    }
+
   private:
+    /// Serializa un @c ComptimeValue (elemento de array / campo de
+    /// struct) a texto legible, recursivo y acotado.
+    static std::string render_comptime_value(const ComptimeValue &v);
+
+    bool capture_comptime_block_locals_ = false;
+    std::vector<ComptimeBlockSnapshot> comptime_block_snapshots_;
     std::unordered_map<std::string, ComptimeConst> comptime_const_values_;
     std::vector<std::unordered_map<std::string, ComptimeConst>>
         comptime_const_locals_;
@@ -1096,7 +1128,7 @@ class TypeChecker {
     uint32_t register_imported_namespace(const std::string &local_name,
                                          const std::string &module_name);
 
-    /// @brief Anyade un simbolo al namespace registrado en @p ns_index.
+    /// @brief anyade un simbolo al namespace registrado en @p ns_index.
     /// Llamado por el compiler_project durante la inyeccion de cada
     /// VexiSymbol cuyo modulo se importo plain (sin `only`).
     void register_namespace_symbol(uint32_t ns_index,
