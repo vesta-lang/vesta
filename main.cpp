@@ -596,7 +596,18 @@ int main(int argc, char *argv[]) {
             "link-base",
             "Con --link: base de carga del ejecutable (hex, e.g. 0x100000 para "
             "un kernel). Default segun el formato.",
-            cxxopts::value<std::string>()->default_value(""));
+            cxxopts::value<std::string>()->default_value(""))(
+            "link-script",
+            "Con --link: script de enlace ESCRITO EN VEX (un .vex con 'fn "
+            "link()' que llama a builtins base/entry/stack/section/"
+            "section_size/align_up/debug_build). El linker lo compila y ejecuta "
+            "para leer la configuracion. Los CLI --link-base/--entry tienen "
+            "prioridad sobre el script.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "link-debug",
+            "Con --link --link-script: hace que el builtin debug_build() del "
+            "script devuelva true.",
+            cxxopts::value<bool>()->default_value("false"));
 
     // BUG FIX: Args posicionales y allow_unrecognised DEBEN configurarse
     // ANTES de @c options.parse(...).  El bug anterior registraba el
@@ -896,6 +907,8 @@ int main(int argc, char *argv[]) {
         if (!lbase.empty())
             lopts.image_base =
                 std::strtoull(lbase.c_str(), nullptr, 0); // 0x.. o decimal
+        lopts.link_script = result["link-script"].as<std::string>();
+        lopts.debug = result.count("link-debug") > 0;
         std::string out_path = result["output"].as<std::string>();
         std::string lerr;
         if (!aot::aot_link(inputs, out_path, lopts, lerr)) {

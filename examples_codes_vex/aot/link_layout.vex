@@ -1,0 +1,17 @@
+// Ejemplo de script de enlace ESCRITO EN VEX (vm --link ... --link-script).
+// Es Vex puro: usa logica/condicionales/comptime para CALCULAR el layout.
+// Builtins disponibles dentro de link():
+//   base(u64 addr)            direccion de carga
+//   entry(string sym)         simbolo de entrada (sin _start sintetico)
+//   stack_size(u64 bytes)     tamano de pila
+//   place_section(string, u64) coloca una seccion en una VA fija
+//   section_bytes(string)     tamano de una seccion ya fusionada
+//   align_up(u64 v, u64 a)    redondeo a multiplo
+//   debug_build()             true con --link-debug
+void link() {
+    u64 load = 0x100000;          // 1 MB: base tipica de kernel
+    if (debug_build()) { load = 0x200000; }
+    base(load);
+    entry("_kstart");             // entry propio (sin stub _start->main)
+    stack_size(align_up(64 * 1024, 4096));
+}

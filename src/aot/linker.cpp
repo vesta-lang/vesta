@@ -22,7 +22,8 @@
 
 #include "aot/linker.h"
 
-#include "aot/aot_native.h" // aot_make_start_stub, AotArch
+#include "aot/aot_native.h"  // aot_make_start_stub, AotArch
+#include "aot/link_script.h" // Phase AOT.5: link-script Vex (configurable)
 
 #include <cstdint>
 #include <fstream>
@@ -524,9 +525,35 @@ bool aot_link(const std::vector<std::string> &inputs,
         }
     }
 
-    // 3. Indices de seccion en el ObjectWriter.  Hosted (sin --entry) reserva
+    // 2.5. Link-script Vex (configurable por el usuario): ejecuta fn link()
+    //      con los builtins de configuracion.  Da los tamanos de seccion ya
+    //      fusionados a section_size().  Lo que fije (base/entry/stack) se
+    //      aplica abajo; los CLI flags (--link-base/--entry) tienen prioridad.
+    std::string eff_entry = opts.entry;
+    uint64_t eff_base = opts.image_base;
+    uint64_t eff_stack = opts.layout.elf_stack_size;
+    std::unordered_map<std::string, uint64_t> script_sections;
+    if (!opts.link_script.empty()) {
+        std::unordered_map<std::string, uint64_t> sec_sizes;
+        for (const MergedSec &m : merged)
+            sec_sizes[m.name] = m.data.size() + m.bss_size;
+        LinkScriptConfig sc;
+        std::string serr;
+        if (!aot_run_link_script(opts.link_script, sec_sizes, opts.debug, sc,
+                                 serr)) {
+            err = serr;
+            return false;
+        }
+        if (eff_entry.empty() && sc.has_entry) eff_entry = sc.entry;
+        if (eff_base == 0 && sc.has_base) eff_base = sc.base;
+        if (sc.has_stack) eff_stack = sc.stack;
+        script_sections = std::move(sc.sections);
+        (void)script_sections; // placement fijo por seccion: emisor (siguiente)
+    }
+
+    // 3. Indices de seccion en el ObjectWriter.  Hosted (sin entry) reserva
     //    el indice 0 para el stub _start.
-    const bool hosted = opts.entry.empty();
+    const bool hosted = eff_entry.empty();
     const int sec_base = hosted ? 1 : 0;
 
     // 4. Tabla de simbolos global: nombre -> (writer-sec, offset).
@@ -582,7 +609,8 @@ bool aot_link(const std::vector<std::string> &inputs,
     // 5. Crear el ObjectWriter y anyadir las secciones (stub primero si hosted).
     ObjectWriter w(opts.fmt);
     LayoutConfig cfg = opts.layout;
-    if (opts.image_base) cfg.image_base = opts.image_base;
+    if (eff_base) cfg.image_base = eff_base;
+    if (eff_stack) cfg.elf_stack_size = eff_stack;
     w.set_config(cfg);
 
     StartStub stub;
@@ -718,9 +746,9 @@ bool aot_link(const std::vector<std::string> &inputs,
             w.add_import_call(ImportCall{stub.import_dll, stub.import_func, 0,
                                          stub.import_call_off});
     } else {
-        auto it = globals.find(opts.entry);
+        auto it = globals.find(eff_entry);
         if (it == globals.end() || !it->second.defined) {
-            err = "linker: simbolo de entrada '" + opts.entry +
+            err = "linker: simbolo de entrada '" + eff_entry +
                   "' no esta definido";
             return false;
         }
