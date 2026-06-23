@@ -1347,6 +1347,11 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     out["frame"] = std::move(frame);
     out["ir_by_line"] = ir_by_line(*fn);
     out["ir_by_id"] = ir_by_id(*fn);
+    {
+        nlohmann::json bn = nlohmann::json::array();
+        for (const auto &blk : fn->blocks) bn.push_back(blk.name);
+        out["block_names"] = std::move(bn);
+    }
     out["args"] = std::move(args);
     return out;
 }
@@ -1470,6 +1475,11 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     out["frame"] = std::move(frame);
     out["ir_by_line"] = ir_by_line(*fn);
     out["ir_by_id"] = ir_by_id(*fn);
+    {
+        nlohmann::json bn = nlohmann::json::array();
+        for (const auto &blk : fn->blocks) bn.push_back(blk.name);
+        out["block_names"] = std::move(bn);
+    }
     out["args"] = std::move(args);
     return out;
 }
