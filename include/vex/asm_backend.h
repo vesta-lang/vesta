@@ -48,6 +48,12 @@ struct AsmAssembleResult {
     std::vector<uint8_t> bytes; ///< bytes maquina (inc.5 JIT)
     std::string error;          ///< mensaje si @c ok==false
     size_t error_offset = 0;    ///< offset aprox en el body del fallo
+    /// CONTRATO opcional (solo-inspeccion): offset en bytes de CADA instruccion
+    /// emitida, en ORDEN de fuente (insn_offsets[i] = offset de la i-esima
+    /// instruccion).  Permite a NUESTRO codigo mapear etiquetas/lineas a
+    /// offsets sin acoplar la inspeccion al backend concreto.  Un backend que no
+    /// lo soporte lo deja vacio (la inspeccion degrada sin etiquetas de asm).
+    std::vector<uint32_t> insn_offsets;
 };
 
 /**
