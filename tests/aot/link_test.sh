@@ -124,6 +124,31 @@ if [ -x "$WORK/sapp.elf" ]; then
   else echo "LINK F: EXIT MISMATCH got=$got exp=42"; rc=1; fi
 else echo "LINK F: no se genero el ejecutable"; rc=1; fi
 
+# --- G) link-script EN VEX (configurable): fn link() fija base/entry ---
+cat > "$WORK/k.c" <<'EOF'
+void _kstart(void) {
+    __asm__ volatile("mov $60,%%rax; mov $42,%%rdi; syscall" ::: "rax","rdi");
+}
+EOF
+cat > "$WORK/layout.vex" <<'EOF'
+void link() {
+    u64 b = 0x800000;
+    if (debug_build()) { b = 0x900000; }   // logica Vex real
+    base(b);
+    entry("_kstart");
+    stack_size(align_up(40000, 4096));
+}
+EOF
+gcc -c -ffreestanding -fno-pic -fno-asynchronous-unwind-tables "$WORK/k.c" -o "$WORK/k.o" 2>/dev/null
+"$VM" --link "$WORK/k.o" -o "$WORK/k.elf" --format elf --link-script "$WORK/layout.vex" >/dev/null 2>&1
+if [ -x "$WORK/k.elf" ]; then
+  base_ok=$(readelf -l "$WORK/k.elf" 2>/dev/null | grep -c "0x0000000000800000")
+  "$WORK/k.elf"; got=$?
+  if [ "$got" = "42" ] && [ "$base_ok" -ge 1 ]; then
+    echo "LINK G (link-script Vex: base 0x800000 + entry): exit=42 OK"
+  else echo "LINK G: got=$got base_ok=$base_ok (esp 42 / base 0x800000)"; rc=1; fi
+else echo "LINK G: no se genero el ejecutable"; rc=1; fi
+
 rm -rf "$WORK"
 [ $rc = 0 ] && echo "AOT.5 linker: TODOS OK" || echo "AOT.5 linker: FALLOS"
 exit $rc

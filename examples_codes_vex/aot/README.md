@@ -238,3 +238,34 @@ relocs `R_386_PC32` / `R_386_32`.  COFF i386 usa `IMAGE_REL_I386_REL32` /
 Validado: `prog.o` (fib recursivo) enlaza con `gcc -m32` y devuelve 55;
 `prog.obj` se reconoce como `pe-i386` con sus simbolos y relocs (ejecucion
 end-to-end requiere un linker de 32-bit para Windows).
+
+### Script de enlace ESCRITO EN VEX (configurable) -- `--link-script`
+
+El linker es configurable con un `.vex` normal (sin sintaxis nueva): defines una
+funcion `void link()` que llama a builtins de configuracion, y el linker la
+compila + ejecuta para leer el layout.  Es intuitivo (es Vex) y potente (logica/
+condicionales/comptime completos para CALCULAR las direcciones).
+
+    vm --link kernel.o -o kernel.elf --format elf --link-script link_layout.vex
+
+```vex
+void link() {
+    u64 load = 0x100000;
+    if (debug_build()) { load = 0x200000; }   // logica Vex real
+    base(load);                                // direccion de carga
+    entry("_kstart");                          // entry propio (sin _start)
+    stack_size(align_up(64 * 1024, 4096));
+}
+```
+
+Builtins: `base(u64)`, `entry(string)`, `stack_size(u64)`, `place_section(string,
+u64)`, `section_bytes(string)` (tamano de una seccion ya fusionada), `align_up(u64,
+u64)`, `debug_build()` (true con `--link-debug`).  Los CLI `--link-base`/`--entry`
+tienen prioridad sobre el script.  Mecanismo: el linker compila el `.vex` a `.velb`
+in-process y lo ejecuta en una VM con los builtins registrados (FFI in-process);
+estos escriben la config que el linker aplica.
+
+Validado por ejecucion: `base(0x800000)` -> el ELF se carga en 0x800000;
+`debug_build()` con `--link-debug` -> 0x900000; `entry("_kstart")` -> entry propio,
+el binario corre (exit 42).  `base`/`entry`/`stack` se aplican ya; el placement por
+seccion (`place_section`) se aplicara cuando el emisor soporte VAs fijas (siguiente).
