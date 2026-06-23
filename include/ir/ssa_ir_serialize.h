@@ -154,7 +154,7 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    6; // v6: + contratos @complexity por dimension (partial/total x pre/post)
+    7; // v7: + tabla de nombres de valores SSA (debug-info LSP: args/vars)
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vexir`.
