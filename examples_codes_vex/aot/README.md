@@ -285,3 +285,25 @@ lee igual que COFF.  El stub `_start` y el contenedor son de 32-bit
 automaticamente.  Validado por ejecucion (WSL): un .o ELF32 (fib recursivo) ->
 ELF32 EXEC = 55; cross-file 32-bit (lib sin main + app) = 42; COFF i386 ->
 PE32 valido (ejecucion requiere un linker/host de 32-bit).  64-bit sin regresion.
+
+### place_section: colocar una seccion en una VA fija (dev-OS)
+
+El builtin `place_section(name, addr)` del link-script Vex coloca una seccion en
+una direccion virtual EXACTA (header multiboot, MMIO, .text/.data en direcciones
+del mapa de memoria del kernel).  El emisor EXEC rellena el fichero hasta
+`addr - base` para que `vaddr == addr` (un PT_LOAD cubre el hueco; va en orden
+de direccion ascendente -- una VA por debajo de la posicion actual es un error
+claro).  Combina con `base()`/`entry()` para control total del layout:
+
+```vex
+void link() {
+    base(0x400000);
+    entry("_kstart");
+    place_section(".boot", 0x410000);   // .boot en VA fija
+}
+```
+
+Validado por ejecucion (WSL): un kernel con `_kstart` en `.boot`, colocado en
+0x410000 por el script -> readelf confirma `.boot` y el entry en 0x410000; corre
+(exit 42).  Con esto el link-script Vex controla base, entry, stack y la VA de
+cada seccion -- configurable y potente, en el propio lenguaje.

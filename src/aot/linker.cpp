@@ -703,7 +703,6 @@ bool aot_link(const std::vector<std::string> &inputs,
         if (eff_base == 0 && sc.has_base) eff_base = sc.base;
         if (sc.has_stack) eff_stack = sc.stack;
         script_sections = std::move(sc.sections);
-        (void)script_sections; // placement fijo por seccion: emisor (siguiente)
     }
 
     // 3. Indices de seccion en el ObjectWriter.  Hosted (sin entry) reserva
@@ -791,6 +790,9 @@ bool aot_link(const std::vector<std::string> &inputs,
         ws.data = std::move(m.data);
         ws.bss_size = (uint32_t)m.bss_size;
         ws.align = m.align;
+        // VA fija si el link-script la coloco con place_section(name, addr).
+        auto pit = script_sections.find(m.name);
+        if (pit != script_sections.end()) ws.vaddr = pit->second;
         w.add_section(std::move(ws));
     }
 
