@@ -171,9 +171,29 @@ Slice 1 = ELF64 in/out; PE/COFF y x86-32 son follow-ups.
   `p_memsz > p_filesz`; el loader las zerifica.  Permite enlazar un runtime C
   (allocator con estado en `.bss`) o un kernel con globales sin inicializar.
 
-LIMITACION conocida: los slots globales del CPU-dispatch de strings
-(`__vex_strlen_fp`, etc.) y su init `__vex_strdisp_init` son por-modulo y solo
-el init del `.o` con `main` corre; usar operaciones de string (`.length()`,
-concat, ...) en un `.o` Vex SIN `main` deja su slot sin inicializar (crash).
-Workaround: mantener el uso de strings en el `.o` con `main` (o enlazar como un
-solo modulo).  Fusion de globals-de-programa cross-.o = follow-up.
+### Inicializacion de programa cross-.o (CPU-dispatch)
+
+Las operaciones de string y `memcpy` usan tablas de punteros elegidas en
+runtime por CPUID (despacho a variantes SIMD / `@HelperOverride`).  Cada `.o`
+lleva sus propios slots (`__vex_strlen_fp`, etc.) y sus inits
+(`__vex_cpu_init` -> `__vex_memcpy_init` -> `__vex_strdisp_init`), que dejan
+los slots apuntando a la variante elegida.  En un solo modulo, esos inits se
+encadenan al arranque de `main`.
+
+Al enlazar varios `.o` el linker garantiza que se ejecuten los inits de TODOS
+los objetos (no solo los del `.o` que tiene `main`): exporta esos inits como
+globales en cada `.o`, los recolecta de todos los objetos y sintetiza un
+`__vex_premain` que los llama en orden (`cpu` -> `memcpy` -> `strdisp`) y salta
+a `main`.  Asi un `.o` Vex SIN `main` que use strings/`memcpy` tambien inicializa
+sus slots; sin esto, sus tablas quedarian sin inicializar.  Cada objeto conserva
+sus propios slots (no se fusionan); el orden `cpu` antes que `memcpy`/`strdisp`
+se respeta porque estos leen el global de features que `cpu_init` escribe.  El
+init del `.o` de `main` ademas corre via su propio prologo: es idempotente
+(re-ejecutarlo deja el mismo valor).
+
+Validado: una libreria `.vex` SIN `main` que usa `.length()`, enlazada con el
+`.o` de `main` y un runtime C (`malloc`/`free`), ejecuta correctamente.
+
+Con `--entry` (sin `main`/stub) el `__vex_premain` no se sintetiza: el punto de
+entrada propio (kernel/bootloader) es responsable de invocar los inits si usa
+esas operaciones.

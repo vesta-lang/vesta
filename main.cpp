@@ -2810,7 +2810,15 @@ int main(int argc, char *argv[]) {
                 // relocs de seccion).  Asi una libreria .o (sin main) expone sus
                 // funciones y otro .o las resuelve cross-file con el linker.
                 for (const AotFn &af : compiled) {
-                    if (af.name.rfind("__", 0) == 0) continue; // helper -> local
+                    // Los inits de programa del CPU-dispatch (cpu/memcpy/strdisp)
+                    // se EXPORTAN como globales aunque empiecen por "__": el
+                    // linker los recolecta de CADA .o y los ejecuta antes de main
+                    // (cada .o tiene sus propios slots fp; basta correr su init).
+                    const bool is_init = (af.name == "__vex_cpu_init" ||
+                                          af.name == "__vex_memcpy_init" ||
+                                          af.name == "__vex_strdisp_init");
+                    if (af.name.rfind("__", 0) == 0 && !is_init)
+                        continue; // helper interno -> local
                     const FnLoc &fl2 = fn_loc[af.name];
                     w.add_symbol(af.name, fl2.sec, fl2.off, /*is_func=*/true);
                 }
