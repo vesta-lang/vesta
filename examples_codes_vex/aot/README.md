@@ -269,3 +269,19 @@ Validado por ejecucion: `base(0x800000)` -> el ELF se carga en 0x800000;
 `debug_build()` con `--link-debug` -> 0x900000; `entry("_kstart")` -> entry propio,
 el binario corre (exit 42).  `base`/`entry`/`stack` se aplican ya; el placement por
 seccion (`place_section`) se aplicara cuando el emisor soporte VAs fijas (siguiente).
+
+### El linker enlaza tambien objetos de 32-bit (ELF32 / COFF i386)
+
+`vm --link` auto-detecta la arquitectura de cada objeto por su cabecera
+(ELF32/ELF64, COFF i386/AMD64) y produce el ejecutable correspondiente
+(ELF32/PE32 vs ELF64/PE32+).  Todos los objetos de un enlace deben coincidir en
+32 vs 64 bits.  Cierra el ciclo "sin toolchain externo" tambien para 32-bit:
+
+    vm --vex kernel.vex -m aot --aot-arch x86-32 --emit obj --format elf -o k.o
+    vm --link k.o -o k.elf --format elf        # ELF32 EXEC, sin ld
+
+ELF32 i386 usa `SHT_REL` (addend en el campo, no en un record); el linker lo
+lee igual que COFF.  El stub `_start` y el contenedor son de 32-bit
+automaticamente.  Validado por ejecucion (WSL): un .o ELF32 (fib recursivo) ->
+ELF32 EXEC = 55; cross-file 32-bit (lib sin main + app) = 42; COFF i386 ->
+PE32 valido (ejecucion requiere un linker/host de 32-bit).  64-bit sin regresion.
