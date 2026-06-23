@@ -90,10 +90,9 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
              * cuando @c fn.emit_line_map esta activo (inspector del LSP);
              * en produccion el flag es OFF y no se construye la tabla -> los
              * bytes generados son identicos y el coste es 1 rama predicha. */
+            const uint32_t pre_rel = static_cast<uint32_t>(out.size() - base);
             if (fn.emit_line_map) {
-                fn.line_map.push_back(
-                    {static_cast<uint32_t>(out.size() - base), mi.source_pc,
-                     mi.ir_id});
+                fn.line_map.push_back({pre_rel, mi.source_pc, mi.ir_id});
             }
             if (!emit_instr(fn, mi, out)) {
                 /* fail-fast: opcode no soportado.  El INT3 hace que la
@@ -101,6 +100,21 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
                  * con basura. */
                 put8(out, 0xCC);
                 return 0;
+            }
+            /* Solo-LSP: para un bloque inline-asm, refinar el line_map con una
+             * entrada POR INSTRUCCION del asm (su linea real) y reubicar sus
+             * etiquetas internas a offset absoluto de la funcion. */
+            if (fn.emit_line_map && mi.op == MOp::INLINE_ASM_RAW &&
+                mi.src1.kind == MOperandKind::IMM32) {
+                const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
+                if (idx < fn.asm_blobs.size()) {
+                    const AsmBlob &bl = fn.asm_blobs[idx];
+                    for (const auto &il : bl.insn_lines)
+                        fn.line_map.push_back(
+                            {pre_rel + il.first, il.second, mi.ir_id});
+                    for (const auto &lb : bl.labels)
+                        fn.asm_labels.push_back({pre_rel + lb.first, lb.second});
+                }
             }
         }
     }

@@ -715,6 +715,22 @@ nlohmann::json ir_listing(const ir::IrFunction &fn) {
     return arr;
 }
 
+/// Convierte las etiquetas de inline-asm (offset->nombre) a JSON {offset(hex
+/// "%04x"), name}, con el mismo formato de offset que las filas asm.
+nlohmann::json asm_labels_json(
+    const std::vector<std::pair<uint32_t, std::string>> &labels) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto &p : labels) {
+        char b[16];
+        std::snprintf(b, sizeof(b), "%04x", p.first);
+        nlohmann::json j;
+        j["offset"] = b;
+        j["name"] = p.second;
+        arr.push_back(std::move(j));
+    }
+    return arr;
+}
+
 /**
  * @brief Anota una instruccion .vel con los valores con nombre de sus registros
  *        VM (rastreo R0..R15), analogo al de x86.  Modifica @p line in-place
@@ -1433,6 +1449,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     // ABI de las CALL).  Pedimos la tabla linea<->asm para la vista correlada.
     std::vector<jit::NativeReloc> relocs;
     std::vector<jit::LineMapEntry> line_map;
+    std::vector<std::pair<uint32_t, std::string>> asm_labels;
     std::vector<uint8_t> bytes;
     try {
         bytes = jit::vreg_compile_native(
@@ -1444,7 +1461,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
             /*target_sysv=*/true,
 #endif
             /*mode32=*/false, jit::FloatIsa::SSE2,
-            /*emit_line_map=*/true, &line_map);
+            /*emit_line_map=*/true, &line_map, &asm_labels);
     } catch (...) {
         return {{"error", "el codegen JIT (vreg) lanzo una excepcion para '" +
                               fn->name + "'"}};
@@ -1487,8 +1504,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
         out["block_names"] = std::move(bn);
     }
     out["ir_listing"] = ir_listing(*fn);
-    {
-    }
+    out["asm_labels"] = asm_labels_json(asm_labels);
     out["args"] = std::move(args);
     return out;
 }
@@ -1552,6 +1568,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     // relocations sin resolver, que se reportan al cliente).
     std::vector<jit::NativeReloc> relocs;
     std::vector<jit::LineMapEntry> line_map;
+    std::vector<std::pair<uint32_t, std::string>> asm_labels;
     std::vector<uint8_t> bytes;
     try {
         bytes = jit::vreg_compile_native(
@@ -1563,7 +1580,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
             /*target_sysv=*/true,
 #endif
             /*mode32=*/false, jit::FloatIsa::SSE2,
-            /*emit_line_map=*/true, &line_map);
+            /*emit_line_map=*/true, &line_map, &asm_labels);
     } catch (...) {
         return {{"error", "el codegen AOT lanzo una excepcion para '" +
                               fn->name + "'"}};
@@ -1618,8 +1635,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         out["block_names"] = std::move(bn);
     }
     out["ir_listing"] = ir_listing(*fn);
-    {
-    }
+    out["asm_labels"] = asm_labels_json(asm_labels);
     out["args"] = std::move(args);
     return out;
 }

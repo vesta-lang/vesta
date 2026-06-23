@@ -135,7 +135,10 @@ std::vector<uint8_t> vreg_compile_native(
      * byte_offset -> source_line del codigo AOT generado.  OFF por defecto
      * -> cero efecto para el resto del proyecto. */
     bool emit_line_map = false,
-    std::vector<LineMapEntry> *line_map_out = nullptr);
+    std::vector<LineMapEntry> *line_map_out = nullptr,
+    /* Solo-LSP: etiquetas internas de bloques inline-asm (byte_offset ->
+     * nombre).  Se rellena si emit_line_map y este puntero != nullptr. */
+    std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr);
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

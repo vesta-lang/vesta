@@ -113,9 +113,12 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     std::vector<NativeReloc> *relocs_out, bool pic,
                     bool target_sysv, bool mode32, FloatIsa fisa,
                     bool emit_line_map,
-                    std::vector<LineMapEntry> *line_map_out) {
+                    std::vector<LineMapEntry> *line_map_out,
+                    std::vector<std::pair<uint32_t, std::string>>
+                        *asm_labels_out) {
     if (relocs_out) relocs_out->clear();
     if (line_map_out) line_map_out->clear();
+    if (asm_labels_out) asm_labels_out->clear();
     /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
      *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
      *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
@@ -154,6 +157,7 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
     /* Solo-LSP: el encoder ya poblo pf.line_map (si emit_line_map).  La
      * entregamos al caller para la vista correlada fuente <-> asm. */
     if (line_map_out) *line_map_out = std::move(pf.line_map);
+    if (asm_labels_out) *asm_labels_out = std::move(pf.asm_labels);
 
     /* AOT: traducir las MReloc del encoder (sym_idx -> reloc_symbols) a
      * NativeReloc con el NOMBRE del simbolo resuelto, para que el driver

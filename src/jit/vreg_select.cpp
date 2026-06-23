@@ -1653,6 +1653,63 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 AsmBlob blob;
+                // Solo-inspeccion: mapear etiquetas internas + linea por instr
+                // usando el contrato insn_offsets (offset de cada instruccion
+                // en orden de fuente).  NUESTRO parser del texto NASM: una
+                // instruccion por linea; las etiquetas ("name:") mapean al
+                // offset de la instruccion SIGUIENTE.  Sin acoplar a Keystone.
+                if (out.emit_line_map && !ar.insn_offsets.empty()) {
+                    const std::string &body = in.func_name;
+                    const uint32_t base_line = in.source_line;
+                    size_t pos = 0;
+                    int instr_idx = 0, body_line = 0;
+                    while (pos <= body.size()) {
+                        size_t nl = body.find('\n', pos);
+                        std::string ln = body.substr(
+                            pos, nl == std::string::npos ? std::string::npos
+                                                         : nl - pos);
+                        // recortar + quitar comentario (; o //)
+                        size_t c = ln.find(';');
+                        if (c != std::string::npos) ln.resize(c);
+                        size_t cc = ln.find("//");
+                        if (cc != std::string::npos) ln.resize(cc);
+                        size_t b0 = ln.find_first_not_of(" \t");
+                        size_t b1 = ln.find_last_not_of(" \t");
+                        std::string t =
+                            (b0 == std::string::npos) ? std::string()
+                                                      : ln.substr(b0, b1 - b0 + 1);
+                        // etiqueta inicial "name:" (posible "name: instr")
+                        if (!t.empty()) {
+                            size_t colon = t.find(':');
+                            size_t sp = t.find_first_of(" \t");
+                            if (colon != std::string::npos &&
+                                (sp == std::string::npos || colon < sp)) {
+                                std::string name = t.substr(0, colon);
+                                if (instr_idx <
+                                    (int)ar.insn_offsets.size())
+                                    blob.labels.push_back(
+                                        {ar.insn_offsets[instr_idx], name});
+                                // resto tras "name:" puede ser una instruccion
+                                size_t rest = t.find_first_not_of(
+                                    " \t", colon + 1);
+                                t = (rest == std::string::npos)
+                                        ? std::string()
+                                        : t.substr(rest);
+                            }
+                        }
+                        if (!t.empty()) { // instruccion
+                            if (instr_idx < (int)ar.insn_offsets.size()) {
+                                blob.insn_lines.push_back(
+                                    {ar.insn_offsets[instr_idx],
+                                     base_line + 1 + body_line});
+                                ++instr_idx;
+                            }
+                        }
+                        ++body_line;
+                        if (nl == std::string::npos) break;
+                        pos = nl + 1;
+                    }
+                }
                 blob.bytes = std::move(ar.bytes);
                 for (ir::IrValueId opv : in.operands) {
                     if (opv >= binding_phys.size() || binding_phys[opv] < 0)
