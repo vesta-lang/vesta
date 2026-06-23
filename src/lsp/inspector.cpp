@@ -609,6 +609,58 @@ nlohmann::json function_args(const ir::IrFunction &fn,
 }
 
 /**
+ * @brief Renderizado corto de una instruccion IR para la correlacion IR<->asm.
+ *
+ * Solo-LSP: formato compacto "<dst> = <op> <operandos>" (o sin dst), con el
+ * nombre de funcion para CALL* y el inmediato para CONST.  Usa los nombres de
+ * los valores SSA (ya etiquetados con el nombre de fuente cuando aplica).
+ */
+std::string ir_short(const ir::IrFunction &fn, const ir::IrInstr &in) {
+    auto vn = [&](ir::IrValueId v) -> std::string {
+        if (v == ir::IR_NO_VALUE)
+            return "?";
+        return v < fn.values.size() ? fn.values[v].name
+                                    : ("%" + std::to_string(v));
+    };
+    std::string s;
+    if (in.dst != ir::IR_NO_VALUE)
+        s += vn(in.dst) + " = ";
+    s += ir::ir_op_name(in.op);
+    if (!in.func_name.empty()) {
+        s += " ";
+        s += in.func_name;
+    }
+    for (size_t k = 0; k < in.operands.size(); ++k) {
+        s += (k == 0 ? " " : ", ");
+        s += vn(in.operands[k]);
+    }
+    if (in.op == ir::IrOp::CONST)
+        s += " " + std::to_string(static_cast<int64_t>(in.imm));
+    return s;
+}
+
+/**
+ * @brief Construye el mapa linea-de-fuente -> lista de ops IR de esa linea.
+ *
+ * Solo-LSP: une por @c source_line (clave fiable: tanto el desensamblado como
+ * cada IrInstr la llevan).  Omite NOP/PHI (ruido).  Es la base de los modos de
+ * correlacion IR<->asm (grupo/panel/3col).
+ */
+nlohmann::json ir_by_line(const ir::IrFunction &fn) {
+    nlohmann::json o = nlohmann::json::object();
+    for (const auto &blk : fn.blocks) {
+        for (const auto &in : blk.instrs) {
+            if (in.source_line == 0)
+                continue;
+            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
+                continue;
+            o[std::to_string(in.source_line)].push_back(ir_short(fn, in));
+        }
+    }
+    return o;
+}
+
+/**
  * @brief Mapea el nombre de tier textual al enum AOT.
  * @param tier "bare" | "embed" | "full" (insensible a otras formas).
  * @return Tier correspondiente (BARE por defecto).
@@ -764,6 +816,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     // Fuente de la funcion (mismo rango que JIT/AOT) + args (VM ABI: R1..R12).
     nlohmann::json src = nlohmann::json::array();
     nlohmann::json args = nlohmann::json::array();
+    nlohmann::json irbl = nlohmann::json::object();
     ir::IrModule mod;
     if (parse_post_opt_module(res, mod)) {
         const ir::IrFunction *fn = pick_function(mod, function);
@@ -772,6 +825,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
             args = function_args(
                 *fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
                       "R10", "R11", "R12"});
+            irbl = ir_by_line(*fn);
         }
     }
 
@@ -780,6 +834,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     out["function"] = function;
     out["asm_lines"] = std::move(asm_lines);
     out["source"] = std::move(src);
+    out["ir_by_line"] = std::move(irbl);
     out["args"] = std::move(args);
     view_cache_[key] = out.dump();
     return out;
@@ -1263,6 +1318,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     out["asm_lines"] = std::move(instrs);
     out["source"] = std::move(src);
     out["frame"] = std::move(frame);
+    out["ir_by_line"] = ir_by_line(*fn);
     out["args"] = std::move(args);
     return out;
 }
@@ -1384,6 +1440,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     out["asm_lines"] = std::move(instrs);
     out["source"] = std::move(src);
     out["frame"] = std::move(frame);
+    out["ir_by_line"] = ir_by_line(*fn);
     out["args"] = std::move(args);
     return out;
 }
