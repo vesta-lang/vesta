@@ -33,7 +33,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <map>
 #include <sstream>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <capstone/capstone.h>
@@ -188,24 +191,108 @@ std::string disasm_x86_64(const uint8_t *code, size_t code_size,
  * @param lm        Tabla byte_offset -> source_line (puede estar vacia).
  * @return Array JSON de @c {addr:"%04x", text, line}.
  */
+/**
+ * @brief Canonicaliza un registro x86 a su GPR de 64 bits.
+ *
+ * Para el rastreo de valores (debug-info) se trata @c eax/ax/al igual que
+ * @c rax, @c r8d/r8w/r8b igual que @c r8, etc.  Asi @c mov eax, ecx propaga
+ * el nombre del valor entre los registros aunque el codegen use el ancho de
+ * 32 bits.
+ *
+ * @param handle Handle Capstone abierto (para @c cs_reg_name).
+ * @param reg    Enum del registro (operando).
+ * @return Cadena canonica ("rax".."r15") o "" si no es un GPR rastreable.
+ */
+std::string canon_reg(csh handle, unsigned reg) {
+    if (reg == X86_REG_INVALID)
+        return "";
+    const char *nm = cs_reg_name(handle, reg);
+    if (!nm)
+        return "";
+    std::string s = nm;
+    static const std::unordered_map<std::string, std::string> kFam = {
+        {"rax", "rax"}, {"eax", "rax"},  {"ax", "rax"},   {"al", "rax"},
+        {"ah", "rax"},  {"rbx", "rbx"},  {"ebx", "rbx"},  {"bx", "rbx"},
+        {"bl", "rbx"},  {"bh", "rbx"},   {"rcx", "rcx"},  {"ecx", "rcx"},
+        {"cx", "rcx"},  {"cl", "rcx"},   {"ch", "rcx"},   {"rdx", "rdx"},
+        {"edx", "rdx"}, {"dx", "rdx"},   {"dl", "rdx"},   {"dh", "rdx"},
+        {"rsi", "rsi"}, {"esi", "rsi"},  {"si", "rsi"},   {"sil", "rsi"},
+        {"rdi", "rdi"}, {"edi", "rdi"},  {"di", "rdi"},   {"dil", "rdi"},
+        {"rbp", "rbp"}, {"ebp", "rbp"},  {"bp", "rbp"},   {"bpl", "rbp"},
+        {"rsp", "rsp"}, {"esp", "rsp"},  {"sp", "rsp"},   {"spl", "rsp"},
+        {"r8", "r8"},   {"r8d", "r8"},   {"r8w", "r8"},   {"r8b", "r8"},
+        {"r9", "r9"},   {"r9d", "r9"},   {"r9w", "r9"},   {"r9b", "r9"},
+        {"r10", "r10"}, {"r10d", "r10"}, {"r10w", "r10"}, {"r10b", "r10"},
+        {"r11", "r11"}, {"r11d", "r11"}, {"r11w", "r11"}, {"r11b", "r11"},
+        {"r12", "r12"}, {"r12d", "r12"}, {"r12w", "r12"}, {"r12b", "r12"},
+        {"r13", "r13"}, {"r13d", "r13"}, {"r13w", "r13"}, {"r13b", "r13"},
+        {"r14", "r14"}, {"r14d", "r14"}, {"r14w", "r14"}, {"r14b", "r14"},
+        {"r15", "r15"}, {"r15d", "r15"}, {"r15w", "r15"}, {"r15b", "r15"},
+    };
+    auto it = kFam.find(s);
+    return it == kFam.end() ? std::string() : it->second;
+}
+
+/// Etiqueta legible de un slot relativo a rbp: "[rbp-0x8]" / "[rbp+0x10]".
+std::string frame_label(int64_t disp) {
+    char b[32];
+    if (disp < 0)
+        std::snprintf(b, sizeof(b), "[rbp-0x%llx]",
+                      static_cast<unsigned long long>(-disp));
+    else
+        std::snprintf(b, sizeof(b), "[rbp+0x%llx]",
+                      static_cast<unsigned long long>(disp));
+    return b;
+}
+
 nlohmann::json
 disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
                          const std::vector<jit::LineMapEntry> &lm,
-                         const std::vector<jit::NativeReloc> &relocs) {
+                         const std::vector<jit::NativeReloc> &relocs,
+                         const std::vector<std::pair<std::string, std::string>>
+                             &arg_seed,
+                         nlohmann::json *frame_out) {
     nlohmann::json arr = nlohmann::json::array();
     if (!code || code_size == 0)
         return arr;
     csh handle;
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK)
         return arr;
-    cs_option(handle, CS_OPT_DETAIL, CS_OPT_OFF);
+    // DETAIL ON: necesitamos los operandos estructurados (reg/mem/imm + acceso)
+    // para rastrear que valor con nombre vive en cada registro / slot del frame.
+    cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
     cs_insn *insn = nullptr;
     const size_t count = cs_disasm(handle, code, code_size, 0, 0, &insn);
     size_t lm_idx = 0; // cursor en lm (ambos en orden ascendente de offset).
+
+    // Estado del rastreo (debug-info):
+    //   regmap[canon]  -> nombre del valor fuente que el registro contiene.
+    //   framemap[disp] -> {nombre, tamano} del slot [rbp+disp].
+    std::unordered_map<std::string, std::string> regmap;
+    struct FSlot {
+        std::string name;
+        uint16_t size;
+        bool seen; // primer offset donde aparece (para orden de salida)
+        uint64_t first_off;
+    };
+    std::map<int64_t, FSlot> framemap;
+    // Seed: la convencion de llamada coloca cada argumento en su registro.
+    for (const auto &pr : arg_seed)
+        if (!pr.first.empty())
+            regmap[pr.first] = pr.second;
+
+    // Layout del prologo (registros guardados + area reservada).  Tras
+    // `mov rbp, rsp`, [rbp+0]=rbp guardado, [rbp+8]=direccion de retorno, y
+    // cada `push reg` posterior baja 8 bytes ([rbp-8], [rbp-16], ...).
+    bool have_rbp = false;
+    int64_t push_off = 0;     // offset (rel. rbp) del ultimo push tras rbp
+    int64_t reserved_bytes = 0;
+    bool reserved_done = false;
+    std::vector<nlohmann::json> saved_regs; // {offset,size,kind,name}
+
     for (size_t i = 0; i < count; ++i) {
         const uint64_t off = insn[i].address; // base 0 -> offset relativo.
         const uint64_t end = off + insn[i].size;
-        // Avanzar el cursor mientras la siguiente entrada cubra este offset.
         while (lm_idx + 1 < lm.size() && lm[lm_idx + 1].byte_offset <= off)
             ++lm_idx;
         uint32_t line = 0;
@@ -219,18 +306,165 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
             text += ' ';
             text += insn[i].op_str;
         }
-        // Anotar con el simbolo si una relocation cae dentro de esta instr
-        // (call/jmp a funcion, lea a dato de .rodata, mov imm64 a simbolo).
-        // El parche del rel32/abs64 vive en [off, end); buscamos ahi.
+
+        // --- Rastreo de valores con nombre + frame --------------------------
+        std::vector<std::string> ann; // partes del comentario de valores
+        auto add_ann = [&](const std::string &s) {
+            for (const auto &e : ann)
+                if (e == s)
+                    return; // dedup
+            ann.push_back(s);
+        };
+        cs_detail *det = insn[i].detail;
+        if (det) {
+            const cs_x86 &x = det->x86;
+            const unsigned id = insn[i].id;
+            // --- Layout del prologo -------------------------------------
+            if (id == X86_INS_MOV && x.op_count == 2 &&
+                x.operands[0].type == X86_OP_REG &&
+                x.operands[1].type == X86_OP_REG &&
+                canon_reg(handle, x.operands[0].reg) == "rbp" &&
+                canon_reg(handle, x.operands[1].reg) == "rsp") {
+                have_rbp = true; // mov rbp, rsp -> frame pointer establecido
+            } else if (id == X86_INS_PUSH && have_rbp && x.op_count == 1 &&
+                       x.operands[0].type == X86_OP_REG) {
+                push_off -= 8;
+                const char *rn = cs_reg_name(handle, x.operands[0].reg);
+                nlohmann::json js;
+                js["offset"] = push_off;
+                js["label"] = frame_label(push_off);
+                js["size"] = 8;
+                js["kind"] = "saved";
+                js["name"] = rn ? rn : "?";
+                saved_regs.push_back(std::move(js));
+            } else if (id == X86_INS_SUB && have_rbp && !reserved_done &&
+                       x.op_count == 2 &&
+                       x.operands[0].type == X86_OP_REG &&
+                       canon_reg(handle, x.operands[0].reg) == "rsp" &&
+                       x.operands[1].type == X86_OP_IMM) {
+                reserved_bytes = x.operands[1].imm;
+                reserved_done = true;
+            }
+            const bool is_mov = (id == X86_INS_MOV || id == X86_INS_MOVZX ||
+                                 id == X86_INS_MOVSX || id == X86_INS_MOVSXD);
+            bool handled = false;
+            // POP es restauracion de epilogo (callee-saved).  El rastreo es
+            // lineal (sin CFG), asi que el `pop rsi` del epilogo del PRIMER
+            // bloque -en orden de direcciones- precede a otros bloques donde
+            // ese mismo registro callee-saved sigue alojando el valor (p.ej.
+            // el parametro durante toda la funcion).  Lo tratamos como
+            // no-invalidante para no perder el nombre en bloques posteriores.
+            if (id == X86_INS_POP)
+                handled = true;
+            if (is_mov && x.op_count == 2) {
+                const cs_x86_op &d = x.operands[0];
+                const cs_x86_op &s = x.operands[1];
+                if (d.type == X86_OP_REG && s.type == X86_OP_REG) {
+                    // mov reg, reg : propaga el nombre del origen al destino.
+                    std::string dc = canon_reg(handle, d.reg);
+                    std::string sc = canon_reg(handle, s.reg);
+                    std::string nm = sc.empty() ? "" : regmap[sc];
+                    if (!dc.empty()) {
+                        if (nm.empty())
+                            regmap.erase(dc);
+                        else {
+                            regmap[dc] = nm;
+                            add_ann(dc + " = " + nm);
+                        }
+                    }
+                    handled = true;
+                } else if (d.type == X86_OP_REG && s.type == X86_OP_MEM &&
+                           canon_reg(handle, s.mem.base) == "rbp") {
+                    // mov reg, [rbp+disp] : carga desde un slot conocido.
+                    std::string dc = canon_reg(handle, d.reg);
+                    auto fit = framemap.find(s.mem.disp);
+                    std::string nm =
+                        fit == framemap.end() ? "" : fit->second.name;
+                    if (!dc.empty()) {
+                        if (nm.empty())
+                            regmap.erase(dc);
+                        else {
+                            regmap[dc] = nm;
+                            add_ann(dc + " = " + nm);
+                        }
+                    }
+                    handled = true;
+                } else if (d.type == X86_OP_MEM &&
+                           canon_reg(handle, d.mem.base) == "rbp" &&
+                           s.type == X86_OP_REG) {
+                    // mov [rbp+disp], reg : guarda un valor con nombre -> slot.
+                    std::string sc = canon_reg(handle, s.reg);
+                    std::string nm = sc.empty() ? "" : regmap[sc];
+                    if (!nm.empty()) {
+                        FSlot &fs = framemap[d.mem.disp];
+                        if (!fs.seen) {
+                            fs.seen = true;
+                            fs.first_off = off;
+                        }
+                        fs.name = nm;
+                        fs.size = d.size ? d.size : 8;
+                        add_ann(frame_label(d.mem.disp) + " = " + nm);
+                    }
+                    handled = true;
+                } else if (d.type == X86_OP_REG && s.type == X86_OP_IMM) {
+                    // mov reg, imm : el registro deja de tener un valor con
+                    // nombre.
+                    std::string dc = canon_reg(handle, d.reg);
+                    if (!dc.empty())
+                        regmap.erase(dc);
+                    handled = true;
+                }
+            }
+            if (!handled) {
+                // Caso generico: anotar los registros/slots LEIDOS con nombre,
+                // luego invalidar los registros ESCRITOS (resultado anonimo).
+                for (uint8_t oi = 0; oi < x.op_count; ++oi) {
+                    const cs_x86_op &op = x.operands[oi];
+                    if (op.type == X86_OP_REG && (op.access & CS_AC_READ)) {
+                        std::string c = canon_reg(handle, op.reg);
+                        if (!c.empty() && !regmap[c].empty())
+                            add_ann(c + " = " + regmap[c]);
+                    } else if (op.type == X86_OP_MEM &&
+                               canon_reg(handle, op.mem.base) == "rbp") {
+                        auto fit = framemap.find(op.mem.disp);
+                        if (fit != framemap.end() && !fit->second.name.empty())
+                            add_ann(frame_label(op.mem.disp) + " = " +
+                                    fit->second.name);
+                    }
+                }
+                for (uint8_t oi = 0; oi < x.op_count; ++oi) {
+                    const cs_x86_op &op = x.operands[oi];
+                    if (op.type == X86_OP_REG && (op.access & CS_AC_WRITE)) {
+                        std::string c = canon_reg(handle, op.reg);
+                        if (!c.empty())
+                            regmap.erase(c);
+                    }
+                }
+            }
+        }
+
+        // Comentario combinado: simbolo de relocation (call/lea) + valores.
+        std::vector<std::string> comments;
         for (const auto &rc : relocs) {
             if (rc.offset >= off && rc.offset < end && !rc.symbol.empty()) {
-                text += "  ; ";
-                text += rc.symbol;
+                std::string sym = rc.symbol;
                 if (rc.addend)
-                    text += "+" + std::to_string(rc.addend);
+                    sym += "+" + std::to_string(rc.addend);
+                comments.push_back(std::move(sym));
                 break;
             }
         }
+        for (const auto &a : ann)
+            comments.push_back(a);
+        if (!comments.empty()) {
+            text += "  ; ";
+            for (size_t c = 0; c < comments.size(); ++c) {
+                if (c)
+                    text += ", ";
+                text += comments[c];
+            }
+        }
+
         nlohmann::json ji;
         ji["addr"] = buf;
         ji["text"] = std::move(text);
@@ -240,6 +474,57 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
     if (count > 0)
         cs_free(insn, count);
     cs_close(&handle);
+
+    // Volcar el frame completo, ordenado de la cima (mas cercano a rbp+) hacia
+    // abajo: retorno, rbp guardado, registros callee-saved, slots con nombre
+    // (spills/locales) y el area reservada.
+    if (frame_out) {
+        std::vector<nlohmann::json> all;
+        if (have_rbp) {
+            // Marco estandar: [rbp+8]=retorno, [rbp+0]=rbp guardado.
+            nlohmann::json jret;
+            jret["offset"] = 8;
+            jret["label"] = frame_label(8);
+            jret["size"] = 8;
+            jret["kind"] = "retaddr";
+            jret["name"] = "direccion de retorno";
+            all.push_back(std::move(jret));
+            nlohmann::json jrbp;
+            jrbp["offset"] = 0;
+            jrbp["label"] = "[rbp]";
+            jrbp["size"] = 8;
+            jrbp["kind"] = "saved";
+            jrbp["name"] = "rbp";
+            all.push_back(std::move(jrbp));
+        }
+        for (auto &s : saved_regs)
+            all.push_back(std::move(s));
+        for (const auto &kv : framemap) {
+            nlohmann::json js;
+            js["offset"] = kv.first; // disp relativo a rbp (negativo = local)
+            js["label"] = frame_label(kv.first);
+            js["size"] = kv.second.size;
+            js["kind"] = "local";
+            js["name"] = kv.second.name;
+            all.push_back(std::move(js));
+        }
+        if (reserved_bytes > 0) {
+            nlohmann::json jr;
+            jr["offset"] = push_off - reserved_bytes;
+            jr["label"] = frame_label(push_off - reserved_bytes);
+            jr["size"] = reserved_bytes;
+            jr["kind"] = "reserved";
+            jr["name"] = "area reservada (locales/shadow)";
+            all.push_back(std::move(jr));
+        }
+        // Orden: offset descendente (cima del marco primero).
+        std::sort(all.begin(), all.end(), [](const auto &a, const auto &b) {
+            return a["offset"].template get<int64_t>() >
+                   b["offset"].template get<int64_t>();
+        });
+        for (auto &e : all)
+            frame_out->push_back(std::move(e));
+    }
     return arr;
 }
 
@@ -955,8 +1240,19 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
                                "backend vreg (float/strings/algunos builtins)"}};
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
-    nlohmann::json instrs =
-        disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map, relocs);
+    nlohmann::json args = function_args(*fn,
+#if defined(_WIN32)
+                                        {"rcx", "rdx", "r8", "r9"});
+#else
+                                        {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
+#endif
+    std::vector<std::pair<std::string, std::string>> seed;
+    for (const auto &a : args)
+        seed.emplace_back(a["reg"].get<std::string>(),
+                          a["name"].get<std::string>());
+    nlohmann::json frame = nlohmann::json::array();
+    nlohmann::json instrs = disasm_x86_64_correlated(
+        bytes.data(), bytes.size(), line_map, relocs, seed, &frame);
     nlohmann::json src = function_source_lines(docs_.text(uri), *fn);
 
     nlohmann::json out;
@@ -966,12 +1262,8 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     out["instructions"] = static_cast<uint64_t>(line_map.size());
     out["asm_lines"] = std::move(instrs);
     out["source"] = std::move(src);
-    out["args"] = function_args(*fn,
-#if defined(_WIN32)
-                                {"rcx", "rdx", "r8", "r9"});
-#else
-                                {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
-#endif
+    out["frame"] = std::move(frame);
+    out["args"] = std::move(args);
     return out;
 }
 
@@ -1056,9 +1348,20 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
                                "' no esta soportada por el selector vreg AOT"}};
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
+    nlohmann::json args = function_args(*fn,
+#if defined(_WIN32)
+                                        {"rcx", "rdx", "r8", "r9"});
+#else
+                                        {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
+#endif
+    std::vector<std::pair<std::string, std::string>> seed;
+    for (const auto &a : args)
+        seed.emplace_back(a["reg"].get<std::string>(),
+                          a["name"].get<std::string>());
+    nlohmann::json frame = nlohmann::json::array();
     // Vista correlada (solo-LSP): asm por-instruccion + fuente de la funcion.
-    nlohmann::json instrs =
-        disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map, relocs);
+    nlohmann::json instrs = disasm_x86_64_correlated(
+        bytes.data(), bytes.size(), line_map, relocs, seed, &frame);
     nlohmann::json src = function_source_lines(docs_.text(uri), *fn);
 
     nlohmann::json jrelocs = nlohmann::json::array();
@@ -1080,12 +1383,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     // Solo-LSP: correlacion fuente <-> asm para la vista godbolt.
     out["asm_lines"] = std::move(instrs);
     out["source"] = std::move(src);
-    out["args"] = function_args(*fn,
-#if defined(_WIN32)
-                                {"rcx", "rdx", "r8", "r9"});
-#else
-                                {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
-#endif
+    out["frame"] = std::move(frame);
+    out["args"] = std::move(args);
     return out;
 }
 
