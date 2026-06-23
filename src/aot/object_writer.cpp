@@ -122,13 +122,25 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
         const AotSym *sym_ptr = csyms.empty() ? nullptr : csyms.data();
         const int sym_n = static_cast<int>(csyms.size());
         if (fmt_ == ObjFormat::ELF)
-            ok = aot_emit_elf_obj(
-                path.c_str(), csecs.data(), static_cast<int>(csecs.size()),
-                crel_ptr, crel_n, sym_ptr, sym_n, errbuf, sizeof(errbuf));
-        else /* PE -> COFF .obj */
-            ok = aot_emit_coff_obj(
-                path.c_str(), csecs.data(), static_cast<int>(csecs.size()),
-                crel_ptr, crel_n, sym_ptr, sym_n, errbuf, sizeof(errbuf));
+            ok = mode32_
+                     ? aot_emit_elf32_obj(path.c_str(), csecs.data(),
+                                          static_cast<int>(csecs.size()),
+                                          crel_ptr, crel_n, sym_ptr, sym_n,
+                                          errbuf, sizeof(errbuf))
+                     : aot_emit_elf_obj(path.c_str(), csecs.data(),
+                                        static_cast<int>(csecs.size()), crel_ptr,
+                                        crel_n, sym_ptr, sym_n, errbuf,
+                                        sizeof(errbuf));
+        else /* PE -> COFF .obj (AMD64 o i386 segun mode32) */
+            ok = mode32_
+                     ? aot_emit_coff32_obj(path.c_str(), csecs.data(),
+                                           static_cast<int>(csecs.size()),
+                                           crel_ptr, crel_n, sym_ptr, sym_n,
+                                           errbuf, sizeof(errbuf))
+                     : aot_emit_coff_obj(path.c_str(), csecs.data(),
+                                         static_cast<int>(csecs.size()),
+                                         crel_ptr, crel_n, sym_ptr, sym_n,
+                                         errbuf, sizeof(errbuf));
         if (!ok) {
             err = errbuf[0] ? errbuf : "ObjectWriter: error obj";
             return false;

@@ -716,6 +716,12 @@ static void wr32(uint8_t *p, uint32_t v) {
     p[3] = (uint8_t)(v >> 24);
 }
 
+/* Escribe un u16 LE en p. */
+static void wr16le(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
 /* Alinea x hacia arriba a un multiplo de a (potencia de 2). */
 static uint32_t aot_dyn_align_u32(uint32_t x, uint32_t a) {
     return (x + (a - 1)) & ~(a - 1);
@@ -2374,6 +2380,304 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
 }
 
 /* =========================================================================
+ *  ELF32 RELOCATABLE (.o i386) -- para enlazar con gcc -m32 / ld
+ *  Difs vs ELF64: ELFCLASS32, EM_386, structs Elf32 (Ehdr 52 / Shdr 40 /
+ *  Sym 16 / Rel 8), y usa SHT_REL (sin addend en el registro: el addend vive
+ *  EN el campo de la seccion -- como COFF).  Relocs R_386_PC32 (2) / R_386_32
+ *  (1).  Se construye a mano con OBuf (sin depender de structs Elf32).
+ * ========================================================================= */
+#define R_386_32 1
+#define R_386_PC32 2
+
+static void e32_push16(OBuf *o, uint16_t v) {
+    uint8_t b[2];
+    b[0] = (uint8_t)v;
+    b[1] = (uint8_t)(v >> 8);
+    ob_put(o, b, 2);
+}
+static void e32_push32(OBuf *o, uint32_t v) {
+    uint8_t b[4];
+    wr32(b, v);
+    ob_put(o, b, 4);
+}
+
+int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
+                       const AotReloc *relocs, int num_relocs,
+                       const AotSym *syms, int num_syms, char *err,
+                       size_t err_cap) {
+    if (num_secs <= 0) {
+        set_err(err, err_cap, "aot_emit_elf32_obj: sin secciones");
+        return 0;
+    }
+    for (int r = 0; r < num_relocs; ++r) {
+        if (relocs[r].target_is_size || relocs[r].target_is_end) {
+            set_err(err, err_cap, "aot_emit_elf32_obj: SIZE/END no soportado");
+            return 0;
+        }
+        if (relocs[r].kind != AOT_RELOC_REL32 &&
+            relocs[r].kind != AOT_RELOC_IMM32) {
+            set_err(err, err_cap,
+                    "aot_emit_elf32_obj: reloc kind no soportado (32-bit usa "
+                    "REL32/ABS32, no ABS64)");
+            return 0;
+        }
+        if (relocs[r].site_section < 0 || relocs[r].site_section >= num_secs) {
+            set_err(err, err_cap, "aot_emit_elf32_obj: site_section invalido");
+            return 0;
+        }
+    }
+    /* Indices de section headers: 0=NULL, 1..N=user, sym, str, rel[i], shstr. */
+    int *sec_nrel = (int *)calloc((size_t)num_secs, sizeof(int));
+    for (int r = 0; r < num_relocs; ++r)
+        sec_nrel[relocs[r].site_section]++;
+    const int sym_sh = 1 + num_secs;
+    const int str_sh = sym_sh + 1;
+    int *rel_sh = (int *)calloc((size_t)num_secs, sizeof(int));
+    int next_sh = str_sh + 1;
+    for (int i = 0; i < num_secs; ++i)
+        if (sec_nrel[i] > 0) rel_sh[i] = next_sh++;
+    const int shstr_sh = next_sh++;
+    const int shnum = next_sh;
+
+    /* Externos dedup. */
+    const char **extn =
+        (const char **)calloc((size_t)num_relocs + 1, sizeof(char *));
+    int n_extn = 0;
+    for (int r = 0; r < num_relocs; ++r) {
+        const char *e = relocs[r].extern_name;
+        if (!e) continue;
+        int found = 0;
+        for (int k = 0; k < n_extn; ++k)
+            if (strcmp(extn[k], e) == 0) {
+                found = 1;
+                break;
+            }
+        if (!found) extn[n_extn++] = e;
+    }
+    const int extn_base = 1 + num_secs + num_syms;
+
+    /* .strtab + symtab (16 bytes/sym, construido en OBuf). */
+    OBuf strtab;
+    memset(&strtab, 0, sizeof(strtab));
+    {
+        uint8_t z = 0;
+        ob_put(&strtab, &z, 1);
+    }
+    const int nsym = 1 + num_secs + num_syms + n_extn;
+    OBuf symtab;
+    memset(&symtab, 0, sizeof(symtab));
+    ob_put(&symtab, NULL, 16); /* sym[0] = null */
+    for (int i = 0; i < num_secs; ++i) {
+        e32_push32(&symtab, 0);                /* st_name */
+        e32_push32(&symtab, 0);                /* st_value */
+        e32_push32(&symtab, 0);                /* st_size */
+        uint8_t info = (uint8_t)((STB_LOCAL << 4) | STT_SECTION);
+        ob_put(&symtab, &info, 1);             /* st_info */
+        uint8_t other = 0;
+        ob_put(&symtab, &other, 1);            /* st_other */
+        e32_push16(&symtab, (uint16_t)(1 + i)); /* st_shndx */
+    }
+    for (int g = 0; g < num_syms; ++g) {
+        e32_push32(&symtab, (uint32_t)strtab.len);
+        ob_put(&strtab, syms[g].name, strlen(syms[g].name) + 1);
+        e32_push32(&symtab, (uint32_t)syms[g].offset); /* st_value */
+        e32_push32(&symtab, 0);                        /* st_size */
+        uint8_t info = (uint8_t)((STB_GLOBAL << 4) |
+                                 (syms[g].is_func ? STT_FUNC : STT_OBJECT));
+        ob_put(&symtab, &info, 1);
+        uint8_t other = 0;
+        ob_put(&symtab, &other, 1);
+        e32_push16(&symtab, (uint16_t)(1 + syms[g].section));
+    }
+    for (int e = 0; e < n_extn; ++e) {
+        e32_push32(&symtab, (uint32_t)strtab.len);
+        ob_put(&strtab, extn[e], strlen(extn[e]) + 1);
+        e32_push32(&symtab, 0); /* st_value */
+        e32_push32(&symtab, 0); /* st_size */
+        uint8_t info = (uint8_t)((STB_GLOBAL << 4) | STT_NOTYPE);
+        ob_put(&symtab, &info, 1);
+        uint8_t other = 0;
+        ob_put(&symtab, &other, 1);
+        e32_push16(&symtab, (uint16_t)SHN_UNDEF);
+    }
+    const int first_global = 1 + num_secs;
+
+    /* .shstrtab. */
+    OBuf shstr;
+    memset(&shstr, 0, sizeof(shstr));
+    {
+        uint8_t z = 0;
+        ob_put(&shstr, &z, 1);
+    }
+    uint32_t *sec_nameoff = (uint32_t *)calloc((size_t)num_secs, 4);
+    uint32_t *rel_nameoff = (uint32_t *)calloc((size_t)num_secs, 4);
+    for (int i = 0; i < num_secs; ++i) {
+        sec_nameoff[i] = (uint32_t)shstr.len;
+        ob_put(&shstr, secs[i].name, strlen(secs[i].name) + 1);
+    }
+    uint32_t no_symtab = (uint32_t)shstr.len;
+    ob_put(&shstr, ".symtab", 8);
+    uint32_t no_strtab = (uint32_t)shstr.len;
+    ob_put(&shstr, ".strtab", 8);
+    for (int i = 0; i < num_secs; ++i) {
+        if (!rel_sh[i]) continue;
+        rel_nameoff[i] = (uint32_t)shstr.len;
+        ob_put(&shstr, ".rel", 4);
+        ob_put(&shstr, secs[i].name, strlen(secs[i].name) + 1);
+    }
+    uint32_t no_shstr = (uint32_t)shstr.len;
+    ob_put(&shstr, ".shstrtab", 10);
+
+    /* Construir el fichero. */
+    OBuf out;
+    memset(&out, 0, sizeof(out));
+    /* Elf32_Ehdr (52). */
+    uint8_t eh[52];
+    memset(eh, 0, sizeof(eh));
+    eh[0] = 0x7f;
+    eh[1] = 'E';
+    eh[2] = 'L';
+    eh[3] = 'F';
+    eh[4] = 1; /* ELFCLASS32 */
+    eh[5] = 1; /* LSB */
+    eh[6] = 1; /* version */
+    wr16le(eh + 16, ET_REL);
+    wr16le(eh + 18, 3 /* EM_386 */);
+    wr32(eh + 20, 1); /* e_version */
+    wr16le(eh + 40, 52); /* e_ehsize */
+    wr16le(eh + 46, 40); /* e_shentsize */
+    wr16le(eh + 48, (uint16_t)shnum);
+    wr16le(eh + 50, (uint16_t)shstr_sh);
+    ob_put(&out, eh, 52);
+
+    uint32_t *sec_off = (uint32_t *)calloc((size_t)num_secs, 4);
+    for (int i = 0; i < num_secs; ++i) {
+        ob_align(&out, 16);
+        sec_off[i] = (uint32_t)out.len;
+        ob_put(&out, secs[i].data, secs[i].size);
+    }
+    /* Pre-escribir el addend EN el campo de cada sitio (REL i386 sin addend en
+     * el registro).  REL32: A = target_off + addend - 4.  ABS32: A =
+     * target_off + addend.  Extern (REL32): A = addend - 4. */
+    for (int r = 0; r < num_relocs; ++r) {
+        const AotReloc *rl = &relocs[r];
+        int64_t A;
+        if (rl->extern_name)
+            A = rl->addend - 4;
+        else if (rl->kind == AOT_RELOC_REL32)
+            A = (int64_t)rl->target_off + rl->addend - 4;
+        else /* IMM32 -> ABS32 */
+            A = (int64_t)rl->target_off + rl->addend;
+        wr32(out.p + sec_off[rl->site_section] + rl->site_off, (uint32_t)A);
+    }
+    ob_align(&out, 4);
+    uint32_t symtab_off = (uint32_t)out.len;
+    ob_put(&out, symtab.p, symtab.len);
+    uint32_t strtab_off = (uint32_t)out.len;
+    ob_put(&out, strtab.p, strtab.len);
+    uint32_t *rel_off = (uint32_t *)calloc((size_t)num_secs, 4);
+    int *rel_cnt = (int *)calloc((size_t)num_secs, sizeof(int));
+    for (int i = 0; i < num_secs; ++i) {
+        if (!rel_sh[i]) continue;
+        ob_align(&out, 4);
+        rel_off[i] = (uint32_t)out.len;
+        /* Emitir los Elf32_Rel de esta seccion en orden. */
+        for (int r = 0; r < num_relocs; ++r) {
+            const AotReloc *rl = &relocs[r];
+            if (rl->site_section != i) continue;
+            uint32_t sym_idx;
+            uint32_t type;
+            if (rl->extern_name) {
+                sym_idx = 0;
+                for (int k = 0; k < n_extn; ++k)
+                    if (strcmp(extn[k], rl->extern_name) == 0) {
+                        sym_idx = (uint32_t)(extn_base + k);
+                        break;
+                    }
+                type = R_386_PC32;
+            } else {
+                sym_idx = (uint32_t)(1 + rl->target_section); /* section sym */
+                type = (rl->kind == AOT_RELOC_REL32) ? R_386_PC32 : R_386_32;
+            }
+            e32_push32(&out, (uint32_t)rl->site_off); /* r_offset */
+            e32_push32(&out, (sym_idx << 8) | (type & 0xff)); /* r_info */
+            rel_cnt[i]++;
+        }
+    }
+    uint32_t shstr_off = (uint32_t)out.len;
+    ob_put(&out, shstr.p, shstr.len);
+    ob_align(&out, 4);
+    uint32_t shoff = (uint32_t)out.len;
+
+    /* Section headers (40 bytes c/u). */
+    /* helper para empujar un Elf32_Shdr. */
+#define E32_SHDR(name, type, flags, off, size, link, info, align, entsz)        \
+    do {                                                                        \
+        e32_push32(&out, (name));                                               \
+        e32_push32(&out, (type));                                               \
+        e32_push32(&out, (flags));                                              \
+        e32_push32(&out, 0); /* sh_addr */                                      \
+        e32_push32(&out, (off));                                                \
+        e32_push32(&out, (size));                                               \
+        e32_push32(&out, (link));                                               \
+        e32_push32(&out, (info));                                               \
+        e32_push32(&out, (align));                                              \
+        e32_push32(&out, (entsz));                                              \
+    } while (0)
+    /* indice 0: NULL */
+    E32_SHDR(0, 0, 0, 0, 0, 0, 0, 0, 0);
+    for (int i = 0; i < num_secs; ++i) {
+        uint32_t fl = SHF_ALLOC;
+        if (secs[i].flags & AOT_SEC_EXEC) fl |= SHF_EXECINSTR;
+        if (secs[i].flags & AOT_SEC_WRITE) fl |= SHF_WRITE;
+        uint32_t al = (secs[i].flags & AOT_SEC_EXEC) ? 16 : 8;
+        E32_SHDR(sec_nameoff[i], SHT_PROGBITS, fl, sec_off[i],
+                 (uint32_t)secs[i].size, 0, 0, al, 0);
+    }
+    E32_SHDR(no_symtab, SHT_SYMTAB, 0, symtab_off, (uint32_t)symtab.len,
+             (uint32_t)str_sh, (uint32_t)first_global, 4, 16);
+    E32_SHDR(no_strtab, SHT_STRTAB, 0, strtab_off, (uint32_t)strtab.len, 0, 0, 1,
+             0);
+    for (int i = 0; i < num_secs; ++i) {
+        if (!rel_sh[i]) continue;
+        E32_SHDR(rel_nameoff[i], 9 /* SHT_REL */, 0, rel_off[i],
+                 (uint32_t)(rel_cnt[i] * 8), (uint32_t)sym_sh, (uint32_t)(1 + i),
+                 4, 8);
+    }
+    E32_SHDR(no_shstr, SHT_STRTAB, 0, shstr_off, (uint32_t)shstr.len, 0, 0, 1, 0);
+#undef E32_SHDR
+
+    wr32(out.p + 32, shoff); /* e_shoff */
+
+    int ok = 1;
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        set_err(err, err_cap, "aot_emit_elf32_obj: fopen fallo");
+        ok = 0;
+    } else {
+        size_t w = fwrite(out.p, 1, out.len, f);
+        fclose(f);
+        if (w != out.len) {
+            set_err(err, err_cap, "aot_emit_elf32_obj: escritura incompleta");
+            ok = 0;
+        }
+    }
+    free(sec_nrel);
+    free(rel_sh);
+    free(extn);
+    free(strtab.p);
+    free(symtab.p);
+    free(shstr.p);
+    free(sec_nameoff);
+    free(rel_nameoff);
+    free(sec_off);
+    free(rel_off);
+    free(rel_cnt);
+    free(out.p);
+    return ok;
+}
+
+/* =========================================================================
  *  COFF RELOCATABLE (.obj Windows) -- via LibCOFFparse
  * ========================================================================= */
 
@@ -2382,10 +2686,16 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
 #define AOT_COFF_SYM_STATIC 3
 #define AOT_COFF_SYM_FUNC 0x20 /* DTYPE function << 4 */
 
-int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
-                      const AotReloc *relocs, int num_relocs,
-                      const AotSym *syms, int num_syms, char *err,
-                      size_t err_cap) {
+/* IMAGE_REL_I386_* (COFF de 32-bit). */
+#define IMAGE_REL_I386_DIR32 6
+#define IMAGE_REL_I386_REL32 20
+
+/* Impl comun COFF .obj para AMD64 (is32=0) e i386 (is32=1).  Difs: Machine,
+ * tipos de reloc, y que i386 NO tiene ABS64 (usa DIR32 para datos abs32). */
+static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
+                         const AotReloc *relocs, int num_relocs,
+                         const AotSym *syms, int num_syms, char *err,
+                         size_t err_cap, int is32) {
     if (num_secs <= 0) {
         set_err(err, err_cap, "aot_emit_coff_obj: sin secciones");
         return 0;
@@ -2396,8 +2706,11 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
                     "aot_emit_coff_obj: SIZE/END no soportado en .obj (v1)");
             return 0;
         }
-        if (relocs[r].kind != AOT_RELOC_REL32 &&
-            relocs[r].kind != AOT_RELOC_ABS64) {
+        const int kind_ok =
+            relocs[r].kind == AOT_RELOC_REL32 ||
+            (is32 ? relocs[r].kind == AOT_RELOC_IMM32
+                  : relocs[r].kind == AOT_RELOC_ABS64);
+        if (!kind_ok) {
             set_err(err, err_cap,
                     "aot_emit_coff_obj: reloc kind no soportado en .obj");
             return 0;
@@ -2494,12 +2807,18 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
             for (; k < n_extn; ++k)
                 if (strcmp(extn[k], rl->extern_name) == 0) break;
             sym_idx = (uint32_t)(num_secs + num_syms + k);
-            type = (uint16_t)IMAGE_REL_AMD64_REL32;
+            type = is32 ? (uint16_t)IMAGE_REL_I386_REL32
+                        : (uint16_t)IMAGE_REL_AMD64_REL32;
         } else {
             sym_idx = (uint32_t)rl->target_section;
-            type = (rl->kind == AOT_RELOC_ABS64)
-                       ? (uint16_t)IMAGE_REL_AMD64_ADDR64
-                       : (uint16_t)IMAGE_REL_AMD64_REL32;
+            if (is32)
+                type = (rl->kind == AOT_RELOC_REL32)
+                           ? (uint16_t)IMAGE_REL_I386_REL32
+                           : (uint16_t)IMAGE_REL_I386_DIR32;
+            else
+                type = (rl->kind == AOT_RELOC_ABS64)
+                           ? (uint16_t)IMAGE_REL_AMD64_ADDR64
+                           : (uint16_t)IMAGE_REL_AMD64_REL32;
         }
         add_relocation(
             &ns[rl->site_section],
@@ -2569,7 +2888,8 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
 
     COFF_HEADER header;
     memset(&header, 0, sizeof(header));
-    header.Machine = 0x8664; /* IMAGE_FILE_MACHINE_AMD64 */
+    header.Machine =
+        is32 ? 0x14c /* I386 */ : 0x8664 /* AMD64 */;
     header.NumberOfSections = (uint16_t)num_secs;
     header.NumberOfSymbols = (uint32_t)nsym;
     header.SizeOfOptionalHeader = 0;
@@ -2591,6 +2911,24 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
         free(data[i]);
     free(data);
     return ok;
+}
+
+/* COFF .obj AMD64 (64-bit). */
+int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
+                      const AotReloc *relocs, int num_relocs,
+                      const AotSym *syms, int num_syms, char *err,
+                      size_t err_cap) {
+    return coff_obj_impl(path, secs, num_secs, relocs, num_relocs, syms,
+                         num_syms, err, err_cap, /*is32=*/0);
+}
+
+/* COFF .obj i386 (32-bit). */
+int aot_emit_coff32_obj(const char *path, const AotSection *secs, int num_secs,
+                        const AotReloc *relocs, int num_relocs,
+                        const AotSym *syms, int num_syms, char *err,
+                        size_t err_cap) {
+    return coff_obj_impl(path, secs, num_secs, relocs, num_relocs, syms,
+                         num_syms, err, err_cap, /*is32=*/1);
 }
 
 /* =========================================================================

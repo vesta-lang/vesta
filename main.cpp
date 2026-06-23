@@ -2406,18 +2406,22 @@ int main(int argc, char *argv[]) {
             // crt/host/loader).
             const bool no_stub = emit_obj || emit_shared || emit_bin;
 
-            // x86-32: soporta --emit bin (flat, modo protegido) y --emit exe
-            // con
-            // --format elf (ELF32 estatico, _start via int 0x80).  PE32 (.exe
-            // Windows 32-bit) y .o32/.so32 son follow-ups.
+            // x86-32: soporta --emit bin (flat), --emit exe (ELF32/PE32) y
+            // --emit obj (.o ELF32 -- COFF32 .obj es follow-up).  .so/.dll de
+            // 32-bit pendientes.  El objeto conserva la extension .o (linkable
+            // con gcc -m32 / ld).
             if (aot_mode32) {
-                const bool ok32 =
-                    emit_bin || (!no_stub /* EXEC: ELF32 o PE32 */);
+                // --emit obj: .o ELF32 (--format elf) o .obj COFF i386
+                // (--format pe), ambos conservando la extension para linkers
+                // externos (gcc -m32 / ld / link.exe).
+                const bool ok32 = emit_bin || emit_obj ||
+                                  (!no_stub /* EXEC: ELF32 o PE32 */);
                 if (!ok32) {
                     std::cerr
-                        << "[aot] --aot-arch x86-32: soporta --emit bin o "
-                           "--emit exe (ELF32 / PE32); .o/.so/.dll de 32-bit "
-                           "son follow-ups.\n";
+                        << "[aot] --aot-arch x86-32: soporta --emit bin, "
+                           "--emit exe (ELF32 / PE32) o --emit obj (.o ELF32 / "
+                           ".obj COFF i386); .so/.dll de 32-bit son "
+                           "follow-ups.\n";
                     return EXIT_FAILURE;
                 }
             }

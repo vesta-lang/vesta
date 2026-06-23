@@ -218,3 +218,23 @@ nativo en esos frames, igual que el resto del AOT).  Relocs soportadas:
 
 Validado por ejecucion (Windows): un solo `.obj` Vex -> 42; multi-`.obj` Vex
 (lib sin main + app) -> 42; `.obj` Vex + `.obj` de C (TDM-GCC) cross-file -> 42.
+
+### Objetos relocatables de 32-bit (.o ELF32 / .obj COFF i386)
+
+`--aot-arch x86-32 --emit obj` produce objetos de 32-bit que CONSERVAN la
+extension estandar (`.o`/`.obj`) para enlazarlos con toolchains externos
+(gcc -m32, ld, link.exe):
+
+    vm --vex prog.vex -m aot --aot-arch x86-32 --emit obj --format elf -o prog.o
+    gcc -m32 prog.o -o prog        # ELF32 i386, el crt llama a main
+
+    vm --vex prog.vex -m aot --aot-arch x86-32 --emit obj --format pe -o prog.obj
+    # COFF i386 (Machine 0x14c), linkable con link.exe / i686-mingw
+
+ELF32 usa `SHT_REL` (i386: el addend vive EN el campo, no en un record RELA),
+relocs `R_386_PC32` / `R_386_32`.  COFF i386 usa `IMAGE_REL_I386_REL32` /
+`IMAGE_REL_I386_DIR32`.
+
+Validado: `prog.o` (fib recursivo) enlaza con `gcc -m32` y devuelve 55;
+`prog.obj` se reconoce como `pe-i386` con sus simbolos y relocs (ejecucion
+end-to-end requiere un linker de 32-bit para Windows).
