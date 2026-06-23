@@ -688,6 +688,100 @@ nlohmann::json ir_by_id(const ir::IrFunction &fn) {
 }
 
 /**
+ * @brief Anota una instruccion .vel con los valores con nombre de sus registros
+ *        VM (rastreo R0..R15), analogo al de x86.  Modifica @p line in-place
+ *        anadiendo "  ; rN = nombre" y actualiza @p vr (mapa rN -> nombre).
+ *
+ * Solo-LSP: seed con los args en r1..rN; @c mov propaga, las ALU/escritores
+ * invalidan su destino y anotan las lecturas con nombre, las ramas anotan sus
+ * operandos, @c call invalida r0.
+ */
+void annotate_vel(std::string &line,
+                  std::unordered_map<std::string, std::string> &vr,
+                  std::vector<std::string> &vstack) {
+    std::vector<std::string> toks;
+    std::string cur;
+    for (char c : line) {
+        if (c == ' ' || c == '\t' || c == ',') {
+            if (!cur.empty()) { toks.push_back(cur); cur.clear(); }
+        } else
+            cur.push_back(c);
+    }
+    if (!cur.empty()) toks.push_back(cur);
+    if (toks.empty()) return;
+    const std::string &mn = toks[0];
+    auto isvr = [](const std::string &t) -> bool {
+        if (t.size() < 2 || t[0] != 'r') return false;
+        for (size_t i = 1; i < t.size(); ++i)
+            if (!std::isdigit((unsigned char)t[i])) return false;
+        return true;
+    };
+    std::vector<std::string> regs;
+    for (size_t i = 1; i < toks.size(); ++i)
+        if (isvr(toks[i])) regs.push_back(toks[i]);
+    std::vector<std::string> ann;
+    auto add = [&](const std::string &s) {
+        for (const auto &e : ann)
+            if (e == s) return;
+        ann.push_back(s);
+    };
+    auto starts = [&](const char *p) { return mn.rfind(p, 0) == 0; };
+    const bool is_branch = starts("jmp") || starts("cmpjmp") ||
+                           starts("cmpu") || starts("cmps") || starts("cmp");
+    const bool is_call = starts("call");
+    const bool is_mov = (mn == "mov" || mn == "movh" || mn == "movc" ||
+                         mn == "movch" || mn == "movcl");
+    if (mn == "push" && regs.size() == 1) {
+        // Guarda el nombre (modelo de pila) para que el pop lo restaure; es
+        // lectura -> anotar si tiene nombre.
+        auto it = vr.find(regs[0]);
+        vstack.push_back(it != vr.end() ? it->second : std::string());
+        if (it != vr.end()) add(regs[0] + " = " + it->second);
+    } else if (mn == "pop" && regs.size() == 1) {
+        if (!vstack.empty()) {
+            std::string nm = vstack.back();
+            vstack.pop_back();
+            if (!nm.empty()) { vr[regs[0]] = nm; add(regs[0] + " = " + nm); }
+            else vr.erase(regs[0]);
+        } else
+            vr.erase(regs[0]);
+    } else if (is_mov && regs.size() >= 1) {
+        const std::string dst = regs[0];
+        if (regs.size() >= 2) { // mov rD, rS -> propaga
+            auto it = vr.find(regs[1]);
+            if (it != vr.end()) { vr[dst] = it->second; add(dst + " = " + it->second); }
+            else vr.erase(dst);
+        } else
+            vr.erase(dst); // mov rD, imm / @Absolute(...)
+    } else if (is_branch) {
+        for (const auto &rg : regs) {
+            auto it = vr.find(rg);
+            if (it != vr.end()) add(rg + " = " + it->second);
+        }
+    } else if (is_call) {
+        for (const auto &rg : regs) {
+            auto it = vr.find(rg);
+            if (it != vr.end()) add(rg + " = " + it->second);
+        }
+        vr.erase("r0"); // el retorno (r0) queda desconocido
+    } else if (!regs.empty()) {
+        // Escritor generico: regs[0]=destino, resto lecturas.
+        for (size_t i = 1; i < regs.size(); ++i) {
+            auto it = vr.find(regs[i]);
+            if (it != vr.end()) add(regs[i] + " = " + it->second);
+        }
+        vr.erase(regs[0]);
+    }
+    if (!ann.empty()) {
+        line += "  ; ";
+        for (size_t i = 0; i < ann.size(); ++i) {
+            if (i) line += ", ";
+            line += ann[i];
+        }
+    }
+}
+
+/**
  * @brief Mapea el nombre de tier textual al enum AOT.
  * @param tier "bare" | "embed" | "full" (insensible a otras formas).
  * @return Tier correspondiente (BARE por defecto).
@@ -792,8 +886,31 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
     const std::string block = vel_extract_fn(res.vel_text, function);
 
+    // Parsear el IR una vez: fuente + args + ir_by_line, y sembrar el rastreo
+    // de registros VM (arg i -> r(i+1)) para las anotaciones del bytecode.
+    nlohmann::json src = nlohmann::json::array();
+    nlohmann::json args = nlohmann::json::array();
+    nlohmann::json irbl = nlohmann::json::object();
+    std::unordered_map<std::string, std::string> vregmap;
+    std::vector<std::string> vstack; // modelo de pila para push/pop
+    ir::IrModule mod;
+    if (parse_post_opt_module(res, mod)) {
+        const ir::IrFunction *fn = pick_function(mod, function);
+        if (fn) {
+            src = function_source_lines(text, *fn);
+            args = function_args(
+                *fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
+                      "R10", "R11", "R12"});
+            irbl = ir_by_line(*fn);
+            for (size_t i = 0; i < args.size(); ++i)
+                vregmap["r" + std::to_string(i + 1)] =
+                    args[i]["name"].get<std::string>();
+        }
+    }
+
     // Parsear el bloque: cada `// @line N` fija la linea actual; cada
-    // instruccion la hereda; las etiquetas van con linea 0 (contexto).
+    // instruccion la hereda; las etiquetas van con linea 0 (contexto).  Cada
+    // instruccion se anota con los valores con nombre de sus registros VM.
     nlohmann::json asm_lines = nlohmann::json::array();
     int cur_line = 0;
     for (const auto &raw : ir_split_lines(block)) {
@@ -809,6 +926,8 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
             continue; // otros comentarios (parametros, etc.)
         const bool is_label =
             (raw[0] != ' ' && raw[0] != '\t' && !t.empty() && t.back() == ':');
+        if (!is_label)
+            annotate_vel(t, vregmap, vstack); // rastreo de registros VM
         nlohmann::json ji;
         ji["addr"] = ""; // el bytecode no tiene offset de byte como el x86
         ji["text"] = t;
@@ -837,22 +956,6 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
                 }
             if (fill != 0)
                 asm_lines[i]["line"] = fill;
-        }
-    }
-
-    // Fuente de la funcion (mismo rango que JIT/AOT) + args (VM ABI: R1..R12).
-    nlohmann::json src = nlohmann::json::array();
-    nlohmann::json args = nlohmann::json::array();
-    nlohmann::json irbl = nlohmann::json::object();
-    ir::IrModule mod;
-    if (parse_post_opt_module(res, mod)) {
-        const ir::IrFunction *fn = pick_function(mod, function);
-        if (fn) {
-            src = function_source_lines(text, *fn);
-            args = function_args(
-                *fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
-                      "R10", "R11", "R12"});
-            irbl = ir_by_line(*fn);
         }
     }
 
