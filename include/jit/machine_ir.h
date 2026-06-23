@@ -1105,6 +1105,14 @@ struct AsmBlob {
     std::vector<uint8_t> clobbers;   ///< MReg ids clobbered (no bindings)
     bool clobbers_flags = false;
     bool clobbers_mem = false;
+    /// Solo-inspeccion (LSP): etiquetas internas del asm -> offset RELATIVO al
+    /// inicio del blob (bytes).  Las computa NUESTRO parser del texto usando el
+    /// contrato insn_offsets del backend.  El encoder las reubica al offset
+    /// absoluto de la funcion.  Vacio = sin info (degrada).
+    std::vector<std::pair<uint32_t, std::string>> labels;
+    /// Solo-inspeccion: offset relativo -> linea .vex de cada instruccion del
+    /// asm (para atribuir cada instr a su linea real, no al `asm {` global).
+    std::vector<std::pair<uint32_t, uint32_t>> insn_lines;
 };
 
 /**
@@ -1158,6 +1166,10 @@ struct MFunction {
     /// Solo-LSP: correlacion byte_offset -> source_line.  Vacia salvo que
     /// @c emit_line_map este activo.  Ver @c LineMapEntry.
     std::vector<LineMapEntry> line_map;
+    /// Solo-LSP: etiquetas internas de bloques inline-asm -> byte_offset
+    /// (absoluto, relativo al inicio de la funcion).  El encoder las reubica
+    /// desde @c AsmBlob::labels.  El inspector las muestra como divisores.
+    std::vector<std::pair<uint32_t, std::string>> asm_labels;
 
     /// Sprint mem-loop-fix-v2 / fib-recursion (2026-06-02):
     /// indices del @c imm64_pool que contienen referencias a la
