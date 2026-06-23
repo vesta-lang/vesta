@@ -626,6 +626,27 @@ std::string ir_short(const ir::IrFunction &fn, const ir::IrInstr &in) {
         return v < fn.values.size() ? fn.values[v].name
                                     : ("%" + std::to_string(v));
     };
+    // INLINE_ASM: el func_name es el cuerpo asm COMPLETO (multilinea).
+    // Volcado en una sola linea es ilegible -> forma compacta con el numero de
+    // instrucciones; el cuerpo real se muestra expandido en ir_listing.
+    if (in.op == ir::IrOp::INLINE_ASM) {
+        int ninstr = 0;
+        bool in_tok = false;
+        for (char c : in.func_name) {
+            if (c == '\n') {
+                in_tok = false;
+            } else if (c == ';' || c == '/') {
+                in_tok = true; // resto de la linea es comentario
+            } else if (!in_tok && c != ' ' && c != '\t' && c != ':') {
+                // primera no-blanca de la linea: cuenta si no es etiqueta sola
+                if (!in_tok) {
+                    in_tok = true;
+                    ++ninstr; // aproximado (incluye lineas de etiqueta)
+                }
+            }
+        }
+        return "inline_asm { " + std::to_string(ninstr) + " lineas }";
+    }
     std::string s;
     if (in.dst != ir::IR_NO_VALUE)
         s += vn(in.dst) + " = ";
@@ -705,6 +726,41 @@ nlohmann::json ir_listing(const ir::IrFunction &fn) {
         for (const auto &in : blk.instrs) {
             if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
                 continue;
+            if (in.op == ir::IrOp::INLINE_ASM) {
+                // Expandir el cuerpo asm: una fila por linea (legible), con su
+                // linea .vex real (base+1+k); las etiquetas como "label".
+                nlohmann::json jh;
+                jh["kind"] = "op";
+                jh["line"] = in.source_line;
+                jh["text"] = "inline_asm {";
+                arr.push_back(std::move(jh));
+                size_t pos = 0;
+                int k = 0;
+                const std::string &body = in.func_name;
+                while (pos <= body.size()) {
+                    size_t nl = body.find('\n', pos);
+                    std::string ln = body.substr(
+                        pos, nl == std::string::npos ? std::string::npos
+                                                     : nl - pos);
+                    size_t b0 = ln.find_first_not_of(" \t");
+                    if (b0 != std::string::npos) {
+                        std::string t = ln.substr(b0);
+                        while (!t.empty() && (t.back() == ' ' || t.back() == '\t'))
+                            t.pop_back();
+                        bool is_lbl = !t.empty() && t.back() == ':';
+                        nlohmann::json jo;
+                        jo["kind"] = is_lbl ? "label" : "op";
+                        jo["line"] = in.source_line + 1 + k;
+                        jo["text"] = is_lbl ? t.substr(0, t.size() - 1)
+                                            : ("  " + t);
+                        arr.push_back(std::move(jo));
+                    }
+                    ++k;
+                    if (nl == std::string::npos) break;
+                    pos = nl + 1;
+                }
+                continue;
+            }
             nlohmann::json jo;
             jo["kind"] = "op";
             jo["line"] = in.source_line;
