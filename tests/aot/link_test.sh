@@ -96,6 +96,34 @@ if [ -x "$WORK/bss.elf" ]; then
   else echo "LINK E: EXIT MISMATCH got=$got exp=42"; rc=1; fi
 else echo "LINK E: no se genero el ejecutable"; rc=1; fi
 
+# --- F) strings en un .o Vex SIN main (CPU-dispatch init cross-.o) ---
+# slib usa .length() pero no tiene main: su __vex_strdisp_init solo corre si el
+# linker lo encadena (via __vex_premain).  Antes esto crasheaba (slot fp sin
+# init).  Runtime C con malloc/free/calloc (el RAII de string referencia free).
+cat > "$WORK/slib.vex" <<'EOF'
+i64 helper_a(i64 n) { string s = "x"; return s.length() + n; }
+EOF
+cat > "$WORK/sapp.vex" <<'EOF'
+extern "x" { fn helper_a(i64 n) -> i64; }
+i64 main() { string t = "y"; return helper_a(40) + t.length(); }
+EOF
+cat > "$WORK/srt.c" <<'EOF'
+static char heap[1 << 20];
+static unsigned long off;
+void *malloc(unsigned long n) { void *p = &heap[off]; off += (n + 15) & ~15UL; return p; }
+void *calloc(unsigned long a, unsigned long b) { return malloc(a * b); }
+void free(void *p) { (void)p; }
+EOF
+"$VM" --vex "$WORK/slib.vex" -m aot --emit obj --format elf -o "$WORK/slib.o" >/dev/null 2>&1
+"$VM" --vex "$WORK/sapp.vex" -m aot --emit obj --format elf -o "$WORK/sapp.o" >/dev/null 2>&1
+gcc -c -fno-pic "$WORK/srt.c" -o "$WORK/srt.o" 2>/dev/null
+"$VM" --link "$WORK/sapp.o" "$WORK/slib.o" "$WORK/srt.o" -o "$WORK/sapp.elf" --format elf >/dev/null 2>&1
+if [ -x "$WORK/sapp.elf" ]; then
+  "$WORK/sapp.elf"; got=$?
+  if [ "$got" = "42" ]; then echo "LINK F (strings en .o sin main, init cross-.o): exit=42 OK"
+  else echo "LINK F: EXIT MISMATCH got=$got exp=42"; rc=1; fi
+else echo "LINK F: no se genero el ejecutable"; rc=1; fi
+
 rm -rf "$WORK"
 [ $rc = 0 ] && echo "AOT.5 linker: TODOS OK" || echo "AOT.5 linker: FALLOS"
 exit $rc

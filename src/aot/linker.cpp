@@ -326,6 +326,13 @@ bool aot_link(const std::vector<std::string> &inputs,
         bool defined = false;
     };
     std::unordered_map<std::string, GDef> globals;
+    // Inits de programa del CPU-dispatch (uno por .o que use el feature).  Se
+    // recolectan APARTE (no en globals: cada .o tiene su propio init con su
+    // mismo nombre -> no es una definicion multiple) y el linker los ejecuta
+    // TODOS antes de main (en orden cpu -> memcpy -> strdisp, porque memcpy/
+    // strdisp leen el global de features que cpu_init escribe).  Asi un .o Vex
+    // SIN main (libreria que usa strings/memcpy) tambien inicializa sus slots.
+    std::vector<std::pair<int, uint64_t>> init_cpu, init_memcpy, init_strdisp;
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjSym &sy : o.syms) {
@@ -335,9 +342,23 @@ bool aot_link(const std::vector<std::string> &inputs,
             if (sy.shndx >= secmap[oi].size()) continue;
             const SecMap &sm = secmap[oi][sy.shndx];
             if (sm.mindex < 0) continue;
+            const int wsec = sec_base + sm.mindex;
+            const uint64_t off = sm.base + sy.value;
+            if (sy.name == "__vex_cpu_init") {
+                init_cpu.push_back({wsec, off});
+                continue;
+            }
+            if (sy.name == "__vex_memcpy_init") {
+                init_memcpy.push_back({wsec, off});
+                continue;
+            }
+            if (sy.name == "__vex_strdisp_init") {
+                init_strdisp.push_back({wsec, off});
+                continue;
+            }
             GDef d;
-            d.wsec = sec_base + sm.mindex;
-            d.off = sm.base + sy.value;
+            d.wsec = wsec;
+            d.off = off;
             d.defined = true;
             auto it = globals.find(sy.name);
             if (it != globals.end() && it->second.defined) {
@@ -454,10 +475,56 @@ bool aot_link(const std::vector<std::string> &inputs,
                   "binario sin main, p.ej. un kernel)";
             return false;
         }
-        w.set_entry(0, 0); // stub en indice 0, offset 0
-        w.add_reloc(0, stub.main_call_off,
-                    RelocTarget::addr(it->second.wsec, it->second.off),
-                    RelocKind::REL32);
+        const GDef mn = it->second;
+        const bool any_init = !init_cpu.empty() || !init_memcpy.empty() ||
+                              !init_strdisp.empty();
+        if (any_init) {
+            // Sintetizar __vex_premain: llama a CADA init de programa (en orden
+            // cpu -> memcpy -> strdisp) y salta a main.  Asi los slots fp de
+            // TODOS los .o (incluidos los .o sin main) quedan inicializados.
+            // El init del .o de main ademas corre via su prologo (idempotente).
+            std::vector<uint8_t> pm;
+            struct PReloc {
+                uint64_t off;
+                int wsec;
+                uint64_t toff;
+            };
+            std::vector<PReloc> prelocs;
+            auto emit_call = [&](const std::pair<int, uint64_t> &t) {
+                pm.push_back(0xE8); // call rel32
+                for (int k = 0; k < 4; ++k)
+                    pm.push_back(0);
+                prelocs.push_back({pm.size() - 4, t.first, t.second});
+            };
+            for (const auto &p : init_cpu)
+                emit_call(p);
+            for (const auto &p : init_memcpy)
+                emit_call(p);
+            for (const auto &p : init_strdisp)
+                emit_call(p);
+            pm.push_back(0xE9); // jmp rel32 -> main (tail)
+            for (int k = 0; k < 4; ++k)
+                pm.push_back(0);
+            prelocs.push_back({pm.size() - 4, mn.wsec, mn.off});
+
+            WriterSection pms;
+            pms.name = ".text._premain";
+            pms.flags = SecFlag::READ | SecFlag::EXEC | SecFlag::CODE;
+            pms.data = std::move(pm);
+            pms.align = 16;
+            const int premain_sec = w.add_section(std::move(pms));
+            for (const PReloc &pr : prelocs)
+                w.add_reloc(premain_sec, pr.off,
+                            RelocTarget::addr(pr.wsec, pr.toff),
+                            RelocKind::REL32);
+            w.set_entry(0, 0); // stub en indice 0
+            w.add_reloc(0, stub.main_call_off,
+                        RelocTarget::addr(premain_sec, 0), RelocKind::REL32);
+        } else {
+            w.set_entry(0, 0); // stub en indice 0, offset 0
+            w.add_reloc(0, stub.main_call_off,
+                        RelocTarget::addr(mn.wsec, mn.off), RelocKind::REL32);
+        }
         if (stub.has_import_call)
             w.add_import_call(ImportCall{stub.import_dll, stub.import_func, 0,
                                          stub.import_call_off});
