@@ -17,6 +17,8 @@
 
 #include "lsp/lsp_server.h"
 
+#include "lsp/builtin_docs.h"
+
 #include <exception>
 #include <fstream>
 #include <sstream>
@@ -24,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "lsp/param_hints.h"
 #include "lsp/semantic_tokens.h"
 #include "lsp/symbol_index.h"
 #include "vex/diagnostic.h"
@@ -393,6 +396,92 @@ nlohmann::json make_completion_item(const std::string &label,
     if (!detail.empty())
         it["detail"] = detail;
     return it;
+}
+
+/**
+ * @brief Extrae el comentario de documentacion que PRECEDE a una definicion.
+ *
+ * Dado el offset de byte del nombre de la definicion, sube por las lineas
+ * inmediatamente anteriores recolectando:
+ *   - lineas de comentario @c // (se quita el @c // y un espacio inicial),
+ *   - lineas de un bloque @c /* ... *\/ (se quitan los delimitadores y un @c *
+ *     de continuacion al inicio).
+ * Se detiene en la primera linea que no es comentario (codigo o linea en
+ * blanco).  Devuelve las lineas en orden natural unidas por @c \n, o "" si no
+ * hay comentario.  Tolerante: cualquier caso raro devuelve lo acumulado.
+ */
+std::string extract_doc_comment(const std::string &text, size_t name_offset) {
+    if (name_offset > text.size())
+        return std::string();
+    // Inicio de la linea que contiene el nombre.
+    size_t line_start = text.rfind('\n', name_offset ? name_offset - 1 : 0);
+    line_start = (line_start == std::string::npos) ? 0 : line_start + 1;
+
+    auto trim = [](const std::string &s) -> std::string {
+        size_t a = s.find_first_not_of(" \t\r");
+        if (a == std::string::npos)
+            return std::string();
+        size_t b = s.find_last_not_of(" \t\r");
+        return s.substr(a, b - a + 1);
+    };
+
+    std::vector<std::string> doc; // de la mas cercana a la mas lejana (luego se invierte)
+    size_t pos = line_start;
+    int guard = 0;
+    while (pos > 0 && guard++ < 200) {
+        // Linea anterior: [prev_start, prev_end) sin el '\n'.
+        size_t nl = text.rfind('\n', pos - 2 < text.size() ? pos - 2 : 0);
+        size_t prev_start = (pos >= 2 && nl != std::string::npos) ? nl + 1 : 0;
+        if (pos < 2)
+            prev_start = 0;
+        size_t prev_end = pos - 1; // posicion del '\n' que separa.
+        if (prev_end > text.size())
+            break;
+        std::string raw = text.substr(prev_start, prev_end - prev_start);
+        std::string t = trim(raw);
+        if (t.rfind("//", 0) == 0) {
+            std::string c = t.substr(2);
+            if (!c.empty() && c[0] == ' ')
+                c = c.substr(1);
+            // saltar las marcas Doxygen de mero formato (@brief queda visible).
+            doc.push_back(c);
+            pos = prev_start;
+            continue;
+        }
+        // Linea de bloque: "*/", "* ...", "/** ...", "/* ...".
+        if (t == "*/" || t.rfind("* ", 0) == 0 || t == "*" ||
+            t.rfind("/**", 0) == 0 || t.rfind("/*", 0) == 0) {
+            std::string c = t;
+            // limpiar delimitadores.
+            if (c.rfind("/**", 0) == 0)
+                c = c.substr(3);
+            else if (c.rfind("/*", 0) == 0)
+                c = c.substr(2);
+            if (!c.empty() && c[0] == '*')
+                c = c.substr(1);
+            if (c.size() >= 2 && c.substr(c.size() - 2) == "*/")
+                c = c.substr(0, c.size() - 2);
+            c = trim(c);
+            if (!c.empty())
+                doc.push_back(c);
+            pos = prev_start;
+            // si era la apertura del bloque, ya terminamos.
+            if (t.rfind("/*", 0) == 0)
+                break;
+            continue;
+        }
+        // Ni comentario ni continuacion de bloque: fin de la doc.
+        break;
+    }
+    if (doc.empty())
+        return std::string();
+    std::string out;
+    for (auto it = doc.rbegin(); it != doc.rend(); ++it) {
+        if (!out.empty())
+            out += "\n";
+        out += *it;
+    }
+    return out;
 }
 
 /// @brief Palabras clave de Vex ofrecidas en el completado general (curadas a
@@ -1022,10 +1111,14 @@ bool LspServer::handle_vesta_request(const std::string &method,
 
         nlohmann::json result;
         if (method == "vesta/bytecode") {
-            result = inspector_.bytecode(uri);
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.bytecode(uri, fn);
         } else if (method == "vesta/ir") {
             const std::string phase = params.value("phase", std::string("post"));
             result = inspector_.ir(uri, phase);
+        } else if (method == "vesta/irDiff") {
+            const std::string fn = params.value("function", std::string());
+            result = inspector_.ir_diff(uri, fn);
         } else if (method == "vesta/complexity") {
             result = inspector_.complexity(uri);
         } else if (method == "vesta/diagram") {
@@ -1049,6 +1142,82 @@ bool LspServer::handle_vesta_request(const std::string &method,
             result = inspector_.macro_expand(uri);
         } else if (method == "vesta/comptimeValues") {
             result = inspector_.comptime_values(uri);
+        } else if (method == "vesta/paramHints") {
+            // Parameter hints (inlay): nombre de cada parametro antes de su
+            // argumento en las llamadas a funciones conocidas.
+            nlohmann::json arr = nlohmann::json::array();
+            if (docs_.has(uri)) {
+                const std::string &text = docs_.text(uri);
+                std::vector<ParamHint> ph = compute_param_hints(text, uri);
+                for (const auto &h : ph) {
+                    nlohmann::json o;
+                    o["line"] = h.line;
+                    o["character"] = h.character;
+                    o["label"] = h.label;
+                    arr.push_back(std::move(o));
+                }
+            }
+            result = nlohmann::json::object();
+            result["hints"] = std::move(arr);
+        } else if (method == "vesta/symbolInfo") {
+            // Informacion del simbolo bajo el cursor para el hover rico:
+            // nombre + categoria + firma + doc (comentarios precedentes).  Las
+            // pestanas IR/bytecode/JIT/AOT las pide el cliente aparte (on-demand)
+            // con vesta/ir, vesta/bytecode, vesta/jitAsm, vesta/aotAsm.
+            const uint32_t line = params.value("line", 0u);
+            const uint32_t character = params.value("character", 0u);
+            nlohmann::json info = nlohmann::json::object();
+            info["found"] = false;
+            if (docs_.has(uri)) {
+                // Reusar la extraccion de palabra del hover (maneja UTF-16).
+                nlohmann::json hp;
+                hp["textDocument"]["uri"] = uri;
+                hp["position"]["line"] = line;
+                hp["position"]["character"] = character;
+                std::string u2, word;
+                if (word_under_cursor(hp, u2, word) && !word.empty()) {
+                    const std::string &text = docs_.text(uri);
+                    DocSymbols local = build_doc_symbols(text, uri);
+                    const SymbolDef *def = nullptr;
+                    for (const auto &d : local.defs)
+                        if (d.name == word) {
+                            def = &d;
+                            break;
+                        }
+                    info["name"] = word;
+                    if (def) {
+                        info["found"] = true;
+                        info["kind"] = symbol_kind_name(def->kind);
+                        info["signature"] = def->signature;
+                        info["container"] = def->container;
+                        info["doc"] = extract_doc_comment(text, def->byte_offset);
+                        const bool callable =
+                            def->kind == SymbolKind::Function ||
+                            def->kind == SymbolKind::Method;
+                        info["callable"] = callable;
+                    } else if (const BuiltinDoc *b = lookup_builtin(word)) {
+                        // Builtin del lenguaje (print, sizeof, str_*, ...):
+                        // doc + firma desde la tabla central.  callable=false
+                        // -> el hover solo muestra la pestana Doc (los builtins
+                        // no tienen IR/JIT/AOT de usuario que inspeccionar).
+                        info["found"] = true;
+                        info["kind"] = "builtin";
+                        info["signature"] = b->signature;
+                        info["container"] = "";
+                        info["doc"] = b->doc;
+                        info["callable"] = false;
+                    } else {
+                        // Identificador sin definicion local (var local, tipo
+                        // importado): aun util saber el nombre.
+                        info["found"] = true;
+                        info["kind"] = "unknown";
+                        info["signature"] = "";
+                        info["doc"] = "";
+                        info["callable"] = false;
+                    }
+                }
+            }
+            result = std::move(info);
         } else {
             // Metodo vesta/* desconocido: no manejado aqui.
             return false;

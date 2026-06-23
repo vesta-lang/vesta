@@ -86,11 +86,16 @@ class Inspector {
     Inspector &operator=(const Inspector &) = delete;
 
     /**
-     * @brief @c vesta/bytecode: texto @c .vel del modulo.
-     * @param uri URI del documento abierto.
+     * @brief @c vesta/bytecode: texto @c .vel del modulo o de una funcion.
+     * @param uri      URI del documento abierto.
+     * @param function Nombre de funcion a aislar (vacio = modulo entero).
+     *                 Para el hover se pasa el simbolo para ver solo SU
+     *                 bytecode; tambien resuelve funciones comptime via el
+     *                 prefijo @c __macro_.
      * @return @c { "text": "<bytecode .vel>" } o @c { "error": "..." }.
      */
-    nlohmann::json bytecode(const std::string &uri);
+    nlohmann::json bytecode(const std::string &uri,
+                            const std::string &function = "");
 
     /**
      * @brief @c vesta/ir: SSA IR del modulo.
@@ -99,6 +104,18 @@ class Inspector {
      * @return @c { "text": "<IR legible>" } o @c { "error": "..." }.
      */
     nlohmann::json ir(const std::string &uri, const std::string &phase);
+
+    /**
+     * @brief @c vesta/irDiff: diff del IR pre-opt vs post-opt de una funcion.
+     *
+     * Extrae el bloque @c @function de @p function en ambas fases y produce un
+     * diff unificado por lineas (prefijos @c "- " eliminado por el optimizador,
+     * @c "+ " generado, @c "  " sin cambios).  Si @p function esta vacio,
+     * compara el modulo entero.
+     *
+     * @return @c { "text": "<diff>" } o @c { "error": "..." }.
+     */
+    nlohmann::json ir_diff(const std::string &uri, const std::string &function);
 
     /**
      * @brief @c vesta/complexity: coste Big-O por funcion.

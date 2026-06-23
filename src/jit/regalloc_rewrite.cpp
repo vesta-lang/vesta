@@ -1535,6 +1535,10 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
     MFunction pf;
     lw.pf = &pf; // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
     pf.name = vf.name;
+    /* Solo-LSP (vista "Godbolt"): propagar el opt-in de la tabla
+     * byte_offset -> source_line al MFunction fisico (que es el que ve el
+     * encoder).  OFF por defecto -> sin efecto en produccion. */
+    pf.emit_line_map = vf.emit_line_map;
     pf.next_label_id = vf.next_label_id;
     pf.label_offsets = vf.label_offsets;
     pf.imm64_pool = vf.imm64_pool;
@@ -1630,7 +1634,16 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             }
             ++ii;
             lw.cur_call_pos = 2u * gi;
+            /* Solo-LSP: las MInstr fisicas que emite lower() se construyen
+             * frescas (make_unary/...), perdiendo el source_pc de @c in.
+             * Lo re-estampamos en las instrs anadidas por esta op para que
+             * el encoder produzca la tabla linea<->asm.  OFF en produccion. */
+            const size_t lm_before = pf.emit_line_map ? outv.size() : 0;
             lw.lower(in, outv);
+            if (pf.emit_line_map && in.source_pc != 0) {
+                for (size_t k = lm_before; k < outv.size(); ++k)
+                    if (outv[k].source_pc == 0) outv[k].source_pc = in.source_pc;
+            }
             ++gi;
         }
         /* OSR 1a: instrumentar el back-edge (BR incondicional a un bloque

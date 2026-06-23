@@ -230,6 +230,7 @@ CompileResult compile_vex_source(const std::string &source,
         lo.set_instrument_mode(opts.instrument_mode);
     }
     lo.set_native_poo(opts.native_poo); // Phase AOT.2.b: POO nativa (-m aot)
+    lo.set_emit_comptime_fns(opts.emit_comptime_fns); // solo-LSP: inspeccion
     // C-3: detectar @StringConcat / @StringEq ANTES del lowering.  A
     // diferencia de @AllocatorOverride (que reescribe IR post-lowering),
     // el override del string built-in debe afectar el lowering MISMO del

@@ -129,7 +129,13 @@ std::vector<uint8_t> vreg_compile_native(
         true
 #endif
     ,
-    bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2);
+    bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
+    /* Solo-LSP (vista "Godbolt"): si @p emit_line_map es true y
+     * @p line_map_out != nullptr, se rellena con la correlacion
+     * byte_offset -> source_line del codigo AOT generado.  OFF por defecto
+     * -> cero efecto para el resto del proyecto. */
+    bool emit_line_map = false,
+    std::vector<LineMapEntry> *line_map_out = nullptr);
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

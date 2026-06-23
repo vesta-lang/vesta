@@ -4549,8 +4549,39 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
                                  k == ast::NodeKind::BoolLitExpr ||
                                  k == ast::NodeKind::CharLitExpr);
         int64_t v;
-        if (!is_literal && lsp_eval_int(vd->init.get(), &v))
-            lsp_var_values_[vd->name] = v;
+        const bool known = !is_literal && lsp_eval_int(vd->init.get(), &v);
+        if (known) lsp_var_values_[vd->name] = v;
+        const bool is_bool =
+            vd->init->result_type.kind == PrimitiveKind::BOOL;
+        auto val_str = [&]() -> std::string {
+            return is_bool ? (v != 0 ? std::string("true") : std::string("false"))
+                           : std::to_string(v);
+        };
+        if (vd->infer_type) {
+            // `auto`/`var`: mostrar el TIPO deducido (+ valor si se conoce).
+            std::string ts = type_to_string(vd->init->result_type);
+            if (!ts.empty() && ts != "void") {
+                ComptimeBuiltinHit hit;
+                hit.loc = vd->init->loc;
+                hit.name = "type"; // builtin_kind="type" -> prefijo ": "
+                hit.type_kind = "type";
+                hit.value_str = known ? (ts + " = " + val_str()) : ts;
+                comptime_builtin_hits_.push_back(std::move(hit));
+            }
+        } else if (known) {
+            // Tipo explicito + init constante o COMPTIME (incluye llamadas a
+            // `comptime fn`, que el evaluador real ejecuta de verdad): p.ej.
+            // `i32 mask = 1 << 8` -> = 256, `comptime i64 F = fib(10)` -> = 55.
+            // (Si el init es un builtin de introspeccion -- sizeof<T>, ... --
+            // este "al final" coincide en la linea con el hit del builtin; el
+            // cliente muestra uno: no se duplica visualmente.)
+            ComptimeBuiltinHit hit;
+            hit.loc = vd->init->loc;
+            hit.name = "expr"; // builtin_kind="expr" -> el cliente lo pinta
+            hit.type_kind = is_bool ? "bool" : "int";
+            hit.value_str = val_str();
+            comptime_builtin_hits_.push_back(std::move(hit));
+        }
     }
     /* `comptime const NAME = expr;` local.  Evalua el init en
      * compile-time y registra en el scope local de comptime const.
@@ -5066,83 +5097,17 @@ bool TypeChecker::lsp_eval_builtin_scalar(const ast::CallExpr *e, int64_t *out) 
 
 bool TypeChecker::lsp_eval_int(const ast::Expr *e, int64_t *out) {
     if (!e) return false;
-    switch (e->kind) {
-    case ast::NodeKind::IntLitExpr:
-        *out = (int64_t)static_cast<const ast::IntLitExpr *>(e)->value;
-        return true;
-    case ast::NodeKind::BoolLitExpr:
-        *out = static_cast<const ast::BoolLitExpr *>(e)->value ? 1 : 0;
-        return true;
-    case ast::NodeKind::CharLitExpr:
-        *out = (int64_t)static_cast<const ast::CharLitExpr *>(e)->codepoint;
-        return true;
-    case ast::NodeKind::IdentExpr: {
-        auto it =
-            lsp_var_values_.find(static_cast<const ast::IdentExpr *>(e)->name);
-        if (it == lsp_var_values_.end()) return false;
-        *out = it->second;
-        return true;
-    }
-    case ast::NodeKind::UnaryExpr: {
-        auto *u = static_cast<const ast::UnaryExpr *>(e);
-        int64_t v;
-        if (!lsp_eval_int(u->operand.get(), &v)) return false;
-        switch (u->op) {
-        case ast::UnOp::LogicalNot: *out = (v == 0) ? 1 : 0; return true;
-        case ast::UnOp::Neg: *out = -v; return true;
-        case ast::UnOp::BitNot: *out = ~v; return true;
-        case ast::UnOp::Pos: *out = v; return true;
-        default: return false;
-        }
-    }
-    case ast::NodeKind::BinaryExpr: {
-        auto *b = static_cast<const ast::BinaryExpr *>(e);
-        int64_t l;
-        if (!lsp_eval_int(b->lhs.get(), &l)) return false;
-        if (b->op == ast::BinOp::LogicalAnd && l == 0) {
-            *out = 0;
-            return true;
-        }
-        if (b->op == ast::BinOp::LogicalOr && l != 0) {
-            *out = 1;
-            return true;
-        }
-        int64_t r;
-        if (!lsp_eval_int(b->rhs.get(), &r)) return false;
-        switch (b->op) {
-        case ast::BinOp::Add: *out = l + r; return true;
-        case ast::BinOp::Sub: *out = l - r; return true;
-        case ast::BinOp::Mul: *out = l * r; return true;
-        case ast::BinOp::Div:
-            if (r == 0) return false;
-            *out = l / r;
-            return true;
-        case ast::BinOp::Mod:
-            if (r == 0) return false;
-            *out = l % r;
-            return true;
-        case ast::BinOp::Eq: *out = (l == r) ? 1 : 0; return true;
-        case ast::BinOp::Neq: *out = (l != r) ? 1 : 0; return true;
-        case ast::BinOp::Lt: *out = (l < r) ? 1 : 0; return true;
-        case ast::BinOp::Le: *out = (l <= r) ? 1 : 0; return true;
-        case ast::BinOp::Gt: *out = (l > r) ? 1 : 0; return true;
-        case ast::BinOp::Ge: *out = (l >= r) ? 1 : 0; return true;
-        case ast::BinOp::LogicalAnd: *out = (l != 0 && r != 0) ? 1 : 0; return true;
-        case ast::BinOp::LogicalOr: *out = (l != 0 || r != 0) ? 1 : 0; return true;
-        case ast::BinOp::BitAnd: *out = l & r; return true;
-        case ast::BinOp::BitOr: *out = l | r; return true;
-        case ast::BinOp::BitXor: *out = l ^ r; return true;
-        case ast::BinOp::Shl: *out = l << r; return true;
-        case ast::BinOp::Shr: *out = l >> r; return true;
-        default: return false;
-        }
-    }
-    case ast::NodeKind::CallExpr:
-        return lsp_eval_builtin_scalar(
-            static_cast<const ast::CallExpr *>(e), out);
-    default:
+    // Delegar en el evaluador comptime REAL del frontend: ejecuta de verdad las
+    // construcciones comptime (comptime fn con su body, comptime const con
+    // llamadas, math constante, builtins sizeof<T>/kind<T>/...).  Devuelve
+    // ok=false para lo que NO es comptime (valores runtime como ffi_call o una
+    // variable mutable): eso se resuelve ejecutando el programa (notebook), no
+    // aqui, para no mostrar un valor que en runtime seria otro.
+    const ComptimeEvalResult r = comptime_eval_expr(*this, e);
+    if (!r.ok || r.is_str || r.is_array || r.is_struct || r.is_type)
         return false;
-    }
+    if (out) *out = r.value;
+    return true;
 }
 
 void TypeChecker::check_if(ast::IfStmt *s, const Type &fn_return_type) {
@@ -9269,6 +9234,20 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->loc,
                 std::string("static_assert FAILED: ") +
                     (msg.empty() ? std::string("condicion falsa") : msg));
+        }
+        // Captura LSP: indicar inline si el static_assert PASA (OK) o FALLA.
+        // Usamos lsp_eval_int porque evalua los builtins (sizeof<T>, ...) que
+        // comptime_eval_expr no cubre.
+        if (capture_comptime_block_locals_) {
+            int64_t sv;
+            if (lsp_eval_int(e->args[0].get(), &sv)) {
+                ComptimeBuiltinHit hit;
+                hit.loc = e->loc;
+                hit.name = "static_assert";
+                hit.type_kind = "assert";
+                hit.value_str = (sv != 0) ? "OK" : "FALLA";
+                comptime_builtin_hits_.push_back(std::move(hit));
+            }
         }
         /* Si !r.ok, no emitimos error -- el lowering despachara
          * via FFI al virtual fn que hace el check en runtime VM. */

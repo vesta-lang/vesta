@@ -69,7 +69,15 @@ enum class SemTokenType : uint32_t {
     String,
     Number,
     Operator,
-    Macro
+    Macro,
+    // Tipos NO estandar propios de Vex (la leyenda es custom; el cliente
+    // mapea por nombre, asi que anyadirlos al final es seguro):
+    EscapeSequence, ///< \n \t \xHH \uHHHH y secuencias ANSI dentro de strings.
+    Interpolation,  ///< delimitadores ${ y } de la interpolacion de strings.
+    Register        ///< registros de CPU (rax, xmm0, ...) en bloques asm.
+    // Las INSTRUCCIONES de asm reusan tipos existentes para diferenciarlas por
+    // categoria (mismo color que ya tienen): aritmeticas->Function,
+    // logicas/bit->Macro, control de flujo->Keyword, movimiento/datos->Type.
 };
 
 /**

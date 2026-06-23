@@ -396,7 +396,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_call, const VregEntries &ent,
                  const CallResolver &resolve_native,
                  const CallResolver &resolve_symbol, bool pic, bool target_sysv,
-                 bool mode32, FloatIsa fisa) {
+                 bool mode32, FloatIsa fisa, bool emit_line_map) {
     /* CRITICAL-EDGE SPLITTING (out-of-SSA): si hay >=1 arista critica que
      * entra a un bloque con PHIs, trabajamos sobre una COPIA de la funcion
      * con los puentes insertados (zero-cost para el caso comun sin aristas
@@ -436,6 +436,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     out = MFunction{};
     out.name = fn.name;
+    /* Solo-LSP (vista "Godbolt"): activar la captura de source_line en el
+     * codegen vreg (AOT).  OFF por defecto -> sin efecto en produccion. */
+    out.emit_line_map = emit_line_map;
     out.vreg_count = static_cast<uint32_t>(fn.values.size());
     out.ir_value_count =
         static_cast<uint32_t>(fn.values.size()); // OSR: limite IR/temps
@@ -731,9 +734,30 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             has_pend = false;
         };
 
+        /* Solo-LSP (vista "Godbolt"): estampado diferido de source_line en
+         * las MInstr de este bloque.  Cada IR-op emite a @c O; snapshot
+         * ANTES de bajarla y estampamos al inicio de la op siguiente (y al
+         * cerrar el bucle), sobreviviendo a los muchos @c continue.  OFF por
+         * defecto -> cero efecto en el codegen AOT de produccion. */
+        size_t lm_before = SIZE_MAX; // SIZE_MAX = nada pendiente
+        uint32_t lm_line = 0;
+        auto lm_flush = [&]() {
+            if (!out.emit_line_map || lm_before == SIZE_MAX) return;
+            if (lm_line != 0)
+                for (size_t k = lm_before; k < O.size(); ++k)
+                    if (O[k].source_pc == 0) O[k].source_pc = lm_line;
+            lm_before = SIZE_MAX;
+        };
+
         for (const ir::IrInstr &in : ib.instrs) {
             MOp mop;
             MCond cc;
+            // Estampar la op anterior (sobrevive a `continue`) + snapshot.
+            lm_flush();
+            if (out.emit_line_map) {
+                lm_before = O.size();
+                lm_line = in.source_line;
+            }
             if (in.op == ir::IrOp::PHI) continue; // resuelto via copias
 
             if (cmp_cond(in.op, cc)) {
@@ -3083,6 +3107,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
         }
         flush_pending(); // por si el bloque termina sin terminador explicito
+        lm_flush();       // solo-LSP: estampar la ultima op del bloque
         out.blocks.push_back(std::move(mb));
     }
     return true;

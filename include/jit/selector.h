@@ -259,6 +259,15 @@ struct SelectorOptions {
     /// por @c fn_pc (mismo contador entre recompilaciones del call site).
     /// Retorna la addr HOST del contador, 0 si no disponible.
     std::function<uint64_t(uint64_t /*fn_pc*/)> reserve_tier_counter{};
+
+    /// Solo-LSP (vista "Godbolt", 2026-06-22): si true, el Selector estampa
+    /// @c MInstr::source_pc con la @c IrInstr::source_line de la op que la
+    /// genero, y marca @c MFunction::emit_line_map para que el encoder
+    /// produzca la tabla byte_offset -> source_line.  OFF por defecto: ningun
+    /// caller de produccion (auto_jit, runtime) lo activa, asi que el codegen
+    /// es BIT-IDENTICO y sin overhead.  Solo el inspector del LSP lo pone a
+    /// true para la vista correlada fuente <-> asm.
+    bool emit_line_map = false;
 };
 
 /**

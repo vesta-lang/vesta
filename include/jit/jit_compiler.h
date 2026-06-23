@@ -50,6 +50,7 @@
 #define VESTA_JIT_JIT_COMPILER_H
 
 #include <cstdint>
+#include <vector>
 
 #include "jit/code_cache.h"
 #include "jit/interp_jit_bridge.h"
@@ -72,6 +73,10 @@ struct CompileResult {
     size_t instr_count = 0;   ///< MInstrs emitidos
     bool unsupported = false; ///< IR contenia op no soportada
     const uint8_t *code_start = nullptr; ///< Para unregister + invalidate
+    /// Solo-LSP (vista "Godbolt"): correlacion byte_offset -> source_line.
+    /// Vacia salvo que se compile con @c SelectorOptions::emit_line_map=true
+    /// (solo el inspector del LSP lo hace).  Ver @c jit::LineMapEntry.
+    std::vector<LineMapEntry> line_map;
 };
 
 /**

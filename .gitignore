@@ -126,3 +126,4 @@ tests/bugs/m_reexport_plain/base.vel
 tests/bugs/m_reexport_plain/mid.vel
 tests/bugs/README.md
 diff_baseline.json
+doc/sprint_lsp_machine_view.md

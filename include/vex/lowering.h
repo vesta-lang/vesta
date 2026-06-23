@@ -117,6 +117,9 @@ class Lowering {
     /// esta activo, el lowering de clases baja a layout C-struct +
     /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
     void set_native_poo(bool on) { native_poo_ = on; }
+    /// Solo-LSP: bajar tambien las funciones @c comptime (no-macro) a IR para
+    /// poder inspeccionar su codegen.  Ver @c CompileOptions::emit_comptime_fns.
+    void set_emit_comptime_fns(bool on) { emit_comptime_fns_ = on; }
 
     /// C-3: registra los nombres de las funciones libres marcadas con
     /// @StringConcat / @StringEq.  Cuando no estan vacios, el lowering
@@ -1441,6 +1444,8 @@ class Lowering {
     std::string instrument_mode_ = "none";
     /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
+    /// Solo-LSP: bajar comptime fns (no-macro) a IR para inspeccion.
+    bool emit_comptime_fns_ = false;
     /// C-3: nombres de los override del string built-in (vacios => default).
     std::string string_concat_override_;
     std::string string_eq_override_;

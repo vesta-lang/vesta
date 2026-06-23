@@ -473,8 +473,10 @@ add_executable(vesta_lsp
         src/lsp/document_store.cpp
         src/lsp/analysis_engine.cpp
         src/lsp/semantic_tokens.cpp
+        src/lsp/param_hints.cpp
         src/lsp/symbol_index.cpp
         src/lsp/inspector.cpp
+        src/lsp/builtin_docs.cpp
         src/lsp/lsp_server.cpp
         src/lsp/lsp_main.cpp
 )

@@ -1820,8 +1820,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
      * una ComptimeVM para acelerar la metaprogramacion ~10-1000x.
      * Por ahora el IR queda en el modulo como dead code; el call
      * site del macro sigue usando el evaluator AST. */
-    if (fd->is_comptime) {
-        if (!fd->is_macro) return;
+    if (fd->is_comptime && !fd->is_macro) {
+        /* comptime fn (no-macro): por defecto NO se baja (se evalua en
+         * compile-time y se elide).  Solo-LSP: con emit_comptime_fns_ la
+         * bajamos como funcion normal para poder inspeccionar su codegen
+         * (JIT/AOT/bytecode del hover).  No pasa por el setup de macro. */
+        if (!emit_comptime_fns_) return;
+    } else if (fd->is_comptime) {
         /* @Macro: intentar lowear el body al IR.  Si contiene
          * caracteristicas no soportadas todavia (introspect,
          * comptime var, builtins comptime-only), saltar limpiamente
@@ -11852,7 +11857,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                  * emitir el IrInstr::CALL al final de lower_call. */
                 goto skip_comptime_eval_for_macro_to_macro;
             }
+            /* Solo-LSP: cuando bajamos comptime fns a IR para inspeccion
+             * (emit_comptime_fns_), una llamada con args runtime -- p.ej. la
+             * auto-llamada de una comptime fn RECURSIVA -- no es
+             * comptime-evaluable; en vez de error, caemos al CALLVM normal
+             * (la callee ya esta en el IR como funcion regular). */
             ComptimeEvalResult r = comptime_eval_expr(tc_, e);
+            if (!r.ok && emit_comptime_fns_) {
+                goto skip_comptime_eval_for_macro_to_macro;
+            }
             if (!r.ok) {
                 error_at(e->loc,
                          "llamada a comptime fn '" + cid->name +
