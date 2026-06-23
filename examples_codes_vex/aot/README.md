@@ -131,3 +131,26 @@ y exponen las dos vistas que necesita el FFI de Windows:
 Validado (PE Windows + ELF WSL): "hello" con e-acento = 5 code-points, 6 bytes,
 `wstr()[1]` == 0xE9; clef de sol (U+1D11E) = 1 code-point, 4 bytes, par suplente
 0xD834 0xDD1E.  Ejemplo 59 -> exit 42.
+
+## Linker propio (Phase AOT.5) -- enlazar .o sin ld/gcc
+
+`vm --link a.o [b.o ...] -o prog [--format elf] [--entry sym] [--link-base 0xADDR]`
+fusiona uno o mas objetos relocatables (ELF64 `ET_REL` -- los que emite
+`--emit obj`, o un `.o` de gcc) en un ejecutable nativo, resolviendo los
+simbolos cross-file y las relocaciones (`R_X86_64_PC32`/`PLT32`/`64`/`32`/`32S`)
+sin depender de ld/gcc.  Reusa el motor de relocs del `ObjectWriter`.
+
+- **Hosted** (sin `--entry`): sintetiza un `_start` que llama a `main` y termina
+  el proceso.  Requiere un `main` global.
+- **dev-OS** (`--entry _kstart`): usa ese simbolo como entrada SIN stub
+  (kernel/bootloader cuyo punto de entrada es propio).  `--link-base` fija la
+  base de carga (e.g. `0x100000`).
+
+    vm --vex kernel.vex -m aot --emit obj --format elf -o kernel.o
+    gcc -c -ffreestanding rt.c -o rt.o          # runtime/driver en C
+    vm --link kernel.o rt.o -o kernel.elf --format elf --entry _kstart
+
+Validado por ejecucion (ELF64, WSL): un solo .o Vex -> 42; .o Vex + .o de C
+(gcc) cross-file (Vex referencia un extern que C define) -> 42; `--entry`
+custom sin main/stub -> 42.  Test: `tests/aot/link_test.sh`.
+Slice 1 = ELF64 in/out; PE/COFF y x86-32 son follow-ups.

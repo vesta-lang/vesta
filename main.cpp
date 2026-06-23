@@ -32,6 +32,7 @@
 #include "aot/aot_lower.h" // Phase AOT.2: re-bajada RAW_ALLOC/FREE/PANIC -> CALL
 #include "aot/object_writer.h" // Phase AOT.4: emisor PE/ELF (ObjectWriter)
 #include "aot/aot_native.h"    // Phase AOT.3 Paso 2: _start arch-portable
+#include "aot/linker.h"        // Phase AOT.5: linker propio (enlaza .o)
 #include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
@@ -579,7 +580,22 @@ int main(int argc, char *argv[]) {
             "file.velb --verify-key pub.pem",
             cxxopts::value<std::string>())(
             "verify-key", "Path al PEM con la clave publica para --verify-velb",
-            cxxopts::value<std::string>());
+            cxxopts::value<std::string>())
+        // Phase AOT.5: linker propio (enlaza .o sin ld/gcc).
+        ("link",
+         "Phase AOT.5: enlaza objetos .o (ELF64 ET_REL) en un ejecutable "
+         "nativo SIN ld/gcc. Uso: vm --link a.o b.o -o prog [--format elf] "
+         "[--entry sym] [--link-base 0xADDR]. Con --entry usa ese simbolo "
+         "como entrada SIN stub (kernel/bootloader); sin el, sintetiza "
+         "_start->main (ejecutable hosted).")(
+            "entry",
+            "Con --link: simbolo de entrada del ejecutable (e.g. _kstart). "
+            "Vacio => _start sintetico que llama a main.",
+            cxxopts::value<std::string>()->default_value(""))(
+            "link-base",
+            "Con --link: base de carga del ejecutable (hex, e.g. 0x100000 para "
+            "un kernel). Default segun el formato.",
+            cxxopts::value<std::string>()->default_value(""));
 
     // BUG FIX: Args posicionales y allow_unrecognised DEBEN configurarse
     // ANTES de @c options.parse(...).  El bug anterior registraba el
@@ -760,11 +776,17 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
 
-        // (3) --emit / --format solo aplican a la compilacion AOT (-m aot).
-        //     Fuera de AOT se ignoraban sin avisar.
-        if ((result.count("emit") || result.count("format")) && !aot_mode) {
-            std::cerr << "[cli] --emit/--format solo aplican con -m aot "
+        // (3) --emit / --format solo aplican a la compilacion AOT (-m aot) o,
+        //     en el caso de --format, al linker propio (--link).  Fuera de esos
+        //     contextos se ignoraban sin avisar.
+        const bool link_mode = result.count("link") > 0;
+        if (result.count("emit") && !aot_mode) {
+            std::cerr << "[cli] --emit solo aplica con -m aot "
                          "(compilacion nativa standalone).\n";
+            return EXIT_FAILURE;
+        }
+        if (result.count("format") && !aot_mode && !link_mode) {
+            std::cerr << "[cli] --format solo aplica con -m aot o --link.\n";
             return EXIT_FAILURE;
         }
     }
@@ -838,6 +860,53 @@ int main(int argc, char *argv[]) {
         }
         std::cerr << "[verify] " << in_path << ": " << vr.error << "\n";
         return EXIT_FAILURE;
+    }
+
+    // Phase AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
+    // sin depender de ld/gcc.  Uso: vm --link a.o b.o -o prog [--format elf]
+    // [--entry sym] [--link-base 0xADDR].
+    if (result.count("link")) {
+        std::vector<std::string> inputs;
+        if (result.count("positional"))
+            inputs = result["positional"].as<std::vector<std::string>>();
+        if (inputs.empty()) {
+            std::cerr << "error: --link requiere al menos un objeto .o "
+                         "(vm --link a.o [b.o ...] -o salida)\n";
+            return EXIT_FAILURE;
+        }
+        aot::LinkOptions lopts;
+        // Formato: --format pe|elf (default ELF; slice 1 = ELF).
+        if (result.count("format")) {
+            const std::string fmt = result["format"].as<std::string>();
+            if (fmt == "pe")
+                lopts.fmt = aot::ObjFormat::PE;
+            else if (fmt == "elf")
+                lopts.fmt = aot::ObjFormat::ELF;
+            else {
+                std::cerr << "error: --format invalido para --link: " << fmt
+                          << " (pe|elf)\n";
+                return EXIT_FAILURE;
+            }
+        } else {
+            lopts.fmt = aot::ObjFormat::ELF;
+        }
+        lopts.entry = result["entry"].as<std::string>();
+        const std::string lbase = result["link-base"].as<std::string>();
+        if (!lbase.empty())
+            lopts.image_base =
+                std::strtoull(lbase.c_str(), nullptr, 0); // 0x.. o decimal
+        std::string out_path = result["output"].as<std::string>();
+        std::string lerr;
+        if (!aot::aot_link(inputs, out_path, lopts, lerr)) {
+            std::cerr << "[link] error: " << lerr << "\n";
+            return EXIT_FAILURE;
+        }
+        std::cerr << "[link] ejecutable '" << out_path << "' escrito ("
+                  << inputs.size() << " objeto(s)"
+                  << (lopts.entry.empty() ? ", _start->main"
+                                          : ", entry=" + lopts.entry)
+                  << ").\n";
+        return EXIT_SUCCESS;
     }
 
 #ifdef VESTA_HAS_PREPROCESSOR
