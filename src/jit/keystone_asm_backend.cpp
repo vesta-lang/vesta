@@ -24,6 +24,7 @@
 #include "jit/keystone_asm_backend.h"
 #include "vex/asm_backend.h"
 
+#include <capstone/capstone.h>
 #include <keystone/keystone.h>
 
 #include <mutex>
@@ -93,6 +94,30 @@ struct KeystoneAsmBackend final : vex::AsmBackend {
         }
         if (enc) ks_free(enc);
         ks_close(ks);
+        // CONTRATO insn_offsets: el offset de cada instruccion emitida, en
+        // orden.  Lo obtenemos descodificando NUESTRA salida con Capstone --
+        // detalle ENCAPSULADO de este backend (Keystone+Capstone van juntos);
+        // la inspeccion solo consume insn_offsets.  Un backend hand-rolled lo
+        // rellenaria nativo sin Capstone.  Solo x86 por ahora.
+        if (r.ok && !r.bytes.empty() &&
+            (arch == vex::AsmArch::X86_64 || arch == vex::AsmArch::X86_32 ||
+             arch == vex::AsmArch::X86_16)) {
+            cs_mode cm = arch == vex::AsmArch::X86_64   ? CS_MODE_64
+                         : arch == vex::AsmArch::X86_32 ? CS_MODE_32
+                                                        : CS_MODE_16;
+            csh h;
+            if (cs_open(CS_ARCH_X86, cm, &h) == CS_ERR_OK) {
+                cs_insn *insn = nullptr;
+                size_t n =
+                    cs_disasm(h, r.bytes.data(), r.bytes.size(), 0, 0, &insn);
+                r.insn_offsets.reserve(n);
+                for (size_t i = 0; i < n; ++i)
+                    r.insn_offsets.push_back(
+                        static_cast<uint32_t>(insn[i].address));
+                if (n) cs_free(insn, n);
+                cs_close(&h);
+            }
+        }
         return r;
     }
 };
