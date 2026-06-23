@@ -272,6 +272,22 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
                      int num_syms, char *err, size_t err_cap);
 
 /**
+ * @brief Emite un objeto RELOCATABLE ELF32 (.o i386) a disco.
+ *
+ * Variante de 32-bit de @c aot_emit_elf_obj: ELFCLASS32 + EM_386 + structs
+ * Elf32 + @c SHT_REL (i386 usa REL, sin addend en el registro: el addend vive
+ * EN el campo de la seccion).  Relocs @c REL32 -> @c R_386_PC32, @c IMM32
+ * (ABS32 a datos) -> @c R_386_32.  No soporta @c ABS64 (no aplica en 32-bit).
+ * Linkable con @c gcc @c -m32 / @c ld.  Conserva la extension @c .o.
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_elf32_obj(const char *path, const AotSection *secs, int num_secs,
+                       const AotReloc *relocs, int num_relocs,
+                       const AotSym *syms, int num_syms, char *err,
+                       size_t err_cap);
+
+/**
  * @brief Emite un objeto RELOCATABLE COFF (.obj Windows) a disco.
  *
  * Analogo a @c aot_emit_elf_obj pero en formato COFF (Machine AMD64), linkable
@@ -289,6 +305,20 @@ int aot_emit_coff_obj(const char *path, const AotSection *secs, int num_secs,
                       const AotReloc *relocs, int num_relocs,
                       const AotSym *syms, int num_syms, char *err,
                       size_t err_cap);
+
+/**
+ * @brief Variante COFF i386 (.obj de 32-bit) de @c aot_emit_coff_obj.
+ *
+ * Machine @c IMAGE_FILE_MACHINE_I386 (0x14c); relocs @c IMAGE_REL_I386_REL32
+ * (pc-rel) / @c IMAGE_REL_I386_DIR32 (abs32, para @c IMM32).  Sin @c ABS64.
+ * Linkable con @c gcc @c -m32 / @c link.exe.  Conserva la extension @c .obj.
+ *
+ * @return 1 en exito, 0 en error.
+ */
+int aot_emit_coff32_obj(const char *path, const AotSection *secs, int num_secs,
+                        const AotReloc *relocs, int num_relocs,
+                        const AotSym *syms, int num_syms, char *err,
+                        size_t err_cap);
 
 /**
  * @brief Emite una libreria compartida ELF64 (.so, ET_DYN) a disco.
