@@ -915,11 +915,14 @@ int main(int argc, char *argv[]) {
             std::cerr << "[link] error: " << lerr << "\n";
             return EXIT_FAILURE;
         }
+        std::string entry_note =
+            !lopts.entry.empty()
+                ? (", entry=" + lopts.entry)
+                : (lopts.link_script.empty() ? std::string(", _start->main")
+                                             : std::string(", entry via "
+                                                           "link-script"));
         std::cerr << "[link] ejecutable '" << out_path << "' escrito ("
-                  << inputs.size() << " objeto(s)"
-                  << (lopts.entry.empty() ? ", _start->main"
-                                          : ", entry=" + lopts.entry)
-                  << ").\n";
+                  << inputs.size() << " objeto(s)" << entry_note << ").\n";
         return EXIT_SUCCESS;
     }
 

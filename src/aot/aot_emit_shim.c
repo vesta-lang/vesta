@@ -389,8 +389,16 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     size_t total_data = 0;
     for (int i = 0; i < num_secs; ++i)
         total_data += secs[i].size;
+    /* Si hay secciones con VA fija (place_section del link-script), el fichero
+     * se rellena hasta vaddr-base; ampliar la capacidad para cubrir el span. */
+    uint64_t span = total_data;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].vaddr && secs[i].vaddr >= base) {
+            uint64_t end = (secs[i].vaddr - base) + secs[i].size;
+            if (end > span) span = end;
+        }
     size_t capacity =
-        (total_data + 64 * AOT_ELF_PAGE + AOT_ELF_PAGE) & ~(AOT_ELF_PAGE - 1);
+        (span + 64 * AOT_ELF_PAGE + AOT_ELF_PAGE) & ~(AOT_ELF_PAGE - 1);
 
     /* 3 phdrs: PT_LOAD R+X (codigo/rodata), PT_LOAD R+W (.data), PT_GNU_STACK
      * (stack RW).  El R+W puede quedar vacio (filesz 0) si no hay writable. */
@@ -466,6 +474,30 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
             if (s->flags & AOT_SEC_EXEC) sh_flags |= SHF_EXECINSTR;
             if (s->flags & AOT_SEC_WRITE) sh_flags |= SHF_WRITE;
             uint64_t align_use = s->align ? s->align : AOT_ELF_PAGE;
+            /* VA fija (place_section): rellenar el fichero hasta vaddr-base para
+             * que vaddr = base + offset de exactamente lo pedido.  El gap se
+             * rellena con ceros (un PT_LOAD lo cubre).  Va en orden de VA: una
+             * VA fija por DEBAJO de la posicion actual es inalcanzable. */
+            if (s->vaddr != 0) {
+                if (s->vaddr < base ||
+                    (s->vaddr - base) < (uint64_t)b->size) {
+                    free(sec_va);
+                    free(sec_foff);
+                    free(sec_seen);
+                    elf_builder_free(b);
+                    set_err(err, err_cap,
+                            "aot_emit_elf: VA fija de seccion inalcanzable "
+                            "(menor que base o que la posicion actual; coloca "
+                            "las secciones en orden de direccion ascendente)");
+                    return 0;
+                }
+                uint64_t want_off = s->vaddr - base;
+                if (want_off > (uint64_t)b->size) {
+                    memset(b->mem + b->size, 0, want_off - b->size);
+                    b->size = want_off;
+                }
+                align_use = 1; // la VA ya esta fijada; no realinear
+            }
             size_t off_out = 0;
             uint64_t vaddr_out = 0;
             size_t idx = elf_builder_add_section_ex(

@@ -165,6 +165,29 @@ if [ -x "$WORK/f32.elf" ]; then
   else echo "LINK H: got=$got cls32=$cls (esp 55 / ELF32)"; rc=1; fi
 else echo "LINK H: no se genero el ejecutable"; rc=1; fi
 
+# --- I) place_section: VA fija por seccion desde el link-script Vex ---
+cat > "$WORK/kb.c" <<'EOF'
+__attribute__((section(".boot"))) void _kstart(void) {
+    __asm__ volatile("mov $60,%%rax; mov $42,%%rdi; syscall" ::: "rax","rdi");
+}
+EOF
+cat > "$WORK/kl.vex" <<'EOF'
+void link() {
+    base(0x400000);
+    entry("_kstart");
+    place_section(".boot", 0x410000);   // VA fija de seccion
+}
+EOF
+gcc -c -ffreestanding -fno-pic -fno-asynchronous-unwind-tables "$WORK/kb.c" -o "$WORK/kb.o" 2>/dev/null
+"$VM" --link "$WORK/kb.o" -o "$WORK/kb.elf" --format elf --link-script "$WORK/kl.vex" >/dev/null 2>&1
+if [ -x "$WORK/kb.elf" ]; then
+  at_ok=$(readelf -SW "$WORK/kb.elf" 2>/dev/null | grep -c "0000000000410000")
+  "$WORK/kb.elf"; got=$?
+  if [ "$got" = "42" ] && [ "$at_ok" -ge 1 ]; then
+    echo "LINK I (place_section .boot @0x410000): exit=42 OK"
+  else echo "LINK I: got=$got at_ok=$at_ok (esp 42 / .boot @0x410000)"; rc=1; fi
+else echo "LINK I: no se genero el ejecutable"; rc=1; fi
+
 rm -rf "$WORK"
 [ $rc = 0 ] && echo "AOT.5 linker: TODOS OK" || echo "AOT.5 linker: FALLOS"
 exit $rc
