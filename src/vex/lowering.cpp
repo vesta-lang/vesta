@@ -27385,6 +27385,23 @@ void Lowering::pop_scope() {
 
 void Lowering::bind(const std::string &name, ir::IrValueId v) {
     scopes_.back()[name] = v;
+    // Debug-info (solo-LSP / dumps): si el valor SSA aun no tiene nombre de
+    // fuente, etiquetarlo con el de la variable -> la pestana IR muestra "%t"
+    // en vez de "%5", y el cache de modulo lo persiste para el inspector.  NO
+    // sobreescribimos nombres ya puestos (params "%n", alias) para no
+    // corromperlos.  Cosmetico: el optimizer/codegen indexan por ID, no por
+    // nombre, y el @ir de produccion no serializa nombres -> cero efecto en
+    // runtime/JIT.
+    if (fn_ && v != ir::IR_NO_VALUE && v < fn_->values.size() &&
+        !name.empty()) {
+        std::string &vn = fn_->values[v].name;
+        // new_value() rellena el nombre por defecto como "%<id>".  Solo
+        // sobreescribimos ese auto-nombre (no params "%n" ni alias ya
+        // nombrados) para no corromper nombres significativos.
+        const bool is_default =
+            (vn == "%" + std::to_string(fn_->values[v].id));
+        if (is_default) vn = "%" + name;
+    }
 }
 
 ir::IrValueId Lowering::lookup(const std::string &name) const {
