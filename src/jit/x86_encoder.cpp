@@ -92,7 +92,8 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
              * bytes generados son identicos y el coste es 1 rama predicha. */
             if (fn.emit_line_map) {
                 fn.line_map.push_back(
-                    {static_cast<uint32_t>(out.size() - base), mi.source_pc});
+                    {static_cast<uint32_t>(out.size() - base), mi.source_pc,
+                     mi.ir_id});
             }
             if (!emit_instr(fn, mi, out)) {
                 /* fail-fast: opcode no soportado.  El INT3 hace que la

@@ -741,11 +741,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
          * defecto -> cero efecto en el codegen AOT de produccion. */
         size_t lm_before = SIZE_MAX; // SIZE_MAX = nada pendiente
         uint32_t lm_line = 0;
+        uint32_t lm_ir_id = 0xFFFFFFFFu; // identidad de la op IR (solo-LSP)
         auto lm_flush = [&]() {
             if (!out.emit_line_map || lm_before == SIZE_MAX) return;
-            if (lm_line != 0)
-                for (size_t k = lm_before; k < O.size(); ++k)
-                    if (O[k].source_pc == 0) O[k].source_pc = lm_line;
+            for (size_t k = lm_before; k < O.size(); ++k) {
+                if (lm_line != 0 && O[k].source_pc == 0)
+                    O[k].source_pc = lm_line;
+                if (O[k].ir_id == 0xFFFFFFFFu) O[k].ir_id = lm_ir_id;
+            }
             lm_before = SIZE_MAX;
         };
 
@@ -757,6 +760,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             if (out.emit_line_map) {
                 lm_before = O.size();
                 lm_line = in.source_line;
+                /* Identidad estable de la op IR = block_index*65536 + pos. */
+                size_t pos = static_cast<size_t>(&in - ib.instrs.data());
+                lm_ir_id = static_cast<uint32_t>(b * 65536u + pos);
             }
             if (in.op == ir::IrOp::PHI) continue; // resuelto via copias
 

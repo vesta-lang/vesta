@@ -1640,9 +1640,13 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
              * el encoder produzca la tabla linea<->asm.  OFF en produccion. */
             const size_t lm_before = pf.emit_line_map ? outv.size() : 0;
             lw.lower(in, outv);
-            if (pf.emit_line_map && in.source_pc != 0) {
-                for (size_t k = lm_before; k < outv.size(); ++k)
-                    if (outv[k].source_pc == 0) outv[k].source_pc = in.source_pc;
+            if (pf.emit_line_map) {
+                for (size_t k = lm_before; k < outv.size(); ++k) {
+                    if (in.source_pc != 0 && outv[k].source_pc == 0)
+                        outv[k].source_pc = in.source_pc;
+                    /* Tambien la identidad de la op IR (correlacion exacta). */
+                    if (outv[k].ir_id == 0xFFFFFFFFu) outv[k].ir_id = in.ir_id;
+                }
             }
             ++gi;
         }

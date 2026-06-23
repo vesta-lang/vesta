@@ -296,8 +296,11 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
         while (lm_idx + 1 < lm.size() && lm[lm_idx + 1].byte_offset <= off)
             ++lm_idx;
         uint32_t line = 0;
-        if (lm_idx < lm.size() && lm[lm_idx].byte_offset <= off)
+        uint32_t ir_id = 0xFFFFFFFFu;
+        if (lm_idx < lm.size() && lm[lm_idx].byte_offset <= off) {
             line = lm[lm_idx].source_line;
+            ir_id = lm[lm_idx].ir_id;
+        }
         char buf[16];
         std::snprintf(buf, sizeof(buf), "%04llx",
                       static_cast<unsigned long long>(off));
@@ -469,6 +472,7 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
         ji["addr"] = buf;
         ji["text"] = std::move(text);
         ji["line"] = line;
+        ji["ir_id"] = ir_id; // correlacion exacta op-IR <-> asm (solo-LSP)
         arr.push_back(std::move(ji));
     }
     if (count > 0)
@@ -655,6 +659,29 @@ nlohmann::json ir_by_line(const ir::IrFunction &fn) {
             if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
                 continue;
             o[std::to_string(in.source_line)].push_back(ir_short(fn, in));
+        }
+    }
+    return o;
+}
+
+/**
+ * @brief Mapa identidad-op-IR -> texto corto (correlacion exacta).
+ *
+ * Solo-LSP: la identidad es block_index*65536 + instr_pos, la MISMA que estampa
+ * el backend vreg en cada MInstr y propaga al line_map.  El cliente cruza el
+ * ir_id de cada fila asm con este mapa para mostrar la op IR exacta que la
+ * genero.  Omite NOP/PHI (sin identidad util).
+ */
+nlohmann::json ir_by_id(const ir::IrFunction &fn) {
+    nlohmann::json o = nlohmann::json::object();
+    for (size_t b = 0; b < fn.blocks.size(); ++b) {
+        const auto &instrs = fn.blocks[b].instrs;
+        for (size_t p = 0; p < instrs.size(); ++p) {
+            const auto &in = instrs[p];
+            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
+                continue;
+            uint32_t id = static_cast<uint32_t>(b * 65536u + p);
+            o[std::to_string(id)] = ir_short(fn, in);
         }
     }
     return o;
@@ -1319,6 +1346,7 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
     out["source"] = std::move(src);
     out["frame"] = std::move(frame);
     out["ir_by_line"] = ir_by_line(*fn);
+    out["ir_by_id"] = ir_by_id(*fn);
     out["args"] = std::move(args);
     return out;
 }
@@ -1441,6 +1469,7 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     out["source"] = std::move(src);
     out["frame"] = std::move(frame);
     out["ir_by_line"] = ir_by_line(*fn);
+    out["ir_by_id"] = ir_by_id(*fn);
     out["args"] = std::move(args);
     return out;
 }
