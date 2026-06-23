@@ -688,6 +688,34 @@ nlohmann::json ir_by_id(const ir::IrFunction &fn) {
 }
 
 /**
+ * @brief Listado ORDENADO del IR para la columna central de la vista 3col:
+ *        por bloque, una fila etiqueta (nombre del bloque) seguida de sus ops.
+ *        Cada fila lleva su @c source_line para el cross-highlight.
+ *
+ * Solo-LSP.  kind: "label" (etiqueta de bloque) | "op" (instruccion IR).
+ */
+nlohmann::json ir_listing(const ir::IrFunction &fn) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto &blk : fn.blocks) {
+        nlohmann::json jl;
+        jl["kind"] = "label";
+        jl["line"] = 0;
+        jl["text"] = blk.name;
+        arr.push_back(std::move(jl));
+        for (const auto &in : blk.instrs) {
+            if (in.op == ir::IrOp::NOP || in.op == ir::IrOp::PHI)
+                continue;
+            nlohmann::json jo;
+            jo["kind"] = "op";
+            jo["line"] = in.source_line;
+            jo["text"] = ir_short(fn, in);
+            arr.push_back(std::move(jo));
+        }
+    }
+    return arr;
+}
+
+/**
  * @brief Anota una instruccion .vel con los valores con nombre de sus registros
  *        VM (rastreo R0..R15), analogo al de x86.  Modifica @p line in-place
  *        anadiendo "  ; rN = nombre" y actualiza @p vr (mapa rN -> nombre).
@@ -891,6 +919,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     nlohmann::json src = nlohmann::json::array();
     nlohmann::json args = nlohmann::json::array();
     nlohmann::json irbl = nlohmann::json::object();
+    nlohmann::json irlst = nlohmann::json::array();
     std::unordered_map<std::string, std::string> vregmap;
     std::vector<std::string> vstack; // modelo de pila para push/pop
     ir::IrModule mod;
@@ -902,6 +931,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
                 *fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
                       "R10", "R11", "R12"});
             irbl = ir_by_line(*fn);
+            irlst = ir_listing(*fn);
             for (size_t i = 0; i < args.size(); ++i)
                 vregmap["r" + std::to_string(i + 1)] =
                     args[i]["name"].get<std::string>();
@@ -965,6 +995,7 @@ nlohmann::json Inspector::bytecode(const std::string &uri,
     out["asm_lines"] = std::move(asm_lines);
     out["source"] = std::move(src);
     out["ir_by_line"] = std::move(irbl);
+    out["ir_listing"] = std::move(irlst);
     out["args"] = std::move(args);
     view_cache_[key] = out.dump();
     return out;
@@ -1455,6 +1486,9 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
         for (const auto &blk : fn->blocks) bn.push_back(blk.name);
         out["block_names"] = std::move(bn);
     }
+    out["ir_listing"] = ir_listing(*fn);
+    {
+    }
     out["args"] = std::move(args);
     return out;
 }
@@ -1582,6 +1616,9 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         nlohmann::json bn = nlohmann::json::array();
         for (const auto &blk : fn->blocks) bn.push_back(blk.name);
         out["block_names"] = std::move(bn);
+    }
+    out["ir_listing"] = ir_listing(*fn);
+    {
     }
     out["args"] = std::move(args);
     return out;
