@@ -149,6 +149,22 @@ if [ -x "$WORK/k.elf" ]; then
   else echo "LINK G: got=$got base_ok=$base_ok (esp 42 / base 0x800000)"; rc=1; fi
 else echo "LINK G: no se genero el ejecutable"; rc=1; fi
 
+# --- H) linkado de objetos de 32-bit (ELF32) con NUESTRO linker ---
+cat > "$WORK/f32.vex" <<'EOF'
+i32 fib(i32 n) { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }
+i32 main() { return fib(10); }
+EOF
+"$VM" --vex "$WORK/f32.vex" -m aot --aot-arch x86-32 --emit obj --format elf \
+      -o "$WORK/f32.o" >/dev/null 2>&1
+"$VM" --link "$WORK/f32.o" -o "$WORK/f32.elf" --format elf >/dev/null 2>&1
+if [ -x "$WORK/f32.elf" ]; then
+  cls=$(readelf -h "$WORK/f32.elf" 2>/dev/null | grep -c ELF32)
+  "$WORK/f32.elf"; got=$?
+  if [ "$got" = "55" ] && [ "$cls" -ge 1 ]; then
+    echo "LINK H (objeto 32-bit ELF32 -> exec): exit=55 OK"
+  else echo "LINK H: got=$got cls32=$cls (esp 55 / ELF32)"; rc=1; fi
+else echo "LINK H: no se genero el ejecutable"; rc=1; fi
+
 rm -rf "$WORK"
 [ $rc = 0 ] && echo "AOT.5 linker: TODOS OK" || echo "AOT.5 linker: FALLOS"
 exit $rc
