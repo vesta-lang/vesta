@@ -1142,6 +1142,26 @@ class Lowering {
     /// @c i64 __vex_strlen(u8* s).
     std::string ensure_strdata_helper();
     std::string ensure_strlen_helper();
+    /// Vex Embed Inc 6 (encoding UTF-8): @c .length() cuenta CODE-POINTS (no
+    /// bytes; @c .bytes() da los bytes via @c emit_native_str_len).  El helper
+    /// @c __vex_str_cplen(u8* p, i64 byte_len) -> i64 recorre los bytes y suma
+    /// 1 por cada byte que NO sea continuacion UTF-8 ((b & 0xC0) != 0x80).
+    /// Para ASCII coincide con el conteo de bytes (cero cambio en los tests
+    /// ASCII existentes).  @c emit_native_str_cplen emite la CALL.
+    std::string ensure_str_cplen_helper();
+    ir::IrValueId emit_native_str_cplen(ir::IrValueId v_ptr, ir::IrValueId v_blen,
+                                        uint32_t source_line);
+    /// Vex Embed Inc 6: @c .wstr() devuelve un @c u16* NUL-terminado en
+    /// UTF-16LE para FFI Win32 @c *W.  El helper
+    /// @c __vex_str_to_utf16(u8* p, i64 byte_len) -> u16* aloca un buffer
+    /// (@c RAW_ALLOC -> malloc/override), decodifica UTF-8 -> UTF-16 (pares
+    /// suplentes para code-points astrales) y lo NUL-termina.  El CALLER es
+    /// dueno del buffer (transitorio para FFI; liberar o aceptar la fuga en
+    /// uso efimero, como en C).
+    std::string ensure_str_to_utf16_helper();
+    ir::IrValueId emit_native_str_to_utf16(ir::IrValueId v_ptr,
+                                           ir::IrValueId v_blen,
+                                           uint32_t source_line);
     /// String Inc 5 (SSO): libera el buffer del value-string SOLO si esta
     /// en modo HEAP (la data SSO es inline, no se libera).  Branchless:
     /// RAW_FREE(ptr0 * is_heap); free(0) es no-op.  Reemplaza el patron
@@ -1303,6 +1323,8 @@ class Lowering {
     bool strcmp_helper_emitted_ = false; ///< El helper strcmp ya esta emitido.
     bool strdata_helper_emitted_ = false; ///< El helper __vex_strdata emitido.
     bool strlen_helper_emitted_ = false; ///< El helper __vex_strlen emitido.
+    bool str_cplen_helper_emitted_ = false; ///< El helper __vex_str_cplen emitido.
+    bool str_to_utf16_helper_emitted_ = false; ///< __vex_str_to_utf16 emitido.
 
     /// CPU dispatch (cimiento): asegura que existan el global
     /// @c __vex_cpu_features (slot @c static_data de 8 bytes zero-init) y el

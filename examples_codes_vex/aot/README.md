@@ -112,3 +112,22 @@ exports .edata).  Cargable con LoadLibrary + GetProcAddress:
 
 Validado: foo.dll (add/triple) cargada via LoadLibrary+GetProcAddress -> 42/42.
 Codigo PIC (RIP-rel); base fija (DYNAMIC_BASE limpiado, sin .reloc).
+
+## Strings UTF-8 (Vex Embed Inc 6) -- .length() / .bytes() / .cstr() / .wstr()
+
+El value-string nativo es UTF-8.  Los accesores distinguen code-points de bytes
+y exponen las dos vistas que necesita el FFI de Windows:
+
+- `.length()` -> numero de CODE-POINTS (cuenta los bytes que no son continuacion
+  UTF-8).  Para ASCII coincide con el numero de bytes.
+- `.bytes()`  -> numero de BYTES del buffer.
+- `.cstr()`   -> `u8*` UTF-8 NUL-terminado (Win32 `*A` / libc).
+- `.wstr()`   -> `u16*` UTF-16LE NUL-terminado (Win32 `*W`), con pares suplentes
+  para code-points astrales (> U+FFFF).  El CALLER es dueno del buffer
+  (transitorio para FFI).
+
+    vm --vex examples_codes_vex/aot/59_string_utf8.vex -m aot --emit exe -o 59.exe
+
+Validado (PE Windows + ELF WSL): "hello" con e-acento = 5 code-points, 6 bytes,
+`wstr()[1]` == 0xE9; clef de sol (U+1D11E) = 1 code-point, 4 bytes, par suplente
+0xD834 0xDD1E.  Ejemplo 59 -> exit 42.
