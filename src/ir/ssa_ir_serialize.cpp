@@ -790,6 +790,18 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
         write_str(out, g.first);
         write_u32(out, static_cast<uint32_t>(g.second));
     }
+
+    // 4) tabla de nombres de valores SSA (debug-info para el LSP: args/vars).
+    //    NO va en el @ir del .velb (emit_ir_section, produccion) -> cero
+    //    coste en el binario; solo en este cache (LSP + .vexir dev).  Por
+    //    funcion: count + un string por value (vacio si el value no tiene
+    //    nombre de fuente).  El indice ES el IrValueId.
+    write_u32(out, static_cast<uint32_t>(mod.functions.size()));
+    for (const auto &fn : mod.functions) {
+        write_u32(out, static_cast<uint32_t>(fn.values.size()));
+        for (const auto &v : fn.values)
+            write_str(out, v.name);
+    }
     return out;
 }
 
@@ -825,6 +837,25 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
         if (!read_str(data, off, name)) return false;
         if (!read_u32(data, off, vid)) return false;
         out.globals.emplace(std::move(name), static_cast<IrValueId>(vid));
+    }
+
+    // 4) tabla de nombres de valores SSA (debug-info).  Si el stream se acabo
+    //    (cache mas viejo sin la tabla pero con misma version -> no deberia
+    //    pasar por el bump, pero somos defensivos), se omite sin error.
+    uint32_t nfns = 0;
+    if (read_u32(data, off, nfns)) {
+        if (nfns > 2000000u) return false;
+        for (uint32_t f = 0; f < nfns; ++f) {
+            uint32_t nvals = 0;
+            if (!read_u32(data, off, nvals)) return false;
+            if (nvals > 50000000u) return false;
+            for (uint32_t v = 0; v < nvals; ++v) {
+                std::string nm;
+                if (!read_str(data, off, nm)) return false;
+                if (f < out.functions.size() && v < out.functions[f].values.size())
+                    out.functions[f].values[v].name = std::move(nm);
+            }
+        }
     }
     return true;
 }
