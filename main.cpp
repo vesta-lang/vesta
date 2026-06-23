@@ -2429,7 +2429,7 @@ int main(int argc, char *argv[]) {
                     main_fn = &fn;
                     break;
                 }
-            if (!main_fn && !emit_shared && !emit_bin) {
+            if (!main_fn && !emit_shared && !emit_bin && !emit_obj) {
                 std::cerr
                     << "[aot] no se encontro la funcion 'main' en el modulo.\n";
                 return EXIT_FAILURE;
@@ -2477,7 +2477,13 @@ int main(int argc, char *argv[]) {
                 queued["main"] = true;
             }
             for (const auto &fn : aot_mod.functions) {
-                if ((emit_shared || !fn.section.empty()) &&
+                // SHARED siembra todo (exporta todo).  OBJECT sin main es una
+                // libreria -> tambien siembra todo (compila todas sus funciones
+                // para que un linker las pueda usar).  Con main, OBJECT mantiene
+                // el BFS desde main (no regresa programas con funciones
+                // inalcanzables no-compilables).  @section siempre se siembra.
+                if ((emit_shared || (emit_obj && !main_fn) ||
+                     !fn.section.empty()) &&
                     !queued.count(fn.name)) {
                     queued[fn.name] = true;
                     work.push_back(fn.name);
@@ -2797,8 +2803,17 @@ int main(int argc, char *argv[]) {
                 // Objeto relocatable: main es un simbolo GLOBAL (lo invoca el
                 // crt del linker externo); sin _start ni entry.
                 w.set_output_kind(aot::OutputKind::OBJECT);
-                const FnLoc &ml = fn_loc["main"];
-                w.add_symbol("main", ml.sec, ml.off, /*is_func=*/true);
+                // Exporta como GLOBAL todas las funciones de USUARIO (no
+                // empiezan por "__").  Los helpers internos (__vex_*/__new_*/
+                // __module_init/...) quedan LOCALES -> no colisionan al enlazar
+                // varios .o Vex (cada .o lleva su propia copia, referenciada via
+                // relocs de seccion).  Asi una libreria .o (sin main) expone sus
+                // funciones y otro .o las resuelve cross-file con el linker.
+                for (const AotFn &af : compiled) {
+                    if (af.name.rfind("__", 0) == 0) continue; // helper -> local
+                    const FnLoc &fl2 = fn_loc[af.name];
+                    w.add_symbol(af.name, fl2.sec, fl2.off, /*is_func=*/true);
+                }
             } else if (emit_bin) {
                 // Binario plano: sin cabecera ni _start; entry = offset 0 (la
                 // primera seccion .text, donde va main si existe).  Las refs
