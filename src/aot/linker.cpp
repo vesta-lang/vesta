@@ -83,16 +83,17 @@ struct ObjSym {
     uint64_t value = 0;
 };
 struct ObjRel {
-    uint32_t applies_sh = 0;
-    uint64_t off = 0;
-    uint32_t sym = 0;
-    uint32_t type = 0;
-    int64_t addend = 0;
+    uint32_t applies_sh = 0;       // seccion a la que aplica (indice interno)
+    uint64_t off = 0;             // offset del campo dentro de esa seccion
+    uint32_t sym = 0;             // indice en la tabla de simbolos
+    aot::RelocKind kind = aot::RelocKind::REL32; // normalizado por el parser
+    int64_t addend = 0;          // addend FINAL (ELF: del registro +4 si PC32;
+                                 //   COFF: leido del propio campo)
 };
 struct ParsedObj {
     std::string path;
     std::vector<uint8_t> bytes;
-    std::vector<ObjSec> secs; // indexado por shndx ELF
+    std::vector<ObjSec> secs; // indexado por indice de seccion
     std::vector<ObjSym> syms; // indexado por indice de symtab
     std::vector<ObjRel> rels;
 };
@@ -109,7 +110,7 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out) {
     return (bool)f;
 }
 
-bool parse_obj(const std::string &path, ParsedObj &po, std::string &err) {
+bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
     po.path = path;
     if (!read_file(path, po.bytes)) {
         err = "no se puede abrir el objeto: " + path;
@@ -195,7 +196,10 @@ bool parse_obj(const std::string &path, ParsedObj &po, std::string &err) {
             os.value = rd64(sy + 8);
         }
     }
-    // Relocs (SHT_RELA).
+    // Relocs (SHT_RELA).  Normalizamos el tipo ELF a aot::RelocKind + addend
+    // FINAL aqui (el addend ELF vive en el registro; PC32/PLT32 llevan +4 para
+    // igualar el REL32 del writer: writer = target-(site+4)+addend, ELF
+    // PC32 = S+A-P -> addend+=4).
     for (uint16_t i = 0; i < e_shnum; ++i) {
         const ObjSec &rs = po.secs[i];
         if (rs.sh_type != SHT_RELA) continue;
@@ -207,12 +211,215 @@ bool parse_obj(const std::string &path, ParsedObj &po, std::string &err) {
             r.off = rd64(re);
             const uint64_t info = rd64(re + 8);
             r.sym = (uint32_t)(info >> 32);
-            r.type = (uint32_t)(info & 0xffffffff);
-            r.addend = (int64_t)rd64(re + 16);
+            const uint32_t rt = (uint32_t)(info & 0xffffffff);
+            const int64_t ad = (int64_t)rd64(re + 16);
+            switch (rt) {
+            case R_X86_64_PC32:
+            case R_X86_64_PLT32:
+                r.kind = aot::RelocKind::REL32;
+                r.addend = ad + 4;
+                break;
+            case R_X86_64_64:
+                r.kind = aot::RelocKind::ABS64;
+                r.addend = ad;
+                break;
+            case R_X86_64_32:
+            case R_X86_64_32S:
+                r.kind = aot::RelocKind::IMM32;
+                r.addend = ad;
+                break;
+            default:
+                err = path + ": tipo de reloc ELF no soportado (" +
+                      std::to_string(rt) + ")";
+                return false;
+            }
             po.rels.push_back(r);
         }
     }
     return true;
+}
+
+// ---- Constantes COFF (subset) ----
+constexpr uint16_t IMAGE_FILE_MACHINE_AMD64 = 0x8664;
+constexpr uint32_t IMAGE_SCN_CNT_CODE = 0x20;
+constexpr uint32_t IMAGE_SCN_CNT_UNINIT_DATA = 0x80; // .bss
+constexpr uint32_t IMAGE_SCN_MEM_EXECUTE = 0x20000000;
+constexpr uint32_t IMAGE_SCN_MEM_WRITE = 0x80000000;
+constexpr uint16_t IMAGE_REL_AMD64_ADDR64 = 1;
+constexpr uint16_t IMAGE_REL_AMD64_ADDR32 = 2;
+constexpr uint16_t IMAGE_REL_AMD64_REL32 = 4;
+constexpr int16_t IMAGE_SYM_UNDEFINED = 0;
+constexpr uint8_t IMAGE_SYM_CLASS_EXTERNAL = 2;
+constexpr uint8_t IMAGE_SYM_CLASS_STATIC = 3;
+
+// Parsea un .obj COFF x86-64 (el de --emit obj --format pe, o de gcc/MSVC).
+// Rellena el MISMO ParsedObj que el ELF (kind+addend ya normalizados): el
+// addend COFF vive EN el campo -> se lee de los bytes de la seccion.
+bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
+    po.path = path;
+    if (!read_file(path, po.bytes)) {
+        err = "no se puede abrir el objeto: " + path;
+        return false;
+    }
+    const std::vector<uint8_t> &b = po.bytes;
+    if (b.size() < 20) {
+        err = path + ": COFF truncado";
+        return false;
+    }
+    if (rd16(&b[0]) != IMAGE_FILE_MACHINE_AMD64) {
+        err = path + ": COFF no es x86-64 (slice 3 solo AMD64)";
+        return false;
+    }
+    const uint16_t nsec = rd16(&b[2]);
+    const uint32_t symtab_off = rd32(&b[8]);
+    const uint32_t nsyms = rd32(&b[12]);
+    const uint16_t opt_hdr = rd16(&b[16]);
+    const uint64_t sh_base = 20 + opt_hdr;
+    // String table: justo despues de la symtab (cada simbolo = 18 bytes).
+    const uint64_t strtab_off = (uint64_t)symtab_off + (uint64_t)nsyms * 18;
+    auto coff_str = [&](uint32_t off) -> std::string {
+        uint64_t p = strtab_off + off;
+        std::string r;
+        while (p < b.size() && b[p] != 0)
+            r.push_back((char)b[p++]);
+        return r;
+    };
+    auto sec_name = [&](const uint8_t *sh) -> std::string {
+        if (sh[0] == '/') { // "/N" -> offset decimal en la string table
+            std::string num((const char *)sh + 1, 7);
+            size_t z = num.find('\0');
+            if (z != std::string::npos) num.resize(z);
+            return coff_str((uint32_t)std::strtoul(num.c_str(), nullptr, 10));
+        }
+        std::string n;
+        for (int i = 0; i < 8 && sh[i]; ++i)
+            n.push_back((char)sh[i]);
+        return n;
+    };
+    // Pliega los nombres COMDAT/agrupados de COFF a su seccion base:
+    // ".text$mn" -> ".text", ".rdata$zzz" -> ".rdata" (como hace un linker
+    // real; ademas evita nombres >8 chars no validos en una imagen PE).
+    auto fold_name = [](std::string n) -> std::string {
+        size_t d = n.find('$');
+        if (d != std::string::npos) n.resize(d);
+        return n;
+    };
+    // Secciones (indice 0 = reservado para alinear con SectionNumber 1-based;
+    // usamos secs[1..nsec]).
+    po.secs.resize((size_t)nsec + 1);
+    for (uint16_t i = 0; i < nsec; ++i) {
+        const uint8_t *sh = &b[sh_base + (uint64_t)i * 40];
+        ObjSec &s = po.secs[i + 1];
+        s.name = fold_name(sec_name(sh));
+        s.sh_size = rd32(sh + 16);          // SizeOfRawData
+        s.sh_offset = rd32(sh + 20);        // PointerToRawData
+        const uint32_t chars = rd32(sh + 36);
+        // Mapear Characteristics a flags ELF-like que el merge entiende.
+        s.sh_flags = SHF_ALLOC;
+        if (chars & IMAGE_SCN_MEM_EXECUTE) s.sh_flags |= SHF_EXECINSTR;
+        if (chars & IMAGE_SCN_MEM_WRITE) s.sh_flags |= SHF_WRITE;
+        s.sh_type = (chars & IMAGE_SCN_CNT_UNINIT_DATA) ? SHT_NOBITS : 1;
+        // Alineamiento: bits 20-23 -> 1 << (val-1).
+        const uint32_t al = (chars >> 20) & 0xf;
+        s.sh_addralign = al ? (1u << (al - 1)) : 1;
+        s.sh_info = 0;
+        // COFF marca casi todo como cargable; descartamos por nombre las
+        // secciones no esenciales para ejecutar: .drectve (directivas del
+        // linker), .debug* (info de depuracion) y .pdata/.xdata (tablas SEH de
+        // unwinding -- usan relocs ADDR32NB/RVA que no resolvemos y que nuestro
+        // propio AOT tampoco emite; sin ellas el binario corre, sin unwinding
+        // nativo de excepciones en esos frames).
+        if (s.name == ".drectve" || s.name.rfind(".debug", 0) == 0 ||
+            s.name == ".pdata" || s.name == ".xdata")
+            s.sh_flags = 0;
+    }
+    // Simbolos (18 bytes; saltar aux symbols via NumberOfAuxSymbols).
+    po.syms.resize(nsyms);
+    for (uint32_t k = 0; k < nsyms;) {
+        const uint8_t *sy = &b[symtab_off + (uint64_t)k * 18];
+        ObjSym os;
+        if (rd32(sy) == 0) // nombre largo: offset en string table @+4
+            os.name = coff_str(rd32(sy + 4));
+        else {
+            for (int i = 0; i < 8 && sy[i]; ++i)
+                os.name.push_back((char)sy[i]);
+        }
+        os.value = rd32(sy + 8);
+        const int16_t secnum = (int16_t)rd16(sy + 12);
+        const uint8_t sclass = sy[16];
+        const uint8_t naux = sy[17];
+        // shndx: 0 = UNDEF; >0 = seccion 1-based (coincide con secs[]).
+        os.shndx = (secnum <= 0) ? SHN_UNDEF : (uint16_t)secnum;
+        os.bind = (sclass == IMAGE_SYM_CLASS_EXTERNAL) ? STB_GLOBAL : 0;
+        // Simbolo de SECCION: STATIC con Value 0 cuyo nombre == nombre de
+        // seccion (lo que el linker trata como STT_SECTION).
+        os.type = (sclass == IMAGE_SYM_CLASS_STATIC && secnum > 0 &&
+                   os.value == 0 && (uint16_t)secnum <= nsec &&
+                   po.secs[secnum].name == os.name)
+                      ? STT_SECTION
+                      : 0;
+        po.syms[k] = os;
+        k += 1 + naux; // los aux ocupan slots pero los dejamos vacios
+        for (uint8_t a = 0; a < naux && k - 1 + a < nsyms; ++a) {
+            // rellenar el slot aux para mantener el indice consistente
+        }
+    }
+    // Relocs por seccion (solo de las secciones que conservamos: las
+    // descartadas -- .pdata/.xdata/.debug/.drectve -- tienen sh_flags=0 y sus
+    // relocs ADDR32NB/RVA no se procesan).
+    for (uint16_t i = 0; i < nsec; ++i) {
+        if (!(po.secs[i + 1].sh_flags & SHF_ALLOC)) continue;
+        const uint8_t *sh = &b[sh_base + (uint64_t)i * 40];
+        const uint32_t prel = rd32(sh + 24);     // PointerToRelocations
+        const uint16_t nrel = rd16(sh + 32);     // NumberOfRelocations
+        const uint32_t raw = rd32(sh + 20);      // PointerToRawData
+        if (prel == 0 || nrel == 0) continue;
+        for (uint16_t k = 0; k < nrel; ++k) {
+            const uint8_t *re = &b[prel + (uint64_t)k * 10];
+            ObjRel r;
+            r.applies_sh = i + 1; // 1-based, coincide con secs[]
+            r.off = rd32(re);     // VirtualAddress = offset en la seccion
+            r.sym = rd32(re + 4); // SymbolTableIndex
+            const uint16_t type = rd16(re + 8);
+            // El addend COFF vive EN el campo (a diferencia de ELF RELA).
+            const uint64_t field = (uint64_t)raw + r.off;
+            switch (type) {
+            case IMAGE_REL_AMD64_REL32:
+                r.kind = aot::RelocKind::REL32;
+                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                break;
+            case IMAGE_REL_AMD64_ADDR64:
+                r.kind = aot::RelocKind::ABS64;
+                r.addend = (field + 8 <= b.size()) ? (int64_t)rd64(&b[field]) : 0;
+                break;
+            case IMAGE_REL_AMD64_ADDR32:
+                r.kind = aot::RelocKind::IMM32;
+                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                break;
+            default:
+                err = path + ": tipo de reloc COFF no soportado (" +
+                      std::to_string(type) + ")";
+                return false;
+            }
+            po.rels.push_back(r);
+        }
+    }
+    return true;
+}
+
+// Detecta el formato por magic y despacha al parser correcto.
+bool parse_any_obj(const std::string &path, ParsedObj &po, std::string &err) {
+    std::vector<uint8_t> head;
+    if (!read_file(path, head) || head.size() < 4) {
+        err = "no se puede abrir el objeto: " + path;
+        return false;
+    }
+    if (head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F')
+        return parse_elf_obj(path, po, err);
+    if (rd16(&head[0]) == IMAGE_FILE_MACHINE_AMD64)
+        return parse_coff_obj(path, po, err);
+    err = path + ": formato de objeto no reconocido (ni ELF64 ni COFF AMD64)";
+    return false;
 }
 
 // Seccion fusionada de salida.
@@ -234,18 +441,18 @@ inline uint64_t align_up(uint64_t v, uint64_t a) {
 bool aot_link(const std::vector<std::string> &inputs,
               const std::string &out_path, const LinkOptions &opts,
               std::string &err) {
-    if (opts.fmt != ObjFormat::ELF) {
-        err = "linker: slice 1 solo soporta --format elf";
+    if (opts.fmt != ObjFormat::ELF && opts.fmt != ObjFormat::PE) {
+        err = "linker: solo soporta --format elf o pe";
         return false;
     }
     if (inputs.empty()) {
         err = "linker: sin objetos de entrada";
         return false;
     }
-    // 1. Parsear todos los objetos.
+    // 1. Parsear todos los objetos (auto-detecta ELF64 / COFF AMD64 por magic).
     std::vector<ParsedObj> objs(inputs.size());
     for (size_t i = 0; i < inputs.size(); ++i)
-        if (!parse_obj(inputs[i], objs[i], err)) return false;
+        if (!parse_any_obj(inputs[i], objs[i], err)) return false;
 
     // 2. Fusionar secciones ALLOC por nombre.  map[(obj, shndx)] ->
     //    (indice de seccion fusionada, offset base dentro de ella).
@@ -263,6 +470,9 @@ bool aot_link(const std::vector<std::string> &inputs,
         for (size_t si = 0; si < o.secs.size(); ++si) {
             ObjSec &s = o.secs[si];
             if (!(s.sh_flags & SHF_ALLOC)) continue;
+            // Saltar secciones vacias (gcc emite .data/.bss de tamano 0 en cada
+            // .o): crear una seccion vacia en la imagen final la invalidaria.
+            if (s.sh_size == 0) continue;
             // perms por flags.
             uint32_t perms = SecFlag::READ;
             const bool is_exec = (s.sh_flags & SHF_EXECINSTR) != 0;
@@ -440,30 +650,9 @@ bool aot_link(const std::vector<std::string> &inputs,
                 }
             }
             if (!ok) continue;
-
-            RelocKind kind;
-            int64_t addend = r.addend;
-            switch (r.type) {
-            case R_X86_64_PC32:
-            case R_X86_64_PLT32:
-                kind = RelocKind::REL32;
-                // writer REL32 = sec_va+off+addend-(site+4); ELF PC32 = S+A-P.
-                // -> addend += 4 para igualar.
-                addend += 4;
-                break;
-            case R_X86_64_64:
-                kind = RelocKind::ABS64;
-                break;
-            case R_X86_64_32:
-            case R_X86_64_32S:
-                kind = RelocKind::IMM32;
-                break;
-            default:
-                err = "linker: tipo de reloc no soportado (" +
-                      std::to_string(r.type) + ") en " + o.path;
-                return false;
-            }
-            w.add_reloc(site_sec, site_off, tgt, kind, addend);
+            // kind + addend ya fueron normalizados por el parser (ELF: del
+            // registro RELA con +4 en PC32; COFF: leidos del propio campo).
+            w.add_reloc(site_sec, site_off, tgt, r.kind, r.addend);
         }
     }
 

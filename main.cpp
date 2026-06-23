@@ -583,8 +583,9 @@ int main(int argc, char *argv[]) {
             cxxopts::value<std::string>())
         // Phase AOT.5: linker propio (enlaza .o sin ld/gcc).
         ("link",
-         "Phase AOT.5: enlaza objetos .o (ELF64 ET_REL) en un ejecutable "
-         "nativo SIN ld/gcc. Uso: vm --link a.o b.o -o prog [--format elf] "
+         "Phase AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
+         "auto-detectados; los de --emit obj o de gcc/MSVC) en un ejecutable "
+         "nativo SIN ld/gcc. Uso: vm --link a.o b.o -o prog [--format elf|pe] "
          "[--entry sym] [--link-base 0xADDR]. Con --entry usa ese simbolo "
          "como entrada SIN stub (kernel/bootloader); sin el, sintetiza "
          "_start->main (ejecutable hosted).")(

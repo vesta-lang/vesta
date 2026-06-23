@@ -197,3 +197,24 @@ Validado: una libreria `.vex` SIN `main` que usa `.length()`, enlazada con el
 Con `--entry` (sin `main`/stub) el `__vex_premain` no se sintetiza: el punto de
 entrada propio (kernel/bootloader) es responsable de invocar los inits si usa
 esas operaciones.
+
+### Slice 3: enlazar .obj COFF -> PE (Windows)
+
+El linker auto-detecta el formato de cada objeto de entrada por su magic
+(ELF64 o COFF AMD64) y produce el ejecutable segun `--format` (elf|pe).  Asi el
+mismo `vm --link` enlaza objetos de Windows:
+
+    vm --vex kernel.vex -m aot --emit obj --format pe -o kernel.obj
+    gcc -c rt.c -o rt.obj           # COFF de MinGW/TDM-GCC (o cl /c con MSVC)
+    vm --link kernel.obj rt.obj -o kernel.exe --format pe
+
+Diferencias COFF vs ELF que maneja el linker: el addend vive EN el campo (no en
+un registro RELA), los nombres COMDAT/agrupados se pliegan a su seccion base
+(`.text$mn` -> `.text`, `.rdata$zzz` -> `.rdata`), las secciones vacias que gcc
+emite (`.data`/`.bss` de tamano 0) se descartan, y las tablas SEH
+(`.pdata`/`.xdata`, relocs ADDR32NB/RVA) tambien se descartan (sin unwinding
+nativo en esos frames, igual que el resto del AOT).  Relocs soportadas:
+`REL32` / `ADDR64` / `ADDR32`.
+
+Validado por ejecucion (Windows): un solo `.obj` Vex -> 42; multi-`.obj` Vex
+(lib sin main + app) -> 42; `.obj` Vex + `.obj` de C (TDM-GCC) cross-file -> 42.
