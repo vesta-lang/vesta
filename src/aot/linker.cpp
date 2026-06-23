@@ -274,6 +274,7 @@ bool aot_link(const std::vector<std::string> &inputs,
             else
                 perms |= SecFlag::DATA;
             const bool is_bss = (s.sh_type == SHT_NOBITS);
+            if (is_bss) perms |= SecFlag::BSS;
             int mi;
             auto it = merged_by_name.find(s.name);
             if (it == merged_by_name.end()) {

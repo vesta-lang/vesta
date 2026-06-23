@@ -154,3 +154,26 @@ Validado por ejecucion (ELF64, WSL): un solo .o Vex -> 42; .o Vex + .o de C
 (gcc) cross-file (Vex referencia un extern que C define) -> 42; `--entry`
 custom sin main/stub -> 42.  Test: `tests/aot/link_test.sh`.
 Slice 1 = ELF64 in/out; PE/COFF y x86-32 son follow-ups.
+
+### Slice 2: multi-.o Vex + .bss
+
+- **Multi-.o Vex**: una libreria `.vex` SIN `main` compila a un `.o` que EXPORTA
+  sus funciones de usuario como globales (los helpers internos `__vex_*`/`__new_*`
+  quedan locales -> no colisionan al enlazar varios `.o` Vex).  Otro `.o` las
+  referencia con `extern "lib" { fn ...; }` y el linker las resuelve cross-file.
+
+      vm --vex lib.vex -m aot --emit obj --format elf -o lib.o   # sin main
+      vm --vex app.vex -m aot --emit obj --format elf -o app.o   # extern + main
+      vm --link app.o lib.o -o app.elf --format elf
+
+- **.bss**: el emisor ELF EXEC soporta secciones NOBITS (globales sin
+  inicializar, de Vex o de un `.o` de C) -- VA en el segmento R+W con
+  `p_memsz > p_filesz`; el loader las zerifica.  Permite enlazar un runtime C
+  (allocator con estado en `.bss`) o un kernel con globales sin inicializar.
+
+LIMITACION conocida: los slots globales del CPU-dispatch de strings
+(`__vex_strlen_fp`, etc.) y su init `__vex_strdisp_init` son por-modulo y solo
+el init del `.o` con `main` corre; usar operaciones de string (`.length()`,
+concat, ...) en un `.o` Vex SIN `main` deja su slot sin inicializar (crash).
+Workaround: mantener el uso de strings en el `.o` con `main` (o enlazar como un
+solo modulo).  Fusion de globals-de-programa cross-.o = follow-up.

@@ -489,6 +489,32 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     }
     rw_end_off = b->size;
     if (rx_end_off == 0) rx_end_off = b->size; /* no hubo seccion writable */
+
+    /* BSS (SHT_NOBITS): secciones con AOT_SEC_BSS -> VA en el segmento R+W, SIN
+     * contenido en fichero.  Van DESPUES de .data en el espacio de direcciones
+     * (base + rw_end_off + ...); el loader las zerifica via p_memsz > p_filesz.
+     * Solo son TARGET de relocs (nunca SITE), asi que sec_foff queda en 0.
+     * Necesario para dev-OS: cualquier global sin inicializar (Vex o un .o de C)
+     * cae en .bss. */
+    uint64_t bss_total = 0;
+    {
+        uint64_t bss_off = rw_end_off;
+        for (int i = 0; i < num_secs; ++i) {
+            const AotSection *s = &secs[i];
+            if (!(s->flags & AOT_SEC_BSS)) continue;
+            uint64_t sz = aot_sec_size(s); /* = bss_size para BSS */
+            if (sz == 0) continue;
+            uint64_t align_use = s->align ? s->align : 8;
+            bss_off = (bss_off + align_use - 1) & ~(align_use - 1);
+            if (sec_va) {
+                sec_va[i] = base + bss_off;
+                sec_foff[i] = 0;
+                sec_seen[i] = 1;
+            }
+            bss_off += sz;
+        }
+        bss_total = bss_off - rw_end_off;
+    }
     if (entry_vaddr == 0) {
         free(sec_va);
         free(sec_foff);
@@ -586,7 +612,7 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
     /* Program headers.  Los filesz usan rx_end_off / rw_end_off (capturados
      * ANTES de .strtab/.symtab, que no son ALLOC y no se mapean).  El
      * .symtab/.strtab quedan al final del fichero, fuera de todo PT_LOAD. */
-    const int has_rw = (rw_end_off > rw_start_off);
+    const int has_rw = (rw_end_off > rw_start_off) || (bss_total > 0);
 
     /* PT_LOAD ejecutable: codigo + rodata.  R+X, y ademas W si contiene alguna
      * seccion rwx (e.g. `.boot` de un kernel/bootloader que se auto-modifica). */
@@ -607,8 +633,9 @@ int aot_emit_elf(const char *path, const AotLayoutCfg *cfg,
         phdr[1].p_offset = rw_start_off;
         phdr[1].p_vaddr = base + rw_start_off;
         phdr[1].p_paddr = base + rw_start_off;
-        phdr[1].p_filesz = rw_end_off - rw_start_off;
-        phdr[1].p_memsz = rw_end_off - rw_start_off;
+        phdr[1].p_filesz = rw_end_off - rw_start_off; /* solo .data en fichero */
+        /* p_memsz cubre .data + .bss (el loader zerifica [filesz, memsz)). */
+        phdr[1].p_memsz = (rw_end_off - rw_start_off) + bss_total;
         phdr[1].p_align = AOT_ELF_PAGE;
     } else {
         phdr[1].p_offset = 0;

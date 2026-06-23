@@ -62,6 +62,40 @@ if [ -x "$WORK/boot.elf" ]; then
   else echo "LINK C: EXIT MISMATCH got=$got exp=42"; rc=1; fi
 else echo "LINK C: no se genero el ejecutable"; rc=1; fi
 
+# --- D) multi-.o Vex: libreria sin main + app que la referencia (extern) ---
+cat > "$WORK/lib.vex" <<'EOF'
+i64 quad(i64 x) { return x * 4; }
+i64 dec(i64 x) { return x - 1; }
+EOF
+cat > "$WORK/app.vex" <<'EOF'
+extern "lib" { fn quad(i64 x) -> i64; fn dec(i64 x) -> i64; }
+i64 main() { return dec(quad(11)) - 1; }
+EOF
+"$VM" --vex "$WORK/lib.vex" -m aot --emit obj --format elf -o "$WORK/lib.o" >/dev/null 2>&1
+"$VM" --vex "$WORK/app.vex" -m aot --emit obj --format elf -o "$WORK/app.o" >/dev/null 2>&1
+"$VM" --link "$WORK/app.o" "$WORK/lib.o" -o "$WORK/app.elf" --format elf >/dev/null 2>&1
+if [ -x "$WORK/app.elf" ]; then
+  "$WORK/app.elf"; got=$?
+  if [ "$got" = "42" ]; then echo "LINK D (multi-.o Vex: lib sin main + app): exit=42 OK"
+  else echo "LINK D: EXIT MISMATCH got=$got exp=42"; rc=1; fi
+else echo "LINK D: no se genero el ejecutable"; rc=1; fi
+
+# --- E) .bss: global sin inicializar (NOBITS) escrito/leido ---
+cat > "$WORK/bss.c" <<'EOF'
+static long g;   /* .bss */
+void _kstart(void) {
+    g = 42; long r = g;
+    __asm__ volatile("mov %0,%%rdi; mov $60,%%rax; syscall" :: "r"(r) : "rax","rdi");
+}
+EOF
+gcc -c -ffreestanding -fno-pic -fno-asynchronous-unwind-tables "$WORK/bss.c" -o "$WORK/bss.o" 2>/dev/null
+"$VM" --link "$WORK/bss.o" -o "$WORK/bss.elf" --format elf --entry _kstart >/dev/null 2>&1
+if [ -x "$WORK/bss.elf" ]; then
+  "$WORK/bss.elf"; got=$?
+  if [ "$got" = "42" ]; then echo "LINK E (.bss global escrito/leido): exit=42 OK"
+  else echo "LINK E: EXIT MISMATCH got=$got exp=42"; rc=1; fi
+else echo "LINK E: no se genero el ejecutable"; rc=1; fi
+
 rm -rf "$WORK"
 [ $rc = 0 ] && echo "AOT.5 linker: TODOS OK" || echo "AOT.5 linker: FALLOS"
 exit $rc
