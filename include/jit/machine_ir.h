@@ -618,6 +618,10 @@ struct MInstr {
     uint8_t variant = 0;
     uint16_t flags = 0;
     uint32_t source_pc = 0;
+    /* Solo-LSP (correlacion IR<->asm exacta): identidad estable de la op IR
+     * origen = block_index*65536 + instr_pos (UINT32_MAX = sintetica, p.ej.
+     * copias de PHI).  El inspector la decodifica a fn.blocks[bi].instrs[pos]. */
+    uint32_t ir_id = 0xFFFFFFFFu;
     MOperand dst;
     MOperand src1;
     MOperand src2;
@@ -888,8 +892,13 @@ struct MInstr {
     }
 };
 
-static_assert(sizeof(MInstr) == 32,
-              "MInstr debe ser 32 bytes para cache locality");
+/* 40 bytes: 32 de codegen + 4 de @c ir_id (correlacion IR<->asm SOLO-LSP, vale
+ * UINT32_MAX en produccion) + 4 de padding.  MachineIR es transitorio del
+ * codegen (no es un path caliente de runtime como el bytecode), asi que el
+ * coste es aceptable; el static_assert sigue blindando contra crecimiento
+ * accidental mas alla de esto. */
+static_assert(sizeof(MInstr) == 36,
+              "MInstr debe ser 36 bytes (32 codegen + ir_id LSP)");
 
 /* ===================================================================== */
 /* MBlock                                                                 */
@@ -1010,6 +1019,7 @@ struct MReloc {
 struct LineMapEntry {
     uint32_t byte_offset = 0;  ///< Offset del primer byte de la instr (rel. fn).
     uint32_t source_line = 0;  ///< Linea .vex (1-based; 0 = sin atribucion).
+    uint32_t ir_id = 0xFFFFFFFFu; ///< Identidad de la op IR origen (solo-LSP).
 };
 
 /* ===================================================================== */
