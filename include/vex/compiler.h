@@ -44,6 +44,11 @@ struct CompileOptions {
     std::string module_name; ///< Nombre logico del modulo (por defecto "main").
     bool emit_debug =
         false;         ///< Emitir comentarios @line N en el .vel generado.
+    /// Solo-LSP: si true, las funciones @c comptime (no-macro) tambien se
+    /// bajan a IR como funciones normales para poder inspeccionar su codegen
+    /// (JIT/AOT/bytecode del hover).  En compilacion normal estas funciones se
+    /// evaluan en compile-time y se eliden -> OFF por defecto.
+    bool emit_comptime_fns = false;
     int opt_level = 2; ///< 0..3, mapea a ir::OptLevel.  Default O2 (DCE + copy
                        ///< prop + const fold + unreachable + TCO).
     /// si true, ademas del .vel, generar el dump
@@ -145,6 +150,16 @@ struct CompileOptions {
     /// historico (cero coste, cero cambio de codegen).  Lo consume el
     /// metodo @c vesta/comptimeValues del LSP, on-demand.
     bool dump_comptime_values = false;
+
+    /// LSP "notebook" (valores runtime): cuando true, el lowering instrumenta
+    /// cada declaracion/asignacion de variable ESCALAR (int/bool/char) emitiendo
+    /// un CALLN a @c vesta_io:vio_lsp_value(source_line, valor) que vuelca
+    /// @c __LSPVAL__:linea:valor a stderr.  El LSP compila con este flag, ejecuta
+    /// el @c .velb en un subproceso con timeout y parsea esos marcadores para
+    /// mostrar los valores reales de las variables inline.  Estrictamente
+    /// ADITIVO y gateado: con el default false el codegen es EXACTAMENTE el
+    /// historico (cero coste).  NUNCA se activa en compilacion normal.
+    bool lsp_value_trace = false;
 };
 
 /**

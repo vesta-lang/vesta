@@ -530,6 +530,10 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
     MFunction mf;
     mf.name = ir_fn.name;
     bool unsupported = false;
+    /* Solo-LSP (vista "Godbolt"): propaga el opt-in al MFunction para que el
+     * encoder genere la tabla byte_offset -> source_line.  OFF por defecto:
+     * cero efecto en el codegen de produccion. */
+    mf.emit_line_map = opts_.emit_line_map;
 
     /* Phase D.7-exc (2026-06-04): exception handling.  El modelo v1 del
      * throw (do_throw modifica proc->rip + epilogue + el scheduler reanuda
@@ -1533,9 +1537,50 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
         ir::IrValueId fused_cmp_op0 = ir::IR_NO_VALUE;
         ir::IrValueId fused_cmp_op1 = ir::IR_NO_VALUE;
 
+        /* Solo-LSP (vista "Godbolt"): estampado diferido de source_line.
+         * Cada IR-op emite a @c mf.blocks.back() (y a veces crea bloques
+         * nuevos).  Snapshot ANTES de bajar la op; tras ella (al inicio de
+         * la iteracion siguiente y al cerrar el bucle) estampamos las
+         * MInstr nuevas con su @c source_line.  El esquema diferido
+         * sobrevive a los muchos @c continue del switch (un post-switch
+         * directo se los saltaria).  Coste con flag OFF: nada (el lambda
+         * retorna al instante y las ramas son no-ops). */
+        size_t lm_blk_before = SIZE_MAX; // SIZE_MAX = nada pendiente
+        size_t lm_instrs_before = 0;
+        uint32_t lm_line = 0;
+        auto lm_flush = [&]() {
+            if (!opts_.emit_line_map || lm_blk_before == SIZE_MAX) return;
+            if (lm_line != 0) {
+                // (a) MInstr nuevas en el bloque que era back() al snapshot.
+                if (lm_blk_before >= 1 &&
+                    (lm_blk_before - 1) < mf.blocks.size()) {
+                    auto &b0 = mf.blocks[lm_blk_before - 1];
+                    for (size_t k = lm_instrs_before; k < b0.instrs.size(); ++k)
+                        if (b0.instrs[k].source_pc == 0)
+                            b0.instrs[k].source_pc = lm_line;
+                }
+                // (b) bloques creados durante la op (todas sus instrs).
+                for (size_t bb = lm_blk_before; bb < mf.blocks.size(); ++bb) {
+                    auto &bn = mf.blocks[bb];
+                    for (auto &mi : bn.instrs)
+                        if (mi.source_pc == 0) mi.source_pc = lm_line;
+                }
+            }
+            lm_blk_before = SIZE_MAX;
+        };
+
         for (size_t ins_idx = 0; ins_idx < ir_block.instrs.size(); ++ins_idx) {
             const auto &ins = ir_block.instrs[ins_idx];
             using IrOp = ir::IrOp;
+            // Estampar la op anterior (sobrevive a `continue`) y snapshot
+            // de esta.
+            lm_flush();
+            if (opts_.emit_line_map) {
+                lm_blk_before = mf.blocks.size();
+                lm_instrs_before =
+                    mf.blocks.empty() ? 0 : mf.blocks.back().instrs.size();
+                lm_line = ins.source_line;
+            }
             switch (ins.op) {
             /* --------- Mov / Const --------- */
             case IrOp::NOP: break;
@@ -8148,6 +8193,9 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 mark_slot_as_gc_if_needed(ins.dst, ins.type);
             }
         }
+        /* Solo-LSP: estampar la ultima op del bloque (sin iteracion
+         * siguiente que dispare el flush diferido). */
+        lm_flush();
 
         /* Si el IrBlock no termina con RET/BR/BR_COND explicito y
          * tiene un sucesor unico, agregar fallthrough JMP.  En

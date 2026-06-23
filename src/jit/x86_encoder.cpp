@@ -85,6 +85,15 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
         }
         for (const auto &mi : block.instrs) {
             ++instr_count_;
+            /* Solo-LSP (vista "Godbolt"): registrar el offset del primer
+             * byte de esta instr y su source_line ANTES de emitirla.  Solo
+             * cuando @c fn.emit_line_map esta activo (inspector del LSP);
+             * en produccion el flag es OFF y no se construye la tabla -> los
+             * bytes generados son identicos y el coste es 1 rama predicha. */
+            if (fn.emit_line_map) {
+                fn.line_map.push_back(
+                    {static_cast<uint32_t>(out.size() - base), mi.source_pc});
+            }
             if (!emit_instr(fn, mi, out)) {
                 /* fail-fast: opcode no soportado.  El INT3 hace que la
                  * ejecucion crasheee con SIGTRAP en lugar de seguir

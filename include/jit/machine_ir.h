@@ -993,6 +993,26 @@ struct MReloc {
 };
 
 /* ===================================================================== */
+/* LineMap (solo-LSP: vista "Godbolt" del codegen)                        */
+/* ===================================================================== */
+
+/**
+ * @struct LineMapEntry
+ * @brief Correlacion byte_offset (instruccion maquina) -> source_line (.vex).
+ *
+ * SOLO se poblea cuando @c MFunction::emit_line_map es true (modo de
+ * analisis exclusivo del LSP).  En compilacion/ejecucion convencional el
+ * flag esta OFF y el encoder NO construye la tabla -> cero overhead, bytes
+ * de codigo BIT-IDENTICOS.  Una entrada por MInstr emitida, en orden de
+ * emision (ascendente por @c byte_offset).  El inspector la cruza con el
+ * desensamblado de Capstone para resaltar fuente <-> asm.
+ */
+struct LineMapEntry {
+    uint32_t byte_offset = 0;  ///< Offset del primer byte de la instr (rel. fn).
+    uint32_t source_line = 0;  ///< Linea .vex (1-based; 0 = sin atribucion).
+};
+
+/* ===================================================================== */
 /* Stackmaps (D.2-integration)                                            */
 /* ===================================================================== */
 
@@ -1117,6 +1137,17 @@ struct MFunction {
     /// binary search durante stack walk.  Cada Stackmap describe los
     /// slots GC vivos en ese punto especifico.
     std::vector<Stackmap> stackmaps;
+
+    /// Solo-LSP (vista "Godbolt"): si true, el encoder poblea @c line_map
+    /// con una entrada por instruccion (byte_offset -> source_line).  Lo
+    /// activa el Selector/vreg-select SOLO cuando el inspector del LSP pide
+    /// el codegen anotado.  OFF por defecto -> el resto del proyecto
+    /// (auto_jit, runtime, AOT normal) NO paga nada: el encoder ni mira la
+    /// tabla y los bytes emitidos son identicos.
+    bool emit_line_map = false;
+    /// Solo-LSP: correlacion byte_offset -> source_line.  Vacia salvo que
+    /// @c emit_line_map este activo.  Ver @c LineMapEntry.
+    std::vector<LineMapEntry> line_map;
 
     /// Sprint mem-loop-fix-v2 / fib-recursion (2026-06-02):
     /// indices del @c imm64_pool que contienen referencias a la

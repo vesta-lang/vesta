@@ -33,8 +33,12 @@
 #include "lsp/semantic_tokens.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <exception>
+#include <string>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "lsp/analysis_engine.h"
 #include "vex/diagnostic.h"
@@ -422,6 +426,193 @@ SemTokenType classify_identifier(const std::string &name,
     return SemTokenType::Variable;
 }
 
+// ---------------------------------------------------------------------------
+// Resaltado de bloques de ensamblador (asm { ... }).
+// ---------------------------------------------------------------------------
+
+/// Pasa @p s a minusculas ASCII (los mnemonicos/registros son case-insensitive).
+std::string to_lower_ascii(const std::string &s) {
+    std::string r = s;
+    for (char &c : r)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    return r;
+}
+
+/// @c true si @p name (ya en minusculas) es un registro de CPU x86-64.
+bool is_asm_register(const std::string &lc) {
+    static const std::unordered_set<std::string> kRegs = {
+        // 64/32/16/8-bit de proposito general.
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip",
+        "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+        "ax", "bx", "cx", "dx", "si", "di", "bp", "sp",
+        "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl",
+        "spl",
+        // Segmento / flags / control.
+        "cs", "ds", "es", "fs", "gs", "ss", "eflags", "rflags",
+    };
+    if (kRegs.count(lc))
+        return true;
+    // r8..r15 y sus sufijos d/w/b (r8d, r10w, r15b).
+    if (lc.size() >= 2 && lc[0] == 'r' && lc[1] >= '0' && lc[1] <= '9') {
+        size_t i = 1;
+        while (i < lc.size() && lc[i] >= '0' && lc[i] <= '9')
+            ++i;
+        int num = std::atoi(lc.c_str() + 1);
+        if (num >= 8 && num <= 15) {
+            if (i == lc.size())
+                return true; // r8..r15
+            if (i + 1 == lc.size() &&
+                (lc[i] == 'd' || lc[i] == 'w' || lc[i] == 'b'))
+                return true; // r8d / r10w / r15b
+        }
+    }
+    // xmm0..31, ymm0..31, zmm0..31, mm0..7, st0..7, k0..7 (mascaras AVX-512).
+    auto vec_reg = [&](const char *pfx, size_t pl, int maxn) -> bool {
+        if (lc.size() <= pl || lc.compare(0, pl, pfx) != 0)
+            return false;
+        for (size_t i = pl; i < lc.size(); ++i)
+            if (lc[i] < '0' || lc[i] > '9')
+                return false;
+        int n = std::atoi(lc.c_str() + pl);
+        return n >= 0 && n <= maxn;
+    };
+    return vec_reg("xmm", 3, 31) || vec_reg("ymm", 3, 31) ||
+           vec_reg("zmm", 3, 31) || vec_reg("mm", 2, 7) ||
+           vec_reg("st", 2, 7) || vec_reg("k", 1, 7);
+}
+
+/**
+ * @brief Clasifica un identificador DENTRO de un bloque asm por su categoria.
+ *
+ * Registros -> Register; instrucciones aritmeticas -> Function; logicas/bit ->
+ * Macro; control de flujo -> Keyword; movimiento/datos -> Type.  Lo que no se
+ * reconoce (labels, simbolos, directivas raras) queda como Variable (texto
+ * normal) para no colorear de mas.
+ */
+SemTokenType classify_asm_ident(const std::string &name) {
+    const std::string lc = to_lower_ascii(name);
+    if (is_asm_register(lc))
+        return SemTokenType::Register;
+
+    // Aritmeticas (enteras + SIMD + x87).
+    static const std::unordered_set<std::string> kArith = {
+        "add", "adc", "sub", "sbb", "mul", "imul", "div", "idiv", "inc", "dec",
+        "neg", "abs", "lea", // lea es aritmetica de direcciones
+        "paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd", "psubq",
+        "pmulld", "pmullw", "pmuldq", "pmuludq", "pmaddwd",
+        "addps", "addpd", "addss", "addsd", "subps", "subpd", "subss", "subsd",
+        "mulps", "mulpd", "mulss", "mulsd", "divps", "divpd", "divss", "divsd",
+        "sqrtps", "sqrtpd", "sqrtss", "sqrtsd", "fadd", "fsub", "fmul", "fdiv",
+        "vaddps", "vaddpd", "vsubps", "vmulps", "vdivps", "vpaddd", "vpsubd",
+        "vpmulld", "vfmadd231ps", "vfmadd231pd",
+    };
+    if (kArith.count(lc))
+        return SemTokenType::Function;
+
+    // Logicas / desplazamiento / bit.
+    static const std::unordered_set<std::string> kLogic = {
+        "and", "or", "xor", "not", "shl", "shr", "sar", "sal", "rol", "ror",
+        "rcl", "rcr", "test", "bt", "bts", "btr", "btc", "bsf", "bsr", "popcnt",
+        "lzcnt", "tzcnt", "andn", "bextr", "blsi", "blsr",
+        "pand", "pandn", "por", "pxor", "psllw", "pslld", "psllq", "psrlw",
+        "psrld", "psrlq", "psraw", "psrad", "andps", "andpd", "orps", "orpd",
+        "xorps", "xorpd", "andnps", "vpand", "vpor", "vpxor",
+    };
+    if (kLogic.count(lc))
+        return SemTokenType::Macro;
+
+    // Control de flujo + comparaciones.
+    static const std::unordered_set<std::string> kControl = {
+        "jmp", "je", "jne", "jz", "jnz", "jg", "jge", "jl", "jle", "ja", "jae",
+        "jb", "jbe", "jc", "jnc", "jo", "jno", "js", "jns", "jp", "jnp", "jcxz",
+        "jecxz", "jrcxz", "call", "ret", "retn", "retf", "iret", "iretq",
+        "loop", "loope", "loopne", "loopz", "loopnz", "cmp", "cmpps", "cmppd",
+        "ucomiss", "ucomisd", "comiss", "comisd", "syscall", "sysret", "int",
+        "int3", "into", "enter", "leave", "hlt", "nop", "pause", "cpuid",
+        "rdtsc", "rdtscp", "cmovz", "cmovnz", "cmove", "cmovne", "cmovg",
+        "cmovl", "sete", "setne", "setg", "setl", "setz", "setnz",
+    };
+    if (kControl.count(lc))
+        return SemTokenType::Keyword;
+
+    // Movimiento / carga / almacenamiento / conversion de datos.
+    static const std::unordered_set<std::string> kMov = {
+        "mov", "movzx", "movsx", "movsxd", "movabs", "xchg", "cmpxchg", "xadd",
+        "push", "pop", "pushf", "popf", "pushfq", "popfq", "cwd", "cdq", "cqo",
+        "cbw", "cwde", "cdqe", "bswap",
+        "movd", "movq", "movdqu", "movdqa", "movaps", "movapd", "movups",
+        "movupd", "movss", "movsd", "movhps", "movlps", "movhlps", "movlhps",
+        "movntdq", "lddqu", "vmovdqu", "vmovdqa", "vmovaps", "vmovups",
+        "pextrb", "pextrw", "pextrd", "pextrq", "pinsrb", "pinsrw", "pinsrd",
+        "pinsrq", "pshufd", "pshufb", "shufps", "punpckldq", "punpckhdq",
+        "cvtsi2ss", "cvtsi2sd", "cvtss2si", "cvtsd2si", "cvttss2si",
+        "cvttsd2si", "cvtss2sd", "cvtsd2ss", "cvtdq2ps", "cvtps2dq",
+        "stos", "lods", "movs", "scas", "rep", "repe", "repne", "lock",
+    };
+    if (kMov.count(lc))
+        return SemTokenType::Type;
+
+    // No reconocido: label, simbolo o directiva -> texto normal.
+    return SemTokenType::Variable;
+}
+
+/**
+ * @brief Localiza los rangos de bytes ocupados por el CUERPO de cada bloque asm.
+ *
+ * Reconoce @c asm [cualificadores] { ... }: tras un @c KW_ASM salta los
+ * identificadores cualificadores (volatile, nomem, ...), exige una @c {, y
+ * balancea llaves hasta la @c } de cierre.  Devuelve, por bloque, el par
+ * [offset tras la '{', offset de la '}'] en bytes del fuente.
+ *
+ * @param toks  Tokens del documento (en orden).
+ * @return Lista de rangos [open, close) de byte del contenido asm.
+ */
+std::vector<std::pair<size_t, size_t>>
+find_asm_ranges(const std::vector<vex::Token> &toks) {
+    std::vector<std::pair<size_t, size_t>> ranges;
+    using TK = vex::TokenKind;
+    const int n = static_cast<int>(toks.size());
+    for (int i = 0; i < n; ++i) {
+        if (toks[i].kind != TK::KW_ASM)
+            continue;
+        int j = i + 1;
+        // Saltar cualificadores (identificadores: volatile, nomem, pure, ...).
+        while (j < n && toks[j].kind == TK::IDENTIFIER)
+            ++j;
+        if (j >= n || toks[j].kind != TK::LBRACE)
+            continue;
+        // Contenido: desde tras la '{' hasta la '}' que la cierra.
+        size_t open = toks[j].loc.offset + toks[j].loc.length;
+        int depth = 1;
+        int k = j + 1;
+        size_t close = open;
+        for (; k < n && depth > 0; ++k) {
+            if (toks[k].kind == TK::LBRACE)
+                ++depth;
+            else if (toks[k].kind == TK::RBRACE) {
+                --depth;
+                if (depth == 0) {
+                    close = toks[k].loc.offset;
+                    break;
+                }
+            }
+        }
+        if (close > open)
+            ranges.push_back({open, close});
+        i = (k > i) ? k : i; // continuar tras el bloque
+    }
+    return ranges;
+}
+
+/// @c true si el offset @p off cae dentro de algun rango asm.
+bool offset_in_asm(size_t off, const std::vector<std::pair<size_t, size_t>> &r) {
+    for (const auto &p : r)
+        if (off >= p.first && off < p.second)
+            return true;
+    return false;
+}
+
 /**
  * @brief Emite uno o varios AbsToken para un span de bytes [b0, b1) con un
  *        tipo dado, partiendo el span por lineas si cruza saltos.
@@ -559,6 +750,255 @@ void scan_comments(const std::string &src, const PositionIndex &idx,
     }
 }
 
+/// Indica si @p c es un digito hexadecimal ASCII.
+inline bool is_hex_digit(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
+/// Indica si @p c puede formar parte de un identificador (para detectar el
+/// prefijo @c r de un raw string sin confundirlo con el sufijo de otro id).
+inline bool is_ident_byte(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
+ * @brief Longitud en bytes de la secuencia de escape que empieza en @p i.
+ *
+ * @p src[i] debe ser la barra invertida.  Reconoce @c \\xHH, @c \\uHHHH,
+ * @c \\u{...} y los escapes simples de un caracter (@c \\n, @c \\t, @c \\\\,
+ * @c \\", etc.).  Si la barra esta al final del fuente devuelve 1.
+ */
+size_t escape_seq_len(const std::string &src, size_t i) {
+    const size_t n = src.size();
+    if (i + 1 >= n)
+        return 1; // barra suelta al final.
+    const char e = src[i + 1];
+    if (e == 'x' || e == 'X') {
+        // \xHH: hasta 2 digitos hex.
+        size_t k = i + 2;
+        int h = 0;
+        while (k < n && h < 2 && is_hex_digit(src[k])) {
+            ++k;
+            ++h;
+        }
+        return k - i;
+    }
+    if (e == 'u' || e == 'U') {
+        if (i + 2 < n && src[i + 2] == '{') {
+            // \u{...}: hasta el cierre '}'.
+            size_t k = i + 3;
+            while (k < n && src[k] != '}' && src[k] != '"' && src[k] != '\n')
+                ++k;
+            if (k < n && src[k] == '}')
+                ++k; // incluir el '}'.
+            return k - i;
+        }
+        // \uHHHH / \UHHHHHHHH: hasta 4 (u) digitos hex (conservador).
+        size_t k = i + 2;
+        int h = 0;
+        const int maxh = (e == 'U') ? 8 : 4;
+        while (k < n && h < maxh && is_hex_digit(src[k])) {
+            ++k;
+            ++h;
+        }
+        return k - i;
+    }
+    return 2; // escape simple: barra + un caracter.
+}
+
+/**
+ * @brief Decodifica el valor de un escape simple/numerico para detectar ESC.
+ *
+ * Solo necesitamos saber si el escape produce el byte ESC (0x1B) para, en ese
+ * caso, extender el resaltado a la secuencia ANSI completa (CSI).  Devuelve el
+ * byte producido o -1 si no es un escape de un solo byte conocido.
+ */
+int escape_byte_value(const std::string &src, size_t i, size_t seq_len) {
+    if (i + 1 >= src.size())
+        return -1;
+    const char e = src[i + 1];
+    if (e == 'e' || e == 'E')
+        return 0x1B; // extension comun \e = ESC.
+    if ((e == 'x' || e == 'X') && seq_len == 4) {
+        // \xHH con 2 digitos.
+        auto hexv = [](char c) -> int {
+            if (c >= '0' && c <= '9')
+                return c - '0';
+            if (c >= 'a' && c <= 'f')
+                return c - 'a' + 10;
+            return c - 'A' + 10;
+        };
+        return (hexv(src[i + 2]) << 4) | hexv(src[i + 3]);
+    }
+    if (e == '0' && seq_len == 4) {
+        // \033 octal -> ESC si los digitos lo dan.
+        int v = 0;
+        for (size_t k = i + 1; k < i + 4; ++k) {
+            if (src[k] < '0' || src[k] > '7')
+                return -1;
+            v = v * 8 + (src[k] - '0');
+        }
+        return v;
+    }
+    return -1;
+}
+
+/**
+ * @brief Escanea el fuente y emite tokens de string con colores diferenciados.
+ *
+ * A diferencia del lexer (que da los tramos de texto interpolado con longitud
+ * 0, "sinteticos"), este scanner recorre el fuente y, para cada literal de
+ * cadena o caracter, emite:
+ *   - @c String       para el texto literal (incluidas las comillas).
+ *   - @c EscapeSequence para cada escape (@c \\n, @c \\xHH, ...) y, si el
+ *     escape es ESC, la secuencia ANSI CSI completa que le sigue (@c [..m).
+ *   - @c Interpolation para los delimitadores @c ${ y @c }.
+ * El INTERIOR de @c ${...} NO se toca aqui: el lexer ya emite esos tokens
+ * (identificadores, operadores) con su color propio.  Asi no hay solapes.
+ *
+ * Reconoce strings normales @c "...", raw @c r"...", triple @c """...""" y
+ * char @c '...'.  Salta los comentarios para no confundir una comilla dentro
+ * de @c // con el inicio de un string.
+ */
+void scan_strings(const std::string &src, const PositionIndex &idx,
+                  std::vector<AbsToken> &out) {
+    const size_t n = src.size();
+    size_t i = 0;
+    while (i < n) {
+        const char c = src[i];
+        // Saltar comentarios (una comilla dentro de // no abre string).
+        if (c == '/' && i + 1 < n && src[i + 1] == '/') {
+            i += 2;
+            while (i < n && src[i] != '\n')
+                ++i;
+            continue;
+        }
+        if (c == '/' && i + 1 < n && src[i + 1] == '*') {
+            i += 2;
+            while (i + 1 < n && !(src[i] == '*' && src[i + 1] == '/'))
+                ++i;
+            i = (i + 1 < n) ? (i + 2) : n;
+            continue;
+        }
+        if (c != '"' && c != '\'') {
+            ++i;
+            continue;
+        }
+        // --- Inicio de un literal de cadena o caracter ---
+        const char quote = c;
+        const bool raw = (quote == '"' && i > 0 && src[i - 1] == 'r' &&
+                          (i < 2 || !is_ident_byte(src[i - 2])));
+        const bool triple = (quote == '"' && i + 2 < n && src[i + 1] == '"' &&
+                             src[i + 2] == '"');
+        const size_t qlen = triple ? 3 : 1;
+        // El tramo de texto que iremos volcando incluye la(s) comilla(s) de
+        // apertura para que el string entero salga con color.
+        size_t text_start = i;
+        size_t j = i + qlen;
+        auto flush_text = [&](size_t end) {
+            if (end > text_start)
+                emit_span_by_lines(src, idx, text_start, end,
+                                   SemTokenType::String, out);
+        };
+        bool closed = false;
+        while (j < n) {
+            // Cierre del literal.
+            if (triple) {
+                if (j + 2 < n && src[j] == '"' && src[j + 1] == '"' &&
+                    src[j + 2] == '"') {
+                    flush_text(j + 3);
+                    j += 3;
+                    closed = true;
+                    break;
+                }
+            } else if (src[j] == quote) {
+                flush_text(j + 1);
+                j += 1;
+                closed = true;
+                break;
+            }
+            // Escape (no en raw).
+            if (!raw && src[j] == '\\') {
+                flush_text(j);
+                size_t el = escape_seq_len(src, j);
+                size_t esc_end = j + el;
+                // Si el escape produce ESC (0x1B) y sigue una CSI (@c [..letra)
+                // extendemos el resaltado a la secuencia ANSI completa.
+                if (escape_byte_value(src, j, el) == 0x1B && esc_end < n &&
+                    src[esc_end] == '[') {
+                    size_t k = esc_end + 1;
+                    while (k < n && src[k] != '\n' && src[k] != quote &&
+                           !((src[k] >= 'A' && src[k] <= 'Z') ||
+                             (src[k] >= 'a' && src[k] <= 'z')))
+                        ++k;
+                    if (k < n && ((src[k] >= 'A' && src[k] <= 'Z') ||
+                                  (src[k] >= 'a' && src[k] <= 'z')))
+                        ++k; // incluir la letra final de la CSI.
+                    esc_end = k;
+                }
+                emit_span_by_lines(src, idx, j, esc_end,
+                                   SemTokenType::EscapeSequence, out);
+                j = esc_end;
+                text_start = j;
+                continue;
+            }
+            // Interpolacion ${...} (solo strings de comilla doble, no raw).
+            if (!raw && quote == '"' && src[j] == '$' && j + 1 < n &&
+                src[j + 1] == '{') {
+                flush_text(j);
+                emit_span_by_lines(src, idx, j, j + 2,
+                                   SemTokenType::Interpolation, out);
+                // Saltar el interior (lo emite el lexer) hasta el '}' que
+                // cierra, contando profundidad y saltando strings anidados.
+                size_t k = j + 2;
+                int depth = 1;
+                while (k < n && depth > 0) {
+                    const char ic = src[k];
+                    if (ic == '{') {
+                        ++depth;
+                    } else if (ic == '}') {
+                        --depth;
+                        if (depth == 0)
+                            break;
+                    } else if (ic == '"' || ic == '\'') {
+                        const char q2 = ic;
+                        ++k;
+                        while (k < n && src[k] != q2) {
+                            if (src[k] == '\\')
+                                ++k;
+                            ++k;
+                        }
+                    }
+                    ++k;
+                }
+                if (k < n && src[k] == '}') {
+                    emit_span_by_lines(src, idx, k, k + 1,
+                                       SemTokenType::Interpolation, out);
+                    ++k;
+                }
+                j = k;
+                text_start = j;
+                continue;
+            }
+            // Salto de linea en string no raw ni triple: literal mal formado;
+            // cerramos el tramo aqui para no arrastrar el resto de la linea.
+            if (src[j] == '\n' && !raw && !triple) {
+                flush_text(j);
+                text_start = j;
+                break;
+            }
+            ++j;
+        }
+        if (!closed && j >= n) {
+            // EOF dentro del string: volcar lo que quede.
+            flush_text(n);
+        }
+        i = (j > i) ? j : i + 1;
+    }
+}
+
 } // namespace
 
 const std::vector<std::string> &semantic_token_types() {
@@ -567,7 +1007,8 @@ const std::vector<std::string> &semantic_token_types() {
         "namespace", "type",       "class",    "enum",     "interface",
         "struct",    "typeParameter", "parameter", "variable", "property",
         "enumMember", "function",  "method",   "keyword",  "modifier",
-        "comment",   "string",     "number",   "operator", "macro"};
+        "comment",   "string",     "number",   "operator", "macro",
+        "escapeSequence", "interpolation", "register"};
     return kTypes;
 }
 
@@ -586,78 +1027,112 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
     try {
         PositionIndex idx(text);
 
-        // 1) Lexar y clasificar cada token.  Los comentarios NO los emite el
-        //    lexer (los descarta); los anyadimos despues con scan_comments.
+        // 1) Lexar TODOS los tokens a un vector.  Necesitamos el conjunto
+        //    completo para localizar los bloques asm { ... } antes de
+        //    clasificar (un identificador dentro de asm se colorea distinto:
+        //    registro, instruccion aritmetica, logica, control o movimiento).
         vex::Diagnostics diags; // descartables: solo queremos los tokens.
         vex::Lexer lex(text, filename, diags);
-        // Limite defensivo de tokens para no colgar ante una entrada
-        // patologica: documentos enormes producen como mucho ~1 token por
-        // byte; el tope holgado evita bucles infinitos por un bug del lexer.
         const size_t kMaxTokens = text.size() + 1024;
-        size_t produced = 0;
+        std::vector<vex::Token> toks;
         for (;;) {
             vex::Token tok = lex.next();
             if (tok.kind == vex::TokenKind::END_OF_FILE)
                 break;
-            if (++produced > kMaxTokens)
+            toks.push_back(tok);
+            if (toks.size() > kMaxTokens)
                 break;
+        }
+        // Rangos de byte ocupados por el cuerpo de cada bloque asm.
+        const std::vector<std::pair<size_t, size_t>> asm_ranges =
+            find_asm_ranges(toks);
 
-            // Resolver el tipo de token semantico.
+        // 2) Clasificar cada token.
+        using TK = vex::TokenKind;
+        for (const vex::Token &tok : toks) {
+            const bool in_asm =
+                !asm_ranges.empty() && offset_in_asm(tok.loc.offset, asm_ranges);
+
             SemTokenType type;
-            using TK = vex::TokenKind;
-            switch (tok.kind) {
-            case TK::STRING_LIT:
-            case TK::RAW_STRING_LIT:
-            case TK::CHAR_LIT:
-            case TK::ISTR_TEXT:
-            case TK::ISTR_EXPR_FMT:
-                type = SemTokenType::String;
-                break;
-            case TK::INT_LIT:
-            case TK::FLOAT_LIT:
-                type = SemTokenType::Number;
-                break;
-            case TK::TRUE_KW:
-            case TK::FALSE_KW:
-            case TK::NULL_KW:
-                // Literales con apariencia de palabra clave.
-                type = SemTokenType::Keyword;
-                break;
-            case TK::IDENTIFIER:
-                type = classify_identifier(tok.lexeme, analysis);
-                break;
-            default:
-                if (is_primitive_type_kw(tok.kind)) {
-                    type = SemTokenType::Type;
-                } else if (is_keyword(tok.kind)) {
-                    type = SemTokenType::Keyword;
-                } else if (is_operator(tok.kind)) {
-                    type = SemTokenType::Operator;
-                } else {
-                    // Delimitadores y tokens de control: no emitir.
-                    continue;
+            if (in_asm) {
+                // Reglas de ensamblador: registros e instrucciones por
+                // categoria; numeros como inmediatos; el resto (labels,
+                // simbolos, operadores) en su color por defecto.
+                switch (tok.kind) {
+                case TK::IDENTIFIER:
+                    type = classify_asm_ident(tok.lexeme);
+                    break;
+                case TK::INT_LIT:
+                case TK::FLOAT_LIT:
+                    type = SemTokenType::Number;
+                    break;
+                default:
+                    if (is_operator(tok.kind)) {
+                        type = SemTokenType::Operator;
+                    } else if (is_keyword(tok.kind)) {
+                        // 'asm', cualificadores: keyword.
+                        type = SemTokenType::Keyword;
+                    } else {
+                        continue; // delimitadores ([ ] , etc.): sin emitir.
+                    }
+                    break;
                 }
-                break;
+            } else {
+                // Reglas normales de Vex.
+                switch (tok.kind) {
+                case TK::STRING_LIT:
+                case TK::RAW_STRING_LIT:
+                case TK::CHAR_LIT:
+                case TK::ISTR_TEXT:
+                case TK::ISTR_EXPR_FMT:
+                case TK::ISTR_BEGIN:
+                case TK::ISTR_END:
+                case TK::ISTR_EXPR_BEGIN:
+                case TK::ISTR_EXPR_END:
+                    // Los strings los maneja scan_strings (texto/escapes/${}).
+                    continue;
+                case TK::INT_LIT:
+                case TK::FLOAT_LIT:
+                    type = SemTokenType::Number;
+                    break;
+                case TK::TRUE_KW:
+                case TK::FALSE_KW:
+                case TK::NULL_KW:
+                    type = SemTokenType::Keyword;
+                    break;
+                case TK::IDENTIFIER:
+                    type = classify_identifier(tok.lexeme, analysis);
+                    break;
+                default:
+                    if (is_primitive_type_kw(tok.kind)) {
+                        type = SemTokenType::Type;
+                    } else if (is_keyword(tok.kind)) {
+                        type = SemTokenType::Keyword;
+                    } else if (is_operator(tok.kind)) {
+                        type = SemTokenType::Operator;
+                    } else {
+                        continue; // delimitadores: no emitir.
+                    }
+                    break;
+                }
             }
 
-            // El span del token puede no tener longitud (sentinelas de string
-            // interpolado como ISTR_BEGIN/END): se omitieron arriba por kind.
-            // Para los emitidos, length en bytes viene en loc.length.
             if (tok.loc.length == 0)
-                continue;
-
-            // Calcular coordenadas LSP del inicio y del final del span.  El
-            // lexer da line/column 1-based en bytes; convertimos via el
-            // indice de posiciones usando el offset de byte del token.
+                continue; // sentinelas de string interpolado, etc.
             const size_t b0 = tok.loc.offset;
             const size_t b1 = b0 + tok.loc.length;
-            // Partir por lineas (un token de string triple-quoted podria
-            // cruzar lineas).  emit_span_by_lines clampa al final del fuente.
             emit_span_by_lines(text, idx, b0, b1, type, abs);
         }
 
         // 2) Anyadir los comentarios.
         scan_comments(text, idx, abs);
+
+        // 3) Anyadir los literales de cadena/caracter con colores
+        //    diferenciados (texto, escapes/ANSI, delimitadores ${}).  El
+        //    lexer-path de arriba ya NO emite los string tokens (los omite);
+        //    aqui se reconstruyen con el span real (el lexer da los tramos
+        //    interpolados con longitud 0).
+        scan_strings(text, idx, abs);
     } catch (...) {
         // Robustez: devolver lo acumulado (posiblemente vacio) sin lanzar.
     }

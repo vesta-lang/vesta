@@ -827,6 +827,18 @@ VESTA_PLUGIN_EXPORT uint64_t vio_println_int(uint64_t n) {
     return 0;
 }
 
+/* LSP "notebook" (valores runtime): vuelca a STDERR un marcador
+ * @c __LSPVAL__:linea:valor que el servidor LSP parsea para mostrar el valor
+ * real de la variable inline.  Va a stderr (no al buffer de stdout) para no
+ * mezclarse con la salida normal del programa.  Solo lo emite el lowering
+ * cuando @c CompileOptions::lsp_value_trace esta activo (modo notebook). */
+VESTA_PLUGIN_EXPORT uint64_t vio_lsp_value(uint64_t line, uint64_t value) {
+    fprintf(stderr, "__LSPVAL__:%llu:%lld\n", (unsigned long long)line,
+            (long long)(int64_t)value);
+    fflush(stderr);
+    return 0;
+}
+
 VESTA_PLUGIN_EXPORT uint64_t vio_print_uint(uint64_t n) {
     char tmp[24];
     size_t k = vio_u64_to_str(n, tmp);

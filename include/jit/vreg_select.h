@@ -138,7 +138,8 @@ bool vreg_select(const ir::IrFunction &fn, MFunction &out,
                      true
 #endif
                  ,
-                 bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2);
+                 bool mode32 = false, FloatIsa fisa = FloatIsa::SSE2,
+                 bool emit_line_map = false);
 
 } // namespace jit
 

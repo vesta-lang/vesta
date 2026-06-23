@@ -28,8 +28,13 @@
 
 #include "lsp/inspector.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <sstream>
+#include <vector>
 
 #include <capstone/capstone.h>
 
@@ -101,6 +106,13 @@ const ir::IrFunction *pick_function(const ir::IrModule &mod,
             if (fn.name == wanted)
                 return &fn;
         }
+        // Funciones comptime: el frontend las baja como @c __macro_<nombre>.
+        // Si el hover pidio @c M_foo, probar @c __macro_M_foo.
+        const std::string macro = "__macro_" + wanted;
+        for (const auto &fn : mod.functions) {
+            if (fn.name == macro)
+                return &fn;
+        }
         return nullptr;
     }
     // Auto: preferir main (nombre exacto o sufijo "main").
@@ -157,6 +169,158 @@ std::string disasm_x86_64(const uint8_t *code, size_t code_size,
     }
     cs_close(&handle);
     return oss.str();
+}
+
+/**
+ * @brief Desensambla correlando cada instruccion maquina con su linea fuente.
+ *
+ * Solo-LSP (vista "Godbolt").  Combina el desensamblado de Capstone (offset
+ * + mnemonico) con la @c line_map del codegen (byte_offset -> source_line)
+ * para producir un array @c [{addr, text, line}].  La @c line_map viene
+ * ordenada ascendentemente por @c byte_offset (orden de emision); para cada
+ * instruccion Capstone en @p off se busca la entrada con el mayor
+ * @c byte_offset <= off (una @c MInstr puede expandir a varias instrucciones
+ * x86, todas atribuidas a su linea).  @c line==0 = sin atribucion (prologo,
+ * epilogo, instrs sinteticas).
+ *
+ * @param code      Bytes del codigo nativo.
+ * @param code_size Numero de bytes.
+ * @param lm        Tabla byte_offset -> source_line (puede estar vacia).
+ * @return Array JSON de @c {addr:"%04x", text, line}.
+ */
+nlohmann::json
+disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
+                         const std::vector<jit::LineMapEntry> &lm,
+                         const std::vector<jit::NativeReloc> &relocs) {
+    nlohmann::json arr = nlohmann::json::array();
+    if (!code || code_size == 0)
+        return arr;
+    csh handle;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK)
+        return arr;
+    cs_option(handle, CS_OPT_DETAIL, CS_OPT_OFF);
+    cs_insn *insn = nullptr;
+    const size_t count = cs_disasm(handle, code, code_size, 0, 0, &insn);
+    size_t lm_idx = 0; // cursor en lm (ambos en orden ascendente de offset).
+    for (size_t i = 0; i < count; ++i) {
+        const uint64_t off = insn[i].address; // base 0 -> offset relativo.
+        const uint64_t end = off + insn[i].size;
+        // Avanzar el cursor mientras la siguiente entrada cubra este offset.
+        while (lm_idx + 1 < lm.size() && lm[lm_idx + 1].byte_offset <= off)
+            ++lm_idx;
+        uint32_t line = 0;
+        if (lm_idx < lm.size() && lm[lm_idx].byte_offset <= off)
+            line = lm[lm_idx].source_line;
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%04llx",
+                      static_cast<unsigned long long>(off));
+        std::string text = insn[i].mnemonic;
+        if (insn[i].op_str[0] != '\0') {
+            text += ' ';
+            text += insn[i].op_str;
+        }
+        // Anotar con el simbolo si una relocation cae dentro de esta instr
+        // (call/jmp a funcion, lea a dato de .rodata, mov imm64 a simbolo).
+        // El parche del rel32/abs64 vive en [off, end); buscamos ahi.
+        for (const auto &rc : relocs) {
+            if (rc.offset >= off && rc.offset < end && !rc.symbol.empty()) {
+                text += "  ; ";
+                text += rc.symbol;
+                if (rc.addend)
+                    text += "+" + std::to_string(rc.addend);
+                break;
+            }
+        }
+        nlohmann::json ji;
+        ji["addr"] = buf;
+        ji["text"] = std::move(text);
+        ji["line"] = line;
+        arr.push_back(std::move(ji));
+    }
+    if (count > 0)
+        cs_free(insn, count);
+    cs_close(&handle);
+    return arr;
+}
+
+/**
+ * @brief Recoge las lineas fuente .vex que abarca una funcion IR.
+ *
+ * Solo-LSP (vista "Godbolt"): el panel SOURCE muestra el codigo de la
+ * funcion.  Calcula el rango [min,max] de @c source_line sobre las
+ * instrucciones de @p fn (ignorando 0) y extrae esas lineas del documento.
+ *
+ * @param doc Texto completo del documento .vex.
+ * @param fn  Funcion IR.
+ * @return Array JSON de @c {line, text} (1-based), vacio si no hay lineas.
+ */
+nlohmann::json function_source_lines(const std::string &doc,
+                                     const ir::IrFunction &fn) {
+    uint32_t lo = UINT32_MAX, hi = 0;
+    for (const auto &blk : fn.blocks) {
+        for (const auto &ins : blk.instrs) {
+            if (ins.source_line == 0)
+                continue;
+            lo = std::min(lo, ins.source_line);
+            hi = std::max(hi, ins.source_line);
+        }
+    }
+    nlohmann::json arr = nlohmann::json::array();
+    if (lo == UINT32_MAX || hi < lo)
+        return arr;
+    // Trocear el documento en lineas (1-based) y extraer [lo,hi].
+    uint32_t cur = 1;
+    size_t start = 0;
+    for (size_t i = 0; i <= doc.size(); ++i) {
+        if (i == doc.size() || doc[i] == '\n') {
+            if (cur >= lo && cur <= hi) {
+                std::string ln = doc.substr(start, i - start);
+                if (!ln.empty() && ln.back() == '\r')
+                    ln.pop_back();
+                nlohmann::json jl;
+                jl["line"] = cur;
+                jl["text"] = std::move(ln);
+                arr.push_back(std::move(jl));
+            }
+            start = i + 1;
+            ++cur;
+            if (cur > hi)
+                break;
+        }
+    }
+    return arr;
+}
+
+/**
+ * @brief Construye la asociacion argumento -> registro de una funcion.
+ *
+ * Solo-LSP: el desensamblado no dice que registro lleva cada argumento.
+ * Esta tabla la calcula desde @c fn.params (nombres) + la convencion de
+ * llamada (orden de los registros de argumento).
+ *
+ * @param fn        Funcion IR.
+ * @param arg_regs  Nombres de los registros de argumento en orden (ABI).
+ * @return Array JSON de @c {name, reg}.
+ */
+nlohmann::json function_args(const ir::IrFunction &fn,
+                             const std::vector<const char *> &arg_regs) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (size_t i = 0; i < fn.params.size() && i < arg_regs.size(); ++i) {
+        const ir::IrValueId pid = fn.params[i];
+        std::string nm;
+        if (pid < fn.values.size())
+            nm = fn.values[pid].name;
+        // Quitar el '%' inicial de los nombres SSA ("%n" -> "n").
+        if (!nm.empty() && nm[0] == '%')
+            nm = nm.substr(1);
+        if (nm.empty())
+            nm = "arg" + std::to_string(i);
+        nlohmann::json ji;
+        ji["name"] = nm;
+        ji["reg"] = arg_regs[i];
+        arr.push_back(std::move(ji));
+    }
+    return arr;
 }
 
 /**
@@ -227,12 +391,112 @@ Inspector::JitState *Inspector::jit_state() {
     return jit_.get();
 }
 
-nlohmann::json Inspector::bytecode(const std::string &uri) {
+namespace {
+/// Forward-decls: las definiciones viven mas abajo (mismo TU, namespace
+/// anonimo).  Reabrir @c namespace{} refiere a la MISMA entidad de enlace
+/// interno, asi que @c Inspector::bytecode puede usarlas antes de definirse.
+std::vector<std::string> ir_split_lines(const std::string &s);
+std::string vel_extract_fn(const std::string &vel, const std::string &fn);
+} // namespace
+
+nlohmann::json Inspector::bytecode(const std::string &uri,
+                                   const std::string &function) {
     if (!docs_.has(uri))
         return {{"error", "documento no abierto"}};
-    const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
+    const std::string &text = docs_.text(uri);
+    // Sin funcion (panel del inspector): modulo entero, texto plano.
+    if (function.empty()) {
+        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        return {{"text", an.result.vel_text}};
+    }
+
+    // Por-funcion (hover): vista correlada linea .vex -> bytecode generado,
+    // igual estilo que JIT/AOT.  Recompilamos con emit_debug para tener los
+    // marcadores `// @line N` y atribuir cada instruccion .vel a su linea.
+    // Cache por (uri, hash, fn) -- recompilar es barato pero no en cada frame.
+    const uint64_t hsh = fnv1a_hash(text);
+    const std::string key =
+        uri + "|" + std::to_string(hsh) + "|bc-gb:" + function;
+    auto it = view_cache_.find(key);
+    if (it != view_cache_.end())
+        return nlohmann::json::parse(it->second);
+
+    vex::CompileOptions opts;
+    opts.module_name = "main";
+    opts.emit_debug = true;         // emite `// @line N` en el .vel
+    opts.emit_comptime_fns = true;  // incluir comptime fns (inspeccion)
+    vex::CompileResult res = vex::compile_vex_source(text, uri, opts);
+    const std::string block = vel_extract_fn(res.vel_text, function);
+
+    // Parsear el bloque: cada `// @line N` fija la linea actual; cada
+    // instruccion la hereda; las etiquetas van con linea 0 (contexto).
+    nlohmann::json asm_lines = nlohmann::json::array();
+    int cur_line = 0;
+    for (const auto &raw : ir_split_lines(block)) {
+        size_t s = raw.find_first_not_of(" \t");
+        if (s == std::string::npos)
+            continue; // linea en blanco
+        std::string t = raw.substr(s);
+        if (t.rfind("// @line ", 0) == 0) {
+            cur_line = std::atoi(t.c_str() + 9);
+            continue;
+        }
+        if (t.rfind("//", 0) == 0)
+            continue; // otros comentarios (parametros, etc.)
+        const bool is_label =
+            (raw[0] != ' ' && raw[0] != '\t' && !t.empty() && t.back() == ':');
+        nlohmann::json ji;
+        ji["addr"] = ""; // el bytecode no tiene offset de byte como el x86
+        ji["text"] = t;
+        ji["line"] = is_label ? 0 : cur_line;
+        asm_lines.push_back(std::move(ji));
+    }
+
+    // Post-pase: las etiquetas (line 0) heredan la linea del bloque que
+    // encabezan -- forward-fill desde la siguiente instruccion con linea>0,
+    // o backward desde la previa.  Asi `factorial_ret:` cae en el bloque del
+    // `return` en vez de la inexistente "linea 0".
+    {
+        int n = static_cast<int>(asm_lines.size());
+        for (int i = 0; i < n; ++i) {
+            if (asm_lines[i]["line"].get<int>() != 0)
+                continue;
+            int fill = 0;
+            for (int j = i + 1; j < n; ++j) {
+                int lj = asm_lines[j]["line"].get<int>();
+                if (lj != 0) { fill = lj; break; }
+            }
+            if (fill == 0) // no hay siguiente; usar la previa
+                for (int j = i - 1; j >= 0; --j) {
+                    int lj = asm_lines[j]["line"].get<int>();
+                    if (lj != 0) { fill = lj; break; }
+                }
+            if (fill != 0)
+                asm_lines[i]["line"] = fill;
+        }
+    }
+
+    // Fuente de la funcion (mismo rango que JIT/AOT) + args (VM ABI: R1..R12).
+    nlohmann::json src = nlohmann::json::array();
+    nlohmann::json args = nlohmann::json::array();
+    ir::IrModule mod;
+    if (parse_post_opt_module(res, mod)) {
+        const ir::IrFunction *fn = pick_function(mod, function);
+        if (fn) {
+            src = function_source_lines(text, *fn);
+            args = function_args(
+                *fn, {"R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
+                      "R10", "R11", "R12"});
+        }
+    }
+
     nlohmann::json out;
-    out["text"] = an.result.vel_text;
+    out["text"] = block;
+    out["function"] = function;
+    out["asm_lines"] = std::move(asm_lines);
+    out["source"] = std::move(src);
+    out["args"] = std::move(args);
+    view_cache_[key] = out.dump();
     return out;
 }
 
@@ -274,6 +538,190 @@ nlohmann::json Inspector::ir(const std::string &uri, const std::string &phase) {
     std::ostringstream oss;
     ir::ir_print(mod, oss);
     return {{"text", oss.str()}};
+}
+
+namespace {
+
+/// Parte @p s en lineas (sin el '\n').
+std::vector<std::string> ir_split_lines(const std::string &s) {
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i <= s.size()) {
+        size_t nl = s.find('\n', i);
+        if (nl == std::string::npos) {
+            if (i < s.size()) out.push_back(s.substr(i));
+            break;
+        }
+        out.push_back(s.substr(i, nl - i));
+        i = nl + 1;
+    }
+    return out;
+}
+
+/// Extrae el bloque @c @function <fn>( ... ) del dump @p dump (con sus
+/// @c @template_of/@type_args precedentes), hasta el siguiente @c @function o
+/// EOF.  Si no se encuentra (o fn vacio), devuelve el dump entero.
+std::string ir_extract_fn(const std::string &dump, const std::string &fn) {
+    if (fn.empty()) return dump;
+    std::vector<std::string> lines = ir_split_lines(dump);
+    const std::string want = "@function " + fn + "(";
+    int found = -1;
+    for (int i = 0; i < (int)lines.size(); ++i)
+        if (lines[i].rfind(want, 0) == 0) { found = i; break; }
+    if (found < 0) return dump;
+    int start = found;
+    while (start > 0 && (lines[start - 1].rfind("@template_of", 0) == 0 ||
+                         lines[start - 1].rfind("@type_args", 0) == 0))
+        --start;
+    int end = (int)lines.size();
+    for (int i = found + 1; i < (int)lines.size(); ++i)
+        if (lines[i].rfind("@function ", 0) == 0) { end = i; break; }
+    std::string out;
+    for (int i = start; i < end; ++i) {
+        out += lines[i];
+        out += "\n";
+    }
+    return out;
+}
+
+/// Extrae el bloque .vel (bytecode textual) de UNA funcion del volcado del
+/// modulo.  Las funciones se delimitan por una etiqueta a columna 0
+/// @c "<fn>:"; las etiquetas internas del cuerpo llevan el prefijo
+/// @c "<fn>_" (entry/while_header/ret/...).  El bloque va desde @c "<fn>:"
+/// hasta la siguiente etiqueta de nivel superior (una que NO empieza por
+/// @c "<fn>_").  Para funciones comptime el frontend emite @c "__macro_<fn>:",
+/// asi que probamos ambos nombres.  Si no se encuentra, devuelve el volcado
+/// entero (degrada con elegancia).
+std::string vel_extract_fn(const std::string &vel, const std::string &fn) {
+    if (fn.empty()) return vel;
+    std::vector<std::string> lines = ir_split_lines(vel);
+    // Helper: ¿la linea es una etiqueta a columna 0?  Devuelve el nombre
+    // (sin los dos puntos) o "" si no lo es.
+    auto label_of = [](const std::string &s) -> std::string {
+        if (s.empty() || s[0] == ' ' || s[0] == '\t') return "";
+        if (s.back() != ':') return "";
+        std::string id = s.substr(0, s.size() - 1);
+        for (char c : id)
+            if (!(std::isalnum((unsigned char)c) || c == '_' || c == '.'))
+                return "";
+        return id;
+    };
+    // Buscar la etiqueta de la funcion (nombre directo o __macro_<fn>).
+    std::string base;
+    int found = -1;
+    for (int i = 0; i < (int)lines.size(); ++i) {
+        std::string lab = label_of(lines[i]);
+        if (lab.empty()) continue;
+        if (lab == fn || lab == "__macro_" + fn) {
+            base = lab;
+            found = i;
+            break;
+        }
+    }
+    if (found < 0) return vel;
+    const std::string pfx = base + "_";
+    int end = (int)lines.size();
+    for (int i = found + 1; i < (int)lines.size(); ++i) {
+        std::string lab = label_of(lines[i]);
+        if (lab.empty()) continue;
+        // Etiqueta de nivel superior distinta (no es interna de esta fn).
+        if (lab != base && lab.rfind(pfx, 0) != 0) {
+            end = i;
+            break;
+        }
+    }
+    std::string out;
+    for (int i = found; i < end; ++i) {
+        out += lines[i];
+        out += "\n";
+    }
+    return out;
+}
+
+/// Una fila del diff alineado.  kind: "same" (l==r), "del" (solo l, eliminado),
+/// "add" (solo r, generado), "chg" (l->r, cambiado).
+struct DiffRow {
+    std::string kind;
+    std::string l, r;
+};
+
+/// Diff por lineas (LCS) que produce FILAS ALINEADAS.  Empareja una racha de
+/// eliminaciones seguida de una de adiciones en filas "chg" (cambiado), de modo
+/// que la version sin/optimizada queden lado a lado.  Capea el coste O(N*M).
+std::vector<DiffRow> ir_diff_rows(const std::string &a, const std::string &b) {
+    std::vector<std::string> A = ir_split_lines(a), B = ir_split_lines(b);
+    const int n = (int)A.size(), m = (int)B.size();
+    // Secuencia bruta de operaciones (same/del/add).
+    std::vector<DiffRow> ops;
+    if ((long long)n * m > 4000000LL) {
+        for (int i = 0; i < n; ++i) ops.push_back({"del", A[i], ""});
+        for (int j = 0; j < m; ++j) ops.push_back({"add", "", B[j]});
+    } else {
+        std::vector<std::vector<int>> L(n + 1, std::vector<int>(m + 1, 0));
+        for (int i = n - 1; i >= 0; --i)
+            for (int j = m - 1; j >= 0; --j)
+                L[i][j] = (A[i] == B[j])
+                              ? L[i + 1][j + 1] + 1
+                              : std::max(L[i + 1][j], L[i][j + 1]);
+        int i = 0, j = 0;
+        while (i < n && j < m) {
+            if (A[i] == B[j]) {
+                ops.push_back({"same", A[i], B[i >= 0 ? j : j]});
+                ops.back().r = B[j];
+                ++i; ++j;
+            } else if (L[i + 1][j] >= L[i][j + 1]) {
+                ops.push_back({"del", A[i], ""}); ++i;
+            } else {
+                ops.push_back({"add", "", B[j]}); ++j;
+            }
+        }
+        while (i < n) { ops.push_back({"del", A[i], ""}); ++i; }
+        while (j < m) { ops.push_back({"add", "", B[j]}); ++j; }
+    }
+    // Emparejar rachas del+add consecutivas en filas "chg".
+    std::vector<DiffRow> rows;
+    for (size_t k = 0; k < ops.size();) {
+        if (ops[k].kind == "del") {
+            size_t d0 = k;
+            while (k < ops.size() && ops[k].kind == "del") ++k;
+            size_t a0 = k;
+            while (k < ops.size() && ops[k].kind == "add") ++k;
+            size_t nd = a0 - d0, na = k - a0;
+            size_t paired = nd < na ? nd : na;
+            for (size_t p = 0; p < paired; ++p)
+                rows.push_back({"chg", ops[d0 + p].l, ops[a0 + p].r});
+            for (size_t p = paired; p < nd; ++p)
+                rows.push_back({"del", ops[d0 + p].l, ""});
+            for (size_t p = paired; p < na; ++p)
+                rows.push_back({"add", "", ops[a0 + p].r});
+        } else {
+            rows.push_back(ops[k]);
+            ++k;
+        }
+    }
+    return rows;
+}
+
+} // namespace
+
+nlohmann::json Inspector::ir_diff(const std::string &uri,
+                                  const std::string &function) {
+    nlohmann::json pre = ir(uri, "pre");
+    nlohmann::json post = ir(uri, "post");
+    if (pre.contains("error")) return pre;
+    if (post.contains("error")) return post;
+    const std::string pre_block =
+        ir_extract_fn(pre.value("text", std::string()), function);
+    const std::string post_block =
+        ir_extract_fn(post.value("text", std::string()), function);
+    std::vector<DiffRow> rows = ir_diff_rows(pre_block, post_block);
+    nlohmann::json jrows = nlohmann::json::array();
+    for (const auto &row : rows)
+        jrows.push_back({{"k", row.kind}, {"l", row.l}, {"r", row.r}});
+    nlohmann::json out;
+    out["rows"] = std::move(jrows);
+    out["function"] = function;
+    return out;
 }
 
 nlohmann::json Inspector::complexity(const std::string &uri) {
@@ -451,40 +899,79 @@ nlohmann::json Inspector::jit_asm(const std::string &uri,
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
     const ir::IrFunction *fn = pick_function(mod, function);
+    if (!fn && !function.empty()) {
+        // Fallback: la funcion puede ser @c comptime (no-macro), que el
+        // frontend elide del IR normal.  Recompilar incluyendola para
+        // poder inspeccionar su codegen.
+        vex::CompileOptions co;
+        co.module_name = "main";
+        co.emit_comptime_fns = true;
+        vex::CompileResult cr2 = vex::compile_vex_source(docs_.text(uri), uri, co);
+        ir::IrModule m2;
+        if (parse_post_opt_module(cr2, m2)) {
+            mod = std::move(m2);
+            fn = pick_function(mod, function);
+        }
+    }
     if (!fn) {
         if (!function.empty())
-            return {{"error", "funcion no encontrada: " + function}};
+            return {{"unsupported", true},
+                    {"reason",
+                     "'" + function +
+                         "' no esta en el IO de runtime: puede ser una funcion "
+                         "comptime recursiva (se evalua en compilacion; el "
+                         "resultado se calcula en el call site) o haber sido "
+                         "inlineada/eliminada por el optimizador"}};
         return {{"error", "el modulo no tiene funciones compilables"}};
     }
 
-    JitState *st = jit_state();
-    if (!st)
-        return {{"error", "no se pudo inicializar el subsistema JIT"}};
-
-    // Compilar la funcion aislada en convencion NATIVE_ABI (vista autonoma,
-    // sin depender de un ProcessVM en ejecucion).
-    jit::CompileResult cr =
-        st->compiler.compile(*fn, jit::SelectorMode::NATIVE_ABI);
-    if (!cr.fn || !cr.code_start) {
-        if (cr.unsupported)
-            return {{"unsupported", true},
-                    {"reason",
-                     "la funcion '" + fn->name +
-                         "' usa operaciones IR no soportadas por el selector "
-                         "JIT (v1: aritmetica/loops/llamadas basicas)"}};
-        return {{"error", "el JIT no produjo codigo para '" + fn->name + "'"}};
+    // Backend VREG moderno (linear-scan, el mismo que produccion), NO el
+    // selector de slots legacy: soporta recursion, llamadas, branches, etc.
+    // Para la VISTA usamos el codegen HOST_LEAF (misma seleccion de
+    // instrucciones + regalloc que el JIT real; solo difieren prologo y la
+    // ABI de las CALL).  Pedimos la tabla linea<->asm para la vista correlada.
+    std::vector<jit::NativeReloc> relocs;
+    std::vector<jit::LineMapEntry> line_map;
+    std::vector<uint8_t> bytes;
+    try {
+        bytes = jit::vreg_compile_native(
+            *fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
+            /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
+#if defined(_WIN32)
+            /*target_sysv=*/false,
+#else
+            /*target_sysv=*/true,
+#endif
+            /*mode32=*/false, jit::FloatIsa::SSE2,
+            /*emit_line_map=*/true, &line_map);
+    } catch (...) {
+        return {{"error", "el codegen JIT (vreg) lanzo una excepcion para '" +
+                              fn->name + "'"}};
     }
+    if (bytes.empty())
+        return {{"unsupported", true},
+                {"reason", "la funcion '" + fn->name +
+                               "' usa operaciones IR aun no soportadas por el "
+                               "backend vreg (float/strings/algunos builtins)"}};
 
-    // Desensamblar los bytes generados.  La base 0 da offsets relativos.
-    std::string text = disasm_x86_64(cr.code_start, cr.code_size, 0);
-    // Liberar el codigo: una vista no necesita conservarlo ejecutable.
-    st->compiler.invalidate(cr);
+    std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
+    nlohmann::json instrs =
+        disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map, relocs);
+    nlohmann::json src = function_source_lines(docs_.text(uri), *fn);
 
     nlohmann::json out;
     out["text"] = std::move(text);
     out["function"] = fn->name;
-    out["bytes"] = static_cast<uint64_t>(cr.code_size);
-    out["instructions"] = static_cast<uint64_t>(cr.instr_count);
+    out["bytes"] = static_cast<uint64_t>(bytes.size());
+    out["instructions"] = static_cast<uint64_t>(line_map.size());
+    out["asm_lines"] = std::move(instrs);
+    out["source"] = std::move(src);
+    out["args"] = function_args(*fn,
+#if defined(_WIN32)
+                                {"rcx", "rdx", "r8", "r9"});
+#else
+                                {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
+#endif
     return out;
 }
 
@@ -498,9 +985,29 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
 
     const ir::IrFunction *fn = pick_function(mod, function);
+    if (!fn && !function.empty()) {
+        // Fallback: la funcion puede ser @c comptime (no-macro), que el
+        // frontend elide del IR normal.  Recompilar incluyendola para
+        // poder inspeccionar su codegen.
+        vex::CompileOptions co;
+        co.module_name = "main";
+        co.emit_comptime_fns = true;
+        vex::CompileResult cr2 = vex::compile_vex_source(docs_.text(uri), uri, co);
+        ir::IrModule m2;
+        if (parse_post_opt_module(cr2, m2)) {
+            mod = std::move(m2);
+            fn = pick_function(mod, function);
+        }
+    }
     if (!fn) {
         if (!function.empty())
-            return {{"error", "funcion no encontrada: " + function}};
+            return {{"unsupported", true},
+                    {"reason",
+                     "'" + function +
+                         "' no esta en el IO de runtime: puede ser una funcion "
+                         "comptime recursiva (se evalua en compilacion; el "
+                         "resultado se calcula en el call site) o haber sido "
+                         "inlineada/eliminada por el optimizador"}};
         return {{"error", "el modulo no tiene funciones compilables"}};
     }
 
@@ -526,11 +1033,19 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     // aislada de UNA funcion (las CALL cross-funcion / datos quedan como
     // relocations sin resolver, que se reportan al cliente).
     std::vector<jit::NativeReloc> relocs;
+    std::vector<jit::LineMapEntry> line_map;
     std::vector<uint8_t> bytes;
     try {
-        bytes = jit::vreg_compile_native(*fn, /*resolve_call=*/{},
-                                         /*ent=*/{}, /*resolve_native=*/{},
-                                         /*resolve_symbol=*/{}, &relocs);
+        bytes = jit::vreg_compile_native(
+            *fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
+            /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
+#if defined(_WIN32)
+            /*target_sysv=*/false,
+#else
+            /*target_sysv=*/true,
+#endif
+            /*mode32=*/false, jit::FloatIsa::SSE2,
+            /*emit_line_map=*/true, &line_map);
     } catch (...) {
         return {{"error", "el codegen AOT lanzo una excepcion para '" +
                               fn->name + "'"}};
@@ -541,6 +1056,10 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
                                "' no esta soportada por el selector vreg AOT"}};
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0);
+    // Vista correlada (solo-LSP): asm por-instruccion + fuente de la funcion.
+    nlohmann::json instrs =
+        disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map, relocs);
+    nlohmann::json src = function_source_lines(docs_.text(uri), *fn);
 
     nlohmann::json jrelocs = nlohmann::json::array();
     for (const auto &r : relocs) {
@@ -556,7 +1075,17 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     out["text"] = std::move(text);
     out["function"] = fn->name;
     out["bytes"] = static_cast<uint64_t>(bytes.size());
+    out["instructions"] = static_cast<uint64_t>(line_map.size());
     out["relocs"] = std::move(jrelocs);
+    // Solo-LSP: correlacion fuente <-> asm para la vista godbolt.
+    out["asm_lines"] = std::move(instrs);
+    out["source"] = std::move(src);
+    out["args"] = function_args(*fn,
+#if defined(_WIN32)
+                                {"rcx", "rdx", "r8", "r9"});
+#else
+                                {"rdi", "rsi", "rdx", "rcx", "r8", "r9"});
+#endif
     return out;
 }
 

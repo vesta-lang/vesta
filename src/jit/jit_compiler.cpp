@@ -110,6 +110,8 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     // que aun no maneja (e.g. operaciones float especificas, ciertos
     // RAW_ASM no patterned).  En ese caso retornamos inmediatamente
     // dejando el flag visible para que el caller caiga al interprete.
+    // Solo-LSP: recordar si se pidio la tabla linea<->asm antes de mover opts.
+    const bool want_line_map = opts.emit_line_map;
     Selector sel(std::move(opts));
     MFunction mf = sel.select(ir_fn, &result.unsupported);
     if (result.unsupported) {
@@ -135,6 +137,12 @@ CompileResult JitCompiler::compile_with_opts(const ir::IrFunction &ir_fn,
     // count de IR instrs por uno: una IR op puede expandir a varias
     // MInstrs y el encoder a un numero variable de bytes.
     result.instr_count = enc.instr_count();
+
+    // Solo-LSP: el encoder ya poblo mf.line_map (si want_line_map).  La
+    // copiamos al resultado para que el inspector correlacione asm<->fuente.
+    if (want_line_map) {
+        result.line_map = std::move(mf.line_map);
+    }
 
     // ---------------------------------------------------------------
     // Fase 3: Code cache (publicacion en memoria ejecutable).
