@@ -228,6 +228,8 @@ VregEntries make_vreg_entries() {
     VregEntries e;
     if (g_runtime_entries) {
         e.callvirt = reinterpret_cast<uint64_t>(g_runtime_entries->callvirt);
+        e.callm = reinterpret_cast<uint64_t>(g_runtime_entries->callm);
+        e.callitf = reinterpret_cast<uint64_t>(g_runtime_entries->callitf);
         e.unwrap_throw =
             reinterpret_cast<uint64_t>(g_runtime_entries->unwrap_throw);
         e.proc_pid = reinterpret_cast<uint64_t>(g_runtime_entries->proc_pid);
