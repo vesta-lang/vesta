@@ -30,6 +30,12 @@ import "term";
 // ---------------------------------------------------------------------------
 @bits(16) @section(".boot", "rx") @at(0x000)
 asm boot16 {
+    // BPB FAT12: el boot empieza con `jmp short 0x3E; nop` + 59 bytes que
+    // run.py rellena con el BIOS Parameter Block (bytes/sector, FATs, root,
+    // etc.).  El codigo real arranca en 0x3E.  Asi la imagen es una FAT12
+    // valida (legible por mtools/mount) y el kernel monta la FAT desde el BPB.
+    db 0xEB, 0x3C, 0x90
+    times 0x3B db 0
     cli
     xor ax, ax
     mov ds, ax

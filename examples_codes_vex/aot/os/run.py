@@ -125,16 +125,50 @@ _IMG_SECTORS = 128        # tamano de la imagen (64 KiB); el boot lee 127
 _SECT = 512
 
 
+def _fat12_set(fat, cluster, value):
+    """Escribe la entrada de 12 bits del cluster en la tabla FAT (packed)."""
+    off = cluster + (cluster >> 1)  # cluster * 1.5
+    if cluster & 1:
+        fat[off] = (fat[off] & 0x0F) | ((value << 4) & 0xF0)
+        fat[off + 1] = (value >> 4) & 0xFF
+    else:
+        fat[off] = value & 0xFF
+        fat[off + 1] = (fat[off + 1] & 0xF0) | ((value >> 8) & 0x0F)
+
+
+def _fat_83_name(name):
+    """Convierte un nombre de comando a un campo 8.3 de 11 bytes (mayusculas,
+    padded con espacios).  'calc' -> 'CALC       '."""
+    base = name.upper().encode("ascii")[:8]
+    ext = b""
+    field = base + b" " * (8 - len(base)) + ext + b" " * (3 - len(ext))
+    return field  # 11 bytes
+
+
 def build_kernel_disk(build_dir):
-    """Ensambla la imagen de disco de VestaOS: kernel (sector 0..) +
-    directorio de programas (sector 96) + programas (sector 97+).  El kernel
-    carga la imagen completa como ramdisk y ejecuta los programas a peticion.
+    """Ensambla una imagen FAT12 real de VestaOS.
+
+    Layout (sectores de 512 B):
+      [0]                  boot sector (kernel + BPB FAT12 en offset 0x0B)
+      [1 .. R-1]           resto del kernel (en los sectores RESERVADOS)
+      [R .. R+F-1]         FAT #1
+      [R+F .. R+2F-1]      FAT #2
+      [..]                 root directory (16 entradas)
+      [data ..]            clusters de datos (programas como ficheros)
+
+    El boot carga la imagen completa como ramdisk a 0x7C00 (sector S ->
+    0x7C00 + S*512).  El kernel monta la FAT en RAM y carga los programas
+    siguiendo sus cadenas de cluster.  Es una FAT12 estandar: legible por
+    herramientas externas (mtools, mount -t vfat, etc.).
     """
     vm = find_vm(build_dir)
     out = os.path.join(HERE, "kernel.bin")
     # 1. Kernel (boot + drivers + shell + cargador), base 0x7C00.
     kbin = os.path.join(HERE, "_kernel_core.bin")
     build(vm, os.path.join(HERE, "kernel.vex"), kbin)
+    with open(kbin, "rb") as f:
+        kb = f.read()
+    os.remove(kbin)
     # 2. Programas, cada uno binario plano independiente (base 0x100000).
     prog_data = []
     for name, src in KERNEL_PROGRAMS:
@@ -146,36 +180,107 @@ def build_kernel_disk(build_dir):
         with open(pb, "rb") as f:
             prog_data.append((name, f.read()))
         os.remove(pb)
-    # 3. Ensamblar la imagen.
-    img = bytearray(_IMG_SECTORS * _SECT)
-    with open(kbin, "rb") as f:
-        kb = f.read()
-    os.remove(kbin)
-    if len(kb) > _DIR_SECTOR * _SECT:
-        sys.exit("error: el kernel (%d B) no cabe antes del directorio (sector %d)"
-                 % (len(kb), _DIR_SECTOR))
+
+    # 3. Parametros FAT12.
+    SPC = 1                       # sectores por cluster
+    NFATS = 2                     # numero de FATs (estandar)
+    ROOT_ENTS = 16               # entradas del directorio raiz
+    root_dir_sects = (ROOT_ENTS * 32 + _SECT - 1) // _SECT  # = 1
+    # Sectores reservados: boot (1) + el resto del kernel.  El kernel debe
+    # caber entero en la zona reservada (el boot lo carga por LBA).
+    reserved = (len(kb) + _SECT - 1) // _SECT
+    if reserved < 1:
+        reserved = 1
+    total = _IMG_SECTORS
+    # sectors_per_fat: cubrir las entradas de todos los clusters de datos.
+    # Iteramos porque spf depende del numero de clusters, que depende de spf.
+    spf = 1
+    for _ in range(8):
+        data_sects = total - reserved - NFATS * spf - root_dir_sects
+        clusters = data_sects // SPC + 2          # +2 (clusters 0,1 reservados)
+        need = (clusters * 3 + 1) // 2            # bytes FAT12 = clusters*1.5
+        new_spf = (need + _SECT - 1) // _SECT
+        if new_spf == spf:
+            break
+        spf = new_spf
+    fat_start = reserved
+    root_start = reserved + NFATS * spf
+    data_start = root_start + root_dir_sects
+    max_data_sects = total - data_start
+    if len(kb) > reserved * _SECT:
+        sys.exit("error: el kernel no cabe en los sectores reservados")
+
+    # 4. Construir la imagen.
+    img = bytearray(total * _SECT)
     img[0:len(kb)] = kb
-    cur = _DIR_SECTOR + 1
-    dir_off = _DIR_SECTOR * _SECT
+
+    # 4a. BPB FAT12 en el boot sector (offsets estandar).  El boot16 deja
+    # un hueco (jmp short + nop + 59 bytes) en 0x00..0x3D para esto.
+    img[0] = 0xEB                                 # jmp short
+    img[1] = 0x3C                                 # -> offset 0x3E
+    img[2] = 0x90                                 # nop
+    img[3:11] = b"VESTAOS "                      # OEM name (8)
+    struct.pack_into("<H", img, 0x0B, _SECT)      # bytes/sector
+    img[0x0D] = SPC                               # sectores/cluster
+    struct.pack_into("<H", img, 0x0E, reserved)   # sectores reservados
+    img[0x10] = NFATS                             # num FATs
+    struct.pack_into("<H", img, 0x11, ROOT_ENTS)  # entradas root dir
+    struct.pack_into("<H", img, 0x13, total)      # total sectores (16-bit)
+    img[0x15] = 0xF8                              # media descriptor (HD)
+    struct.pack_into("<H", img, 0x16, spf)        # sectores/FAT
+    struct.pack_into("<H", img, 0x18, 63)         # sectores/pista (geom dummy)
+    struct.pack_into("<H", img, 0x1A, 16)         # cabezas (geom dummy)
+    struct.pack_into("<I", img, 0x1C, 0)          # sectores ocultos
+    img[0x26] = 0x29                             # extended boot signature
+    struct.pack_into("<I", img, 0x27, 0x56455354)  # volume id
+    img[0x2B:0x36] = b"VESTAOS    "              # volume label (11)
+    img[0x36:0x3E] = b"FAT12   "                 # fs type (8)
+
+    # 4b. FAT: cluster 0 = media | 0xF00, cluster 1 = EOC.
+    fat = bytearray(spf * _SECT)
+    _fat12_set(fat, 0, 0xF00 | 0xF8)
+    _fat12_set(fat, 1, 0xFFF)
+
+    # 4c. Escribir programas como ficheros + entradas de root dir.
+    rootdir = bytearray(ROOT_ENTS * 32)
+    next_cluster = 2
+    rent = 0
     for name, data in prog_data:
-        nsect = (len(data) + _SECT - 1) // _SECT
-        if (cur + nsect) > _IMG_SECTORS - 1:
-            sys.exit("error: los programas no caben en la imagen")
-        img[cur * _SECT:cur * _SECT + len(data)] = data
-        # Entrada de directorio (32 bytes): nombre[20] + sector + size + pad.
+        nclust = max(1, (len(data) + _SECT * SPC - 1) // (_SECT * SPC))
+        if next_cluster - 2 + nclust > max_data_sects // SPC:
+            sys.exit("error: los programas no caben en la zona de datos FAT")
+        first = next_cluster
+        for k in range(nclust):
+            cl = next_cluster
+            sect = data_start + (cl - 2) * SPC
+            chunk = data[k * _SECT * SPC:(k + 1) * _SECT * SPC]
+            img[sect * _SECT:sect * _SECT + len(chunk)] = chunk
+            nxt = 0xFFF if k == nclust - 1 else (cl + 1)
+            _fat12_set(fat, cl, nxt)
+            next_cluster += 1
+        # Entrada de root dir (32 bytes): 8.3 name + attr + first cluster + size.
         ent = bytearray(32)
-        nb = name.encode("ascii")[:19]
-        ent[0:len(nb)] = nb
-        ent[20:24] = struct.pack("<I", cur)
-        ent[24:28] = struct.pack("<I", len(data))
-        img[dir_off:dir_off + 32] = ent
-        dir_off += 32
-        print("[dir] %-8s sector=%d bytes=%d" % (name, cur, len(data)))
-        cur += nsect
+        ent[0:11] = _fat_83_name(name)
+        ent[11] = 0x20                            # attr = archive
+        struct.pack_into("<H", ent, 0x1A, first)  # primer cluster (low)
+        struct.pack_into("<I", ent, 0x1C, len(data))  # tamano del fichero
+        rootdir[rent * 32:(rent + 1) * 32] = ent
+        rent += 1
+        print("[fat] %-8s cluster=%d clusters=%d bytes=%d"
+              % (name, first, nclust, len(data)))
+
+    # 4d. Volcar FAT (x NFATS) y root dir a la imagen.
+    for fi in range(NFATS):
+        s = (fat_start + fi * spf) * _SECT
+        img[s:s + len(fat)] = fat
+    rs = root_start * _SECT
+    img[rs:rs + len(rootdir)] = rootdir
+
     with open(out, "wb") as f:
         f.write(img)
-    print("[disk] %s (%d KiB, %d programa(s))"
-          % (out, _IMG_SECTORS * _SECT // 1024, len(prog_data)))
+    print("[disk] %s FAT12 (%d KiB) reserved=%d fat=@%d(x%d,%d sect) root=@%d data=@%d"
+          % (out, total * _SECT // 1024, reserved, fat_start, NFATS, spf,
+             root_start, data_start))
     return out
 
 
