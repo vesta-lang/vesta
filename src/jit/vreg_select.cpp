@@ -3372,9 +3372,61 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                     addr = resolve_call(in.func_name);
                 } else {
-                    /* kind 0 (SRET dynamic) -> fallback (call dinamico). */
-                    vreg_dbg(fn.name.c_str(), "smartptr_free(kind0)");
-                    return false;
+                    /* kind 0 (SRET_DISPATCH): deleter DINAMICO en
+                     * operands[1] (cargado del slot+8 en runtime).
+                     *   if (ptr == 0) skip;            // moved
+                     *   regs[1]=ptr; regs[15]=1;
+                     *   if (deleter == 0) raw_free(ptr);
+                     *   else vrt_call_bc_function(proc, deleter);  // VM call
+                     * Retira de slots los unique<T> con deleter dinamico. */
+                    if (!vm || in.operands.size() < 2 ||
+                        ent.call_bc_function == 0 || ent.raw_free == 0) {
+                        vreg_dbg(fn.name.c_str(), "smartptr_free(kind0-no-entry)");
+                        return false;
+                    }
+                    const ir::IrValueId deleter = in.operands[1];
+                    const MLabelId Lsp_done = out.new_label();
+                    const MLabelId Lsp_raw = out.new_label();
+#if defined(_WIN32)
+                    const MReg sp_pr = MReg::RCX, sp_a1 = MReg::RDX;
+#else
+                    const MReg sp_pr = MReg::RDI, sp_a1 = MReg::RSI;
+#endif
+                    O.push_back(mk_test(ptr, ptr));
+                    O.push_back(MInstr::make_jcc(MCond::E, Lsp_done));
+                    /* stage args del deleter: regs[1]=ptr, regs[15]=1. */
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, vm_reg_mem(1), vr(ptr)));
+                    O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(15),
+                                                   MOperand::make_imm32(1)));
+                    O.push_back(mk_test(deleter, deleter));
+                    O.push_back(MInstr::make_jcc(MCond::E, Lsp_raw));
+                    /* vrt_call_bc_function(proc, deleter).  R10 temporal. */
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(deleter)));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(sp_a1, 8),
+                        MOperand::make_reg(MReg::R10, 8)));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(sp_pr, 8),
+                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(MInstr::make_call_abs(
+                        out.intern_imm64(ent.call_bc_function)));
+                    O.push_back(MInstr::make_jmp(Lsp_done));
+                    /* default: raw_free(proc, ptr). */
+                    O.push_back(MInstr::make_label_def(Lsp_raw));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(ptr)));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(sp_a1, 8),
+                        MOperand::make_reg(MReg::R10, 8)));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(sp_pr, 8),
+                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(
+                        MInstr::make_call_abs(out.intern_imm64(ent.raw_free)));
+                    O.push_back(MInstr::make_label_def(Lsp_done));
+                    break;
                 }
                 if (addr == 0) {
                     vreg_dbg(fn.name.c_str(), "smartptr_free-unresolved");
