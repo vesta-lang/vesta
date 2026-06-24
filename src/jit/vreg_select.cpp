@@ -429,18 +429,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         const char *v = std::getenv("VESTA_VREG_NO_SPLIT");
         return v && v[0] != '\0' && v[0] != '0';
     }();
-    /* El split se aplica en el path AOT (HOST_LEAF), donde es el bloqueante
-     * real (un `if(c){n=v}` con PHI en el merge no compilaba) y el codegen es
-     * el ABI nativo del target sin traduccion vm_mem -> seguro (validado por
-     * ejecucion).  En VM_ABI (JIT en proceso) se MANTIENE el comportamiento
-     * previo (rechazo de la arista critica -> fallback al selector de slots):
-     * habilitar vreg en VM_ABI para estas funciones destapa un bug LATENTE,
-     * INDEPENDIENTE del split, del paso de punteros a ALLOCA de la VM-stack
-     * entre funciones vreg (reproducible sin el split); ese fix es de otro
-     * sprint.  Asi el JIT no regresiona (las funciones que antes caian a
-     * slots siguen cayendo) y el AOT gana las aristas criticas. */
-    if (!no_split && abi == AbiKind::HOST_LEAF &&
-        has_critical_edge_to_phi(fn_in)) {
+    /* El split se aplica en AMBOS paths (AOT HOST_LEAF y JIT VM_ABI).  Un
+     * `if(c){n=v}` con PHI en el merge es el bloqueante real: sin el split
+     * estas funciones caian al selector de slots (legacy, con los bugs
+     * B-JIT-1).  El "bug latente" que antes desaconsejaba el split en VM_ABI
+     * (vreg=valor-basura en 33_optional_result_builtin) NO era del split ni
+     * del paso de punteros a ALLOCA entre funciones vreg: era el MIX
+     * vreg-caller (frame host) + callee-en-SLOTS (direccionamiento VM) para
+     * el mismo ALLOCA.  Al hacer que UNWRAP compile por vreg en VM_ABI
+     * (vrt_unwrap_throw), el callee deja de caer a slots -> caller y callee
+     * coinciden en direccionamiento -> correcto.  Validado: diff_harness
+     * vreg==interp en todo el corpus.  Esto retira slots de ~27 funciones
+     * con control de flujo + PHI (el mayor causante de fallback). */
+    if (!no_split && has_critical_edge_to_phi(fn_in)) {
         fn_storage = fn_in;
         split_critical_edges(fn_storage);
         fn_ptr = &fn_storage;
@@ -1285,16 +1286,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "unwrap-shape");
                     return false;
                 }
-                if (abi != AbiKind::HOST_LEAF) {
-                    vreg_dbg(fn.name.c_str(), "unwrap-vm-abi");
-                    return false; // VM_ABI (JIT): cae a interp
-                }
                 const ir::IrValueId v = in.operands[0];
                 const MLabelId Lok = out.new_label();
                 O.push_back(mk_test(v, v));
                 O.push_back(MInstr::make_jcc(MCond::NE, Lok));
-                O.push_back(MInstr::make_call_sym(
-                    out.intern_reloc_symbol("__vex_panic_null")));
+                if (abi == AbiKind::HOST_LEAF) {
+                    /* AOT: hook __vex_panic_null (sin args; default bare-lib,
+                     * redefinible -- freestanding lo provee el usuario). */
+                    O.push_back(MInstr::make_call_sym(
+                        out.intern_reloc_symbol("__vex_panic_null")));
+                } else {
+                    /* VM_ABI (JIT): camino frio llama vrt_unwrap_throw(proc)
+                     * -> mismo FatalError capturable que el bytecode UNWRAP.
+                     * proc vive en RBX.  Sin el fallback a slots, dec_or y
+                     * cia compilan por vreg (consistencia de direccionamiento
+                     * con sus callers -> retira slots). */
+                    if (ent.unwrap_throw == 0) {
+                        vreg_dbg(fn.name.c_str(), "unwrap-no-entry");
+                        return false;
+                    }
+#if defined(_WIN32)
+                    const MReg ca0 = MReg::RCX;
+#else
+                    const MReg ca0 = MReg::RDI;
+#endif
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(ca0, 8),
+                        MOperand::make_reg(MReg::RBX, 8)));
+                    O.push_back(MInstr::make_call_abs(
+                        out.intern_imm64(ent.unwrap_throw)));
+                }
                 O.push_back(MInstr::make_label_def(Lok));
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vr(in.dst), vr(v)));

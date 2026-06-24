@@ -80,6 +80,7 @@ struct RuntimeEntries {
 
     /* ----- Excepciones ----- */
     void (*throw_fatal)(vrt_proc *, uint32_t, const char *) = nullptr;
+    void (*unwrap_throw)(vrt_proc *) = nullptr; ///< UNWRAP null (1-arg)
     void (*tryenter)(vrt_proc *, uint64_t, vrt_class *) = nullptr;
     void (*tryleave)(vrt_proc *) = nullptr;
     /* Lanza una excepcion user-defined dado su GcHandle (i64).  Delega

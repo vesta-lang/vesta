@@ -209,6 +209,14 @@ void vrt_throw_fatal(vrt_proc *proc, uint32_t kind, const char *message) {
     runtime::throw_fatal(as_proc(proc), kind, message);
 }
 
+void vrt_unwrap_throw(vrt_proc *proc) {
+    if (!proc) return;
+    /* Mismo throw que exec_instr_unwrap (bytecode 0x26): FatalError
+     * capturable con FATAL_NULL_POINTER. */
+    runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
+                         "unwrap sobre Optional/Result/referencia null");
+}
+
 /* Forward decl: do_throw vive en exec_instruction_oop.cpp con C++ mangling.
  * NO debe estar en el extern "C" envolvente; usamos un alias que pueda ser
  * llamado desde las funciones C. */
