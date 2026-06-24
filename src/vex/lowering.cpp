@@ -21499,6 +21499,58 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             emit_def2(ir::IrOp::DEFFIELD, reload_cls(), b);
         }
 
+        // 3.6) INICIALIZAR los static fields con su valor por defecto.
+        // El DEFFIELD solo reserva el slot (zero).  Sin esto,
+        // `static i64 base = 40;` quedaba en 0 (bug general: el init del
+        // static nunca se aplicaba en VM/JIT).  Emitimos SETSTATIC con el
+        // literal constante.  (Solo constantes; un init no-constante de
+        // static es raro y queda como 0 -- mismo criterio que el AOT.)
+        for (const auto &fld : cd->fields) {
+            if (!fld.is_static || !fld.init) continue;
+            uint64_t s_off = 0;
+            bool s_ok = false;
+            for (const auto &lf : lay.static_fields)
+                if (lf.name == fld.name) {
+                    s_off = lf.offset;
+                    s_ok = true;
+                    break;
+                }
+            if (!s_ok) continue;
+            uint64_t cval = 0;
+            bool have = false;
+            const ast::Expr *ie = fld.init.get();
+            if (ie->kind == ast::NodeKind::IntLitExpr) {
+                cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                have = true;
+            } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                cval = static_cast<const ast::BoolLitExpr *>(ie)->value ? 1u : 0u;
+                have = true;
+            } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                have = true;
+            } else if (ie->kind == ast::NodeKind::UnaryExpr) {
+                auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                if (u->op == ast::UnOp::Neg && u->operand &&
+                    u->operand->kind == ast::NodeKind::IntLitExpr)
+                    cval = (uint64_t)(-(int64_t)static_cast<
+                               const ast::IntLitExpr *>(u->operand.get())
+                               ->value),
+                    have = true;
+            }
+            if (have) {
+                const ir::IrValueId vc = reload_cls();
+                const ir::IrValueId vv = emit_const64(cval);
+                ir::IrInstr ss{};
+                ss.op = ir::IrOp::SETSTATIC;
+                ss.type = ir::IrType::VOID;
+                ss.dst = ir::IR_NO_VALUE;
+                ss.operands = {vc, vv};
+                ss.imm = s_off;
+                ss.source_line = ln;
+                fn.append(cur, std::move(ss));
+            }
+        }
+
         // Las interfaces no emiten defmethod (metodos abstractos sin code).
         if (cd->is_interface) continue;
 
