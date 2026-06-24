@@ -1406,6 +1406,250 @@ bool ir_pass_promote_closure_env(IrFunction &fn) {
 }
 
 //==============================================================================
+//  ir_pass_own_closure_envs (opcion 1: heap + RAII para escapes cross-function)
+//==============================================================================
+//
+// Ver doc en el header.  Corre tras inline+promote (solo ve envs RAW_ALLOC
+// etiquetados "__closure_env" que sobrevivieron = escapes reales).  Resuelve
+// el dueno terminal de cada closure e inserta el RAW_FREE; revierte a
+// GC_ALLOC (-> rechazo en bare) lo que no tenga dueno limpio.  Conservador.
+
+namespace {
+
+/* Una closure que se retorna va por SRET: el buffer de 16 bytes {fn,env} es el
+ * PRIMER param de la funcion productora (su __retbuf), y cada call site pasa el
+ * buffer como operands[0].  Un "forward" (threading del SRET) es una CALL cuyo
+ * buffer es el propio __retbuf del caller.  El DUENO terminal es quien ALOCA el
+ * buffer (ALLOCA 16) y lo pasa a la productora sin reenviarlo ni dejarlo
+ * escapar; ahi va el RAW_FREE de [buffer+8]. */
+
+/* buf es un DUENO LIMPIO en C: C single-block, buf es una ALLOCA local (no el
+ * __retbuf de C), y sus unicos usos son: arg0 de la CALL constructora a
+ * `yname`, LOAD(buf) [fn_addr] y ADD(buf,const) [dir del env].  Cualquier otro
+ * uso (STORE, otro arg de CALL, RET, PHI, func_ptr) -> no limpio. */
+bool ic_clean_owner_buf(const IrFunction &C, IrValueId buf,
+                        const std::string &yname) {
+    if (buf == IR_NO_VALUE) return false;
+    if (C.blocks.size() != 1) return false; /* dominancia trivial */
+    if (!C.params.empty() && C.params[0] == buf) return false; /* es retbuf */
+    bool is_alloca = false;
+    for (const auto &in : C.blocks[0].instrs)
+        if (in.dst == buf && in.op == IrOp::ALLOCA) is_alloca = true;
+    if (!is_alloca) return false;
+    for (const auto &in : C.blocks[0].instrs) {
+        bool as_ctor = (in.op == IrOp::CALL && in.func_name == yname &&
+                        !in.operands.empty() && in.operands[0] == buf);
+        bool as_load = (in.op == IrOp::LOAD && !in.operands.empty() &&
+                        in.operands[0] == buf);
+        bool as_addr = (in.op == IrOp::ADD && in.operands.size() == 2 &&
+                        in.operands[0] == buf);
+        for (size_t k = 0; k < in.operands.size(); ++k) {
+            if (in.operands[k] != buf) continue;
+            if (as_ctor && k == 0) continue;
+            if (as_load && k == 0) continue;
+            if (as_addr && k == 0) continue;
+            return false; /* uso no reconocido -> escape/alias */
+        }
+        if (in.func_ptr == buf) return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool ir_pass_own_closure_envs(IrModule &mod) {
+    std::unordered_map<std::string, size_t> name_to_idx;
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        name_to_idx[mod.functions[i].name] = i;
+
+    /* 1. yielders: funciones que CREAN un env etiquetado o que REENVIAN el
+     *    resultado de una CALL a otra yielder.  Fixpoint. */
+    const size_t NF = mod.functions.size();
+    std::vector<bool> creates_env(NF, false), yielder(NF, false);
+    for (size_t i = 0; i < NF; ++i) {
+        for (const auto &bb : mod.functions[i].blocks)
+            for (const auto &in : bb.instrs)
+                if (in.op == IrOp::RAW_ALLOC && in.func_name == "__closure_env")
+                    creates_env[i] = true;
+        if (creates_env[i]) yielder[i] = true;
+    }
+    bool grew = true;
+    while (grew) {
+        grew = false;
+        for (size_t i = 0; i < NF; ++i) {
+            if (yielder[i]) continue;
+            const IrFunction &F = mod.functions[i];
+            if (F.params.empty()) continue; /* sin __retbuf no reenvia SRET */
+            const IrValueId retbuf = F.params[0];
+            for (const auto &bb : F.blocks)
+                for (const auto &c : bb.instrs) {
+                    /* forward SRET: CALL a yielder pasando el propio retbuf. */
+                    if (c.op != IrOp::CALL || c.operands.empty() ||
+                        c.operands[0] != retbuf)
+                        continue;
+                    auto it = name_to_idx.find(c.func_name);
+                    if (it != name_to_idx.end() && yielder[it->second]) {
+                        yielder[i] = true;
+                        grew = true;
+                    }
+                }
+        }
+    }
+
+    /* 2. ownable[F] (solo yielders): cada call-site que provee buffer es un
+     *    forward-a-ownable o un dueno-limpio.  Fixpoint (true -> false). */
+    std::vector<bool> ownable(NF, true);
+    grew = true;
+    while (grew) {
+        grew = false;
+        for (size_t fy = 0; fy < NF; ++fy) {
+            if (!yielder[fy] || !ownable[fy]) continue;
+            const std::string &yname = mod.functions[fy].name;
+            bool ok = true;
+            for (size_t ci = 0; ci < NF && ok; ++ci) {
+                const IrFunction &C = mod.functions[ci];
+                const IrValueId cret =
+                    C.params.empty() ? IR_NO_VALUE : C.params[0];
+                for (const auto &bb : C.blocks) {
+                    for (const auto &in : bb.instrs) {
+                        if (in.op != IrOp::CALL || in.func_name != yname ||
+                            in.operands.empty())
+                            continue;
+                        const IrValueId buf = in.operands[0];
+                        if (buf != IR_NO_VALUE && buf == cret) {
+                            /* forward: el caller (yielder) debe ser ownable. */
+                            if (!yielder[ci] || !ownable[ci]) ok = false;
+                        } else if (!ic_clean_owner_buf(C, buf, yname)) {
+                            ok = false; /* ni forward ni dueno limpio */
+                        }
+                        if (!ok) break;
+                    }
+                    if (!ok) break;
+                }
+            }
+            if (!ok) { ownable[fy] = false; grew = true; }
+        }
+    }
+
+    bool changed = false;
+
+    /* 3. Revertir envs de yielders NO-ownable a GC_ALLOC (-> rechazo bare). */
+    for (size_t i = 0; i < NF; ++i) {
+        if (!creates_env[i] || ownable[i]) continue;
+        for (auto &bb : mod.functions[i].blocks)
+            for (auto &in : bb.instrs)
+                if (in.op == IrOp::RAW_ALLOC &&
+                    in.func_name == "__closure_env") {
+                    in.op = IrOp::GC_ALLOC;
+                    in.func_name.clear();
+                    changed = true;
+                }
+    }
+
+    /* 4. Para yielders ownable: quitar el tag (RAW_ALLOC normal) e insertar el
+     *    RAW_FREE en cada dueno terminal (call-site no-forward + limpio). */
+    for (size_t i = 0; i < NF; ++i) {
+        if (!creates_env[i] || !ownable[i]) continue;
+        for (auto &bb : mod.functions[i].blocks)
+            for (auto &in : bb.instrs)
+                if (in.op == IrOp::RAW_ALLOC &&
+                    in.func_name == "__closure_env") {
+                    in.func_name.clear();
+                    changed = true;
+                }
+    }
+    /* Insertar frees: recorrer todas las funciones; en cada CALL a una yielder
+     *   ownable cuyo resultado NO se reenvia y es dueno limpio, anadir
+     *   `ea=ADD(dst,8); ep=LOAD ea; RAW_FREE ep` antes de cada RET. */
+    for (size_t ci = 0; ci < NF; ++ci) {
+        IrFunction &C = mod.functions[ci];
+        if (C.blocks.size() != 1) continue; /* solo duenos single-block */
+        /* recolectar los dst a liberar (dueno limpio de yielder ownable). */
+        const IrValueId cret = C.params.empty() ? IR_NO_VALUE : C.params[0];
+        std::vector<IrValueId> to_free;
+        for (const auto &in : C.blocks[0].instrs) {
+            if (in.op != IrOp::CALL || in.operands.empty()) continue;
+            auto it = name_to_idx.find(in.func_name);
+            if (it == name_to_idx.end()) continue;
+            const size_t fy = it->second;
+            if (!yielder[fy] || !ownable[fy]) continue;
+            const IrValueId buf = in.operands[0];
+            if (buf != IR_NO_VALUE && buf == cret) continue; /* forward */
+            if (!ic_clean_owner_buf(C, buf, in.func_name)) continue;
+            to_free.push_back(buf);
+        }
+        if (to_free.empty()) continue;
+
+        /* reconstruir el bloque insertando los frees antes de cada RET. */
+        std::vector<IrInstr> out;
+        out.reserve(C.blocks[0].instrs.size() + to_free.size() * 3);
+        for (auto &in : C.blocks[0].instrs) {
+            if (in.op == IrOp::RET) {
+                for (IrValueId dst : to_free) {
+                    /* ea = dst + 8 (host). */
+                    IrValueId c8 = static_cast<IrValueId>(C.values.size());
+                    {
+                        IrValue v{};
+                        v.id = c8;
+                        v.type = IrType::I64;
+                        v.name = "%cef_off" + std::to_string(c8);
+                        v.is_const = true;
+                        v.const_val = 8;
+                        C.values.push_back(v);
+                    }
+                    IrValueId ea = static_cast<IrValueId>(C.values.size());
+                    {
+                        IrValue v{};
+                        v.id = ea;
+                        v.type = IrType::PTR;
+                        v.name = "%cef_ea" + std::to_string(ea);
+                        v.is_host_ptr = true;
+                        C.values.push_back(v);
+                    }
+                    IrValueId ep = static_cast<IrValueId>(C.values.size());
+                    {
+                        IrValue v{};
+                        v.id = ep;
+                        v.type = IrType::PTR;
+                        v.name = "%cef_ep" + std::to_string(ep);
+                        v.is_host_ptr = true;
+                        C.values.push_back(v);
+                    }
+                    IrInstr k8{};
+                    k8.op = IrOp::CONST;
+                    k8.type = IrType::I64;
+                    k8.dst = c8;
+                    k8.imm = 8;
+                    out.push_back(std::move(k8));
+                    IrInstr ad{};
+                    ad.op = IrOp::ADD;
+                    ad.type = IrType::I64;
+                    ad.dst = ea;
+                    ad.operands = {dst, c8};
+                    out.push_back(std::move(ad));
+                    IrInstr ld{};
+                    ld.op = IrOp::LOAD;
+                    ld.type = IrType::I64;
+                    ld.dst = ep;
+                    ld.operands = {ea};
+                    out.push_back(std::move(ld));
+                    IrInstr rf{};
+                    rf.op = IrOp::RAW_FREE;
+                    rf.type = IrType::VOID;
+                    rf.operands = {ep};
+                    out.push_back(std::move(rf));
+                }
+                changed = true;
+            }
+            out.push_back(std::move(in));
+        }
+        C.blocks[0].instrs = std::move(out);
+    }
+
+    return changed;
+}
+
+//==============================================================================
 //  Phase C2.13: Escape Analysis + Scalar Replacement de objetos GC
 //
 //  Detecta objetos `new X(...)` (emitidos como `call @__new_X(args)`) que NO

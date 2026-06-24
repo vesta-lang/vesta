@@ -217,6 +217,29 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn);
 bool ir_pass_promote_closure_env(IrFunction &fn);
 
 /**
+ * @brief Inserta el RAW_FREE del env de una closure que escapa cross-function
+ *        (opcion 1: heap + RAII determinista), solo AOT/bare (native_poo).
+ *
+ * Corre a NIVEL MODULO tras inline+promote (asi solo ve los envs que
+ * sobrevivieron como RAW_ALLOC etiquetado "__closure_env" -- escapes
+ * cross-function reales; los no-escapantes ya estan en stack via promote).
+ *
+ * Para cada funcion "yielder" (crea un env que escapa via RET, o reenvia el
+ * resultado de otra yielder), busca el DUENO terminal: el consumidor que liga
+ * el resultado a un local que NO se reenvia ni se deja escapar.  En ese dueno
+ * inserta `ep = LOAD [closure+8]; RAW_FREE ep` en cada RET (RAW_FREE(0) es
+ * no-op -> seguro para closures sin capturas).  Si TODA la cadena tiene dueno
+ * limpio, conserva el RAW_ALLOC (bare-compatible) y le quita el tag.  Si algun
+ * env no tiene dueno limpio, REVIERTE su RAW_ALLOC a GC_ALLOC -> aot_analyze
+ * lo rechaza limpio (REGLA: nunca leak).  Conservador: ante cualquier duda,
+ * revierte (rechazo) en vez de arriesgar un leak/UAF.
+ *
+ * @param mod Modulo a transformar in-place.
+ * @return true si inserto algun free o revirtio algun alloc.
+ */
+bool ir_pass_own_closure_envs(IrModule &mod);
+
+/**
  * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
  *
  * Analiza los `call @__new_X(...)` de @p fn y determina cuales NO escapan
