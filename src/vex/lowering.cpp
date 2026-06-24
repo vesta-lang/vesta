@@ -8053,7 +8053,12 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         const ir::IrValueId v_size = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(N * 8), e->loc.line);
         ir::IrInstr ins{};
-        ins.op = ir::IrOp::GC_ALLOC;
+        // AOT bare (native_poo_): el env escapante va a HEAP via RAW_ALLOC
+        // (-> malloc / @AllocatorOverride), no GC_ALLOC (no hay GC en bare).
+        // La liberacion se hace via RAII (cleanup del valor closure) -- ver
+        // el cleanup que registra el caller del lambda; si la closure escapa
+        // mas alla, el dueno final la libera.  VM/JIT siguen con GC_ALLOC.
+        ins.op = native_poo_ ? ir::IrOp::RAW_ALLOC : ir::IrOp::GC_ALLOC;
         ins.type = ir::IrType::PTR;
         ins.dst = env_addr;
         ins.operands = {v_size};
