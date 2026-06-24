@@ -92,3 +92,6 @@ void __vex_print_char(unsigned long long cp) {
 void __vex_print_cstr(const char *s) {
     if (s) fputs(s, stdout);
 }
+
+/** @brief Vacia el buffer de stdout (flush). */
+void __vex_flush(void) { fflush(stdout); }

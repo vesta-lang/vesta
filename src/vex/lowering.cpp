@@ -16181,6 +16181,18 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        if (native_poo_) {
+            out_mod_->register_native_import("vex_bare_io", "__vex_flush");
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "vex_bare_io:__vex_flush";
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         out_mod_->register_native_import(lib, "vio_flush");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
@@ -16221,6 +16233,37 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64, e->loc.line,
                            /*is_explicit=*/true);
+        // AOT/bare: rutear a los formateadores nativos __vex_print_* (sin
+        // proc).  float/color/gchandle se difieren con warning.
+        if (native_poo_) {
+            std::string nf;
+            if (is_print_uint) nf = "__vex_print_u64";
+            else if (is_print_hex) nf = "__vex_print_hex";
+            else if (is_print_bool) nf = "__vex_print_bool";
+            else if (is_print_char) nf = "__vex_print_char";
+            else if (is_print_bin) nf = "__vex_print_bin";
+            else if (is_print_oct) nf = "__vex_print_oct";
+            else if (is_print_ptr) nf = "__vex_print_ptr";
+            else if (is_print_cstr) nf = "__vex_print_cstr";
+            if (nf.empty()) {
+                diags_.warning(e->loc, std::string("'") + name +
+                                           "' en AOT nativo aun no soportado; "
+                                           "se omite");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            out_mod_->register_native_import("vex_bare_io", nf);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "vex_bare_io:" + nf;
+            ins.operands = {v};
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         std::string func;
         if (is_print_uint)
             func = "vio_print_uint";
@@ -16306,12 +16349,16 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // Forzar i64 para coincidir con la firma C de vio_print_int.
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64,
                            e->loc.line);
-        out_mod_->register_native_import(lib, "vio_print_int");
+        const std::string pint_lib =
+            native_poo_ ? std::string("vex_bare_io") : lib;
+        const std::string pint_sym =
+            native_poo_ ? "__vex_print_i64" : "vio_print_int";
+        out_mod_->register_native_import(pint_lib, pint_sym);
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":vio_print_int";
+        ins.func_name = pint_lib + ":" + pint_sym;
         ins.operands = {v};
         ins.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ins));
