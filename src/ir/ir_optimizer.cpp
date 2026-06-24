@@ -6863,6 +6863,89 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
 //  via guard-chain de K candidatos + fallback al dispatch original.
 // =========================================================================
 
+// Reordena los bloques de la funcion a Reverse Post-Order (RPO) desde el
+// entry (bloque 0), siguiendo los sucesores derivados de los terminadores.
+// Necesario tras la cirugia de spec_devirt: esta crea bloques (guards/fast/
+// fallback/merge) en orden de procesamiento de los sites (un unordered_map,
+// no determinista), dejando el array de bloques en orden NO topologico.  El
+// emisor de bytecode + su regalloc/liveness asumen orden ~control-flow (p.ej.
+// el fall-through a `bid+1` y la liveness lineal), por lo que un orden mezclado
+// producia codigo incorrecto (resultados que aliasaban entre sites) y no
+// determinista.  RPO da el orden canonico y deterministico (independiente del
+// orden de iteracion del map).  El path JIT/vreg ya lo toleraba; esto arregla
+// el interprete.
+static void reorder_blocks_rpo(IrFunction &fn) {
+    const size_t N = fn.blocks.size();
+    if (N <= 1) return;
+    auto succs_of = [&](size_t b, std::vector<IrBlockId> &out) {
+        out.clear();
+        if (fn.blocks[b].instrs.empty()) return;
+        const IrInstr &t = fn.blocks[b].instrs.back();
+        if (t.op == IrOp::BR) {
+            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
+        } else if (t.op == IrOp::BR_COND) {
+            if (t.target_block != IR_NO_BLOCK) out.push_back(t.target_block);
+            if (t.false_block != IR_NO_BLOCK) out.push_back(t.false_block);
+        }
+    };
+    std::vector<std::vector<IrBlockId>> sc(N);
+    for (size_t b = 0; b < N; ++b) succs_of(b, sc[b]);
+    std::vector<int> state(N, 0); // 0=sin visitar, 1=en pila, 2=hecho
+    std::vector<IrBlockId> post;
+    post.reserve(N);
+    std::vector<std::pair<size_t, size_t>> stk; // (bloque, indice de sucesor)
+    stk.push_back({0, 0});
+    state[0] = 1;
+    while (!stk.empty()) {
+        auto &top = stk.back();
+        if (top.second < sc[top.first].size()) {
+            const IrBlockId s = sc[top.first][top.second++];
+            if (s < N && state[s] == 0) {
+                state[s] = 1;
+                stk.push_back({static_cast<size_t>(s), 0});
+            }
+        } else {
+            post.push_back(static_cast<IrBlockId>(top.first));
+            state[top.first] = 2;
+            stk.pop_back();
+        }
+    }
+    // Conservar bloques no alcanzables desde el entry (no deberia haber tras
+    // spec_devirt, pero por robustez) al final, en su orden original.
+    for (size_t b = 0; b < N; ++b)
+        if (state[b] != 2) post.push_back(static_cast<IrBlockId>(b));
+    // RPO = reverse(post).  remap[viejo] = nuevo indice.
+    std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
+    for (size_t i = 0; i < post.size(); ++i)
+        remap[post[post.size() - 1 - i]] = static_cast<IrBlockId>(i);
+    bool identity = true;
+    for (size_t b = 0; b < N; ++b)
+        if (remap[b] != static_cast<IrBlockId>(b)) {
+            identity = false;
+            break;
+        }
+    if (identity) return; // ya esta en RPO
+    std::vector<IrBlock> nb(N);
+    for (size_t b = 0; b < N; ++b) {
+        IrBlock bb = std::move(fn.blocks[b]);
+        bb.id = remap[b];
+        for (auto &p : bb.preds)
+            if (p < N) p = remap[p];
+        for (auto &s : bb.succs)
+            if (s < N) s = remap[s];
+        for (auto &ins : bb.instrs) {
+            if (ins.target_block != IR_NO_BLOCK && ins.target_block < N)
+                ins.target_block = remap[ins.target_block];
+            if (ins.false_block != IR_NO_BLOCK && ins.false_block < N)
+                ins.false_block = remap[ins.false_block];
+            for (auto &pa : ins.phi_args)
+                if (pa.block < N) pa.block = remap[pa.block];
+        }
+        nb[remap[b]] = std::move(bb);
+    }
+    fn.blocks = std::move(nb);
+}
+
 bool ir_pass_spec_devirt(IrFunction &fn) {
     if (fn.blocks.empty() || fn.spec_devirt_sites.empty()) return false;
     bool changed = false;
@@ -7073,6 +7156,12 @@ bool ir_pass_spec_devirt(IrFunction &fn) {
 
         changed = true;
     }
+
+    // Tras la cirugia, los bloques nuevos quedaron en orden NO topologico
+    // (orden de iteracion del unordered_map de sites).  Reordenar a RPO para
+    // que el emisor de bytecode + regalloc/liveness (sensibles al orden) y el
+    // fall-through emitan codigo correcto y DETERMINISTA.
+    if (changed) reorder_blocks_rpo(fn);
 
     return changed;
 }
