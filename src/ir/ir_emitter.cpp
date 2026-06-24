@@ -1288,16 +1288,31 @@ static void emit_phi_copies(EmitCtx &ctx, IrBlockId pred_id,
 
 // Devuelve true si ins es una CMP cuyo unico uso es la siguiente instruccion
 // BR_COND (para fusion cmp+branch).
-static bool can_fuse_cmp_brcond(const IrBlock &bb, size_t cmp_idx,
-                                const IrInstr &br_cond_ins) {
+static bool can_fuse_cmp_brcond(const IrFunction &fn, const IrBlock &bb,
+                                size_t cmp_idx, const IrInstr &br_cond_ins) {
     const IrInstr &cmp = bb.instrs[cmp_idx];
     if (cmp.dst == IR_NO_VALUE) return false;
-    // La fusion es segura si el resultado cmp no se usa en ningun otro sitio
-    // dentro del bloque, aparte de la siguiente instruccion BR_COND.
-    // Comprobacion simplificada: solo verificamos que sea el uso inmediato.
-    if (!br_cond_ins.operands.empty() && br_cond_ins.operands[0] == cmp.dst)
-        return true;
-    return false;
+    // El BR_COND inmediato debe ramificar sobre el resultado del cmp.
+    if (br_cond_ins.operands.empty() || br_cond_ins.operands[0] != cmp.dst)
+        return false;
+    // CRITICO: la fusion (cmpjmp) consume el cmp SIN materializar su resultado
+    // en un registro.  Solo es segura si el resultado del cmp se usa
+    // EXCLUSIVAMENTE en este BR_COND.  Si se usa en cualquier otro sitio (p.ej.
+    // `bool b = a < c; if (b) {...}; if (b) {...}` -> el mismo valor alimenta
+    // un segundo BR_COND en otro bloque), el segundo uso leeria un registro sin
+    // materializar -> bool constante/erroneo.  Contamos todos los usos del
+    // valor en la funcion; debe haber exactamente UNO (este BR_COND).
+    size_t uses = 0;
+    for (const auto &b : fn.blocks) {
+        for (const auto &in : b.instrs) {
+            for (IrValueId op : in.operands)
+                if (op == cmp.dst) uses = uses + 1;
+            if (in.func_ptr == cmp.dst) uses = uses + 1;
+            for (const auto &pa : in.phi_args)
+                if (pa.value == cmp.dst) uses = uses + 1;
+        }
+    }
+    return uses == 1;
 }
 
 /**
@@ -1845,7 +1860,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (idx + 1 < bb.instrs.size()) {
             const IrInstr &next = bb.instrs[idx + 1];
             if (next.op == IrOp::BR_COND &&
-                can_fuse_cmp_brcond(bb, idx, next)) {
+                can_fuse_cmp_brcond(ctx.fn, bb, idx, next)) {
                 // Fusion: emitir cmp + salto condicional ahora.
                 //
                 // BUG critico arreglado (2026-05-04): las copias PHI

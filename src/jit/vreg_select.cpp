@@ -200,6 +200,27 @@ inline MInstr mk_setcc(ir::IrValueId dst, MCond cc) {
     return i;
 }
 
+/** @brief Cuenta cuantas veces se usa el SSA value @p v en toda la funcion
+ *  (operandos + func_ptr + phi_args).  Se usa para decidir si un CMP puede
+ *  fusionarse con su BR_COND: la fusion (CMP + Jcc) NO materializa el bool en
+ *  un registro, asi que solo es segura si el resultado del CMP se usa
+ *  EXCLUSIVAMENTE en ese BR_COND (uses == 1).  Con >1 uso (p.ej. el mismo bool
+ *  alimenta un segundo BR_COND en otro bloque) hay que materializarlo via
+ *  SETcc; si no, el segundo uso leeria un registro sin escribir. */
+inline size_t vreg_count_uses(const ir::IrFunction &fn, ir::IrValueId v) {
+    if (v == ir::IR_NO_VALUE) return 0;
+    size_t n = 0;
+    for (const auto &b : fn.blocks)
+        for (const auto &in : b.instrs) {
+            for (ir::IrValueId op : in.operands)
+                if (op == v) n = n + 1;
+            if (in.func_ptr == v) n = n + 1;
+            for (const auto &pa : in.phi_args)
+                if (pa.value == v) n = n + 1;
+        }
+    return n;
+}
+
 /** @brief True si el bloque @p b tiene alguna instr PHI. */
 inline bool block_has_phi(const ir::IrBlock &b) {
     for (const auto &in : b.instrs)
@@ -1340,8 +1361,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 const ir::IrValueId cond = in.operands[0];
 
-                if (has_pend && pend_dst == cond) {
-                    /* FUSION: CMP a,b + Jcc(cc) true + JMP false. */
+                if (has_pend && pend_dst == cond &&
+                    vreg_count_uses(fn, pend_dst) == 1) {
+                    /* FUSION: CMP a,b + Jcc(cc) true + JMP false.  Solo si el
+                     * bool del CMP se usa UNICAMENTE en este BR_COND (si no,
+                     * hay que materializarlo via SETcc para el otro uso). */
                     O.push_back(mk_cmp(pend_a, pend_b));
                     O.push_back(MInstr::make_jcc(pend_cc, blbl[tt]));
                     O.push_back(MInstr::make_jmp(blbl[tf]));
