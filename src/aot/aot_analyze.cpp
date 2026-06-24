@@ -141,6 +141,11 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     //    el linker contra lo que el usuario enlace (libc, kernel, etc.) --
     case IrOp::CALL:
     case IrOp::CALLIND:
+    // CALLCLOSURE: en bare baja a una llamada indirecta plana al fn_addr de
+    // la closure (se ignora el env).  Las lambdas SIN capturas compilan asi
+    // (nivel puntero-de-funcion C); las capturantes usan READ_VM_REG en su
+    // helper, que sigue siendo RUNTIME_DEPENDENT -> el modulo se rechaza.
+    case IrOp::CALLCLOSURE:
     case IrOp::TAILCALL:
     case IrOp::CALLN:
     // -- memoria local / punteros crudos / copia inline --
@@ -315,8 +320,9 @@ static bool aot_op_embed_supported(IrOp op) noexcept {
     case IrOp::CALLITF:
     case IrOp::CALLSUPER:
     case IrOp::PROCEED:
-    // closures
-    case IrOp::CALLCLOSURE:
+    // closures: CALLCLOSURE ya es PURE_NATIVE (arriba); READ_VM_REG (lectura
+    // del env en R14 por el helper de una lambda CAPTURANTE) sigue siendo
+    // runtime -> las lambdas con capturas se rechazan limpio en bare.
     case IrOp::READ_VM_REG:
     // tipos
     case IrOp::INSTANCEOF:

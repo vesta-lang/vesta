@@ -2734,6 +2734,42 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * env (si is_gc_object) tambien. */
             case ir::IrOp::CALLCLOSURE: {
                 flush_pending();
+                /* HOST_LEAF (AOT bare): una closure es {fn_addr, env}.
+                 * func_ptr ya es el fn_addr cargado de closure[0];
+                 * operands[0] = env, operands[1..] = args.  Las lambdas SIN
+                 * capturas (las unicas compilables en bare: las capturantes
+                 * usan READ_VM_REG, que aot_analyze rechaza) no leen env ->
+                 * emitimos una llamada indirecta plana al fn_addr con los
+                 * args en arg_regs (= puntero de funcion C; si el optimizador
+                 * conoce la lambda, devirtualiza a CALL directo). */
+                if (abi == AbiKind::HOST_LEAF) {
+                    if (in.func_ptr == ir::IR_NO_VALUE) {
+                        vreg_dbg(fn.name.c_str(), "callclosure(no-fnptr)");
+                        return false;
+                    }
+                    std::vector<ir::IrValueId> cargs;
+                    if (in.operands.size() > 1)
+                        cargs.assign(in.operands.begin() + 1,
+                                     in.operands.end());
+                    if (!emit_host_args(cargs, O)) {
+                        vreg_dbg(fn.name.c_str(), "callclosure(host-leaf-args)");
+                        return false;
+                    }
+                    MInstr cc;
+                    cc.op = MOp::CALL;
+                    cc.src1 = vr(in.func_ptr);
+                    O.push_back(cc);
+                    if (in.dst != ir::IR_NO_VALUE) {
+                        const bool dst_f =
+                            fp_ok && in.dst < fn.values.size() &&
+                            ir_type_is_float(fn.values[in.dst].type);
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, dst_f ? vrt(in.dst) : vr(in.dst),
+                            MOperand::make_reg(dst_f ? MReg::XMM0 : MReg::RAX,
+                                               8)));
+                    }
+                    break;
+                }
                 if (!vm || ent.callclosure == 0) {
                     vreg_dbg(fn.name.c_str(), "callclosure(no-vm/no-addr)");
                     return false;
