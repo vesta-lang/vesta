@@ -193,6 +193,13 @@ struct Lowerer {
     uint32_t k = 0;           ///< numero de callee-saved asignados
     uint32_t total_saved = 0; ///< callee-saved + (vm_abi ? 1 (rbx) : 0)
     int32_t spill_bytes = 0;  ///< tamano del area de spills (alineado)
+    /// Args ilimitados (JIT/AOT): nº de slots GP que se pasan por PILA
+    /// (overflow de los arg_regs).  Se reservan en el FONDO del frame
+    /// (encima del shadow Win64) y se direccionan RSP-relativo en el call.
+    /// El interprete tiene limite 12 (bytecode), el JIT/AOT no.
+    uint32_t out_stack_args = 0;
+    /// Offset RSP del primer stack-arg: 32 (Win64 shadow) o 0 (SysV).
+    int32_t stack_arg_base = 0;
     /// Commit 8: offset (desde RBP) del inicio del area de allocas
     /// (justo debajo de los spill slots) + cursor de asignacion.
     uint32_t alloca_base = 0;
@@ -224,9 +231,10 @@ struct Lowerer {
     MFunction *pf = nullptr;
 
     Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
-            bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in)
+            bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
+            uint32_t out_stack_args_in = 0)
         : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
-          has_vm_alloca(has_vm_alloca_in) {
+          has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in) {
         SZ = t.pointer_size ? t.pointer_size : 8u;
         k = static_cast<uint32_t>(ra.callee_saved_used.size());
         total_saved = k + (vm_abi ? 1u : 0u); // +1 por el push rbx
@@ -259,6 +267,14 @@ struct Lowerer {
             spill_bytes += 8;
         }
         if (!no_frame) {
+            /* stack_arg_base = offset RSP del primer arg por pila.  Win64
+             * reserva 32 de shadow ANTES de los stack args (el callee lee
+             * arg5 en [rsp+32]); SysV no tiene shadow (arg7 en [rsp+0]).
+             * Detectado por el nº de GP arg_regs del TARGET (4=Win64,
+             * 6=SysV) -> correcto tambien en AOT cross-target. */
+            const size_t gareg_n =
+                tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
+            stack_arg_base = (gareg_n == 4) ? 32 : 0;
 #if defined(_WIN32)
             /* Win64: si hay CALLs, reservar 32 bytes de shadow/home
              * space en el FONDO del frame (debajo de los spill slots)
@@ -267,6 +283,11 @@ struct Lowerer {
 #else
             (void)has_calls;
 #endif
+            /* Args ilimitados: reservar el outgoing area (slots GP por
+             * pila) encima del shadow.  Stack-arg j vive en
+             * [rsp + stack_arg_base + j*8] en cada call. */
+            if (out_stack_args > 0)
+                spill_bytes += static_cast<int32_t>(out_stack_args * 8u);
             /* Alinear (SZ*total_saved + spill_bytes) a 16 para mantener
              * el stack 16-aligned en CALLs internos.  Con slots de 4
              * (x86-32) el desalineo puede ser 4/8/12 -> padding exacto. */
@@ -597,15 +618,36 @@ struct Lowerer {
         const auto &gareg = tri.arg_regs[static_cast<size_t>(RegClass::GP)];
         const auto &fareg = tri.arg_regs[static_cast<size_t>(RegClass::FP)];
         std::vector<std::pair<MReg, MOperand>> gmoves, fmoves;
+        /* Args ilimitados: GP que no caben en arg_regs van por PILA en
+         * [rsp + stack_arg_base + (idx-gareg)*8].  (idx, loc). */
+        std::vector<std::pair<int32_t, MOperand>> smoves;
         for (const auto &pa : pending_args) {
             if (pa.is_fp) {
                 if (pa.idx < fareg.size())
                     fmoves.emplace_back(static_cast<MReg>(fareg[pa.idx]),
                                         pa.loc);
+                /* FP overflow: el selector bailа (no llega aqui). */
             } else {
                 if (pa.idx < gareg.size())
                     gmoves.emplace_back(static_cast<MReg>(gareg[pa.idx]),
                                         pa.loc);
+                else {
+                    const int32_t off =
+                        stack_arg_base +
+                        static_cast<int32_t>((pa.idx - gareg.size()) * 8u);
+                    smoves.emplace_back(off, pa.loc);
+                }
+            }
+        }
+        /* Stores de stack-args PRIMERO (leen su loc antes del shuffle de los
+         * arg_regs).  mem->mem via scr0 (R10, caller-saved, libre aqui). */
+        for (const auto &sm : smoves) {
+            const MOperand dst = MOperand::make_mem(MReg::RSP, sm.first);
+            if (sm.second.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sm.second));
+                out.push_back(MInstr::make_unary(MOp::MOV, dst, reg(scr0)));
+            } else {
+                out.push_back(MInstr::make_unary(MOp::MOV, dst, sm.second));
             }
         }
         if (!gmoves.empty()) emit_parallel_moves(std::move(gmoves), scr1, out);
@@ -1546,7 +1588,32 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             if (in.op == MOp::ALLOCA_VM) has_vm_alloca = true;
         }
     }
-    Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca);
+    /* Args ilimitados (JIT/AOT): max nº de GP args por PILA en cualquier
+     * call (overflow de arg_regs).  Reset por call group; toma el maximo
+     * para dimensionar el outgoing area del frame una sola vez. */
+    uint32_t max_stack_args = 0;
+    {
+        const size_t gareg_n =
+            tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
+        uint32_t gp_in_call = 0;
+        for (const auto &b : vf.blocks) {
+            for (const auto &in : b.instrs) {
+                if (in.op == MOp::ARG) {
+                    if (!Lowerer::is_fp_operand(in.src1)) ++gp_in_call;
+                } else if (in.op == MOp::CALL || in.op == MOp::CALL_ABS ||
+                           in.op == MOp::CALL_SYM) {
+                    if (gp_in_call > gareg_n) {
+                        const uint32_t s =
+                            gp_in_call - static_cast<uint32_t>(gareg_n);
+                        if (s > max_stack_args) max_stack_args = s;
+                    }
+                    gp_in_call = 0;
+                }
+            }
+        }
+    }
+    Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca,
+               max_stack_args);
     lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
