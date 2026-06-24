@@ -530,32 +530,10 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         };
     }
 
-    /* Phase D.7 (opt-in): intentar primero el path de registros
-     * virtuales.  Si la funcion es del subset soportado por el selector
-     * vreg, la compila el register allocator; si no, cae al path de
-     * slots de abajo (fallback transparente). */
-    if (g_jit_use_vregs) {
-        uint8_t *vcode = vreg_compile(*ir_fn, *g_code_cache, {},
-                                      make_vreg_entries(), {}, mc_sym_res);
-        if (vcode != nullptr) {
-            method->jit_code = reinterpret_cast<void *>(vcode);
-            if (method->code_vaddr != 0) {
-                register_jit_code_at_pc(method->code_vaddr,
-                                        reinterpret_cast<void *>(vcode));
-            }
-            ++g_jit_compiled_count;
-            if (g_jit_warn_unsupported) {
-                std::fprintf(stderr, "[jit-vreg] compilado '%s'\n",
-                             key.c_str());
-            }
-            return;
-        }
-        if (g_jit_warn_unsupported) {
-            std::fprintf(stderr,
-                         "[jit-vreg] '%s' no soportada -> fallback a slots\n",
-                         key.c_str());
-        }
-    }
+    /* Phase D.7: el intento vreg se MOVIO mas abajo (tras construir el
+     * resolver recursivo de user-fns + native_resolver) para que un metodo
+     * que llama a otra funcion Vex resuelva la callee por vreg en vez de
+     * caer a slots por "call(no-resolver)". */
 
     /* Phase: compile_with_opts pasando el symbol_table de la
      * executable que poseyo este metodo, para que el mini-parser
@@ -793,6 +771,30 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             }
             return addr;
         };
+    }
+
+    /* Phase D.7 (opt-in): intento vreg con el resolver recursivo + native
+     * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vex se
+     * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
+     * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
+    if (g_jit_use_vregs) {
+        uint8_t *vcode = vreg_compile(
+            *ir_fn, *g_code_cache, mc_opts.resolve_user_fn, make_vreg_entries(),
+            mc_opts.resolve_native_fn, mc_sym_res);
+        if (vcode != nullptr) {
+            method->jit_code = reinterpret_cast<void *>(vcode);
+            if (method->code_vaddr != 0)
+                register_jit_code_at_pc(method->code_vaddr,
+                                        reinterpret_cast<void *>(vcode));
+            ++g_jit_compiled_count;
+            if (g_jit_warn_unsupported)
+                std::fprintf(stderr, "[jit-vreg] compilado '%s'\n", key.c_str());
+            return;
+        }
+        if (g_jit_warn_unsupported)
+            std::fprintf(stderr,
+                         "[jit-vreg] '%s' no soportada -> fallback a slots\n",
+                         key.c_str());
     }
 
     const CompileResult res = g_compiler->compile_with_opts(*ir_fn, mc_opts);
