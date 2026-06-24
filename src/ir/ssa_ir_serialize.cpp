@@ -82,6 +82,8 @@ constexpr uint8_t FN_FLAG_NATIVE =
     1 << 0; ///< Funcion FFI (sin body IR; solo declaracion)
 constexpr uint8_t FN_FLAG_VARIADIC =
     1 << 1; ///< Acepta nargs variable (R15 contiene el count)
+constexpr uint8_t FN_FLAG_NAKED =
+    1 << 2; ///< Phase NR @Naked: sin prologo/epilogo/ret (ISRs/stubs)
 
 /**
  * @brief Serializa un @c IrValue al stream binario.
@@ -357,6 +359,7 @@ size_t serialize_function(const IrFunction &fn, std::vector<uint8_t> &out) {
     uint8_t fn_flags = 0;
     if (fn.is_native) fn_flags |= FN_FLAG_NATIVE;
     if (fn.is_variadic) fn_flags |= FN_FLAG_VARIADIC;
+    if (fn.is_naked) fn_flags |= FN_FLAG_NAKED;
     write_u8(out, fn_flags);
 
     // Params: lista de IrValueId que apuntan a entries en values[]
@@ -440,6 +443,7 @@ bool deserialize_function(const std::vector<uint8_t> &in, size_t &off,
     out.ret_type = static_cast<IrType>(ret_type_b);
     out.is_native = (fn_flags & FN_FLAG_NATIVE) != 0;
     out.is_variadic = (fn_flags & FN_FLAG_VARIADIC) != 0;
+    out.is_naked = (fn_flags & FN_FLAG_NAKED) != 0;
 
     /* params */
     uint32_t n_params = 0;
@@ -713,6 +717,8 @@ static void serialize_static_data(const IrModule::StaticDataStore &sd,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         write_str(out, e.meta.shared_key);
+        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        write_str(out, e.meta.symbol_name);
     }
 }
 
@@ -761,6 +767,8 @@ static bool deserialize_static_data(const std::vector<uint8_t> &in, size_t &off,
         }
         // Global compartido a nivel de programa (CPU dispatch fp-table).
         if (!read_str(in, off, e.meta.shared_key)) return false;
+        // Phase NR / dev-OS: nombre exportado del bloque (cross-block symref).
+        if (!read_str(in, off, e.meta.symbol_name)) return false;
         // Validar que el rango cae dentro del pool.
         if (static_cast<uint64_t>(e.byte_offset) + e.byte_len > sd.bytes.size())
             return false;

@@ -630,7 +630,7 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn) {
 //      que NO escapan a ningun sitio.
 //==============================================================================
 
-bool ir_pass_promote_local_allocas(IrFunction &fn) {
+bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
@@ -852,10 +852,13 @@ bool ir_pass_promote_local_allocas(IrFunction &fn) {
         }
     }
 
-    /* Step 4: promover ALLOCAs que NO escapan. */
+    /* Step 4: promover ALLOCAs que NO escapan (o TODAS si force_all: bare
+     * AOT no tiene VM stack, asi que incluso las que "escapan" a un CALL
+     * deben vivir en la pila nativa -- el host stack ES addressable cross
+     * call, a diferencia del modelo VM). */
     bool any_promoted = false;
     for (size_t i = 0; i < candidates.size(); ++i) {
-        if (escapes[i]) continue;
+        if (!force_all && escapes[i]) continue;
         IrValueId v = candidates[i];
         for (auto &blk : fn.blocks) {
             for (auto &ins : blk.instrs) {

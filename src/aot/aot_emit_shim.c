@@ -3273,12 +3273,43 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
         fixd[b + 1] = key;
     }
 
+    /* Pre-chequeo: dos secciones FIJAS (@at) cuyos rangos se solapan son una
+     * contradiccion que el emisor NO puede resolver (el usuario las anclo a
+     * offsets incompatibles).  Lo detectamos ANTES del merge y damos un error
+     * PRECISO -- nombres + offsets + cuantos bytes solapan -- para que re-
+     * espaciar sea trivial en vez de adivinar. */
+    for (int a = 0; a + 1 < nfixd; ++a) {
+        const AotSection *cur = &secs[fixd[a]];
+        const AotSection *nxt = &secs[fixd[a + 1]];
+        uint64_t cur_at = (uint64_t)cur->at;
+        uint64_t cur_end = cur_at + aot_sec_size(cur);
+        uint64_t nxt_at = (uint64_t)nxt->at;
+        if (cur_end > nxt_at) {
+            char b[256];
+            snprintf(b, sizeof(b),
+                     "aot_emit_flat_bin: solape @at -- la seccion '%s' "
+                     "(@0x%llX..0x%llX) se solapa con '%s' (@0x%llX) por 0x%llX "
+                     "bytes; sube su @at a 0x%llX o reduce '%s'",
+                     cur->name ? cur->name : "?",
+                     (unsigned long long)cur_at, (unsigned long long)cur_end,
+                     nxt->name ? nxt->name : "?", (unsigned long long)nxt_at,
+                     (unsigned long long)(cur_end - nxt_at),
+                     (unsigned long long)cur_end, cur->name ? cur->name : "?");
+            set_err(err, err_cap, b);
+            goto fail;
+        }
+    }
+
     /* Merge greedy: coloca FLUYENTES secuencialmente hasta que la siguiente no
      * cabe antes del proximo ancla FIJO; entonces rellena con ceros hasta el
-     * ancla y coloca la seccion FIJA.  Reporta solapes. */
+     * ancla y coloca la seccion FIJA.  Las secciones FLUYENTES grandes (p.ej.
+     * la .text del kernel) que no caben en ningun hueco se difieren tras el
+     * ultimo ancla FIJO automaticamente (nunca se incrustan entre anclas, asi
+     * no colisionan con el layout @at por mucho que crezcan). */
     {
         uint64_t cursor = 0;
         int qi = 0, fi = 0;
+        const char *prev_name = "(inicio)"; /* quien avanzo el cursor */
         while (qi < nflow || fi < nfixd) {
             int take_fixed = 0;
             uint64_t aligned = cursor;
@@ -3298,17 +3329,29 @@ int aot_emit_flat_bin(const char *path, uint64_t base, const AotSection *secs,
             if (take_fixed) {
                 uint64_t fa = (uint64_t)secs[fixd[fi]].at;
                 if (cursor > fa) {
-                    set_err(err, err_cap,
-                            "aot_emit_flat_bin: solape -- una seccion @at se "
-                            "superpone con datos previos");
+                    /* Una FLUYENTE colocada antes empujo el cursor sobre este
+                     * ancla.  Con el diferido esto no deberia ocurrir, pero si
+                     * pasa, reportamos quien y por cuanto. */
+                    char b[256];
+                    snprintf(b, sizeof(b),
+                             "aot_emit_flat_bin: solape -- '%s' (termina en "
+                             "0x%llX) invade la seccion @at '%s' (@0x%llX) por "
+                             "0x%llX bytes",
+                             prev_name, (unsigned long long)cursor,
+                             secs[fixd[fi]].name ? secs[fixd[fi]].name : "?",
+                             (unsigned long long)fa,
+                             (unsigned long long)(cursor - fa));
+                    set_err(err, err_cap, b);
                     goto fail;
                 }
                 sec_off[fixd[fi]] = fa;
                 cursor = fa + aot_sec_size(&secs[fixd[fi]]);
+                prev_name = secs[fixd[fi]].name ? secs[fixd[fi]].name : "?";
                 ++fi;
             } else {
                 sec_off[flow[qi]] = aligned;
                 cursor = aligned + aot_sec_size(&secs[flow[qi]]);
+                prev_name = secs[flow[qi]].name ? secs[flow[qi]].name : "?";
                 ++qi;
             }
         }

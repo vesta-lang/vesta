@@ -524,6 +524,13 @@ struct StringLitExpr : Expr {
 
 struct IdentExpr : Expr {
     std::string name;
+    /// Function pointers: el type checker marca @c true cuando el ident
+    /// resuelve a una funcion top-level usada como VALOR (no llamada
+    /// directa).  El lowering emite @c LABEL_ADDR (direccion de la funcion)
+    /// en vez de un load de variable.  @c func_ref_mangled guarda el nombre
+    /// mangled real del simbolo a referenciar.
+    bool is_func_ref = false;
+    std::string func_ref_mangled;
     IdentExpr() : Expr(NodeKind::IdentExpr) {}
 };
 
@@ -668,6 +675,11 @@ struct CallExpr : Expr {
     /// emitir una llamada.  Equivalente al `splice` de Lisp/Scheme
     /// para emitir codigo al AST runtime (no solo eval comptime).
     std::unique_ptr<Expr> macro_expanded;
+    /// Function pointers: el type checker marca @c true cuando el callee es
+    /// una expresion de tipo FUNCTION (variable/cast/etc.), no una llamada
+    /// directa por nombre.  El lowering baja a CALLIND (llamada indirecta a
+    /// traves del puntero que resulta de evaluar @c callee).
+    bool is_indirect_call = false;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -1428,6 +1440,12 @@ struct FunctionDecl : Node {
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
     bool is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
     bool is_panic_handler = false;  ///< @PanicHandler (AOT freestanding)
+    /// Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
+    /// El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
+    /// programador provee la salida (`ret`/`iretq`/`iret`).  Para ISRs,
+    /// stubs de entry y cambio de modo en dev OS.  Semantica de
+    /// `__attribute__((naked))` de GCC.  Solo lo consume el codegen.
+    bool is_naked = false;
     /// C-3: @StringConcat -- esta fn libre reemplaza el operador `+`
     /// (y el builtin str_concat) entre dos strings.  Firma esperada:
     /// fn(string, string) -> string.  Aplica en native_poo_ (AOT) y Full.

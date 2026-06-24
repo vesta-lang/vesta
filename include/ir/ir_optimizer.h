@@ -177,7 +177,11 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn);
  *
  * @return true si se promociono alguna ALLOCA.
  */
-bool ir_pass_promote_local_allocas(IrFunction &fn);
+// @c force_all=true (bare AOT): promueve TODAS las ALLOCAs a host_alloca,
+// escapen o no.  En bare nativo no hay VM stack (rbx no es un ProcessVM*),
+// asi que un ALLOCA_VM ([rbx+off]) corrompe.  Cualquier local debe vivir en
+// la pila nativa.  Default (false): solo promueve las que no escapan (JIT/VM).
+bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
 
 /**
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin

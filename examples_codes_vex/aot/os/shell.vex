@@ -1,0 +1,100 @@
+// ===========================================================================
+// shell -- interprete de comandos estilo MS-DOS.
+//
+// Comandos integrados (builtins): help, ver, cls, echo, exit.  Cualquier otro
+// comando se busca como PROGRAMA en el disco (directorio) y, si existe, se
+// carga y ejecuta pasandole sus argumentos.  Asi calc y notepad (edit) son
+// programas SEPARADOS en disco, no codigo del kernel.
+// ===========================================================================
+import "term";
+import "fb";
+import "serial";
+import "prog";
+
+bool streq(char* a, char* b) {
+    u64 i = 0;
+    while (a[i] != 0) {
+        if (a[i] != b[i]) { return false; }
+        i = i + 1;
+    }
+    return b[i] == 0;
+}
+
+bool starts_with(char* s, char* p) {
+    u64 i = 0;
+    while (p[i] != 0) {
+        if (s[i] != p[i]) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+void cmd_help() {
+    term.tputs("Comandos integrados:\n");
+    term.tputs("  help          esta ayuda\n");
+    term.tputs("  ver           version del sistema\n");
+    term.tputs("  cls           limpia la pantalla\n");
+    term.tputs("  echo <texto>  imprime el texto\n");
+    term.tputs("  exit          apaga el sistema\n");
+    term.tputs("Programas en disco:\n");
+    term.tputs("  calc <expr>   calculadora (programa)\n");
+    term.tputs("  edit          editor de texto (programa)\n");
+}
+
+// Bucle principal de la terminal.
+void shell_run() {
+    u8 line[256];
+    u8 pname[24];
+    fb.fb_set_fg(0x00CFCFCF);
+    term.tputs("\nVestaOS 1.0  --  terminal (escribe 'help')\n\n");
+    while (true) {
+        term.tputs("A:\\> ");
+        u64 len = term.read_line(line, 256);
+        char* cmd = (char*) line;
+        if (len == 0) {
+            continue;
+        }
+        if (streq(cmd, "help")) {
+            cmd_help();
+        } else {
+            if (streq(cmd, "ver")) {
+                term.tputs("VestaOS 1.0 (kernel modular en Vesta, AOT 64-bit)\n");
+            } else {
+                if (streq(cmd, "cls")) {
+                    fb.fb_clear();
+                } else {
+                    if (streq(cmd, "exit")) {
+                        term.tputs("Apagando VestaOS...\n");
+                        serial.outb(0xF4, 0x42);
+                        return;
+                    } else {
+                        if (starts_with(cmd, "echo ")) {
+                            term.tputs(cmd + 5);
+                            term.tputc(10);
+                        } else {
+                            // Separar nombre de programa y argumentos.
+                            u64 i = 0;
+                            while (cmd[i] != 0 && cmd[i] != 32 && i < 23) {
+                                pname[i] = (u8) cmd[i];
+                                i = i + 1;
+                            }
+                            pname[i] = 0;
+                            char* args = cmd + i;
+                            if (args[0] == 32) {
+                                args = args + 1;   // saltar el espacio
+                            }
+                            u64 ent = prog.prog_find((char*) pname);
+                            if (ent == 0) {
+                                term.tputs("comando o programa no encontrado: ");
+                                term.tputs((char*) pname);
+                                term.tputc(10);
+                            } else {
+                                prog.prog_exec(ent, args);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

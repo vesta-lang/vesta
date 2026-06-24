@@ -2270,6 +2270,11 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            if (std::getenv("VESTA_AOT_DUMP_IR")) {
+                std::cerr << "===== AOT native_poo IR =====\n";
+                ir::ir_print(aot_mod, std::cerr);
+                std::cerr << "=============================\n";
+            }
             aot::AotCompatReport rep = aot::aot_analyze_module(aot_mod, tgt);
             std::cout << "[aot] target=" << tier_name
                       << (aot_freestanding ? " --freestanding" : "") << ": "
@@ -2305,6 +2310,15 @@ int main(int argc, char *argv[]) {
                 lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
             }
             aot::aot_lower_runtime(aot_mod, lcfg);
+
+            // Bare AOT: NO hay VM stack (rbx no es un ProcessVM*).  Forzar
+            // TODAS las ALLOCAs a la pila nativa (host_alloca), incluso las
+            // que "escapan" a un CALL -- en nativo el host stack ES
+            // addressable cross-call.  Sin esto, un local cuya direccion se
+            // pasa a una funcion (p.ej. un buffer para itoa) se aloca con
+            // ALLOCA_VM ([rbx+0x40]) -> direccion basura -> SIGSEGV.
+            for (auto &afn : aot_mod.functions)
+                ir::ir_pass_promote_local_allocas(afn, /*force_all=*/true);
 
             // ------------------------------------------------------------------
             // Paso 2: codegen nativo (HOST_LEAF) + emision del ejecutable.
@@ -2503,8 +2517,11 @@ int main(int argc, char *argv[]) {
                 // para que un linker las pueda usar).  Con main, OBJECT mantiene
                 // el BFS desde main (no regresa programas con funciones
                 // inalcanzables no-compilables).  @section siempre se siembra.
+                // Phase NR @Naked: un ISR/stub se referencia desde la IDT/GDT
+                // o por asm externo, NUNCA por un CALL visible -> sembrarlo
+                // siempre para que no lo elimine el dead-strip del BFS.
                 if ((emit_shared || (emit_obj && !main_fn) ||
-                     !fn.section.empty()) &&
+                     !fn.section.empty() || fn.is_naked) &&
                     !queued.count(fn.name)) {
                     queued[fn.name] = true;
                     work.push_back(fn.name);
@@ -2774,6 +2791,19 @@ int main(int argc, char *argv[]) {
                     place_data(N);
             }
 
+            // Phase NR / dev-OS: nombre de bloque (asm/bytes) -> su ubicacion.
+            // Permite que OTROS bloques lo referencien por simbolo (un `jmp
+            // other_block` o un `dd gdt` cross-block).  Los bloques con
+            // symbol_name son FORCE_EMIT -> ya estan colocados (loop de
+            // arriba); ademas place_data() es idempotente.
+            std::unordered_map<std::string, std::pair<int, uint64_t>>
+                data_sym_loc;
+            for (uint32_t N = 0; N < sd.size(); ++N) {
+                const std::string &snm = sd.entries[N].meta.symbol_name;
+                if (snm.empty()) continue;
+                data_sym_loc[snm] = place_data(N);
+            }
+
             // Crear el writer + TODAS las secciones (writer idx == secs idx,
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
@@ -2987,19 +3017,35 @@ int main(int argc, char *argv[]) {
                 const int dsec = dit->second.first;
                 const uint64_t doff = dit->second.second;
                 for (const auto &sr : meta.sym_refs) {
+                    // Resolver contra una FUNCION (fn_loc) o, si no, contra
+                    // otro BLOQUE asm/bytes nombrado (data_sym_loc): un dev-OS
+                    // hace `jmp pm32` / `dd gdt` cross-block.
+                    int tsec;
+                    uint64_t toff;
                     auto fit = fn_loc.find(sr.sym);
-                    if (fit == fn_loc.end()) {
-                        std::cerr
-                            << "[aot] bytes: referencia a simbolo no resuelto '"
-                            << sr.sym << "' (solo funciones soportadas).\n";
-                        return EXIT_FAILURE;
+                    if (fit != fn_loc.end()) {
+                        tsec = fit->second.sec;
+                        toff = fit->second.off;
+                    } else {
+                        auto dsit = data_sym_loc.find(sr.sym);
+                        if (dsit == data_sym_loc.end()) {
+                            std::cerr << "[aot] referencia a simbolo no "
+                                         "resuelto '"
+                                      << sr.sym
+                                      << "' (ni funcion ni bloque asm/bytes).\n";
+                            return EXIT_FAILURE;
+                        }
+                        tsec = dsit->second.first;
+                        toff = dsit->second.second;
                     }
-                    const aot::RelocKind k = sr.is_rel ? aot::RelocKind::REL32
-                                                       : aot::RelocKind::ABS64;
+                    // Kind segun is_rel + ancho: REL32 (jmp/call near), IMM32
+                    // (dd -> VA absoluta de 32 bits) o ABS64 (dq -> 64 bits).
+                    const aot::RelocKind k =
+                        sr.is_rel ? aot::RelocKind::REL32
+                                  : (sr.width == 4 ? aot::RelocKind::IMM32
+                                                   : aot::RelocKind::ABS64);
                     w.add_reloc(dsec, doff + sr.offset,
-                                aot::RelocTarget::addr(fit->second.sec,
-                                                       fit->second.off),
-                                k);
+                                aot::RelocTarget::addr(tsec, toff), k);
                 }
             }
 

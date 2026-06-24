@@ -5641,7 +5641,13 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         if (ce->operand) {
             Type to = check_expr(ce->operand.get());
             ce->operand->result_type = to;
-            if (to.kind == PrimitiveKind::VOID) {
+            // Function pointer: `(u64) foo` / `(fn(...)->R) foo` -- foo es una
+            // funcion (check_ident la marca is_func_ref y devuelve void).  El
+            // cast es valido: el resultado es la direccion del codigo.
+            bool op_is_func_ref =
+                ce->operand->kind == ast::NodeKind::IdentExpr &&
+                static_cast<ast::IdentExpr *>(ce->operand.get())->is_func_ref;
+            if (to.kind == PrimitiveKind::VOID && !op_is_func_ref) {
                 diags_.error(ce->loc,
                              "no se puede castear una expresion de tipo void");
             }
@@ -5963,7 +5969,8 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             const Type &ta = arg_types[i];
             const Type &tp = ctor->param_types[i];
             if (ta.kind == PrimitiveKind::COUNT) continue;
-            if (!types_assignable(tp, ta)) {
+            if (!types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  " del constructor '" + e->class_name +
@@ -5974,6 +5981,28 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         }
     }
     return Type{PrimitiveKind::CLASS, e->class_name};
+}
+
+bool TypeChecker::value_assignable_to_interface(
+    const Type &target, const Type &value) const noexcept {
+    if (target.kind != PrimitiveKind::CLASS ||
+        value.kind != PrimitiveKind::CLASS)
+        return false;
+    if (target.struct_name.empty() || value.struct_name.empty()) return false;
+    if (target.struct_name == value.struct_name) return false; // ya cubierto
+    auto it_t = class_layouts_.find(target.struct_name);
+    if (it_t == class_layouts_.end() || !it_t->second.is_interface)
+        return false;
+    // Recorrer la clase concreta + su cadena de super buscando la interfaz.
+    std::string cur = value.struct_name;
+    for (int depth = 0; depth < 64 && !cur.empty(); ++depth) {
+        auto it_c = class_layouts_.find(cur);
+        if (it_c == class_layouts_.end()) break;
+        for (const auto &in : it_c->second.interface_names)
+            if (in == target.struct_name) return true;
+        cur = it_c->second.super_name;
+    }
+    return false;
 }
 
 Type TypeChecker::check_index(ast::IndexExpr *e) {
@@ -6399,12 +6428,22 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
         }
     }
     if (s->kind == SymbolKind::Function) {
-        // Tratamos las funciones como un tipo VOID a efectos de
-        // inferencia cuando aparecen sin call directo; el caso CALL
-        // (CallExpr) lo manejara especificamente.  Pasar una funcion
-        // libre como argumento a un parametro @c fn(T) -> R esta
-        // soportado y se promociona explicitamente a function value
-        // en @c check_call (cubre el caso first-class).
+        // Function pointers: marcamos el ident como referencia a funcion y
+        // guardamos el nombre mangled, PERO devolvemos VOID (comportamiento
+        // historico) para no romper:
+        //   - HOF: pasar `foo` a un parametro fn(...) -> R lo promociona a
+        //     closure en check_call.
+        //   - closures/lambdas (modelo de 16 bytes fn+env).
+        // La marca @c is_func_ref solo la consume el CAST explicito
+        // (`(u64) foo` o `(fn(...)->R) foo`), que emite LABEL_ADDR (la
+        // direccion cruda del codigo).  Asi el OS puede meter direcciones de
+        // funciones del kernel en una tabla sin tocar el modelo de closures.
+        const FunctionSig *sig = function_sig_by_name(e->name);
+        if (sig) {
+            e->is_func_ref = true;
+            e->func_ref_mangled =
+                sig->mangled_label.empty() ? e->name : sig->mangled_label;
+        }
         return Type{};
     }
     return s->type;
@@ -7067,11 +7106,16 @@ Type TypeChecker::check_binary(ast::BinaryExpr *e) {
     case ast::BinOp::BitXor:
     case ast::BinOp::Shl:
     case ast::BinOp::Shr: {
-        if (!is_integral(tl.kind) || !is_integral(tr.kind)) {
+        // Promocion entera estilo C: un `char` es un entero (u8) en las
+        // operaciones bitwise -- `(attr << 8) | ch` con ch:char no requiere
+        // cast manual.  Reusa char_as_u8 + promote_arith como la aritmetica.
+        if (!is_char_or_integral(tl.kind) || !is_char_or_integral(tr.kind)) {
             diags_.error(e->loc, "operandos no enteros en operacion bitwise");
             return Type{};
         }
-        return Type{promote_arith(tl.kind, tr.kind)};
+        const PrimitiveKind a = char_as_u8(tl.kind);
+        const PrimitiveKind b = char_as_u8(tr.kind);
+        return Type{promote_arith(a, b)};
     }
     }
     return Type{};
@@ -7763,7 +7807,8 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
          s->type.kind == PrimitiveKind::STRING &&
          (tv.kind == PrimitiveKind::STRING || tv.kind == PrimitiveKind::CHAR));
     if (tv.kind != PrimitiveKind::COUNT && !string_append_ok &&
-        !types_assignable(s->type, tv)) {
+        !types_assignable(s->type, tv) &&
+        !value_assignable_to_interface(s->type, tv)) {
         diags_.error(e->loc, std::string("tipo del valor (") +
                                  type_to_string(tv) +
                                  ") incompatible con tipo del destino (" +
@@ -7778,6 +7823,52 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         for (auto &a : e->args)
             (void)check_expr(a.get());
         return Type{};
+    }
+
+    // Function pointers: llamada INDIRECTA a traves de un valor de tipo
+    // FUNCTION (una variable que guarda un puntero a funcion, el resultado
+    // de un cast `(fn(...)->R) addr`, etc.).  Las llamadas DIRECTAS por
+    // nombre (`foo(args)`) NO entran aqui: una IdentExpr que resuelve a una
+    // funcion top-level se despacha por nombre mas abajo.
+    {
+        // Solo casts/index a tipo FUNCTION son punteros a funcion RAW (8
+        // bytes) -> CALLIND.  Una VARIABLE de tipo FUNCTION puede ser un
+        // closure (lambda con env de 16 bytes); esas se llaman por el path
+        // de closure existente (CALLCLOSURE) mas abajo -- no las intercepta.
+        bool indirect = false;
+        Type ftype{};
+        if (e->callee->kind == ast::NodeKind::CastExpr ||
+            e->callee->kind == ast::NodeKind::IndexExpr) {
+            Type ct = check_expr(e->callee.get());
+            if (ct.kind == PrimitiveKind::FUNCTION) {
+                indirect = true;
+                ftype = ct;
+            }
+        }
+        if (indirect) {
+            e->is_indirect_call = true;
+            // Validar el numero de argumentos contra la firma.
+            if (e->args.size() != ftype.fn_params.size()) {
+                diags_.error(e->loc,
+                             "llamada indirecta: numero de argumentos (" +
+                                 std::to_string(e->args.size()) +
+                                 ") distinto de la firma (" +
+                                 std::to_string(ftype.fn_params.size()) + ")");
+            }
+            for (size_t i = 0; i < e->args.size(); ++i) {
+                Type at = check_expr(e->args[i].get());
+                if (i < ftype.fn_params.size() &&
+                    !types_assignable(ftype.fn_params[i], at)) {
+                    diags_.warning(e->loc,
+                                   "llamada indirecta: argumento " +
+                                       std::to_string(i + 1) +
+                                       " de tipo distinto al de la firma");
+                }
+            }
+            Type ret = ftype.pointee ? *ftype.pointee : Type{PrimitiveKind::VOID};
+            e->result_type = ret;
+            return ret;
+        }
     }
 
     // Metodos OO sobre tipo string.  Si callee es
@@ -8390,7 +8481,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 const Type ta = check_expr(e->args[i].get());
                 const Type &tp = smtd->param_types[i];
                 if (ta.kind == PrimitiveKind::COUNT) continue;
-                if (!types_assignable(tp, ta)) {
+                if (!types_assignable(tp, ta) &&
+                    !value_assignable_to_interface(tp, ta)) {
                     diags_.error(e->args[i]->loc,
                                  std::string("argumento ") +
                                      std::to_string(i + 1) + " del metodo '" +
@@ -8471,7 +8563,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             const Type ta = check_expr(e->args[i].get());
             const Type &tp = mtd->param_types[i];
             if (ta.kind == PrimitiveKind::COUNT) continue;
-            if (!types_assignable(tp, ta)) {
+            if (!types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  " del metodo '" + fa->field_name +
@@ -10847,7 +10940,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     }
                 }
             }
-            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta)) {
+            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  ": tipo (" + type_to_string(ta) +
@@ -11010,7 +11104,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
             }
         }
-        if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta)) {
+        if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
+            !value_assignable_to_interface(tp, ta)) {
             diags_.error(e->args[i]->loc, std::string("argumento ") +
                                               std::to_string(i + 1) +
                                               ": tipo (" + type_to_string(ta) +

@@ -226,7 +226,8 @@ class Lowering {
      * Idempotente: si ya existe slot para @p name lo devuelve.
      * Init: el slot empieza zero-filled; @c __module_init lo inicializa.
      */
-    uint64_t get_or_create_runtime_global_slot(const std::string &name);
+    uint64_t get_or_create_runtime_global_slot(const std::string &name,
+                                               uint64_t bytes = 8);
 
     /**
      * @brief Inserta una conversion de tipo si difiere; identidad si igual.

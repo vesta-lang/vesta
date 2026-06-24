@@ -1,0 +1,212 @@
+// ===========================================================================
+// VestaOS -- kernel MODULAR de 64 bits con bootloader propio, escrito en
+// Vesta y compilado con el AOT de Vesta (sin gcc / ld / nasm).
+//
+// El kernel se reparte en MoDULOS Vesta (import): lib (itoa), serial (COM1),
+// console (driver VGA con cursor/scroll/color).  Este fichero raiz contiene
+// el bootloader (asm) y kmain(), que usa los modulos.
+//
+// Arranque:
+//   1. Sector 1 (bootloader, 16-bit): la BIOS lo carga en 0x7C00; lee el
+//      resto de la imagen desde disco (int 0x13), habilita A20, carga la GDT
+//      y pasa a modo protegido.
+//   2. Modo protegido (32-bit): paginacion (PAE + EFER.LME + CR0.PG) y salto
+//      a modo largo.
+//   3. Modo largo (64-bit): fija la pila y llama a kmain() (Vesta).
+//   4. kmain(): inicializa COM1 y la consola VGA, imprime un banner, calcula
+//      los primos < 50 y la serie de Fibonacci, y los muestra en pantalla y
+//      por el puerto serie.
+//
+// Construir y ejecutar:  python run.py run        (ver README.md)
+// ===========================================================================
+import "serial";
+import "fb";
+import "shell";
+import "prog";
+import "term";
+
+// ---------------------------------------------------------------------------
+// SECTOR 1 -- bootloader (asm).  Layout fijo con @at; firma 0xAA55 en 0x1FE.
+// ---------------------------------------------------------------------------
+@bits(16) @section(".boot", "rx") @at(0x000)
+asm boot16 {
+    cli
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
+
+    mov al, 0x52             // 'R' -> debugcon: real mode
+    out 0xE9, al
+
+    mov [0x0500], dl         // guardar la unidad de arranque (la BIOS la da en DL)
+
+    // --- Copiar la fuente 8x16 de la VGA BIOS a 0x60000 (la usa el driver
+    //     de framebuffer).  OJO: int 0x10/1130 devuelve la fuente en ES:BP
+    //     pero TAMBIEN sobreescribe DL (filas-1) y CX -- por eso guardamos DL
+    //     al arranque (0x0500) y lo restauramos antes de leer el disco. ---
+    cld
+    mov ax, 0x1130
+    mov bh, 0x06             // fuente 8x16
+    int 0x10                 // ES:BP = direccion de la fuente
+    push es
+    pop ds                   // ds = segmento de la fuente
+    mov si, bp
+    mov ax, 0x6000
+    mov es, ax               // es:di = 0x6000:0 = 0x60000
+    xor di, di
+    mov cx, 0x1000           // 4096 bytes (256 glifos x 16)
+    rep movsb
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+
+    // --- VBE: modo 0x143 = 800x600x32bpp (Bochs/QEMU).  El 0x115 es 24bpp y
+    //     rota los canales al escribir u32 por pixel.  ModeInfoBlock -> 0x5000.
+    mov ax, 0x4F01
+    mov cx, 0x143
+    mov di, 0x5000
+    int 0x10
+    mov ax, 0x4F02
+    mov bx, 0x4143          // 0x4000 = linear framebuffer
+    int 0x10
+
+    // Cargar el resto de la imagen (sectores 1..127) a 0x7E00 via int 0x13
+    // AH=42 (LBA extendido, fiable para lecturas grandes; AH=02/CHS falla al
+    // cruzar pistas).  DAP en 0x0600.  dl = unidad de arranque (BIOS).  En
+    // CD (El Torito) ya esta cargado: si AH=42 falla, seguimos igual.
+    mov si, 0x0600
+    mov byte [si], 0x10        // tamano del DAP
+    mov byte [si + 1], 0
+    mov word [si + 2], 127     // sectores a leer
+    mov word [si + 4], 0x7E00  // offset destino
+    mov word [si + 6], 0       // segmento destino
+    mov dword [si + 8], 1      // LBA inicial (sector 1)
+    mov dword [si + 12], 0
+    mov dl, [0x0500]        // restaurar la unidad de arranque (int 0x10 la pisa)
+    mov ah, 0x42
+    int 0x13
+
+    in al, 0x92            // A20
+    or al, 2
+    out 0x92, al
+
+    lgdt [0x7E00]
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    jmp 0x08:pm32
+}
+
+@bits(32) @section(".pm", "rx") @at(0x240)
+asm pm32 {
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov esp, 0x7C00
+
+    mov al, 0x50            // 'P' -> debugcon: protected mode
+    out 0xE9, al
+
+    // Paginacion que mapea los primeros 4 GiB con paginas de 2 MiB (cubre el
+    // linear framebuffer de VBE, en memoria alta ~0xFD000000).  Tablas en
+    // 0x200000 (2 MiB), por encima del ramdisk y del area de ejecucion.
+    //   PML4 @0x200000  PDPT @0x201000  PD0..PD3 @0x202000..0x205FFF
+    mov edi, 0x200000       // poner a cero 6 paginas de tablas
+    mov ecx, 0x1800
+    xor eax, eax
+    rep stosd
+    mov dword [0x200000], 0x201003          // PML4[0] -> PDPT
+    mov dword [0x201000], 0x202003          // PDPT[0] -> PD0
+    mov dword [0x201008], 0x203003          // PDPT[1] -> PD1
+    mov dword [0x201010], 0x204003          // PDPT[2] -> PD2
+    mov dword [0x201018], 0x205003          // PDPT[3] -> PD3
+    mov edi, 0x202000       // llenar 2048 PDEs con paginas de 2 MiB
+    mov eax, 0x83           // pagina 0 | present|rw|PS
+    mov ecx, 0x800
+fill_pd:
+    mov [edi], eax
+    add eax, 0x200000       // siguiente pagina de 2 MiB
+    add edi, 8
+    dec ecx
+    jnz fill_pd
+
+    mov eax, 0x200000
+    mov cr3, eax
+    mov eax, cr4
+    or eax, 0x20           // PAE
+    mov cr4, eax
+    mov ecx, 0xC0000080    // EFER.LME
+    rdmsr
+    or eax, 0x100
+    wrmsr
+    mov eax, cr0
+    or eax, 0x80000000     // PG
+    mov cr0, eax
+    jmp 0x18:lm64
+}
+
+@bits(64) @section(".lm", "rx") @at(0x340)
+asm lm64 {
+    mov ax, 0x20
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov rsp, 0x90000       // pila del kernel
+    call kmain
+.hang:
+    hlt
+    jmp .hang
+}
+
+@section(".gdtr") @at(0x200)
+bytes gdtr {
+    dw 0x0027
+    dd gdt_ents
+}
+@section(".gdtents") @at(0x208)
+bytes gdt_ents {
+    dq 0
+    db 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00   // code32
+    db 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00   // data32
+    db 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xAF, 0x00   // code64
+    db 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xAF, 0x00   // data64
+}
+@section(".sig") @at(0x1FE)
+bytes sig { db 0x55, 0xAA }
+
+// ---------------------------------------------------------------------------
+// SECTORES 2+ -- logica del kernel en Vesta.
+// ---------------------------------------------------------------------------
+
+// Punto de entrada del kernel (llamado por el stub de modo largo).
+@section(".kernel") @at(0x380)
+void kmain() {
+    serial.serial_init();
+    fb.fb_init();           // consola grafica (linear framebuffer VBE 800x600x32)
+
+    // Banner (verde sobre el fondo azul oscuro del framebuffer).
+    fb.fb_set_fg(0x0040E040);
+    term.tputs("VestaOS 1.0  --  kernel de 64 bits en Vesta (framebuffer VBE)\n\n");
+    fb.fb_set_fg(0x00CFCFCF);
+
+    // Auto-test al arranque (validacion headless): carga el programa 'calc'
+    // desde el DISCO y lo ejecuta con dos expresiones.  Esto ejercita todo el
+    // cargador de programas + la tabla de API + la llamada por puntero, sin
+    // necesidad de entrada interactiva.  Sale por el debugcon.
+    term.tputs("selftest: ");
+    u64 ent = prog.prog_find("calc");
+    if (ent != 0) {
+        prog.prog_exec(ent, "2+3*4");        // -> "= 14"
+        prog.prog_exec(ent, "(2+3)*4");      // -> "= 20"
+    } else {
+        term.tputs("calc no encontrado\n");
+    }
+
+    // Terminal interactiva (teclado o serie); incluye calc y notepad.
+    shell.shell_run();
+
+    // shell_run() solo retorna con 'exit'; en HW real caemos al hlt del stub.
+}

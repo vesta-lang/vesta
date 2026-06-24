@@ -307,3 +307,76 @@ Validado por ejecucion (WSL): un kernel con `_kstart` en `.boot`, colocado en
 0x410000 por el script -> readelf confirma `.boot` y el entry en 0x410000; corre
 (exit 42).  Con esto el link-script Vex controla base, entry, stack y la VA de
 cada seccion -- configurable y potente, en el propio lenguaje.
+
+### @Naked: funciones sin prologo/epilogo (ISRs, stubs, cambio de modo)
+
+`@Naked` (Phase NR -- "Vesta sin runtime") marca una funcion cuyo cuerpo se
+emite VERBATIM: el codegen NO inserta prologo (`push rbp`/`sub rsp`), NI
+epilogo, NI el `ret` implicito.  El programador provee la salida real
+(`ret`/`iretq`/`iret`).  Misma semantica que `__attribute__((naked))` de GCC.
+Es el primitivo fundacional para dev OS: con `@Naked` + inline `asm { ... }` se
+escriben ISRs, stubs de entry y rutinas de cambio de modo sin un solo byte
+anadido por el compilador.
+
+```vex
+@Naked void isr_timer() {
+    asm volatile {
+        push rax
+        mov al, 0x20
+        out 0x20, al        // EOI al PIC maestro
+        pop rax
+        iretq
+    }
+}
+```
+
+Garantias del codegen AOT:
+
+- cero prologo/epilogo/ret implicito -- el `objdump` del cuerpo es EXACTAMENTE
+  el asm escrito.
+- NO se elimina por dead-strip aunque ningun `CALL` la referencie (un ISR se
+  referencia desde la IDT, invisible al compilador): las `@Naked` se siembran
+  siempre en el BFS de compilacion.
+- simbolo GLOBAL en el `.o` -> la rutina de setup de la IDT/GDT la referencia
+  por nombre (`dq isr_timer` en un bloque `bytes`, o desde otro `.o`/asm).
+
+Un `asm { ... }` SIN `register(...)` bindings (lee directamente los registros
+del ABI) es valido en `@Naked`: el cuerpo se ensambla verbatim y no marca
+in/out vregs.  Ejemplo completo: `60_naked_isr.vex`.  Test: `tests/aot/naked_test.sh`.
+Validado por ejecucion (PE host): `add_naked(40,2)` -> exit 42; ISR void ->
+`.o` ELF con `isr_timer` GLOBAL y cuerpo byte-exacto.
+
+### Mini-SO (VestaOS): bootloader propio -> protegido -> modo largo
+
+El subdirectorio **[`os/`](os/)** contiene un mini sistema operativo completo:
+un bootloader propio que pasa a modo protegido (32) y luego a modo largo (64),
+con un **kernel escrito en Vesta** (driver VGA, punteros, bucles, FFI inline-asm),
+todo compilado por el AOT (sin gcc/ld/nasm).  Ver [`os/README.md`](os/README.md).
+
+- `os/kernel.vex`: boot(16) -> protegido(32, paginacion PAE+LME+PG) ->
+  largo(64) -> `kmain()` en Vesta sobre VGA.
+- `os/os_protected.vex`: variante minima de 32 bits.
+- `os/run.py`: construir / ejecutar / validar en QEMU (portable).
+
+Las transiciones de modo usan FAR JUMPS SIMBOLICOS y la base del GDT es un
+simbolo, resueltos por el emisor AOT cross-bloque:
+
+```vex
+jmp 0x08:pm32            // far jump 16->32 a otro bloque, por SIMBOLO
+...
+bytes gdtr { dw 0x0027
+             dd gdt_ents }   // base del GDT por SIMBOLO (cross-bloque)
+```
+
+El emisor AOT resuelve estas referencias cross-bloque (un bloque `asm`/`bytes`
+referencia a otro por nombre): near `jmp`/`call` -> REL32; `dd sym` -> IMM32
+(VA absoluta de 32 bits); `dq sym` -> ABS64; `jmp SEG:sym` (far) -> IMM32 sobre
+el offset.  Validado en QEMU (`python os/run.py test all`): ambos arrancan,
+ejecutan las etapas y salen por isa-debug-exit (exit 133).
+
+Limitacion conocida (Keystone): un solo bloque `asm` NO puede cambiar de modo
+con `.code32`/`bits 32` (Keystone ignora la directiva intra-run).  Por eso cada
+modo es un bloque `@bits` separado, referenciados por simbolo -- mas limpio.
+Las referencias a simbolos en OPERANDOS DE MEMORIA (`lgdt [sym]`,
+`mov rsi, sym`) tampoco se resuelven aun; se usa la direccion @at fija (p.ej.
+`lgdt [0x7DC0]`).  El far jump y los datos (`dd sym`) SI son simbolicos.

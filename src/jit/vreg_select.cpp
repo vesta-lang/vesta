@@ -436,6 +436,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     out = MFunction{};
     out.name = fn.name;
+    /* Phase NR @Naked: propagar para suprimir prologo/epilogo/ret en el
+     * rewrite-to-physical.  El cuerpo (asm) provee su propia salida. */
+    out.naked = fn.is_naked;
     /* Solo-LSP (vista "Godbolt"): activar la captura de source_line en el
      * codegen vreg (AOT).  OFF por defecto -> sin efecto en produccion. */
     out.emit_line_map = emit_line_map;
@@ -1510,12 +1513,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         sgn, fidx));
                     break;
                 }
-                /* host_ptr: LOAD directo (commit 7).  u32-unsigned aun
-                 * cae a fallback en el path host. */
-                if (w == 4 && !sgn) {
-                    vreg_dbg(fn.name.c_str(), "load-u32");
-                    return false;
-                }
+                /* host_ptr: LOAD directo (commit 7).  u32 unsigned -> el
+                 * rewrite emite `mov r32,[mem]` (zero-extend por hardware). */
                 O.push_back(MInstr::make_load(vr(in.dst), vr(in.operands[0]),
                                               static_cast<uint8_t>(w), sgn));
                 break;
@@ -1642,7 +1641,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * in/out alimenta la liveness del AsmBlob. */
             case ir::IrOp::INLINE_ASM: {
                 flush_pending();
-                if (!has_inline_asm || vex::g_asm_backend == nullptr) {
+                /* Phase NR @Naked: un asm{} SIN register() bindings (cuerpo
+                 * de un ISR/stub) tiene @c asm_reg_bindings vacio -> antes
+                 * caia por @c !has_inline_asm.  El unico requisito real es el
+                 * backend de ensamblado; sin bindings, @c in.operands esta
+                 * vacio y el blob no marca in/out vregs (correcto). */
+                if (vex::g_asm_backend == nullptr) {
                     vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
                     return false;
                 }

@@ -189,6 +189,7 @@ struct Lowerer {
     const TargetRegInfo &tri;
     bool vm_abi = false;      ///< VM_ABI (salva RBX=ProcessVM*) vs host leaf
     bool no_frame = false;    ///< hoja frameless: sin push/mov rbp ni sub rsp
+    bool naked = false;       ///< Phase NR @Naked: sin prologo/epilogo/ret
     uint32_t k = 0;           ///< numero de callee-saved asignados
     uint32_t total_saved = 0; ///< callee-saved + (vm_abi ? 1 (rbx) : 0)
     int32_t spill_bytes = 0;  ///< tamano del area de spills (alineado)
@@ -409,6 +410,8 @@ struct Lowerer {
     }
 
     void emit_prologue(std::vector<MInstr> &out) const {
+        /* Phase NR @Naked: cero prologo.  El cuerpo (asm) controla todo. */
+        if (naked) return;
         if (!no_frame) {
             out.push_back(push(MReg::RBP));
             out.push_back(
@@ -443,6 +446,8 @@ struct Lowerer {
     }
 
     void emit_epilogue(std::vector<MInstr> &out) const {
+        /* Phase NR @Naked: cero epilogo (el cuerpo provee ret/iretq). */
+        if (naked) return;
         if (no_frame) {
             /* Frameless: rsp ya apunta justo encima de los registros
              * salvados (no hubo push rbp ni sub rsp).  Solo se deshacen
@@ -1002,6 +1007,11 @@ struct Lowerer {
         }
 
         if (op == MOp::RET) {
+            /* Phase NR @Naked: NO emitir el ret implicito; el cuerpo (asm)
+             * provee la salida real (ret/iretq).  Un ret aqui seria, en el
+             * mejor caso, codigo muerto tras un iretq; en el peor, pisaria
+             * la convencion de interrupcion. */
+            if (naked) return;
             emit_epilogue(out);
             out.push_back(MInstr::make_ret());
             return;
@@ -1057,10 +1067,16 @@ struct Lowerer {
             MOperand pdst = dst_spilled ? reg(scr0) : resolve(in.dst);
             if (width == 8) {
                 out.push_back(MInstr::make_unary(MOp::MOV, pdst, mem));
+            } else if (width == 4 && !sgn) {
+                /* u32: `mov r32, [mem]` zero-extiende a r64 por hardware
+                 * (no hay MOVZX de 32->64).  pdst a 32 bits -> sin REX.W. */
+                MOperand d32 = pdst;
+                if (d32.kind == MOperandKind::REG) d32.width = 4;
+                out.push_back(MInstr::make_unary(MOp::MOV, d32, mem));
             } else if (sgn) {
                 mem.flags = width; // ancho del src para MOVSX
                 out.push_back(MInstr::make_unary(MOp::MOVSX, pdst, mem));
-            } else { // u8/u16 (u32 lo filtro el selector)
+            } else { // u8/u16
                 mem.flags = width;
                 out.push_back(MInstr::make_unary(MOp::MOVZX, pdst, mem));
             }
@@ -1531,6 +1547,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
         }
     }
     Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca);
+    lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
     lw.pf = &pf; // labels intra-expansion (LOAD_VM/STORE_VM page-cache)
