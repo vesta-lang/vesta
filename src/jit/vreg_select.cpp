@@ -672,7 +672,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_arg(static_cast<uint8_t>(fi_a), vrt(av)));
                 ++fi_a;
             } else {
-                if (gi_a >= gmax) return false;
+                /* GP: overflow permitido -> stack arg (args ilimitados).
+                 * El rewrite lo coloca en [rsp+base+(idx-gmax)*8]. */
+                (void)gmax;
                 OO.push_back(
                     MInstr::make_arg(static_cast<uint8_t>(gi_a), vr(av)));
                 ++gi_a;
@@ -3341,13 +3343,44 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                 MOperand::make_reg(MReg::RAX, 4)));
                         break;
                     }
-                    if (nargs > host_leaf_nmax) {
-                        vreg_dbg(fn.name.c_str(), "calln(host-leaf-args)");
-                        return false;
+                    /* Args ILIMITADOS (AOT): indice por clase; GP overflow
+                     * -> pila (el rewrite lo coloca).  FP overflow -> bail. */
+                    {
+                        (void)host_leaf_nmax;
+                        const size_t hl_fmax =
+                            fp_ok ? tri_sel
+                                        .arg_regs[static_cast<size_t>(
+                                            RegClass::FP)]
+                                        .size()
+                                  : 0;
+                        size_t hl_gi = 0, hl_fi = 0;
+                        bool hl_fp_ovf = false;
+                        std::vector<MInstr> hl_args;
+                        for (size_t a = 0; a < nargs; ++a) {
+                            const ir::IrValueId av = in.operands[a];
+                            const bool is_f =
+                                fp_ok && av < fn.values.size() &&
+                                ir_type_is_float(fn.values[av].type);
+                            if (is_f) {
+                                if (hl_fi >= hl_fmax) {
+                                    hl_fp_ovf = true;
+                                    break;
+                                }
+                                hl_args.push_back(MInstr::make_arg(
+                                    static_cast<uint8_t>(hl_fi), vrt(av)));
+                                ++hl_fi;
+                            } else {
+                                hl_args.push_back(MInstr::make_arg(
+                                    static_cast<uint8_t>(hl_gi), vr(av)));
+                                ++hl_gi;
+                            }
+                        }
+                        if (hl_fp_ovf) {
+                            vreg_dbg(fn.name.c_str(), "calln(host-leaf-fp)");
+                            return false;
+                        }
+                        for (auto &mi : hl_args) O.push_back(mi);
                     }
-                    for (size_t a = 0; a < nargs; ++a)
-                        O.push_back(MInstr::make_arg(static_cast<uint8_t>(a),
-                                                     vr(in.operands[a])));
                     O.push_back(
                         MInstr::make_call_sym(out.intern_reloc_symbol(sym)));
                     if (in.dst != ir::IR_NO_VALUE)
@@ -3365,19 +3398,43 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "calln-unresolved");
                     return false;
                 }
-                const size_t nargs = in.operands.size();
-#if defined(_WIN32)
-                const size_t nmax = 4;
-#else
-                const size_t nmax = 6;
-#endif
-                if (nargs > nmax) { // stack args no soportados
-                    vreg_dbg(fn.name.c_str(), "calln-args");
+                /* Args ILIMITADOS (JIT/AOT): indice POR CLASE; los GP que
+                 * no caben en arg_regs van por PILA (el rewrite los coloca
+                 * en [rsp+base+j*8]).  El limite 12 era del bytecode/interp;
+                 * aqui no existe.  FP overflow (raro en FFI) -> bail. */
+                const size_t calln_nargs = in.operands.size();
+                const size_t calln_fmax =
+                    fp_ok
+                        ? tri_sel.arg_regs[static_cast<size_t>(RegClass::FP)]
+                              .size()
+                        : 0;
+                size_t cn_gi = 0, cn_fi = 0;
+                bool calln_fp_ovf = false;
+                std::vector<MInstr> calln_args;
+                for (size_t a = 0; a < calln_nargs; ++a) {
+                    const ir::IrValueId av = in.operands[a];
+                    const bool is_f = fp_ok && av < fn.values.size() &&
+                                      ir_type_is_float(fn.values[av].type);
+                    if (is_f) {
+                        if (cn_fi >= calln_fmax) {
+                            calln_fp_ovf = true;
+                            break;
+                        }
+                        calln_args.push_back(MInstr::make_arg(
+                            static_cast<uint8_t>(cn_fi), vrt(av)));
+                        ++cn_fi;
+                    } else {
+                        /* GP: overflow permitido -> stack arg. */
+                        calln_args.push_back(MInstr::make_arg(
+                            static_cast<uint8_t>(cn_gi), vr(av)));
+                        ++cn_gi;
+                    }
+                }
+                if (calln_fp_ovf) {
+                    vreg_dbg(fn.name.c_str(), "calln-fp-stack");
                     return false;
                 }
-                for (size_t a = 0; a < nargs; ++a)
-                    O.push_back(MInstr::make_arg(static_cast<uint8_t>(a),
-                                                 vr(in.operands[a])));
+                for (auto &mi : calln_args) O.push_back(mi);
                 O.push_back(MInstr::make_call_abs(out.intern_imm64(fn_addr)));
                 if (in.dst != ir::IR_NO_VALUE)
                     O.push_back(
