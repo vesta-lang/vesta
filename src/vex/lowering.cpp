@@ -7743,6 +7743,18 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
         param_bindings.emplace_back(e->params[i]->name, pv);
     }
 
+    // AOT (native_poo_) con capturas: el env se pasa como PARAMETRO OCULTO
+    // FINAL (convencion C `void* userdata`), no por R14.  Asi el helper usa
+    // el ABI nativo (sin READ_VM_REG) -> compilable en bare y llamable desde
+    // C.  El prologue de capturas lee de este param en vez de R14.
+    ir::IrValueId native_env_param = ir::IR_NO_VALUE;
+    if (native_poo_ && !e->captures.empty()) {
+        native_env_param = child_fn.new_value(ir::IrType::PTR, "%__env");
+        child_fn.values[native_env_param].is_param = true;
+        child_fn.values[native_env_param].is_host_ptr = true; // bare: env host
+        child_fn.params.push_back(native_env_param);
+    }
+
     const ir::IrBlockId entry = child_fn.new_block("entry");
 
     fn_ = &child_fn;
@@ -7768,23 +7780,30 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     // valor a un SSA value.
     ir::IrValueId env_ptr = ir::IR_NO_VALUE;
     if (!e->captures.empty()) {
-        env_ptr = child_fn.new_value(ir::IrType::PTR);
-        // (gap O): si la lambda fue marcada como env_in_heap,
-        // el env_ptr en R14 apunta a HEAP RAW (host_ptr), no a
-        // stack VM.  Marcamos is_host_ptr para que LOAD/STORE
-        // contra el env block emitan @c movh en lugar de @c mov.
-        if (e->env_in_heap) {
-            child_fn.values[env_ptr].is_host_ptr = true;
+        if (native_env_param != ir::IR_NO_VALUE) {
+            // AOT: el env es el parametro oculto final (host_ptr ya marcado).
+            // No se emite READ_VM_REG -> el helper no tiene ops runtime y
+            // compila en bare.
+            env_ptr = native_env_param;
+        } else {
+            env_ptr = child_fn.new_value(ir::IrType::PTR);
+            // (gap O): si la lambda fue marcada como env_in_heap,
+            // el env_ptr en R14 apunta a HEAP RAW (host_ptr), no a
+            // stack VM.  Marcamos is_host_ptr para que LOAD/STORE
+            // contra el env block emitan @c movh en lugar de @c mov.
+            if (e->env_in_heap) {
+                child_fn.values[env_ptr].is_host_ptr = true;
+            }
+            // raw_asm-elim wave 3: prologue del closure helper lee R14
+            // (env_ptr) via IrOp::READ_VM_REG (path VM/JIT).
+            ir::IrInstr rr{};
+            rr.op = ir::IrOp::READ_VM_REG;
+            rr.type = ir::IrType::PTR;
+            rr.dst = env_ptr;
+            rr.imm = 14; // R14 = env_ptr en la convention de callclosure
+            rr.source_line = e->loc.line;
+            child_fn.append(entry, std::move(rr));
         }
-        // raw_asm-elim wave 3: prologue del closure helper lee R14 (env_ptr)
-        // via IrOp::READ_VM_REG.  Reemplaza el viejo RAW_ASM `mov {dst}, r14`.
-        ir::IrInstr rr{};
-        rr.op = ir::IrOp::READ_VM_REG;
-        rr.type = ir::IrType::PTR;
-        rr.dst = env_ptr;
-        rr.imm = 14; // R14 = env_ptr en la calling convention de callclosure
-        rr.source_line = e->loc.line;
-        child_fn.append(entry, std::move(rr));
 
         for (size_t i = 0; i < e->captures.size(); ++i) {
             // Tipo del capture: usar el tipo guardado por el type
