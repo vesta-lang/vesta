@@ -228,6 +228,8 @@ VregEntries make_vreg_entries() {
     VregEntries e;
     if (g_runtime_entries) {
         e.callvirt = reinterpret_cast<uint64_t>(g_runtime_entries->callvirt);
+        e.unwrap_throw =
+            reinterpret_cast<uint64_t>(g_runtime_entries->unwrap_throw);
         e.gc_deref = reinterpret_cast<uint64_t>(g_runtime_entries->gc_deref);
         e.gc_handle =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_handle_for_ptr);

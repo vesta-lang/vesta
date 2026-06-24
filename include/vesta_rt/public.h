@@ -238,6 +238,15 @@ void vrt_monitor_notify_all(vrt_proc *proc, vrt_handle obj);
 void vrt_throw_fatal(vrt_proc *proc, uint32_t kind, const char *message);
 
 /**
+ * @brief Lanza FATAL_NULL_POINTER (unwrap sobre null).  Atajo 1-arg para
+ * el chequeo inline de UNWRAP en el JIT vreg VM_ABI: el codegen emite
+ * `test v,v; jne ok; call vrt_unwrap_throw(proc); ok:` -> el camino frio
+ * (null) llama aqui.  Equivale al throw del bytecode UNWRAP (0x26).
+ * Nunca retorna (salta al handler o aborta).
+ */
+void vrt_unwrap_throw(vrt_proc *proc);
+
+/**
  * @brief Push de un frame de manejo de excepciones.
  *
  * El handler_pc es la direccion absoluta del catch block (en bytecode
