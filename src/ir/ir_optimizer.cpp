@@ -4628,33 +4628,175 @@ bool ir_pass_reassoc(IrFunction &fn) {
 
 // Elision COMPTIME de UNWRAP: cuando el operando es provably non-null, el
 // chequeo es innecesario.  Convierte el UNWRAP en MOV (dst = operando); el
-// copy_prop/DCE posterior lo eliminan -> cero codigo.  Provably non-null:
-// constante != 0, ALLOCA (&local), STR_LIT_ADDR (.rodata), LABEL_ADDR (codigo/
-// dato), o el resultado de otro UNWRAP (ya verificado).
+// copy_prop/DCE posterior lo eliminan -> cero codigo.
+//
+// Dos fuentes de "non-null":
+//   1) GLOBAL (vale en cualquier punto, por dominancia del def en SSA):
+//      constante != 0, ALLOCA (&local), STR_LIT_ADDR (.rodata),
+//      LABEL_ADDR (codigo/dato), o el resultado de otro UNWRAP.
+//   2) FLOW-SENSITIVE: dentro de la rama de un null-check.  P.ej.
+//      `if (x != null) { ... !!x ... }` -> x es non-null en esa rama.
+//      Se resuelve con un dataflow "must-be-non-null" sobre el CFG:
+//      greatest fixpoint con init TOP (todo non-null) e interseccion en
+//      los merges; los hechos se generan en las aristas de BR_COND cuyo
+//      cond es CMP_NE/CMP_EQ contra 0 o ISNULL.  Captura tambien loops.
 bool ir_pass_elide_unwrap(IrFunction &fn) {
     std::unordered_map<IrValueId, IrOp> def_op;
+    std::unordered_map<IrValueId, const IrInstr *> def_instr;
     for (const auto &bb : fn.blocks)
         for (const auto &in : bb.instrs)
-            if (in.dst != IR_NO_VALUE) def_op[in.dst] = in.op;
+            if (in.dst != IR_NO_VALUE) {
+                def_op[in.dst] = in.op;
+                def_instr[in.dst] = &in;
+            }
+
+    auto globally_nonnull = [&](IrValueId v) -> bool {
+        if (v < fn.values.size() && fn.values[v].is_const &&
+            fn.values[v].const_val != 0)
+            return true;
+        auto it = def_op.find(v);
+        return it != def_op.end() &&
+               (it->second == IrOp::ALLOCA || it->second == IrOp::STR_LIT_ADDR ||
+                it->second == IrOp::LABEL_ADDR || it->second == IrOp::UNWRAP);
+    };
+
+    auto is_zero = [&](IrValueId v) -> bool {
+        return v < fn.values.size() && fn.values[v].is_const &&
+               fn.values[v].const_val == 0;
+    };
+
+    // Sigue cadenas BITCAST/MOV hasta la raiz: estas ops copian los bits del
+    // valor, asi que preservan la null-ness (un ptr es null sii su bitcast a
+    // i64 es 0).  El frontend compara `bitcast(maybe) != 0` pero el unwrap usa
+    // `maybe` directo -> hay que normalizar ambos a la misma raiz.
+    auto resolve_alias = [&](IrValueId v) -> IrValueId {
+        for (int g = 0; g < 64; ++g) {
+            auto it = def_instr.find(v);
+            if (it == def_instr.end()) break;
+            const IrInstr *d = it->second;
+            if ((d->op == IrOp::BITCAST || d->op == IrOp::MOV) &&
+                !d->operands.empty())
+                v = d->operands[0];
+            else
+                break;
+        }
+        return v;
+    };
+
+    // Hecho de arista de un terminador BR_COND: si su cond compara un valor
+    // contra null, devuelve ese valor probado (normalizado) y si la arista
+    // TRUE implica non-null.  false si no se reconoce el patron.
+    auto edge_fact = [&](const IrInstr &term, IrValueId &tested,
+                         bool &true_nonnull) -> bool {
+        if (term.op != IrOp::BR_COND || term.operands.empty()) return false;
+        auto it = def_instr.find(term.operands[0]);
+        if (it == def_instr.end()) return false;
+        const IrInstr *c = it->second;
+        if (c->op == IrOp::ISNULL && !c->operands.empty()) {
+            tested = resolve_alias(c->operands[0]); // isnull true => ES null
+            true_nonnull = false;
+            return true;
+        }
+        if ((c->op == IrOp::CMP_EQ || c->op == IrOp::CMP_NE) &&
+            c->operands.size() >= 2) {
+            const IrValueId a = c->operands[0], b = c->operands[1];
+            if (is_zero(b)) tested = resolve_alias(a);
+            else if (is_zero(a)) tested = resolve_alias(b);
+            else return false;
+            true_nonnull = (c->op == IrOp::CMP_NE); // x!=0 true => non-null
+            return true;
+        }
+        return false;
+    };
+
+    const size_t nb = fn.blocks.size();
+    // Mapa id de bloque -> indice (no asumimos id==indice).
+    std::unordered_map<IrBlockId, size_t> idx_of;
+    for (size_t i = 0; i < nb; ++i) idx_of[fn.blocks[i].id] = i;
+
+    // Reticulo: para cada bloque, conjunto de valores non-null en su entrada.
+    // top=true representa TOP (universo: todo non-null) para seedear el gfp.
+    struct Facts {
+        bool top = true;
+        std::unordered_set<IrValueId> s;
+    };
+    std::vector<Facts> in_facts(nb);
+    // Anclas: bloques sin preds (entry + inalcanzables) -> nada conocido.
+    for (size_t i = 0; i < nb; ++i)
+        if (fn.blocks[i].preds.empty()) in_facts[i] = Facts{false, {}};
+
+    bool stable = false;
+    int guard = 0;
+    while (!stable && guard++ < 4096) {
+        stable = true;
+        for (size_t bi = 0; bi < nb; ++bi) {
+            const IrBlock &bb = fn.blocks[bi];
+            if (bb.preds.empty()) continue; // ancla fija
+            Facts merged;
+            merged.top = true; // identidad de la interseccion
+            bool any = false;
+            for (IrBlockId pid : bb.preds) {
+                auto pit = idx_of.find(pid);
+                if (pit == idx_of.end()) continue;
+                const size_t pp = pit->second;
+                // out[pp -> bi] = in[pp] (+ hecho de arista).
+                Facts out = in_facts[pp];
+                const IrBlock &pbb = fn.blocks[pp];
+                if (!pbb.instrs.empty()) {
+                    const IrInstr &term = pbb.instrs.back();
+                    IrValueId tested = IR_NO_VALUE;
+                    bool tnn = false;
+                    if (edge_fact(term, tested, tnn)) {
+                        const bool to_true =
+                            (term.target_block == fn.blocks[bi].id);
+                        const bool to_false =
+                            (term.false_block == fn.blocks[bi].id);
+                        const bool implies_nonnull =
+                            (to_true && tnn) || (to_false && !tnn);
+                        if (implies_nonnull && tested != IR_NO_VALUE) {
+                            if (!out.top) out.s.insert(tested);
+                            // si out.top, ya incluye tested (universo)
+                        }
+                    }
+                }
+                // merged = merged ∩ out
+                if (!any) {
+                    merged = std::move(out);
+                    any = true;
+                } else if (out.top) {
+                    // ∩ TOP = merged (sin cambio)
+                } else if (merged.top) {
+                    merged = std::move(out);
+                } else {
+                    std::unordered_set<IrValueId> inter;
+                    for (IrValueId v : merged.s)
+                        if (out.s.count(v)) inter.insert(v);
+                    merged.s = std::move(inter);
+                }
+            }
+            // Comparar con el valor previo.
+            Facts &cur = in_facts[bi];
+            bool same = (cur.top == merged.top) && (cur.s == merged.s);
+            if (!same) {
+                cur = std::move(merged);
+                stable = false;
+            }
+        }
+    }
+
     bool changed = false;
-    for (auto &bb : fn.blocks) {
+    for (size_t bi = 0; bi < nb; ++bi) {
+        auto &bb = fn.blocks[bi];
+        const Facts &facts = in_facts[bi];
         for (auto &in : bb.instrs) {
             if (in.op != IrOp::UNWRAP || in.operands.empty()) continue;
             const IrValueId v = in.operands[0];
-            bool nonnull = false;
-            if (v < fn.values.size() && fn.values[v].is_const &&
-                fn.values[v].const_val != 0)
-                nonnull = true;
-            if (!nonnull) {
-                auto it = def_op.find(v);
-                if (it != def_op.end() &&
-                    (it->second == IrOp::ALLOCA ||
-                     it->second == IrOp::STR_LIT_ADDR ||
-                     it->second == IrOp::LABEL_ADDR ||
-                     it->second == IrOp::UNWRAP))
-                    nonnull = true;
-            }
-            if (nonnull) {
+            const IrValueId vr = resolve_alias(v); // normalizar a la raiz
+            // TOP en bloques alcanzables converge a no-top; si quedo top es
+            // inalcanzable -> no aplicamos el hecho de flujo.
+            const bool flow_nn =
+                !facts.top && (facts.s.count(v) || facts.s.count(vr));
+            if (globally_nonnull(v) || globally_nonnull(vr) || flow_nn) {
                 in.op = IrOp::MOV; // dst = v ; copy_prop/DCE lo limpian
                 changed = true;
             }
