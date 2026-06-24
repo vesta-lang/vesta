@@ -21268,8 +21268,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // raw_asm-elim: la variante SHARED (__new_<X>_shared) tambien se
             // emite estructurada usando IrOp::NEWOBJS (newobjs -> SharedHeap)
             // en lugar de NEWOBJ.  Asi NINGUN __new_<X> queda en RAW_ASM.
-            const bool emit_structured = true;
-            if (emit_structured) {
+            {
                 // v_slot = direccion del slot ClassInfo* cacheado
                 // (static_data).
                 const ir::IrValueId v_slot = fn.new_value(ir::IrType::PTR);
@@ -21360,112 +21359,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     ret.source_line = cd->loc.line;
                     fn.append(entry, std::move(ret));
                 }
-            } else {
-                // Construir RAW_ASM body.
-                std::ostringstream asm_;
-
-                // fix12 - optimizaciones bytecode-level del helper:
-                //  (1) Cargar cache en r1 directamente (skip mov r1, r12).
-                //  (2) push r0 directo (handle) en lugar de gchandle r12, r12.
-                //  (3) xchg cur0, r1 post-newobj para obtener host_ptr en r1
-                //      sin la secuencia xchg cur0, r12 + mov r1, r12.
-                // Para nargs=0 estas tres optimizaciones combinan a 3 instr
-                // menos. Para nargs>0 ahorran 1 instr (la shift derecha sigue
-                // necesaria).
-
-                if (nargs == 0) {
-                    // Caso comun y ultra-optimizado: ctor sin args (o sin ctor,
-                    // o ctor zero-init trivial saltado por fix12).
-                    // Cargar ClassInfo* directo en r1 (sin pasar por r12).
-                    asm_ << "mov r1, @Absolute(\"code.s_" << cache_idx
-                         << "\")\n";
-                    asm_ << "mov r1, [r1]\n"; // r1 = ClassInfo* (cacheado)
-                    asm_ << "mov r15, 1\n";
-                    asm_ << newobj_op
-                         << " r1\n"; // r0 = GcHandle, r1 = ClassInfo*
-                    if (effective_ctor) {
-                        // Preservar handle directamente con push r0 (sin
-                        // gchandle). newobj acaba de devolver r0=handle; el GC
-                        // del ctor body puede mover el objeto pero el handle es
-                        // estable.
-                        asm_ << "push r0\n";          // save handle pre-ctor
-                        asm_ << "gcderef cur0, r0\n"; // cur0 = host_ptr
-                        asm_ << "xchg cur0, r1\n"; // r1 = host_ptr (this); cur0
-                                                   // = ClassInfo*
-                        asm_ << "mov r15, 1\n";
-                        asm_ << "callvirt r1, " << ctor_vtable_idx << "\n";
-                        asm_ << "pop r12\n"; // r12 = handle (restored)
-                        asm_ << "gcderef cur0, r12\n"; // cur0 = host_ptr fresco
-                        asm_ << "xchg cur0, r12\n";    // r12 = host_ptr
-                        asm_ << "mov r0, r12\n";
-                    } else {
-                        // Sin ctor (real o saltado por zero-init opt):
-                        // convertir handle a host_ptr y devolverlo.  Los fields
-                        // ya estan a 0 por el memset de gc_heap.alloc.
-                        asm_ << "gcderef cur0, r0\n";
-                        asm_ << "xchg cur0, r12\n"; // r12 = host_ptr
-                        asm_ << "mov r0, r12\n";
-                    }
-                } else {
-                    // Caso con args: necesitamos salvar/restaurar args
-                    // alrededor del newobj (que clobbera r1) y hacer shift
-                    // derecha pre-callvirt. Salvar args en stack: push r1..r_N
-                    // (orden ascendente).
-                    for (size_t i = 0; i < nargs; ++i) {
-                        asm_ << "push r" << (i + 1) << "\n";
-                    }
-                    // Cargar cache en r1 (los args ya estan salvados).
-                    asm_ << "mov r1, @Absolute(\"code.s_" << cache_idx
-                         << "\")\n";
-                    asm_ << "mov r1, [r1]\n"; // r1 = ClassInfo*
-                    asm_ << "mov r15, 1\n";
-                    asm_ << newobj_op << " r1\n"; // r0 = handle
-                    // Convertir handle a host_ptr en r12 (que esta libre).
-                    asm_ << "gcderef cur0, r0\n";
-                    asm_ << "xchg cur0, r12\n"; // r12 = host_ptr
-                    // Restaurar args en orden inverso (LIFO): r_N, ..., r1.
-                    for (size_t i = nargs; i > 0; --i) {
-                        asm_ << "pop r" << i << "\n";
-                    }
-                    if (effective_ctor) {
-                        // Shift derecha: r_{N+1}=r_N, ..., r2=r1.
-                        for (size_t i = nargs + 1; i >= 2; --i) {
-                            asm_ << "mov r" << i << ", r" << (i - 1) << "\n";
-                        }
-                        asm_ << "mov r1, r12\n"; // this = host_ptr
-                        // fix - preservar handle a traves de callvirt
-                        // porque el ctor body puede hacer GC moves.
-                        asm_ << "gchandle r12, r12\n"; // r12 = handle
-                        asm_ << "push r12\n";
-                        asm_ << "mov r15, " << (nargs + 1) << "\n";
-                        asm_ << "callvirt r1, " << ctor_vtable_idx << "\n";
-                        asm_ << "pop r12\n";           // r12 = handle
-                        asm_ << "gcderef cur0, r12\n"; // cur0 = host_ptr fresco
-                        asm_ << "xchg cur0, r12\n";
-                    }
-                    asm_ << "mov r0, r12\n";
-                }
-
-                ir::IrInstr ra{};
-                ra.op = ir::IrOp::RAW_ASM;
-                ra.type = ir::IrType::PTR;
-                ra.dst = ir::IR_NO_VALUE;
-                ra.func_name = asm_.str();
-                ra.source_line = cd->loc.line;
-                fn.append(entry, std::move(ra));
-
-                // Cerrar con RET PTR (r0 ya tiene el handle).
-                ir::IrInstr ret{};
-                ret.op = ir::IrOp::RET;
-                ret.type = ir::IrType::PTR;
-                // No añadimos operands; el emisor IR genera 'ret' simple y r0
-                // ya esta cargado por el RAW_ASM previo.  Para que el emisor no
-                // intente construir RET con un valor SSA, usamos VOID y luego
-                // dejamos un fall-through.  Mejor: ret sin operandos como void.
-                ret.type = ir::IrType::VOID;
-                ret.source_line = cd->loc.line;
-                fn.append(entry, std::move(ret));
-            } // fin else (path RAW_ASM legacy: ctor / nargs>0 / shared)
+            }
 
             propagate_is_gc_object_through_phis(fn);
 
