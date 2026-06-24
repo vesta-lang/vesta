@@ -25,6 +25,8 @@ modelo clásico de un SO: kernel + programas de usuario + una ABI entre ambos.
 | :------ | :-- |
 | `kernel.vex` | Raíz: bootloader (asm 16/32/64) + `kmain` + auto-test. |
 | `prog.vex` | Cargador de programas + tabla de API del kernel. |
+| `fat.vex` | Driver **FAT12** de solo-lectura (BPB, FAT, root dir, cadenas de cluster). |
+| `fb.vex` | Consola de texto sobre framebuffer **VBE** 800×600×32 (fuente 8×16 del BIOS). |
 | `shell.vex` | Terminal: builtins (help/ver/cls/echo/exit) + lanza programas de disco. |
 | `term.vex` | E/S: teclado/serie de entrada; VGA/serie/debugcon de salida; `read_line`. |
 | `kbd.vex` | Driver de teclado PS/2 (scancode → ASCII, Shift). |
@@ -70,25 +72,32 @@ A:\> ver
 ## Cómo funciona
 
 ```text
-  DISCO (imagen)                         MEMORIA (en ejecucion)
+  DISCO (imagen FAT12)                    MEMORIA (en ejecucion)
   +------------------------+
-  | sector 0   boot (asm)  |  BIOS -->   0x7C00  boot -> protegido -> largo
-  | sect 1..   kernel      |  int13h -->  ramdisk (kernel + dir + programas)
-  | sect 96    directorio  |             0x70000 tabla de API (punteros)
-  | sect 97..  calc.prog   |  copia -->  0x100000 programa en ejecucion
-  |            edit.prog   |             0x90000  pila del kernel
+  | sector 0     boot+BPB  |  BIOS -->   0x7C00  boot -> protegido -> largo
+  | sect 1..21   kernel    |  int13h -->  ramdisk (imagen FAT12 completa)
+  | sect 22..23  FAT x2    |             0x70000 tabla de API (punteros)
+  | sect 24      root dir  |  carga -->  0x100000 programa en ejecucion
+  | sect 25..    clusters  |             0x90000  pila del kernel
+  |   CALC, EDIT (ficheros)|
   +------------------------+
 ```
 
-1. **Boot** (sector 0, asm): la BIOS lo carga en 0x7C00.  Lee el resto de la
-   imagen con `int 0x13 AH=42` (LBA extendido) como un *ramdisk* en memoria,
-   habilita A20, GDT, paginación, y entra en modo largo (64-bit).
+La imagen es una **FAT12 estándar** (BPB en el boot sector, dos FATs, root
+directory de 16 entradas, datos en clusters).  Es legible por herramientas
+externas (`mtools`, `mount -t vfat`).
+
+1. **Boot** (sector 0, asm): la BIOS lo carga en 0x7C00.  Empieza con
+   `jmp short + BPB FAT12`.  Lee el resto de la imagen con `int 0x13 AH=42`
+   (LBA extendido) como un *ramdisk* en memoria, habilita A20, GDT, paginación,
+   y entra en modo largo (64-bit).
 2. **kmain** ejecuta un auto-test (carga `calc` del disco y lo corre) y luego
    lanza la **terminal**.
 3. La terminal lee una línea (teclado o serie), separa comando y argumentos.
-   Si es un builtin lo ejecuta; si no, busca el nombre en el **directorio** del
-   disco, copia el programa a 0x100000 y **salta a su entry** vía puntero de
-   función: `prog_main(tabla_api, args)`.
+   Si es un builtin lo ejecuta; si no, el driver **FAT** (`fat.vex`) busca el
+   nombre 8.3 en el root directory, sigue su **cadena de clusters** para cargar
+   el fichero a 0x100000 y **salta a su entry** vía puntero de función:
+   `prog_main(tabla_api, args)`.
 4. El **programa** usa la **tabla de API** (un array de punteros a `puts`,
    `dec`, `getline`, ...) para llamar a los servicios del kernel.  No está
    enlazado con el kernel: solo conoce los índices de la tabla.
@@ -109,5 +118,6 @@ A:\> ver
 - Más programas de disco: crea `prog_<x>.vex` (entry `prog_main(api, args)`) y
   añádelo a `KERNEL_PROGRAMS` en `run.py`.
 - IDT + interrupciones (teclado/timer) con funciones `@Naked` como ISRs.
-- Un sistema de ficheros real (en vez del directorio fijo) + driver ATA on-demand.
+- Escritura FAT12 + driver ATA on-demand (hoy la FAT es solo-lectura sobre el
+  ramdisk; un driver ATA permitiría leer/escribir el disco real sin cargarlo entero).
 - Más servicios en la tabla de API (cls, color, lectura de teclado por scancode).
