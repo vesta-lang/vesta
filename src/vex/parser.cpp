@@ -521,6 +521,8 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             synchronize();
         }
     }
+    // @NoExceptions (sticky) se aplica a todo el modulo.
+    mod->no_exceptions = module_no_exceptions_;
     return mod;
 }
 
@@ -721,6 +723,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
     bool top_is_naked = false;          /* Phase NR: @Naked (ISRs/stubs) */
+    bool top_is_noexcept = false;       /* @NoExcept: fn sin excepciones */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
     /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
@@ -783,6 +786,10 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_panic_handler = true;
             else if (current_.lexeme == "Naked")
                 top_is_naked = true;
+            else if (current_.lexeme == "NoExcept")
+                top_is_noexcept = true;
+            else if (current_.lexeme == "NoExceptions")
+                module_no_exceptions_ = true; // sticky: modulo entero
             else if (current_.lexeme == "StringConcat")
                 top_is_string_concat = true;
             else if (current_.lexeme == "StringEq")
@@ -1424,6 +1431,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         // future_alloc + spawn { msgrecv handle + body + fulfill } y
         // devuelve el handle del future al caller.
         if (fd && top_is_async) fd->is_async = true;
+        if (fd && top_is_noexcept) fd->is_noexcept = true;
         if (fd && is_comptime_fn) fd->is_comptime = true;
         if (fd && top_is_macro) fd->is_macro = true;
         if (fd && top_is_pure) fd->is_pure = true;

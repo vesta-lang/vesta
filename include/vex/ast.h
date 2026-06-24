@@ -1446,6 +1446,11 @@ struct FunctionDecl : Node {
     /// stubs de entry y cambio de modo en dev OS.  Semantica de
     /// `__attribute__((naked))` de GCC.  Solo lo consume el codegen.
     bool is_naked = false;
+    /// @NoExcept (o modulo @NoExceptions): esta funcion promete no propagar
+    /// excepciones.  El frontend rechaza throw/try/catch en su cuerpo y el
+    /// codegen omite el bookkeeping de excepciones (cero overhead).  Un
+    /// unwrap-null en este scope termina el proceso (no es catchable).
+    bool is_noexcept = false;
     /// C-3: @StringConcat -- esta fn libre reemplaza el operador `+`
     /// (y el builtin str_concat) entre dos strings.  Firma esperada:
     /// fn(string, string) -> string.  Aplica en native_poo_ (AOT) y Full.
@@ -1971,6 +1976,10 @@ struct ClassDecl : Node {
  */
 struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
+    /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
+    /// modulo (todas las funciones + metodos lo heredan).  Para contextos
+    /// que no pueden tenerlas (kernel, freestanding, embedded).
+    bool no_exceptions = false;
     ModuleNode() : Node(NodeKind::Module) {}
 };
 

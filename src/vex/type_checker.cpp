@@ -3471,12 +3471,15 @@ void TypeChecker::check_functions() {
         // `comptime const string n = ...`.
         const bool saved_is_macro = current_fn_is_macro_;
         current_fn_is_macro_ = fn->is_macro;
+        const bool saved_noexcept = current_fn_is_noexcept_;
+        current_fn_is_noexcept_ = fn->is_noexcept || mod_.no_exceptions;
         // Tambien empujamos un scope comptime nuevo para los locals del
         // macro body (para que find_comptime_local_mut los encuentre).
         if (fn->is_macro) push_comptime_scope();
         check_block(fn->body.get(), fn_ret);
         if (fn->is_macro) pop_comptime_scope();
         current_fn_is_macro_ = saved_is_macro;
+        current_fn_is_noexcept_ = saved_noexcept;
         current_fn_return_type_ = saved_ret;
         pop_scope();
     }
@@ -4227,6 +4230,11 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
         return;
     case ast::NodeKind::TryStmt: {
         auto *ts = static_cast<ast::TryStmt *>(s);
+        if (current_fn_is_noexcept_)
+            diags_.error(ts->loc,
+                         "try/catch no permitido: la funcion esta marcada "
+                         "@NoExcept (o el modulo @NoExceptions).  Las "
+                         "excepciones estan deshabilitadas en este scope");
         if (ts->body) check_stmt(ts->body.get(), fn_return_type);
         for (auto &cc : ts->catches) {
             // Validar que el tipo de la excepcion (si se da) es
@@ -4259,6 +4267,11 @@ void TypeChecker::check_stmt(ast::Stmt *s, const Type &fn_return_type) {
     }
     case ast::NodeKind::ThrowStmt: {
         auto *th = static_cast<ast::ThrowStmt *>(s);
+        if (current_fn_is_noexcept_)
+            diags_.error(th->loc,
+                         "throw no permitido: la funcion esta marcada "
+                         "@NoExcept (o el modulo @NoExceptions).  Usa "
+                         "Result<T,E> o panic() para errores sin excepciones");
         if (th->value) {
             Type tv = check_expr(th->value.get());
             if (tv.kind != PrimitiveKind::CLASS &&

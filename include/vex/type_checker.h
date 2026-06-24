@@ -1520,6 +1520,9 @@ class TypeChecker {
     /// `comptime const` automaticamente para que los IdentExpr
     /// posteriores sean resoluble por el comptime evaluator.
     bool current_fn_is_macro_ = false;
+    /// @NoExcept/@NoExceptions: la funcion actual no admite excepciones.
+    /// check_stmt rechaza throw/try/catch cuando es true.
+    bool current_fn_is_noexcept_ = false;
 
     // Conteo de errores al inicio del run() para detectar exito.
     size_t initial_errors_ = 0;

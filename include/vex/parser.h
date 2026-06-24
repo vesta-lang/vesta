@@ -380,6 +380,10 @@ class Parser {
     /// de la siguiente decl).
     bool last_decl_was_target_skip_ = false;
 
+    /// @NoExceptions a nivel modulo (sticky): una vez visto, se propaga a
+    /// ModuleNode::no_exceptions -> todas las funciones lo heredan.
+    bool module_no_exceptions_ = false;
+
     /// Phase M6.a L.3: visibilidad pendiente capturada en
     /// @c parse_top_level_decl.  Los sub-parsers que produzcan un
     /// nodo top-level llaman @c apply_pending_visibility_ al final
