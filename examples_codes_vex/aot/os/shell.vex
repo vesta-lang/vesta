@@ -1,15 +1,17 @@
 // ===========================================================================
 // shell -- interprete de comandos estilo MS-DOS.
 //
-// Comandos integrados (builtins): help, ver, cls, echo, exit.  Cualquier otro
-// comando se busca como PROGRAMA en el disco (directorio) y, si existe, se
-// carga y ejecuta pasandole sus argumentos.  Asi calc y notepad (edit) son
-// programas SEPARADOS en disco, no codigo del kernel.
+// Builtins: help, ver, cls, echo, ls/dir, cat/type, write, rm/del, mkdir, exit.
+// Cualquier otro comando se busca como PROGRAMA en el disco (FAT) y, si existe,
+// se carga y ejecuta pasandole sus argumentos.  Los comandos de escritura
+// (write/rm/mkdir) modifican el ramdisk EN RAM (sin write-back a disco: en modo
+// largo no hay int 0x13), por lo que los cambios persisten hasta el reinicio.
 // ===========================================================================
 import "term";
 import "fb";
 import "serial";
 import "prog";
+import "fat";
 
 bool streq(char* a, char* b) {
     u64 i = 0;
@@ -29,72 +31,179 @@ bool starts_with(char* s, char* p) {
     return true;
 }
 
+u64 slen(char* s) {
+    u64 i = 0;
+    while (s[i] != 0) { i = i + 1; }
+    return i;
+}
+
 void cmd_help() {
     term.tputs("Comandos integrados:\n");
-    term.tputs("  help          esta ayuda\n");
-    term.tputs("  ver           version del sistema\n");
-    term.tputs("  cls           limpia la pantalla\n");
-    term.tputs("  echo <texto>  imprime el texto\n");
-    term.tputs("  exit          apaga el sistema\n");
+    term.tputs("  help              esta ayuda\n");
+    term.tputs("  ver               version del sistema\n");
+    term.tputs("  cls               limpia la pantalla\n");
+    term.tputs("  echo <texto>      imprime el texto\n");
+    term.tputs("  ls / dir          lista los ficheros\n");
+    term.tputs("  cat <fich>        muestra el contenido\n");
+    term.tputs("  write <f> <txt>   crea/sobrescribe un fichero\n");
+    term.tputs("  rm <fich>         borra un fichero\n");
+    term.tputs("  mkdir <dir>       crea un directorio\n");
+    term.tputs("  exit              apaga el sistema\n");
     term.tputs("Programas en disco:\n");
-    term.tputs("  calc <expr>   calculadora (programa)\n");
-    term.tputs("  edit          editor de texto (programa)\n");
+    term.tputs("  calc <expr>       calculadora (programa)\n");
+    term.tputs("  edit              editor de texto (programa)\n");
+}
+
+// Imprime el nombre 8.3 de una entrada (11 bytes) como "NAME.EXT".
+void print_83(u8* ent) {
+    u64 i = 0;
+    while (i < 8 && ent[i] != 32) {
+        term.tputc((u64) ent[i]);
+        i = i + 1;
+    }
+    if (ent[8] != 32) {
+        term.tputc(46);                            // '.'
+        u64 j = 8;
+        while (j < 11 && ent[j] != 32) {
+            term.tputc((u64) ent[j]);
+            j = j + 1;
+        }
+    }
+}
+
+// ls / dir -- lista las entradas validas del root directory.
+void cmd_ls() {
+    u64 root = fat.fat_root_addr();
+    u64 n = fat.fat_root_ents();
+    u64 e = 0;
+    u64 files = 0;
+    while (e < n) {
+        u8* ent = (u8*) (root + e * 32);
+        if (ent[0] == 0) { e = n; }                // fin del directorio
+        else {
+            // saltar borradas (0xE5) y la etiqueta de volumen (attr 0x08).
+            if (ent[0] != 0xE5 && (ent[0x0B] & 0x08) == 0) {
+                print_83(ent);
+                if ((ent[0x0B] & 0x10) != 0) {
+                    term.tputs("    <DIR>\n");
+                } else {
+                    u32* sp = (u32*) (ent + 0x1C);
+                    term.tputs("    ");
+                    term.tdec((i64) (u64) sp[0]);
+                    term.tputs(" bytes\n");
+                }
+                files = files + 1;
+            }
+            e = e + 1;
+        }
+    }
+    term.tdec((i64) files);
+    term.tputs(" entrada(s)\n");
+}
+
+// cat <fich> -- muestra el contenido de un fichero (byte a byte).
+void cmd_cat(char* name) {
+    if (name[0] == 0) { term.tputs("uso: cat <fichero>\n"); return; }
+    u64 ent = fat.fat_find(name);
+    if (ent == 0) { term.tputs("no encontrado: "); term.tputs(name);
+                    term.tputc(10); return; }
+    u8* buf = (u8*) 0x90000;                        // scratch en RAM libre
+    u64 size = fat.fat_load(ent, buf);
+    u64 i = 0;
+    while (i < size) { term.tputc((u64) buf[i]); i = i + 1; }
+    if (size > 0 && buf[size - 1] != 10) { term.tputc(10); }
+}
+
+// write <fich> <texto> -- crea/sobrescribe un fichero con el texto dado.
+void cmd_write(char* rest) {
+    // separar el nombre (primer token) del texto (resto tras el espacio).
+    u8 name[16];
+    u64 i = 0;
+    while (rest[i] != 0 && rest[i] != 32 && i < 15) {
+        name[i] = (u8) rest[i];
+        i = i + 1;
+    }
+    name[i] = 0;
+    if (i == 0) { term.tputs("uso: write <fichero> <texto>\n"); return; }
+    char* text = rest + i;
+    if (text[0] == 32) { text = text + 1; }         // saltar el espacio
+    u64 n = slen(text);
+    u64 w = fat.fat_write((char*) name, (u8*) text, n);
+    term.tputs("escritos ");
+    term.tdec((i64) w);
+    term.tputs(" bytes en ");
+    term.tputs((char*) name);
+    term.tputc(10);
+}
+
+// rm <fich> -- borra un fichero.
+void cmd_rm(char* name) {
+    if (name[0] == 0) { term.tputs("uso: rm <fichero>\n"); return; }
+    u64 ok = fat.fat_delete(name);
+    if (ok != 0) { term.tputs("borrado: "); }
+    else { term.tputs("no encontrado: "); }
+    term.tputs(name);
+    term.tputc(10);
+}
+
+// mkdir <dir> -- crea un directorio.
+void cmd_mkdir(char* name) {
+    if (name[0] == 0) { term.tputs("uso: mkdir <dir>\n"); return; }
+    u64 ok = fat.fat_mkdir(name);
+    if (ok != 0) { term.tputs("creado: "); }
+    else { term.tputs("fallo (ya existe / disco lleno): "); }
+    term.tputs(name);
+    term.tputc(10);
 }
 
 // Bucle principal de la terminal.
 void shell_run() {
     u8 line[256];
-    u8 pname[24];
+    u8 word[32];
     fb.fb_set_fg(0x00CFCFCF);
     term.tputs("\nVestaOS 1.0  --  terminal (escribe 'help')\n\n");
     while (true) {
         term.tputs("A:\\> ");
         u64 len = term.read_line(line, 256);
         char* cmd = (char*) line;
-        if (len == 0) {
+        if (len == 0) { continue; }
+        // separar el primer token (word) del resto (args).
+        u64 i = 0;
+        while (cmd[i] != 0 && cmd[i] != 32 && i < 31) {
+            word[i] = (u8) cmd[i];
+            i = i + 1;
+        }
+        word[i] = 0;
+        char* w = (char*) word;
+        char* args = cmd + i;
+        if (args[0] == 32) { args = args + 1; }     // saltar el espacio
+
+        if (streq(w, "help")) { cmd_help(); continue; }
+        if (streq(w, "ver")) {
+            term.tputs("VestaOS 1.0 (kernel modular en Vesta, AOT 64-bit)\n");
             continue;
         }
-        if (streq(cmd, "help")) {
-            cmd_help();
+        if (streq(w, "cls")) { fb.fb_clear(); continue; }
+        if (streq(w, "exit")) {
+            term.tputs("Apagando VestaOS...\n");
+            serial.outb(0xF4, 0x42);
+            return;
+        }
+        if (streq(w, "echo")) { term.tputs(args); term.tputc(10); continue; }
+        if (streq(w, "ls") || streq(w, "dir")) { cmd_ls(); continue; }
+        if (streq(w, "cat") || streq(w, "type")) { cmd_cat(args); continue; }
+        if (streq(w, "write")) { cmd_write(args); continue; }
+        if (streq(w, "rm") || streq(w, "del")) { cmd_rm(args); continue; }
+        if (streq(w, "mkdir") || streq(w, "md")) { cmd_mkdir(args); continue; }
+
+        // No es builtin: buscar un programa en disco.
+        u64 ent = prog.prog_find(w);
+        if (ent == 0) {
+            term.tputs("comando o programa no encontrado: ");
+            term.tputs(w);
+            term.tputc(10);
         } else {
-            if (streq(cmd, "ver")) {
-                term.tputs("VestaOS 1.0 (kernel modular en Vesta, AOT 64-bit)\n");
-            } else {
-                if (streq(cmd, "cls")) {
-                    fb.fb_clear();
-                } else {
-                    if (streq(cmd, "exit")) {
-                        term.tputs("Apagando VestaOS...\n");
-                        serial.outb(0xF4, 0x42);
-                        return;
-                    } else {
-                        if (starts_with(cmd, "echo ")) {
-                            term.tputs(cmd + 5);
-                            term.tputc(10);
-                        } else {
-                            // Separar nombre de programa y argumentos.
-                            u64 i = 0;
-                            while (cmd[i] != 0 && cmd[i] != 32 && i < 23) {
-                                pname[i] = (u8) cmd[i];
-                                i = i + 1;
-                            }
-                            pname[i] = 0;
-                            char* args = cmd + i;
-                            if (args[0] == 32) {
-                                args = args + 1;   // saltar el espacio
-                            }
-                            u64 ent = prog.prog_find((char*) pname);
-                            if (ent == 0) {
-                                term.tputs("comando o programa no encontrado: ");
-                                term.tputs((char*) pname);
-                                term.tputc(10);
-                            } else {
-                                prog.prog_exec(ent, args);
-                            }
-                        }
-                    }
-                }
-            }
+            prog.prog_exec(ent, args);
         }
     }
 }
