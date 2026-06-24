@@ -15510,6 +15510,34 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     //
     // emit_print_newline():  CALLN vio_print_newline (cero args).
     // -----------------------------------------------------------------
+
+    // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
+    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vex con
+    // ese nombre (p.ej. `void __vex_write(u8* b, u64 n) {...}`) se llama a la
+    // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
+    // si no, se usa el simbolo C por defecto (CALLN vex_bare_io:<prim>, lo
+    // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
+    // programables en el propio lenguaje sin import ni libreria std.
+    auto emit_io_prim = [&](const std::string &prim,
+                            const std::vector<ir::IrValueId> &args,
+                            uint32_t line) {
+        const bool user_defined = (tc_.function_sig_by_name(prim) != nullptr);
+        ir::IrInstr ins{};
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.operands = args;
+        ins.source_line = line;
+        if (user_defined) {
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = prim;
+        } else {
+            out_mod_->register_native_import("vex_bare_io", prim);
+            ins.op = ir::IrOp::CALLN;
+            ins.func_name = "vex_bare_io:" + prim;
+        }
+        fn_->append(current_block_, std::move(ins));
+    };
+
     auto emit_print_string_literal = [&](const std::string &text,
                                          uint32_t line) {
         if (text.empty()) return;
@@ -15526,19 +15554,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         fn_->append(current_block_, std::move(is));
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
         if (native_poo_) {
-            // AOT/bare: sin proc -> escribir los bytes via el sink nativo
-            // __vex_write(host_ptr, len).  El usuario puede redefinir ese
-            // simbolo (stdout a su gusto).  El v_str es host_ptr en native_poo.
+            // AOT/bare: sin proc -> escribir los bytes via __vex_write (el
+            // usuario puede redefinirlo en Vex).  v_str es host_ptr.
             fn_->values[v_str].is_host_ptr = true;
-            out_mod_->register_native_import("vex_bare_io", "__vex_write");
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "vex_bare_io:__vex_write";
-            ins.operands = {v_str, v_len};
-            ins.source_line = line;
-            fn_->append(current_block_, std::move(ins));
+            emit_io_prim("__vex_write", {v_str, v_len}, line);
             return;
         }
         const ir::IrValueId v_proc = emit_getproc(line);
@@ -15804,15 +15823,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ext.source_line = ex->loc.line;
                 fn_->append(current_block_, std::move(ext));
             }
-            out_mod_->register_native_import("vex_bare_io", sym);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "vex_bare_io:" + sym;
-            ins.operands = {arg};
-            ins.source_line = ex->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit_io_prim(sym, {arg}, ex->loc.line);
             return;
         }
 
@@ -16182,14 +16193,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         if (native_poo_) {
-            out_mod_->register_native_import("vex_bare_io", "__vex_flush");
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "vex_bare_io:__vex_flush";
-            ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit_io_prim("__vex_flush", {}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -16252,15 +16256,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
-            out_mod_->register_native_import("vex_bare_io", nf);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "vex_bare_io:" + nf;
-            ins.operands = {v};
-            ins.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            emit_io_prim(nf, {v}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -16349,16 +16345,17 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // Forzar i64 para coincidir con la firma C de vio_print_int.
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64,
                            e->loc.line);
-        const std::string pint_lib =
-            native_poo_ ? std::string("vex_bare_io") : lib;
-        const std::string pint_sym =
-            native_poo_ ? "__vex_print_i64" : "vio_print_int";
-        out_mod_->register_native_import(pint_lib, pint_sym);
+        if (native_poo_) {
+            emit_io_prim("__vex_print_i64", {v}, e->loc.line);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_mod_->register_native_import(lib, "vio_print_int");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = pint_lib + ":" + pint_sym;
+        ins.func_name = lib + ":vio_print_int";
         ins.operands = {v};
         ins.source_line = e->loc.line;
         fn_->append(current_block_, std::move(ins));
