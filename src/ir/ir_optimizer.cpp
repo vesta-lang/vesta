@@ -5555,7 +5555,19 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* Ultima instr debe ser RET. */
         const auto &last = fn.blocks[0].instrs.back();
         if (last.op != IrOp::RET) return false;
-        if (fn.blocks[0].instrs.size() > INLINE_THRESHOLD) return false;
+        /* Factoria de closures (construye una closure, tipicamente para
+         * devolverla): inlinar con threshold MAYOR.  Inlinar la factoria en
+         * el caller hace que el env nazca en el frame del caller -> si la
+         * closure no escapa de ahi, un pase posterior promueve el env de
+         * heap a stack (cero alocacion, cero leak).  Es la base de las
+         * lambdas capturantes que escapan SIN heap (opcion 3). */
+        size_t eff_threshold = INLINE_THRESHOLD;
+        for (const auto &ins : fn.blocks[0].instrs)
+            if (ins.op == IrOp::MAKE_CLOSURE) {
+                eff_threshold = INLINE_THRESHOLD * 3 + 8; // holgura p/ factoria
+                break;
+            }
+        if (fn.blocks[0].instrs.size() > eff_threshold) return false;
         /* No inlinear funciones que contengan CALLs recursivas a si mismas. */
         for (const auto &ins : fn.blocks[0].instrs) {
             if ((ins.op == IrOp::CALL || ins.op == IrOp::TAILCALL) &&
