@@ -2985,6 +2985,67 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* CALLITF: dispatch de interfaz via itable.  operands[0]=obj,
+             * operands[1]=params_ptr (iface+metodo, lo lee el runtime),
+             * operands[2..]=args.  El itable scan es complejo (IC slot) ->
+             * version simple: marshalling + vrt_callitf(proc, obj, params, 0)
+             * (ic_slot=0 -> sin cache, resuelve cada vez; correcto).  El
+             * inline-IC es optimizacion futura.  Retira de slots. */
+            case ir::IrOp::CALLITF: {
+                flush_pending();
+                if (!vm || ent.callitf == 0) {
+                    vreg_dbg(fn.name.c_str(), "callitf(no-vm/no-addr)");
+                    return false;
+                }
+                if (in.operands.size() < 2) {
+                    vreg_dbg(fn.name.c_str(), "callitf-shape");
+                    return false;
+                }
+                const ir::IrValueId ci_obj = in.operands[0];
+                const ir::IrValueId ci_params = in.operands[1];
+                const size_t ci_nargs =
+                    in.operands.size() > 2 ? in.operands.size() - 2 : 0;
+                /* Stage: regs[1]=obj, regs[2..]=args, regs[15]=nargs+1. */
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vm_reg_mem(1), vr(ci_obj)));
+                for (size_t a = 0; a < ci_nargs; ++a)
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, vm_reg_mem(static_cast<int>(a) + 2),
+                        vr(in.operands[a + 2])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vm_reg_mem(15),
+                    MOperand::make_imm32(static_cast<int32_t>(ci_nargs + 1))));
+                /* vrt_callitf(proc, obj, params, 0).  R10/R11 temporales. */
+#if defined(_WIN32)
+                const MReg cif_pr = MReg::RCX, cif_obj = MReg::RDX,
+                           cif_par = MReg::R8, cif_ic = MReg::R9;
+#else
+                const MReg cif_pr = MReg::RDI, cif_obj = MReg::RSI,
+                           cif_par = MReg::RDX, cif_ic = MReg::RCX;
+#endif
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(ci_obj)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R11, 8), vr(ci_params)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cif_obj, 8),
+                                               MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cif_par, 8),
+                                               MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cif_ic, 8),
+                                               MOperand::make_imm32(0)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cif_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callitf)));
+                if (in.dst != ir::IR_NO_VALUE)
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                   vm_reg_mem(0)));
+                break;
+            }
+
             /* CALLCLOSURE: %dst = vrt_callclosure(proc, fn_addr, env).
              * func_ptr = SSA con fn_addr (helper __lambda_N o jit_code);
              * operands[0] = env_ptr (0 si sin captures); operands[1..] =
