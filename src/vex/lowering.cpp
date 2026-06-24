@@ -1148,6 +1148,52 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         default: break;
         }
     }
+    // AOT (native_poo_): los campos estaticos de clase se mapean a globales
+    // planos (slot __static_<Clase>_<campo>).  Pre-grabamos su inicializador
+    // constante en los bytes del slot (no hay __module_init en bare).  Las
+    // rutas de lectura/escritura usan el mismo slot via get_or_create.
+    if (native_poo_) {
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
+            auto *cd = static_cast<ast::ClassDecl *>(decl.get());
+            for (const auto &fld : cd->fields) {
+                if (!fld.is_static) continue;
+                const uint64_t slot = get_or_create_runtime_global_slot(
+                    "__static_" + cd->name + "_" + fld.name, 8);
+                if (!fld.init) continue;
+                uint64_t cval = 0;
+                bool have = false;
+                const ast::Expr *ie = fld.init.get();
+                if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                    cval = static_cast<const ast::BoolLitExpr *>(ie)->value ? 1u
+                                                                           : 0u;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                    cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                    if (u->op == ast::UnOp::Neg && u->operand &&
+                        u->operand->kind == ast::NodeKind::IntLitExpr) {
+                        cval = (uint64_t)(-(int64_t)static_cast<
+                            const ast::IntLitExpr *>(u->operand.get())
+                                              ->value);
+                        have = true;
+                    }
+                }
+                if (have && slot < out_module.static_data.entries.size()) {
+                    uint32_t off =
+                        out_module.static_data.entries[slot].byte_offset;
+                    for (int k = 0; k < 8; ++k)
+                        out_module.static_data.bytes[off + (size_t)k] =
+                            (uint8_t)((cval >> (8 * k)) & 0xFF);
+                }
+            }
+        }
+    }
     if (main_decl) lower_function(main_decl, out_module);
 
     for (auto &decl : mod_.decls) {
@@ -22010,6 +22056,39 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
                                  base_id->name + "'");
             return ir::IR_NO_VALUE;
         }
+        // AOT (native_poo_): un campo estatico es almacenamiento por-clase,
+        // sin ClassRegistry.  Lo mapeamos a un GLOBAL plano (slot static_data
+        // unico por <Clase>_<campo>) -> STR_LIT_ADDR + LOAD, igual que un
+        // global runtime.  Evita findclass+getstatic (runtime, no bare).
+        if (native_poo_) {
+            const ir::IrType ir_t = ir_type_from_primitive(s_typ.kind);
+            const uint64_t slot = get_or_create_runtime_global_slot(
+                "__static_" + base_id->name + "_" + e->field_name, 8);
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_addr;
+                is.imm = slot;
+                is.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(is));
+            }
+            ir::IrValueId v_val = fn_->new_value(ir_t == ir::IrType::VOID
+                                                     ? ir::IrType::I64
+                                                     : ir_t);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = (ir_t == ir::IrType::VOID) ? ir::IrType::I64 : ir_t;
+                ld.dst = v_val;
+                ld.operands = {v_addr};
+                ld.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ld));
+            }
+            return v_val;
+        }
         // 1) Sprint 5: findclass via IR ops (ALLOCA + STORE + FINDCLASS).
         const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
         const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
@@ -22231,6 +22310,30 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         const ir::IrType field_ir = ir_type_from_primitive(s_typ.kind);
         const ir::IrValueId rhs_cast =
             cast_if_needed(rhs, fn_->values[rhs].type, field_ir, loc.line);
+        // AOT (native_poo_): campo estatico = global plano -> STR_LIT_ADDR +
+        // STORE (mismo slot que la lectura: <Clase>_<campo>).
+        if (native_poo_) {
+            const uint64_t slot = get_or_create_runtime_global_slot(
+                "__static_" + base_id->name + "_" + target->field_name, 8);
+            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_addr;
+                is.imm = slot;
+                is.source_line = loc.line;
+                fn_->append(current_block_, std::move(is));
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = field_ir;
+            st.operands = {rhs_cast, v_addr};
+            st.source_line = loc.line;
+            fn_->append(current_block_, std::move(st));
+            return rhs_cast;
+        }
         // 1) Sprint 5: findclass via IR ops.
         const uint64_t cname_idx = intern_class_name(*out_mod_, base_id->name);
         const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
