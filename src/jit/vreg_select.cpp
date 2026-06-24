@@ -1272,6 +1272,34 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             /* Conversiones enteras: BITCAST (mismo ancho -> MOV),
              * SEXT/ZEXT/CAST (extension via MOVSX/MOVZX).  Las
              * truncaciones y los floats caen a fallback por ahora. */
+            /* UNWRAP (AOT/HOST_LEAF): assert non-null + passthrough.  Los
+             * provably-non-null ya los elimino ir_pass_elide_unwrap (cero
+             * codigo).  Para el resto: chequeo INLINE hiper-eficiente
+             *   test v,v ; jne ok ; call __vex_panic_null ; ok: ; mov dst,v
+             * Hot path = test + branch predicho-no-tomado (~0 overhead); el
+             * panic es cold.  __vex_panic_null es un hook (default en la
+             * bare-lib, redefinible -- freestanding lo provee el usuario). */
+            case ir::IrOp::UNWRAP: {
+                flush_pending();
+                if (in.operands.empty() || in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "unwrap-shape");
+                    return false;
+                }
+                if (abi != AbiKind::HOST_LEAF) {
+                    vreg_dbg(fn.name.c_str(), "unwrap-vm-abi");
+                    return false; // VM_ABI (JIT): cae a interp
+                }
+                const ir::IrValueId v = in.operands[0];
+                const MLabelId Lok = out.new_label();
+                O.push_back(mk_test(v, v));
+                O.push_back(MInstr::make_jcc(MCond::NE, Lok));
+                O.push_back(MInstr::make_call_sym(
+                    out.intern_reloc_symbol("__vex_panic_null")));
+                O.push_back(MInstr::make_label_def(Lok));
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vr(in.dst), vr(v)));
+                break;
+            }
             case ir::IrOp::BITCAST: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;
