@@ -595,6 +595,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         return static_cast<ir::IrValueId>(id);
     };
 
+    /* Devirtualizacion de punteros de funcion conocidos: si un value viene de
+     * un LABEL_ADDR (direccion de una funcion concreta), guardamos su nombre.
+     * CALLCLOSURE/CALLIND cuyo func_ptr este aqui se bajan a un CALL DIRECTO
+     * (CALL_SYM) en vez de una llamada indirecta -> sin indireccion (mejor
+     * que un puntero de funcion C).  Caso tipico: lambda sin capturas llamada
+     * en el mismo scope donde se define. */
+    std::unordered_map<ir::IrValueId, std::string> label_fn;
+
     /* FP-regalloc: operando VREG de un value IR con su CLASE (FP si el value
      * es float y fp_ok) y ANCHO correctos (4 para f32, 8 para f64/resto).
      * El rewrite consulta la clase (@c is_fp_operand) para enrutar los MOV
@@ -2512,10 +2520,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "callind(host-leaf-args)");
                         return false;
                     }
-                    MInstr c;
-                    c.op = MOp::CALL;
-                    c.src1 = vr(in.func_ptr);
-                    O.push_back(c);
+                    // Devirtualizacion: func_ptr de un LABEL_ADDR conocido ->
+                    // CALL DIRECTO (sin indireccion).
+                    auto lf = label_fn.find(in.func_ptr);
+                    if (lf != label_fn.end()) {
+                        O.push_back(MInstr::make_call_sym(
+                            out.intern_reloc_symbol(lf->second)));
+                    } else {
+                        MInstr c;
+                        c.op = MOp::CALL;
+                        c.src1 = vr(in.func_ptr);
+                        O.push_back(c);
+                    }
                     if (in.dst != ir::IR_NO_VALUE) {
                         const bool dst_f =
                             fp_ok && in.dst < fn.values.size() &&
@@ -2755,10 +2771,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "callclosure(host-leaf-args)");
                         return false;
                     }
-                    MInstr cc;
-                    cc.op = MOp::CALL;
-                    cc.src1 = vr(in.func_ptr);
-                    O.push_back(cc);
+                    // Devirtualizacion: si el fn_addr proviene de un LABEL_ADDR
+                    // conocido (lambda conocida estaticamente) -> CALL DIRECTO
+                    // (sin indireccion, mejor que un puntero de funcion C).
+                    auto lf = label_fn.find(in.func_ptr);
+                    if (lf != label_fn.end()) {
+                        O.push_back(MInstr::make_call_sym(
+                            out.intern_reloc_symbol(lf->second)));
+                    } else {
+                        MInstr cc;
+                        cc.op = MOp::CALL;
+                        cc.src1 = vr(in.func_ptr);
+                        O.push_back(cc);
+                    }
                     if (in.dst != ir::IR_NO_VALUE) {
                         const bool dst_f =
                             fp_ok && in.dst < fn.values.size() &&
@@ -3143,6 +3168,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         O.push_back(MInstr::make_lea_rip_sym(vr(in.dst), sidx));
                     else
                         O.push_back(MInstr::make_mov_sym(vr(in.dst), sidx));
+                    // Recordar que dst es la direccion de esta funcion conocida
+                    // -> permite devirtualizar un CALL indirecto sobre ella.
+                    label_fn[in.dst] = in.func_name;
                     break;
                 }
                 /* VM/JIT: resolvemos via resolve_symbol (Phase D.3-H). */
