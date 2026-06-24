@@ -12,6 +12,7 @@ import "fb";
 import "serial";
 import "prog";
 import "fat";
+import "clock";
 
 bool streq(char* a, char* b) {
     u64 i = 0;
@@ -46,8 +47,15 @@ void cmd_help() {
     term.tputs("  ls / dir          lista los ficheros\n");
     term.tputs("  cat <fich>        muestra el contenido\n");
     term.tputs("  write <f> <txt>   crea/sobrescribe un fichero\n");
+    term.tputs("  echo <t> > <f>    redirige el texto a un fichero\n");
+    term.tputs("  cp <src> <dst>    copia un fichero\n");
+    term.tputs("  mv <old> <new>    renombra un fichero\n");
+    term.tputs("  touch <fich>      crea un fichero vacio\n");
     term.tputs("  rm <fich>         borra un fichero\n");
     term.tputs("  mkdir <dir>       crea un directorio\n");
+    term.tputs("  df                espacio en disco\n");
+    term.tputs("  date / uptime     fecha/hora y tiempo activo\n");
+    term.tputs("  beep              pitido del altavoz\n");
     term.tputs("  exit              apaga el sistema\n");
     term.tputs("Programas en disco:\n");
     term.tputs("  calc <expr>       calculadora (programa)\n");
@@ -83,8 +91,12 @@ void cmd_ls() {
         else {
             // saltar borradas (0xE5) y la etiqueta de volumen (attr 0x08).
             if (ent[0] != 0xE5 && (ent[0x0B] & 0x08) == 0) {
+                u64 attr = (u64) ent[0x0B];
+                if ((attr & 0x10) != 0) { fb.fb_set_fg(0x0040E0E0); }  // cian
+                else { fb.fb_set_fg(0x00CFCFCF); }                     // gris
                 print_83(ent);
-                if ((ent[0x0B] & 0x10) != 0) {
+                fb.fb_set_fg(0x00808890);                    // gris tenue p/ meta
+                if ((attr & 0x10) != 0) {
                     term.tputs("    <DIR>\n");
                 } else {
                     u32* sp = (u32*) (ent + 0x1C);
@@ -97,6 +109,7 @@ void cmd_ls() {
             e = e + 1;
         }
     }
+    fb.fb_set_fg(0x00CFCFCF);                       // restaurar gris
     term.tdec((i64) files);
     term.tputs(" entrada(s)\n");
 }
@@ -156,6 +169,138 @@ void cmd_mkdir(char* name) {
     term.tputc(10);
 }
 
+// Separa el primer token de `rest` en `abuf` y devuelve el puntero al segundo
+// token (saltando el espacio).
+char* split_two(char* rest, u8* abuf, u64 maxn) {
+    u64 i = 0;
+    while (rest[i] != 0 && rest[i] != 32 && i < maxn - 1) {
+        abuf[i] = (u8) rest[i];
+        i = i + 1;
+    }
+    abuf[i] = 0;
+    char* b = rest + i;
+    while (b[0] == 32) { b = b + 1; }
+    return b;
+}
+
+// date -- fecha y hora actuales del RTC.
+void cmd_date() {
+    term.tputs("Fecha: ");
+    clock.clock_print_date();
+    term.tputs("  ");
+    clock.clock_print_time();
+    term.tputc(10);
+}
+
+// uptime -- tiempo desde el arranque.
+void cmd_uptime() {
+    u64 s = clock.uptime_secs();
+    term.tputs("Uptime: ");
+    term.tdec((i64) (s / 3600));
+    term.tputs("h ");
+    term.tdec((i64) ((s / 60) % 60));
+    term.tputs("m ");
+    term.tdec((i64) (s % 60));
+    term.tputs("s\n");
+}
+
+// df -- uso del disco (calculado de la FAT).
+void cmd_df() {
+    u64 total = fat.fat_cluster_count();
+    u64 free = fat.fat_free_clusters();
+    u64 cb = fat.fat_cluster_bytes();
+    term.tputs("Disco A:  ");
+    term.tdec((i64) (total * cb));
+    term.tputs(" total, ");
+    term.tdec((i64) (free * cb));
+    term.tputs(" libres, ");
+    term.tdec((i64) ((total - free) * cb));
+    term.tputs(" usados (bytes)\n");
+}
+
+// cp <src> <dst> -- copia un fichero.
+void cmd_cp(char* rest) {
+    u8 a[16];
+    char* dst = split_two(rest, a, 16);
+    if (a[0] == 0 || dst[0] == 0) { term.tputs("uso: cp <src> <dst>\n"); return; }
+    u64 ent = fat.fat_find((char*) a);
+    if (ent == 0) { term.tputs("no encontrado: "); term.tputs((char*) a);
+                    term.tputc(10); return; }
+    u8* buf = (u8*) 0x90000;
+    u64 size = fat.fat_load(ent, buf);
+    u64 w = fat.fat_write(dst, buf, size);
+    term.tputs("copiados ");
+    term.tdec((i64) w);
+    term.tputs(" bytes\n");
+}
+
+// mv <old> <new> -- renombra (en sitio, conserva los clusters).
+void cmd_mv(char* rest) {
+    u8 a[16];
+    char* dst = split_two(rest, a, 16);
+    if (a[0] == 0 || dst[0] == 0) { term.tputs("uso: mv <old> <new>\n"); return; }
+    u64 ent = fat.fat_find((char*) a);
+    if (ent == 0) { term.tputs("no encontrado: "); term.tputs((char*) a);
+                    term.tputc(10); return; }
+    if (fat.fat_find(dst) != 0) { fat.fat_delete(dst); }   // sobrescribir destino
+    fat.fat_mk83(dst, (u8*) ent);                          // renombrar en sitio
+    term.tputs("renombrado a ");
+    term.tputs(dst);
+    term.tputc(10);
+}
+
+// touch <fich> -- crea un fichero vacio si no existe.
+void cmd_touch(char* name) {
+    if (name[0] == 0) { term.tputs("uso: touch <fich>\n"); return; }
+    if (fat.fat_find(name) != 0) { return; }               // ya existe
+    fat.fat_write(name, (u8*) "", 0);
+    term.tputs("creado: ");
+    term.tputs(name);
+    term.tputc(10);
+}
+
+// beep -- pitido por el altavoz del PC (PIT canal 2 + puerto 0x61).
+void cmd_beep() {
+    serial.outb(0x43, 0xB6);
+    u64 div = 1193180 / 1000;                              // ~1000 Hz
+    serial.outb(0x42, div & 0xFF);
+    serial.outb(0x42, (div >> 8) & 0xFF);
+    u64 t = serial.inb(0x61);
+    serial.outb(0x61, t | 3);                              // altavoz ON
+    u64 i = 0;
+    while (i < 8000000) { i = i + 1; }                     // espera (busy loop)
+    serial.outb(0x61, t & 0xFC);                           // altavoz OFF
+}
+
+// echo <texto> [> fichero] -- imprime, o escribe a fichero con redireccion.
+void cmd_echo(char* args) {
+    i64 gt = 0 - 1;
+    u64 i = 0;
+    while (args[i] != 0) {
+        if (args[i] == 62) { gt = (i64) i; }               // '>'
+        i = i + 1;
+    }
+    if (gt < 0) { term.tputs(args); term.tputc(10); return; }
+    // texto = args[0..gt) (trim final), fichero = primer token tras '>'.
+    u8 text[200];
+    u64 tn = 0;
+    u64 j = 0;
+    while (j < (u64) gt && tn < 199) { text[tn] = (u8) args[j]; tn = tn + 1; j = j + 1; }
+    while (tn > 0 && text[tn - 1] == 32) { tn = tn - 1; }
+    text[tn] = 0;
+    char* f = args + (u64) gt + 1;
+    while (f[0] == 32) { f = f + 1; }
+    u8 fname[16];
+    u64 fk = 0;
+    while (f[fk] != 0 && f[fk] != 32 && fk < 15) { fname[fk] = (u8) f[fk]; fk = fk + 1; }
+    fname[fk] = 0;
+    if (fk == 0) { term.tputs("uso: echo <texto> > <fich>\n"); return; }
+    fat.fat_write((char*) fname, text, tn);
+    term.tputs("escrito en ");
+    term.tputs((char*) fname);
+    term.tputc(10);
+}
+
 // Bucle principal de la terminal.
 void shell_run() {
     u8 line[256];
@@ -163,7 +308,9 @@ void shell_run() {
     fb.fb_set_fg(0x00CFCFCF);
     term.tputs("\nVestaOS 1.0  --  terminal (escribe 'help')\n\n");
     while (true) {
+        fb.fb_set_fg(0x0040E040);                   // prompt en verde
         term.tputs("A:\\> ");
+        fb.fb_set_fg(0x00CFCFCF);                    // entrada en gris
         u64 len = term.read_line(line, 256);
         char* cmd = (char*) line;
         if (len == 0) { continue; }
@@ -189,12 +336,21 @@ void shell_run() {
             serial.outb(0xF4, 0x42);
             return;
         }
-        if (streq(w, "echo")) { term.tputs(args); term.tputc(10); continue; }
+        if (streq(w, "echo")) { cmd_echo(args); continue; }
         if (streq(w, "ls") || streq(w, "dir")) { cmd_ls(); continue; }
         if (streq(w, "cat") || streq(w, "type")) { cmd_cat(args); continue; }
         if (streq(w, "write")) { cmd_write(args); continue; }
+        if (streq(w, "cp") || streq(w, "copy")) { cmd_cp(args); continue; }
+        if (streq(w, "mv") || streq(w, "rename") || streq(w, "ren")) {
+            cmd_mv(args); continue;
+        }
+        if (streq(w, "touch")) { cmd_touch(args); continue; }
         if (streq(w, "rm") || streq(w, "del")) { cmd_rm(args); continue; }
         if (streq(w, "mkdir") || streq(w, "md")) { cmd_mkdir(args); continue; }
+        if (streq(w, "df")) { cmd_df(); continue; }
+        if (streq(w, "date") || streq(w, "time")) { cmd_date(); continue; }
+        if (streq(w, "uptime")) { cmd_uptime(); continue; }
+        if (streq(w, "beep")) { cmd_beep(); continue; }
 
         // No es builtin: buscar un programa en disco.
         u64 ent = prog.prog_find(w);

@@ -115,6 +115,23 @@ u64 fat_cluster_count() {
     return data_sects / spc;
 }
 
+// Tamano de un cluster en bytes.
+u64 fat_cluster_bytes() {
+    return bpb_u8(0x0D) * 512;
+}
+
+// Numero de clusters libres (entrada FAT == 0) en el volumen.
+u64 fat_free_clusters() {
+    u64 count = fat_cluster_count();
+    u64 free = 0;
+    u64 c = 2;
+    while (c < count + 2) {
+        if (fat_next(c) == 0) { free = free + 1; }
+        c = c + 1;
+    }
+    return free;
+}
+
 // Escribe el valor `val` (12 bits) en la entrada FAT de `cluster`, en TODAS
 // las copias de la FAT (normalmente 2) para mantenerlas coherentes.
 void fat_set_next(u64 cluster, u64 val) {

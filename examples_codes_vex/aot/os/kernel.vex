@@ -24,6 +24,7 @@ import "fb";
 import "shell";
 import "prog";
 import "term";
+import "clock";          // reloj RTC (clock_init para el uptime)
 
 // ---------------------------------------------------------------------------
 // SECTOR 1 -- bootloader (asm).  Layout fijo con @at; firma 0xAA55 en 0x1FE.
@@ -192,6 +193,7 @@ bytes sig { db 0x55, 0xAA }
 void kmain() {
     serial.serial_init();
     fb.fb_init();           // consola grafica (linear framebuffer VBE 800x600x32)
+    clock.clock_init();     // registra el instante de arranque (para uptime)
 
     // Banner (verde sobre el fondo azul oscuro del framebuffer).
     fb.fb_set_fg(0x0040E040);
@@ -211,8 +213,9 @@ void kmain() {
         term.tputs("calc no encontrado\n");
     }
 
-    // Terminal interactiva (teclado o serie); incluye calc y notepad + los
-    // comandos de ficheros (ls, cat, write, rm, mkdir).
+    // Terminal interactiva (teclado o serie); incluye calc/edit, los comandos
+    // de ficheros (ls/cat/write/cp/mv/touch/rm/mkdir/echo>), reloj (date/
+    // uptime), df y beep.
     shell.shell_run();
 
     // shell_run() solo retorna con 'exit'; en HW real caemos al hlt del stub.
