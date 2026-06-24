@@ -25,6 +25,7 @@
  * muestra o guarda el texto desmontado.
  */
 #include "assembly/assembly.h"
+#include <algorithm> // UCRT64: no transitivo
 #include <capstone/capstone.h>
 #include <keystone/keystone.h>
 

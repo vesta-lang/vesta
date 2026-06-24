@@ -21,6 +21,7 @@
  * .cpp.
  */
 #include "util/assembler_multiprocess.h"
+#include <algorithm> // UCRT64: no transitivo
 #include "profiler/timer.h"
 #include "util/fs_utils.h"
 #include "linker/velb_linker_bytecode.h"

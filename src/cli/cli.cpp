@@ -25,6 +25,7 @@
  * VestaViewManager::run().
  */
 #include "cli/cli.h"
+#include <algorithm> // UCRT64: no transitivo
 #include "cli/vsh.h"
 
 #include <cstdio>

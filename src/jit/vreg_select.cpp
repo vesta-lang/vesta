@@ -42,6 +42,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>  // std::string (UCRT64 no lo incluye transitivo)
 #include <utility> // std::swap (FCMP operand reorder)
 #include <vector>  // critical-edge splitting (pred_count, working copy)
 
