@@ -90,6 +90,7 @@ void RuntimeEntries::resolve() {
     // -----------------------------------------------------------------
     throw_fatal = &vrt_throw_fatal;
     unwrap_throw = &vrt_unwrap_throw;
+    proc_pid = &vrt_proc_pid;
     tryenter = &vrt_tryenter;
     tryleave = &vrt_tryleave;
     throw_user = &vrt_throw_user;

@@ -1321,6 +1321,47 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_unary(MOp::MOV, vr(in.dst), vr(v)));
                 break;
             }
+            /* ISNULL: dst = (src == 0) ? 1 : 0.  Inline puro, cero runtime:
+             * test src,src (ZF<=>src==0) ; mov dst,0 (no toca flags) ;
+             * setcc-E dst (byte bajo).  Mismo idiom que flush_pending para
+             * materializar un bool. */
+            case ir::IrOp::ISNULL: {
+                flush_pending();
+                if (in.operands.empty() || in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "isnull-shape");
+                    return false;
+                }
+                const ir::IrValueId v = in.operands[0];
+                O.push_back(mk_test(v, v));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_imm32(0)));
+                O.push_back(mk_setcc(in.dst, MCond::E)); // ZF <=> src==0
+                break;
+            }
+            /* GETPID: PID encoded del proceso actual.  Es un servicio del VM
+             * (vm->pid), no una op pura ni overridable -> CALL vrt_proc_pid.
+             * Op raro (no hot).  AOT bare no tiene VM -> fallback. */
+            case ir::IrOp::GETPID: {
+                flush_pending();
+                if (in.dst == ir::IR_NO_VALUE) break;
+                if (abi == AbiKind::HOST_LEAF || ent.proc_pid == 0) {
+                    vreg_dbg(fn.name.c_str(), "getpid-no-entry");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg ca0 = MReg::RCX;
+#else
+                const MReg ca0 = MReg::RDI;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(ca0, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.proc_pid)));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_reg(MReg::RAX, 8)));
+                break;
+            }
             case ir::IrOp::BITCAST: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;
