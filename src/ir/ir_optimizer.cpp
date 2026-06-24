@@ -4626,6 +4626,43 @@ bool ir_pass_reassoc(IrFunction &fn) {
     return changed;
 }
 
+// Elision COMPTIME de UNWRAP: cuando el operando es provably non-null, el
+// chequeo es innecesario.  Convierte el UNWRAP en MOV (dst = operando); el
+// copy_prop/DCE posterior lo eliminan -> cero codigo.  Provably non-null:
+// constante != 0, ALLOCA (&local), STR_LIT_ADDR (.rodata), LABEL_ADDR (codigo/
+// dato), o el resultado de otro UNWRAP (ya verificado).
+bool ir_pass_elide_unwrap(IrFunction &fn) {
+    std::unordered_map<IrValueId, IrOp> def_op;
+    for (const auto &bb : fn.blocks)
+        for (const auto &in : bb.instrs)
+            if (in.dst != IR_NO_VALUE) def_op[in.dst] = in.op;
+    bool changed = false;
+    for (auto &bb : fn.blocks) {
+        for (auto &in : bb.instrs) {
+            if (in.op != IrOp::UNWRAP || in.operands.empty()) continue;
+            const IrValueId v = in.operands[0];
+            bool nonnull = false;
+            if (v < fn.values.size() && fn.values[v].is_const &&
+                fn.values[v].const_val != 0)
+                nonnull = true;
+            if (!nonnull) {
+                auto it = def_op.find(v);
+                if (it != def_op.end() &&
+                    (it->second == IrOp::ALLOCA ||
+                     it->second == IrOp::STR_LIT_ADDR ||
+                     it->second == IrOp::LABEL_ADDR ||
+                     it->second == IrOp::UNWRAP))
+                    nonnull = true;
+            }
+            if (nonnull) {
+                in.op = IrOp::MOV; // dst = v ; copy_prop/DCE lo limpian
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
 bool ir_pass_dce(IrFunction &fn) {
     // Construir conjunto de valores que son usados en algun operando
     std::unordered_set<IrValueId> used;
@@ -8244,6 +8281,11 @@ void ir_optimize(IrModule &mod, OptLevel level) {
                 // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr VM
                 // por LOAD elidido.  Bench struct_field: ~270M instr ahorradas.
                 any |= ir_pass_load_narrow(fn);
+                // Elision COMPTIME de unwrap: si el valor es provably non-null
+                // (CONST!=0, &local/ALLOCA, STR_LIT_ADDR, LABEL_ADDR, Some(const)
+                // tras const-prop/SLF) el UNWRAP se vuelve MOV -> copy_prop/DCE
+                // lo borran -> cero overhead.  Beneficia VM/JIT/AOT.
+                any |= ir_pass_elide_unwrap(fn);
                 // Segunda ronda de DCE tras plegado/TCO/loop header inline/CSE.
                 any |= ir_pass_dce(fn);
             }

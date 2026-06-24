@@ -15276,6 +15276,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Optional via instrucciones VM isnull/unwrap (referencias).
     const bool is_isPresent = (name == "isPresent");
     const bool is_unwrap = (name == "unwrap");
+    // unwrap_unchecked: opt-out per-sitio.  Misma forma que unwrap pero
+    // SIN chequeo (baja a identidad / LOAD payload directo).  UB si null.
+    const bool is_unwrap_unchecked = (name == "unwrap_unchecked");
     // Optional/Result builtins del compilador (stack values).
     const bool is_Some = (name == "Some");
     const bool is_None = (name == "None");
@@ -15433,7 +15436,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_fopen || is_fwrite || is_fclose || is_malloc || is_free ||
         is_forName || is_getClass || is_getField || is_getMethod ||
         is_newInstance || is_invoke || is_proceed || is_isPresent ||
-        is_unwrap || is_Some || is_None || is_Ok || is_Err || is_isOk ||
+        is_unwrap || is_unwrap_unchecked ||
+        is_Some || is_None || is_Ok || is_Err || is_isOk ||
         is_value || is_error || is_wait || is_notify || is_notifyAll ||
         is_cpu_features ||
         is_pid || is_msgsend || is_msgrecv || is_args_count || is_args_get ||
@@ -18598,9 +18602,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // `unwrap` (genera NPE si flag==0); luego LOAD payload at +8.
     // Para referencias (CLASS/PTR) legacy: VM `unwrap` directo sobre
     // el puntero (0 = null).
-    if (is_unwrap) {
+    if (is_unwrap || is_unwrap_unchecked) {
+        const char *bn = is_unwrap_unchecked ? "unwrap_unchecked" : "unwrap";
         if (e->args.size() != 1) {
-            error_at(e->loc, "unwrap: requiere exactamente 1 argumento");
+            error_at(e->loc, std::string(bn) +
+                                 ": requiere exactamente 1 argumento");
             out_value = ir::IR_NO_VALUE;
             return true;
         }
@@ -18610,30 +18616,34 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         // Optional<T>: LOAD flag, unwrap (lanza si 0), LOAD payload.
+        // unwrap_unchecked: omite flag+UNWRAP, LOAD payload directo (UB
+        // si vacio) -- cero coste, sin red.
         if (e->args[0]->result_type.kind == PrimitiveKind::OPTIONAL) {
             const Type at = e->args[0]->result_type;
             const Type payload_st =
                 at.pointee ? *at.pointee : Type{PrimitiveKind::I64};
             const ir::IrType payload_t =
                 ir_type_from_primitive(payload_st.kind);
-            // Load flag (i64) from buf+0.
-            const ir::IrValueId v_flag = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr ldf{};
-            ldf.op = ir::IrOp::LOAD;
-            ldf.type = ir::IrType::I64;
-            ldf.dst = v_flag;
-            ldf.operands = {v_arg};
-            ldf.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(ldf));
-            // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
-            const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr uw{};
-            uw.op = ir::IrOp::UNWRAP;
-            uw.type = ir::IrType::I64;
-            uw.dst = v_chk;
-            uw.operands = {v_flag};
-            uw.source_line = e->loc.line;
-            fn_->append(current_block_, std::move(uw));
+            if (is_unwrap) {
+                // Load flag (i64) from buf+0.
+                const ir::IrValueId v_flag = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ldf{};
+                ldf.op = ir::IrOp::LOAD;
+                ldf.type = ir::IrType::I64;
+                ldf.dst = v_flag;
+                ldf.operands = {v_arg};
+                ldf.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(ldf));
+                // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
+                const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr uw{};
+                uw.op = ir::IrOp::UNWRAP;
+                uw.type = ir::IrType::I64;
+                uw.dst = v_chk;
+                uw.operands = {v_flag};
+                uw.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(uw));
+            }
             // Load payload from buf+8.
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
@@ -18656,7 +18666,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = v_dst;
             return true;
         }
-        // Referencias legacy: VM `unwrap` directo.
+        // Referencias: unwrap_unchecked baja a IDENTIDAD (el "valor" de
+        // un unwrap es el mismo puntero; lo unico que anade unwrap es el
+        // chequeo).  Devolvemos v_arg directo -> cero IR, cero coste.
+        if (is_unwrap_unchecked) {
+            out_value = v_arg;
+            return true;
+        }
+        // Referencias legacy: VM `unwrap` directo (con chequeo runtime).
         const ir::IrType t = fn_->values[v_arg].type;
         const ir::IrValueId v_dst = fn_->new_value(t);
         ir::IrInstr ra{};

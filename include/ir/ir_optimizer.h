@@ -125,6 +125,13 @@ void ir_optimize(IrModule &mod, OptLevel level);
 bool ir_pass_dce(IrFunction &fn);
 
 /**
+ * @brief Elision comptime de UNWRAP cuando el operando es provably non-null
+ *        (CONST!=0, ALLOCA, STR_LIT_ADDR, LABEL_ADDR, o resultado de UNWRAP).
+ *        Convierte el UNWRAP en MOV -> copy_prop/DCE lo eliminan (cero codigo).
+ */
+bool ir_pass_elide_unwrap(IrFunction &fn);
+
+/**
  * @brief Pase Dead Alloc Elimination.
  *
  * Elimina CALLs a funciones synthetic @c __new_<ClassName> (helpers de

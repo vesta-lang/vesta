@@ -156,6 +156,11 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::GEP:
     case IrOp::MVTAKE_IR:
     case IrOp::ISNULL:
+    // UNWRAP: el selector AOT lo baja a inline `test v,v; jne ok; call
+    // __vex_panic_null; ok: mov dst,v` (los provably-non-null ya los elimino
+    // ir_pass_elide_unwrap).  El call al hook lo resuelve el linker (como
+    // cualquier extern); en freestanding el usuario provee __vex_panic_null.
+    case IrOp::UNWRAP:
     case IrOp::MEMCPY:
     // -- atomicos enteros (lock-prefixed nativos) --
     case IrOp::ATOMIC_LD_I64:

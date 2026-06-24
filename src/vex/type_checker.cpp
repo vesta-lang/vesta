@@ -9800,9 +9800,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         e->result_type = rt;
         return rt;
     }
-    if (id->name == "unwrap") {
+    // unwrap(x)          : assert non-null, throw/panic si null.
+    // unwrap_unchecked(x): MISMA semantica de TIPO, pero el lowering NO
+    //                      emite chequeo (baja a identidad).  UB si x es
+    //                      null -- es el opt-out per-sitio (estilo Rust
+    //                      unwrap_unchecked); nombre greppable para audits.
+    if (id->name == "unwrap" || id->name == "unwrap_unchecked") {
+        const char *bn = id->name.c_str();
         if (e->args.size() != 1) {
-            diags_.error(e->loc, "unwrap: se esperaba 1 argumento, recibidos " +
+            diags_.error(e->loc, std::string(bn) +
+                                     ": se esperaba 1 argumento, recibidos " +
                                      std::to_string(e->args.size()));
         }
         Type at = e->args.empty() ? Type{} : check_expr(e->args[0].get());
@@ -9816,8 +9823,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         if (at.kind != PrimitiveKind::CLASS && at.kind != PrimitiveKind::PTR &&
             at.kind != PrimitiveKind::I64 && at.kind != PrimitiveKind::COUNT) {
-            diags_.error(e->loc, "unwrap: el argumento debe ser una referencia "
-                                 "o Optional<T>, no '" +
+            diags_.error(e->loc, std::string(bn) +
+                                     ": el argumento debe ser una referencia "
+                                     "o Optional<T>, no '" +
                                      type_to_string(at) + "'");
         }
         e->result_type = at;

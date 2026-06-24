@@ -20,6 +20,19 @@
  * emiten via @c __vex_write -- aqui no se tocan.
  */
 #include <stdio.h>
+#include <stdlib.h>
+
+/**
+ * @brief Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).
+ *
+ * El selector AOT emite el chequeo INLINE (test+branch) y solo llama aqui en
+ * el camino frio (valor null).  Default: mensaje + abort.  Redefinible (en
+ * freestanding el usuario DEBE proveerlo, p.ej. halt del kernel).
+ */
+void __vex_panic_null(void) {
+    fputs("panic: unwrap de un valor null (Optional/nonnull vacio)\n", stderr);
+    abort();
+}
 
 /** @brief Sink de stdout: escribe @p len bytes de @p buf. */
 void __vex_write(const char *buf, unsigned long long len) {
