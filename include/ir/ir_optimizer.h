@@ -204,6 +204,19 @@ bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
 bool ir_pass_promote_local_raw_alloc(IrFunction &fn);
 
 /**
+ * @brief AOT/native_poo: promueve el env de una closure de HEAP
+ *        (GC_ALLOC/RAW_ALLOC) a STACK (ALLOCA) cuando no escapa del frame.
+ *
+ * Closure-aware: relaja el escape-check para `STORE R,closure_slot[+k]` (slot
+ * ALLOCA local) y `CALLCLOSURE env=R` (uso sincrono), que el pase generico
+ * marca como escape.  Conservador: cualquier uso desconocido -> no promueve
+ * (peor caso = rechazo en bare, NUNCA use-after-free).  Habilita closures
+ * capturantes que escapan (p.ej. tras inlinar la factoria) SIN heap ni leak.
+ * @return true si promociono algun env.
+ */
+bool ir_pass_promote_closure_env(IrFunction &fn);
+
+/**
  * @brief Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.
  *
  * Analiza los `call @__new_X(...)` de @p fn y determina cuales NO escapan

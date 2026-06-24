@@ -1188,6 +1188,224 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
 }
 
 //==============================================================================
+//  Pase ir_pass_promote_closure_env  (AOT / native_poo)
+//
+//  Promueve el env de una closure de HEAP (GC_ALLOC / RAW_ALLOC) a STACK
+//  (ALLOCA) cuando el env NO escapa del frame.  Es closure-aware: relaja el
+//  escape-check del pase generico para los 2 patrones seguros propios de una
+//  closure (que el generico marca como escape):
+//    (1) STORE R, closure_slot[+k]  con closure_slot un ALLOCA LOCAL  -> R
+//        fluye a un slot local; se "tinta" ese slot y se siguen sus loads.
+//    (2) CALLCLOSURE con R como env (operands[0]) o func_ptr -> uso SiNCRONO.
+//  Cualquier OTRO uso de un valor tintado (RET, STORE a no-local, arg de CALL,
+//  THROW, op desconocida) -> ESCAPA -> NO se promueve (queda GC_ALLOC, que en
+//  bare se rechaza limpio; NUNCA se deja un heap sin liberar -> sin leak, y al
+//  ser conservador el peor caso es no-promover, jamas un use-after-free).
+//==============================================================================
+bool ir_pass_promote_closure_env(IrFunction &fn) {
+    if (fn.is_native || fn.values.empty()) return false;
+
+    // value -> instruccion definidora (para resolver bases de direcciones).
+    std::vector<const IrInstr *> def_of(fn.values.size(), nullptr);
+    for (const auto &b : fn.blocks)
+        for (const auto &ins : b.instrs)
+            if (ins.dst != IR_NO_VALUE && ins.dst < def_of.size())
+                def_of[ins.dst] = &ins;
+
+    auto is_const_v = [&](IrValueId v) -> bool {
+        return v != IR_NO_VALUE && v < fn.values.size() && fn.values[v].is_const;
+    };
+    // Raiz de una direccion: sigue cadenas ADD(base, const) / MOV.
+    auto resolve_base = [&](IrValueId v) -> IrValueId {
+        for (int g = 0; g < 64 && v != IR_NO_VALUE && v < def_of.size(); ++g) {
+            const IrInstr *d = def_of[v];
+            if (!d) break;
+            if (d->op == IrOp::ADD && d->operands.size() == 2) {
+                const IrValueId a = d->operands[0], b = d->operands[1];
+                if (is_const_v(a) && !is_const_v(b)) v = b;
+                else if (is_const_v(b) && !is_const_v(a)) v = a;
+                else break;
+            } else if (d->op == IrOp::MOV && d->operands.size() == 1) {
+                v = d->operands[0];
+            } else break;
+        }
+        return v;
+    };
+
+    // ALLOCAs locales (candidatos a slot tintado).
+    std::unordered_set<IrValueId> local_alloca;
+    for (const auto &b : fn.blocks)
+        for (const auto &ins : b.instrs)
+            if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE)
+                local_alloca.insert(ins.dst);
+
+    bool changed = false;
+    for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        for (size_t ii = 0; ii < fn.blocks[bi].instrs.size(); ++ii) {
+            IrInstr &A = fn.blocks[bi].instrs[ii];
+            if (A.op != IrOp::GC_ALLOC && A.op != IrOp::RAW_ALLOC) continue;
+            if (A.dst == IR_NO_VALUE) continue;
+            if (A.operands.empty()) continue;
+            const IrValueId size_vid = A.operands[0];
+            if (!is_const_v(size_vid)) continue;
+            const uint64_t size_bytes = fn.values[size_vid].const_val;
+            if (size_bytes == 0 || size_bytes > 65536) continue;
+
+            // Fixpoint: tinta = {R, derivados, loads desde slots tintados};
+            // tainted_slots = ALLOCAs locales donde se guarda un valor tintado.
+            std::vector<bool> taint(fn.values.size(), false);
+            std::unordered_set<IrValueId> tainted_slots;
+            taint[A.dst] = true;
+            auto is_t = [&](IrValueId v) -> bool {
+                return v != IR_NO_VALUE && v < taint.size() && taint[v];
+            };
+            bool prop = true;
+            int iters = 0;
+            while (prop && iters++ < 128) {
+                prop = false;
+                for (const auto &b : fn.blocks) {
+                    for (const auto &ins : b.instrs) {
+                        // (a) propagar taint a valores derivados / loads.
+                        if (ins.dst != IR_NO_VALUE && ins.dst < taint.size() &&
+                            !taint[ins.dst]) {
+                            bool d = false;
+                            switch (ins.op) {
+                            case IrOp::ADD:
+                            case IrOp::SUB:
+                            case IrOp::MOV:
+                            case IrOp::CAST:
+                            case IrOp::BITCAST:
+                            case IrOp::SEXT:
+                            case IrOp::ZEXT:
+                            case IrOp::TRUNC:
+                                for (auto v : ins.operands)
+                                    if (is_t(v)) { d = true; break; }
+                                break;
+                            case IrOp::PHI:
+                                for (auto &pa : ins.phi_args)
+                                    if (is_t(pa.value)) { d = true; break; }
+                                break;
+                            case IrOp::LOAD: {
+                                const IrValueId addr =
+                                    ins.operands.empty() ? IR_NO_VALUE
+                                                         : ins.operands[0];
+                                if (is_t(addr)) d = true;
+                                else if (tainted_slots.count(
+                                             resolve_base(addr)))
+                                    d = true;
+                                break;
+                            }
+                            default: break;
+                            }
+                            if (d) { taint[ins.dst] = true; prop = true; }
+                        }
+                        // (b) descubrir slots tintados: STORE val-tintado en
+                        //     un ALLOCA local -> tintar el slot (loads futuros
+                        //     desde el se vuelven tintados).
+                        if (ins.op == IrOp::STORE && ins.operands.size() >= 2 &&
+                            is_t(ins.operands[0])) {
+                            const IrValueId base = resolve_base(ins.operands[1]);
+                            if (local_alloca.count(base) &&
+                                !tainted_slots.count(base)) {
+                                tainted_slots.insert(base);
+                                prop = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Escape check sobre la tinta FINAL.
+            bool escapes = false;
+            for (const auto &b : fn.blocks) {
+                if (escapes) break;
+                for (const auto &ins : b.instrs) {
+                    if (escapes) break;
+                    switch (ins.op) {
+                    case IrOp::RET:
+                    case IrOp::TAILCALL:
+                    case IrOp::THROW:
+                    case IrOp::RSPAWN_RETURN:
+                    case IrOp::FULFILL_HLT:
+                        for (auto v : ins.operands)
+                            if (is_t(v)) { escapes = true; break; }
+                        break;
+                    case IrOp::STORE:
+                        // val tintado: seguro solo si addr base es ALLOCA local
+                        // (ya tintado en el fixpoint); si no -> escapa.
+                        if (ins.operands.size() >= 2 && is_t(ins.operands[0])) {
+                            const IrValueId base =
+                                resolve_base(ins.operands[1]);
+                            if (!local_alloca.count(base)) escapes = true;
+                        }
+                        // val NO tintado pero addr tintada = escribir EN R
+                        // (capture store) -> seguro, no hacemos nada.
+                        break;
+                    case IrOp::CALLCLOSURE:
+                        // operands[0]=env (sincrono, seguro), func_ptr seguro;
+                        // operands[1..]=args: si tintado -> podria guardarse.
+                        for (size_t k = 1; k < ins.operands.size(); ++k)
+                            if (is_t(ins.operands[k])) { escapes = true; break; }
+                        break;
+                    case IrOp::CALL:
+                    case IrOp::CALLVIRT:
+                    case IrOp::CALLM:
+                    case IrOp::CALLITF:
+                    case IrOp::CALLIND:
+                    case IrOp::CALLN:
+                    case IrOp::CALLSUPER:
+                        for (auto v : ins.operands)
+                            if (is_t(v)) { escapes = true; break; }
+                        if (is_t(ins.func_ptr)) escapes = true;
+                        break;
+                    case IrOp::LOAD:
+                    case IrOp::ADD:
+                    case IrOp::SUB:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                    case IrOp::BITCAST:
+                    case IrOp::SEXT:
+                    case IrOp::ZEXT:
+                    case IrOp::TRUNC:
+                    case IrOp::PHI:
+                    case IrOp::GC_ALLOC:
+                    case IrOp::RAW_ALLOC:
+                        break; // ya cubiertos por la propagacion / inofensivos
+                    default:
+                        // op desconocida que toca un valor tintado -> escape.
+                        for (auto v : ins.operands)
+                            if (is_t(v)) { escapes = true; break; }
+                        if (is_t(ins.func_ptr)) escapes = true;
+                        break;
+                    }
+                }
+            }
+
+            if (escapes) continue;
+            // Promover a ALLOCA (stack host).  Cualquier RAW_FREE del env
+            // (no deberia haberlo aun) se volveria no-op sobre stack: por
+            // seguridad NO promovemos si hay un RAW_FREE de un valor tintado.
+            bool has_free = false;
+            for (const auto &b : fn.blocks)
+                for (const auto &ins : b.instrs)
+                    if (ins.op == IrOp::RAW_FREE && !ins.operands.empty() &&
+                        is_t(ins.operands[0]))
+                        has_free = true;
+            if (has_free) continue;
+
+            A.op = IrOp::ALLOCA;
+            A.imm = size_bytes;
+            A.type = IrType::I8;
+            A.host_alloca = true;
+            A.operands.clear();
+            if (A.dst < fn.values.size()) fn.values[A.dst].is_host_ptr = true;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+//==============================================================================
 //  Phase C2.13: Escape Analysis + Scalar Replacement de objetos GC
 //
 //  Detecta objetos `new X(...)` (emitidos como `call @__new_X(args)`) que NO
