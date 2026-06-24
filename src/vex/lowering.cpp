@@ -15525,6 +15525,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is.source_line = line;
         fn_->append(current_block_, std::move(is));
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
+        if (native_poo_) {
+            // AOT/bare: sin proc -> escribir los bytes via el sink nativo
+            // __vex_write(host_ptr, len).  El usuario puede redefinir ese
+            // simbolo (stdout a su gusto).  El v_str es host_ptr en native_poo.
+            fn_->values[v_str].is_host_ptr = true;
+            out_mod_->register_native_import("vex_bare_io", "__vex_write");
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "vex_bare_io:__vex_write";
+            ins.operands = {v_str, v_len};
+            ins.source_line = line;
+            fn_->append(current_block_, std::move(ins));
+            return;
+        }
         const ir::IrValueId v_proc = emit_getproc(line);
         out_mod_->register_native_import(lib, "vio_print");
         ir::IrInstr ins{};
@@ -15538,6 +15554,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     };
 
     auto emit_print_newline = [&](uint32_t line) {
+        if (native_poo_) {
+            emit_print_string_literal("\n", line); // via __vex_write
+            return;
+        }
         out_mod_->register_native_import(lib, "vio_print_newline");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
@@ -15704,6 +15724,97 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ir::IrValueId v = lower_expr(ex);
         if (v == ir::IR_NO_VALUE) return;
         const ir::IrType vt = fn_->values[v].type;
+
+        // -------------------------------------------------------------
+        // AOT/bare (native_poo_): formateo de un valor de runtime SIN proc.
+        // Despacha a los helpers __vex_print_* (libc, ABI plana).  El usuario
+        // puede redefinir cualquiera.  Cubre escalares (dec/uint/hex/bin/oct/
+        // ptr/bool/char) + char* (cstr).  Float y string value-type se
+        // difieren con un warning claro.  El format-spec ${x:kind} elige el
+        // helper; padding/alineacion se difiere (warning una vez).
+        // -------------------------------------------------------------
+        if (native_poo_) {
+            if (t.kind == PrimitiveKind::F32 || t.kind == PrimitiveKind::F64) {
+                diags_.warning(ex->loc,
+                               "print de float en AOT nativo aun no soportado; "
+                               "se omite el valor");
+                return;
+            }
+            if (t.kind == PrimitiveKind::STRING) {
+                // string value-type (Embed): pendiente de extraer ptr+len.
+                diags_.warning(ex->loc,
+                               "print de 'string' (value-type) en AOT nativo "
+                               "aun no soportado; usa char* o un literal");
+                return;
+            }
+            if (fs.align != FmtSpec::Align::NONE && fs.width > 0) {
+                diags_.warning(ex->loc, "padding/alineacion en print AOT nativo "
+                                        "aun no soportado; se ignora el ancho");
+            }
+            const bool is_unsigned_t = (t.kind == PrimitiveKind::CHAR ||
+                                        t.kind == PrimitiveKind::U8 ||
+                                        t.kind == PrimitiveKind::U16 ||
+                                        t.kind == PrimitiveKind::U32 ||
+                                        t.kind == PrimitiveKind::U64);
+            // Elegir el helper (kind explicito del format-spec o AUTO->tipo).
+            std::string sym;
+            bool as_signed_dec = false;
+            if (fs.kind == FmtSpec::Kind::HEX)
+                sym = "__vex_print_hex";
+            else if (fs.kind == FmtSpec::Kind::BIN)
+                sym = "__vex_print_bin";
+            else if (fs.kind == FmtSpec::Kind::OCT)
+                sym = "__vex_print_oct";
+            else if (fs.kind == FmtSpec::Kind::PTR)
+                sym = "__vex_print_ptr";
+            else if (fs.kind == FmtSpec::Kind::BOOL)
+                sym = "__vex_print_bool";
+            else if (fs.kind == FmtSpec::Kind::CHAR)
+                sym = "__vex_print_char";
+            else if (fs.kind == FmtSpec::Kind::DEC) {
+                sym = is_unsigned_t ? "__vex_print_u64" : "__vex_print_i64";
+                as_signed_dec = !is_unsigned_t;
+            } else {
+                // AUTO: por tipo (mismo criterio que el path VM).
+                switch (t.kind) {
+                case PrimitiveKind::BOOL: sym = "__vex_print_bool"; break;
+                case PrimitiveKind::PTR:
+                case PrimitiveKind::ARRAY:
+                case PrimitiveKind::CLASS: sym = "__vex_print_ptr"; break;
+                default:
+                    if (is_unsigned_t)
+                        sym = "__vex_print_u64";
+                    else {
+                        sym = "__vex_print_i64";
+                        as_signed_dec = true;
+                    }
+                    break;
+                }
+            }
+            // Extender el valor a 64 bits (los helpers toman u64/i64).  Para
+            // decimal con signo, SEXT; en cualquier otro caso, ZEXT (bits).
+            ir::IrValueId arg = v;
+            if (vt != ir::IrType::I64 && vt != ir::IrType::PTR) {
+                arg = fn_->new_value(ir::IrType::I64);
+                ir::IrInstr ext{};
+                ext.op = as_signed_dec ? ir::IrOp::SEXT : ir::IrOp::ZEXT;
+                ext.type = ir::IrType::I64;
+                ext.dst = arg;
+                ext.operands = {v};
+                ext.source_line = ex->loc.line;
+                fn_->append(current_block_, std::move(ext));
+            }
+            out_mod_->register_native_import("vex_bare_io", sym);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "vex_bare_io:" + sym;
+            ins.operands = {arg};
+            ins.source_line = ex->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return;
+        }
 
         // Format spec ${expr:fmt}: si el formato pide un kind concreto
         // (hex/bin/oct/dec/ptr/gc/char/bool) o alineacion, usamos el
