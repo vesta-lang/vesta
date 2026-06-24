@@ -68,6 +68,7 @@ using CallResolver = std::function<uint64_t(const std::string &)>;
 struct VregEntries {
     uint64_t callvirt = 0;  ///< vrt_callvirt(proc, obj, vtbl_idx)
     uint64_t unwrap_throw = 0; ///< vrt_unwrap_throw(proc) -- UNWRAP null (VM_ABI)
+    uint64_t proc_pid = 0;     ///< vrt_proc_pid(proc) -> PID encoded (GETPID)
     uint64_t gc_deref = 0;  ///< vrt_gc_deref(proc, handle)
     uint64_t gc_handle = 0; ///< vrt_gc_handle_for_ptr(proc, host_ptr)
     uint64_t raw_alloc = 0; ///< vrt_raw_alloc(proc, size)
