@@ -1362,6 +1362,50 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
+            /* MVTAKE_IR: move-and-zero (ownership de smart pointers).
+             * [dst] = [src]; [src] = 0.  Inline puro (3 ops de memoria host)
+             * cuando ambas direcciones son host_ptr (slots de unique/shared
+             * en el frame host).  VM-addr -> fallback (raro). */
+            case ir::IrOp::MVTAKE_IR: {
+                flush_pending();
+                if (in.operands.size() < 2) {
+                    vreg_dbg(fn.name.c_str(), "mvtake-shape");
+                    return false;
+                }
+                const ir::IrValueId mv_dst = in.operands[0];
+                const ir::IrValueId mv_src = in.operands[1];
+                const bool mv_host = !vm || (fn.values[mv_dst].is_host_ptr &&
+                                             fn.values[mv_src].is_host_ptr);
+                const ir::IrValueId mv_tmp = new_tmp();
+                const ir::IrValueId mv_z = new_tmp();
+                if (mv_host) {
+                    /* Ambas host: 3 ops de memoria directas. */
+                    O.push_back(
+                        MInstr::make_load(vr(mv_tmp), vr(mv_src), 8, false));
+                    O.push_back(MInstr::make_store(vr(mv_dst), vr(mv_tmp), 8));
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(mv_z),
+                                                   MOperand::make_imm32(0)));
+                    O.push_back(MInstr::make_store(vr(mv_src), vr(mv_z), 8));
+                } else {
+                    /* VM-addr (slots de smart pointers en VM-stack): page-cache
+                     * inline via LOAD_VM/STORE_VM (runtime solo en page-miss). */
+                    if (ent.vm_read_u64 == 0 || ent.vm_write_u64 == 0) {
+                        vreg_dbg(fn.name.c_str(), "mvtake(no-vm-rt)");
+                        return false;
+                    }
+                    const uint32_t rd = out.intern_imm64(ent.vm_read_u64);
+                    const uint32_t wr = out.intern_imm64(ent.vm_write_u64);
+                    O.push_back(MInstr::make_load_vm(vr(mv_tmp), vr(mv_src), 8,
+                                                     false, rd));
+                    O.push_back(
+                        MInstr::make_store_vm(vr(mv_dst), vr(mv_tmp), 8, wr));
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(mv_z),
+                                                   MOperand::make_imm32(0)));
+                    O.push_back(
+                        MInstr::make_store_vm(vr(mv_src), vr(mv_z), 8, wr));
+                }
+                break;
+            }
             case ir::IrOp::BITCAST: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;
