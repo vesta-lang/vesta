@@ -1275,8 +1275,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::BITCAST: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               vr(in.operands[0])));
+                /* BITCAST reinterpreta bits sin convertir.  Entre el banco GP
+                 * y el XMM hay que MOVER los bits con MOVQ (no un MOV GP->GP).
+                 * Caso clave: enum/optional con payload f64 -> el payload se
+                 * guarda como i64 (bitcast f64->i64) y al destructurar se hace
+                 * bitcast i64->f64; sin el MOVQ el FMUL leeria un XMM sin
+                 * escribir -> resultado basura. */
+                const ir::IrValueId src = in.operands[0];
+                const bool dst_f = in.dst < fn.values.size() &&
+                                   ir_type_is_float(fn.values[in.dst].type);
+                const bool src_f = src < fn.values.size() &&
+                                   ir_type_is_float(fn.values[src].type);
+                if (dst_f != src_f && !fp_ok) {
+                    /* bitcast GP<->FP pero el target no soporta float -> no
+                     * podemos emitir MOVQ; fallback. */
+                    vreg_dbg(fn.name.c_str(), "bitcast-fp-no-fpok");
+                    return false;
+                }
+                if (dst_f && !src_f) {
+                    O.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM,
+                                                   vrt(in.dst), vr(src)));
+                } else if (!dst_f && src_f) {
+                    O.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                                   vr(in.dst), vrt(src)));
+                } else if (dst_f && src_f) {
+                    O.push_back(MInstr::make_unary(MOp::MOV, vrt(in.dst),
+                                                   vrt(src)));
+                } else {
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                   vr(src)));
+                }
                 break;
             }
             case ir::IrOp::ZEXT:
