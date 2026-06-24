@@ -1058,8 +1058,71 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
         if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
             const uint64_t ab = vex_global_array_bytes(gv->type.get());
-            if (ab > 0)
-                (void)get_or_create_runtime_global_slot(gv->name, ab);
+            if (ab > 0) {
+                const uint64_t slot =
+                    get_or_create_runtime_global_slot(gv->name, ab);
+                // Init-list constante `= {e0, e1, ...}`: grabar los bytes
+                // directamente en el slot .data (en AOT no corre
+                // __module_init).  Solo elementos enteros constantes.
+                auto *at = static_cast<ast::ArrayTypeNode *>(gv->type.get());
+                uint64_t esz = 8;
+                if (at->element_type &&
+                    at->element_type->kind ==
+                        ast::NodeKind::PrimitiveTypeNode)
+                    esz = primitive_size_bytes(
+                        static_cast<ast::PrimitiveTypeNode *>(
+                            at->element_type.get())
+                            ->prim);
+                if (gv->init &&
+                    gv->init->kind == ast::NodeKind::InitListExpr &&
+                    slot < out_mod_->static_data.entries.size() && esz > 0) {
+                    auto *il =
+                        static_cast<ast::InitListExpr *>(gv->init.get());
+                    const uint32_t base_off =
+                        out_mod_->static_data.entries[slot].byte_offset;
+                    for (size_t ei = 0; ei < il->elements.size(); ++ei) {
+                        uint64_t cval = 0;
+                        const ast::Expr *ie = il->elements[ei].get();
+                        bool have = false;
+                        if (ie &&
+                            ie->kind == ast::NodeKind::IntLitExpr) {
+                            cval =
+                                static_cast<const ast::IntLitExpr *>(ie)->value;
+                            have = true;
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::UnaryExpr) {
+                            auto *u =
+                                static_cast<const ast::UnaryExpr *>(ie);
+                            if (u->op == ast::UnOp::Neg && u->operand &&
+                                u->operand->kind ==
+                                    ast::NodeKind::IntLitExpr) {
+                                cval = (uint64_t)(-(int64_t)static_cast<
+                                    const ast::IntLitExpr *>(u->operand.get())
+                                                      ->value);
+                                have = true;
+                            }
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::CharLitExpr) {
+                            cval = static_cast<const ast::CharLitExpr *>(ie)
+                                       ->codepoint;
+                            have = true;
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::BoolLitExpr) {
+                            cval = static_cast<const ast::BoolLitExpr *>(ie)
+                                           ->value
+                                       ? 1u
+                                       : 0u;
+                            have = true;
+                        }
+                        if (!have) continue;
+                        const uint64_t eoff = base_off + ei * esz;
+                        for (uint64_t k = 0; k < esz; ++k)
+                            out_mod_->static_data
+                                .bytes[eoff + k] =
+                                (uint8_t)((cval >> (8 * k)) & 0xFF);
+                    }
+                }
+            }
             continue;
         }
         if (!gv->type || gv->type->kind != ast::NodeKind::PrimitiveTypeNode)
@@ -10617,6 +10680,19 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
     }
     const ir::IrValueId addr = lower_field_addr(e);
     if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+    // Campo de tipo AGREGADO inline (struct/array/optional/result anidado):
+    // su "valor" SSA ES su direccion (pass-through), NO se carga.  Sin esto,
+    // `r.a.x` (a = sub-struct inline) emitia un LOAD que deref-eaba los
+    // primeros 8 bytes de `a` como un puntero -> direccion basura -> segfault
+    // en AOT (host) o valor erroneo en VM.  Mismo patron que los fixes B1/B3
+    // de ptr_of/read_borrow sobre agregados.
+    if (e->result_type.kind == PrimitiveKind::STRUCT ||
+        e->result_type.kind == PrimitiveKind::ARRAY ||
+        e->result_type.kind == PrimitiveKind::OPTIONAL ||
+        e->result_type.kind == PrimitiveKind::RESULT) {
+        return addr;
+    }
 
     const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
     const ir::IrValueId dst = fn_->new_value(ft);
@@ -21534,6 +21610,12 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
             auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
             if (gv->is_const || !gv->init) continue;
+            // Los arrays globales (T[N]) ya tienen su contenido grabado en los
+            // bytes del slot static_data (pre-pase, init-list constante o
+            // zero-init).  __module_init NO debe intentar lowerar su init-list
+            // (InitListExpr no es lowerable como expresion de valor) -> skip.
+            if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode)
+                continue;
             auto rit = runtime_global_slots_.find(gv->name);
             if (rit == runtime_global_slots_.end()) continue;
             const uint64_t slot_idx = rit->second;
