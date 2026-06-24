@@ -1078,29 +1078,21 @@ void exec_instr_strcmp(ProcessVM *vm, const DecodedInstr &instr) {
  * Implementa conversion completa UTF-8 <-> UTF-16LE con surrogates.
  * Materializa ROPE/SLICE antes de convertir.
  */
-void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
-    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
-    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
-    const uint8_t enc_bits = (instr.data_instruction.reg_data.reg2 >> 4) &
-                             0xF; // nibble alto (emit_strconv)
-
-    auto new_enc = static_cast<loader::StringEncoding>(enc_bits);
-    gc::GcHandle hs = flatten_string(
-        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()));
+/* Core de STRCONV compartido por el opcode (exec_instr_strconv) y el runtime
+ * entry vrt_str_conv (JIT/AOT).  Toma el handle fuente + codificacion destino
+ * y devuelve el handle convertido; sin tocar registros VM. */
+gc::GcHandle strconv_public(ProcessVM *vm, gc::GcHandle src_h,
+                            uint32_t enc) noexcept {
+    auto new_enc = static_cast<loader::StringEncoding>(enc & 0xFu);
+    gc::GcHandle hs = flatten_string(vm, src_h);
 
     uint8_t *payload = vm->gc_heap.deref(hs);
-    if (!payload) {
-        vm->registers.regs[r_dst].qword(gc::GC_NULL_HANDLE);
-        return;
-    }
+    if (!payload) return gc::GC_NULL_HANDLE;
 
     auto *src_str = reinterpret_cast<loader::StringObject *>(payload);
     auto src_enc = loader::str_encoding(src_str);
 
-    if (src_enc == new_enc) {
-        vm->registers.regs[r_dst].qword(hs);
-        return;
-    } // sin cambio
+    if (src_enc == new_enc) return hs; // sin cambio
 
     const uint8_t *src_data = loader::str_data(src_str);
     uint32_t src_len = src_str->byte_len;
@@ -1186,7 +1178,17 @@ void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
                                  loader::str_encoding(rs));
         }
     }
-    vm->registers.regs[r_dst].qword(static_cast<uint64_t>(result));
+    return result;
+}
+
+void exec_instr_strconv(ProcessVM *vm, const DecodedInstr &instr) {
+    const uint8_t r_dst = (instr.data_instruction.reg_data.reg1 >> 4) & 0xF;
+    const uint8_t r_src = instr.data_instruction.reg_data.reg1 & 0xF;
+    const uint8_t enc_bits = (instr.data_instruction.reg_data.reg2 >> 4) & 0xF;
+    const gc::GcHandle r = strconv_public(
+        vm, static_cast<gc::GcHandle>(vm->registers.regs[r_src].qword()),
+        enc_bits);
+    vm->registers.regs[r_dst].qword(static_cast<uint64_t>(r));
 }
 
 // =========================================================================

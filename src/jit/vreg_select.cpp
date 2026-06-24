@@ -1408,6 +1408,136 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 break;
             }
+            /* NEWOBJS: alloc en SharedHeap -> handle.  vrt_newobjs(proc, cls).
+             * Op raro (memoria compartida); el alloc shared (slab+CAS) no se
+             * inlinea -> CALL directo es lo optimo.  Devuelve handle directo
+             * (sin gcderef extra). */
+            case ir::IrOp::NEWOBJS: {
+                flush_pending();
+                if (!vm || ent.newobjs == 0 || in.operands.empty() ||
+                    in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "newobjs(no-vm/no-addr)");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg ns_pr = MReg::RCX, ns_cls = MReg::RDX;
+#else
+                const MReg ns_pr = MReg::RDI, ns_cls = MReg::RSI;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(ns_cls, 8),
+                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(ns_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.newobjs)));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_reg(MReg::RAX, 8)));
+                break;
+            }
+            /* DLOPEN: carga libreria (syscall del SO).  vrt_dlopen(proc,
+             * path_addr, path_len).  No inlineable (OS call); raro. */
+            case ir::IrOp::DLOPEN: {
+                flush_pending();
+                if (!vm || ent.dlopen == 0 || in.operands.size() < 2 ||
+                    in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "dlopen(no-vm/no-addr)");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg dl_pr = MReg::RCX, dl_a1 = MReg::RDX,
+                           dl_a2 = MReg::R8;
+#else
+                const MReg dl_pr = MReg::RDI, dl_a1 = MReg::RSI,
+                           dl_a2 = MReg::RDX;
+#endif
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R10, 8),
+                    vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R11, 8),
+                    vr(in.operands[1])));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(dl_a1, 8),
+                                               MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(dl_a2, 8),
+                                               MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(dl_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.dlopen)));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_reg(MReg::RAX, 8)));
+                break;
+            }
+            /* PANIC: FatalError USER_ABORT (terminal -- no retorna).
+             * vrt_panic_str(proc, msg_addr, msg_len).  Frio por definicion;
+             * CALL directo es lo optimo (inlinear codigo terminal no aporta). */
+            case ir::IrOp::PANIC: {
+                flush_pending();
+                if (!vm || ent.panic_str == 0 || in.operands.size() < 2) {
+                    vreg_dbg(fn.name.c_str(), "panic(no-vm/no-addr)");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg pa_pr = MReg::RCX, pa_a1 = MReg::RDX,
+                           pa_a2 = MReg::R8;
+#else
+                const MReg pa_pr = MReg::RDI, pa_a1 = MReg::RSI,
+                           pa_a2 = MReg::RDX;
+#endif
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R10, 8),
+                    vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R11, 8),
+                    vr(in.operands[1])));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(pa_a1, 8),
+                                               MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(pa_a2, 8),
+                                               MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(pa_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.panic_str)));
+                break;
+            }
+            /* STRCONV: convierte StringObject a otra codificacion.
+             * vrt_str_conv(proc, str, enc).  operands[0]=str, imm=enc.
+             * Conversion compleja (UTF-8/16/32) -> CALL directo es lo optimo. */
+            case ir::IrOp::STRCONV: {
+                flush_pending();
+                if (!vm || ent.str_conv == 0 || in.operands.empty() ||
+                    in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "strconv(no-vm/no-addr)");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg sc_pr = MReg::RCX, sc_s = MReg::RDX,
+                           sc_e = MReg::R8;
+#else
+                const MReg sc_pr = MReg::RDI, sc_s = MReg::RSI,
+                           sc_e = MReg::RDX;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(sc_s, 8),
+                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(sc_e, 8),
+                    MOperand::make_imm32(static_cast<int32_t>(in.imm))));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(sc_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.str_conv)));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_reg(MReg::RAX, 8)));
+                break;
+            }
             case ir::IrOp::BITCAST: {
                 flush_pending();
                 if (in.operands.size() != 1) return false;

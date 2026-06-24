@@ -584,6 +584,27 @@ uint8_t *vrt_newobj(vrt_proc *proc, vrt_class *cls);
 vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls);
 
 /**
+ * @brief NEWOBJS: aloca un objeto de @p cls en el SharedHeap (cross-process)
+ *        y devuelve su GcHandle (con SHARED_HANDLE_BIT).  Equivale al opcode
+ *        newobjs (0xA6).  GC_NULL_HANDLE si cls es null u OOM.
+ */
+vrt_handle vrt_newobjs(vrt_proc *proc, vrt_class *cls);
+
+/**
+ * @brief DLOPEN: carga una libreria nativa (LoadLibrary/dlopen) cuyo path
+ *        (UTF-8) vive en @p path_vaddr (len @p path_len) del vm_mem.
+ *        Devuelve el handle host (i64); lanza FatalError si falla.
+ */
+uint64_t vrt_dlopen(vrt_proc *proc, uint64_t path_vaddr, uint32_t path_len);
+
+/**
+ * @brief STRCONV: convierte el StringObject @p src a la codificacion @p enc
+ *        (StringEncoding).  Devuelve un GcHandle nuevo (o el mismo si ya esta
+ *        en esa codificacion).  Equivale al opcode strconv (0x4A).
+ */
+vrt_handle vrt_str_conv(vrt_proc *proc, vrt_handle src, uint32_t enc);
+
+/**
  * @brief Phase D.7.opt: registra un handle para un raw_ptr de objeto ya
  *        alocado por bump-pointer inline en JIT.
  *

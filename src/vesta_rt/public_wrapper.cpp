@@ -33,6 +33,18 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new> // placement-new (vrt_newobjs)
+#include <string>
+
+/* FFI runtime (vrt_dlopen): API de carga dinamica del SO. */
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include "gc/gc_heap.h"
 #include "jit/auto_jit.h"
@@ -46,6 +58,7 @@
 #include "runtime/manager_runtime.h"
 #include "runtime/native_invoke.h"
 #include "runtime/proceso_runtime.h"
+#include "runtime/string_runtime.h"
 #include "runtime/runtime.h"
 #include "runtime/string_runtime.h"
 #include "loader/string_object.h"
@@ -1134,6 +1147,58 @@ vrt_handle vrt_newobj_handle(vrt_proc *proc, vrt_class *cls) {
     hdr->class_ptr = ci;
     hdr->flags = loader::OBJ_FLAG_GC_OWNED;
     return handle;
+}
+
+/* NEWOBJS: aloca en SharedHeap (cross-process) + registra en
+ * SharedHandleTable.  Replica exec_instr_newobjs; devuelve el handle con
+ * SHARED_HANDLE_BIT.  Sin tocar proc->registers (args/retorno C). */
+vrt_handle vrt_newobjs(vrt_proc *proc, vrt_class *cls) {
+    if (!proc || !cls) return VRT_NULL_HANDLE;
+    runtime::ProcessVM *p = as_proc(proc);
+    auto *ci = reinterpret_cast<loader::ClassInfo *>(cls);
+    auto &vmr = p->scheduler.vm_reference;
+    const uint32_t sz = ci->instance_size;
+    uint8_t *payload = vmr.shared_heap.alloc(static_cast<size_t>(sz));
+    if (!payload) return VRT_NULL_HANDLE; // OOM SharedHeap
+    const uint32_t sh = vmr.shared_handle_table.register_object(payload, sz);
+    if (sh == 0) { // tabla llena
+        vmr.shared_heap.free(payload);
+        return VRT_NULL_HANDLE;
+    }
+    auto *hdr = new (payload) loader::ObjectHeader();
+    hdr->class_ptr = ci;
+    hdr->flags = loader::OBJ_FLAG_GC_OWNED;
+    hdr->hash_code = sh; // SHARED_HANDLE_BIT | shared_idx
+    return static_cast<vrt_handle>(sh);
+}
+
+/* DLOPEN: lee el path (UTF-8) de vm_mem y carga la libreria via API del SO.
+ * Replica exec_instr_dlopen; lanza FatalError capturable si falla. */
+uint64_t vrt_dlopen(vrt_proc *proc, uint64_t path_vaddr, uint32_t path_len) {
+    if (!proc) return 0;
+    runtime::ProcessVM *p = as_proc(proc);
+    std::string path(static_cast<size_t>(path_len), '\0');
+    if (path_len) p->vm_mem.read_bytes(path_vaddr, &path[0], path_len);
+    void *handle = nullptr;
+#if defined(_WIN32)
+    handle = static_cast<void *>(LoadLibraryA(path.c_str()));
+#else
+    handle = dlopen(path.c_str(), RTLD_LAZY);
+#endif
+    if (handle == nullptr) {
+        runtime::throw_fatal(p, VESTA_FATAL_NULL_POINTER,
+                             "dlopen: no se pudo cargar la libreria");
+        return 0;
+    }
+    return reinterpret_cast<uint64_t>(handle);
+}
+
+/* STRCONV: convierte un StringObject a otra codificacion.  Delega en el core
+ * compartido strconv_public (mismo algoritmo que el opcode 0x4A). */
+vrt_handle vrt_str_conv(vrt_proc *proc, vrt_handle src, uint32_t enc) {
+    if (!proc) return VRT_NULL_HANDLE;
+    return static_cast<vrt_handle>(runtime::strconv_public(
+        as_proc(proc), static_cast<gc::GcHandle>(src), enc));
 }
 
 /* ===================================================================== */
