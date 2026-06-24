@@ -19,6 +19,7 @@
  * con un valor constante.
  */
 #include "arena/VirtualMemory.h"
+#include <algorithm> // UCRT64: no transitivo
 
 namespace vm {
 

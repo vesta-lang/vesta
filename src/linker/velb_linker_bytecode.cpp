@@ -22,6 +22,7 @@
  * write_to_file).
  */
 #include "linker/velb_linker_bytecode.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include <chrono>
 #include <cstdlib>

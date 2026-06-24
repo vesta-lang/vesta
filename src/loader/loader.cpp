@@ -10,6 +10,7 @@
  * ProcessVM con el PC inicializado segun @c init_pc del ejecutable.
  */
 #include "loader/loader.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include <cstdio>
 #include <cstring>

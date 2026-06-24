@@ -46,6 +46,7 @@
 #include <fstream>  // cargar prebuilt .velb desde disco
 #include <iostream> // log VESTA_MC_VERBOSE
 #include <mutex>    // std::call_once para registro one-shot
+#include <functional>
 
 #include "ffi/virtual_lib_registry.h" // registrar vex_static_assert
 

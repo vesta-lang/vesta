@@ -26,6 +26,7 @@
  */
 
 #include "vex/compiler.h"
+#include <algorithm> // UCRT64: no transitivo
 #include <unordered_set>
 
 #include "ir/ir_emitter.h"

@@ -23,6 +23,7 @@
  */
 
 #include "aot/link_script.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include "ffi/virtual_lib_registry.h"
 #include "runtime/manager_runtime.h"

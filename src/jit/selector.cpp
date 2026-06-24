@@ -37,6 +37,7 @@
 #include "jit/jit_regalloc.h"
 #include "vesta_rt/abi.h"
 
+#include <algorithm> // std::sort/min/max (UCRT64 no los incluye transitivo)
 #include <array>
 #include <cctype>
 #include <cstdio>

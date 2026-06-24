@@ -21,6 +21,7 @@
  * apply_directive().
  */
 #include "emmit/parser_to_bytecode.h"
+#include <algorithm> // UCRT64: no transitivo
 
 #include "cli/sync_io.h"
 

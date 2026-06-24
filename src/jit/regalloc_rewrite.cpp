@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <utility> // std::pair (marshal stack-args; UCRT64 no transitivo)
 #include <vector>
 
 #include "vesta_rt/abi.h" // VESTA_PROC_OSR_BUFFER_OFFSET / VESTA_OSR_BUFFER_N

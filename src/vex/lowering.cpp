@@ -16,6 +16,7 @@
  */
 
 #include "vex/lowering.h"
+#include <algorithm> // UCRT64: no transitivo
 #include "vex/asm_effects.h" // inferencia de clobbers (Phase AS inc.4)
 #include "vex/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
 #include "vex/collection_intrinsics.h" // tabla de tipos coleccion
