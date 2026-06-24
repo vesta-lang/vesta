@@ -2270,6 +2270,58 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
+            // analizar/compilar.  Sin esto, una factoria-de-closure inlineada
+            // en su caller queda como copia standalone no usada y su GC_ALLOC
+            // bloquearia la compilacion bare.  Cierre transitivo desde main +
+            // funciones @section, siguiendo CALL/TAILCALL/LABEL_ADDR y los
+            // sym_refs de las vtablas (static_data).  Conservador: ante la duda
+            // se conserva (un drop erroneo daria un error de enlace ruidoso,
+            // nunca corrupcion).
+            {
+                std::unordered_set<std::string> live;
+                std::vector<std::string> work;
+                auto add_live = [&](const std::string &n) {
+                    if (!n.empty() && live.insert(n).second) work.push_back(n);
+                };
+                std::unordered_map<std::string, const ir::IrFunction *> by_name;
+                for (auto &f : aot_mod.functions) by_name[f.name] = &f;
+                add_live("main");
+                add_live("__module_init");
+                for (auto &f : aot_mod.functions)
+                    if (!f.section.empty()) add_live(f.name);
+                // Raices por vtablas/datos: nombres referenciados en sym_refs.
+                for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
+                    for (const auto &sr : aot_mod.static_data.meta_at(si).sym_refs)
+                        add_live(sr.sym);
+                while (!work.empty()) {
+                    const std::string cur = work.back();
+                    work.pop_back();
+                    auto it = by_name.find(cur);
+                    if (it == by_name.end()) continue;
+                    for (const auto &b : it->second->blocks)
+                        for (const auto &ins : b.instrs) {
+                            if ((ins.op == ir::IrOp::CALL ||
+                                 ins.op == ir::IrOp::TAILCALL ||
+                                 ins.op == ir::IrOp::LABEL_ADDR) &&
+                                !ins.func_name.empty())
+                                add_live(ins.func_name);
+                        }
+                }
+                std::vector<ir::IrFunction> kept;
+                kept.reserve(aot_mod.functions.size());
+                for (auto &f : aot_mod.functions)
+                    if (live.count(f.name)) kept.push_back(std::move(f));
+                aot_mod.functions = std::move(kept);
+            }
+
+            // AOT: promover envs de closure de heap a stack cuando no escapan
+            // (closure-aware escape analysis).  Tras esto, los que no se
+            // pudieron promover quedan GC_ALLOC -> aot_analyze los rechaza
+            // limpio (nunca heap sin liberar).  Corre solo en el path AOT.
+            for (auto &afn : aot_mod.functions)
+                (void)ir::ir_pass_promote_closure_env(afn);
+
             if (std::getenv("VESTA_AOT_DUMP_IR")) {
                 std::cerr << "===== AOT native_poo IR =====\n";
                 ir::ir_print(aot_mod, std::cerr);
