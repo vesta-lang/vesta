@@ -7559,6 +7559,254 @@ bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
 }
 
 // =========================================================================
+//  Pase ir_pass_inline_closures
+// =========================================================================
+//
+// Inline del CUERPO de la lambda en el CALLCLOSURE.  Ver doc en el header.
+// Estrategia conservadora: 1 MAKE_CLOSURE + 1 CALLCLOSURE en el MISMO
+// bloque, capturas by-value, helper single-block terminado en RET.  El
+// emparejamiento es trivial (solo hay una closure) -> sin alias analysis.
+
+bool ir_pass_inline_closures(IrModule &mod) {
+    bool changed = false;
+
+    std::unordered_map<std::string, size_t> name_to_idx;
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        name_to_idx[mod.functions[i].name] = i;
+
+    for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+        IrFunction &caller = mod.functions[fi];
+        if (caller.is_native) continue;
+
+        /* 1. Localizar el unico MAKE_CLOSURE y el unico CALLCLOSURE. */
+        int mc_b = -1, mc_i = -1, cc_b = -1, cc_i = -1, n_mc = 0, n_cc = 0;
+        for (size_t b = 0; b < caller.blocks.size(); ++b) {
+            const auto &ins = caller.blocks[b].instrs;
+            for (size_t k = 0; k < ins.size(); ++k) {
+                if (ins[k].op == IrOp::MAKE_CLOSURE) {
+                    ++n_mc;
+                    mc_b = static_cast<int>(b);
+                    mc_i = static_cast<int>(k);
+                } else if (ins[k].op == IrOp::CALLCLOSURE) {
+                    ++n_cc;
+                    cc_b = static_cast<int>(b);
+                    cc_i = static_cast<int>(k);
+                }
+            }
+        }
+        if (n_mc != 1 || n_cc != 1) continue;
+        if (mc_b != cc_b || mc_i >= cc_i) continue; /* mc antes del cc */
+
+        IrBlock &bb = caller.blocks[cc_b];
+        const IrInstr mc = bb.instrs[mc_i]; /* copia: vamos a reescribir bb */
+        const IrInstr cc = bb.instrs[cc_i];
+
+        /* by-value only: bits 1.. de imm = mutable_mask. */
+        if ((mc.imm >> 1) != 0ULL) continue;
+
+        auto it = name_to_idx.find(mc.func_name);
+        if (it == name_to_idx.end() || it->second == fi) continue;
+        const IrFunction &h = mod.functions[it->second];
+        if (h.is_native || h.blocks.size() != 1) continue;
+        const IrBlock &hb = h.blocks[0];
+        if (hb.instrs.empty() || hb.instrs.back().op != IrOp::RET) continue;
+
+        const size_t n_args = cc.operands.empty() ? 0 : cc.operands.size() - 1;
+        const size_t n_caps = mc.operands.size();
+
+        /* params del helper = [declarados...] (+ [env] en native_poo). */
+        IrValueId env_param = IR_NO_VALUE;
+        std::vector<IrValueId> decl_params;
+        if (h.params.size() == n_args) {
+            decl_params = h.params;
+        } else if (h.params.size() == n_args + 1) {
+            decl_params.assign(h.params.begin(), h.params.end() - 1);
+            env_param = h.params.back();
+        } else {
+            continue; /* aridad no encaja */
+        }
+
+        /* env_ptr: param oculto (native_poo) o READ_VM_REG 14 (VM/JIT). */
+        IrValueId env_ptr = env_param;
+        std::unordered_set<size_t> skip; /* instrs del prologo a omitir */
+        if (env_ptr == IR_NO_VALUE && n_caps > 0) {
+            for (size_t k = 0; k < hb.instrs.size(); ++k) {
+                if (hb.instrs[k].op == IrOp::READ_VM_REG &&
+                    hb.instrs[k].imm == 14) {
+                    env_ptr = hb.instrs[k].dst;
+                    skip.insert(k);
+                    break;
+                }
+            }
+            if (env_ptr == IR_NO_VALUE) continue; /* capturas sin env -> bail */
+        }
+
+        /* Direcciones de captura: env_ptr (offset 0) + ADD(env_ptr,const). */
+        std::unordered_set<IrValueId> cap_addr;
+        if (env_ptr != IR_NO_VALUE) cap_addr.insert(env_ptr);
+        for (size_t k = 0; k < hb.instrs.size(); ++k) {
+            const auto &in = hb.instrs[k];
+            if (in.op == IrOp::ADD && in.operands.size() == 2 &&
+                in.operands[0] == env_ptr) {
+                cap_addr.insert(in.dst);
+                skip.insert(k);
+            }
+        }
+
+        /* LOADs de captura en orden de fuente -> raw_v_i. */
+        std::vector<IrValueId> cap_loads;
+        for (size_t k = 0; k < hb.instrs.size(); ++k) {
+            const auto &in = hb.instrs[k];
+            if (in.op == IrOp::LOAD && in.operands.size() == 1 &&
+                cap_addr.count(in.operands[0])) {
+                cap_loads.push_back(in.dst);
+                skip.insert(k);
+            }
+        }
+        if (cap_loads.size() != n_caps) continue;
+
+        /* vmap: params -> args; capturas -> valores del MAKE_CLOSURE. */
+        std::unordered_map<IrValueId, IrValueId> vmap;
+        for (size_t k = 0; k < decl_params.size(); ++k)
+            vmap[decl_params[k]] = cc.operands[k + 1];
+        for (size_t i = 0; i < n_caps; ++i) {
+            vmap[cap_loads[i]] = mc.operands[i];
+            /* TRUNC que estrecha la captura (by-value narrow): mapear su
+             * dst tambien al valor original y omitir el TRUNC. */
+            for (size_t k = 0; k < hb.instrs.size(); ++k) {
+                const auto &in = hb.instrs[k];
+                if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
+                    in.operands[0] == cap_loads[i]) {
+                    vmap[in.dst] = mc.operands[i];
+                    skip.insert(k);
+                    break;
+                }
+            }
+        }
+
+        /* Seguridad: env_ptr SOLO usado por ADD(env_ptr,..) / LOAD(env_ptr);
+         * ningun READ_VM_REG fuera del prologo. */
+        bool ok = true;
+        for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
+            const auto &in = hb.instrs[k];
+            auto used = [&](IrValueId u) {
+                if (u != env_ptr || env_ptr == IR_NO_VALUE) return;
+                const bool as_add = (in.op == IrOp::ADD &&
+                                     in.operands.size() == 2 &&
+                                     in.operands[0] == env_ptr);
+                const bool as_ld = (in.op == IrOp::LOAD &&
+                                    in.operands.size() == 1 &&
+                                    in.operands[0] == env_ptr);
+                if (!as_add && !as_ld) ok = false;
+            };
+            for (auto u : in.operands) used(u);
+            if (in.func_ptr != IR_NO_VALUE) used(in.func_ptr);
+            if (in.op == IrOp::READ_VM_REG && !skip.count(k)) ok = false;
+        }
+        if (!ok) continue;
+
+        /* Construir el cuerpo inlineado (sin commit hasta saber que es OK). */
+        std::vector<IrInstr> body;
+        auto remap_dst = [&](IrValueId cvid, IrType type) -> IrValueId {
+            if (cvid == IR_NO_VALUE) return IR_NO_VALUE;
+            auto vit = vmap.find(cvid);
+            if (vit != vmap.end()) return vit->second;
+            const IrValueId nid = static_cast<IrValueId>(caller.values.size());
+            IrValue nv{};
+            nv.id = nid;
+            nv.type = type;
+            nv.name = "%clo_" + std::to_string(nid);
+            if (cvid < h.values.size()) {
+                const auto &cv = h.values[cvid];
+                nv.is_const = cv.is_const;
+                nv.const_val = cv.const_val;
+                nv.is_host_ptr = cv.is_host_ptr;
+                nv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
+                nv.is_gc_object = cv.is_gc_object;
+                nv.narrow_only = cv.narrow_only;
+            }
+            caller.values.push_back(nv);
+            vmap[cvid] = nid;
+            return nid;
+        };
+        auto remap_op = [&](IrValueId cvid) -> IrValueId {
+            if (cvid == IR_NO_VALUE) return IR_NO_VALUE;
+            auto vit = vmap.find(cvid);
+            return (vit != vmap.end()) ? vit->second : IR_NO_VALUE;
+        };
+
+        IrValueId ret_value = IR_NO_VALUE;
+        for (size_t k = 0; k < hb.instrs.size() && ok; ++k) {
+            if (skip.count(k)) continue;
+            const IrInstr &ci = hb.instrs[k];
+            if (ci.op == IrOp::RET) {
+                if (!ci.operands.empty()) {
+                    ret_value = remap_op(ci.operands[0]);
+                    if (ret_value == IR_NO_VALUE) ok = false;
+                }
+                continue;
+            }
+            if (!ci.phi_args.empty()) { ok = false; break; }
+            IrInstr ni = ci;
+            if (ni.dst != IR_NO_VALUE) {
+                const IrType dt = (ni.dst < h.values.size())
+                                      ? h.values[ni.dst].type
+                                      : ni.type;
+                ni.dst = remap_dst(ni.dst, dt);
+            }
+            bool op_ok = true;
+            for (auto &op : ni.operands) {
+                const IrValueId before = op;
+                op = remap_op(op);
+                if (before != IR_NO_VALUE && op == IR_NO_VALUE) op_ok = false;
+            }
+            if (ni.func_ptr != IR_NO_VALUE) {
+                const IrValueId before = ni.func_ptr;
+                ni.func_ptr = remap_op(ni.func_ptr);
+                if (before != IR_NO_VALUE && ni.func_ptr == IR_NO_VALUE)
+                    op_ok = false;
+            }
+            if (!op_ok) { ok = false; break; }
+            body.push_back(std::move(ni));
+        }
+        if (!ok) continue; /* anomalia -> no transformar (bb intacto) */
+
+        /* Commit: reescribir bb = [0..cc) sin el marcador, + body con MOV
+         * del retorno al dst, + (cc_i, fin) sin el CALLCLOSURE. */
+        std::vector<IrInstr> rebuilt;
+        rebuilt.reserve(bb.instrs.size() + body.size());
+        for (int k = 0; k < cc_i; ++k) {
+            if (k == mc_i) continue; /* drop marker */
+            rebuilt.push_back(bb.instrs[k]);
+        }
+        for (auto &bi : body) rebuilt.push_back(std::move(bi));
+        if (cc.dst != IR_NO_VALUE && ret_value != IR_NO_VALUE) {
+            IrInstr mv{};
+            mv.op = IrOp::MOV;
+            mv.type = cc.type;
+            mv.dst = cc.dst;
+            mv.operands = {ret_value};
+            mv.source_line = cc.source_line;
+            rebuilt.push_back(std::move(mv));
+        } else if (cc.dst != IR_NO_VALUE) {
+            IrInstr cz{};
+            cz.op = IrOp::CONST;
+            cz.type = cc.type;
+            cz.dst = cc.dst;
+            cz.imm = 0;
+            cz.source_line = cc.source_line;
+            rebuilt.push_back(std::move(cz));
+        }
+        for (size_t k = cc_i + 1; k < bb.instrs.size(); ++k)
+            rebuilt.push_back(bb.instrs[k]);
+        bb.instrs = std::move(rebuilt);
+        changed = true;
+    }
+
+    return changed;
+}
+
+// =========================================================================
 //  Punto de entrada principal
 // =========================================================================
 
@@ -7570,6 +7818,11 @@ void ir_optimize(IrModule &mod, OptLevel level) {
      * el codigo expandido. */
     if (level >= OptLevel::O1) {
         ir_pass_inline(mod);
+        /* Tras inlinar las factorias, la closure se construye y se invoca
+         * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
+         * el CALLCLOSURE (elimina el call indirecto + el env; el DCE limpia
+         * las stores/allocs muertas).  Cross-backend: interp, JIT y AOT. */
+        ir_pass_inline_closures(mod);
     }
 
     /* Phase D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a

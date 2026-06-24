@@ -336,6 +336,29 @@ bool ir_pass_reassoc(IrFunction &fn);
 bool ir_pass_inline(IrModule &mod, size_t threshold = 12);
 
 /**
+ * @brief Inline del CUERPO de una lambda en el CALLCLOSURE (cross-backend).
+ *
+ * Cuando una funcion construye UNA closure (MAKE_CLOSURE) con capturas
+ * by-value y la invoca UNA vez (CALLCLOSURE) en el mismo bloque, este pase
+ * sustituye el CALLCLOSURE por el cuerpo del helper @c __lambda_N,
+ * mapeando los params -> args y las capturas -> los valores capturados
+ * (operands del MAKE_CLOSURE).  Elimina la llamada indirecta + el acceso
+ * al env por completo (el DCE posterior limpia las stores/allocs del env
+ * que quedan muertas).  Beneficia a TODOS los backends: el interprete y el
+ * JIT evitan el dispatch @c vrt_callclosure, y el AOT evita el call
+ * indirecto -- mejor que un puntero de funcion de C/C++.
+ *
+ * Conservador (cero riesgo de mispairing): solo actua si la funcion tiene
+ * EXACTAMENTE un MAKE_CLOSURE y un CALLCLOSURE en el mismo bloque, todas
+ * las capturas son by-value (no mutable), y el helper es single-block.
+ * Ante cualquier anomalia, no transforma (mantiene el CALLCLOSURE).
+ *
+ * @param mod Modulo a transformar in-place.
+ * @return true si inlino al menos una closure.
+ */
+bool ir_pass_inline_closures(IrModule &mod);
+
+/**
  * @brief Loop-Invariant Code Motion.
  *
  * Detecta loops via back-edges (JMP/BR_COND a un bloque anterior),
