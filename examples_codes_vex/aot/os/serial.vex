@@ -1,0 +1,54 @@
+// ===========================================================================
+// serial -- driver del puerto serie COM1 (0x3F8).  E/S por puerto con asm.
+// ===========================================================================
+
+// Escribe un byte a un puerto (instruccion `out`).
+void outb(u64 port, u64 val) {
+    register("rdx") u64 p = port;
+    register("rax") u64 v = val;
+    asm volatile { out dx, al }
+}
+
+// Lee un byte de un puerto (instruccion `in`).
+u64 inb(u64 port) {
+    register("rdx") u64 p = port;
+    register("rax") u64 r = 0;
+    asm volatile { in al, dx }
+    return r & 0xFF;
+}
+
+// Inicializa COM1 a 38400 baudios, 8N1.
+void serial_init() {
+    outb(0x3F9, 0x00);       // desactivar interrupciones
+    outb(0x3FB, 0x80);       // DLAB on
+    outb(0x3F8, 0x03);       // divisor lo = 3 (38400)
+    outb(0x3F9, 0x00);       // divisor hi
+    outb(0x3FB, 0x03);       // 8 bits, sin paridad, 1 stop
+    outb(0x3FA, 0xC7);       // habilitar FIFO, limpiar, umbral 14
+    outb(0x3FC, 0x0B);       // IRQs on, RTS/DSR
+}
+
+// Espera a que el THR este vacio y envia un caracter.
+void serial_putc(u64 c) {
+    while ((inb(0x3FD) & 0x20) == 0) { }   // LSR bit 5 = THR empty
+    outb(0x3F8, c);
+}
+
+// Envia una cadena nul-terminada.
+void serial_puts(char* s) {
+    u64 i = 0;
+    while (s[i] != 0) {
+        serial_putc((u64) s[i]);
+        i = i + 1;
+    }
+}
+
+// true si hay un byte disponible para leer (LSR bit 0 = data ready).
+bool serial_haskey() {
+    return (inb(0x3FD) & 0x01) != 0;
+}
+
+// Lee un byte recibido por COM1 (asume serial_haskey() == true).
+u64 serial_getc() {
+    return inb(0x3F8) & 0xFF;
+}

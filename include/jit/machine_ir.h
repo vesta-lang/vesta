@@ -1163,6 +1163,10 @@ struct MFunction {
     /// (auto_jit, runtime, AOT normal) NO paga nada: el encoder ni mira la
     /// tabla y los bytes emitidos son identicos.
     bool emit_line_map = false;
+    /// Phase NR: `@Naked` -- suprime prologo/epilogo Y ret implicito en el
+    /// rewrite-to-physical.  El cuerpo (asm) provee su propia salida
+    /// (ret/iretq).  Propagado desde @c IrFunction::is_naked por vreg-select.
+    bool naked = false;
     /// Solo-LSP: correlacion byte_offset -> source_line.  Vacia salvo que
     /// @c emit_line_map este activo.  Ver @c LineMapEntry.
     std::vector<LineMapEntry> line_map;

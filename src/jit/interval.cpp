@@ -174,6 +174,13 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::MOV_SYM:
     case MOp::LEA_RIP_SYM: r.dst = R::DEF; break;
 
+    /* CALL indirecta (CALLIND / dispatch por puntero): src1 es el vreg con
+     * la DIRECCION de la funcion -- un USE que debe seguir vivo hasta el
+     * call (si no, el regalloc reusa su registro para un argumento y el
+     * call salta a basura).  El role solo aplica si src1.is_vreg(); el
+     * CALL_SYM directo lleva un IMM (sym_idx), no un vreg -> no le afecta. */
+    case MOp::CALL: r.src1 = R::USE; break;
+
     /* Control de flujo / pseudo: sin operandos de registro vreg.
      * CALL_SYM (AOT) cae aqui: sus args ya se marshalaron via ARG; su
      * src1 es el IMM32(sym_idx). */

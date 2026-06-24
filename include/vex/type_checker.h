@@ -431,6 +431,18 @@ class TypeChecker {
     }
 
     /**
+     * @brief Upcast implicito clase concreta -> interfaz.
+     *
+     * Devuelve true si @p value es una CLASE concreta que implementa la
+     * INTERFAZ @p target (directamente o via su cadena de super).  Habilita
+     * el polimorfismo: `ISh s = new Sq();`, `s = new Sq();`, `use(new Sq())`
+     * cuando `use(ISh)`.  Sin esto el type-checker rechazaba el upcast y el
+     * polimorfismo con tipo concreto desconocido era inalcanzable.
+     */
+    bool value_assignable_to_interface(const Type &target,
+                                       const Type &value) const noexcept;
+
+    /**
      * @brief Acceso de solo lectura a la tabla de layouts de enums.
      *
      * El lowering la consulta para emitir el codigo de constructor de

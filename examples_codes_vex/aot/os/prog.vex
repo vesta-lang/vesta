@@ -1,0 +1,104 @@
+// ===========================================================================
+// prog -- cargador de PROGRAMAS de disco + tabla de API del kernel.
+//
+// El boot carga la imagen completa como un "ramdisk" contiguo a partir de
+// 0x7C00 (sector S -> RAM 0x7C00 + S*512).  En el sector DIR_SECTOR hay un
+// DIRECTORIO de programas; cada entrada (32 bytes):
+//   +0  [20] nombre (nul-terminado)
+//   +20 [4]  sector inicial del programa en el disco
+//   +24 [4]  tamano en bytes
+//   +28 [4]  reservado
+// Una entrada con nombre vacio termina el directorio.
+//
+// Para EJECUTAR un programa: se copia desde el ramdisk a EXEC_ADDR (0x100000)
+// y se salta a su entry (offset 0) pasando rdi = tabla de API, rsi = args.
+// La tabla de API es un array de u64 con las direcciones de los servicios del
+// kernel (function pointers), de modo que el programa no se enlaza con el
+// kernel: solo conoce los indices.
+// ===========================================================================
+import "term";
+import "console";
+
+// --- Servicios del kernel expuestos a los programas (via la tabla de API) ---
+void k_puts(char* s) {
+    term.tputs(s);
+}
+void k_putc(u64 c) {
+    term.tputc(c);
+}
+void k_dec(i64 v) {
+    term.tdec(v);
+}
+u64 k_getline(u8* buf, u64 max) {
+    return term.read_line(buf, max);
+}
+
+// Construye la tabla de API en 0x70000 (RAM libre) y devuelve su direccion.
+// IMPORTANTE: NO usar 0xA0000-0xFFFFF (VGA + ROM del BIOS): ahi las
+// escrituras se ignoran y las lecturas devuelven la ROM.
+// Indices: [0]=puts [1]=putc [2]=dec [3]=getline.
+u64 api_build() {
+    u64* t = (u64*) 0x70000;
+    t[0] = (u64) k_puts;
+    t[1] = (u64) k_putc;
+    t[2] = (u64) k_dec;
+    t[3] = (u64) k_getline;
+    return 0x70000;
+}
+
+// Copia n bytes de src a dst (byte a byte; suficiente para cargar programas).
+void mcopy(u8* dst, u8* src, u64 n) {
+    u64 i = 0;
+    while (i < n) {
+        dst[i] = src[i];
+        i = i + 1;
+    }
+}
+
+// Compara nombre del directorio (campo de 20 bytes) con una cadena.
+bool name_eq(u8* entry, char* name) {
+    u64 i = 0;
+    while (name[i] != 0) {
+        if (i >= 20) { return false; }
+        if (entry[i] != name[i]) { return false; }
+        i = i + 1;
+    }
+    // el resto del nombre en la entrada debe ser 0.
+    return entry[i] == 0;
+}
+
+// Busca un programa por nombre.  Devuelve la direccion (ramdisk) de su entrada
+// de directorio, o 0 si no existe.  DIR en el sector 96 -> RAM 0x13C00.
+u64 prog_find(char* name) {
+    u8* dir = (u8*) 0x13C00;
+    u64 off = 0;
+    u64 count = 0;
+    while (count < 64) {
+        u8* entry = (u8*) (0x13C00 + off);
+        if (entry[0] == 0) { return 0; }      // fin del directorio
+        if (name_eq(entry, name)) {
+            return 0x13C00 + off;
+        }
+        off = off + 32;
+        count = count + 1;
+    }
+    return 0;
+}
+
+// Carga y ejecuta el programa de la entrada `ent` con la cadena `args`.
+// Devuelve el codigo de retorno del programa, o -1 si falla.
+i64 prog_exec(u64 ent, char* args) {
+    u8* e = (u8*) ent;
+    // sector (u32 LE en +20) y tamano (u32 LE en +24).
+    u32* sect_p = (u32*) (ent + 20);
+    u32* size_p = (u32*) (ent + 24);
+    u64 sect = (u64) sect_p[0];
+    u64 size = (u64) size_p[0];
+    u8* src = (u8*) (0x7C00 + sect * 512);   // direccion en el ramdisk
+    u8* dst = (u8*) 0x100000;                // EXEC_ADDR
+    mcopy(dst, src, size);
+    u64 api = api_build();
+    // Llamar al entry del programa: prog_main(api, args) en 0x100000.
+    i64 r = ((fn(u64,u64)->i64) 0x100000)(api, (u64) args);
+    return r;
+}

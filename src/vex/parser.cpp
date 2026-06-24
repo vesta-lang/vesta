@@ -720,6 +720,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_async = false;
     bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
     bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
+    bool top_is_naked = false;          /* Phase NR: @Naked (ISRs/stubs) */
     bool top_is_string_concat = false;  /* C-3: @StringConcat */
     bool top_is_string_eq = false;      /* C-3: @StringEq */
     /* CPU dispatch Inc 4: @HelperOverride(<helper>).  Guarda el nombre del
@@ -780,6 +781,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_alloc_override = true;
             else if (current_.lexeme == "PanicHandler")
                 top_is_panic_handler = true;
+            else if (current_.lexeme == "Naked")
+                top_is_naked = true;
             else if (current_.lexeme == "StringConcat")
                 top_is_string_concat = true;
             else if (current_.lexeme == "StringEq")
@@ -1426,6 +1429,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && top_is_pure) fd->is_pure = true;
         if (fd && top_is_alloc_override) fd->is_alloc_override = true;
         if (fd && top_is_panic_handler) fd->is_panic_handler = true;
+        if (fd && top_is_naked) fd->is_naked = true;
         if (fd && top_is_string_concat) fd->is_string_concat_override = true;
         if (fd && top_is_string_eq) fd->is_string_eq_override = true;
         if (fd && !top_helper_override_target.empty())
@@ -1675,6 +1679,37 @@ bool Parser::looks_like_cast() const noexcept {
             declared_aliases_.count(first.lexeme) > 0);
     if (!is_type_starter) return false;
     ++off;
+
+    // Tipo funcion `fn(params) -> ret`: saltar `(...)` balanceado + el
+    // `-> tipo_retorno` para reconocer `(fn(...)->R) expr` como cast.
+    if (first_kind == TokenKind::KW_FN) {
+        if (mut_lex.peek_at(off).kind == TokenKind::LPAREN) {
+            int d = 1;
+            ++off;
+            const size_t MAXP = 128;
+            while (d > 0 && off < MAXP) {
+                TokenKind k = mut_lex.peek_at(off).kind;
+                if (k == TokenKind::END_OF_FILE) return false;
+                if (k == TokenKind::LPAREN)
+                    ++d;
+                else if (k == TokenKind::RPAREN)
+                    --d;
+                ++off;
+            }
+            if (d != 0) return false;
+        }
+        if (mut_lex.peek_at(off).kind == TokenKind::ARROW) {
+            ++off;
+            TokenKind rk = mut_lex.peek_at(off).kind;
+            if (primitive_kind_from_token(rk) != PrimitiveKind::COUNT ||
+                rk == TokenKind::IDENTIFIER ||
+                rk == TokenKind::KW_NONNULL) {
+                ++off;
+                while (mut_lex.peek_at(off).kind == TokenKind::STAR)
+                    ++off;
+            }
+        }
+    }
 
     // Saltar argumentos genericos `<...>` con balance, tratando
     // `>>` (SHR) como dos GTs.

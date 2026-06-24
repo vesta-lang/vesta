@@ -70,6 +70,17 @@
 #include <sstream>
 #include <unordered_map>
 
+// Header generado por CMake (cmake/gen_codegen_version.cmake) que define
+// VEXI_COMPILER_BUILD_ID con un hash de las fuentes de codegen.  Asi el
+// cvh cambia SOLO cuando el codigo de generacion del compilador cambia.
+// __has_include para no romper builds fuera del CMake (cae al __DATE__/__TIME__
+// de abajo si el header no existe).
+#if defined(__has_include)
+#if __has_include("vex_codegen_version.h")
+#include "vex_codegen_version.h"
+#endif
+#endif
+
 namespace vex {
 
 // ---------------------------------------------------------------------------

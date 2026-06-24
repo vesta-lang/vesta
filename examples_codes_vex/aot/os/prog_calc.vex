@@ -1,0 +1,99 @@
+// ===========================================================================
+// prog_calc -- CALCULADORA como PROGRAMA SEPARADO de VestaOS.
+//
+// Se compila a un binario plano independiente (base 0x100000) y se almacena
+// en el disco.  El kernel lo carga en 0x100000 y salta a su entry pasando:
+//   rdi = direccion de la TABLA DE API del kernel (array de u64 con las
+//         direcciones de las funciones de servicio).
+//   rsi = direccion de la cadena de ARGUMENTOS (la expresion a evaluar).
+//
+// El programa llama a los servicios del kernel a traves de la tabla (function
+// pointers), de modo que NO esta enlazado con el kernel: solo conoce el
+// contrato (indices de la tabla).  Indices de la API:
+//   [0] puts(char*)      [1] putc(u64)      [2] dec(i64)
+// ===========================================================================
+
+// Evaluador de expresiones (descenso recursivo).  Cursor en globals; cada
+// programa tiene su propio .data (cargado en 0x100000).
+u64 g_cs = 0;
+u64 g_cp = 0;
+
+i64 parse_expr();
+
+void skip_sp() {
+    char* s = (char*) g_cs;
+    while (s[g_cp] == 32) { g_cp = g_cp + 1; }
+}
+
+i64 parse_number() {
+    char* s = (char*) g_cs;
+    i64 v = 0;
+    while (s[g_cp] >= 48 && s[g_cp] <= 57) {
+        v = v * 10 + (s[g_cp] - 48);
+        g_cp = g_cp + 1;
+    }
+    return v;
+}
+
+i64 parse_factor() {
+    char* s = (char*) g_cs;
+    skip_sp();
+    if (s[g_cp] == 40) {                 // '('
+        g_cp = g_cp + 1;
+        i64 v = parse_expr();
+        skip_sp();
+        if (s[g_cp] == 41) { g_cp = g_cp + 1; }
+        return v;
+    }
+    if (s[g_cp] == 45) {                 // '-' unario
+        g_cp = g_cp + 1;
+        return 0 - parse_factor();
+    }
+    return parse_number();
+}
+
+i64 parse_term() {
+    i64 v = parse_factor();
+    char* s = (char*) g_cs;
+    skip_sp();
+    while (s[g_cp] == 42 || s[g_cp] == 47 || s[g_cp] == 37) {
+        u64 op = (u64) s[g_cp];
+        g_cp = g_cp + 1;
+        i64 r = parse_factor();
+        if (op == 42) { v = v * r; }
+        else { if (r == 0) { v = 0; } else { if (op == 47) { v = v / r; } else { v = v % r; } } }
+        skip_sp();
+    }
+    return v;
+}
+
+i64 parse_expr() {
+    i64 v = parse_term();
+    char* s = (char*) g_cs;
+    skip_sp();
+    while (s[g_cp] == 43 || s[g_cp] == 45) {
+        u64 op = (u64) s[g_cp];
+        g_cp = g_cp + 1;
+        i64 r = parse_term();
+        if (op == 43) { v = v + r; } else { v = v - r; }
+        skip_sp();
+    }
+    return v;
+}
+
+// Entry del programa.  @at(0) -> primer byte del binario; el kernel salta aqui.
+@section(".entry") @at(0x000)
+i64 prog_main(u64 api, u64 args) {
+    u64* tbl = (u64*) api;
+    // Servicios del kernel via la tabla (function pointers).
+    u64 a_puts = tbl[0];     // void puts(char*)
+    u64 a_dec = tbl[2];      // void dec(i64)
+
+    ((fn(u64)->void) a_puts)((u64) "= ");
+    g_cs = args;
+    g_cp = 0;
+    i64 r = parse_expr();
+    ((fn(i64)->void) a_dec)(r);
+    ((fn(u64)->void) a_puts)((u64) "\n");
+    return r;
+}

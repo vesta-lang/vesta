@@ -1065,6 +1065,18 @@ struct IrFunction {
      */
     std::string section;
     std::string section_perms;
+    /**
+     * @brief Phase NR: `@Naked` -- funcion sin prologo/epilogo NI ret
+     *        implicito (dev OS: ISRs, stubs de entry/cambio de modo).
+     *
+     * El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
+     * programador es responsable del control de flujo de salida
+     * (`ret`/`iretq`/`iret`) y de no usar locales/spills que requieran
+     * frame (igual semantica que `__attribute__((naked))` de GCC).  Solo
+     * lo consume el codegen (AOT/JIT); el interprete lo ignora (un cuerpo
+     * naked con asm puro no tiene representacion en bytecode VM).
+     */
+    bool is_naked = false;
     int64_t section_at = -1; ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
     int32_t section_order =
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
@@ -1305,6 +1317,15 @@ struct IrModule {
             uint8_t is_rel = 0;  ///< 1 = PC-relativo; 0 = absoluto.
         };
         std::vector<SymRef> sym_refs; ///< vacio = sin refs (caso comun).
+        /// Phase NR / dev-OS: nombre EXPORTADO de este bloque de datos para
+        /// que OTROS bloques lo referencien por simbolo (cross-block).  Lo
+        /// fija el lowering para bloques `asm name {}` y `bytes name {}`: su
+        /// `name` se vuelve un simbolo resoluble por el emisor AOT (un `dd
+        /// gdt` / `jmp other_block` en otro bloque resuelve a la ubicacion de
+        /// ESTE).  Vacio => bloque anonimo (literal de cadena, etc.) sin
+        /// simbolo.  Para que la ubicacion sea estable, un bloque con
+        /// symbol_name se marca FORCE_EMIT + NON_DEDUP.
+        std::string symbol_name;
         /// Clave de global compartido a nivel de PROGRAMA: cuando no esta
         /// vacia, este slot es un unico global identificado por la clave en
         /// todo el binario (aunque sea NON_DEDUP).  El merge cross-module

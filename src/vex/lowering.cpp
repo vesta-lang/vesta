@@ -25,6 +25,7 @@
 #include "ir/ir_optimizer.h"           // register_pure_new_helper
 
 #include <functional>
+#include <map>
 #include <set>
 #include <sstream>
 #include <utility>
@@ -77,6 +78,84 @@ namespace vex {
 //  firma al final) esto no es un problema.
 // =====================================================================
 namespace {
+/**
+ * @brief Normaliza literales enteros DECIMALES a hexadecimal (0x...) en una
+ *        linea de ensamblador.
+ *
+ * Keystone en modo NASM interpreta los enteros desnudos como HEXADECIMAL
+ * (`127` -> 0x127), contra la semantica NASM (decimal).  Para que `mov ax,
+ * 127` valga 127 y no 0x127, reescribimos cada literal decimal a `0x<hex>`
+ * antes de pasarlo a Keystone (que SI parsea 0x correctamente).  Se respetan:
+ *   - literales ya en 0x / 0b / 0o (se dejan tal cual).
+ *   - digitos que forman parte de un identificador/registro (r8, xmm15,
+ *     etiquetas .loop1): el digito va precedido de letra/_/'.', no se toca.
+ *   - el contenido de cadenas entre comillas.
+ */
+std::string asmblk_dec_to_hex(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    const size_t n = s.size();
+    size_t i = 0;
+    bool in_str = false;
+    char qc = 0;
+    while (i < n) {
+        char c = s[i];
+        if (in_str) {
+            out.push_back(c);
+            if (c == qc) in_str = false;
+            ++i;
+            continue;
+        }
+        if (c == '"' || c == '\'') {
+            in_str = true;
+            qc = c;
+            out.push_back(c);
+            ++i;
+            continue;
+        }
+        // Posible inicio de un literal numerico: un digito cuyo char previo
+        // NO sea alfanumerico / '_' / '.' (eso seria parte de un identificador
+        // o etiqueta, p.ej. r8, .loop1).
+        const bool prev_ident =
+            !out.empty() &&
+            (std::isalnum((unsigned char)out.back()) || out.back() == '_' ||
+             out.back() == '.');
+        if (std::isdigit((unsigned char)c) && !prev_ident) {
+            // Leer el token numerico completo.
+            size_t j = i;
+            while (j < n && (std::isalnum((unsigned char)s[j])))
+                ++j;
+            std::string tok = s.substr(i, j - i);
+            // 0x / 0b / 0o: dejar tal cual (Keystone los parsea bien).
+            bool is_prefixed =
+                tok.size() >= 2 && tok[0] == '0' &&
+                (tok[1] == 'x' || tok[1] == 'X' || tok[1] == 'b' ||
+                 tok[1] == 'B' || tok[1] == 'o' || tok[1] == 'O');
+            bool all_dec = !is_prefixed && !tok.empty();
+            for (char d : tok)
+                if (!std::isdigit((unsigned char)d)) all_dec = false;
+            if (all_dec) {
+                unsigned long long v = 0;
+                bool ok = true;
+                for (char d : tok) {
+                    v = v * 10ull + (unsigned long long)(d - '0');
+                }
+                (void)ok;
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "0x%llx", v);
+                out += buf;
+            } else {
+                out += tok; // 0x.../identificador-con-digitos: verbatim
+            }
+            i = j;
+            continue;
+        }
+        out.push_back(c);
+        ++i;
+    }
+    return out;
+}
+
 std::string asmblk_trim(const std::string &s) {
     size_t a = 0, b = s.size();
     while (a < b &&
@@ -440,6 +519,7 @@ bool asmblk_assemble(
             err = "no hay backend de ensamblado (Keystone) disponible";
             return false;
         }
+        t = asmblk_dec_to_hex(t);
         vex::AsmAssembleResult r = vex::g_asm_backend->assemble(t, arch);
         if (!r.ok) {
             err = "error de ensamblado: " + r.error;
@@ -482,6 +562,43 @@ bool asmblk_assemble(
                 for (int i = 0; i < 4; ++i)
                     out.push_back(0);
                 continue;
+            }
+            // Far jump/call SIMBOLICO `jmp SEG:symbol` (cambio de modo en un
+            // dev-OS: `jmp 0x08:pm32`).  Se emite con offset de 32 bits (en
+            // 16-bit via prefijo 0x66) -> el campo offset es un sym_ref IMM32
+            // (VA absoluta del bloque destino, resuelta por el emisor AOT).
+            // No valido en 64-bit (no hay far jmp ptr:off directo).
+            size_t colon = operand.find(':');
+            if (colon != std::string::npos && bits != 64) {
+                std::string segs = asmblk_trim(operand.substr(0, colon));
+                std::string offs = asmblk_trim(operand.substr(colon + 1));
+                bool seg_ok = true;
+                size_t sp = 0;
+                int64_t selv = asmblk_eval_expr(segs, sp, 0, seg_ok);
+                const bool far_ident =
+                    seg_ok && !offs.empty() &&
+                    (std::isalpha((unsigned char)offs[0]) || offs[0] == '_') &&
+                    offs.find_first_of(" \t[]+-*,:") == std::string::npos &&
+                    !asmblk_is_register(offs) && !local_labels.count(offs) &&
+                    selv >= 0 && selv <= 0xFFFF;
+                if (far_ident) {
+                    if (!flush()) return false;
+                    // 16-bit: 0x66 (operand-size) fuerza offset de 32 bits.
+                    if (bits == 16) out.push_back(0x66);
+                    out.push_back(0xEA); // far jmp/call ptr16:32 (EA = jmp)
+                    // (call far simbolico no se usa en boot; EA = jmp far).
+                    ir::IrModule::StaticDataMeta::SymRef sr;
+                    sr.offset = (uint32_t)out.size(); // imm32 (offset) tras EA
+                    sr.sym = offs;
+                    sr.width = 4;
+                    sr.is_rel = 0; // ABS (IMM32: VA absoluta del destino)
+                    sym_refs->push_back(std::move(sr));
+                    for (int i = 0; i < 4; ++i)
+                        out.push_back(0); // placeholder offset32
+                    out.push_back((uint8_t)(selv & 0xFF)); // selector lo
+                    out.push_back((uint8_t)((selv >> 8) & 0xFF)); // selector hi
+                    continue;
+                }
             }
         }
         if (is_data) {
@@ -730,6 +847,29 @@ ir::IrType Lowering::ir_type_from_primitive(PrimitiveKind p) noexcept {
 // Run principal.
 // ---------------------------------------------------------------------
 
+// Tamano en bytes de un global array nativo @c T[N] (N constante en
+// compile-time).  Devuelve 0 si @p tn no es un array de tamano fijo con
+// elemento dimensionable (entonces no se le reserva storage estatico).
+// Habilita buffers estaticos globales (p.ej. heap de un allocator bump en
+// codigo bare-metal): @c u8[4096] g_heap; -> slot de 4096 bytes en .data.
+static uint64_t vex_global_array_bytes(const ast::TypeNode *tn) {
+    if (!tn || tn->kind != ast::NodeKind::ArrayTypeNode) return 0;
+    auto *at = static_cast<const ast::ArrayTypeNode *>(tn);
+    if (!at->element_type || !at->size_expr) return 0; // T[] decay = sin storage
+    if (at->size_expr->kind != ast::NodeKind::IntLitExpr) return 0;
+    const uint64_t count =
+        static_cast<const ast::IntLitExpr *>(at->size_expr.get())->value;
+    uint64_t esz = 0;
+    if (at->element_type->kind == ast::NodeKind::PrimitiveTypeNode)
+        esz = primitive_size_bytes(
+            static_cast<const ast::PrimitiveTypeNode *>(at->element_type.get())
+                ->prim);
+    else if (at->element_type->kind == ast::NodeKind::PointerTypeNode)
+        esz = 8;
+    if (esz == 0 || count == 0) return 0;
+    return count * esz;
+}
+
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     const size_t initial_errors = diags_.error_count();
     out_module.name = module_name;
@@ -915,6 +1055,13 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
         auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
         if (gv->is_const || gv->is_comptime) continue;
+        // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
+        if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
+            const uint64_t ab = vex_global_array_bytes(gv->type.get());
+            if (ab > 0)
+                (void)get_or_create_runtime_global_slot(gv->name, ab);
+            continue;
+        }
         if (!gv->type || gv->type->kind != ast::NodeKind::PrimitiveTypeNode)
             continue;
         auto *pt = static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
@@ -984,6 +1131,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // Solo se reserva si tiene tipo basico soportado: STRING o
             // enteros/floats que caben en 8 bytes.
             bool runtime_global_supported = false;
+            // Global array nativo T[N]: ya tiene slot (pre-pase); soportado.
+            if (!gv->is_const && !is_comptime_silent && gv->type &&
+                gv->type->kind == ast::NodeKind::ArrayTypeNode &&
+                vex_global_array_bytes(gv->type.get()) > 0) {
+                runtime_global_supported = true;
+            }
             if (!gv->is_const && !is_comptime_silent && gv->type &&
                 gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
                 auto *pt =
@@ -1004,7 +1157,66 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 case PrimitiveKind::CHAR:
                 case PrimitiveKind::PTR:
                     runtime_global_supported = true;
-                    (void)get_or_create_runtime_global_slot(gv->name);
+                    {
+                        uint64_t slot = get_or_create_runtime_global_slot(gv->name);
+                        // AOT/bare: __module_init NO se ejecuta (el entry es
+                        // main/kmain directo).  Para que el global tenga su
+                        // valor inicial sin depender de __module_init, si el
+                        // init es una constante la grabamos DIRECTAMENTE en los
+                        // bytes de .data.  El STORE de __module_init (VM/JIT)
+                        // re-escribe el mismo valor; en AOT esos bytes son la
+                        // unica fuente.  (Inits no-constantes -- p.ej. llamadas
+                        // -- siguen necesitando __module_init: no soportado en
+                        // AOT puro, pero raro en codigo bare.)
+                        uint64_t cval = 0;
+                        bool have = false;
+                        const ast::Expr *ie = gv->init.get();
+                        if (ie) {
+                            switch (ie->kind) {
+                            case ast::NodeKind::IntLitExpr:
+                                cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                                have = true;
+                                break;
+                            case ast::NodeKind::BoolLitExpr:
+                                cval = static_cast<const ast::BoolLitExpr *>(ie)->value ? 1u : 0u;
+                                have = true;
+                                break;
+                            case ast::NodeKind::CharLitExpr:
+                                cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                                have = true;
+                                break;
+                            case ast::NodeKind::FloatLitExpr: {
+                                double d = static_cast<const ast::FloatLitExpr *>(ie)->value;
+                                std::memcpy(&cval, &d, sizeof(double));
+                                have = true;
+                                break;
+                            }
+                            case ast::NodeKind::UnaryExpr: {
+                                auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                                if (u->op == ast::UnOp::Neg && u->operand &&
+                                    u->operand->kind == ast::NodeKind::IntLitExpr) {
+                                    cval = (uint64_t)(-(int64_t)static_cast<const ast::IntLitExpr *>(
+                                        u->operand.get())->value);
+                                    have = true;
+                                } else if (u->op == ast::UnOp::Neg && u->operand &&
+                                           u->operand->kind == ast::NodeKind::FloatLitExpr) {
+                                    double d = -static_cast<const ast::FloatLitExpr *>(
+                                        u->operand.get())->value;
+                                    std::memcpy(&cval, &d, sizeof(double));
+                                    have = true;
+                                }
+                                break;
+                            }
+                            default: break;
+                            }
+                        }
+                        if (have && slot < out_mod_->static_data.entries.size()) {
+                            uint32_t off = out_mod_->static_data.entries[slot].byte_offset;
+                            for (int k = 0; k < 8; ++k)
+                                out_mod_->static_data.bytes[off + (size_t)k] =
+                                    (uint8_t)((cval >> (8 * k)) & 0xFF);
+                        }
+                    }
                     break;
                 default: break;
                 }
@@ -1102,6 +1314,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             m.section_at = bd->attr_at;
             m.section_order = bd->attr_order;
             m.sym_refs = std::move(asm_syms); // call/jmp -> funcion Vex
+            // Phase NR / dev-OS: exportar el nombre del bloque como simbolo
+            // resoluble por otros bloques (cross-block jmp/call/dd).
+            m.symbol_name = bd->name;
             m.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                        ir::IrModule::SD_FLAG_NON_DEDUP;
             continue;
@@ -1160,22 +1375,24 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         rebuilt.push_back((uint8_t)(v >> (8 * i)));
                 }
             } else {
-                // Simbolo de funcion -> reloc absoluta de 64 bits.
-                if (sr.width != 8) {
+                // Simbolo (funcion u otro bloque) -> reloc absoluta.  Se
+                // admite `dq` (ABS64) y `dd` (ABS32): un dev-OS pone la base
+                // de un GDTR / un puntero far de 32 bits con `dd gdt`, donde
+                // la direccion cabe en 32 bits (binario plano bajo 4GB).
+                if (sr.width != 8 && sr.width != 4) {
                     diags_.error(bd->loc,
-                                 "bytes: la referencia a la funcion '" +
-                                     sr.sym +
-                                     "' requiere 'dq' (direccion de 64 bits)");
+                                 "bytes: la referencia al simbolo '" + sr.sym +
+                                     "' requiere 'dd' (32 bits) o 'dq' (64 bits)");
                     ok = false;
                     break;
                 }
                 ir::IrModule::StaticDataMeta::SymRef d;
                 d.offset = (uint32_t)rebuilt.size(); // offset en el blob nuevo
                 d.sym = sr.sym;
-                d.width = 8;
+                d.width = sr.width; // 4 -> ABS32, 8 -> ABS64
                 d.is_rel = sr.is_rel ? 1 : 0;
                 kept.push_back(std::move(d));
-                for (int i = 0; i < 8; ++i)
+                for (int i = 0; i < sr.width; ++i)
                     rebuilt.push_back(0); // placeholder
             }
             cursor =
@@ -1194,6 +1411,9 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         m.section_perms = bd->attr_section_perms;
         m.section_at = bd->attr_at;
         m.section_order = bd->attr_order;
+        // Phase NR / dev-OS: exportar el nombre del bloque bytes como simbolo
+        // resoluble cross-block (p.ej. `lgdt [gdtr]` / `dd gdt` desde otro).
+        m.symbol_name = bd->name;
         m.flags |=
             ir::IrModule::SD_FLAG_FORCE_EMIT | ir::IrModule::SD_FLAG_NON_DEDUP;
         // Solo las refs de funcion sobreviven como relocs (las comptime
@@ -1899,6 +2119,8 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn.section_perms = fd->attr_section_perms;
     fn.section_at = fd->attr_at;
     fn.section_order = fd->attr_order;
+    // Phase NR: @Naked -- el codegen suprime prologo/epilogo/ret.
+    fn.is_naked = fd->is_naked;
 
     // Subsistema de coste (modo --analyze): propagar el contrato
     // @complexity del AST al IR.  Metadata pura -- el codegen la ignora;
@@ -9226,6 +9448,27 @@ ir::IrValueId Lowering::lower_expr(ast::Expr *e) {
 
 ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (!e || !e->operand) return ir::IR_NO_VALUE;
+
+    // Function pointer: `(u64) foo` / `(fn(...)->R) foo` donde foo es una
+    // funcion top-level -> emitir LABEL_ADDR (direccion cruda del codigo).
+    // El resultado es un puntero de 8 bytes valido para meter en una tabla
+    // o para una llamada indirecta posterior (cast u64->fn -> CALLIND).
+    if (e->operand->kind == ast::NodeKind::IdentExpr) {
+        auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
+        if (id->is_func_ref) {
+            const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::LABEL_ADDR;
+            ins.type = ir::IrType::PTR;
+            ins.dst = dst;
+            ins.func_name = id->func_ref_mangled.empty() ? id->name
+                                                         : id->func_ref_mangled;
+            ins.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ins));
+            return dst;
+        }
+    }
+
     const ir::IrValueId v_op = lower_expr(e->operand.get());
     if (v_op == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
@@ -9714,6 +9957,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             // con el ancho correcto.  Default i64.
             ir::IrType t = ir::IrType::I64;
             bool is_string = false;
+            bool is_array = false;
             for (auto &decl : mod_.decls) {
                 if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl)
                     continue;
@@ -9725,10 +9969,32 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                         static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
                     t = ir_type_from_primitive(pt->prim);
                     is_string = (pt->prim == PrimitiveKind::STRING);
+                } else if (gv->type &&
+                           gv->type->kind == ast::NodeKind::ArrayTypeNode) {
+                    is_array = true;
                 }
                 break;
             }
             const uint64_t slot_idx = sit->second;
+            // Array global: decae a su DIRECCION (host_ptr), no se carga
+            // el contenido.  g_heap[i] indexa sobre esta direccion.
+            if (is_array) {
+                const int ln_a = e->loc.line;
+                ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
+                // AOT (native_poo_): el slot vive en .data del host -> host_ptr.
+                // VM/JIT: el slot vive en vm_mem -> direccion VM (NO host;
+                // marcar host_ptr haria que el indexado use movh sobre una
+                // direccion VM y segfaultee).
+                fn_->values[v_a].is_host_ptr = native_poo_;
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = v_a;
+                is.imm = slot_idx;
+                is.source_line = ln_a;
+                fn_->append(current_block_, std::move(is));
+                return v_a;
+            }
             const int ln = e->loc.line;
             ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
             {
@@ -11612,6 +11878,35 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * en codigo runtime real generado a partir de string compile-time. */
     if (e->macro_expanded) {
         return lower_expr(e->macro_expanded.get());
+    }
+
+    // Function pointers: llamada INDIRECTA.  Evaluamos el callee a un SSA
+    // value (la direccion del codigo: una variable fn(...), un cast, etc.) y
+    // emitimos CALLIND con func_ptr = ese valor.  El tipo de retorno viene
+    // del result_type que dejo el type checker.
+    if (e->is_indirect_call) {
+        const ir::IrValueId fnp = lower_expr(e->callee.get());
+        std::vector<ir::IrValueId> args;
+        args.reserve(e->args.size());
+        for (auto &a : e->args) {
+            const ir::IrValueId av = lower_expr(a.get());
+            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            args.push_back(av);
+        }
+        const ir::IrType rt = ir_type_from_primitive(e->result_type.kind);
+        const ir::IrValueId dst =
+            (e->result_type.kind == PrimitiveKind::VOID)
+                ? ir::IR_NO_VALUE
+                : fn_->new_value(rt);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALLIND;
+        ins.type = rt;
+        ins.dst = dst;
+        ins.func_ptr = fnp;
+        ins.operands = std::move(args);
+        ins.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ins));
+        return dst;
     }
 
     // Phase M.7: llamada a funcion de namespace importado, ej.
@@ -13852,7 +14147,16 @@ ir::IrValueId Lowering::lower_string_lit(ast::StringLitExpr *e) {
     // Convertir el contenido resuelto a vector<uint8_t> y registrarlo
     // (deduplicado) en static_data.  Los duplicados retornan el mismo
     // indice, ahorrando bytes en el .vel emitido.
+    //
+    // NUL terminator: el STR_LIT_ADDR se usa como `char*` (C string) -- p.ej.
+    // pasado a una funcion que itera hasta el 0.  Sin el nul, dos literales
+    // contiguos en .rodata se leen como uno solo (un `dputs("A")` seguia
+    // hasta el siguiente literal).  En PE/exe "funcionaba" por relleno de
+    // alineacion casual; en el .bin empaquetado no.  El +1 byte es inocuo
+    // para los consumidores que usan longitud explicita (STRMAKE lee
+    // value.size() bytes e ignora el nul).
     std::vector<uint8_t> bytes(e->value.begin(), e->value.end());
+    bytes.push_back(0);
     const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
 
     // Emitir IrOp::STR_LIT_ADDR -> el emisor genera "mov rDst,
@@ -20355,6 +20659,43 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 for (const auto &mi : lay.methods)
                     if (mi.vtable_index + 1u > nslots)
                         nslots = mi.vtable_index + 1u;
+                // El dispatch de INTERFAZ usa el vtable_index del metodo en la
+                // INTERFAZ (numerada 0-based, sin ctor).  La clase numera con
+                // el ctor en el slot 0 -> los slots no coinciden.  En native_poo
+                // el ctor NUNCA se despacha por vtable (new/super llaman directo)
+                // -> su slot esta MUERTO y podemos colocar ahi el metodo de
+                // interfaz.  Recolectamos esas colocaciones (offset de interfaz
+                // -> metodo implementador) y las aplicamos DESPUES de los slots
+                // propios para que ganen su slot.  Tambien ampliamos nslots a
+                // los slots de interfaz por si la interfaz tuviera mas metodos.
+                struct IfaceSlot {
+                    uint32_t slot;
+                    std::string sym;
+                };
+                std::vector<IfaceSlot> iface_slots;
+                for (const auto &iname : lay.interface_names) {
+                    auto it_if = tc_.class_layouts().find(iname);
+                    if (it_if == tc_.class_layouts().end()) continue;
+                    for (const auto &im : it_if->second.methods) {
+                        if (im.is_constructor) continue;
+                        // Buscar el metodo implementador en la clase (incluye
+                        // heredados) por nombre.
+                        const ClassMethodInfo *impl = nullptr;
+                        for (const auto &cm : lay.methods)
+                            if (!cm.is_constructor && cm.name == im.name) {
+                                impl = &cm;
+                                break;
+                            }
+                        if (!impl) continue;
+                        const std::string owner = impl->defining_class.empty()
+                                                      ? cd->name
+                                                      : impl->defining_class;
+                        iface_slots.push_back(
+                            {im.vtable_index, owner + "__" + impl->name});
+                        if (im.vtable_index + 1u > nslots)
+                            nslots = im.vtable_index + 1u;
+                    }
+                }
                 if (nslots == 0) {
                     needs_vtable = false;
                 } else {
@@ -20369,15 +20710,25 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     vm.section_name = ".data.rel.ro";
                     vm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                                 ir::IrModule::SD_FLAG_NON_DEDUP;
+                    // Un simbolo por slot (offset).  Los metodos propios primero;
+                    // las colocaciones de interfaz SOBREESCRIBEN (priman) su
+                    // slot -- el slot del ctor esta muerto en native_poo.  Sin
+                    // depender del orden de aplicacion de relocs del emisor.
+                    std::map<uint32_t, std::string> slot_sym;
                     for (const auto &mi : lay.methods) {
                         const std::string owner = mi.defining_class.empty()
                                                       ? cd->name
                                                       : mi.defining_class;
-                        ir::IrModule::StaticDataMeta::SymRef sr;
-                        sr.offset = mi.vtable_index * 8u;
-                        sr.sym =
+                        slot_sym[mi.vtable_index * 8u] =
                             owner + "__" +
                             (mi.is_constructor ? std::string("ctor") : mi.name);
+                    }
+                    for (const auto &is : iface_slots)
+                        slot_sym[is.slot * 8u] = is.sym;
+                    for (const auto &kv : slot_sym) {
+                        ir::IrModule::StaticDataMeta::SymRef sr;
+                        sr.offset = kv.first;
+                        sr.sym = kv.second;
                         sr.width = 8;
                         sr.is_rel = 0;
                         vm.sym_refs.push_back(std::move(sr));
@@ -22156,7 +22507,12 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // su SSA value viene directamente de un @c new ConcreteClass()
     // (caso comun: @c IServicio s = new ImplA();).
     // -----------------------------------------------------------------
-    if (lay.is_interface && !native_poo_) {
+    // Devirtualizacion cuando el tipo concreto del receptor se conoce
+    // estaticamente.  En native_poo (AOT) se aplica SIEMPRE (HOST_LEAF no
+    // soporta CALLVIRT y la vtable nativa sufre slot-mismatch interfaz/clase
+    // -> el CALL directo es la unica via correcta); en no-native solo para
+    // interfaces (el backend ya devirta los CALLVIRT de clase base).
+    if (lay.is_interface || native_poo_) {
         auto it_conc = ssa_concrete_class_.find(obj);
         if (it_conc != ssa_concrete_class_.end()) {
             const std::string &concrete_name = it_conc->second;
@@ -22166,6 +22522,34 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                 // Buscar metodo por nombre en la clase concreta.
                 for (const auto &cm : conc_lay.methods) {
                     if (cm.name == mtd->name && !cm.is_constructor) {
+                        if (native_poo_) {
+                            // AOT (HOST_LEAF no soporta CALLVIRT): el tipo
+                            // concreto se conoce -> CALL DIRECTO a
+                            // <concreto>__<metodo>.  Correcto y mas rapido,
+                            // y EVITA el bug de slot-mismatch entre el
+                            // vtable_index de la interfaz (area=slot0) y el
+                            // de la clase concreta (el ctor ocupa slot0 ->
+                            // area=slot1).  Sin esto el dispatch de interfaz
+                            // nativo leia el slot equivocado (resultado
+                            // silenciosamente erroneo).
+                            const std::string callee =
+                                (cm.defining_class.empty() ? concrete_name
+                                                           : cm.defining_class) +
+                                "__" + cm.name;
+                            ir::IrInstr ca{};
+                            ca.op = ir::IrOp::CALL;
+                            ca.type = ret_ir;
+                            ca.dst = dst;
+                            ca.func_name = callee;
+                            ca.operands.push_back(obj);
+                            if (method_call_sret)
+                                ca.operands.push_back(v_method_call_retbuf);
+                            for (auto av : arg_vals)
+                                ca.operands.push_back(av);
+                            ca.source_line = e->loc.line;
+                            fn_->append(current_block_, std::move(ca));
+                            return visible_dst;
+                        }
                         // CALLVIRT directo con el vtable_idx de la
                         // clase concreta -> backend devirtaliza.
                         ir::IrInstr cv{};
@@ -27669,15 +28053,22 @@ ir::IrValueId Lowering::emit_getproc(uint32_t source_line) {
 // dedup -- cada global necesita SU PROPIO slot aunque comparta bytes
 // iniciales (typicamente todos los globals empiezan en {0,0,...,0} y
 // si los dedupeamos colisionan en el mismo storage).
-uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name) {
+uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name,
+                                                     uint64_t nbytes) {
     auto it = runtime_global_slots_.find(name);
     if (it != runtime_global_slots_.end()) return it->second;
-    std::vector<uint8_t> bytes(8, 0); // 8 bytes zero-init
+    if (nbytes < 8) nbytes = 8; // minimo un qword (alineacion)
+    std::vector<uint8_t> bytes(static_cast<size_t>(nbytes), 0); // zero-init
     const uint64_t idx = static_cast<uint64_t>(
         out_mod_->static_data.push_back(std::move(bytes)));
+    auto &gmeta = out_mod_->static_data.meta_at(idx);
     // Marcar el slot como NON_DEDUP para que el merge cross-module
     // no colapse multiples globals con bytes iniciales identicos.
-    out_mod_->static_data.meta_at(idx).flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+    gmeta.flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+    // AOT: un global runtime es MUTABLE -> debe vivir en .data (rw), no en
+    // .rodata (r): escribir a un slot read-only segfaultea en nativo.  El
+    // interp/JIT ignoran section_name; solo lo consume el codegen AOT.
+    gmeta.section_name = ".data";
     runtime_global_slots_[name] = idx;
     return idx;
 }
@@ -28687,6 +29078,25 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
         if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         arg_vals.push_back(av);
     }
+    // AOT (native_poo_): la clase super es estaticamente conocida -> CALL
+    // DIRECTO a <super>__ctor(this, args).  Evita findclass + callsuper
+    // (ambos runtime, no compilables en bare).  Habilita herencia en AOT.
+    if (native_poo_) {
+        const std::string sname = super_ctor->defining_class.empty()
+                                      ? super_name
+                                      : super_ctor->defining_class;
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = ir::IrType::VOID;
+        ca.dst = ir::IR_NO_VALUE;
+        ca.func_name = sname + "__ctor";
+        ca.operands.push_back(v_this);
+        for (auto av : arg_vals)
+            ca.operands.push_back(av);
+        ca.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ca));
+        return ir::IR_NO_VALUE;
+    }
     // Resolver ClassInfo* del super via findclass inline (mismo patron
     // que forName).  Resultado en v_cls.  Luego emitir CALLSUPER IR.
     const uint64_t super_name_idx = intern_class_name(*out_mod_, super_name);
@@ -28759,6 +29169,25 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
     const ir::IrType ret_ir = ir_type_from_primitive(found->return_type.kind);
     const ir::IrValueId dst =
         (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret_ir);
+    // AOT (native_poo_): el metodo base es estaticamente conocido ->
+    // CALL DIRECTO a <defining_class>__<metodo>(this, args).  Evita
+    // findclass + callsuper (runtime).  Habilita super.metodo() en AOT.
+    if (native_poo_) {
+        const std::string owner = found->defining_class.empty()
+                                      ? it->second.super_name
+                                      : found->defining_class;
+        ir::IrInstr ca{};
+        ca.op = ir::IrOp::CALL;
+        ca.type = ret_ir;
+        ca.dst = dst;
+        ca.func_name = owner + "__" + found->name;
+        ca.operands.push_back(v_this);
+        for (auto av : arg_vals)
+            ca.operands.push_back(av);
+        ca.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ca));
+        return dst;
+    }
     // Resolver ClassInfo* del super via findclass inline.
     const std::string &super_name = it->second.super_name;
     const uint64_t super_name_idx = intern_class_name(*out_mod_, super_name);
