@@ -2763,10 +2763,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "callclosure(no-fnptr)");
                         return false;
                     }
+                    // ABI bare: helper = R __lambda(args..., void* env).
+                    // operands[0] = env, operands[1..] = args.  Pasamos los
+                    // args y luego el env como ULTIMO arg.  Lambdas sin
+                    // capturas: env es 0 y el helper no tiene param env -> el
+                    // arg extra sobra inofensivamente (caller-clean ABI).
                     std::vector<ir::IrValueId> cargs;
                     if (in.operands.size() > 1)
                         cargs.assign(in.operands.begin() + 1,
                                      in.operands.end());
+                    if (!in.operands.empty())
+                        cargs.push_back(in.operands[0]); // env al final
                     if (!emit_host_args(cargs, O)) {
                         vreg_dbg(fn.name.c_str(), "callclosure(host-leaf-args)");
                         return false;
