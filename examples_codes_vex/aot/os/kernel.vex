@@ -211,7 +211,8 @@ void kmain() {
         term.tputs("calc no encontrado\n");
     }
 
-    // Terminal interactiva (teclado o serie); incluye calc y notepad.
+    // Terminal interactiva (teclado o serie); incluye calc y notepad + los
+    // comandos de ficheros (ls, cat, write, rm, mkdir).
     shell.shell_run();
 
     // shell_run() solo retorna con 'exit'; en HW real caemos al hlt del stub.
