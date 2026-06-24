@@ -127,3 +127,6 @@ tests/bugs/m_reexport_plain/mid.vel
 tests/bugs/README.md
 diff_baseline.json
 doc/sprint_lsp_machine_view.md
+
+# Artefacto suelto del compilador en la raiz
+/out.vel
