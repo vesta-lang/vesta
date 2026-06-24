@@ -125,6 +125,15 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
 
+# GCC 16 (UCRT64) tiene un ICE en el pase de var-tracking a -O3 sobre algunas
+# funciones del frontend.  var-tracking es info de DEBUG -> en Release
+# (-DNDEBUG, sin -g) no aporta NADA y se puede desactivar SIN tocar el nivel
+# de optimizacion: -O3 sigue intacto (calidad del codigo identica).  Solo GNU.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    string(APPEND CMAKE_CXX_FLAGS_RELEASE " -fno-var-tracking")
+    string(APPEND CMAKE_C_FLAGS_RELEASE " -fno-var-tracking")
+endif ()
+
 
 # SQLite library (statica)
 add_library(sqlite3 STATIC
@@ -501,6 +510,22 @@ if (WIN32)
 else ()
     target_link_libraries(vesta_lsp PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
+
+# Reduccion de tamano del LSP (espejo de `vm`).  Sin esto el .exe pesaba
+# ~327MB: el 91% era DWARF de depuracion sin estripar (las libs estaticas
+# vendored la emiten por defecto aunque no haya -g).  Con --strip-all +
+# --gc-sections baja a ~26MB (-92%).  No afecta -O3.
+target_link_options(vesta_lsp PRIVATE
+        $<$<CONFIG:Release>:
+        -Wl,--gc-sections
+        -Wl,--strip-all
+        -Wl,--as-needed
+        -Wl,--build-id=none
+        >
+        $<$<AND:$<CONFIG:Release>,$<BOOL:${WIN32}>>:
+        -static -static-libgcc -static-libstdc++
+        >
+)
 
 # Test unitario de la conversion de posiciones byte->UTF-16.  Solo necesita
 # document_store.cpp (autocontenido, sin deps del compilador).
