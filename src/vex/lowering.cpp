@@ -880,6 +880,26 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // signature.
     out_mod_ = &out_module;
 
+    // AOT / Embed (native_poo_): el AOP (@Aspect + advice) se registra en
+    // RUNTIME (MethodInfo::advice_chain via addadvice en __module_init), que
+    // native_poo NO emite.  Sin esto, el advice se ignoraria SILENCIOSAMENTE y
+    // los metodos correrian sin sus before/after/around -> resultado erroneo
+    // (16_aop daba 1 en vez de 99).  Rechazar en compile-time es lo correcto:
+    // un fallo ruidoso es mejor que un resultado incorrecto.
+    if (native_poo_) {
+        for (const auto &kv : tc_.class_layouts()) {
+            if (kv.second.is_aspect) {
+                error_at(SourceLoc{},
+                         "AOP (@Aspect '" + kv.first +
+                             "') no soportado en compilacion nativa "
+                             "(--target bare/embed): el advice se registra en "
+                             "runtime y se ignoraria. Usa --target full o "
+                             "elimina los aspectos.");
+                return false;
+            }
+        }
+    }
+
     // Inferir el fichero fuente del primer AST node con loc.file no
     // vacio.  Esto se usa en warnings emitidos por @c cast_if_needed
     // que solo recibe @c source_line.  Sin esta inferencia, los
