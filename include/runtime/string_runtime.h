@@ -103,6 +103,20 @@ gc::GcHandle strcat_public(ProcessVM *vm, gc::GcHandle a,
  */
 int64_t strcmp_public(ProcessVM *vm, gc::GcHandle a, gc::GcHandle b) noexcept;
 
+/**
+ * @brief Convierte un StringObject a otra codificacion (UTF-8/16/32).
+ * Mismo algoritmo que el opcode STRCONV (0x4A).  Core compartido entre
+ * @c exec_instr_strconv y el runtime entry @c vrt_str_conv (JIT/AOT).
+ *
+ * @param vm   Proceso virtual.
+ * @param src  GcHandle del string fuente.
+ * @param enc  Codificacion destino (loader::StringEncoding como u32).
+ * @return GcHandle del string convertido (o el mismo si ya esta en esa
+ *         codificacion); @c GC_NULL_HANDLE si src no es valido.
+ */
+gc::GcHandle strconv_public(ProcessVM *vm, gc::GcHandle src,
+                            uint32_t enc) noexcept;
+
 } // namespace runtime
 
 #endif // RUNTIME_STRING_RUNTIME_H

@@ -241,6 +241,10 @@ VregEntries make_vreg_entries() {
         e.gc_allocp =
             reinterpret_cast<uint64_t>(g_runtime_entries->gc_alloc_payload);
         e.newobj = reinterpret_cast<uint64_t>(g_runtime_entries->newobj_handle);
+        e.newobjs = reinterpret_cast<uint64_t>(g_runtime_entries->newobjs);
+        e.dlopen = reinterpret_cast<uint64_t>(g_runtime_entries->dlopen);
+        e.str_conv = reinterpret_cast<uint64_t>(g_runtime_entries->str_conv);
+        e.panic_str = reinterpret_cast<uint64_t>(g_runtime_entries->panic_str);
         /* Class registry (Fase 2). */
         e.findclass = reinterpret_cast<uint64_t>(g_runtime_entries->findclass);
         e.findmethod =

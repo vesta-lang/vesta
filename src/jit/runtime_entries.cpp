@@ -137,6 +137,9 @@ void RuntimeEntries::resolve() {
     findclass = &vrt_findclass;
     newobj = &vrt_newobj;
     newobj_handle = &vrt_newobj_handle;
+    newobjs = &vrt_newobjs;
+    dlopen = &vrt_dlopen;
+    str_conv = &vrt_str_conv;
     // Inline cache para CALLVIRT (variante optimizada que usa el
     // class_ptr previamente observado como prediccion).
     callvirt_ic = &vrt_callvirt_ic;

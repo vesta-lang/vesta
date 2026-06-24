@@ -137,6 +137,12 @@ struct RuntimeEntries {
     uint8_t *(*newobj)(vrt_proc *, vrt_class *) = nullptr;
     /* Combinado newobj + gc_handle_for_ptr en una sola call (fast path JIT). */
     vrt_handle (*newobj_handle)(vrt_proc *, vrt_class *) = nullptr;
+    /* NEWOBJS: alloc en SharedHeap -> handle (bit 31). */
+    vrt_handle (*newobjs)(vrt_proc *, vrt_class *) = nullptr;
+    /* DLOPEN: carga libreria nativa -> handle host. */
+    uint64_t (*dlopen)(vrt_proc *, uint64_t, uint32_t) = nullptr;
+    /* STRCONV: convierte StringObject a otra codificacion -> handle. */
+    vrt_handle (*str_conv)(vrt_proc *, vrt_handle, uint32_t) = nullptr;
     /* CALLVIRT con Inline Cache (actualiza slot tras dispatch). */
     uint64_t (*callvirt_ic)(vrt_proc *, uint8_t *, uint32_t,
                             uint64_t) = nullptr;

@@ -77,6 +77,10 @@ struct VregEntries {
     uint64_t raw_free = 0;  ///< vrt_raw_free(proc, host_ptr)
     uint64_t gc_allocp = 0; ///< vrt_gc_alloc_payload(proc, size) -> host_ptr
     uint64_t newobj = 0; ///< vrt_newobj_handle(proc, cls) -> GcHandle (NEWOBJ)
+    uint64_t newobjs = 0;   ///< vrt_newobjs(proc, cls) -> handle (NEWOBJS shared)
+    uint64_t dlopen = 0;    ///< vrt_dlopen(proc, path_vaddr, len) -> host handle
+    uint64_t str_conv = 0;  ///< vrt_str_conv(proc, str, enc) -> handle (STRCONV)
+    uint64_t panic_str = 0; ///< vrt_panic_str(proc, msg_vaddr, len) (PANIC)
     uint64_t calln = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
     /* Class registry (Fase 2).  Todos 1-arg (proc, params_vaddr) salvo
      * deffield/defmethod (2-arg: cls, params) y addadvice (3-arg). */
