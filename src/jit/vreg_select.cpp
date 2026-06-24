@@ -2880,6 +2880,111 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* CALLM: dispatch via MethodInfo* ya resuelto (operands[1]).  No
+             * hay vtable walk (a diferencia de CALLVIRT): inline directo del
+             * method->jit_code (cero runtime en el fast path; vrt_callm ~150ns
+             * solo en el frio).  operands[0]=obj, operands[1]=method,
+             * operands[2..]=args.  Espejo del inline de slots (selector.cpp). */
+            case ir::IrOp::CALLM: {
+                flush_pending();
+                if (!vm || ent.callm == 0) {
+                    vreg_dbg(fn.name.c_str(), "callm(no-vm/no-addr)");
+                    return false;
+                }
+                if (in.operands.size() < 2) {
+                    vreg_dbg(fn.name.c_str(), "callm-shape");
+                    return false;
+                }
+                const ir::IrValueId obj = in.operands[0];
+                const ir::IrValueId method = in.operands[1];
+                const size_t nargs =
+                    in.operands.size() > 2 ? in.operands.size() - 2 : 0;
+                /* Stage: regs[1]=obj, regs[2..]=args, regs[15]=nargs+1. */
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vm_reg_mem(1), vr(obj)));
+                for (size_t a = 0; a < nargs; ++a)
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, vm_reg_mem(static_cast<int>(a) + 2),
+                        vr(in.operands[a + 2])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vm_reg_mem(15),
+                    MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
+#if defined(_WIN32)
+                const MReg cm_pr = MReg::RCX, cm_obj = MReg::RDX,
+                           cm_m = MReg::R8;
+#else
+                const MReg cm_pr = MReg::RDI, cm_obj = MReg::RSI,
+                           cm_m = MReg::RDX;
+#endif
+                auto cm_load_field = [&](ir::IrValueId base,
+                                         int32_t off) -> ir::IrValueId {
+                    const ir::IrValueId d = new_tmp();
+                    if (off == 0) {
+                        O.push_back(
+                            MInstr::make_load(vr(d), vr(base), 8, false));
+                    } else {
+                        const ir::IrValueId addr = new_tmp();
+                        O.push_back(
+                            MInstr::make_unary(MOp::MOV, vr(addr), vr(base)));
+                        O.push_back(MInstr::make_binary(
+                            MOp::ADD, vr(addr), vr(addr),
+                            MOperand::make_imm32(off)));
+                        O.push_back(
+                            MInstr::make_load(vr(d), vr(addr), 8, false));
+                    }
+                    return d;
+                };
+                const MLabelId Lcm_fb = out.new_label();
+                const MLabelId Lcm_done = out.new_label();
+                /* INLINE: method no-null; sin advice; jit_code presente. */
+                O.push_back(mk_test(method, method));
+                O.push_back(MInstr::make_jcc(MCond::E, Lcm_fb));
+                const ir::IrValueId cm_adv = cm_load_field(
+                    method, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
+                O.push_back(mk_test(cm_adv, cm_adv));
+                O.push_back(MInstr::make_jcc(MCond::NE, Lcm_fb));
+                const ir::IrValueId cm_code =
+                    cm_load_field(method, VESTA_METHODINFO_JIT_CODE_OFFSET);
+                O.push_back(mk_test(cm_code, cm_code));
+                O.push_back(MInstr::make_jcc(MCond::E, Lcm_fb));
+                /* FAST: R10=code (scratch, no colisiona con pr_reg=rbx mov);
+                 * proc en arg0; call indirecto R10. */
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(cm_code)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cm_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                {
+                    MInstr ic;
+                    ic.op = MOp::CALL;
+                    ic.src1 = MOperand::make_reg(MReg::R10, 8);
+                    O.push_back(ic);
+                }
+                O.push_back(MInstr::make_jmp(Lcm_done));
+                /* FALLBACK: vrt_callm(proc, obj, method).  R10/R11 temporales
+                 * para no clobber-ar arg regs antes de leerlos. */
+                O.push_back(MInstr::make_label_def(Lcm_fb));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R10, 8), vr(obj)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(MReg::R11, 8), vr(method)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cm_obj, 8),
+                                               MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cm_m, 8),
+                                               MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(cm_pr, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(ent.callm)));
+                O.push_back(MInstr::make_label_def(Lcm_done));
+                if (in.dst != ir::IR_NO_VALUE)
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                   vm_reg_mem(0)));
+                break;
+            }
+
             /* CALLCLOSURE: %dst = vrt_callclosure(proc, fn_addr, env).
              * func_ptr = SSA con fn_addr (helper __lambda_N o jit_code);
              * operands[0] = env_ptr (0 si sin captures); operands[1..] =
