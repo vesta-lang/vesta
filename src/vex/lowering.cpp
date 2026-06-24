@@ -20827,25 +20827,56 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     std::string sym;
                 };
                 std::vector<IfaceSlot> iface_slots;
-                for (const auto &iname : lay.interface_names) {
+                // Recolectar las interfaces de la clase Y de TODA su cadena de
+                // superclases.  Una clase que hereda (E : C, C : Sh) implementa
+                // Sh transitivamente, pero su `interface_names` solo lista las
+                // DIRECTAS -> sin esto, la vtable de E no colocaria el metodo de
+                // Sh en su slot de interfaz y el dispatch dinamico leeria
+                // basura (bug: s[1].a() sobre un E heredado daba garbage).
+                std::vector<std::string> all_ifaces;
+                {
+                    std::string cur = cd->name;
+                    int guard = 0;
+                    while (!cur.empty() && guard++ < 64) {
+                        auto itc = tc_.class_layouts().find(cur);
+                        if (itc == tc_.class_layouts().end()) break;
+                        for (const auto &in : itc->second.interface_names)
+                            all_ifaces.push_back(in);
+                        cur = itc->second.super_name;
+                    }
+                }
+                for (const auto &iname : all_ifaces) {
                     auto it_if = tc_.class_layouts().find(iname);
                     if (it_if == tc_.class_layouts().end()) continue;
                     for (const auto &im : it_if->second.methods) {
                         if (im.is_constructor) continue;
-                        // Buscar el metodo implementador en la clase (incluye
-                        // heredados) por nombre.
+                        // Buscar el metodo implementador en la clase y, si no
+                        // esta (metodo heredado no aplanado), en la cadena de
+                        // superclases.  owner = clase que DEFINE el metodo.
                         const ClassMethodInfo *impl = nullptr;
-                        for (const auto &cm : lay.methods)
-                            if (!cm.is_constructor && cm.name == im.name) {
-                                impl = &cm;
-                                break;
+                        std::string impl_owner;
+                        {
+                            std::string cur = cd->name;
+                            int guard = 0;
+                            while (!cur.empty() && guard++ < 64 && !impl) {
+                                auto itc = tc_.class_layouts().find(cur);
+                                if (itc == tc_.class_layouts().end()) break;
+                                for (const auto &cm : itc->second.methods)
+                                    if (!cm.is_constructor &&
+                                        cm.name == im.name) {
+                                        impl = &cm;
+                                        impl_owner =
+                                            cm.defining_class.empty()
+                                                ? itc->second.name
+                                                : cm.defining_class;
+                                        break;
+                                    }
+                                cur = itc->second.super_name;
                             }
+                        }
                         if (!impl) continue;
-                        const std::string owner = impl->defining_class.empty()
-                                                      ? cd->name
-                                                      : impl->defining_class;
                         iface_slots.push_back(
-                            {im.vtable_index, owner + "__" + impl->name});
+                            {im.vtable_index, impl_owner + "__" + impl->name});
                         if (im.vtable_index + 1u > nslots)
                             nslots = im.vtable_index + 1u;
                     }
