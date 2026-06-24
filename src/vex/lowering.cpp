@@ -8053,13 +8053,20 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         const ir::IrValueId v_size = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(N * 8), e->loc.line);
         ir::IrInstr ins{};
-        // Env escapante: GC_ALLOC (VM/JIT) -- en bare GC_ALLOC se rechaza
-        // limpio (no hay GC).  El path leak-free para bare (env en stack via
-        // inline+promote, o RAW_ALLOC+RAII) requiere escape-analysis sound y
-        // se hace en un pase dedicado.  REGLA: nunca leak -> mientras el pase
-        // no exista, las closures que escapan se RECHAZAN en bare (no se
-        // alocan en heap sin free).
-        ins.op = ir::IrOp::GC_ALLOC;
+        // Env escapante.  VM/JIT: GC_ALLOC (el GC lo libera).  AOT/bare
+        // (native_poo): RAW_ALLOC etiquetado "__closure_env" -- el pase
+        // ir_pass_own_closure_envs (tras inline+promote) busca el dueno
+        // terminal de la closure e inserta el RAW_FREE en su scope-exit;
+        // si no hay dueno limpio, revierte este alloc a GC_ALLOC para que
+        // aot_analyze lo rechace (REGLA: nunca leak).  Los envs que NO
+        // escapan ya los convierte promote a ALLOCA (stack) antes de este
+        // pase, asi que aqui solo llegan los escapes cross-function reales.
+        if (native_poo_) {
+            ins.op = ir::IrOp::RAW_ALLOC;
+            ins.func_name = "__closure_env"; // tag p/ el pase de ownership
+        } else {
+            ins.op = ir::IrOp::GC_ALLOC;
+        }
         ins.type = ir::IrType::PTR;
         ins.dst = env_addr;
         ins.operands = {v_size};

@@ -2322,6 +2322,13 @@ int main(int argc, char *argv[]) {
             for (auto &afn : aot_mod.functions)
                 (void)ir::ir_pass_promote_closure_env(afn);
 
+            // AOT opcion 1: las closures que escapan CROSS-FUNCTION (env creado
+            // en una factoria y retornado; no inlinable -> promote no lo pudo
+            // poner en stack) se liberan con RAW_FREE determinista en el dueno
+            // terminal.  Lo que no tenga dueno limpio se revierte a GC_ALLOC
+            // (aot_analyze lo rechaza -> nunca leak).  Corre tras promote.
+            (void)ir::ir_pass_own_closure_envs(aot_mod);
+
             if (std::getenv("VESTA_AOT_DUMP_IR")) {
                 std::cerr << "===== AOT native_poo IR =====\n";
                 ir::ir_print(aot_mod, std::cerr);
