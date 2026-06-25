@@ -478,8 +478,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * caso (VM_ABI del JIT en proceso, x86-32, o FloatIsa != SSE2) las ops
      * float caen al fallback (false) -> el path de slots / el interp se
      * encargan (sin regresion).  Los backends x87/AVX/AVX512F/AUTO son slices
-     * futuros. */
-    const bool fp_ok = (abi == AbiKind::HOST_LEAF) &&
+     * futuros.  El boundary VM_ABI (params/RET/CALL) cruza por
+     * proc->registers: el MOV generico de un vreg FP-class a/desde vm_reg_mem
+     * se enruta a MOVSD/MOVSS en el rewrite (regalloc_rewrite.cpp, path
+     * is_fp_operand), igual que un spill FP.  NOTA forward-compat: este gate y
+     * el RegClass::FP son tambien la base de los futuros tipos anchos
+     * N=potencia-de-2 (i128/f128 -> XMM, i256 -> YMM, i512 -> ZMM); el manejo
+     * es guiado por ANCHO (fp_mov_for_width), no por un tipo float fijo. */
+    const bool fp_ok = (abi == AbiKind::HOST_LEAF || abi == AbiKind::VM) &&
                        (fisa == FloatIsa::SSE2) && !mode32;
     /* Marcar la clase FP de cada vreg float (F32/F64).  El linear_scan por
      * clase les asigna XMM; el rewrite materializa con MOVSD/MOVSS.  Solo si
