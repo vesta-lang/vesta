@@ -567,14 +567,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
         const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
         const bool evex = (vec_w >= 64);
+        const bool l256 = (vec_w == 32); // 16->VEX.128, 32->VEX.256, 64->EVEX.512
         if (mi.src2.kind == MOperandKind::REG) {
             const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
             if (evex)
                 emit_evex(xd, xs, xv, wbit, /*ll=*/2, 0, false, out, /*map=*/2,
                           /*pp=*/1);
             else
-                emit_vex3(xd, xs, xv, wbit, /*l256=*/true, 0, false, out,
-                          /*map=*/2, /*pp=*/1);
+                emit_vex3(xd, xs, xv, wbit, l256, 0, false, out, /*map=*/2,
+                          /*pp=*/1);
             put8(out, 0xB8);
             put8(out, modrm(3, xd & 7, xs & 7));
         } else if (mi.src2.kind == MOperandKind::MEM) {
@@ -587,7 +588,7 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                 emit_evex(xd, bid, xv, wbit, /*ll=*/2, iid, has_index, out,
                           /*map=*/2, /*pp=*/1);
             else
-                emit_vex3(xd, bid, xv, wbit, /*l256=*/true, iid, has_index, out,
+                emit_vex3(xd, bid, xv, wbit, l256, iid, has_index, out,
                           /*map=*/2, /*pp=*/1);
             put8(out, 0xB8);
             emit_modrm_mem(mi.src2, xd & 7, out);

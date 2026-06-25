@@ -164,7 +164,11 @@ inline TargetRegInfo build_x86_64_target(bool sysv) {
      * traves de un CALL todavia (cuando lo hagan, habra que salvarlos -- TODO
      * cross-call FP). */
     t.scratch[FP] = {id(MReg::XMM14), id(MReg::XMM15)};
-    for (int i = 16; i <= 29; ++i) { /* XMM0..XMM13 asignables */
+    /* XMM13 (id 29) RESERVADO como acumulador vectorial de las reducciones/FMA
+     * (VEC_ACC_*): debe sobrevivir TODO el bucle en un registro, no en memoria.
+     * Excluido de allocatable -> ningun otro valor lo pisa.  Asignables:
+     * XMM0..XMM12 (ids 16..28). */
+    for (int i = 16; i <= 28; ++i) { /* XMM0..XMM12 asignables */
         t.allocatable[FP].push_back(static_cast<uint8_t>(i));
         t.caller_saved[FP].push_back(static_cast<uint8_t>(i));
     }

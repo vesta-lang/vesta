@@ -28,13 +28,17 @@ import sys
 import tempfile
 import time
 
-# Kernels: nombre -> cuerpo del bucle interior vectorizable (sobre f64* HOST).
-# Cada uno se envuelve en un bucle externo de `reps` iteraciones (no vectorizable)
-# para amplificar el trabajo y dar un wall time medible.
+# Kernels: nombre -> BLOQUE interior del bucle externo (incluye el bucle
+# vectorizable).  Las reducciones/dot-product usan un acumulador `acc` LOCAL al
+# bucle externo (no `s`) para que el acumulador vectorial sea register-resident;
+# usar `s` (compartido con el bucle externo) lo volveria address-taken.
 KERNELS = {
-    "element-wise (c=a+b)": "for (i32 i = 0; i < n; i++) { c[i] = a[i] + b[i]; }",
-    "reduccion (s+=a[i])":  "for (i32 i = 0; i < n; i++) { s = s + a[i]; }",
-    "dot-product (s+=a*b)": "for (i32 i = 0; i < n; i++) { s = s + a[i] * b[i]; }",
+    "element-wise (c=a+b)":
+        "for (i32 i = 0; i < n; i++) { c[i] = a[i] + b[i]; } s = s + c[0] + a[0];",
+    "reduccion (acc+=a[i])":
+        "f64 acc = 0.0; for (i32 i = 0; i < n; i++) { acc = acc + a[i]; } s = s + acc;",
+    "dot-product (acc+=a*b)":
+        "f64 acc = 0.0; for (i32 i = 0; i < n; i++) { acc = acc + a[i] * b[i]; } s = s + acc;",
 }
 
 VEX_TEMPLATE = """\
@@ -43,7 +47,6 @@ f64 kernel(f64* a, f64* b, f64* c, i32 n, i32 reps) {{
     f64 s = 0.0;
     for (i32 r = 0; r < reps; r++) {{
         {inner}
-        s = s + c[0] + a[0];   // dependencia: evita que el optimizer borre el bucle
     }}
     return s;
 }}

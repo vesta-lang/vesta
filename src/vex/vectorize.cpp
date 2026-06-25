@@ -1065,14 +1065,14 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         al.host_alloca = true;
         al.source_line = ln; fn_->append(entry, std::move(al));
     }
-    // zero-init de los `width` bytes del slot (width/8 stores de 8 bytes a 0),
-    // valido para cualquier tipo de elemento (W lanes == todo a 0).
-    const ir::IrValueId v_zero8 = emit_const(ir::IrType::I64, 0, ln);
-    for (uint64_t q = 0; q < width; q += 8) {
-        const ir::IrValueId at =
-            (q == 0) ? acc_slot
-                     : ptr_at(acc_slot, emit_const(ir::IrType::I64, q, ln));
-        store_zero8(at, v_zero8);
+    // VEC_ACC_ZERO: pone a 0 el acumulador vectorial (XMM dedicado en el JIT;
+    // los `width` bytes del slot en el interprete).  Reemplaza el zero-init
+    // manual y prepara el acumulador REGISTER-RESIDENT.
+    {
+        ir::IrInstr az{}; az.op = ir::IrOp::VEC_ACC_ZERO; az.type = elem_ty;
+        az.dst = ir::IR_NO_VALUE; az.operands = {acc_slot};
+        az.imm = width; az.source_line = ln;
+        fn_->append(entry, std::move(az));
     }
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
@@ -1103,8 +1103,9 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     fn_->blocks[mbody].preds.push_back(mhdr);
     fn_->blocks[redb].preds.push_back(mhdr);
 
-    // --- mbody: acc_slot += a[i..]  (VEC_BINOP add) o  acc_slot += a*b
-    //     (VEC_FMA, dot-product fusionado); i += W; BR mhdr ---
+    // --- mbody: acc += a[i..]  (VEC_ACC_ADD) o  acc += a*b (VEC_ACC_FMA);
+    //     acc REGISTER-RESIDENT (XMM dedicado en JIT, sin round-trip a memoria);
+    //     i += W; BR mhdr ---
     current_block_ = mbody;
     {
         const ir::IrValueId i64 =
@@ -1113,19 +1114,19 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId a_at = ptr_at(v_a, off);
         if (is_fma) {
             const ir::IrValueId b_at = ptr_at(v_b, off);
-            ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA; vf.type = elem_ty;
+            ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_ACC_FMA; vf.type = elem_ty;
             vf.dst = ir::IR_NO_VALUE;
-            vf.operands = {acc_slot, a_at, b_at}; // acc_slot += a*b
+            vf.operands = {acc_slot, a_at, b_at}; // acc += a*b
             vf.imm = width;
             vf.source_line = ln;
             fn_->append(current_block_, std::move(vf));
         } else {
-            ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
-            vb.dst = ir::IR_NO_VALUE;
-            vb.operands = {acc_slot, acc_slot, a_at}; // acc_slot = acc_slot + a
-            vb.imm = ((uint64_t)0 << 8) | width;      // subop 0 = add
-            vb.source_line = ln;
-            fn_->append(current_block_, std::move(vb));
+            ir::IrInstr va{}; va.op = ir::IrOp::VEC_ACC_ADD; va.type = elem_ty;
+            va.dst = ir::IR_NO_VALUE;
+            va.operands = {acc_slot, a_at}; // acc += a
+            va.imm = width;
+            va.source_line = ln;
+            fn_->append(current_block_, std::move(va));
         }
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
@@ -1135,8 +1136,15 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
 
-    // --- redb: horizontal sum_{k<W} acc_slot[k] + acc_init; BR thdr ---
+    // --- redb: vuelca el acc register-resident al slot (JIT; no-op interp) y
+    //     reduce horizontalmente sum_{k<W} acc_slot[k] + acc_init; BR thdr ---
     current_block_ = redb;
+    {
+        ir::IrInstr st{}; st.op = ir::IrOp::VEC_ACC_STORE; st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE; st.operands = {acc_slot};
+        st.imm = width; st.source_line = ln;
+        fn_->append(redb, std::move(st));
+    }
     ir::IrValueId result0 = acc_init;
     for (uint64_t k = 0; k < W; ++k) {
         const ir::IrValueId at =
