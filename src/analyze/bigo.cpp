@@ -403,6 +403,39 @@ CostResult analyze_function(const ir::IrFunction &fn) {
             if (r.is_divide_conquer) det << " divide-y-venceras";
         }
     }
+    // 4.a. Detectar la ESTRATEGIA de dispatch de match/switch y anotarla.
+    //      No cambia la clase Big-O en n (un match sobre k casos fijos es O(1)
+    //      respecto al tamano de entrada), pero informa el coste del dispatch
+    //      en numero de CASOS k -- reflejando las optimizaciones del backend:
+    //        - SWITCH_DENSE  -> O(1) jump table (computed-goto, caso denso).
+    //        - bloques sw_lt/sw_ge -> O(log k) BST balanceado (caso disperso).
+    //        - cadena match_arm/match_next -> O(k) lineal (pocos casos/guards).
+    {
+        bool has_dense = false, has_bst = false, has_linear = false;
+        for (const auto &blk : fn.blocks) {
+            if (!has_bst &&
+                (blk.name.rfind("sw_lt", 0) == 0 ||
+                 blk.name.rfind("sw_ge", 0) == 0))
+                has_bst = true;
+            if (!has_linear &&
+                (blk.name.rfind("match_arm", 0) == 0 ||
+                 blk.name.rfind("match_next", 0) == 0))
+                has_linear = true;
+            for (const auto &ins : blk.instrs)
+                if (ins.op == ir::IrOp::SWITCH_DENSE) has_dense = true;
+        }
+        const char *sw = nullptr;
+        if (has_dense)
+            sw = "switch O(1) jump table (denso)";
+        else if (has_bst)
+            sw = "switch O(log k) BST (k casos)";
+        else if (has_linear)
+            sw = "switch O(k) lineal (k casos)";
+        if (sw) {
+            if (det.tellp() > 0) det << "; ";
+            det << sw;
+        }
+    }
     r.detail = det.str();
 
     // 4.b. Inicializar el coste TOTAL = PARCIAL.  Si la funcion no tiene
