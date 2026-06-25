@@ -154,14 +154,46 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
 
             /* ---- Buscar un fisico libre y usable ---- */
             int chosen = -1;
-            for (uint8_t r : allocatable) {
-                if (occupied[r]) continue;
-                if (cc && !is_callee(r)) continue; // cross-call: solo callee
-                if (clobbered_for(iv, r))
-                    continue; // inc.5e: clobbered por un asm
-                chosen = static_cast<int>(r);
-                break;
+            /* Coalescing 2-address: preferir el fisico de src1 (hint) si esta
+             * LIBRE.  Libre <=> src1 ya expiro = murio -> reusar su reg para
+             * dst es seguro y elide el `mov dst, src1` del legalizado.  Si no
+             * esta libre/usable, cae al greedy normal. */
+            if (vid < ivs.coalesce_hint.size() && ivs.coalesce_hint[vid] >= 0) {
+                const uint32_t partner =
+                    static_cast<uint32_t>(ivs.coalesce_hint[vid]);
+                /* CRITICO: el reg de partner solo conserva su valor si partner
+                 * MUERE exactamente en el def de dst (su ultimo uso = la ranura
+                 * use del op 2-address, posicion 2*gi; el def de dst = 2*gi+1).
+                 * Asi no hay hueco donde otro vreg reuse el reg.  Posiciones: 2
+                 * por instr (use=2*gi, def=2*gi+1) -> partner.end()+1 ==
+                 * dst.start().  Para dst loop-carried (start = header, mucho
+                 * antes) no se cumple -> no coalesce (seguro).  Sin este guard,
+                 * occupied[hr]==false (libre) NO garantiza que hr aun tenga el
+                 * valor de partner (pudo morir antes y reusarse el reg). */
+                if (partner < out.assign.size() &&
+                    out.assign[partner].loc == RegAlloc::Loc::REG &&
+                    partner < ivs.intervals.size() &&
+                    ivs.intervals[partner].end() + 1u == istart) {
+                    const uint8_t hr = out.assign[partner].reg;
+                    /* hr debe ser de esta clase (mismo banco), estar libre y
+                     * pasar los filtros cross-call / clobber. */
+                    bool in_class = false;
+                    for (uint8_t r : allocatable)
+                        if (r == hr) { in_class = true; break; }
+                    if (in_class && !occupied[hr] && !(cc && !is_callee(hr)) &&
+                        !clobbered_for(iv, hr))
+                        chosen = static_cast<int>(hr);
+                }
             }
+            if (chosen < 0)
+                for (uint8_t r : allocatable) {
+                    if (occupied[r]) continue;
+                    if (cc && !is_callee(r)) continue; // cross-call: solo callee
+                    if (clobbered_for(iv, r))
+                        continue; // inc.5e: clobbered por un asm
+                    chosen = static_cast<int>(r);
+                    break;
+                }
 
             if (chosen >= 0) {
                 const uint8_t r = static_cast<uint8_t>(chosen);
