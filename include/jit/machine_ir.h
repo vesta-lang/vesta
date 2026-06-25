@@ -635,6 +635,15 @@ enum class MOp : uint8_t {
      * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
     VBROADCASTSD = 132, ///< VBROADCASTSD ymm/zmm, xmm
 
+    /* Packed SINGLE (f32): mismos opcodes 0F 58/5C/59/5E/51/57/54 que los PD
+     * pero SIN el prefijo 66 (pp=00 en VEX/EVEX; EVEX W0).  4x f32 (XMM),
+     * 8x (YMM), 16x (ZMM).  Para mover bytes se reusa MOVUPD (da igual el
+     * prefijo en un move crudo). */
+    ADDPS = 133,        ///< ADDPS xmm,xmm  (0F 58) -- f32 add
+    SUBPS = 134,        ///< SUBPS xmm,xmm  (0F 5C)
+    MULPS = 135,        ///< MULPS xmm,xmm  (0F 59)
+    DIVPS = 136,        ///< DIVPS xmm,xmm  (0F 5E)
+
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup
                           ///< {offset, src1=LABEL}.  El pipeline lo parchea

@@ -639,6 +639,27 @@ void test_encode_vbroadcastsd_zmm() {
     CHECK_BYTES(out,
                 (std::vector<uint8_t>{0x62, 0x52, 0xFD, 0x48, 0x19, 0xF6}));
 }
+void test_encode_vaddps_ymm() {
+    /* vaddps ymm14,ymm14,ymm15 -> c4 41 0c 58 f7  (PS: pp=00, sin 66) */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::ADDPS, MOperand::make_reg(MReg::XMM14, 32),
+                            MOperand::make_reg(MReg::XMM15, 32))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0xC4, 0x41, 0x0C, 0x58, 0xF7}));
+}
+void test_encode_vaddps_zmm() {
+    /* vaddps zmm14,zmm14,zmm15 -> 62 51 0c 48 58 f7  (PS: W0, pp=00) */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::ADDPS, MOperand::make_reg(MReg::XMM14, 64),
+                            MOperand::make_reg(MReg::XMM15, 64))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out,
+                (std::vector<uint8_t>{0x62, 0x51, 0x0C, 0x48, 0x58, 0xF7}));
+}
 void test_encode_vsqrtpd_zmm() {
     /* vsqrtpd zmm14,zmm15 -> 62 51 fd 48 51 f7  (unario: vvvv=1111) */
     MFunction fn = make_single_block_fn(
@@ -680,6 +701,8 @@ int main() {
     test_encode_vpaddq_zmm();
     test_encode_vbroadcastsd_ymm();
     test_encode_vbroadcastsd_zmm();
+    test_encode_vaddps_ymm();
+    test_encode_vaddps_zmm();
     test_encode_vsqrtpd_zmm();
     test_encode_push_pop();
     test_encode_jmp_label();

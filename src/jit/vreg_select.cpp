@@ -2341,11 +2341,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * entero (PADDD/PSUBD i32, PADDQ/PSUBQ i64).  No hay mul/div
                  * entero packed en SSE2 -> bail (la cola/loop escalar lo hace). */
                 MOp pop;
-                if (in.type == ir::IrType::F64 || in.type == ir::IrType::F32) {
+                if (in.type == ir::IrType::F64) {
                     pop = (subop == 0)   ? MOp::ADDPD
                           : (subop == 1) ? MOp::SUBPD
                           : (subop == 2) ? MOp::MULPD
                                          : MOp::DIVPD;
+                } else if (in.type == ir::IrType::F32) {
+                    pop = (subop == 0)   ? MOp::ADDPS
+                          : (subop == 1) ? MOp::SUBPS
+                          : (subop == 2) ? MOp::MULPS
+                                         : MOp::DIVPS;
                 } else if (in.type == ir::IrType::I64 ||
                            in.type == ir::IrType::U64) {
                     if (subop == 0) pop = MOp::PADDQ;

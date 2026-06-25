@@ -3082,13 +3082,15 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r12, " << esz << "\n";
             }
             if (is_fp) {
-                ctx.out << "    movh r14, [r11]\n";    // a[k] bits
-                ctx.out << "    movh r13, [r12]\n";    // b[k] bits
+                // carga esz bytes (f64=8 -> r14; f32=4 -> r14d) y opera con el
+                // sufijo .ps cuando es f32 (low 32 del banco ZMM).
+                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k] bits
+                ctx.out << "    movh r13" << rsz << ", [r12]\n"; // b[k] bits
                 ctx.out << "    bitg2z f0, r14\n";
                 ctx.out << "    bitg2z f1, r13\n";
                 ctx.out << "    " << fop << suf << " f0, f1\n";
                 ctx.out << "    bitz2g r14, f0\n";
-                ctx.out << "    movh [r10], r14\n";    // dst[k]
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
             } else {
                 // entero: cargar esz bytes, add/sub, guardar esz bytes.
                 ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
