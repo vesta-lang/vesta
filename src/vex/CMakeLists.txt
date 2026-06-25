@@ -58,6 +58,9 @@ add_library(vex_lib STATIC
     type_checker.cpp
     lombok.cpp
     lowering.cpp
+    # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
+    # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
+    vectorize.cpp
     borrow_checker.cpp
     compiler.cpp
     compiler_project.cpp
