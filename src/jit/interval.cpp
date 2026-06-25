@@ -432,6 +432,14 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 tmp_out.union_inplace(live_in[blk.succ_a]);
             if (blk.succ_b != MBLOCK_INVALID && blk.succ_b != blk.succ_a)
                 tmp_out.union_inplace(live_in[blk.succ_b]);
+            /* Sucesores extra / abnormales (handlers de excepcion, futuros
+             * targets de jumptable): unirlos mantiene vivos los valores
+             * live-in al sucesor a traves del edge anormal (el catch usa
+             * valores definidos antes del try; sin esta union el regalloc los
+             * consideraria muertos y el throw los perderia). */
+            for (const MBlockId es : blk.extra_succs)
+                if (es != MBLOCK_INVALID && es != blk.succ_a && es != blk.succ_b)
+                    tmp_out.union_inplace(live_in[es]);
             if (!tmp_out.equals(live_out[bi])) {
                 live_out[bi].copy_from(tmp_out);
                 changed = true;

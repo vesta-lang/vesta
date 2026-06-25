@@ -927,6 +927,15 @@ struct MBlock {
     std::vector<MInstr> instrs;
     MBlockId succ_a = MBLOCK_INVALID;
     MBlockId succ_b = MBLOCK_INVALID;
+    /// Sucesores EXTRA / ABNORMALES (edges que no son el fallthrough ni el
+    /// branch del terminador): handlers de excepcion (edge tryenter->catch)
+    /// y, en el futuro, targets de jumptable/switch.  Vacio por defecto
+    /// (cero overhead en el caso comun).  La liveness los UNE ademas de
+    /// succ_a/succ_b para mantener vivos los valores live-in al sucesor a
+    /// traves del edge anormal (p.ej. los valores que el catch usa).  La
+    /// deteccion de loops y el encoder NO los consideran (no hay branch
+    /// fisico hacia ellos; el control llega via runtime, p.ej. do_throw).
+    std::vector<MBlockId> extra_succs;
     /// Offset en bytes desde el inicio del code cache donde se
     /// emite la primera instr de este bloque.  Lo poblea el encoder.
     uint32_t byte_offset = 0;

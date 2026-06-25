@@ -1699,6 +1699,7 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
         pf.blocks[b].label_id = vf.blocks[b].label_id;
         pf.blocks[b].succ_a = vf.blocks[b].succ_a;
         pf.blocks[b].succ_b = vf.blocks[b].succ_b;
+        pf.blocks[b].extra_succs = vf.blocks[b].extra_succs;
         std::vector<MInstr> outv;
         outv.reserve(vf.blocks[b].instrs.size() * 2 + 8);
         if (b == 0) lw.emit_prologue(outv);
