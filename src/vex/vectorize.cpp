@@ -396,6 +396,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
                         bool *out_fp) -> bool {
         switch (k) {
         case PrimitiveKind::F64: *out_ty = ir::IrType::F64; *out_esz = 8; *out_fp = true;  return true;
+        case PrimitiveKind::F32: *out_ty = ir::IrType::F32; *out_esz = 4; *out_fp = true;  return true;
         case PrimitiveKind::I64: *out_ty = ir::IrType::I64; *out_esz = 8; *out_fp = false; return true;
         case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
         case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;
@@ -917,6 +918,7 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
                             uint64_t *out_esz, bool *out_fp) -> bool {
         switch (k) {
         case PrimitiveKind::F64: *out_ty = ir::IrType::F64; *out_esz = 8; *out_fp = true;  return true;
+        case PrimitiveKind::F32: *out_ty = ir::IrType::F32; *out_esz = 4; *out_fp = true;  return true;
         case PrimitiveKind::I64: *out_ty = ir::IrType::I64; *out_esz = 8; *out_fp = false; return true;
         case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
         case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;

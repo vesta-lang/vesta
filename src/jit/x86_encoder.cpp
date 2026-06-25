@@ -339,12 +339,16 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     case MOp::SQRTPD:
     case MOp::XORPD:
     case MOp::ANDPD:
-    case MOp::UNPCKLPD: {
-        /* Packed SSE2 (2x f64 o 4x i32 / 2x i64): 66 + (REX) + 0F + <op> +
-         * ModR/M.  Los float usan op 58/5C/59/5E (packed-double); los enteros
-         * FE/FA/D4/FB (PADDD/PSUBD/PADDQ/PSUBQ).  Unarios/logicos: SQRTPD=51,
-         * XORPD=57, ANDPD=54, UNPCKLPD=14.  Reg-reg only; los loads/stores van
-         * por MOVUPD/MOVAPD (mover 16B crudos vale para int). */
+    case MOp::UNPCKLPD:
+    case MOp::ADDPS:
+    case MOp::SUBPS:
+    case MOp::MULPS:
+    case MOp::DIVPS: {
+        /* Packed SSE2: 66? + (REX) + 0F + <op> + ModR/M.  Los packed-DOUBLE
+         * (PD) y enteros llevan prefijo 66; los packed-SINGLE (PS) NO (pp=00).
+         * Opcodes float 58/5C/59/5E (add/sub/mul/div) compartidos PD/PS;
+         * enteros FE/FA/D4/FB; unarios/logicos 51/57/54; UNPCKLPD=14.  Reg-reg
+         * only; los loads/stores van por MOVUPD (mover bytes crudos vale). */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -352,10 +356,10 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
-        const uint8_t opcode = (mi.op == MOp::ADDPD)     ? 0x58
-                               : (mi.op == MOp::SUBPD)    ? 0x5C
-                               : (mi.op == MOp::MULPD)    ? 0x59
-                               : (mi.op == MOp::DIVPD)    ? 0x5E
+        const uint8_t opcode = (mi.op == MOp::ADDPD || mi.op == MOp::ADDPS) ? 0x58
+                               : (mi.op == MOp::SUBPD || mi.op == MOp::SUBPS) ? 0x5C
+                               : (mi.op == MOp::MULPD || mi.op == MOp::MULPS) ? 0x59
+                               : (mi.op == MOp::DIVPD || mi.op == MOp::DIVPS) ? 0x5E
                                : (mi.op == MOp::PADDD)    ? 0xFE
                                : (mi.op == MOp::PSUBD)    ? 0xFA
                                : (mi.op == MOp::PADDQ)    ? 0xD4
@@ -364,28 +368,30 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                                : (mi.op == MOp::XORPD)    ? 0x57
                                : (mi.op == MOp::ANDPD)    ? 0x54
                                                           : 0x14; /* UNPCKLPD */
-        /* EVEX W: packed-double y qword usan W1; PADDD/PSUBD (dword) W0. */
+        /* packed-single (PS): pp=00 (sin 66), EVEX W0.  packed-double/qword: pp=01
+         * (66), EVEX W1.  PADDD/PSUBD (dword): pp=01 pero W0. */
+        const bool is_ps =
+            (mi.op == MOp::ADDPS || mi.op == MOp::SUBPS ||
+             mi.op == MOp::MULPS || mi.op == MOp::DIVPS);
+        const uint8_t pp = is_ps ? 0 : 1;
         const uint8_t wbit =
-            (mi.op == MOp::PADDD || mi.op == MOp::PSUBD) ? 0 : 1;
-        /* SQRTPD es UNARIO (dst, src): vvvv no se usa (1111).  El resto son
-         * 2-address (dst = dst OP src) -> vvvv = dst en VEX/EVEX. */
+            (is_ps || mi.op == MOp::PADDD || mi.op == MOp::PSUBD) ? 0 : 1;
+        /* SQRTPD es UNARIO (dst, src): vvvv no se usa (1111). */
         const bool unary = (mi.op == MOp::SQRTPD);
         const uint8_t vec_w = mi.dst.width ? mi.dst.width : 16;
         if (vec_w >= 64) {
-            /* AVX512 (EVEX.512): 62 .. .. .. <op> modrm  (sin 0F: el mapa va
-             * en el prefijo).  dst=reg, src=rm, vvvv=dst (o 15 si unario). */
-            emit_evex(xd, xs, unary ? VEX_NO_VVVV : xd, wbit, /*ll=*/2, 0, false, out);
+            emit_evex(xd, xs, unary ? VEX_NO_VVVV : xd, wbit, /*ll=*/2, 0, false,
+                      out, /*map=*/1, pp);
             put8(out, opcode);
             put8(out, modrm(3, xd & 7, xs & 7));
         } else if (vec_w == 32) {
-            /* AVX2 (VEX.256): C4 .. .. <op> modrm  (sin 0F). */
-            emit_vex3(xd, xs, unary ? VEX_NO_VVVV : xd, /*w=*/0, /*l256=*/true, 0, false,
-                      out);
+            emit_vex3(xd, xs, unary ? VEX_NO_VVVV : xd, /*w=*/0, /*l256=*/true, 0,
+                      false, out, /*map=*/1, pp);
             put8(out, opcode);
             put8(out, modrm(3, xd & 7, xs & 7));
         } else {
-            /* SSE2 (128b): 66 [REX] 0F <op> modrm. */
-            put8(out, 0x66);
+            /* SSE (128b): [66] [REX] 0F <op> modrm. */
+            if (!is_ps) put8(out, 0x66);
             const uint8_t rex_R = (xd >= 8) ? 1 : 0;
             const uint8_t rex_B = (xs >= 8) ? 1 : 0;
             if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
