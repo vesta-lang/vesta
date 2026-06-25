@@ -550,6 +550,29 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
+    case MOp::VBROADCASTSD: {
+        /* VBROADCASTSD ymm/zmm, xmm: difunde el f64 bajo a todos los lanes.
+         * VEX.256.66.0F38.W0 19 /r ; EVEX.512.66.0F38.W1 19 /r.  Op de 2
+         * operandos (vvvv no usado).  Solo AVX (no hay forma 128b util aqui). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
+        if (vec_w >= 64)
+            emit_evex(xd, xs, VEX_NO_VVVV, /*w=*/1, /*ll=*/2, 0, false, out,
+                      /*map=*/2);
+        else
+            emit_vex3(xd, xs, VEX_NO_VVVV, /*w=*/0, /*l256=*/true, 0, false, out,
+                      /*map=*/2);
+        put8(out, 0x19);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
+
     case MOp::MOVUPD:
     case MOp::MOVAPD: {
         /* Move packed 2x f64 (16 bytes) XMM<->XMM o XMM<->mem.  Prefijo 66.

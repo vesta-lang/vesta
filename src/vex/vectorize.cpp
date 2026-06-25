@@ -715,11 +715,12 @@ bool Lowering::try_vectorize_unary_for(ast::ForStmt *s) {
         std::fprintf(stderr, "[mc-idiom] MATCH vec_unop idx=%s subop=%d\n",
                      idx_name.c_str(), subop);
 
-    // ======== Emitir el loop vectorizado (W=2 f64) + cola escalar. ========
+    // ======== Emitir el loop vectorizado + cola escalar. ========
+    // Chunk por ISA (SSE2/AVX2/AVX512); el JIT descompone al ancho del host.
     const uint32_t ln = s->loc.line;
     const uint64_t esz = 8;     // f64
-    const uint64_t W = 2;       // 128b / 8
-    const uint64_t width = 16;
+    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t W = width / esz;
 
     const ir::IrValueId i_init = lower_expr(vd->init.get());
     const ir::IrValueId v_a = lower_expr(a_base);

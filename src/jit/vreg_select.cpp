@@ -2238,11 +2238,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_UNOP: {
                 flush_pending();
                 if (in.operands.size() != 2) return false;
-                const uint64_t width = in.imm & 0xFF;
+                const uint64_t chunk_w = in.imm & 0xFF; // 16/32/64
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
-                if (width != 16) return false; // solo 128b (SSE2)
-                if (!fp_ok || in.type != ir::IrType::F64)
-                    return false; // solo f64 (W=2) por ahora
+                if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
+                    return false;
+                if (!fp_ok || in.type != ir::IrType::F64) return false; // f64
+                /* mismo chunk/descompone que VEC_BINOP: emite al ancho del host
+                 * (eff_w), descomponiendo el chunk en n_pieces. */
+                const uint64_t host_w =
+                    jit::vec_isa_width(jit::vec_emit_isa());
+                const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
+                const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
@@ -2252,9 +2258,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
-                const MOperand x0 = MOperand::make_reg(fp0, 16);
-                const MOperand x1 = MOperand::make_reg(fp1, 16);
-                /* mascara de signo en x1 (solo fneg/fabs). */
+                const uint8_t ew = static_cast<uint8_t>(eff_w);
+                const MOperand x0 = MOperand::make_reg(fp0, ew);
+                const MOperand x1 = MOperand::make_reg(fp1, ew); // mascara wide
+                /* mascara de signo wide en x1 (solo fneg/fabs).  Se construye
+                 * UNA vez al ancho eff_w: imm64 -> GP -> MOVQ_GP_XMM x1.lo ->
+                 * difundir a todos los lanes (UNPCKLPD para 128b, VBROADCASTSD
+                 * para YMM/ZMM).  Vive a traves del bucle de piezas (los MOV de
+                 * base son GP, no tocan el scratch FP). */
                 if (subop == 1 || subop == 2) {
                     const uint64_t mask = (subop == 1) ? 0x8000000000000000ULL
                                                        : 0x7fffffffffffffffULL;
@@ -2262,34 +2273,45 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, MOperand::make_reg(gp1, 8),
                         MOperand::make_imm64_idx(idx)));
-                    O.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM, x1,
-                                                   MOperand::make_reg(gp1, 8)));
-                    O.push_back(MInstr::make_unary(MOp::UNPCKLPD, x1, x1));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
+                        MOperand::make_reg(gp1, 8)));
+                    if (eff_w <= 16)
+                        O.push_back(MInstr::make_unary(
+                            MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),
+                            MOperand::make_reg(fp1, 16)));
+                    else
+                        O.push_back(MInstr::make_unary(
+                            MOp::VBROADCASTSD, x1,
+                            MOperand::make_reg(fp1, 16)));
                 }
-                /* load a -> x0 */
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(gp0, 8),
-                                               vr(in.operands[1])));
-                O.push_back(MInstr::make_unary(MOp::MOVUPD, x0,
-                                               MOperand::make_mem(gp0, 0)));
-                /* op */
-                if (subop == 0) {
-                    /* copy: nada (x0 ya tiene a) */
-                } else if (subop == 1) {
-                    O.push_back(MInstr::make_unary(MOp::XORPD, x0, x1));
-                } else if (subop == 2) {
-                    O.push_back(MInstr::make_unary(MOp::ANDPD, x0, x1));
-                } else if (subop == 3) {
-                    O.push_back(MInstr::make_unary(MOp::SQRTPD, x0, x0));
-                } else {
-                    return false;
+                for (uint64_t pc = 0; pc < n_pieces; ++pc) {
+                    const int32_t off = static_cast<int32_t>(pc * eff_w);
+                    // load a -> x0
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    // op
+                    if (subop == 0) {
+                        /* copy: nada */
+                    } else if (subop == 1) {
+                        O.push_back(MInstr::make_unary(MOp::XORPD, x0, x1));
+                    } else if (subop == 2) {
+                        O.push_back(MInstr::make_unary(MOp::ANDPD, x0, x1));
+                    } else if (subop == 3) {
+                        O.push_back(MInstr::make_unary(MOp::SQRTPD, x0, x0));
+                    } else {
+                        return false;
+                    }
+                    // store -> dst
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
                 }
-                /* store -> dst */
-                O.push_back(MInstr::make_unary(MOp::MOV,
-                                               MOperand::make_reg(gp0, 8),
-                                               vr(in.operands[0])));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, MOperand::make_mem(gp0, 0), x0));
                 break;
             }
 
