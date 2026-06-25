@@ -82,9 +82,20 @@ InstrRoles operand_roles(MOp op) noexcept {
     /* Comparaciones: solo leen (setean flags). */
     case MOp::CMP:
     case MOp::TEST:
-    case MOp::UCOMISD:
         r.src1 = R::USE;
         r.src2 = R::USE;
+        break;
+
+    /* UCOMISD/UCOMISS: compare FP (setea flags, NO escribe).  Se emiten con
+     * @c make_unary(ucmp, a, b) -> el operando @c a ocupa el slot DST pero se
+     * LEE (no se define).  Marcarlo como USE: si quedara en NONE (default) la
+     * liveness no veria @c a vivo en el ucomisd -> su XMM se reusaria para
+     * @c b -> @c ucomisd xmm0, xmm0 (compara un valor consigo mismo).  CMP/TEST
+     * enteros no sufren esto porque usan src1/src2 (mk_cmp), no el slot dst. */
+    case MOp::UCOMISD:
+    case MOp::UCOMISS:
+        r.dst = R::USE;
+        r.src1 = R::USE;
         break;
 
     /* IDIV src: divisor use; dividendo/resultado en RAX/RDX (fijos,
@@ -162,11 +173,6 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::CVTTSS2SI:
         r.dst = R::DEF;
         r.src1 = R::USE;
-        break;
-    /* UCOMISS: solo lee (setea flags), igual que UCOMISD/CMP. */
-    case MOp::UCOMISS:
-        r.src1 = R::USE;
-        r.src2 = R::USE;
         break;
 
     /* AOT MOV_SYM / LEA_RIP_SYM: dst = &simbolo (def); src1 es el
