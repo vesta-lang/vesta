@@ -643,6 +643,11 @@ enum class MOp : uint8_t {
     SUBPS = 134,        ///< SUBPS xmm,xmm  (0F 5C)
     MULPS = 135,        ///< MULPS xmm,xmm  (0F 59)
     DIVPS = 136,        ///< DIVPS xmm,xmm  (0F 5E)
+    /* FMA fusionado (dot-product): dst = src1*src2 + dst (1 redondeo).  src2
+     * (rm) puede ser memoria.  VFMADD231PD (66 0F38 W1 B8) -> f64; VFMADD231PS
+     * (66 0F38 W0 B8) -> f32.  Solo AVX/AVX512 (no hay FMA en SSE2 base). */
+    VFMADD231PD = 141,  ///< VFMADD231PD dst, src1, src2/mem (f64)
+    VFMADD231PS = 142,  ///< VFMADD231PS dst, src1, src2/mem (f32)
 
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup

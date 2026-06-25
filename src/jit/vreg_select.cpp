@@ -2418,6 +2418,71 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Por chunk:
+             * MOVUPD x0,[acc]; MOVUPD x1,[a]; VFMADD231P{D,S} x0,x1,[b] (x0 =
+             * a*b + acc, 1 redondeo); MOVUPD [acc],x0.  Mismo chunk/descompone
+             * y scratch (gp0/gp1, fp0/fp1) que VEC_BINOP.  b se lee de memoria
+             * (3er operando del FMA) -> solo 2 XMM scratch. */
+            case ir::IrOp::VEC_FMA: {
+                flush_pending();
+                if (in.operands.size() != 3) return false;
+                const uint64_t chunk_w = in.imm & 0xFF;
+                if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
+                    return false;
+                if (!fp_ok) return false;
+                MOp fma;
+                if (in.type == ir::IrType::F64) fma = MOp::VFMADD231PD;
+                else if (in.type == ir::IrType::F32) fma = MOp::VFMADD231PS;
+                else return false;
+                const uint64_t host_w =
+                    jit::vec_isa_width(jit::vec_emit_isa());
+                // FMA requiere AVX (>=256); con host SSE2 solo, bail (el
+                // interp/loop escalar lo hace).  256/512 -> ymm/zmm.
+                uint64_t emit_w = host_w;
+                if (emit_w < 32) return false; // sin AVX no hay VFMADD
+                const uint64_t eff_w = (chunk_w < emit_w) ? chunk_w : emit_w;
+                if (eff_w < 32) return false;
+                const uint64_t n_pieces = chunk_w / eff_w;
+                const auto &gpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
+                const auto &fpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
+                if (gpsc.size() < 2 || fpsc.size() < 2) return false;
+                const MReg gp0 = static_cast<MReg>(gpsc[0]);
+                const MReg gp1 = static_cast<MReg>(gpsc[1]);
+                const MReg fp0 = static_cast<MReg>(fpsc[0]);
+                const MReg fp1 = static_cast<MReg>(fpsc[1]);
+                const uint8_t ew = static_cast<uint8_t>(eff_w);
+                const MOperand x0 = MOperand::make_reg(fp0, ew); // acc
+                const MOperand x1 = MOperand::make_reg(fp1, ew); // a
+                const MOperand r0 = MOperand::make_reg(gp0, 8);
+                const MOperand r1 = MOperand::make_reg(gp1, 8);
+                for (uint64_t pc = 0; pc < n_pieces; ++pc) {
+                    const int32_t off = static_cast<int32_t>(pc * eff_w);
+                    // x0 = acc[off]
+                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                   vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    // x1 = a[off]
+                    O.push_back(MInstr::make_unary(MOp::MOV, r1,
+                                                   vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, x1, MOperand::make_mem(gp1, off)));
+                    // x0 = x1 * [b+off] + x0
+                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                   vr(in.operands[2])));
+                    O.push_back(MInstr::make_binary(
+                        fma, x0, x1, MOperand::make_mem(gp0, off)));
+                    // acc[off] = x0
+                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                   vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                }
+                break;
+            }
+
             /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
              * (NASM Intel, ya con comptime-consts sustituidas por el
              * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite

@@ -3105,6 +3105,48 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    // VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Interp (oraculo) =
+    // W ops ESCALARES por lane con `fmadd` (1 redondeo, std::fma) para coincidir
+    // BIT-A-BIT con VFMADD231P{D,S} del JIT; un fmul+fadd separado divergiria.
+    // Solo f64/f32.  r10=acc, r11=a, r12=b.
+    case IrOp::VEC_FMA: {
+        if (ins.operands.size() < 3) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        ctx.out << "    push r10\n    push r11\n    push r12\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // acc
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0); // b
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n"; // b, a, acc
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+                ctx.out << "    addu r12, " << esz << "\n";
+            }
+            ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    bitg2z f1, r13\n";
+            ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+            ctx.out << "    bitg2z f2, r14\n";
+            ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // f0 = a*b + acc
+            ctx.out << "    bitz2g r14, f0\n";
+            ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+        }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
     // --- OOP / GC ---
     case IrOp::NEWOBJ: {
         // fix5 - NEWOBJ internamente llama @c gc_heap.alloc() que

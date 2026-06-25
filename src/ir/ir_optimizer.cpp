@@ -110,6 +110,7 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::MEMCPY:
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
     case IrOp::SETFIELD:
     // OOP con efectos
     case IrOp::NEWOBJ:
@@ -5304,6 +5305,7 @@ bool ir_pass_dse(IrFunction &fn) {
             case IrOp::MEMCPY:
             case IrOp::VEC_UNOP:
             case IrOp::VEC_BINOP:
+            case IrOp::VEC_FMA:
             case IrOp::SETFIELD:
             case IrOp::ARRAY_STORE:
             case IrOp::STRFINALIZE:
@@ -6619,6 +6621,7 @@ bool ir_pass_licm(IrFunction &fn) {
                 case IrOp::MEMCPY:
                 case IrOp::VEC_UNOP:
                 case IrOp::VEC_BINOP:
+                case IrOp::VEC_FMA:
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:
@@ -7567,6 +7570,7 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::MEMCPY:
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
     case IrOp::STRFINALIZE:
     case IrOp::GCWB_IR:
     // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE LEE
@@ -7635,7 +7639,8 @@ static bool is_store_like(IrOp op) {
     // como store-like es la barrera conservativa correcta.
     return op == IrOp::STORE || op == IrOp::SETFIELD ||
            op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY ||
-           op == IrOp::VEC_UNOP || op == IrOp::VEC_BINOP;
+           op == IrOp::VEC_UNOP || op == IrOp::VEC_BINOP ||
+           op == IrOp::VEC_FMA;
 }
 
 static bool is_load_like(IrOp op) {

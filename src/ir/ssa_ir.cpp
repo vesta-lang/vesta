@@ -121,6 +121,7 @@ static const OpEntry OP_TABLE[] = {
     // ops vectoriales fusionadas (auto-vectorizacion)
     {"vec_unop", IrOp::VEC_UNOP},
     {"vec_binop", IrOp::VEC_BINOP},
+    {"vec_fma", IrOp::VEC_FMA},
     // aritmetica entera extendida (Math-IR-promote wave 4)
     {"iabs", IrOp::IABS},
     {"imin", IrOp::IMIN},
@@ -550,7 +551,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::GCDEREF_IR || ins.op == IrOp::ARRAY_STORE ||
         ins.op == IrOp::RETHROW || ins.op == IrOp::RSPAWN_RETURN ||
         ins.op == IrOp::SMARTPTR_FREE || ins.op == IrOp::STRFINALIZE ||
-        ins.op == IrOp::VEC_UNOP || ins.op == IrOp::VEC_BINOP) {
+        ins.op == IrOp::VEC_UNOP || ins.op == IrOp::VEC_BINOP || ins.op == IrOp::VEC_FMA) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -767,6 +768,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         break;
 
     case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
         // vec_binop.fN %dst_ptr, %a_ptr, %b_ptr   imm=(subop<<8)|ancho
         o << " ";
         print_val(o, fn, ins.operands[0]);
