@@ -3147,6 +3147,78 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    // VEC_ACC_* : acumulador vectorial.  El JIT lo mantiene en un XMM dedicado;
+    // el INTERPRETE (oraculo) usa el acc_slot de MEMORIA (lento pero correcto)
+    // -> ZERO/ADD/FMA operan sobre el slot por lane; STORE es no-op (el acc ya
+    // esta en el slot).  Asi el slot tiene la suma al salir del bucle en AMBOS
+    // (la reduccion horizontal posterior lo consume igual).
+    case IrOp::VEC_ACC_ZERO: {
+        if (ins.operands.empty()) break;
+        const uint64_t width = ins.imm & 0xFF;
+        ctx.out << "    push r10\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0);
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r10\n";
+        ctx.out << "    mov r14, 0\n";
+        for (uint64_t q = 0; q < width; q += 8) {
+            if (q > 0) ctx.out << "    addu r10, 8\n";
+            ctx.out << "    movh [r10], r14\n";
+        }
+        ctx.out << "    pop r10\n";
+        ctx.r14_cache = -1;
+        break;
+    }
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA: {
+        // acc[k] += a[k]  (ADD)  o  acc[k] += a[k]*b[k]  (FMA), por lane.
+        const bool is_fma = (ins.op == IrOp::VEC_ACC_FMA);
+        if (ins.operands.size() < (is_fma ? 3u : 2u)) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        ctx.out << "    push r10\n    push r11\n    push r12\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // acc slot
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        if (is_fma) {
+            const std::string p = ctx.load_src(ins.operands[2], 0); // b
+            ctx.out << "    push " << p << "\n";
+            ctx.out << "    pop r12\n";
+        }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, acc
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+                if (is_fma) ctx.out << "    addu r12, " << esz << "\n";
+            }
+            ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+            ctx.out << "    bitg2z f1, r13\n";
+            if (is_fma) {
+                ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+                ctx.out << "    bitg2z f2, r14\n";
+                ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // acc += a*b
+            } else {
+                ctx.out << "    fadd" << suf << " f0, f1\n"; // acc += a
+            }
+            ctx.out << "    bitz2g r14, f0\n";
+            ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+        }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+    case IrOp::VEC_ACC_STORE:
+        // no-op en el interprete: el acc ya vive en el slot de memoria.
+        break;
+
     // --- OOP / GC ---
     case IrOp::NEWOBJ: {
         // fix5 - NEWOBJ internamente llama @c gc_heap.alloc() que

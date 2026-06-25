@@ -2483,6 +2483,76 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* VEC_ACC_* : acumulador vectorial REGISTER-RESIDENT para
+             * reducciones/dot-products.  El acc vive en XMM13 (DEDICADO,
+             * reservado en target_reginfo) a TRAVES del bucle -> sin round-trip
+             * a memoria por iteracion.  Solo 1 registro -> sin descomposicion:
+             * bail si el chunk excede el ancho del host (cae a interp).  La
+             * scratch FP del a/b es XMM14 (fp0). */
+            case ir::IrOp::VEC_ACC_ZERO:
+            case ir::IrOp::VEC_ACC_ADD:
+            case ir::IrOp::VEC_ACC_FMA:
+            case ir::IrOp::VEC_ACC_STORE: {
+                flush_pending();
+                if (!fp_ok) return false;
+                const uint64_t chunk_w = in.imm & 0xFF;
+                if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
+                    return false;
+                const uint64_t host_w =
+                    jit::vec_isa_width(jit::vec_emit_isa());
+                if (chunk_w > host_w) return false; // acc de 1 reg, sin split
+                const bool is_f32 = (in.type == ir::IrType::F32);
+                if (in.type != ir::IrType::F64 && !is_f32) return false;
+                const auto &gpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
+                const auto &fpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
+                if (gpsc.empty() || fpsc.empty()) return false;
+                const MReg gp0 = static_cast<MReg>(gpsc[0]);
+                const MReg gp1 =
+                    (gpsc.size() >= 2) ? static_cast<MReg>(gpsc[1]) : gp0;
+                const uint8_t ew = static_cast<uint8_t>(chunk_w);
+                const MReg ACC = MReg::XMM13;            // acumulador dedicado
+                const MReg SCR = static_cast<MReg>(fpsc[0]); // XMM14 scratch a/b
+                const MOperand xacc = MOperand::make_reg(ACC, ew);
+                const MOperand xscr = MOperand::make_reg(SCR, ew);
+                if (in.op == ir::IrOp::VEC_ACC_ZERO) {
+                    // acc = 0.  XORPD (no XORPS) para ambos f32/f64: el zeroing
+                    // es agnostico al tipo y XORPD va al packed-arith case que
+                    // SI maneja el ancho (16/32/64); XORPS(102) es scalar 128b.
+                    O.push_back(MInstr::make_unary(MOp::XORPD, xacc, xacc));
+                } else if (in.op == ir::IrOp::VEC_ACC_ADD) {
+                    // acc += a[chunk]:  MOVUPD scr,[a]; ADDP{D,S} acc,scr.
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, xscr, MOperand::make_mem(gp0, 0)));
+                    O.push_back(MInstr::make_unary(
+                        is_f32 ? MOp::ADDPS : MOp::ADDPD, xacc, xscr));
+                } else if (in.op == ir::IrOp::VEC_ACC_FMA) {
+                    // acc += a*b:  MOVUPD scr,[a]; VFMADD231 acc,scr,[b].
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, xscr, MOperand::make_mem(gp0, 0)));
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp1, 8),
+                                                   vr(in.operands[2])));
+                    O.push_back(MInstr::make_binary(
+                        is_f32 ? MOp::VFMADD231PS : MOp::VFMADD231PD, xacc,
+                        xscr, MOperand::make_mem(gp1, 0)));
+                } else { // VEC_ACC_STORE: slot = acc.
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, MOperand::make_mem(gp0, 0), xacc));
+                }
+                break;
+            }
+
             /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
              * (NASM Intel, ya con comptime-consts sustituidas por el
              * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite

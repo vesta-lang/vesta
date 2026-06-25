@@ -609,6 +609,17 @@ enum class IrOp : uint16_t {
     MONNOTI = 0xE3,  ///< monnoti  %obj     (despertar un esperante)
     MONNOTA = 0xE4,  ///< monnota  %obj     (despertar todos los esperantes)
 
+    // ---- acumulador vectorial register-resident (reduccion/dot-product) ----
+    // El acumulador de W lanes vive en un XMM/YMM/ZMM DEDICADO (no en memoria)
+    // a traves del bucle -> sin round-trip por iteracion.  El interprete
+    // (oraculo) usa el acc_slot de memoria (lento pero correcto); el JIT usa el
+    // registro y solo vuelca al slot UNA vez (VEC_ACC_STORE) al salir del bucle,
+    // donde la reduccion horizontal existente lo consume.  imm = ancho (16/32/64).
+    VEC_ACC_ZERO = 0xE5,  ///< vec_acc_zero %slot         (acc = 0; imm=ancho)
+    VEC_ACC_ADD = 0xE6,   ///< vec_acc_add  %slot, %a      (acc += a[chunk])
+    VEC_ACC_FMA = 0xE7,   ///< vec_acc_fma  %slot, %a, %b  (acc += a*b)
+    VEC_ACC_STORE = 0xE8, ///< vec_acc_store %slot         (slot = acc; nop interp)
+
     // ---- intrinsics VM (0xF0-0xFF) ----
     GETPROC = 0xF0, ///< %dst = getproc     (ProcessVM* del proceso actual)
     GETVM = 0xF1,   ///< %dst = getvm       (VM* de la instancia)

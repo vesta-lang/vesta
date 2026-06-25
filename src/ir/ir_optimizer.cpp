@@ -111,6 +111,10 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
     case IrOp::VEC_FMA:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
     case IrOp::SETFIELD:
     // OOP con efectos
     case IrOp::NEWOBJ:
@@ -5306,6 +5310,10 @@ bool ir_pass_dse(IrFunction &fn) {
             case IrOp::VEC_UNOP:
             case IrOp::VEC_BINOP:
             case IrOp::VEC_FMA:
+            case IrOp::VEC_ACC_ZERO:
+            case IrOp::VEC_ACC_ADD:
+            case IrOp::VEC_ACC_FMA:
+            case IrOp::VEC_ACC_STORE:
             case IrOp::SETFIELD:
             case IrOp::ARRAY_STORE:
             case IrOp::STRFINALIZE:
@@ -6622,6 +6630,10 @@ bool ir_pass_licm(IrFunction &fn) {
                 case IrOp::VEC_UNOP:
                 case IrOp::VEC_BINOP:
                 case IrOp::VEC_FMA:
+                case IrOp::VEC_ACC_ZERO:
+                case IrOp::VEC_ACC_ADD:
+                case IrOp::VEC_ACC_FMA:
+                case IrOp::VEC_ACC_STORE:
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:
@@ -7571,6 +7583,10 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
     case IrOp::VEC_FMA:
+    case IrOp::VEC_ACC_ZERO:
+    case IrOp::VEC_ACC_ADD:
+    case IrOp::VEC_ACC_FMA:
+    case IrOp::VEC_ACC_STORE:
     case IrOp::STRFINALIZE:
     case IrOp::GCWB_IR:
     // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE LEE
@@ -7640,7 +7656,9 @@ static bool is_store_like(IrOp op) {
     return op == IrOp::STORE || op == IrOp::SETFIELD ||
            op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY ||
            op == IrOp::VEC_UNOP || op == IrOp::VEC_BINOP ||
-           op == IrOp::VEC_FMA;
+           op == IrOp::VEC_FMA || op == IrOp::VEC_ACC_ZERO ||
+           op == IrOp::VEC_ACC_ADD || op == IrOp::VEC_ACC_FMA ||
+           op == IrOp::VEC_ACC_STORE;
 }
 
 static bool is_load_like(IrOp op) {
