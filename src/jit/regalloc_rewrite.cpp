@@ -1091,6 +1091,51 @@ struct Lowerer {
             return;
         }
 
+        /* LOAD float HOST: dst es un vreg FP -> MOVSD/MOVSS xmm, [addr]. */
+        if (op == MOp::LOAD && is_fp_operand(in.dst)) {
+            const uint8_t width = static_cast<uint8_t>(in.flags >> 1);
+            MOperand a = resolve(in.src1);
+            MReg addr_reg;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                addr_reg = scr1;
+            } else {
+                addr_reg = static_cast<MReg>(a.reg);
+            }
+            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            const MOp mv = fp_mov_for_width(width ? width : 8);
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand pdst = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            out.push_back(MInstr::make_unary(mv, pdst, mem));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(
+                    mv, slot_mem(ra.slot_of(in.dst.vreg_id())), xmm(fscr0)));
+            return;
+        }
+
+        /* STORE float HOST: el valor (src2) es un vreg FP -> MOVSD/MOVSS. */
+        if (op == MOp::STORE && is_fp_operand(in.src2)) {
+            const uint8_t width = static_cast<uint8_t>(in.flags);
+            MOperand a = resolve(in.src1);
+            MReg addr_reg;
+            if (a.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), a));
+                addr_reg = scr1;
+            } else {
+                addr_reg = static_cast<MReg>(a.reg);
+            }
+            const MOp mv = fp_mov_for_width(width ? width : 8);
+            MOperand v = resolve(in.src2);
+            if (v.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(mv, xmm(fscr0), v));
+                v = xmm(fscr0);
+            }
+            const MOperand mem = MOperand::make_mem(addr_reg, 0);
+            out.push_back(MInstr::make_unary(mv, mem, v));
+            return;
+        }
+
         if (op == MOp::LOAD) {
             /* dst = [addr].  addr y dst pueden estar spilled. */
             const uint8_t width = static_cast<uint8_t>(in.flags >> 1);

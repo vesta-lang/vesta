@@ -2027,10 +2027,6 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                    vr(in.operands[0])));
                     break;
                 }
-                if (ir_type_is_float(in.type)) {
-                    vreg_dbg(fn.name.c_str(), "load-float");
-                    return false;
-                }
                 const int w = ir_type_bytes(in.type);
                 const bool sgn = ir_type_signed(in.type);
                 /* AOT (HOST_LEAF): NO hay vm_mem -> toda direccion es host
@@ -2038,6 +2034,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * reales).  Solo el VM_ABI traduce vaddr -> host via
                  * LOAD_VM; en bare emitimos LOAD host directo. */
                 if (vm && !fn.values[in.operands[0]].is_host_ptr) {
+                    /* float desde memoria VM (vaddr): LOAD_VM no materializa a
+                     * XMM aun -> bail.  El caso HOST si se soporta (make_load
+                     * + rewrite enruta el dst FP a MOVSD/MOVSS). */
+                    if (ir_type_is_float(in.type)) {
+                        vreg_dbg(fn.name.c_str(), "load-float-vm");
+                        return false;
+                    }
                     /* vm_mem (vaddr): page-cache inline + fallback al
                      * runtime vrt_vm_read_u<w> (la direccion se hornea
                      * en imm64_pool; el rewrite expande POST-regalloc). */
@@ -2059,8 +2062,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     break;
                 }
                 /* host_ptr: LOAD directo (commit 7).  u32 unsigned -> el
-                 * rewrite emite `mov r32,[mem]` (zero-extend por hardware). */
-                O.push_back(MInstr::make_load(vr(in.dst), vr(in.operands[0]),
+                 * rewrite emite `mov r32,[mem]` (zero-extend por hardware).
+                 * El DST usa vrt() (class-aware): para un f64/f32 le da clase
+                 * FP -> el rewrite enruta a MOVSD/MOVSS (sin esto, vr() lo
+                 * hardcodea a GP y el valor float queda inconsistente con el
+                 * FADD que SI lo trata como XMM -> codegen roto). */
+                O.push_back(MInstr::make_load(vrt(in.dst), vr(in.operands[0]),
                                               static_cast<uint8_t>(w), sgn));
                 break;
             }
@@ -2075,14 +2082,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                    vr(in.operands[0])));
                     break;
                 }
-                if (ir_type_is_float(in.type)) {
-                    vreg_dbg(fn.name.c_str(), "store-float");
-                    return false;
-                }
                 const int w = ir_type_bytes(in.type);
                 /* AOT (HOST_LEAF): toda direccion es host -> STORE directo
                  * (ver nota en LOAD).  Solo VM_ABI usa STORE_VM. */
                 if (vm && !fn.values[in.operands[1]].is_host_ptr) {
+                    /* float a memoria VM (vaddr): STORE_VM no soporta XMM aun
+                     * -> bail.  El caso HOST si (make_store + rewrite MOVSD). */
+                    if (ir_type_is_float(in.type)) {
+                        vreg_dbg(fn.name.c_str(), "store-float-vm");
+                        return false;
+                    }
                     /* vm_mem (vaddr): page-cache inline + fallback al
                      * runtime vrt_vm_write_u<w>. */
                     uint64_t fn_addr = 0;
@@ -2102,8 +2111,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         static_cast<uint8_t>(w), fidx));
                     break;
                 }
+                /* El VALOR (operands[0]) usa vrt() (class-aware): para f64/f32
+                 * le da clase FP -> el rewrite enruta a MOVSD/MOVSS [addr],xmm
+                 * (consistente con como el FADD produjo el valor en XMM). */
                 O.push_back(MInstr::make_store(vr(in.operands[1]),
-                                               vr(in.operands[0]),
+                                               vrt(in.operands[0]),
                                                static_cast<uint8_t>(w)));
                 break;
             }
