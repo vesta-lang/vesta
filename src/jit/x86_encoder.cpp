@@ -328,6 +328,36 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
+    case MOp::ADDPD:
+    case MOp::SUBPD:
+    case MOp::MULPD:
+    case MOp::DIVPD: {
+        /* Packed-double SSE2 (2x f64): 66 + (REX) + 0F + <op> + ModR/M.
+         * Mismo op_byte que las escalares (58/5C/59/5E) pero prefijo 66
+         * (packed-double) en vez de F2 (scalar-double).  Reg-reg only;
+         * los loads/stores van por MOVUPD/MOVAPD. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        put8(out, 0x66);
+        const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+        const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+        if (rex_R || rex_B) {
+            put8(out, 0x40 | (rex_R << 2) | rex_B);
+        }
+        put8(out, 0x0F);
+        const uint8_t opcode = (mi.op == MOp::ADDPD)   ? 0x58
+                               : (mi.op == MOp::SUBPD) ? 0x5C
+                               : (mi.op == MOp::MULPD) ? 0x59
+                                                       : 0x5E; /* DIVPD */
+        put8(out, opcode);
+        put8(out, modrm(3, xd & 7, xs & 7));
+        return true;
+    }
     case MOp::CVTSI2SD: {
         /* CVTSI2SD xmm, r64: F2 + REX.W + 0F + 2A + ModR/M(11, xmm&7, gp&7).
          * Convierte int64 signed a f64. */
@@ -480,6 +510,60 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             return true;
         }
         put8(out, 0xCC); /* combinacion no soportada (mem<-mem, imm, ...) */
+        return true;
+    }
+
+    case MOp::MOVUPD:
+    case MOp::MOVAPD: {
+        /* Move packed 2x f64 (16 bytes) XMM<->XMM o XMM<->mem.  Prefijo 66.
+         *   MOVUPD: 0F 10 (load) / 0F 11 (store)  -- unaligned.
+         *   MOVAPD: 0F 28 (load) / 0F 29 (store)  -- aligned (#GP si !16B).
+         * Misma estructura que MOVSD pero packed-double. */
+        const bool apd = (mi.op == MOp::MOVAPD);
+        const uint8_t op_load = apd ? 0x28 : 0x10;
+        const uint8_t op_store = apd ? 0x29 : 0x11;
+        const bool dst_xmm = (mi.dst.kind == MOperandKind::REG);
+        const bool src_xmm = (mi.src1.kind == MOperandKind::REG);
+        if (dst_xmm && src_xmm) {
+            const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+            const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            put8(out, 0x66);
+            const uint8_t rex = rex_byte(false, xd, xs);
+            if (rex) put8(out, rex);
+            put8(out, 0x0F);
+            put8(out, op_load);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
+        if (dst_xmm && mi.src1.kind == MOperandKind::MEM) {
+            const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+            const MReg base = mi.src1.mem_base();
+            const MReg idx = mi.src1.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            put8(out, 0x66);
+            const uint8_t rex = rex_byte(false, xd, reg_id(base),
+                                         has_index ? reg_id(idx) : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0x0F);
+            put8(out, op_load);
+            emit_modrm_mem(mi.src1, xd & 7, out);
+            return true;
+        }
+        if (mi.dst.kind == MOperandKind::MEM && src_xmm) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+            const MReg base = mi.dst.mem_base();
+            const MReg idx = mi.dst.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            put8(out, 0x66);
+            const uint8_t rex = rex_byte(false, xs, reg_id(base),
+                                         has_index ? reg_id(idx) : 0);
+            if (rex) put8(out, rex);
+            put8(out, 0x0F);
+            put8(out, op_store);
+            emit_modrm_mem(mi.dst, xs & 7, out);
+            return true;
+        }
+        put8(out, 0xCC);
         return true;
     }
 

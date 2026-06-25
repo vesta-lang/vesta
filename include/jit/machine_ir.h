@@ -599,14 +599,27 @@ enum class MOp : uint8_t {
      * clobbea vregs porque la save/restore preserva RSI/RDI/RCX). */
     REP_MOVSB = 104,
 
-    DATA_PTR_LABEL = 105, ///< Entrada de 8 bytes de la jump table densa:
+    /* Packed FP SSE2 (auto-vectorizacion, 2026-06-25): operan sobre 2x f64
+     * (128-bit XMM).  Prefijo 66 (packed-double).  Reg-reg (arith) o reg-mem
+     * (MOVUPD/MOVAPD).  Base de la vectorizacion de loops float y, a futuro,
+     * de los tipos anchos N=potencia-de-2 (i128 -> XMM completo).  AVX (VEX,
+     * 4x f64) y AVX512 (EVEX, 8x f64) son slices posteriores con el mismo
+     * patron pero distinto encoding. */
+    ADDPD = 106,  ///< ADDPD xmm,xmm (66 0F 58) -- 2x f64 add
+    SUBPD = 107,  ///< SUBPD xmm,xmm (66 0F 5C) -- 2x f64 sub
+    MULPD = 108,  ///< MULPD xmm,xmm (66 0F 59) -- 2x f64 mul
+    DIVPD = 109,  ///< DIVPD xmm,xmm (66 0F 5E) -- 2x f64 div
+    MOVUPD = 110, ///< MOVUPD dst,src (66 0F 10 load / 66 0F 11 store) 16B unaligned
+    MOVAPD = 111, ///< MOVAPD dst,src (66 0F 28 load / 66 0F 29 store) 16B aligned
+
+    DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup
                           ///< {offset, src1=LABEL}.  El pipeline lo parchea
                           ///< POST-memcpy con base + label_offsets[label].
                           ///< No es codigo ejecutable (se salta); el dispatch
                           ///< lo lee via `mov rT, [rbase + idx*8]`.
 
-    COUNT = 106
+    COUNT = 113
 };
 
 /* ===================================================================== */
