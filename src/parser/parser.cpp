@@ -351,6 +351,8 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"fcvt.ps", {"fcvt.ps", OpArity::TWO}},
         {"fextend", {"fextend", OpArity::TWO}},
         {"fnarrow", {"fnarrow", OpArity::TWO}},
+        {"fmadd", {"fmadd", OpArity::THREE}},       // fd = fma(fa, fb, fd)
+        {"fmadd.ps", {"fmadd.ps", OpArity::THREE}},
         {"fmin", {"fmin", OpArity::TWO}},
         {"fmin.ps", {"fmin.ps", OpArity::TWO}},
         {"fmax", {"fmax", OpArity::TWO}},

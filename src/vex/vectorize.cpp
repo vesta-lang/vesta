@@ -945,34 +945,53 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     if (!red_elem_info(acc_id->result_type.kind, &elem_ty, &esz, &elem_fp))
         return false;
     const std::string acc_name = acc_id->name;
-    // value = acc + a[idx]  (solo suma v1)
+    // value = acc + a[idx]  (reduccion) o  acc + a[idx]*b[idx]  (dot-product/FMA)
     if (!asg->value || asg->value->kind != NodeKind::BinaryExpr) return false;
     auto *rhs = static_cast<BinaryExpr *>(asg->value.get());
     if (rhs->op != BinOp::Add) return false;
     if (!rhs->lhs || rhs->lhs->kind != NodeKind::IdentExpr) return false;
     if (static_cast<IdentExpr *>(rhs->lhs.get())->name != acc_name)
         return false; // lhs debe ser el MISMO acc
-    if (!rhs->rhs || rhs->rhs->kind != NodeKind::IndexExpr) return false;
-    auto *a_ix = static_cast<IndexExpr *>(rhs->rhs.get());
-    if (!a_ix->overload_method.empty() || a_ix->is_range) return false;
-    if (!a_ix->base || a_ix->base->kind != NodeKind::IdentExpr) return false;
-    if (!a_ix->index || a_ix->index->kind != NodeKind::IdentExpr) return false;
-    if (static_cast<IdentExpr *>(a_ix->index.get())->name != idx_name)
-        return false;
-    auto *a_base = static_cast<IdentExpr *>(a_ix->base.get());
-    {
-        const Type &t = a_base->result_type;
+    // Valida base_ident[idx] HOST del MISMO tipo que el acumulador; devuelve base.
+    auto check_idx_base = [&](ast::Expr *e) -> ast::IdentExpr * {
+        if (!e || e->kind != NodeKind::IndexExpr) return nullptr;
+        auto *ix = static_cast<IndexExpr *>(e);
+        if (!ix->overload_method.empty() || ix->is_range) return nullptr;
+        if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return nullptr;
+        if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return nullptr;
+        if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
+            return nullptr;
+        auto *base = static_cast<IdentExpr *>(ix->base.get());
+        const Type &t = base->result_type;
         const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
                                t.kind == PrimitiveKind::ARRAY) &&
                               static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false; // solo HOST
-        // el array debe tener EL MISMO tipo de elemento que el acumulador.
-        if (t.pointee->kind != acc_id->result_type.kind) return false;
+        if (!ptr_like || t.is_virtual) return nullptr;            // solo HOST
+        if (t.pointee->kind != acc_id->result_type.kind) return nullptr;
+        return base;
+    };
+    ast::IdentExpr *a_base = nullptr, *b_base = nullptr;
+    bool is_fma = false;
+    if (rhs->rhs && rhs->rhs->kind == NodeKind::IndexExpr) {
+        // reduccion simple: acc += a[i]
+        a_base = check_idx_base(rhs->rhs.get());
+        if (!a_base) return false;
+    } else if (rhs->rhs && rhs->rhs->kind == NodeKind::BinaryExpr) {
+        // dot-product: acc += a[i] * b[i]  (solo float -> VFMADD/fmadd)
+        auto *mul = static_cast<BinaryExpr *>(rhs->rhs.get());
+        if (mul->op != BinOp::Mul || !elem_fp) return false;
+        a_base = check_idx_base(mul->lhs.get());
+        b_base = check_idx_base(mul->rhs.get());
+        if (!a_base || !b_base) return false;
+        is_fma = true;
+    } else {
+        return false;
     }
 
     if (MC_DBG)
-        std::fprintf(stderr, "[mc-idiom] MATCH vec_reduce idx=%s acc=%s\n",
-                     idx_name.c_str(), acc_name.c_str());
+        std::fprintf(stderr, "[mc-idiom] MATCH %s idx=%s acc=%s\n",
+                     is_fma ? "vec_fma" : "vec_reduce", idx_name.c_str(),
+                     acc_name.c_str());
 
     // ======== Emitir: acumulador vectorial + reduccion horizontal + cola.
     // El ancho del acumulador vectorial lo elige la ISA (16/32/64 = W lanes).
@@ -985,9 +1004,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId i_init =
         vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
+    const ir::IrValueId v_b = is_fma ? lower_expr(b_base) : ir::IR_NO_VALUE;
     const ir::IrValueId v_N = lower_expr(vl.limit);
     if (acc_init == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
-        v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE)
+        v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE ||
+        (is_fma && v_b == ir::IR_NO_VALUE))
         return false;
     if (fn_->values[acc_init].type != elem_ty) return false;
     const ir::IrType idx_ty = fn_->values[i_init].type;
@@ -1082,19 +1103,30 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     fn_->blocks[mbody].preds.push_back(mhdr);
     fn_->blocks[redb].preds.push_back(mhdr);
 
-    // --- mbody: acc_slot += a[i..i+1] (VEC_BINOP add); i += W; BR mhdr ---
+    // --- mbody: acc_slot += a[i..]  (VEC_BINOP add) o  acc_slot += a*b
+    //     (VEC_FMA, dot-product fusionado); i += W; BR mhdr ---
     current_block_ = mbody;
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId a_at = ptr_at(v_a, off);
-        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
-        vb.dst = ir::IR_NO_VALUE;
-        vb.operands = {acc_slot, acc_slot, a_at}; // acc_slot = acc_slot + a
-        vb.imm = ((uint64_t)0 << 8) | width;      // subop 0 = add
-        vb.source_line = ln;
-        fn_->append(current_block_, std::move(vb));
+        if (is_fma) {
+            const ir::IrValueId b_at = ptr_at(v_b, off);
+            ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA; vf.type = elem_ty;
+            vf.dst = ir::IR_NO_VALUE;
+            vf.operands = {acc_slot, a_at, b_at}; // acc_slot += a*b
+            vf.imm = width;
+            vf.source_line = ln;
+            fn_->append(current_block_, std::move(vf));
+        } else {
+            ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
+            vb.dst = ir::IR_NO_VALUE;
+            vb.operands = {acc_slot, acc_slot, a_at}; // acc_slot = acc_slot + a
+            vb.imm = ((uint64_t)0 << 8) | width;      // subop 0 = add
+            vb.source_line = ln;
+            fn_->append(current_block_, std::move(vb));
+        }
     }
     const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
@@ -1146,14 +1178,22 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     fn_->blocks[tbody].preds.push_back(thdr);
     fn_->blocks[exit].preds.push_back(thdr);
 
-    // --- tbody: result += a[i]; i++; BR thdr ---
+    // --- tbody: result += a[i]  o  result += a[i]*b[i] (FMA); i++; BR thdr ---
+    // La cola usa FMUL+FADD separados (2 redondeos) en interp Y jit por igual
+    // (son IR ops escalares lowereadas identicamente) -> interp==jit; los lanes
+    // vectorizados usan fused (fmadd / VFMADD) en ambos.
     current_block_ = tbody;
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId ai = load_el(ptr_at(v_a, off));
-        const ir::IrValueId rnext = bin(acc_op, elem_ty, phi_res, ai);
+        ir::IrValueId addend = ai;
+        if (is_fma) {
+            const ir::IrValueId bi = load_el(ptr_at(v_b, off));
+            addend = bin(ir::IrOp::FMUL, elem_ty, ai, bi); // a[i]*b[i]
+        }
+        const ir::IrValueId rnext = bin(acc_op, elem_ty, phi_res, addend);
         const ir::IrValueId i_tnext =
             bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
         { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;

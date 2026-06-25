@@ -859,6 +859,12 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
         {"fnarrow",
          {{0x00, 0x5D, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_instr_freg}}},
+        {"fmadd",
+         {{0x00, 0x5F, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_fmadd}}},
+        {"fmadd.ps",
+         {{0x00, 0x5F, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_instr_fmadd}}},
         /* Sprint string-perf-5: FP ops escalares nativas en interp. */
         {"fmin",
          {{0x00, 0x80, InstrSizeMode::FIXED_4, AddressingMode::REG,

@@ -1840,6 +1840,12 @@ void exec_instr_fextend(ProcessVM *vm, const DecodedInstr &instr);
  */
 void exec_instr_fnarrow(ProcessVM *vm, const DecodedInstr &instr);
 
+/** @brief FMADD escalar fusionado (0x5F): fd = fma(fa, fb, fd) -- un solo
+ *  redondeo (C std::fma).  Convention B: byte2=(fa<<4)|fd, byte3=(fb<<4)|isf32.
+ *  Lo emite la auto-vectorizacion (VEC_FMA) para que el interprete coincida
+ *  bit-a-bit con VFMADD231PD del JIT (que tambien fusiona con 1 redondeo). */
+void exec_instr_fmadd(ProcessVM *vm, const DecodedInstr &instr);
+
 /** @brief FMIN escalar (0x80): reg1 = fmin(reg1, reg2). */
 void exec_instr_fmin(ProcessVM *vm, const DecodedInstr &instr);
 /** @brief FMAX escalar (0x81): reg1 = fmax(reg1, reg2). */

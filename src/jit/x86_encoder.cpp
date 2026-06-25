@@ -556,6 +556,47 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         return true;
     }
 
+    case MOp::VFMADD231PD:
+    case MOp::VFMADD231PS: {
+        /* VFMADD231P{D,S} dst, src1(vvvv), src2(rm reg|mem): dst = src1*src2 +
+         * dst (1 redondeo).  66 0F38 B8; W1 para PD, W0 para PS.  Solo AVX/512
+         * (vec_w 32/64); 128b tambien valido pero el vectorizador usa >=256. */
+        const bool ps = (mi.op == MOp::VFMADD231PS);
+        const uint8_t wbit = ps ? 0 : 1;
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 32;
+        const bool evex = (vec_w >= 64);
+        if (mi.src2.kind == MOperandKind::REG) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+            if (evex)
+                emit_evex(xd, xs, xv, wbit, /*ll=*/2, 0, false, out, /*map=*/2,
+                          /*pp=*/1);
+            else
+                emit_vex3(xd, xs, xv, wbit, /*l256=*/true, 0, false, out,
+                          /*map=*/2, /*pp=*/1);
+            put8(out, 0xB8);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (mi.src2.kind == MOperandKind::MEM) {
+            const MReg base = mi.src2.mem_base();
+            const MReg idx = mi.src2.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            const uint8_t bid = reg_id(base);
+            const uint8_t iid = has_index ? reg_id(idx) : 0;
+            if (evex)
+                emit_evex(xd, bid, xv, wbit, /*ll=*/2, iid, has_index, out,
+                          /*map=*/2, /*pp=*/1);
+            else
+                emit_vex3(xd, bid, xv, wbit, /*l256=*/true, iid, has_index, out,
+                          /*map=*/2, /*pp=*/1);
+            put8(out, 0xB8);
+            emit_modrm_mem(mi.src2, xd & 7, out);
+        } else {
+            put8(out, 0xCC);
+        }
+        return true;
+    }
+
     case MOp::VBROADCASTSD: {
         /* VBROADCASTSD ymm/zmm, xmm: difunde el f64 bajo a todos los lanes.
          * VEX.256.66.0F38.W0 19 /r ; EVEX.512.66.0F38.W1 19 /r.  Op de 2

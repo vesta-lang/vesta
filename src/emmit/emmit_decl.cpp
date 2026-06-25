@@ -2694,6 +2694,36 @@ void emit_instr_freg(const vm::Instruction *instruction_parser,
 }
 
 /**
+ * @brief Emite FMADD (3 operandos ZMM): fd = fma(fa, fb, fd).
+ *
+ * FIXED_4, Convention B (decode_instr_raw_bytes): byte2 = (fa<<4)|fd,
+ * byte3 = (fb<<4)|is_f32.  Sin byte de control de modo (la op es escalar; el
+ * vectorizador la usa por lane).  El sufijo @c .ps activa el bit is_f32.
+ */
+void emit_instr_fmadd(const vm::Instruction *instruction_parser,
+                      ByteWriter &code_final, const InstrInfo *now_instr,
+                      Assembler *assembly_ctx) {
+    (void)assembly_ctx;
+    (void)now_instr;
+    auto *r1 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[0].get()); // fd
+    auto *r2 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[1].get()); // fa
+    auto *r3 = dynamic_cast<vm::RegisterOperand *>(
+        instruction_parser->operands[2].get()); // fb
+    if (!r1 || !r2 || !r3)
+        throw std::runtime_error(instruction_parser->opcode +
+                                 ": se requieren tres operandos de registro ZMM");
+    const uint8_t fd = zmm_reg_index(r1->name);
+    const uint8_t fa = zmm_reg_index(r2->name);
+    const uint8_t fb = zmm_reg_index(r3->name);
+    const bool is_f32 =
+        (instruction_parser->opcode.find(".ps") != std::string::npos);
+    code_final.emit8(static_cast<uint8_t>((fa << 4) | fd)); // byte2
+    code_final.emit8(static_cast<uint8_t>((fb << 4) | (is_f32 ? 1 : 0))); // byte3
+}
+
+/**
  * @brief Emite instrucciones ZMM unarias (fsqrt, fabs, fneg) con un solo
  * operando.
  *

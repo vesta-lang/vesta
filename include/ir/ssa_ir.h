@@ -219,7 +219,8 @@ enum class IrOp : uint16_t {
     // VEC_BINOP dst[i] = a[i] OP b[i] (subop 0=fadd 1=fsub 2=fmul 3=fdiv)
     VEC_UNOP = 0x2D, ///< vec_unop.fN %dst_ptr, %a_ptr        imm=(subop<<8)|ancho
     VEC_BINOP = 0x2E, ///< vec_binop.fN %dst_ptr, %a_ptr, %b_ptr imm=(subop<<8)|ancho
-    VEC_RESERVED = 0x2F, ///< reservado (futuro: vec ternario / FMA / reduccion)
+    // VEC_FMA acc[i] += a[i] * b[i]  (dot-product fusionado, 1 redondeo).
+    VEC_FMA = 0x2F, ///< vec_fma.fN %acc_ptr, %a_ptr, %b_ptr   imm=ancho
 
     // ---- logica y desplazamientos (0x30-0x3F) ----
     AND = 0x30, ///< %dst = and.T    %a, %b

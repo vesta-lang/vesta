@@ -165,6 +165,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     // -- ops vectoriales fusionadas (SIMD nativo / packed) --
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
+    case IrOp::VEC_FMA:
     // -- atomicos enteros (lock-prefixed nativos) --
     case IrOp::ATOMIC_LD_I64:
     case IrOp::ATOMIC_ST_I64:
