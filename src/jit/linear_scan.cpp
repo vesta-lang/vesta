@@ -208,9 +208,20 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 continue;
             }
 
-            /* ---- Sin reg libre: SPILL (Poletto, fin mas lejano) ---- */
+            /* ---- Sin reg libre: SPILL por NEXT-USE (no por fin mas lejano) ----
+             * Mejor heuristica que Poletto: mantener en reg el intervalo que se
+             * usa ANTES; spillear el que se usa MAS TARDE (su reg no se necesita
+             * en mas tiempo).  next_use = primer uso >= istart (lista uses
+             * ascendente); si no quedan usos -> end() (vivo pero sin usos, buen
+             * candidato a spill).  Solo heuristica -> no afecta correctitud. */
+            auto next_use = [&](uint32_t av) -> uint32_t {
+                const auto &u = ivs.intervals[av].uses;
+                auto it = std::lower_bound(u.begin(), u.end(), istart);
+                if (it != u.end()) return *it;
+                return ivs.intervals[av].end();
+            };
             int victim_idx = -1;
-            uint32_t victim_end = 0;
+            uint32_t victim_nu = 0;
             for (size_t a = 0; a < active.size(); ++a) {
                 const uint32_t av = active[a];
                 const uint8_t r = out.assign[av].reg;
@@ -220,14 +231,14 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
                 /* inc.5e: no robar un reg clobbered por un asm que iv cruza
                  * (iv no podria vivir ahi). */
                 if (clobbered_for(iv, r)) continue;
-                const uint32_t e = ivs.intervals[av].end();
-                if (victim_idx < 0 || e > victim_end) {
+                const uint32_t nu = next_use(av);
+                if (victim_idx < 0 || nu > victim_nu) {
                     victim_idx = static_cast<int>(a);
-                    victim_end = e;
+                    victim_nu = nu;
                 }
             }
 
-            if (victim_idx < 0 || iv.end() >= victim_end) {
+            if (victim_idx < 0 || next_use(vid) >= victim_nu) {
                 /* Spillear el PROPIO intervalo (su fin es el mas lejano,
                  * o no hay activo robable). */
                 out.assign[vid].loc = RegAlloc::Loc::SPILL;
