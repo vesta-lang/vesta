@@ -27,6 +27,7 @@
 #include "ir/ssa_ir.h"
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h" // Phase AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
+#include "jit/vec_isa.h"        // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
 #include "gc/raw_allocator.h" // Phase D.7 perf: inline slab fast-path
 #include "vex/asm_backend.h"  // Phase AS inc.5: ensamblar inline-asm -> bytes
 #include "vex/asm_effects.h"  // Phase AS inc.5: asm_canonical_reg
@@ -2300,9 +2301,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_BINOP: {
                 flush_pending();
                 if (in.operands.size() != 3) return false;
-                const uint64_t width = in.imm & 0xFF;
+                const uint64_t chunk_w = in.imm & 0xFF; // 16/32/64 (matcher)
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
-                if (width != 16) return false; // solo 128b (SSE2)
+                if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
+                    return false;
+                /* El matcher horneo un chunk de @c chunk_w bytes; lo emitimos
+                 * con el ancho SIMD del HOST (16=SSE2/32=AVX2/64=AVX512),
+                 * descomponiendo en @c n_pieces ops si el chunk es mas ancho.
+                 * Asi el `.velb` es portable (corre en cualquier x86-64) y
+                 * AUTO-cpuid.  VESTA_JIT_VEC_ISA fuerza el ancho (validar
+                 * AVX512 por disasm en CPU sin avx512). */
+                const uint64_t host_w =
+                    jit::vec_isa_width(jit::vec_emit_isa());
+                const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
+                const uint64_t n_pieces = chunk_w / eff_w;
                 /* op packed segun el tipo de elemento: float (ADDPD/...) o
                  * entero (PADDD/PSUBD i32, PADDQ/PSUBQ i64).  No hay mul/div
                  * entero packed en SSE2 -> bail (la cola/loop escalar lo hace). */
@@ -2346,22 +2358,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg gp1 = static_cast<MReg>(gpsc[1]);
                 const MReg fp0 = static_cast<MReg>(fpsc[0]);
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
-                const MOperand x0 = MOperand::make_reg(fp0, 16);
-                const MOperand x1 = MOperand::make_reg(fp1, 16);
+                /* x0/x1 con ancho eff_w (16/32/64) -> el encoder elige
+                 * SSE2/VEX/EVEX.  Una pieza procesa eff_w bytes en el offset
+                 * piece*eff_w; recargamos la base por pieza (solo 2 GP scratch)
+                 * y le sumamos el offset (cuando n_pieces>1). */
+                const uint8_t ew = static_cast<uint8_t>(eff_w);
+                const MOperand x0 = MOperand::make_reg(fp0, ew);
+                const MOperand x1 = MOperand::make_reg(fp1, ew);
                 const MOperand r0 = MOperand::make_reg(gp0, 8);
                 const MOperand r1 = MOperand::make_reg(gp1, 8);
-                // load a, b
-                O.push_back(MInstr::make_unary(MOp::MOV, r0, vr(in.operands[1])));
-                O.push_back(MInstr::make_unary(MOp::MOV, r1, vr(in.operands[2])));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, x0, MOperand::make_mem(gp0, 0)));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, x1, MOperand::make_mem(gp1, 0)));
-                O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= x1
-                // store -> dst
-                O.push_back(MInstr::make_unary(MOp::MOV, r0, vr(in.operands[0])));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, MOperand::make_mem(gp0, 0), x0));
+                for (uint64_t pc = 0; pc < n_pieces; ++pc) {
+                    // offset de la pieza dentro del chunk (0 cuando n_pieces=1,
+                    // que es el unico caso que llega a EVEX -> sin disp).
+                    const int32_t off = static_cast<int32_t>(pc * eff_w);
+                    // load a -> x0  ([base+off])
+                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                   vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    // load b -> x1
+                    O.push_back(MInstr::make_unary(MOp::MOV, r1,
+                                                   vr(in.operands[2])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, x1, MOperand::make_mem(gp1, off)));
+                    O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= x1
+                    // store -> dst
+                    O.push_back(MInstr::make_unary(MOp::MOV, r0,
+                                                   vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                }
                 break;
             }
 

@@ -540,6 +540,84 @@ void test_encode_movupd_store() {
     CHECK_BYTES(out, (std::vector<uint8_t>{0x66, 0x0F, 0x11, 0x01}));
 }
 
+/* --- AVX2 (VEX.256) y AVX512 (EVEX.512): byte-exact validado con objdump.
+ * Usa XMM14/XMM15 (-> ymm/zmm) y R10 como base para ejercitar los bits altos
+ * R/B del prefijo.  NO requiere una CPU con AVX2/AVX512 (solo codifica). */
+void test_encode_vaddpd_ymm() {
+    /* vaddpd ymm14,ymm14,ymm15 -> c4 41 0d 58 f7 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::ADDPD, MOperand::make_reg(MReg::XMM14, 32),
+                            MOperand::make_reg(MReg::XMM15, 32))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0xC4, 0x41, 0x0D, 0x58, 0xF7}));
+}
+void test_encode_vmovupd_ymm_load() {
+    /* vmovupd ymm14,[r10] -> c4 41 7d 10 32 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::MOVUPD, MOperand::make_reg(MReg::XMM14, 32),
+                            MOperand::make_mem(MReg::R10, 0))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0xC4, 0x41, 0x7D, 0x10, 0x32}));
+}
+void test_encode_vmovupd_ymm_store() {
+    /* vmovupd [r10],ymm14 -> c4 41 7d 11 32 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::MOVUPD, MOperand::make_mem(MReg::R10, 0),
+                            MOperand::make_reg(MReg::XMM14, 32))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0xC4, 0x41, 0x7D, 0x11, 0x32}));
+}
+void test_encode_vaddpd_zmm() {
+    /* vaddpd zmm14,zmm14,zmm15 -> 62 51 8d 48 58 f7 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::ADDPD, MOperand::make_reg(MReg::XMM14, 64),
+                            MOperand::make_reg(MReg::XMM15, 64))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out,
+                (std::vector<uint8_t>{0x62, 0x51, 0x8D, 0x48, 0x58, 0xF7}));
+}
+void test_encode_vmovupd_zmm_load() {
+    /* vmovupd zmm14,[r10] -> 62 51 fd 48 10 32 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::MOVUPD, MOperand::make_reg(MReg::XMM14, 64),
+                            MOperand::make_mem(MReg::R10, 0))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out,
+                (std::vector<uint8_t>{0x62, 0x51, 0xFD, 0x48, 0x10, 0x32}));
+}
+void test_encode_vpaddd_zmm() {
+    /* vpaddd zmm14,zmm14,zmm15 -> 62 51 0d 48 fe f7  (W0, dword) */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::PADDD, MOperand::make_reg(MReg::XMM14, 64),
+                            MOperand::make_reg(MReg::XMM15, 64))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out,
+                (std::vector<uint8_t>{0x62, 0x51, 0x0D, 0x48, 0xFE, 0xF7}));
+}
+void test_encode_vpaddq_zmm() {
+    /* vpaddq zmm14,zmm14,zmm15 -> 62 51 8d 48 d4 f7  (W1, qword) */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::PADDQ, MOperand::make_reg(MReg::XMM14, 64),
+                            MOperand::make_reg(MReg::XMM15, 64))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out,
+                (std::vector<uint8_t>{0x62, 0x51, 0x8D, 0x48, 0xD4, 0xF7}));
+}
+
 int main() {
     /* Encoding tests */
     test_encode_ret();
@@ -559,6 +637,14 @@ int main() {
     test_encode_mulpd();
     test_encode_movupd_load();
     test_encode_movupd_store();
+    /* AVX2 (VEX) + AVX512 (EVEX) byte-exact */
+    test_encode_vaddpd_ymm();
+    test_encode_vmovupd_ymm_load();
+    test_encode_vmovupd_ymm_store();
+    test_encode_vaddpd_zmm();
+    test_encode_vmovupd_zmm_load();
+    test_encode_vpaddd_zmm();
+    test_encode_vpaddq_zmm();
     test_encode_push_pop();
     test_encode_jmp_label();
     test_encode_jcc();

@@ -201,6 +201,56 @@ class X86Encoder {
     void emit_modrm_mem(const MOperand &mem, uint8_t reg_field,
                         std::vector<uint8_t> &out);
 
+    /// Sentinel para "sin segundo source" (vvvv no usado -> campo 1111).
+    static constexpr uint8_t VEX_NO_VVVV = 0xFF;
+
+    /// Emite el prefijo VEX de 3 bytes (C4) para mapa 0F + prefijo 66 (pp=01).
+    /// @p reg = ModRM.reg (0..15); @p rm = ModRM.rm reg/base (0..15);
+    /// @p vvvv = segundo source (0..15) o @c VEX_NO_VVVV si la op es de 2
+    /// operandos (el campo se codifica como 1111, obligatorio para ops sin
+    /// src1 como VMOVUPD/VSQRTPD; un campo distinto = #UD);
+    /// @p w = bit W; @p l256 = true para 256-bit (YMM), false para 128-bit;
+    /// @p idx/@p has_idx = registro indice del SIB (para el bit X).
+    static void emit_vex3(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
+                          bool l256, uint8_t idx, bool has_idx,
+                          std::vector<uint8_t> &out) {
+        const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~REX.R
+        const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~REX.B
+        const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~REX.X
+        // El campo vvvv almacena ~src1; para "sin source" debe ser 1111.
+        const uint8_t vfield =
+            (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
+        put8(out, 0xC4);
+        put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
+                                       0x01)); // mmmmm=00001 (0F)
+        put8(out, static_cast<uint8_t>(((w & 1) << 7) | (vfield << 3) |
+                                       ((l256 ? 1 : 0) << 2) | 0x01)); // pp=66
+    }
+
+    /// Emite el prefijo EVEX de 4 bytes (62) para mapa 0F + 66, registros
+    /// 0..15 sin mascara (k0), sin broadcast/zeroing.  @p ll = 0/1/2 para
+    /// 128/256/512-bit.  Resto de parametros como @c emit_vex3.
+    static void emit_evex(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
+                          uint8_t ll, uint8_t idx, bool has_idx,
+                          std::vector<uint8_t> &out) {
+        const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~R  (reg bit3)
+        const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~B  (rm bit3)
+        const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~X
+        const uint8_t Rp = 1; // ~R' (reg bit4): solo 0..15 -> no extendido
+        const uint8_t Vp = 1; // ~V' (vvvv bit4): solo 0..15
+        const uint8_t vfield =
+            (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
+        put8(out, 0x62);
+        // P0: [R X B R'] [0 0] [m m=01(0F)]
+        put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
+                                       (Rp << 4) | 0x01));
+        // P1: [W] [~vvvv] [1] [pp=01(66)]
+        put8(out, static_cast<uint8_t>(((w & 1) << 7) | (vfield << 3) |
+                                       (1 << 2) | 0x01));
+        // P2: [z=0] [L'L] [b=0] [V'] [aaa=000]
+        put8(out, static_cast<uint8_t>(((ll & 3) << 5) | (Vp << 3)));
+    }
+
     /// Resuelve todos los @c MFunction::fixups patcheando rel32 in-place.
     /// @c base es el offset del comienzo de @p fn dentro del buffer
     /// global (para soportar emit de varias funciones consecutivas).
