@@ -8519,6 +8519,36 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     std::sort(sw_cases.begin(), sw_cases.end());
     const bool use_bst = !match_any_guard && sw_cases.size() >= 5;
 
+    // Jump table DENSO (computed-goto O(1) en JIT): rango ~= N, sin guards,
+    // tags no-negativos.  Emite un marker SWITCH_DENSE (no-op en interp/
+    // optimizer) que el backend JIT baja a un island nativo; el dispatch
+    // BST/lineal de abajo sigue siendo el path del interp + fallback.
+    if (!match_any_guard && sw_cases.size() >= 4) {
+        const int64_t lo_tag = sw_cases.front().first;
+        const int64_t hi_tag = sw_cases.back().first;
+        const int64_t range = hi_tag - lo_tag + 1;
+        const int64_t n = static_cast<int64_t>(sw_cases.size());
+        // Densidad: rango no mucho mayor que N (evita tablas con muchos
+        // huecos) + cap a 256 entradas (island compacto) + base no-negativa.
+        if (lo_tag >= 0 && range >= n && range <= 2 * n && range <= 256) {
+            std::vector<uint32_t> table(static_cast<size_t>(range),
+                                        static_cast<uint32_t>(default_bb));
+            for (const auto &c : sw_cases)
+                table[static_cast<size_t>(c.first - lo_tag)] =
+                    static_cast<uint32_t>(c.second);
+            ir::IrInstr sd{};
+            sd.op = ir::IrOp::SWITCH_DENSE;
+            sd.type = ir::IrType::VOID;
+            sd.dst = ir::IR_NO_VALUE;
+            sd.operands = {tag_v};
+            sd.imm = static_cast<uint64_t>(lo_tag);
+            sd.target_block = default_bb;
+            sd.jump_targets = std::move(table);
+            sd.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(sd));
+        }
+    }
+
     // Helper local: anade una arista CFG (succ + pred).
     auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
         fn_->blocks[from].succs.push_back(to);

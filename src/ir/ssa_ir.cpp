@@ -188,6 +188,7 @@ static const OpEntry OP_TABLE[] = {
     {"make_closure", IrOp::MAKE_CLOSURE},
     {"make_variant", IrOp::MAKE_VARIANT},
     {"match_variant", IrOp::MATCH_VARIANT},
+    {"switch_dense", IrOp::SWITCH_DENSE},
     {"calln", IrOp::CALLN},
     // memoria
     {"alloca", IrOp::ALLOCA},
@@ -677,6 +678,20 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         o << " ";
         if (!ins.operands.empty()) print_val(o, fn, ins.operands[0]);
         o << ", @" << ins.func_name << ", n_arms=" << ins.imm;
+        break;
+    }
+
+    case IrOp::SWITCH_DENSE: {
+        // switch_dense %tag, min=M, default=BB, [t0, t1, ...]
+        o << " ";
+        if (!ins.operands.empty()) print_val(o, fn, ins.operands[0]);
+        o << ", min=" << static_cast<int64_t>(ins.imm)
+          << ", default=BB" << ins.target_block << ", [";
+        for (size_t i = 0; i < ins.jump_targets.size(); ++i) {
+            if (i) o << ", ";
+            o << "BB" << ins.jump_targets[i];
+        }
+        o << "]";
         break;
     }
 

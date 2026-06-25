@@ -342,6 +342,15 @@ enum class IrOp : uint16_t {
     ///<   @c dst = IR_NO_VALUE (marker puro)
     ///<
     ///< El IR emitter actual lo trata como no-op.
+    SWITCH_DENSE = 0x8B, ///< switch_dense %tag, min=imm, targets=jump_targets[],
+                         ///< default=target_block.  Marker (no-op en interp/
+                         ///< optimizer/ir_emitter) que el backend JIT (vreg)
+                         ///< baja a un island nativo O(1) (computed-goto):
+                         ///< idx=tag-min; if idx u>=N -> default; else jmp al
+                         ///< brazo jump_targets[idx].  Emitido por
+                         ///< lower_match_expr para match DENSO (rango~=N) tras
+                         ///< el LOAD del tag y JUNTO al BST (que es el dispatch
+                         ///< del interp + fallback).  operands[0]=%tag.
 
     MAKE_CLOSURE =
         0x87, ///< make_closure @helper, env_kind=imm, captures=[%c0, %c1, ...]
@@ -818,6 +827,13 @@ struct IrInstr {
     IrBlockId false_block;  ///< rama false de BR_COND
 
     std::vector<IrPhiArg> phi_args; ///< para PHI
+
+    /// Tabla de bloques destino para SWITCH_DENSE (jump table denso O(1)):
+    /// jump_targets[idx] = bloque del valor (imm_min + idx); idx fuera de
+    /// rango -> target_block (default).  Vacio para el resto de ops.  El
+    /// backend JIT (vreg) lo baja a un island nativo (computed-goto); el
+    /// interp usa el BST que el frontend emite junto al marker.
+    std::vector<uint32_t> jump_targets;
 
     uint32_t
         source_line; ///< numero de linea del fuente original (0 = desconocido)

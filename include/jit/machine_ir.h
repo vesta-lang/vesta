@@ -599,7 +599,14 @@ enum class MOp : uint8_t {
      * clobbea vregs porque la save/restore preserva RSI/RDI/RCX). */
     REP_MOVSB = 104,
 
-    COUNT = 105
+    DATA_PTR_LABEL = 105, ///< Entrada de 8 bytes de la jump table densa:
+                          ///< emite 8 zeros + registra un AddrTableFixup
+                          ///< {offset, src1=LABEL}.  El pipeline lo parchea
+                          ///< POST-memcpy con base + label_offsets[label].
+                          ///< No es codigo ejecutable (se salta); el dispatch
+                          ///< lo lee via `mov rT, [rbase + idx*8]`.
+
+    COUNT = 106
 };
 
 /* ===================================================================== */
@@ -907,6 +914,23 @@ struct MInstr {
         i.src1 = MOperand::make_label(label_id);
         return i;
     }
+
+    /** @brief DATA_PTR_LABEL: entrada de 8 bytes de la jump table densa que
+     *  apunta al @p label_id (parchada post-memcpy). */
+    static MInstr make_data_ptr_label(uint32_t label_id) noexcept {
+        MInstr i;
+        i.op = MOp::DATA_PTR_LABEL;
+        i.src1 = MOperand::make_label(label_id);
+        return i;
+    }
+
+    /** @brief JMP indirecto a registro (FF /4). */
+    static MInstr make_jmp_reg(MReg r) noexcept {
+        MInstr i;
+        i.op = MOp::JMP;
+        i.src1 = MOperand::make_reg(r, 8);
+        return i;
+    }
 };
 
 /* 40 bytes: 32 de codegen + 4 de @c ir_id (correlacion IR<->asm SOLO-LSP, vale
@@ -1168,6 +1192,16 @@ struct MFunction {
     /// Offset de cada label en el code cache.  Indexado por label_id.
     /// Si el label no esta resuelto aun, contiene UINT32_MAX.
     std::vector<uint32_t> label_offsets;
+    /// Jump table denso (SWITCH_DENSE): cada entrada DATA_PTR_LABEL emite 8
+    /// bytes placeholder + registra aqui (patch_at, label del brazo).  Tras
+    /// el memcpy al code cache (base conocida) el pipeline parchea:
+    /// *(u64*)(base + patch_at) = base + label_offsets[label].  Es una
+    /// direccion ABSOLUTA -> no se resuelve en resolve_fixups (que es rel32).
+    struct AddrTableFixup {
+        uint32_t patch_at;  ///< offset en el codigo de la entrada de 8 bytes
+        MLabelId label;     ///< label del bloque destino (brazo o default)
+    };
+    std::vector<AddrTableFixup> addr_table_fixups;
     /// Tamano del frame stack (bytes) reservado por enter (sub rsp, N).
     /// Lo poblea el selector tras analizar locales/spills.
     uint32_t stack_frame_size = 0;

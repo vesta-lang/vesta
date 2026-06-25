@@ -752,6 +752,22 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put32(out, 0); /* placeholder rel32 */
         return true;
     }
+    case MOp::DATA_PTR_LABEL: {
+        /* Entrada de 8 bytes de la jump table densa: 8 zeros placeholder +
+         * un AddrTableFixup {offset, label}.  El pipeline lo parchea
+         * POST-memcpy con la direccion absoluta (base + label_offsets[label]).
+         * No es codigo ejecutable (se salta); el dispatch lo lee con un mov. */
+        if (mi.src1.kind != MOperandKind::LABEL) {
+            put8(out, 0xCC);
+            return true;
+        }
+        MFunction::AddrTableFixup f;
+        f.patch_at = static_cast<uint32_t>(out.size());
+        f.label = static_cast<MLabelId>(mi.src1.value);
+        fn.addr_table_fixups.push_back(f);
+        for (int k = 0; k < 8; ++k) put8(out, 0); /* placeholder qword */
+        return true;
+    }
     case MOp::LEA_LABEL: {
         /* lea r64, [rip+disp32] -> direccion NATIVA de un LABEL local
          * (intra-funcion).  Mismo encoding que LEA_RIP_SYM pero el disp32 lo
