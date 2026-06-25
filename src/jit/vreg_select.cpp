@@ -2226,6 +2226,72 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* VEC_UNOP dst[i] = OP a[i] (auto-vectorizacion unaria).  SIMD
+             * packed 128b (W=2 f64): MOVUPD x0,[a]; <op> x0; MOVUPD [dst],x0.
+             *   copy(0) -> sin op; sqrt(3) -> SQRTPD x0,x0;
+             *   fneg(1) -> XORPD x0,mask(0x8000..);  fabs(2) -> ANDPD x0,mask(0x7fff..).
+             * La mascara de signo de 16B se construye desde un imm64 -> GP ->
+             * MOVQ_GP_XMM x1 -> UNPCKLPD x1,x1 (difunde el lane bajo a ambos),
+             * sin constante en memoria.  Scratch del target (gp0/gp1, fp0/fp1),
+             * igual que VEC_BINOP (clobber set formal). */
+            case ir::IrOp::VEC_UNOP: {
+                flush_pending();
+                if (in.operands.size() != 2) return false;
+                const uint64_t width = in.imm & 0xFF;
+                const uint64_t subop = (in.imm >> 8) & 0xFF;
+                if (width != 16) return false; // solo 128b (SSE2)
+                if (!fp_ok || in.type != ir::IrType::F64)
+                    return false; // solo f64 (W=2) por ahora
+                const auto &gpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
+                const auto &fpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
+                if (gpsc.size() < 2 || fpsc.size() < 2) return false;
+                const MReg gp0 = static_cast<MReg>(gpsc[0]);
+                const MReg gp1 = static_cast<MReg>(gpsc[1]);
+                const MReg fp0 = static_cast<MReg>(fpsc[0]);
+                const MReg fp1 = static_cast<MReg>(fpsc[1]);
+                const MOperand x0 = MOperand::make_reg(fp0, 16);
+                const MOperand x1 = MOperand::make_reg(fp1, 16);
+                /* mascara de signo en x1 (solo fneg/fabs). */
+                if (subop == 1 || subop == 2) {
+                    const uint64_t mask = (subop == 1) ? 0x8000000000000000ULL
+                                                       : 0x7fffffffffffffffULL;
+                    const uint32_t idx = out.intern_imm64(mask);
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(gp1, 8),
+                        MOperand::make_imm64_idx(idx)));
+                    O.push_back(MInstr::make_unary(MOp::MOVQ_GP_XMM, x1,
+                                                   MOperand::make_reg(gp1, 8)));
+                    O.push_back(MInstr::make_unary(MOp::UNPCKLPD, x1, x1));
+                }
+                /* load a -> x0 */
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(gp0, 8),
+                                               vr(in.operands[1])));
+                O.push_back(MInstr::make_unary(MOp::MOVUPD, x0,
+                                               MOperand::make_mem(gp0, 0)));
+                /* op */
+                if (subop == 0) {
+                    /* copy: nada (x0 ya tiene a) */
+                } else if (subop == 1) {
+                    O.push_back(MInstr::make_unary(MOp::XORPD, x0, x1));
+                } else if (subop == 2) {
+                    O.push_back(MInstr::make_unary(MOp::ANDPD, x0, x1));
+                } else if (subop == 3) {
+                    O.push_back(MInstr::make_unary(MOp::SQRTPD, x0, x0));
+                } else {
+                    return false;
+                }
+                /* store -> dst */
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(gp0, 8),
+                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOVUPD, MOperand::make_mem(gp0, 0), x0));
+                break;
+            }
+
             /* VEC_BINOP dst[i] = a[i] OP b[i] (auto-vectorizacion).  SIMD
              * packed: MOVUPD xmm0,[a]; MOVUPD xmm1,[b]; <ADDPD/...> xmm0,xmm1;
              * MOVUPD [dst],xmm0.  Solo 128b (W=2 f64) por ahora.  Robusto:

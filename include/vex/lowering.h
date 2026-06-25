@@ -303,6 +303,12 @@ class Lowering {
     /// (SIMD packed en JIT/AOT, escalar por lane en interp) + una cola escalar
     /// re-bajando el cuerpo para el resto (N % W).  Devuelve true si matcheo.
     bool try_vectorize_elementwise_for(ast::ForStmt *s);
+    /// Auto-vectorizacion UNARIA: @c for(T i=init; i<N; i++) b[i] = OP a[i];
+    /// con @c a/@c b punteros f64 HOST y OP in @c -a[i] (fneg), @c sqrt(a[i])
+    /// (fsqrt), @c fabs(a[i]) (fabs).  Loop principal W=2 con @c VEC_UNOP (SIMD
+    /// packed SQRTPD/XORPD/ANDPD en JIT/AOT, escalar por lane en interp) + cola
+    /// escalar.  La copia pura la cubre el memcpy-idiom.  Devuelve true si match.
+    bool try_vectorize_unary_for(ast::ForStmt *s);
     /// Auto-vectorizacion de REDUCCION: @c for(T i=init; i<N; i++) acc = acc +
     /// a[i]; con @c acc escalar f64 y @c a puntero f64 HOST.  Usa un acumulador
     /// vectorial de W=2 lanes (slot host 16B) acumulado con @c VEC_BINOP

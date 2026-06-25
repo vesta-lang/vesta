@@ -335,11 +335,16 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     case MOp::PADDD:
     case MOp::PSUBD:
     case MOp::PADDQ:
-    case MOp::PSUBQ: {
+    case MOp::PSUBQ:
+    case MOp::SQRTPD:
+    case MOp::XORPD:
+    case MOp::ANDPD:
+    case MOp::UNPCKLPD: {
         /* Packed SSE2 (2x f64 o 4x i32 / 2x i64): 66 + (REX) + 0F + <op> +
          * ModR/M.  Los float usan op 58/5C/59/5E (packed-double); los enteros
-         * FE/FA/D4/FB (PADDD/PSUBD/PADDQ/PSUBQ).  Reg-reg only; los loads/
-         * stores van por MOVUPD/MOVAPD (mover 16B crudos vale para int). */
+         * FE/FA/D4/FB (PADDD/PSUBD/PADDQ/PSUBQ).  Unarios/logicos: SQRTPD=51,
+         * XORPD=57, ANDPD=54, UNPCKLPD=14.  Reg-reg only; los loads/stores van
+         * por MOVUPD/MOVAPD (mover 16B crudos vale para int). */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -354,14 +359,18 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             put8(out, 0x40 | (rex_R << 2) | rex_B);
         }
         put8(out, 0x0F);
-        const uint8_t opcode = (mi.op == MOp::ADDPD)   ? 0x58
-                               : (mi.op == MOp::SUBPD) ? 0x5C
-                               : (mi.op == MOp::MULPD) ? 0x59
-                               : (mi.op == MOp::DIVPD) ? 0x5E
-                               : (mi.op == MOp::PADDD) ? 0xFE
-                               : (mi.op == MOp::PSUBD) ? 0xFA
-                               : (mi.op == MOp::PADDQ) ? 0xD4
-                                                       : 0xFB; /* PSUBQ */
+        const uint8_t opcode = (mi.op == MOp::ADDPD)     ? 0x58
+                               : (mi.op == MOp::SUBPD)    ? 0x5C
+                               : (mi.op == MOp::MULPD)    ? 0x59
+                               : (mi.op == MOp::DIVPD)    ? 0x5E
+                               : (mi.op == MOp::PADDD)    ? 0xFE
+                               : (mi.op == MOp::PSUBD)    ? 0xFA
+                               : (mi.op == MOp::PADDQ)    ? 0xD4
+                               : (mi.op == MOp::PSUBQ)    ? 0xFB
+                               : (mi.op == MOp::SQRTPD)   ? 0x51
+                               : (mi.op == MOp::XORPD)    ? 0x57
+                               : (mi.op == MOp::ANDPD)    ? 0x54
+                                                          : 0x14; /* UNPCKLPD */
         put8(out, opcode);
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
