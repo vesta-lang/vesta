@@ -1319,6 +1319,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_call_abs(
                         out.intern_imm64(ent.unwrap_throw)));
                 }
+                /* Terminar el frame nativo tras el throw: vrt_unwrap_throw
+                 * (do_throw) restaura RIP/RSP/RBP/regs del proceso al handler
+                 * del catch (bytecode) y RETORNA.  Si el nativo cayera a Lok,
+                 * ejecutaria con el estado VM ya restaurado -> deref invalido
+                 * (crash determinista).  El epilogue (make_ret -> mov rsp,rbp +
+                 * pop + ret) devuelve a enter_jit, que detecta rip!=pre_rip y
+                 * deja que el interp resuma en el handler.  NO escribe regs[0]
+                 * (do_throw ya lo puso = exception_ptr para el catch).
+                 * En HOST_LEAF el __vex_panic_null normalmente aborta; el ret
+                 * queda inalcanzable (inofensivo). */
+                O.push_back(MInstr::make_ret());
                 O.push_back(MInstr::make_label_def(Lok));
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vr(in.dst), vr(v)));
@@ -1507,6 +1518,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_call_abs(out.intern_imm64(ent.panic_str)));
                 break;
             }
+            /* TRYENTER/TRYLEAVE/THROW: NO se compilan en vreg.  Una funcion con
+             * su PROPIO try/catch resume el handler (catch) en bytecode interp
+             * via do_throw (rip=handler_pc); pero los locals de la funcion viven
+             * en slots/vregs del frame JIT (host stack), NO en proc->registers
+             * que el interp lee al resumir -> mismatch -> el catch ve basura.
+             * Resumir el catch correctamente requiere deopt maps (reconstruir
+             * el estado interp desde el frame JIT), trabajo arquitectural
+             * pendiente.  Mientras tanto, bail -> la funcion corre en interp
+             * (correcto).  OJO: una funcion SIN try/catch que SOLO lanza
+             * (unwrap/panic) SI compila: el throw cross-function se desenrolla
+             * al catch del caller (interp), cuyos locals viven en
+             * proc->registers (ver el make_ret de UNWRAP + el guard de
+             * decoded_ptr en do_throw). */
             /* STRCONV: convierte StringObject a otra codificacion.
              * vrt_str_conv(proc, str, enc).  operands[0]=str, imm=enc.
              * Conversion compleja (UTF-8/16/32) -> CALL directo es lo optimo. */
