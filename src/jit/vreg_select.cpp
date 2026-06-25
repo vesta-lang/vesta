@@ -2203,11 +2203,29 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (in.operands.size() != 3) return false;
                 const uint64_t width = in.imm & 0xFF;
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
-                if (width != 16) return false; // solo 128b (SSE2 W=2 f64)
-                const MOp pop = (subop == 0)   ? MOp::ADDPD
-                                : (subop == 1) ? MOp::SUBPD
-                                : (subop == 2) ? MOp::MULPD
-                                               : MOp::DIVPD;
+                if (width != 16) return false; // solo 128b (SSE2)
+                /* op packed segun el tipo de elemento: float (ADDPD/...) o
+                 * entero (PADDD/PSUBD i32, PADDQ/PSUBQ i64).  No hay mul/div
+                 * entero packed en SSE2 -> bail (la cola/loop escalar lo hace). */
+                MOp pop;
+                if (in.type == ir::IrType::F64 || in.type == ir::IrType::F32) {
+                    pop = (subop == 0)   ? MOp::ADDPD
+                          : (subop == 1) ? MOp::SUBPD
+                          : (subop == 2) ? MOp::MULPD
+                                         : MOp::DIVPD;
+                } else if (in.type == ir::IrType::I64 ||
+                           in.type == ir::IrType::U64) {
+                    if (subop == 0) pop = MOp::PADDQ;
+                    else if (subop == 1) pop = MOp::PSUBQ;
+                    else return false; // mul/div i64 no packed en SSE2
+                } else if (in.type == ir::IrType::I32 ||
+                           in.type == ir::IrType::U32) {
+                    if (subop == 0) pop = MOp::PADDD;
+                    else if (subop == 1) pop = MOp::PSUBD;
+                    else return false; // mul/div i32 no packed en SSE2 (PMULLD=SSE4.1)
+                } else {
+                    return false; // tipo no soportado
+                }
                 // Usamos los XMM scratch ALTOS (XMM14/XMM15): el FP-regalloc
                 // del vreg asigna los XMM bajos primero, asi que estos rara vez
                 // estan vivos en el cuerpo del loop vectorizado (que no tiene

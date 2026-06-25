@@ -612,6 +612,15 @@ enum class MOp : uint8_t {
     MOVUPD = 110, ///< MOVUPD dst,src (66 0F 10 load / 66 0F 11 store) 16B unaligned
     MOVAPD = 111, ///< MOVAPD dst,src (66 0F 28 load / 66 0F 29 store) 16B aligned
 
+    /* Packed ENTEROS SSE2 (auto-vectorizacion de loops int).  Mismo patron que
+     * los packed float (66 0F xx, reg-reg) pero suma/resta entera por lane.
+     * No hay div entero packed en SSE (los loops int div/mul-i64 caen a
+     * escalar).  PADDD/PSUBD = 4x i32; PADDQ/PSUBQ = 2x i64. */
+    PADDD = 124, ///< PADDD xmm,xmm (66 0F FE) -- 4x i32 add
+    PSUBD = 125, ///< PSUBD xmm,xmm (66 0F FA) -- 4x i32 sub
+    PADDQ = 126, ///< PADDQ xmm,xmm (66 0F D4) -- 2x i64 add
+    PSUBQ = 127, ///< PSUBQ xmm,xmm (66 0F FB) -- 2x i64 sub
+
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup
                           ///< {offset, src1=LABEL}.  El pipeline lo parchea

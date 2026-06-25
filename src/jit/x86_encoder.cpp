@@ -331,11 +331,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     case MOp::ADDPD:
     case MOp::SUBPD:
     case MOp::MULPD:
-    case MOp::DIVPD: {
-        /* Packed-double SSE2 (2x f64): 66 + (REX) + 0F + <op> + ModR/M.
-         * Mismo op_byte que las escalares (58/5C/59/5E) pero prefijo 66
-         * (packed-double) en vez de F2 (scalar-double).  Reg-reg only;
-         * los loads/stores van por MOVUPD/MOVAPD. */
+    case MOp::DIVPD:
+    case MOp::PADDD:
+    case MOp::PSUBD:
+    case MOp::PADDQ:
+    case MOp::PSUBQ: {
+        /* Packed SSE2 (2x f64 o 4x i32 / 2x i64): 66 + (REX) + 0F + <op> +
+         * ModR/M.  Los float usan op 58/5C/59/5E (packed-double); los enteros
+         * FE/FA/D4/FB (PADDD/PSUBD/PADDQ/PSUBQ).  Reg-reg only; los loads/
+         * stores van por MOVUPD/MOVAPD (mover 16B crudos vale para int). */
         if (mi.dst.kind != MOperandKind::REG ||
             mi.src1.kind != MOperandKind::REG) {
             put8(out, 0xCC);
@@ -353,7 +357,11 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         const uint8_t opcode = (mi.op == MOp::ADDPD)   ? 0x58
                                : (mi.op == MOp::SUBPD) ? 0x5C
                                : (mi.op == MOp::MULPD) ? 0x59
-                                                       : 0x5E; /* DIVPD */
+                               : (mi.op == MOp::DIVPD) ? 0x5E
+                               : (mi.op == MOp::PADDD) ? 0xFE
+                               : (mi.op == MOp::PSUBD) ? 0xFA
+                               : (mi.op == MOp::PADDQ) ? 0xD4
+                                                       : 0xFB; /* PSUBQ */
         put8(out, opcode);
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
