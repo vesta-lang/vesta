@@ -935,11 +935,13 @@ struct Lowerer {
             return;
         }
 
-        if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM) {
+        if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM ||
+            op == MOp::LEA_LABEL) {
             /* AOT: dst = &simbolo (.rodata).  MOV_SYM = abs (mov imm64,
-             * --no-pie); LEA_RIP_SYM = RIP-rel (lea, default PIC).  Resolver
+             * --no-pie); LEA_RIP_SYM = RIP-rel (lea, default PIC).  LEA_LABEL =
+             * direccion nativa de un label local (in-JIT catch).  Resolver
              * el dst vreg a fisico y emitir la instr fisica; el encoder deja
-             * el placeholder + MReloc.  dst spilled -> scratch + store. */
+             * el placeholder + MReloc/MFixup.  dst spilled -> scratch + store. */
             MOperand d = resolve(in.dst);
             if (d.is_reg()) {
                 MInstr m;

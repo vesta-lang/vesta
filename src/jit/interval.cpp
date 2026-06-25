@@ -172,7 +172,8 @@ InstrRoles operand_roles(MOp op) noexcept {
     /* AOT MOV_SYM / LEA_RIP_SYM: dst = &simbolo (def); src1 es el
      * IMM32(sym_idx), no un vreg. */
     case MOp::MOV_SYM:
-    case MOp::LEA_RIP_SYM: r.dst = R::DEF; break;
+    case MOp::LEA_RIP_SYM:
+    case MOp::LEA_LABEL: r.dst = R::DEF; break;
 
     /* CALL indirecta (CALLIND / dispatch por puntero): src1 es el vreg con
      * la DIRECCION de la funcion -- un USE que debe seguir vivo hasta el

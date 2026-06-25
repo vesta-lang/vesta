@@ -84,6 +84,9 @@ struct RuntimeEntries {
     uint64_t (*proc_pid)(vrt_proc *) = nullptr; ///< GETPID -> PID encoded
     void (*tryenter)(vrt_proc *, uint64_t, vrt_class *) = nullptr;
     void (*tryleave)(vrt_proc *) = nullptr;
+    /* Excepciones in-JIT (Opcion B): handler en codigo JIT.  El throw resume
+     * via do_throw -> vrt_resume_jit (no por el interp). */
+    void (*tryenter_jit)(vrt_proc *, vrt_class *, uint64_t) = nullptr;
     /* Lanza una excepcion user-defined dado su GcHandle (i64).  Delega
      * a @c do_throw que recorre @c exc_frame_stack para encontrar el
      * catch matching y salta al handler.  Nunca retorna normalmente. */

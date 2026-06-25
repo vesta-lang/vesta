@@ -81,6 +81,16 @@ struct VregEntries {
     uint64_t dlopen = 0;    ///< vrt_dlopen(proc, path_vaddr, len) -> host handle
     uint64_t str_conv = 0;  ///< vrt_str_conv(proc, str, enc) -> handle (STRCONV)
     uint64_t panic_str = 0; ///< vrt_panic_str(proc, msg_vaddr, len) (PANIC)
+    /* Excepciones in-JIT (Opcion B).  tryenter_jit registra el frame con la
+     * direccion nativa del catch + rsp/rbp host; tryleave hace el pop normal;
+     * throw_user lanza (do_throw resume via vrt_resume_jit). */
+    uint64_t tryenter_jit = 0; ///< vrt_tryenter_jit(proc,type,catch_addr)
+    uint64_t tryleave = 0;     ///< vrt_tryleave(proc)
+    uint64_t throw_user = 0;   ///< vrt_throw_user(proc, exc_handle)
+    /* Offsets (desde ProcessVM*) de los campos handoff RSP/RBP del tryenter
+     * in-JIT.  -1 = no disponible -> TRYENTER baila. */
+    int32_t jit_exc_rsp_off = -1; ///< offsetof(ProcessVM, jit_exc_rsp)
+    int32_t jit_exc_rbp_off = -1; ///< offsetof(ProcessVM, jit_exc_rbp)
     uint64_t calln = 0;  ///< vrt_calln(proc, lib_id, fn_id) -- FFI native
     /* Class registry (Fase 2).  Todos 1-arg (proc, params_vaddr) salvo
      * deffield/defmethod (2-arg: cls, params) y addadvice (3-arg). */

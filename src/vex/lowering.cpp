@@ -6022,6 +6022,23 @@ void Lowering::lower_try(ast::TryStmt *s) {
             ra.type = ir::IrType::VOID;
             ra.dst = ir::IR_NO_VALUE;
             ra.operands = {v_handler_pc, v_type};
+            /* Bloque handler (catch) en target_block: lo usa el backend JIT
+             * (Opcion B in-JIT catch) para capturar la direccion nativa del
+             * catch (LEA_LABEL) y registrar el edge abnormal (extra_succs)
+             * para la liveness/force-spill.  El interp lo ignora (usa
+             * v_handler_pc bytecode). */
+            ra.target_block = handler_bbs[ci];
+            /* imm = 1 si el catch puede capturar un AV de OS (catch-all o
+             * FatalError): el in-JIT catch es inseguro en ese caso (el path
+             * av_recovery longjmp-ea al scheduler y throw_fatal/do_throw corren
+             * sobre la region de stack del frame JIT muerto, clobbeando sus
+             * slots antes del resume).  El backend JIT baila -> esos try corren
+             * en interp (correcto, como antes).  Los catch de tipo-usuario
+             * (no-AV) SI van in-JIT. */
+            ra.imm = (cc.exc_class_name.empty() ||
+                      cc.exc_class_name == "FatalError")
+                         ? 1u
+                         : 0u;
             ra.source_line = cc.loc.line;
             fn_->append(current_block_, std::move(ra));
         }
@@ -7088,6 +7105,11 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         ra.type = ir::IrType::VOID;
         ra.dst = ir::IR_NO_VALUE;
         ra.operands = {v_handler_pc, v_type_null};
+        /* Bloque handler en target_block (Opcion B in-JIT catch). */
+        ra.target_block = handler_bb;
+        /* El handler del synchronized es catch-all (cleanup + rethrow) -> puede
+         * capturar un AV -> in-JIT inseguro -> imm=1 (baila a interp). */
+        ra.imm = 1u;
         ra.source_line = s->loc.line;
         fn_->append(current_block_, std::move(ra));
     }

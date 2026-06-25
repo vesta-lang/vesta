@@ -290,6 +290,76 @@ void vrt_tryleave(vrt_proc *proc) {
     p->exc_free_list = top;
 }
 
+void vrt_tryenter_jit(vrt_proc *proc, vrt_class *type_class,
+                      uint64_t native_catch_addr) {
+    /* Frame de excepcion in-JIT: el handler vive en codigo JIT (no bytecode).
+     * Igual que @c vrt_tryenter pero ademas registra native_catch_addr +
+     * native_rsp/rbp para que @c do_throw resuma via @c vrt_resume_jit.  El
+     * snapshot de regs/VM-rsp/rbp/frame_stack se mantiene (lo usa do_throw
+     * para la limpieza VM antes del salto y para restaurar R1..R15 del catch
+     * que el frontend reload-ea desde slots). */
+    if (!proc) return;
+    runtime::ProcessVM *p = as_proc(proc);
+    runtime::ProcessVM::ExceptionFrame *ef;
+    if (p->exc_free_list != nullptr) {
+        ef = p->exc_free_list;
+        p->exc_free_list = ef->prev;
+    } else {
+        ef = new runtime::ProcessVM::ExceptionFrame();
+    }
+    ef->handler_pc = 0; /* no se usa: el resume es nativo */
+    ef->type = reinterpret_cast<loader::ClassInfo *>(type_class);
+    ef->saved_rsp = p->registers.stack_pointer.qword();
+    ef->saved_rbp = p->registers.base_pointer.qword();
+    ef->saved_frame_stack = reinterpret_cast<uint64_t>(p->frame_stack);
+    for (int i = 0; i < 16; ++i)
+        ef->saved_regs[i] = p->registers.regs[i].qword();
+    ef->native_catch_addr = native_catch_addr;
+    /* RSP/RBP host del frame del try: handoff transitorio escrito por el JIT
+     * justo antes de esta llamada (evita un 5o arg en pila Win64). */
+    ef->native_rsp = p->jit_exc_rsp;
+    ef->native_rbp = p->jit_exc_rbp;
+    ef->prev = p->exc_frame_stack;
+    p->exc_frame_stack = ef;
+}
+
+#if defined(__GNUC__)
+__attribute__((noreturn))
+#endif
+void vrt_resume_jit(uint64_t catch_addr, uint64_t native_rsp,
+                    uint64_t native_rbp, uint64_t proc) {
+    /* Restaura el frame host del try y salta al bloque catch JIT.  Abandona
+     * los frames nativos intermedios reseteando RSP.
+     *
+     * CRITICO: restaurar RBX = proc.  En VM_ABI el JIT mantiene el ProcessVM*
+     * en RBX (callee-saved, fijado en el prologue).  El path del throw
+     * (vrt_throw_user/do_throw, funciones C) salvo el RBX del JIT en SUS frames
+     * y nunca lo restauro (no retornan, saltamos desde aqui) -> RBX trae basura
+     * al llegar al catch.  El catch usa RBX para acceder a proc, asi que lo
+     * recargamos.  El epilogue del catch restaura los demas callee-saved
+     * (r12-r15) desde su home en el frame (memoria intacta, rbp-relativo).
+     *
+     * Los operandos viven en registros (constraint "r"), distintos de
+     * RSP/RBP/RBX, asi que siguen validos tras cambiarlos.  Orden: RBX, RBP,
+     * RSP, JMP (cada paso solo toca su destino). */
+#if defined(__x86_64__) || defined(_M_X64)
+    __asm__ volatile("mov %3, %%rbx\n\t"
+                     "mov %0, %%rbp\n\t"
+                     "mov %1, %%rsp\n\t"
+                     "jmp *%2\n\t"
+                     :
+                     : "r"(native_rbp), "r"(native_rsp), "r"(catch_addr),
+                       "r"(proc)
+                     : "memory");
+#else
+    (void)catch_addr;
+    (void)native_rsp;
+    (void)native_rbp;
+    (void)proc;
+#endif
+    __builtin_unreachable();
+}
+
 void vrt_throw_user(vrt_proc *proc, uint64_t exc_handle) {
     /* Delega a do_throw.  Nunca retorna normalmente -- do_throw modifica
      * RIP/RSP/RBP/regs del proceso y el JIT-eado debe detectar el cambio

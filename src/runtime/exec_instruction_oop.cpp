@@ -124,6 +124,11 @@ void do_throw(ProcessVM *vm, uint64_t exception_ptr) {
             uint64_t handler_addr = ef->handler_pc; // guardar antes de liberar
             uint64_t saved_rsp = ef->saved_rsp;
             uint64_t saved_rbp = ef->saved_rbp;
+            // Excepciones in-JIT (Opcion B): si el frame es JIT, capturar la
+            // direccion nativa del catch + rsp/rbp host ANTES de reciclar ef.
+            const uint64_t native_catch = ef->native_catch_addr;
+            const uint64_t native_rsp = ef->native_rsp;
+            const uint64_t native_rbp = ef->native_rbp;
             auto *saved_fs =
                 (loader::FrameHeader *)(uintptr_t)ef->saved_frame_stack;
             // Snapshot de R0..R15 que el tryenter capturo.  Restauramos
@@ -178,7 +183,20 @@ void do_throw(ProcessVM *vm, uint64_t exception_ptr) {
 
             // convencion: R00 contiene el puntero al objeto excepcion
             vm->registers.regs[R00].qword(exception_ptr);
-            vm->registers.rip.qword(handler_addr); // saltar al handler
+            // Excepciones in-JIT (Opcion B): el catch vive en codigo JIT.  La
+            // limpieza VM (rsp/rbp/frame_stack/regs + regs[0]=exc) ya esta
+            // hecha arriba; ahora restauramos el frame HOST y saltamos al
+            // bloque catch nativo via el primitivo de unwind.  NUNCA retorna
+            // (abandona los frames nativos intermedios reseteando rsp).  El
+            // catch lee la excepcion via LANDINGPAD (proc->registers[0]) y sus
+            // demas valores via LOAD de los slots VM (force-spill garantiza
+            // que sobrevivieron al throw).
+            if (native_catch != 0) {
+                vrt_resume_jit(native_catch, native_rsp, native_rbp,
+                               reinterpret_cast<uint64_t>(vm));
+                // unreachable
+            }
+            vm->registers.rip.qword(handler_addr); // saltar al handler (interp)
             // did_jump solo lo consume el loop del interprete (dispatch_table:
             // `if (!decoded_ptr->did_jump)`).  Cuando do_throw corre desde un
             // frame JIT (vrt_throw_user/vrt_unwrap_throw), decoded_ptr puede
