@@ -8541,7 +8541,16 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             sd.type = ir::IrType::VOID;
             sd.dst = ir::IR_NO_VALUE;
             sd.operands = {tag_v};
-            sd.imm = static_cast<uint64_t>(lo_tag);
+            // imm: bits 0-31 = min; bit 32 = no_bounds.  no_bounds cuando la
+            // tabla cubre TODO el rango de tags del enum (min==0 y
+            // range==n_variantes): el tag de un enum SIEMPRE es valido, asi
+            // que idx in [0,range) -> el cmp/jae de bounds es redundante (el
+            // backend lo elide).  Los huecos van por table[idx]=default.
+            const bool sw_no_bounds =
+                (lo_tag == 0 &&
+                 range == static_cast<int64_t>(elay.variants.size()));
+            sd.imm = static_cast<uint64_t>(lo_tag) |
+                     (sw_no_bounds ? (UINT64_C(1) << 32) : 0);
             sd.target_block = default_bb;
             sd.jump_targets = std::move(table);
             sd.source_line = e->loc.line;

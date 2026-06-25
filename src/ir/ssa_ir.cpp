@@ -685,7 +685,8 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         // switch_dense %tag, min=M, default=BB, [t0, t1, ...]
         o << " ";
         if (!ins.operands.empty()) print_val(o, fn, ins.operands[0]);
-        o << ", min=" << static_cast<int64_t>(ins.imm)
+        o << ", min=" << static_cast<int64_t>(ins.imm & 0xFFFFFFFFu)
+          << (((ins.imm >> 32) & 1u) ? " no_bounds" : "")
           << ", default=BB" << ins.target_block << ", [";
         for (size_t i = 0; i < ins.jump_targets.size(); ++i) {
             if (i) o << ", ";
