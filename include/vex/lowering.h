@@ -303,6 +303,12 @@ class Lowering {
     /// (SIMD packed en JIT/AOT, escalar por lane en interp) + una cola escalar
     /// re-bajando el cuerpo para el resto (N % W).  Devuelve true si matcheo.
     bool try_vectorize_elementwise_for(ast::ForStmt *s);
+    /// Auto-vectorizacion de REDUCCION: @c for(T i=init; i<N; i++) acc = acc +
+    /// a[i]; con @c acc escalar f64 y @c a puntero f64 HOST.  Usa un acumulador
+    /// vectorial de W=2 lanes (slot host 16B) acumulado con @c VEC_BINOP
+    /// (acc_slot += a_chunk), reduccion horizontal final + cola escalar.  El
+    /// resultado se bindea a @c acc.  Devuelve true si matcheo.
+    bool try_vectorize_reduction_for(ast::ForStmt *s);
     /// Valida que @p asg sea exactamente @c dst[idx] = src[idx] con bases
     /// IdentExpr HOST ptr/array de igual tamano de elemento.  Compartido por
     /// las formas while/for.  Rellena las bases y el tamano de elemento.

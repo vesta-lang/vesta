@@ -757,8 +757,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (p.op != ir::IrOp::PHI) continue;
                 for (const ir::IrPhiArg &a : p.phi_args) {
                     if (a.block == static_cast<ir::IrBlockId>(b)) {
-                        O.push_back(MInstr::make_unary(MOp::MOV, vr(p.dst),
-                                                       vr(a.value)));
+                        // vrt() (class-aware): para un PHI float (F32/F64) la
+                        // copia debe ir por MOVSD/MOVSS (el rewrite la enruta
+                        // por is_fp_operand); vr() la haria con MOV entero ->
+                        // acumulador float loop-carried roto.
+                        O.push_back(MInstr::make_unary(MOp::MOV, vrt(p.dst),
+                                                       vrt(a.value)));
                         break;
                     }
                 }

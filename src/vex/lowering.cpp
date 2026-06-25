@@ -4955,6 +4955,9 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // Auto-vectorizacion aritmetica: `for (...) c[i] = a[i] OP b[i];` f64 host
     // -> loop W=2 con VEC_BINOP (SIMD) + cola escalar.
     if (try_vectorize_elementwise_for(s)) return;
+    // Auto-vectorizacion de reduccion: `for (...) acc = acc + a[i];` f64 host
+    // -> acumulador vectorial W=2 + reduccion horizontal + cola escalar.
+    if (try_vectorize_reduction_for(s)) return;
 
     // for(init; cond; step) body
     //
