@@ -630,6 +630,10 @@ enum class MOp : uint8_t {
     XORPD = 129,    ///< XORPD xmm,xmm    (66 0F 57) -- xor 128b (fneg via mask)
     ANDPD = 130,    ///< ANDPD xmm,xmm    (66 0F 54) -- and 128b (fabs via mask)
     UNPCKLPD = 131, ///< UNPCKLPD xmm,xmm (66 0F 14) -- dst.hi = src.lo (broadcast)
+    /* Broadcast de un f64 (xmm.lo) a TODOS los lanes de un YMM/ZMM (mapa 0F38).
+     * Solo AVX (VEX.256.66.0F38.W0 19 / EVEX.512.66.0F38.W1 19); para 128b se
+     * usa UNPCKLPD.  Construye la mascara de signo wide de fneg/fabs. */
+    VBROADCASTSD = 132, ///< VBROADCASTSD ymm/zmm, xmm
 
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup

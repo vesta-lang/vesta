@@ -211,9 +211,10 @@ class X86Encoder {
     /// src1 como VMOVUPD/VSQRTPD; un campo distinto = #UD);
     /// @p w = bit W; @p l256 = true para 256-bit (YMM), false para 128-bit;
     /// @p idx/@p has_idx = registro indice del SIB (para el bit X).
+    /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
     static void emit_vex3(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
                           bool l256, uint8_t idx, bool has_idx,
-                          std::vector<uint8_t> &out) {
+                          std::vector<uint8_t> &out, uint8_t map = 1) {
         const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~REX.R
         const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~REX.B
         const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~REX.X
@@ -222,7 +223,7 @@ class X86Encoder {
             (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
         put8(out, 0xC4);
         put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
-                                       0x01)); // mmmmm=00001 (0F)
+                                       (map & 0x1F))); // mmmmm
         put8(out, static_cast<uint8_t>(((w & 1) << 7) | (vfield << 3) |
                                        ((l256 ? 1 : 0) << 2) | 0x01)); // pp=66
     }
@@ -230,9 +231,10 @@ class X86Encoder {
     /// Emite el prefijo EVEX de 4 bytes (62) para mapa 0F + 66, registros
     /// 0..15 sin mascara (k0), sin broadcast/zeroing.  @p ll = 0/1/2 para
     /// 128/256/512-bit.  Resto de parametros como @c emit_vex3.
+    /// @p map = mapa de opcode: 1 = 0F, 2 = 0F38, 3 = 0F3A.
     static void emit_evex(uint8_t reg, uint8_t rm, uint8_t vvvv, uint8_t w,
                           uint8_t ll, uint8_t idx, bool has_idx,
-                          std::vector<uint8_t> &out) {
+                          std::vector<uint8_t> &out, uint8_t map = 1) {
         const uint8_t Rb = (reg & 8) ? 0 : 1;              // ~R  (reg bit3)
         const uint8_t Bb = (rm & 8) ? 0 : 1;               // ~B  (rm bit3)
         const uint8_t Xb = (has_idx && (idx & 8)) ? 0 : 1; // ~X
@@ -241,9 +243,9 @@ class X86Encoder {
         const uint8_t vfield =
             (vvvv == VEX_NO_VVVV) ? 0xF : static_cast<uint8_t>((~vvvv) & 0xF);
         put8(out, 0x62);
-        // P0: [R X B R'] [0 0] [m m=01(0F)]
+        // P0: [R X B R'] [0 0] [m m]  (mm: 01=0F, 10=0F38, 11=0F3A)
         put8(out, static_cast<uint8_t>((Rb << 7) | (Xb << 6) | (Bb << 5) |
-                                       (Rp << 4) | 0x01));
+                                       (Rp << 4) | (map & 0x03)));
         // P1: [W] [~vvvv] [1] [pp=01(66)]
         put8(out, static_cast<uint8_t>(((w & 1) << 7) | (vfield << 3) |
                                        (1 << 2) | 0x01));
