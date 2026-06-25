@@ -3003,22 +3003,27 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     // VEC_BINOP dst[i] = a[i] OP b[i]  (auto-vectorizacion).  En el interprete
-    // (oraculo) lo bajamos a W operaciones ESCALARES por lane reusando el path
-    // float (bitg2z/f<op>/bitz2g); el JIT lo baja a SIMD packed (MOVUPD/ADDPD).
-    // Solo F64 (esz=8) por ahora -- el matcher solo emite F64.  Robusto frente
-    // al regalloc: push/pop de r10/r11/r12 (dst/a/b) + r13/r14 + f0/f1 scratch.
+    // (oraculo) lo bajamos a W operaciones ESCALARES por lane; el JIT lo baja a
+    // SIMD packed (MOVUPD + ADDPD/PADDQ/...).  Soporta f64/f32 (via bitg2z/
+    // f<op>/bitz2g) y enteros i32/i64 (add/sub directo).  Robusto frente al
+    // regalloc: push/pop de r10/r11/r12 (dst/a/b) + r13/r14 + f0/f1 scratch.
     case IrOp::VEC_BINOP: {
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t subop = (ins.imm >> 8) & 0xFF;
-        const size_t esz = ir_type_size(ins.type); // F64=8
+        const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
         const char *fop = (subop == 0)   ? "fadd"
                           : (subop == 1) ? "fsub"
                           : (subop == 2) ? "fmul"
                                          : "fdiv";
+        const char *iop = (subop == 0) ? "adds" : "subs"; // int: add/sub
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        // sufijo de tamano del reg para load/store entero (8b->"", 4b->"d").
+        const std::string rsz = (esz == 4) ? "d" : "";
         // Cargar los 3 punteros (dst/a/b) en r10/r11/r12 via push del VALOR
         // (sin hazard de parallel-move).
         ctx.out << "    push r10\n    push r11\n    push r12\n";
@@ -3036,13 +3041,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
                 ctx.out << "    addu r12, " << esz << "\n";
             }
-            ctx.out << "    movh r14, [r11]\n";        // a[k] bits
-            ctx.out << "    movh r13, [r12]\n";        // b[k] bits
-            ctx.out << "    bitg2z f0, r14\n";
-            ctx.out << "    bitg2z f1, r13\n";
-            ctx.out << "    " << fop << suf << " f0, f1\n";
-            ctx.out << "    bitz2g r14, f0\n";
-            ctx.out << "    movh [r10], r14\n";        // dst[k]
+            if (is_fp) {
+                ctx.out << "    movh r14, [r11]\n";    // a[k] bits
+                ctx.out << "    movh r13, [r12]\n";    // b[k] bits
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out << "    " << fop << suf << " f0, f1\n";
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14\n";    // dst[k]
+            } else {
+                // entero: cargar esz bytes, add/sub, guardar esz bytes.
+                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    movh r13" << rsz << ", [r12]\n"; // b[k]
+                ctx.out << "    " << iop << " r14, r13\n";       // a OP b (64b)
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
+            }
         }
         ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
         ctx.r13_cache = -1;

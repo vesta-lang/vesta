@@ -387,9 +387,24 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
     auto *a_ix = static_cast<IndexExpr *>(rhs->lhs.get());
     auto *b_ix = static_cast<IndexExpr *>(rhs->rhs.get());
 
-    // Helper: valida que @p ix es base_ident[idx] HOST f64, devuelve la base.
-    auto check_idx_f64_host = [&](IndexExpr *ix,
-                                  IdentExpr **out_base) -> bool {
+    // Tipos de elemento vectorizables (HOST): f64 (todas las ops) e enteros
+    // i64/i32 (solo add/sub -- SSE2 no tiene mul/div packed de enteros).  El
+    // valor de salida es el PrimitiveKind comun a las 3 bases.
+    auto elem_info = [](PrimitiveKind k, ir::IrType *out_ty, uint64_t *out_esz,
+                        bool *out_fp) -> bool {
+        switch (k) {
+        case PrimitiveKind::F64: *out_ty = ir::IrType::F64; *out_esz = 8; *out_fp = true;  return true;
+        case PrimitiveKind::I64: *out_ty = ir::IrType::I64; *out_esz = 8; *out_fp = false; return true;
+        case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
+        case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;
+        case PrimitiveKind::U32: *out_ty = ir::IrType::U32; *out_esz = 4; *out_fp = false; return true;
+        default: return false;
+        }
+    };
+    // Helper: valida que @p ix es base_ident[idx] HOST de un tipo vectorizable;
+    // devuelve la base + su PrimitiveKind de elemento.
+    auto check_idx_host = [&](IndexExpr *ix, IdentExpr **out_base,
+                              PrimitiveKind *out_kind) -> bool {
         if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
             ix->is_range)
             return false;
@@ -403,14 +418,22 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
                                t.kind == PrimitiveKind::ARRAY) &&
                               static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false;        // solo HOST
-        if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64 v1
+        ir::IrType ety; uint64_t esz2; bool fp2;
+        if (!elem_info(t.pointee->kind, &ety, &esz2, &fp2)) return false;
         *out_base = base;
+        *out_kind = t.pointee->kind;
         return true;
     };
     ast::IdentExpr *c_base = nullptr, *a_base = nullptr, *b_base = nullptr;
-    if (!check_idx_f64_host(c_ix, &c_base)) return false;
-    if (!check_idx_f64_host(a_ix, &a_base)) return false;
-    if (!check_idx_f64_host(b_ix, &b_base)) return false;
+    PrimitiveKind ck, ak, bk;
+    if (!check_idx_host(c_ix, &c_base, &ck)) return false;
+    if (!check_idx_host(a_ix, &a_base, &ak)) return false;
+    if (!check_idx_host(b_ix, &b_base, &bk)) return false;
+    if (ck != ak || ak != bk) return false;        // mismo tipo de elemento
+    ir::IrType elem_ty; uint64_t esz; bool elem_fp;
+    elem_info(ck, &elem_ty, &esz, &elem_fp);
+    // Enteros: solo add/sub (sin mul/div packed en SSE2).
+    if (!elem_fp && subop != 0 && subop != 1) return false;
 
     if (MC_DBG)
         std::fprintf(stderr, "[mc-idiom] MATCH vec_for idx=%s subop=%d\n",
@@ -418,9 +441,8 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
 
     // ======== Emitir el loop vectorizado (W=2 f64) + cola escalar. ========
     const uint32_t ln = s->loc.line;
-    const uint64_t esz = 8;     // f64
-    const uint64_t W = 2;       // 128b / 8 = 2 lanes
-    const uint64_t width = 16;  // bytes por VEC_BINOP
+    const uint64_t width = 16;  // bytes por VEC_BINOP (128b SSE2)
+    const uint64_t W = width / esz; // lanes: f64/i64=2, i32=4
 
     // Bajar el VALOR inicial + las bases directamente (NO lower_stmt(init), que
     // declararia `i` address-taken -> ALLOCA).  NO re-bajamos el AST del cuerpo
@@ -506,7 +528,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId a_at = ptr_at(v_a, off);
         const ir::IrValueId b_at = ptr_at(v_b, off);
-        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = ir::IrType::F64;
+        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
         vb.dst = ir::IR_NO_VALUE;
         vb.operands = {c_at, a_at, b_at};
         vb.imm = ((uint64_t)subop << 8) | width;
@@ -549,23 +571,27 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64,
                                       emit_const(ir::IrType::I64, esz, ln));
-        auto load_f64 = [&](ir::IrValueId base) -> ir::IrValueId {
+        auto load_el = [&](ir::IrValueId base) -> ir::IrValueId {
             const ir::IrValueId at = ptr_at(base, off);
-            const ir::IrValueId v = fn_->new_value(ir::IrType::F64);
-            ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::F64;
+            const ir::IrValueId v = fn_->new_value(elem_ty);
+            ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
             ld.dst = v; ld.operands = {at}; ld.source_line = ln;
             fn_->append(current_block_, std::move(ld));
             return v;
         };
-        const ir::IrValueId v_ai = load_f64(v_a);
-        const ir::IrValueId v_bi = load_f64(v_b);
-        const ir::IrOp fop = (subop == 0)   ? ir::IrOp::FADD
-                             : (subop == 1) ? ir::IrOp::FSUB
-                             : (subop == 2) ? ir::IrOp::FMUL
-                                            : ir::IrOp::FDIV;
-        const ir::IrValueId v_res = bin(fop, ir::IrType::F64, v_ai, v_bi);
+        const ir::IrValueId v_ai = load_el(v_a);
+        const ir::IrValueId v_bi = load_el(v_b);
+        ir::IrOp eop;
+        if (elem_fp)
+            eop = (subop == 0)   ? ir::IrOp::FADD
+                  : (subop == 1) ? ir::IrOp::FSUB
+                  : (subop == 2) ? ir::IrOp::FMUL
+                                 : ir::IrOp::FDIV;
+        else // enteros: solo add/sub (validado arriba)
+            eop = (subop == 0) ? ir::IrOp::ADD : ir::IrOp::SUB;
+        const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_bi);
         const ir::IrValueId c_at = ptr_at(v_c, off);
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = ir::IrType::F64;
+        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
         st.dst = ir::IR_NO_VALUE; st.operands = {v_res, c_at};
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
@@ -626,7 +652,21 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
     // target = acc (ident f64)
     if (!asg->target || asg->target->kind != NodeKind::IdentExpr) return false;
     auto *acc_id = static_cast<IdentExpr *>(asg->target.get());
-    if (acc_id->result_type.kind != PrimitiveKind::F64) return false;
+    // Tipos de acumulador vectorizables: f64 e enteros i64/i32 (suma).
+    auto red_elem_info = [](PrimitiveKind k, ir::IrType *out_ty,
+                            uint64_t *out_esz, bool *out_fp) -> bool {
+        switch (k) {
+        case PrimitiveKind::F64: *out_ty = ir::IrType::F64; *out_esz = 8; *out_fp = true;  return true;
+        case PrimitiveKind::I64: *out_ty = ir::IrType::I64; *out_esz = 8; *out_fp = false; return true;
+        case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
+        case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;
+        case PrimitiveKind::U32: *out_ty = ir::IrType::U32; *out_esz = 4; *out_fp = false; return true;
+        default: return false;
+        }
+    };
+    ir::IrType elem_ty; uint64_t esz; bool elem_fp;
+    if (!red_elem_info(acc_id->result_type.kind, &elem_ty, &esz, &elem_fp))
+        return false;
     const std::string acc_name = acc_id->name;
     // value = acc + a[idx]  (solo suma v1)
     if (!asg->value || asg->value->kind != NodeKind::BinaryExpr) return false;
@@ -649,18 +689,18 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
                                t.kind == PrimitiveKind::ARRAY) &&
                               static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false; // solo HOST
-        if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64 v1
+        // el array debe tener EL MISMO tipo de elemento que el acumulador.
+        if (t.pointee->kind != acc_id->result_type.kind) return false;
     }
 
     if (MC_DBG)
         std::fprintf(stderr, "[mc-idiom] MATCH vec_reduce idx=%s acc=%s\n",
                      idx_name.c_str(), acc_name.c_str());
 
-    // ======== Emitir: acumulador vectorial W=2 + reduccion horizontal + cola.
+    // ======== Emitir: acumulador vectorial + reduccion horizontal + cola.
     const uint32_t ln = s->loc.line;
-    const uint64_t esz = 8;
-    const uint64_t W = 2;
-    const uint64_t width = 16;
+    const uint64_t width = 16;          // 128b SSE2
+    const uint64_t W = width / esz;     // f64/i64=2 lanes, i32=4 lanes
 
     // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
     const ir::IrValueId acc_init = lookup(acc_name);
@@ -670,7 +710,7 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
     if (acc_init == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
         v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE)
         return false;
-    if (fn_->values[acc_init].type != ir::IrType::F64) return false;
+    if (fn_->values[acc_init].type != elem_ty) return false;
     const ir::IrType idx_ty = fn_->values[i_init].type;
 
     auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
@@ -690,16 +730,20 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
         fn_->append(current_block_, std::move(in));
         return d;
     };
-    auto load_f64 = [&](ir::IrValueId at) -> ir::IrValueId {
-        const ir::IrValueId v = fn_->new_value(ir::IrType::F64);
-        ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::F64;
+    // load/store del tipo de elemento (acumulador y array).
+    auto load_el = [&](ir::IrValueId at) -> ir::IrValueId {
+        const ir::IrValueId v = fn_->new_value(elem_ty);
+        ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
         ld.dst = v; ld.operands = {at}; ld.source_line = ln;
         fn_->append(current_block_, std::move(ld));
         return v;
     };
-    auto store_f64 = [&](ir::IrValueId at, ir::IrValueId v) {
-        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = ir::IrType::F64;
-        st.dst = ir::IR_NO_VALUE; st.operands = {v, at}; st.source_line = ln;
+    // op de acumulacion: FADD para float, ADD para entero.
+    const ir::IrOp acc_op = elem_fp ? ir::IrOp::FADD : ir::IrOp::ADD;
+    // store crudo de 8 bytes a 0 (zero-init del slot de 16B, cualquier tipo).
+    auto store_zero8 = [&](ir::IrValueId at, ir::IrValueId vz) {
+        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = ir::IrType::I64;
+        st.dst = ir::IR_NO_VALUE; st.operands = {vz, at}; st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     };
 
@@ -720,9 +764,11 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
         al.dst = acc_slot; al.imm = 16; al.host_alloca = true;
         al.source_line = ln; fn_->append(entry, std::move(al));
     }
-    const ir::IrValueId v_zero = emit_const(ir::IrType::F64, 0, ln);
-    store_f64(acc_slot, v_zero);
-    store_f64(ptr_at(acc_slot, emit_const(ir::IrType::I64, 8, ln)), v_zero);
+    // zero-init de los 16 bytes del slot (2 stores de 8 bytes a 0), valido
+    // para cualquier tipo de elemento (W lanes f64/i64/i32 == todo a 0).
+    const ir::IrValueId v_zero8 = emit_const(ir::IrType::I64, 0, ln);
+    store_zero8(acc_slot, v_zero8);
+    store_zero8(ptr_at(acc_slot, emit_const(ir::IrType::I64, 8, ln)), v_zero8);
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
@@ -759,7 +805,7 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId a_at = ptr_at(v_a, off);
-        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = ir::IrType::F64;
+        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = elem_ty;
         vb.dst = ir::IR_NO_VALUE;
         vb.operands = {acc_slot, acc_slot, a_at}; // acc_slot = acc_slot + a
         vb.imm = ((uint64_t)0 << 8) | width;      // subop 0 = add
@@ -773,15 +819,16 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
     fn_->blocks[mhdr].preds.push_back(mbody);
     fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
 
-    // --- redb: horizontal acc_slot[0]+acc_slot[1] + acc_init; BR thdr ---
+    // --- redb: horizontal sum_{k<W} acc_slot[k] + acc_init; BR thdr ---
     current_block_ = redb;
-    const ir::IrValueId lane0 = load_f64(acc_slot);
-    const ir::IrValueId lane1 =
-        load_f64(ptr_at(acc_slot, emit_const(ir::IrType::I64, 8, ln)));
-    const ir::IrValueId partial =
-        bin(ir::IrOp::FADD, ir::IrType::F64, lane0, lane1);
-    const ir::IrValueId result0 =
-        bin(ir::IrOp::FADD, ir::IrType::F64, acc_init, partial);
+    ir::IrValueId result0 = acc_init;
+    for (uint64_t k = 0; k < W; ++k) {
+        const ir::IrValueId at =
+            (k == 0) ? acc_slot
+                     : ptr_at(acc_slot, emit_const(ir::IrType::I64, k * esz, ln));
+        const ir::IrValueId lane = load_el(at);
+        result0 = bin(acc_op, elem_ty, result0, lane);
+    }
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
       br.source_line = ln; fn_->append(redb, std::move(br)); }
     fn_->blocks[redb].succs.push_back(thdr);
@@ -796,9 +843,9 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
         phi.phi_args.push_back({phi_im, redb});
         fn_->append(thdr, std::move(phi));
     }
-    const ir::IrValueId phi_res = fn_->new_value(ir::IrType::F64);
+    const ir::IrValueId phi_res = fn_->new_value(elem_ty);
     {
-        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = ir::IrType::F64;
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = elem_ty;
         phi.dst = phi_res; phi.source_line = ln;
         phi.phi_args.push_back({result0, redb});
         fn_->append(thdr, std::move(phi));
@@ -821,9 +868,8 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
         const ir::IrValueId i64 =
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
-        const ir::IrValueId ai = load_f64(ptr_at(v_a, off));
-        const ir::IrValueId rnext =
-            bin(ir::IrOp::FADD, ir::IrType::F64, phi_res, ai);
+        const ir::IrValueId ai = load_el(ptr_at(v_a, off));
+        const ir::IrValueId rnext = bin(acc_op, elem_ty, phi_res, ai);
         const ir::IrValueId i_tnext =
             bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
         { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
