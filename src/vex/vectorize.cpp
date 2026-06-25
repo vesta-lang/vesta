@@ -584,4 +584,261 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
     return true;
 }
 
+bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
+    using namespace ast;
+    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    if (!s->cond || !s->body || !s->init || !s->step) return false;
+
+    // --- estructura: for (T i = init; i < N; i++) acc = acc + a[i]; ---
+    if (s->cond->kind != NodeKind::BinaryExpr) return false;
+    auto *cond = static_cast<BinaryExpr *>(s->cond.get());
+    if (cond->op != BinOp::Lt) return false;
+    if (!cond->lhs || cond->lhs->kind != NodeKind::IdentExpr) return false;
+    if (!cond->rhs) return false;
+    {
+        const NodeKind lk = cond->rhs->kind;
+        if (lk != NodeKind::IdentExpr && lk != NodeKind::IntLitExpr)
+            return false;
+    }
+    const std::string idx_name =
+        static_cast<IdentExpr *>(cond->lhs.get())->name;
+    if (s->init->kind != NodeKind::VarDeclStmt) return false;
+    auto *vd = static_cast<VarDeclStmt *>(s->init.get());
+    if (vd->name != idx_name || !vd->init) return false;
+    if (!mc_is_increment_expr(s->step.get(), idx_name)) return false;
+
+    // body = un solo stmt: acc = acc + a[idx].
+    ast::Expr *bexpr = nullptr;
+    if (s->body->kind == NodeKind::ExprStmt) {
+        bexpr = static_cast<ExprStmt *>(s->body.get())->expr.get();
+    } else if (s->body->kind == NodeKind::BlockStmt) {
+        auto *b = static_cast<BlockStmt *>(s->body.get());
+        if (b->body.size() != 1 || !b->body[0] ||
+            b->body[0]->kind != NodeKind::ExprStmt)
+            return false;
+        bexpr = static_cast<ExprStmt *>(b->body[0].get())->expr.get();
+    } else {
+        return false;
+    }
+    if (!bexpr || bexpr->kind != NodeKind::AssignExpr) return false;
+    auto *asg = static_cast<AssignExpr *>(bexpr);
+    if (asg->op != AssignOp::Assign) return false;
+    // target = acc (ident f64)
+    if (!asg->target || asg->target->kind != NodeKind::IdentExpr) return false;
+    auto *acc_id = static_cast<IdentExpr *>(asg->target.get());
+    if (acc_id->result_type.kind != PrimitiveKind::F64) return false;
+    const std::string acc_name = acc_id->name;
+    // value = acc + a[idx]  (solo suma v1)
+    if (!asg->value || asg->value->kind != NodeKind::BinaryExpr) return false;
+    auto *rhs = static_cast<BinaryExpr *>(asg->value.get());
+    if (rhs->op != BinOp::Add) return false;
+    if (!rhs->lhs || rhs->lhs->kind != NodeKind::IdentExpr) return false;
+    if (static_cast<IdentExpr *>(rhs->lhs.get())->name != acc_name)
+        return false; // lhs debe ser el MISMO acc
+    if (!rhs->rhs || rhs->rhs->kind != NodeKind::IndexExpr) return false;
+    auto *a_ix = static_cast<IndexExpr *>(rhs->rhs.get());
+    if (!a_ix->overload_method.empty() || a_ix->is_range) return false;
+    if (!a_ix->base || a_ix->base->kind != NodeKind::IdentExpr) return false;
+    if (!a_ix->index || a_ix->index->kind != NodeKind::IdentExpr) return false;
+    if (static_cast<IdentExpr *>(a_ix->index.get())->name != idx_name)
+        return false;
+    auto *a_base = static_cast<IdentExpr *>(a_ix->base.get());
+    {
+        const Type &t = a_base->result_type;
+        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
+                               t.kind == PrimitiveKind::ARRAY) &&
+                              static_cast<bool>(t.pointee);
+        if (!ptr_like || t.is_virtual) return false; // solo HOST
+        if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64 v1
+    }
+
+    if (MC_DBG)
+        std::fprintf(stderr, "[mc-idiom] MATCH vec_reduce idx=%s acc=%s\n",
+                     idx_name.c_str(), acc_name.c_str());
+
+    // ======== Emitir: acumulador vectorial W=2 + reduccion horizontal + cola.
+    const uint32_t ln = s->loc.line;
+    const uint64_t esz = 8;
+    const uint64_t W = 2;
+    const uint64_t width = 16;
+
+    // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
+    const ir::IrValueId acc_init = lookup(acc_name);
+    const ir::IrValueId i_init = lower_expr(vd->init.get());
+    const ir::IrValueId v_a = lower_expr(a_base);
+    const ir::IrValueId v_N = lower_expr(cond->rhs.get());
+    if (acc_init == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
+        v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE)
+        return false;
+    if (fn_->values[acc_init].type != ir::IrType::F64) return false;
+    const ir::IrType idx_ty = fn_->values[i_init].type;
+
+    auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
+                   ir::IrValueId b) -> ir::IrValueId {
+        const ir::IrValueId d = fn_->new_value(ty);
+        ir::IrInstr in{};
+        in.op = op; in.type = ty; in.dst = d;
+        in.operands = {a, b}; in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
+        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
+        fn_->values[d].is_host_ptr = true;
+        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
+        in.dst = d; in.operands = {base, off}; in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    auto load_f64 = [&](ir::IrValueId at) -> ir::IrValueId {
+        const ir::IrValueId v = fn_->new_value(ir::IrType::F64);
+        ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = ir::IrType::F64;
+        ld.dst = v; ld.operands = {at}; ld.source_line = ln;
+        fn_->append(current_block_, std::move(ld));
+        return v;
+    };
+    auto store_f64 = [&](ir::IrValueId at, ir::IrValueId v) {
+        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = ir::IrType::F64;
+        st.dst = ir::IR_NO_VALUE; st.operands = {v, at}; st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    };
+
+    const ir::IrBlockId entry = current_block_;
+    const ir::IrBlockId mhdr = fn_->new_block("vred_main_hdr");
+    const ir::IrBlockId mbody = fn_->new_block("vred_main_body");
+    const ir::IrBlockId redb = fn_->new_block("vred_reduce");
+    const ir::IrBlockId thdr = fn_->new_block("vred_tail_hdr");
+    const ir::IrBlockId tbody = fn_->new_block("vred_tail_body");
+    const ir::IrBlockId exit = fn_->new_block("vred_exit");
+
+    // --- entry: acc_slot host 16B = {0,0}; consts; BR mhdr ---
+    current_block_ = entry;
+    const ir::IrValueId acc_slot = fn_->new_value(ir::IrType::PTR);
+    fn_->values[acc_slot].is_host_ptr = true;
+    {
+        ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
+        al.dst = acc_slot; al.imm = 16; al.host_alloca = true;
+        al.source_line = ln; fn_->append(entry, std::move(al));
+    }
+    const ir::IrValueId v_zero = emit_const(ir::IrType::F64, 0, ln);
+    store_f64(acc_slot, v_zero);
+    store_f64(ptr_at(acc_slot, emit_const(ir::IrType::I64, 8, ln)), v_zero);
+    const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
+    const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
+      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    fn_->blocks[entry].succs.push_back(mhdr);
+    fn_->blocks[mhdr].preds.push_back(entry);
+
+    // --- mhdr: PHI i; cond (i+W)<=N -> mbody|redb ---
+    current_block_ = mhdr;
+    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
+    {
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
+        phi.dst = phi_im; phi.source_line = ln;
+        phi.phi_args.push_back({i_init, entry});
+        fn_->append(mhdr, std::move(phi));
+    }
+    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
+    const ir::IrValueId cond_m =
+        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
+    {
+        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
+        brc.target_block = mbody; brc.false_block = redb; brc.source_line = ln;
+        fn_->append(mhdr, std::move(brc));
+    }
+    fn_->blocks[mhdr].succs.push_back(mbody);
+    fn_->blocks[mhdr].succs.push_back(redb);
+    fn_->blocks[mbody].preds.push_back(mhdr);
+    fn_->blocks[redb].preds.push_back(mhdr);
+
+    // --- mbody: acc_slot += a[i..i+1] (VEC_BINOP add); i += W; BR mhdr ---
+    current_block_ = mbody;
+    {
+        const ir::IrValueId i64 =
+            cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
+        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId a_at = ptr_at(v_a, off);
+        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP; vb.type = ir::IrType::F64;
+        vb.dst = ir::IR_NO_VALUE;
+        vb.operands = {acc_slot, acc_slot, a_at}; // acc_slot = acc_slot + a
+        vb.imm = ((uint64_t)0 << 8) | width;      // subop 0 = add
+        vb.source_line = ln;
+        fn_->append(current_block_, std::move(vb));
+    }
+    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
+      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    fn_->blocks[mbody].succs.push_back(mhdr);
+    fn_->blocks[mhdr].preds.push_back(mbody);
+    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+
+    // --- redb: horizontal acc_slot[0]+acc_slot[1] + acc_init; BR thdr ---
+    current_block_ = redb;
+    const ir::IrValueId lane0 = load_f64(acc_slot);
+    const ir::IrValueId lane1 =
+        load_f64(ptr_at(acc_slot, emit_const(ir::IrType::I64, 8, ln)));
+    const ir::IrValueId partial =
+        bin(ir::IrOp::FADD, ir::IrType::F64, lane0, lane1);
+    const ir::IrValueId result0 =
+        bin(ir::IrOp::FADD, ir::IrType::F64, acc_init, partial);
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
+      br.source_line = ln; fn_->append(redb, std::move(br)); }
+    fn_->blocks[redb].succs.push_back(thdr);
+    fn_->blocks[thdr].preds.push_back(redb);
+
+    // --- thdr: PHI i + PHI result; cond i<N -> tbody|exit ---
+    current_block_ = thdr;
+    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
+    {
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
+        phi.dst = phi_it; phi.source_line = ln;
+        phi.phi_args.push_back({phi_im, redb});
+        fn_->append(thdr, std::move(phi));
+    }
+    const ir::IrValueId phi_res = fn_->new_value(ir::IrType::F64);
+    {
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = ir::IrType::F64;
+        phi.dst = phi_res; phi.source_line = ln;
+        phi.phi_args.push_back({result0, redb});
+        fn_->append(thdr, std::move(phi));
+    }
+    const ir::IrValueId cond_t =
+        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
+    {
+        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
+        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        fn_->append(thdr, std::move(brc));
+    }
+    fn_->blocks[thdr].succs.push_back(tbody);
+    fn_->blocks[thdr].succs.push_back(exit);
+    fn_->blocks[tbody].preds.push_back(thdr);
+    fn_->blocks[exit].preds.push_back(thdr);
+
+    // --- tbody: result += a[i]; i++; BR thdr ---
+    current_block_ = tbody;
+    {
+        const ir::IrValueId i64 =
+            cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
+        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId ai = load_f64(ptr_at(v_a, off));
+        const ir::IrValueId rnext =
+            bin(ir::IrOp::FADD, ir::IrType::F64, phi_res, ai);
+        const ir::IrValueId i_tnext =
+            bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
+        { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
+          br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+        fn_->blocks[tbody].succs.push_back(thdr);
+        fn_->blocks[thdr].preds.push_back(tbody);
+        fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
+        fn_->blocks[thdr].instrs[1].phi_args.push_back({rnext, tbody});
+    }
+
+    // --- exit: acc = phi_res (resultado final) ---
+    current_block_ = exit;
+    block_terminated_ = false;
+    update_scope(acc_name, phi_res);
+    return true;
+}
+
 } // namespace vex
