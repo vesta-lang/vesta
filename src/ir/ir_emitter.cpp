@@ -3002,6 +3002,46 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    // VEC_UNOP dst[i] = OP a[i]  (auto-vectorizacion unaria).  Interprete
+    // (oraculo) = W ops ESCALARES por lane (copy via movh; fneg/fabs/fsqrt via
+    // bitg2z/f<op>/bitz2g); el JIT lo baja a SIMD packed (SQRTPD/XORPD/ANDPD).
+    // Solo f64 (el matcher solo emite f64).  Robusto: push/pop r10/r11 (dst/a).
+    case IrOp::VEC_UNOP: {
+        if (ins.operands.size() < 2) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const uint64_t subop = (ins.imm >> 8) & 0xFF;
+        const size_t esz = ir_type_size(ins.type); // F64=8
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const char *uop = (subop == 1)   ? "fneg"
+                          : (subop == 2) ? "fabs"
+                          : (subop == 3) ? "fsqrt"
+                                         : nullptr; // 0=copy (sin op)
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, dst
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            ctx.out << "    movh r14, [r11]\n";        // a[k] bits
+            if (uop) {
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    " << uop << " f0, f0\n";
+                ctx.out << "    bitz2g r14, f0\n";
+            }
+            ctx.out << "    movh [r10], r14\n";        // dst[k]
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
+
     // VEC_BINOP dst[i] = a[i] OP b[i]  (auto-vectorizacion).  En el interprete
     // (oraculo) lo bajamos a W operaciones ESCALARES por lane; el JIT lo baja a
     // SIMD packed (MOVUPD + ADDPD/PADDQ/...).  Soporta f64/f32 (via bitg2z/

@@ -621,6 +621,16 @@ enum class MOp : uint8_t {
     PADDQ = 126, ///< PADDQ xmm,xmm (66 0F D4) -- 2x i64 add
     PSUBQ = 127, ///< PSUBQ xmm,xmm (66 0F FB) -- 2x i64 sub
 
+    /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
+     * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y
+     * UNPCKLPD (difunde el lane bajo a ambos -> construye la mascara de signo
+     * de 16B desde un MOVQ_GP_XMM, sin constante en memoria).  Mismo form
+     * simple 66 0F xx /r reg-reg que los demas packed. */
+    SQRTPD = 128,   ///< SQRTPD xmm,xmm   (66 0F 51) -- 2x f64 sqrt
+    XORPD = 129,    ///< XORPD xmm,xmm    (66 0F 57) -- xor 128b (fneg via mask)
+    ANDPD = 130,    ///< ANDPD xmm,xmm    (66 0F 54) -- and 128b (fabs via mask)
+    UNPCKLPD = 131, ///< UNPCKLPD xmm,xmm (66 0F 14) -- dst.hi = src.lo (broadcast)
+
     DATA_PTR_LABEL = 112, ///< Entrada de 8 bytes de la jump table densa:
                           ///< emite 8 zeros + registra un AddrTableFixup
                           ///< {offset, src1=LABEL}.  El pipeline lo parchea
