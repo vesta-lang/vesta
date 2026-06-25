@@ -2226,28 +2226,43 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 } else {
                     return false; // tipo no soportado
                 }
-                // Usamos los XMM scratch ALTOS (XMM14/XMM15): el FP-regalloc
-                // del vreg asigna los XMM bajos primero, asi que estos rara vez
-                // estan vivos en el cuerpo del loop vectorizado (que no tiene
-                // otros valores FP).  TODO robustez: reservarlos formalmente en
-                // el regalloc (clobber set de VEC_BINOP) o save/restore sin
-                // SUB/ADD RSP (que el encoder no soporta en este path).
-                const MOperand x0 = MOperand::make_reg(MReg::XMM14, 16);
-                const MOperand x1 = MOperand::make_reg(MReg::XMM15, 16);
-                const MOperand r10 = MOperand::make_reg(MReg::R10, 8);
-                const MOperand r11 = MOperand::make_reg(MReg::R11, 8);
+                // ROBUSTEZ (clobber set formal): los scratch los DERIVAMOS del
+                // TargetRegInfo (tri_sel.scratch[GP]/[FP]) en vez de hardcodear
+                // R10/R11/XMM14/XMM15.  Estos registros estan RESERVADOS por el
+                // allocator (no son asignables -> nunca contienen un valor vivo)
+                // y son los MISMOS que el rewrite usa como scratch GP (scr0/scr1)
+                // y FP (fscr0/fscr1).  Invariante de seguridad: el vector vive en
+                // los 2 XMM scratch (fp0/fp1) a traves del `MOV gp0, c_ptr`
+                // intermedio; ese MOV solo materializa un operando GP (puntero) ->
+                // usa scratch GP, NUNCA toca el scratch FP -> el vector sobrevive.
+                // Si el target NO reserva >=2 GP + >=2 FP scratch, bail (cola
+                // escalar).  Asi un cambio de scratch del target no corrompe en
+                // silencio: el VEC_BINOP sigue automaticamente al target.
+                const auto &gpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
+                const auto &fpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
+                if (gpsc.size() < 2 || fpsc.size() < 2) return false;
+                const MReg gp0 = static_cast<MReg>(gpsc[0]);
+                const MReg gp1 = static_cast<MReg>(gpsc[1]);
+                const MReg fp0 = static_cast<MReg>(fpsc[0]);
+                const MReg fp1 = static_cast<MReg>(fpsc[1]);
+                const MOperand x0 = MOperand::make_reg(fp0, 16);
+                const MOperand x1 = MOperand::make_reg(fp1, 16);
+                const MOperand r0 = MOperand::make_reg(gp0, 8);
+                const MOperand r1 = MOperand::make_reg(gp1, 8);
                 // load a, b
-                O.push_back(MInstr::make_unary(MOp::MOV, r10, vr(in.operands[1])));
-                O.push_back(MInstr::make_unary(MOp::MOV, r11, vr(in.operands[2])));
+                O.push_back(MInstr::make_unary(MOp::MOV, r0, vr(in.operands[1])));
+                O.push_back(MInstr::make_unary(MOp::MOV, r1, vr(in.operands[2])));
                 O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, x0, MOperand::make_mem(MReg::R10, 0)));
+                    MOp::MOVUPD, x0, MOperand::make_mem(gp0, 0)));
                 O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, x1, MOperand::make_mem(MReg::R11, 0)));
+                    MOp::MOVUPD, x1, MOperand::make_mem(gp1, 0)));
                 O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= x1
                 // store -> dst
-                O.push_back(MInstr::make_unary(MOp::MOV, r10, vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::MOV, r0, vr(in.operands[0])));
                 O.push_back(MInstr::make_unary(
-                    MOp::MOVUPD, MOperand::make_mem(MReg::R10, 0), x0));
+                    MOp::MOVUPD, MOperand::make_mem(gp0, 0), x0));
                 break;
             }
 
