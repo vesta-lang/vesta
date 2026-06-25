@@ -203,6 +203,19 @@ enum class IrOp : uint16_t {
                    ///<   (@c roundsd con bits 0-1 de imm8 = rounding mode), en
     ///<   ARM (@c frintm/p/n/z), en WASM (@c f64.floor/ceil/nearest/trunc)
     ///<   y en RISC-V (@c fcvt.l.d con rounding mode).  Reactivados.
+    // ---- ops VECTORIALES (auto-vectorizacion, 0x2D-0x2F) ----
+    // Compiler-internas: las emite el matcher de vectorize.cpp para loops
+    // element-wise.  El "valor" es un VECTOR de W elementos que vive en un
+    // registro FP/ZMM (vreg FP class).  imm bits 0-7 = ancho en bytes (16/32/
+    // 64 = 128/256/512b); para VBINOP bits 8-15 = sub-op (0=add 1=sub 2=mul
+    // 3=div).  Punteros HOST.  Bajada por backend:
+    //   interp: VLOAD = movh host->VM-stack + fload->ZMM;  VBINOP = fadd[.ps]
+    //           packed;  VSTORE = fstore ZMM->VM-stack + movh->host.  (Sin
+    //           opcodes VM nuevos; roundtrip correcto -- el interp es oraculo.)
+    //   jit/aot: VLOAD=MOVUPD, VBINOP=ADDPD/..., VSTORE=MOVUPD (SIMD directo).
+    VLOAD = 0x2D,  ///< %vec = vload.fN [%host_ptr]       imm=ancho_bytes
+    VSTORE = 0x2E, ///< vstore.fN %vec, %host_ptr         imm=ancho_bytes
+    VBINOP = 0x2F, ///< %vec = vbinop.fN %a, %b   imm=(subop<<8)|ancho_bytes
 
     // ---- logica y desplazamientos (0x30-0x3F) ----
     AND = 0x30, ///< %dst = and.T    %a, %b
