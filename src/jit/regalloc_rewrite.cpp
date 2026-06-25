@@ -1527,8 +1527,14 @@ struct Lowerer {
                     out.push_back(MInstr::make_unary(op, pdst, reg(scr1)));
                 }
             } else {
-                out.push_back(
-                    MInstr::make_unary(MOp::MOV, pdst, rs1)); // pdst = src1
+                /* Elide el `mov pdst, src1` identidad cuando el regalloc ya
+                 * coalescio dst y src1 al mismo fisico (mismo criterio que el
+                 * path de shifts).  Quita un mov redundante por cada ALU
+                 * 2-address coalescida. */
+                if (!(pdst.kind == MOperandKind::REG &&
+                      rs1.kind == MOperandKind::REG && pdst.reg == rs1.reg))
+                    out.push_back(
+                        MInstr::make_unary(MOp::MOV, pdst, rs1)); // pdst = src1
                 out.push_back(
                     MInstr::make_unary(op, pdst,
                                        imul_fix(rs2))); // pdst OP= src2
