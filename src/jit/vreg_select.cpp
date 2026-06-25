@@ -692,6 +692,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         return true;
     };
 
+    /* VM_ABI: store de UN arg a proc->registers.regs[slot].  CLAVE: un arg
+     * FLOAT vive en un XMM; con vrt() (clase FP) el rewrite enruta el
+     * `MOV regs[slot], fp_vreg` a MOVSD (guarda los 8 bytes = bits del f64).
+     * Con vr() (GP) se guardaba un registro GP stale -> el callee leia bits
+     * basura del arg float.  Espejo del fix de carga de params (vrt en el
+     * prologo) y del retorno float (MOVQ_XMM_GP). */
+    auto store_vm_arg = [&](std::vector<MInstr> &OO, int slot,
+                            ir::IrValueId av) {
+        const bool av_fp = fp_ok && av < fn.values.size() &&
+                           ir_type_is_float(fn.values[av].type);
+        OO.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(slot),
+                                        av_fp ? vrt(av) : vr(av)));
+    };
+
     for (size_t b = 0; b < NB; ++b) {
         const ir::IrBlock &ib = fn.blocks[b];
         MBlock mb;
@@ -699,11 +713,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         auto &O = mb.instrs;
 
         /* VM_ABI: al entrar, cargar cada parametro desde
-         * proc->registers.regs[i+1] (regs[0] reservado al retorno). */
+         * proc->registers.regs[i+1] (regs[0] reservado al retorno).
+         * CLAVE: usar vrt() (class-aware), NO vr() (GP).  Un parametro FLOAT
+         * en regs[i+1] guarda el bit-pattern i64 del f64; con vrt() el dst es
+         * un vreg de clase FP -> el rewrite enruta el MOV a MOVSD (carga los 8
+         * bytes = bits del f64 al XMM).  Con vr() (GP) se cargaba en un GP
+         * register que ademas pisaba otro param (p.ej. el puntero p en RAX) ->
+         * direccion basura en el loop -> SEGFAULT. */
         if (vm && b == 0) {
             for (size_t i = 0; i < fn.params.size(); ++i)
                 O.push_back(
-                    MInstr::make_unary(MOp::MOV, vr(fn.params[i]),
+                    MInstr::make_unary(MOp::MOV, vrt(fn.params[i]),
                                        vm_reg_mem(static_cast<int>(i) + 1)));
         }
 
@@ -1901,22 +1921,35 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::RET: {
                 flush_pending();
                 if (!in.operands.empty()) {
-                    /* Float return (Phase AOT C1, HOST_LEAF): el valor va a
-                     * XMM0 (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el
-                     * rewrite a MOVSD (is_fp_operand).  En VM_ABI float aun no
-                     * se soporta (fp_ok=false -> no llegan ops float aqui). */
                     const ir::IrValueId rv = in.operands[0];
-                    if (!vm && fp_ok && rv < fn.values.size() &&
-                        ir_type_is_float(fn.values[rv].type)) {
+                    const bool rv_fp = fp_ok && rv < fn.values.size() &&
+                                       ir_type_is_float(fn.values[rv].type);
+                    /* Float return HOST_LEAF (Phase AOT C1): el valor va a XMM0
+                     * (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el rewrite
+                     * a MOVSD (is_fp_operand). */
+                    if (!vm && rv_fp) {
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, MOperand::make_reg(MReg::XMM0, 8),
                             vrt(rv)));
                         O.push_back(MInstr::make_ret());
                         break;
                     }
-                    /* VM_ABI: escribir el resultado en
-                     * proc->registers.regs[0] ([rbx+off]); host leaf:
-                     * dejarlo en RAX. */
+                    /* Float return VM_ABI: proc->registers.regs[0] guarda el
+                     * bit-pattern i64 del f64 (convencion del interp).  El valor
+                     * vive en un XMM -> MOVQ_XMM_GP mueve los bits a un GP temp y
+                     * luego se escribe a regs[0].  Sin esto, vr(rv) trataba el
+                     * valor float como GP y movia un registro stale (basura) a
+                     * regs[0] -> retorno incorrecto (p.ej. 0). */
+                    if (vm && rv_fp) {
+                        const ir::IrValueId gpb = new_tmp();
+                        O.push_back(MInstr::make_unary(MOp::MOVQ_XMM_GP,
+                                                       vr(gpb), vrt(rv)));
+                        O.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(0),
+                                                       vr(gpb)));
+                        O.push_back(MInstr::make_ret());
+                        break;
+                    }
+                    /* GP: VM_ABI -> regs[0] ([rbx+off]); host leaf -> RAX. */
                     const MOperand dst =
                         vm ? vm_reg_mem(0) : MOperand::make_reg(MReg::RAX, 8);
                     O.push_back(
@@ -3101,11 +3134,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         return false;
                     }
                 }
-                /* 1. Stores de args a proc->registers.regs[i+1]. */
+                /* 1. Stores de args a proc->registers.regs[i+1]
+                 *    (float-aware via store_vm_arg). */
                 for (size_t i = 0; i < in.operands.size(); ++i)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
-                        vr(in.operands[i])));
+                    store_vm_arg(O, static_cast<int>(i) + 1, in.operands[i]);
                 /* 2. proc (=RBX) al primer arg host del callee. */
 #if defined(_WIN32)
                 const MReg proc_reg = MReg::RCX;
@@ -3218,11 +3250,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     }
                 }
                 /* 1. Stores de args a proc->registers.regs[i+1] (igual
-                 *    que CALL; los args son vregs del frame actual). */
+                 *    que CALL; los args son vregs del frame actual;
+                 *    float-aware via store_vm_arg). */
                 for (size_t i = 0; i < in.operands.size(); ++i)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
-                        vr(in.operands[i])));
+                    store_vm_arg(O, static_cast<int>(i) + 1, in.operands[i]);
                 /* 2. Pseudo TAILCALL (el rewrite hace proc->A0 +
                  *    epilogue + jmp).  Termina el bloque (terminador). */
                 if (is_self)
@@ -3247,11 +3278,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrValueId obj = in.operands[0];
                 const uint32_t vtbl_idx = static_cast<uint32_t>(in.imm);
                 /* 1. Stores de args reales a proc->registers.regs[i+1]
-                 *    (operands[0]=obj=this -> regs[1], args -> regs[2..]). */
+                 *    (operands[0]=obj=this -> regs[1], args -> regs[2..];
+                 *    float-aware via store_vm_arg). */
                 for (size_t i = 0; i < in.operands.size(); ++i)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
-                        vr(in.operands[i])));
+                    store_vm_arg(O, static_cast<int>(i) + 1, in.operands[i]);
                 /* 2. arg regs host (arg0=proc, arg1=obj, arg2=vtbl_idx). */
 #if defined(_WIN32)
                 const MReg pr_reg = MReg::RCX, obj_reg = MReg::RDX,
@@ -3387,9 +3417,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vm_reg_mem(1), vr(obj)));
                 for (size_t a = 0; a < nargs; ++a)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(a) + 2),
-                        vr(in.operands[a + 2])));
+                    store_vm_arg(O, static_cast<int>(a) + 2,
+                                 in.operands[a + 2]);
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, vm_reg_mem(15),
                     MOperand::make_imm32(static_cast<int32_t>(nargs + 1))));
@@ -3493,9 +3522,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vm_reg_mem(1), vr(ci_obj)));
                 for (size_t a = 0; a < ci_nargs; ++a)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(a) + 2),
-                        vr(in.operands[a + 2])));
+                    store_vm_arg(O, static_cast<int>(a) + 2,
+                                 in.operands[a + 2]);
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, vm_reg_mem(15),
                     MOperand::make_imm32(static_cast<int32_t>(ci_nargs + 1))));
@@ -3555,9 +3583,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(
                     MInstr::make_unary(MOp::MOV, vm_reg_mem(1), vr(su_this)));
                 for (size_t a = 0; a < su_nargs; ++a)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(a) + 2),
-                        vr(in.operands[a + 2])));
+                    store_vm_arg(O, static_cast<int>(a) + 2,
+                                 in.operands[a + 2]);
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, vm_reg_mem(15),
                     MOperand::make_imm32(static_cast<int32_t>(su_nargs + 1))));
@@ -3690,11 +3717,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "callclosure-args");
                     return false;
                 }
-                /* 1. Stores de args (operands[1..]) a regs[1..N]. */
+                /* 1. Stores de args (operands[1..]) a regs[1..N]
+                 *    (float-aware via store_vm_arg). */
                 for (size_t i = 0; i < nargs; ++i)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vm_reg_mem(static_cast<int>(i) + 1),
-                        vr(in.operands[i + 1])));
+                    store_vm_arg(O, static_cast<int>(i) + 1,
+                                 in.operands[i + 1]);
                 /* 2. regs[15] = nargs. */
                 O.push_back(MInstr::make_unary(
                     MOp::MOV, vm_reg_mem(15),
