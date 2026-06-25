@@ -4540,6 +4540,8 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     // HOST, lo reemplazamos por un MEMCPY (rep movsb / SIMD en JIT/AOT; bucle
     // host->host en el interprete).  Si no matchea, seguimos con el lowering
     // normal del while.
+    static const bool no_vec = std::getenv("VESTA_NO_VECTORIZE") != nullptr;
+    if (!no_vec) {
     if (try_lower_memcpy_idiom(s)) return;
     // Auto-vectorizacion aritmetica/unaria/reduccion sobre la forma `while`:
     // `while (i < N) { c[i] = a[i] OP b[i]; i++; }` (y unaria/reduccion) ->
@@ -4548,6 +4550,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     if (try_vectorize_elementwise_for(s)) return;
     if (try_vectorize_unary_for(s)) return;
     if (try_vectorize_reduction_for(s)) return;
+    } // !no_vec
 
     // Pre-walk: variables mutadas en cond+body.
     std::set<std::string> modified;
@@ -4956,6 +4959,10 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
 void Lowering::lower_for(ast::ForStmt *s) {
     if (!s) return;
 
+    // VESTA_NO_VECTORIZE=1 desactiva TODA la auto-vectorizacion (loops escalares)
+    // -> linea base para benchmarks (escalar vs SSE2 vs AVX2).
+    static const bool no_vec = std::getenv("VESTA_NO_VECTORIZE") != nullptr;
+    if (!no_vec) {
     // Auto-vectorizacion: la forma canonica del memcpy
     // `for (T i = init; i < N; i++) dst[i] = src[i];` (ver vectorize.cpp).
     if (try_lower_memcpy_idiom_for(s)) return;
@@ -4968,6 +4975,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // Auto-vectorizacion de reduccion: `for (...) acc = acc + a[i];` f64 host
     // -> acumulador vectorial W=2 + reduccion horizontal + cola escalar.
     if (try_vectorize_reduction_for(s)) return;
+    } // !no_vec
 
     // for(init; cond; step) body
     //
