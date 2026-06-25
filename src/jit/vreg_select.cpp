@@ -851,7 +851,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     def_blk == ir::IR_NO_BLOCK || def_blk >= blbl.size()) {
                     break; // no-op -> el BST hace el dispatch
                 }
-                const int64_t min_v = static_cast<int64_t>(in.imm);
+                const int64_t min_v =
+                    static_cast<int64_t>(in.imm & 0xFFFFFFFFu);
+                const bool no_bounds = ((in.imm >> 32) & 1u) != 0;
                 const size_t range = in.jump_targets.size();
                 const MReg RI = MReg::R10, RB = MReg::R11; // scratch reservados
                 // idx = tag - min en RI.
@@ -863,24 +865,30 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         MOp::SUB, MOperand::make_reg(RI, 8),
                         MOperand::make_reg(RI, 8),
                         MOperand::make_imm32(static_cast<int32_t>(min_v))));
-                // bounds: cmp RI, range; jae default (unsigned: idx<0 -> huge).
-                {
+                // bounds: cmp RI, range; jae default.  ELIDIDO cuando la tabla
+                // cubre todo el rango del enum (no_bounds): el tag siempre es
+                // valido -> idx in [0,range) garantizado.
+                if (!no_bounds) {
                     MInstr c{};
                     c.op = MOp::CMP;
                     c.src1 = MOperand::make_reg(RI, 8);
                     c.src2 =
                         MOperand::make_imm32(static_cast<int32_t>(range));
                     O.push_back(c);
+                    O.push_back(MInstr::make_jcc(MCond::AE, blbl[def_blk]));
                 }
-                O.push_back(MInstr::make_jcc(MCond::AE, blbl[def_blk]));
-                // lea RB, [rip+table]; mov RB, [RB + RI*8]; jmp RB.
+                // lea RB, [rip+table]; jmp [RB + RI*8]  (salto indirecto a
+                // memoria: funde el load + jump en una sola instr -> minimo
+                // teorico del jump table).
                 const MLabelId table_lbl = out.new_label();
                 O.push_back(MInstr::make_lea_label(MOperand::make_reg(RB, 8),
                                                    table_lbl));
-                O.push_back(MInstr::make_unary(
-                    MOp::MOV, MOperand::make_reg(RB, 8),
-                    MOperand::make_mem(RB, 0, RI, 8)));
-                O.push_back(MInstr::make_jmp_reg(RB));
+                {
+                    MInstr j{};
+                    j.op = MOp::JMP;
+                    j.src1 = MOperand::make_mem(RB, 0, RI, 8);
+                    O.push_back(j);
+                }
                 // Tabla: una entrada de 8 bytes por valor [min, min+range).
                 O.push_back(MInstr::make_label_def(table_lbl));
                 for (size_t k = 0; k < range; ++k) {
