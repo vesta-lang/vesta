@@ -87,6 +87,17 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
     std::memcpy(code, bytes.data(), bytes.size());
+    /* Jump table densa (SWITCH_DENSE): parchear cada entrada de 8 bytes con la
+     * direccion nativa absoluta del brazo (base + label_offset).  POST-memcpy
+     * (base = code) y PRE-commit (antes del flush icache). */
+    for (const auto &f : pf.addr_table_fixups) {
+        if (f.label < pf.label_offsets.size() &&
+            pf.label_offsets[f.label] != UINT32_MAX) {
+            const uint64_t target =
+                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
+            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
+        }
+    }
     cc.commit(code, bytes.size());
 
     /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo vreg generado. */
@@ -242,6 +253,16 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     uint8_t *code = cc.alloc(bytes.size(), 16);
     if (!code) return nullptr;
     std::memcpy(code, bytes.data(), bytes.size());
+    /* Jump table densa (SWITCH_DENSE): parchear entradas con la direccion
+     * nativa del brazo (base + label_offset).  POST-memcpy, PRE-commit. */
+    for (const auto &f : pf.addr_table_fixups) {
+        if (f.label < pf.label_offsets.size() &&
+            pf.label_offsets[f.label] != UINT32_MAX) {
+            const uint64_t target =
+                reinterpret_cast<uint64_t>(code) + pf.label_offsets[f.label];
+            std::memcpy(code + f.patch_at, &target, sizeof(uint64_t));
+        }
+    }
     cc.commit(code, bytes.size());
 
     /* 7. Resolver la direccion absoluta del OSR-entry via el offset que el

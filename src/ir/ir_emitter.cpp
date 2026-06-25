@@ -1523,6 +1523,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         }
         break;
 
+    // --- SWITCH_DENSE ---
+    // Marker del jump table denso O(1).  No-op en el interp/bytecode: el
+    // dispatch real lo hace el BST que lower_match_expr emite junto al marker.
+    // Solo el backend JIT (vreg) lo baja a un island nativo (computed-goto).
+    case IrOp::SWITCH_DENSE:
+        if (ctx.comments) {
+            ctx.out << "    // switch_dense min=" << static_cast<int64_t>(ins.imm)
+                    << " n=" << ins.jump_targets.size() << "\n";
+        }
+        break;
+
     // --- CONST ---
     case IrOp::CONST: {
         std::string rd = ctx.dst_of(ins.dst);

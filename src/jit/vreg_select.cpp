@@ -355,6 +355,8 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
             if (in.false_block != ir::IR_NO_BLOCK)
                 in.false_block = rm(in.false_block);
             for (ir::IrPhiArg &a : in.phi_args) a.block = rm(a.block);
+            // SWITCH_DENSE: remapear la tabla de bloques destino.
+            for (uint32_t &t : in.jump_targets) t = rm(t);
         }
     }
     fn.blocks = std::move(laid);
@@ -788,11 +790,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             lm_before = SIZE_MAX;
         };
 
+        bool sw_dense_term = false; // SWITCH_DENSE emitio el dispatch (island
+                                    // de tabla); el resto del bloque (BST que
+                                    // el frontend emite como path interp) es
+                                    // dead code en JIT -> saltar.
         for (const ir::IrInstr &in : ib.instrs) {
             MOp mop;
             MCond cc;
             // Estampar la op anterior (sobrevive a `continue`) + snapshot.
             lm_flush();
+            if (sw_dense_term) break; // dispatch denso ya emitido
             if (out.emit_line_map) {
                 lm_before = O.size();
                 lm_line = in.source_line;
@@ -826,6 +833,67 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * -> el interval builder nunca los ve. */
             case ir::IrOp::MAKE_VARIANT: break;
             case ir::IrOp::MATCH_VARIANT: break;
+
+            /* SWITCH_DENSE: jump table densa O(1) (computed-goto, lo mas optimo).
+             * Dispatch: idx = tag - min; if idx u>= N -> default; else cargar la
+             * direccion del brazo de la tabla y saltar (1 solo salto indirecto):
+             *   mov  R10, tag ; sub R10, min ; cmp R10, N ; jae default
+             *   lea  R11, [rip+table] ; mov R11, [R11 + R10*8] ; jmp R11
+             *   table: dq arm0, arm1, ... (8B c/u, parchadas post-memcpy con la
+             *          direccion nativa = base + label_offset del brazo).
+             * El BST que el frontend emite tras este marker es el path del
+             * interp + fallback; en JIT es dead code (saltamos el resto del
+             * bloque via sw_dense_term).  Si falta algo, no-op -> corre el BST. */
+            case ir::IrOp::SWITCH_DENSE: {
+                flush_pending();
+                const ir::IrBlockId def_blk = in.target_block;
+                if (!vm || in.operands.empty() || in.jump_targets.empty() ||
+                    def_blk == ir::IR_NO_BLOCK || def_blk >= blbl.size()) {
+                    break; // no-op -> el BST hace el dispatch
+                }
+                const int64_t min_v = static_cast<int64_t>(in.imm);
+                const size_t range = in.jump_targets.size();
+                const MReg RI = MReg::R10, RB = MReg::R11; // scratch reservados
+                // idx = tag - min en RI.
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(RI, 8),
+                                               vr(in.operands[0])));
+                if (min_v != 0)
+                    O.push_back(MInstr::make_binary(
+                        MOp::SUB, MOperand::make_reg(RI, 8),
+                        MOperand::make_reg(RI, 8),
+                        MOperand::make_imm32(static_cast<int32_t>(min_v))));
+                // bounds: cmp RI, range; jae default (unsigned: idx<0 -> huge).
+                {
+                    MInstr c{};
+                    c.op = MOp::CMP;
+                    c.src1 = MOperand::make_reg(RI, 8);
+                    c.src2 =
+                        MOperand::make_imm32(static_cast<int32_t>(range));
+                    O.push_back(c);
+                }
+                O.push_back(MInstr::make_jcc(MCond::AE, blbl[def_blk]));
+                // lea RB, [rip+table]; mov RB, [RB + RI*8]; jmp RB.
+                const MLabelId table_lbl = out.new_label();
+                O.push_back(MInstr::make_lea_label(MOperand::make_reg(RB, 8),
+                                                   table_lbl));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, MOperand::make_reg(RB, 8),
+                    MOperand::make_mem(RB, 0, RI, 8)));
+                O.push_back(MInstr::make_jmp_reg(RB));
+                // Tabla: una entrada de 8 bytes por valor [min, min+range).
+                O.push_back(MInstr::make_label_def(table_lbl));
+                for (size_t k = 0; k < range; ++k) {
+                    const uint32_t tb = in.jump_targets[k];
+                    const ir::IrBlockId arm =
+                        (tb < blbl.size()) ? tb : def_blk;
+                    O.push_back(MInstr::make_data_ptr_label(blbl[arm]));
+                    mb.extra_succs.push_back(static_cast<MBlockId>(arm));
+                }
+                mb.extra_succs.push_back(static_cast<MBlockId>(def_blk));
+                sw_dense_term = true; // saltar el BST (dead code en JIT)
+                break;
+            }
             /* MAKE_CLOSURE: marker semantico puro (idem MAKE_VARIANT).
              * La construccion real (ALLOCA env + STOREs + ALLOCA fv +
              * STORE fn/env) la emite el frontend ANTES/DESPUES; el

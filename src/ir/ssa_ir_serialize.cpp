@@ -209,6 +209,13 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
         write_u32(o, static_cast<uint32_t>(i.phi_args[k].value));
         write_u32(o, static_cast<uint32_t>(i.phi_args[k].block));
     }
+    // jump_targets: tabla de bloques del SWITCH_DENSE (jump table denso).
+    // Count u32 (un switch denso puede tener >255 entradas).  Vacio en el
+    // resto de ops.  (Formato v6/v8.)
+    const size_t jtc = i.jump_targets.size();
+    write_u32(o, static_cast<uint32_t>(jtc));
+    for (size_t k = 0; k < jtc; ++k)
+        write_u32(o, i.jump_targets[k]);
 }
 
 /**
@@ -279,6 +286,16 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
         if (!read_u32(in, off, b)) return false;
         IrPhiArg a{static_cast<IrValueId>(v), static_cast<IrBlockId>(b)};
         i.phi_args.push_back(a);
+    }
+    /* jump_targets (SWITCH_DENSE) -- formato v6/v8. */
+    uint32_t jtc = 0;
+    if (!read_u32(in, off, jtc)) return false;
+    i.jump_targets.clear();
+    i.jump_targets.reserve(jtc);
+    for (uint32_t k = 0; k < jtc; ++k) {
+        uint32_t t = 0;
+        if (!read_u32(in, off, t)) return false;
+        i.jump_targets.push_back(t);
     }
     return true;
 }

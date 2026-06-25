@@ -75,6 +75,7 @@ static bool is_side_effecting(IrOp op) {
     case IrOp::MAKE_CLOSURE:
     case IrOp::MAKE_VARIANT:
     case IrOp::MATCH_VARIANT:
+    case IrOp::SWITCH_DENSE:
     // control de flujo
     case IrOp::BR:
     case IrOp::BR_COND:
@@ -5493,6 +5494,12 @@ bool ir_pass_unreachable(IrFunction &fn) {
                 }
             }
             ins.phi_args = std::move(new_phi);
+            // SWITCH_DENSE: remapear la tabla de bloques destino (campo
+            // jump_targets) igual que target_block.  Sin esto, tras la
+            // renumeracion la jump table apunta a ids viejos -> dispatch
+            // permutado.
+            for (uint32_t &t : ins.jump_targets)
+                if (t < nblocks && remap[t] != IR_NO_BLOCK) t = remap[t];
         }
         new_blocks.push_back(std::move(bb));
     }
