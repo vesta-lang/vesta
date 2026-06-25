@@ -2968,10 +2968,17 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.out << "    push r10\n"; // salvar temporales
         ctx.out << "    push r11\n";
         ctx.out << "    push r12\n";
-        // Empujar los VALORES de dst/src/len (load_src materializa spills).
-        ctx.out << "    push " << ctx.load_src(ins.operands[0], 0) << "\n";
-        ctx.out << "    push " << ctx.load_src(ins.operands[1], 0) << "\n";
-        ctx.out << "    push " << ctx.load_src(ins.operands[2], 0) << "\n";
+        // Empujar los VALORES de dst/src/len.  load_src EMITE codigo (carga de
+        // spill) como efecto colateral, asi que hay que capturarlo en una var
+        // ANTES del push (el orden de evaluacion de `<<` no esta especificado
+        // -> interleaving) y empujarlo antes del siguiente load_src (que puede
+        // reusar el mismo scratch r13/r14).
+        { const std::string p = ctx.load_src(ins.operands[0], 0);
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0);
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0);
+          ctx.out << "    push " << p << "\n"; }
         ctx.out << "    pop r12\n"; // len
         ctx.out << "    pop r11\n"; // src
         ctx.out << "    pop r10\n"; // dst
@@ -3015,9 +3022,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // Cargar los 3 punteros (dst/a/b) en r10/r11/r12 via push del VALOR
         // (sin hazard de parallel-move).
         ctx.out << "    push r10\n    push r11\n    push r12\n";
-        ctx.out << "    push " << ctx.load_src(ins.operands[0], 0) << "\n"; // dst
-        ctx.out << "    push " << ctx.load_src(ins.operands[1], 0) << "\n"; // a
-        ctx.out << "    push " << ctx.load_src(ins.operands[2], 0) << "\n"; // b
+        // load_src emite codigo (spill) -> capturar en var ANTES del push.
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0); // b
+          ctx.out << "    push " << p << "\n"; }
         ctx.out << "    pop r12\n    pop r11\n    pop r10\n"; // b, a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
