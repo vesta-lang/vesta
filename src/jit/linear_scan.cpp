@@ -129,6 +129,17 @@ RegAlloc linear_scan(const IntervalResult &ivs, const TargetRegInfo &tri) {
 
             const bool cc = crosses_call(iv);
 
+            /* ---- force_spill: memory-resident obligatorio ----
+             * Vregs live-in a un sucesor abnormal (handler de excepcion):
+             * deben vivir en un slot para sobrevivir al edge del throw (el
+             * catch recarga del slot tras el unwind).  Mismo trato que un GC
+             * root cross-call. */
+            if (vid < ivs.force_spill.size() && ivs.force_spill[vid]) {
+                out.assign[vid].loc = RegAlloc::Loc::SPILL;
+                out.assign[vid].slot = out.num_spill_slots++;
+                continue;
+            }
+
             /* ---- GC root vivo a traves de un call: SPILL forzado ----
              * (Phase D.7 commit 6, enfoque A).  Un valor GC en un registro
              * a traves de un call seria invisible al GC (que escanea el

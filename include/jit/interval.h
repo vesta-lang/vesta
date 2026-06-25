@@ -163,6 +163,14 @@ struct IntervalResult {
         std::vector<uint8_t> regs; ///< MReg ids clobbered (no bindings)
     };
     std::vector<AsmClobberSite> asm_clobbers;
+    /// Vregs que DEBEN ser memory-resident (force-spill).  Indexado por vreg
+    /// id (1 = forzar SPILL).  Lo poblea @c build_intervals con los valores
+    /// live-in a un sucesor EXTRA/abnormal (handler de excepcion): deben vivir
+    /// en un slot para sobrevivir al edge anormal (el throw clobberea regs
+    /// pero no la memoria; el catch recarga del slot).  Mecanismo general
+    /// reusable por GC/deopt (forzar memoria en un punto).  Vacio = sin
+    /// fuerza (caso comun, cero coste).
+    std::vector<uint8_t> force_spill;
 };
 
 /**

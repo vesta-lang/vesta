@@ -454,6 +454,27 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         }
     }
 
+    /* ---- 3b) force_spill: vregs live-in a un sucesor EXTRA/abnormal ----
+     * Deben ser memory-resident para sobrevivir al edge anormal (el throw
+     * llega al handler por runtime, no por un branch; clobberea regs pero no
+     * la memoria; el catch recarga del slot).  Solo recorre extra_succs (vacio
+     * en el caso comun -> coste cero). */
+    {
+        bool any_extra = false;
+        for (size_t b = 0; b < NB; ++b)
+            if (!mf.blocks[b].extra_succs.empty()) { any_extra = true; break; }
+        if (any_extra) {
+            out.force_spill.assign(NV, 0u);
+            for (size_t b = 0; b < NB; ++b) {
+                for (const MBlockId es : mf.blocks[b].extra_succs) {
+                    if (es == MBLOCK_INVALID || es >= NB) continue;
+                    for (uint32_t v = 0; v < NV; ++v)
+                        if (live_in[es].test(v)) out.force_spill[v] = 1u;
+                }
+            }
+        }
+    }
+
     /* ---- 4) Construccion de rangos POR BLOQUE via live-in/out ----
      * Para cada bloque y cada vreg, se calcula su rango EN ese bloque a
      * partir de @c live_in/@c live_out (ya computados) + su primera
