@@ -108,6 +108,7 @@ static bool is_side_effecting(IrOp op) {
     // memoria
     case IrOp::STORE:
     case IrOp::MEMCPY:
+    case IrOp::VSTORE:
     case IrOp::SETFIELD:
     // OOP con efectos
     case IrOp::NEWOBJ:
@@ -5300,6 +5301,7 @@ bool ir_pass_dse(IrFunction &fn) {
             // (el asm puede leerlos via los operandos register-bound).
             case IrOp::INLINE_ASM:
             case IrOp::MEMCPY:
+            case IrOp::VSTORE:
             case IrOp::SETFIELD:
             case IrOp::ARRAY_STORE:
             case IrOp::STRFINALIZE:
@@ -6613,6 +6615,7 @@ bool ir_pass_licm(IrFunction &fn) {
                 switch (ins.op) {
                 case IrOp::STORE:
                 case IrOp::MEMCPY:
+                case IrOp::VSTORE:
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:
@@ -7559,6 +7562,7 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::SETFIELD:
     case IrOp::ARRAY_STORE:
     case IrOp::MEMCPY:
+    case IrOp::VSTORE:
     case IrOp::STRFINALIZE:
     case IrOp::GCWB_IR:
     // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE LEE
@@ -7624,12 +7628,12 @@ static bool is_sched_barrier(IrOp op) {
  * dependen del previo (orden de escritura es observable). */
 static bool is_store_like(IrOp op) {
     return op == IrOp::STORE || op == IrOp::SETFIELD ||
-           op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY;
+           op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY || op == IrOp::VSTORE;
 }
 
 static bool is_load_like(IrOp op) {
     return op == IrOp::LOAD || op == IrOp::GETFIELD || op == IrOp::ARRAY_LOAD ||
-           op == IrOp::ARRAY_LEN;
+           op == IrOp::ARRAY_LEN || op == IrOp::VLOAD;
 }
 
 /* Terminadores: deben quedar al final del bloque. */

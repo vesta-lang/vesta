@@ -118,6 +118,10 @@ static const OpEntry OP_TABLE[] = {
     {"fceil", IrOp::FCEIL},
     {"fround", IrOp::FROUND},
     {"ftrunc", IrOp::FTRUNC},
+    // ops vectoriales (auto-vectorizacion)
+    {"vload", IrOp::VLOAD},
+    {"vstore", IrOp::VSTORE},
+    {"vbinop", IrOp::VBINOP},
     // aritmetica entera extendida (Math-IR-promote wave 4)
     {"iabs", IrOp::IABS},
     {"imin", IrOp::IMIN},
@@ -546,7 +550,8 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::TRYENTER || ins.op == IrOp::GCWB_IR ||
         ins.op == IrOp::GCDEREF_IR || ins.op == IrOp::ARRAY_STORE ||
         ins.op == IrOp::RETHROW || ins.op == IrOp::RSPAWN_RETURN ||
-        ins.op == IrOp::SMARTPTR_FREE || ins.op == IrOp::STRFINALIZE) {
+        ins.op == IrOp::SMARTPTR_FREE || ins.op == IrOp::STRFINALIZE ||
+        ins.op == IrOp::VSTORE) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -751,6 +756,31 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         print_val(o, fn, ins.operands[1]);
         o << ", ";
         print_val(o, fn, ins.operands[2]);
+        break;
+
+    case IrOp::VLOAD:
+        // vload.fN [%host_ptr]   imm=ancho
+        o << " [";
+        print_val(o, fn, ins.operands[0]);
+        o << "], w=" << ins.imm;
+        break;
+
+    case IrOp::VSTORE:
+        // vstore.fN %vec, %host_ptr   imm=ancho
+        o << " ";
+        print_val(o, fn, ins.operands[0]);
+        o << ", ";
+        print_val(o, fn, ins.operands[1]);
+        o << ", w=" << ins.imm;
+        break;
+
+    case IrOp::VBINOP:
+        // vbinop.fN %a, %b   imm=(subop<<8)|ancho
+        o << " ";
+        print_val(o, fn, ins.operands[0]);
+        o << ", ";
+        print_val(o, fn, ins.operands[1]);
+        o << ", imm=" << ins.imm;
         break;
 
     case IrOp::GETFIELD:
