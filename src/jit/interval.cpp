@@ -476,6 +476,41 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
         }
     }
 
+    /* ---- 3c) coalesce_hint: para ops 2-address (dst = src1 OP src2) ----
+     * Registrar hint[dst] = src1 para que el linear_scan prefiera el fisico de
+     * src1 al asignar dst (si libre = src1 murio -> coalescing seguro), de modo
+     * que el legalizado elida el `mov dst, src1`.  Cubre ALU (ADD/SUB/AND/OR/
+     * XOR/IMUL) y shifts/rotates (mov dst,src1 + sh dst,imm). */
+    {
+        out.coalesce_hint.assign(NV, -1);
+        auto is_two_addr = [](MOp op) -> bool {
+            switch (op) {
+            case MOp::ADD:
+            case MOp::SUB:
+            case MOp::AND:
+            case MOp::OR:
+            case MOp::XOR:
+            case MOp::IMUL:
+            case MOp::SHL:
+            case MOp::SHR:
+            case MOp::SAR:
+            case MOp::ROL:
+            case MOp::ROR: return true;
+            default: return false;
+            }
+        };
+        for (size_t b = 0; b < NB; ++b) {
+            for (const MInstr &mi : mf.blocks[b].instrs) {
+                if (!is_two_addr(mi.op)) continue;
+                if (!mi.dst.is_vreg() || !mi.src1.is_vreg()) continue;
+                const uint32_t d = mi.dst.vreg_id();
+                const uint32_t s = mi.src1.vreg_id();
+                if (d == s || d >= NV || s >= NV) continue;
+                out.coalesce_hint[d] = static_cast<int32_t>(s);
+            }
+        }
+    }
+
     /* ---- 4) Construccion de rangos POR BLOQUE via live-in/out ----
      * Para cada bloque y cada vreg, se calcula su rango EN ese bloque a
      * partir de @c live_in/@c live_out (ya computados) + su primera
