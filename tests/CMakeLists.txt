@@ -156,6 +156,11 @@ list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/runtime/exec_instruction
 # de los binarios de test.
 list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/capi/")
 
+# El servidor LSP (src/lsp/) tiene su propio main() en lsp_main.cpp -> colisiona
+# con el main() de cada binario de test (multiple definition).  Se excluye igual
+# que en el CMakeLists principal (que crea vesta_lsp como ejecutable aparte).
+list(FILTER ALL_PROJECT_SOURCES EXCLUDE REGEX "/src/lsp/")
+
 # Fuentes del modulo distribuido (agregadas explicitamente porque GLOB_RECURSE
 # puede estar cacheado desde antes de que existiera el directorio src/distrib/)
 list(APPEND ALL_PROJECT_SOURCES ${CMAKE_SOURCE_DIR}/src/distrib/mailbox.cpp)

@@ -33,6 +33,8 @@
 
 #include "vex/lowering.h"
 
+#include "jit/vec_isa.h" // ancho del chunk vectorizado (SSE2/AVX2/AVX512)
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -439,10 +441,12 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
         std::fprintf(stderr, "[mc-idiom] MATCH vec_for idx=%s subop=%d\n",
                      idx_name.c_str(), subop);
 
-    // ======== Emitir el loop vectorizado (W=2 f64) + cola escalar. ========
+    // ======== Emitir el loop vectorizado + cola escalar. ========
+    // El chunk (16/32/64 bytes) lo elige la ISA: SSE2 W=2, AVX2 W=4, AVX512 W=8
+    // (f64).  El IR es portable: el JIT descompone el chunk al ancho del host.
     const uint32_t ln = s->loc.line;
-    const uint64_t width = 16;  // bytes por VEC_BINOP (128b SSE2)
-    const uint64_t W = width / esz; // lanes: f64/i64=2, i32=4
+    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t W = width / esz; // lanes segun ancho/tipo
 
     // Bajar el VALOR inicial + las bases directamente (NO lower_stmt(init), que
     // declararia `i` address-taken -> ALLOCA).  NO re-bajamos el AST del cuerpo
@@ -953,9 +957,10 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
                      idx_name.c_str(), acc_name.c_str());
 
     // ======== Emitir: acumulador vectorial + reduccion horizontal + cola.
+    // El ancho del acumulador vectorial lo elige la ISA (16/32/64 = W lanes).
     const uint32_t ln = s->loc.line;
-    const uint64_t width = 16;          // 128b SSE2
-    const uint64_t W = width / esz;     // f64/i64=2 lanes, i32=4 lanes
+    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t W = width / esz;     // lanes segun ancho/tipo
 
     // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
     const ir::IrValueId acc_init = lookup(acc_name);
@@ -1010,20 +1015,25 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
     const ir::IrBlockId tbody = fn_->new_block("vred_tail_body");
     const ir::IrBlockId exit = fn_->new_block("vred_exit");
 
-    // --- entry: acc_slot host 16B = {0,0}; consts; BR mhdr ---
+    // --- entry: acc_slot host `width` bytes = {0..}; consts; BR mhdr ---
     current_block_ = entry;
     const ir::IrValueId acc_slot = fn_->new_value(ir::IrType::PTR);
     fn_->values[acc_slot].is_host_ptr = true;
     {
         ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
-        al.dst = acc_slot; al.imm = 16; al.host_alloca = true;
+        al.dst = acc_slot; al.imm = static_cast<int64_t>(width);
+        al.host_alloca = true;
         al.source_line = ln; fn_->append(entry, std::move(al));
     }
-    // zero-init de los 16 bytes del slot (2 stores de 8 bytes a 0), valido
-    // para cualquier tipo de elemento (W lanes f64/i64/i32 == todo a 0).
+    // zero-init de los `width` bytes del slot (width/8 stores de 8 bytes a 0),
+    // valido para cualquier tipo de elemento (W lanes == todo a 0).
     const ir::IrValueId v_zero8 = emit_const(ir::IrType::I64, 0, ln);
-    store_zero8(acc_slot, v_zero8);
-    store_zero8(ptr_at(acc_slot, emit_const(ir::IrType::I64, 8, ln)), v_zero8);
+    for (uint64_t q = 0; q < width; q += 8) {
+        const ir::IrValueId at =
+            (q == 0) ? acc_slot
+                     : ptr_at(acc_slot, emit_const(ir::IrType::I64, q, ln));
+        store_zero8(at, v_zero8);
+    }
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
