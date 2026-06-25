@@ -2189,6 +2189,46 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* VEC_BINOP dst[i] = a[i] OP b[i] (auto-vectorizacion).  SIMD
+             * packed: MOVUPD xmm0,[a]; MOVUPD xmm1,[b]; <ADDPD/...> xmm0,xmm1;
+             * MOVUPD [dst],xmm0.  Solo 128b (W=2 f64) por ahora.  Robusto:
+             * save/restore de xmm0/xmm1 en pila (por si el FP-regalloc los
+             * tiene vivos) y dst/a/b a R10/R11 (scratch GP no asignable). */
+            case ir::IrOp::VEC_BINOP: {
+                flush_pending();
+                if (in.operands.size() != 3) return false;
+                const uint64_t width = in.imm & 0xFF;
+                const uint64_t subop = (in.imm >> 8) & 0xFF;
+                if (width != 16) return false; // solo 128b (SSE2 W=2 f64)
+                const MOp pop = (subop == 0)   ? MOp::ADDPD
+                                : (subop == 1) ? MOp::SUBPD
+                                : (subop == 2) ? MOp::MULPD
+                                               : MOp::DIVPD;
+                // Usamos los XMM scratch ALTOS (XMM14/XMM15): el FP-regalloc
+                // del vreg asigna los XMM bajos primero, asi que estos rara vez
+                // estan vivos en el cuerpo del loop vectorizado (que no tiene
+                // otros valores FP).  TODO robustez: reservarlos formalmente en
+                // el regalloc (clobber set de VEC_BINOP) o save/restore sin
+                // SUB/ADD RSP (que el encoder no soporta en este path).
+                const MOperand x0 = MOperand::make_reg(MReg::XMM14, 16);
+                const MOperand x1 = MOperand::make_reg(MReg::XMM15, 16);
+                const MOperand r10 = MOperand::make_reg(MReg::R10, 8);
+                const MOperand r11 = MOperand::make_reg(MReg::R11, 8);
+                // load a, b
+                O.push_back(MInstr::make_unary(MOp::MOV, r10, vr(in.operands[1])));
+                O.push_back(MInstr::make_unary(MOp::MOV, r11, vr(in.operands[2])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOVUPD, x0, MOperand::make_mem(MReg::R10, 0)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOVUPD, x1, MOperand::make_mem(MReg::R11, 0)));
+                O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= x1
+                // store -> dst
+                O.push_back(MInstr::make_unary(MOp::MOV, r10, vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOVUPD, MOperand::make_mem(MReg::R10, 0), x0));
+                break;
+            }
+
             /* Phase AS inc.5: bloque de inline-asm nativo.  El cuerpo
              * (NASM Intel, ya con comptime-consts sustituidas por el
              * frontend) se ENSAMBLA a bytes via g_asm_backend; se emite
