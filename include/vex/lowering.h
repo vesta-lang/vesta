@@ -286,6 +286,13 @@ class Lowering {
     void lower_if(ast::IfStmt *s);
     void lower_return(ast::ReturnStmt *s);
     void lower_while(ast::WhileStmt *s);
+    /// Auto-vectorizacion (idioma memcpy): si @p s es exactamente el patron
+    /// de copia de bytes/elementos `while (i < N) { dst[i] = src[i]; i++; }`
+    /// sobre punteros HOST, lo reemplaza por un unico @c MEMCPY (el JIT/AOT lo
+    /// bajan a @c rep @c movsb / SIMD; el interprete a un bucle host->host).
+    /// Devuelve true si reconocio y bajo el idioma (el llamante debe @c return);
+    /// false si no matchea (seguir con el lowering normal del while).
+    bool try_lower_memcpy_idiom(ast::WhileStmt *s);
     void lower_do_while(ast::DoWhileStmt *s);
     void lower_for(ast::ForStmt *s);
     void lower_try(ast::TryStmt *s);
