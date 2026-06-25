@@ -179,7 +179,12 @@ void do_throw(ProcessVM *vm, uint64_t exception_ptr) {
             // convencion: R00 contiene el puntero al objeto excepcion
             vm->registers.regs[R00].qword(exception_ptr);
             vm->registers.rip.qword(handler_addr); // saltar al handler
-            vm->decoded_ptr->flags_info.did_jump = true;
+            // did_jump solo lo consume el loop del interprete (dispatch_table:
+            // `if (!decoded_ptr->did_jump)`).  Cuando do_throw corre desde un
+            // frame JIT (vrt_throw_user/vrt_unwrap_throw), decoded_ptr puede
+            // ser NULL -> el redirect lo detecta enter_jit comparando rip,
+            // asi que aqui basta con guardar el deref (path frio).
+            if (vm->decoded_ptr) vm->decoded_ptr->flags_info.did_jump = true;
             return;
         }
         ef = ef->prev;
@@ -225,8 +230,11 @@ void do_throw(ProcessVM *vm, uint64_t exception_ptr) {
 
                 // saltar al handler dentro del metodo
                 vm->registers.rip.qword(method->code_vaddr + h.handler_pc);
-                vm->decoded_ptr->flags_info.did_jump =
-                    true; // notificar el salto
+                // Guarda decoded_ptr null (throw desde frame JIT); ver nota
+                // en el path TRYENTER de arriba.
+                if (vm->decoded_ptr)
+                    vm->decoded_ptr->flags_info.did_jump =
+                        true; // notificar el salto
                 return;
             }
         }
