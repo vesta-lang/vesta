@@ -203,19 +203,23 @@ enum class IrOp : uint16_t {
                    ///<   (@c roundsd con bits 0-1 de imm8 = rounding mode), en
     ///<   ARM (@c frintm/p/n/z), en WASM (@c f64.floor/ceil/nearest/trunc)
     ///<   y en RISC-V (@c fcvt.l.d con rounding mode).  Reactivados.
-    // ---- ops VECTORIALES (auto-vectorizacion, 0x2D-0x2F) ----
-    // Compiler-internas: las emite el matcher de vectorize.cpp para loops
-    // element-wise.  El "valor" es un VECTOR de W elementos que vive en un
-    // registro FP/ZMM (vreg FP class).  imm bits 0-7 = ancho en bytes (16/32/
-    // 64 = 128/256/512b); para VBINOP bits 8-15 = sub-op (0=add 1=sub 2=mul
-    // 3=div).  Punteros HOST.  Bajada por backend:
-    //   interp: VLOAD = movh host->VM-stack + fload->ZMM;  VBINOP = fadd[.ps]
-    //           packed;  VSTORE = fstore ZMM->VM-stack + movh->host.  (Sin
-    //           opcodes VM nuevos; roundtrip correcto -- el interp es oraculo.)
-    //   jit/aot: VLOAD=MOVUPD, VBINOP=ADDPD/..., VSTORE=MOVUPD (SIMD directo).
-    VLOAD = 0x2D,  ///< %vec = vload.fN [%host_ptr]       imm=ancho_bytes
-    VSTORE = 0x2E, ///< vstore.fN %vec, %host_ptr         imm=ancho_bytes
-    VBINOP = 0x2F, ///< %vec = vbinop.fN %a, %b   imm=(subop<<8)|ancho_bytes
+    // ---- ops VECTORIALES FUSIONADAS (auto-vectorizacion, 0x2D-0x2F) ----
+    // Compiler-internas: las emite el matcher de vectorize.cpp para el cuerpo
+    // de un loop element-wise (W elementos por iteracion).  Son FUSIONADAS
+    // (load+op+store en UNA op) para NO necesitar un "valor vectorial" SSA: el
+    // modelo de valores del IR es de 8 bytes (GP) y un vector son 16/32/64B, asi
+    // que el vector vive solo TRANSITORIO dentro de la op (zmm0/zmm1 scratch en
+    // interp, xmm0/xmm1 en jit).  Operandos = punteros HOST a los elementos i.
+    // imm bits 0-7 = ancho en bytes (16/32/64 = 128/256/512b); bits 8-15 = sub-op.
+    // Bajada por backend (reusa ops EXISTENTES; cero opcodes VM nuevos):
+    //   interp: movh host<->VM-stack scratch + fload/fstore ZMM + f<op>[.ps]
+    //           packed.  Roundtrip correcto (interp = oraculo).
+    //   jit/aot: MOVUPD [ptr] + <packed op> + MOVUPD (SIMD directo).
+    // VEC_UNOP dst[i] = OP a[i]    (subop 0=copy 1=fneg 2=fabs 3=fsqrt)
+    // VEC_BINOP dst[i] = a[i] OP b[i] (subop 0=fadd 1=fsub 2=fmul 3=fdiv)
+    VEC_UNOP = 0x2D, ///< vec_unop.fN %dst_ptr, %a_ptr        imm=(subop<<8)|ancho
+    VEC_BINOP = 0x2E, ///< vec_binop.fN %dst_ptr, %a_ptr, %b_ptr imm=(subop<<8)|ancho
+    VEC_RESERVED = 0x2F, ///< reservado (futuro: vec ternario / FMA / reduccion)
 
     // ---- logica y desplazamientos (0x30-0x3F) ----
     AND = 0x30, ///< %dst = and.T    %a, %b

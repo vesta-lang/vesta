@@ -108,7 +108,8 @@ static bool is_side_effecting(IrOp op) {
     // memoria
     case IrOp::STORE:
     case IrOp::MEMCPY:
-    case IrOp::VSTORE:
+    case IrOp::VEC_UNOP:
+    case IrOp::VEC_BINOP:
     case IrOp::SETFIELD:
     // OOP con efectos
     case IrOp::NEWOBJ:
@@ -5301,7 +5302,8 @@ bool ir_pass_dse(IrFunction &fn) {
             // (el asm puede leerlos via los operandos register-bound).
             case IrOp::INLINE_ASM:
             case IrOp::MEMCPY:
-            case IrOp::VSTORE:
+            case IrOp::VEC_UNOP:
+            case IrOp::VEC_BINOP:
             case IrOp::SETFIELD:
             case IrOp::ARRAY_STORE:
             case IrOp::STRFINALIZE:
@@ -6615,7 +6617,8 @@ bool ir_pass_licm(IrFunction &fn) {
                 switch (ins.op) {
                 case IrOp::STORE:
                 case IrOp::MEMCPY:
-                case IrOp::VSTORE:
+                case IrOp::VEC_UNOP:
+                case IrOp::VEC_BINOP:
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:
@@ -7562,7 +7565,8 @@ static bool is_sched_barrier(IrOp op) {
     case IrOp::SETFIELD:
     case IrOp::ARRAY_STORE:
     case IrOp::MEMCPY:
-    case IrOp::VSTORE:
+    case IrOp::VEC_UNOP:
+    case IrOp::VEC_BINOP:
     case IrOp::STRFINALIZE:
     case IrOp::GCWB_IR:
     // Sprint string-perf-2 bug fix (2026-06-02): STRMAKE LEE
@@ -7627,13 +7631,16 @@ static bool is_sched_barrier(IrOp op) {
  * STOREs previos del mismo bloque (conservativo).  Otros STOREs tambien
  * dependen del previo (orden de escritura es observable). */
 static bool is_store_like(IrOp op) {
+    // VEC_UNOP/VEC_BINOP escriben memoria (dst) y ademas leen (a/b): tratarlas
+    // como store-like es la barrera conservativa correcta.
     return op == IrOp::STORE || op == IrOp::SETFIELD ||
-           op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY || op == IrOp::VSTORE;
+           op == IrOp::ARRAY_STORE || op == IrOp::MEMCPY ||
+           op == IrOp::VEC_UNOP || op == IrOp::VEC_BINOP;
 }
 
 static bool is_load_like(IrOp op) {
     return op == IrOp::LOAD || op == IrOp::GETFIELD || op == IrOp::ARRAY_LOAD ||
-           op == IrOp::ARRAY_LEN || op == IrOp::VLOAD;
+           op == IrOp::ARRAY_LEN;
 }
 
 /* Terminadores: deben quedar al final del bloque. */
