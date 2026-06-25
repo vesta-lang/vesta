@@ -297,6 +297,12 @@ class Lowering {
     /// del memcpy).  Cubre el for que DECLARA la var del loop en @c init
     /// (loop-local), evitando el writeback de scope post-loop.
     bool try_lower_memcpy_idiom_for(ast::ForStmt *s);
+    /// Auto-vectorizacion aritmetica: @c for(T i=init; i<N; i++) c[i]=a[i] OP
+    /// b[i]; con a/b/c punteros f64 HOST y OP in {+,-,*,/}.  Emite un loop
+    /// principal que procesa W=2 elementos por iteracion via @c VEC_BINOP
+    /// (SIMD packed en JIT/AOT, escalar por lane en interp) + una cola escalar
+    /// re-bajando el cuerpo para el resto (N % W).  Devuelve true si matcheo.
+    bool try_vectorize_elementwise_for(ast::ForStmt *s);
     /// Valida que @p asg sea exactamente @c dst[idx] = src[idx] con bases
     /// IdentExpr HOST ptr/array de igual tamano de elemento.  Compartido por
     /// las formas while/for.  Rellena las bases y el tamano de elemento.

@@ -4952,6 +4952,9 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // Auto-vectorizacion: la forma canonica del memcpy
     // `for (T i = init; i < N; i++) dst[i] = src[i];` (ver vectorize.cpp).
     if (try_lower_memcpy_idiom_for(s)) return;
+    // Auto-vectorizacion aritmetica: `for (...) c[i] = a[i] OP b[i];` f64 host
+    // -> loop W=2 con VEC_BINOP (SIMD) + cola escalar.
+    if (try_vectorize_elementwise_for(s)) return;
 
     // for(init; cond; step) body
     //
