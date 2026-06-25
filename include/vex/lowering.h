@@ -293,6 +293,26 @@ class Lowering {
     /// Devuelve true si reconocio y bajo el idioma (el llamante debe @c return);
     /// false si no matchea (seguir con el lowering normal del while).
     bool try_lower_memcpy_idiom(ast::WhileStmt *s);
+    /// Igual para @c for(T i=init; i<N; i++) dst[i]=src[i]; (la forma canonica
+    /// del memcpy).  Cubre el for que DECLARA la var del loop en @c init
+    /// (loop-local), evitando el writeback de scope post-loop.
+    bool try_lower_memcpy_idiom_for(ast::ForStmt *s);
+    /// Valida que @p asg sea exactamente @c dst[idx] = src[idx] con bases
+    /// IdentExpr HOST ptr/array de igual tamano de elemento.  Compartido por
+    /// las formas while/for.  Rellena las bases y el tamano de elemento.
+    bool mc_match_copy_assign(ast::AssignExpr *asg, const std::string &idx_name,
+                              ast::IdentExpr **out_dst, ast::IdentExpr **out_src,
+                              size_t *out_esz);
+    /// Emite el MEMCPY equivalente a la copia en @c current_block_.  @p v_idx
+    /// es el SSA del indice inicial (ya resuelto por el llamante: lookup para
+    /// el while, lower del init para el for).  Si @p idx_name_for_post no esta
+    /// vacio, ademas escribe el idx post-loop = idx_init+count en ese nombre de
+    /// scope (solo el while con idx externa lo necesita).  Devuelve false si
+    /// @p v_idx no es un entero o si algun lower_expr fallo (defensivo).
+    bool mc_emit_copy(ir::IrValueId v_idx, ast::Expr *limit,
+                      ast::IdentExpr *dst_base, ast::IdentExpr *src_base,
+                      size_t esz, uint32_t ln,
+                      const std::string &idx_name_for_post);
     void lower_do_while(ast::DoWhileStmt *s);
     void lower_for(ast::ForStmt *s);
     void lower_try(ast::TryStmt *s);
