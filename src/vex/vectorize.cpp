@@ -73,6 +73,95 @@ static bool mc_is_increment_expr(ast::Expr *e, const std::string &idx) {
     return false;
 }
 
+namespace {
+/// Descriptor normalizado de un loop contador vectorizable, extraido de un
+/// @c for o un @c while.  @c body_exprs son las sentencias del cuerpo (sin el
+/// incremento), cada una un @c AssignExpr; @c for_init es la expr del valor
+/// inicial de @c idx para @c for (el frontend la baja fresca), o @c nullptr
+/// para @c while (el indice ya esta declarado -> el valor inicial es el binding
+/// SSA actual via lookup).
+struct VecLoop {
+    std::string idx_name;
+    ast::Expr *limit = nullptr;        // N (cond.rhs)
+    std::vector<ast::Expr *> body_exprs; // sentencias del cuerpo (AssignExpr)
+    ast::Expr *for_init = nullptr;     // vd->init (for) o nullptr (while)
+};
+
+/// Extrae un @c VecLoop de un @c for(T i=init; i<N; i++) BODY o de un
+/// @c while(i<N){ BODY; i=i+1; }.  El cuerpo del @c for es 1 sentencia; el del
+/// @c while son las sentencias previas a un incremento final de @c i.  Devuelve
+/// false si la forma no encaja (cualquier desviacion -> el loop se baja normal).
+bool mc_extract_vec_loop(ast::Stmt *s, VecLoop &out) {
+    using namespace ast;
+    if (!s) return false;
+    // cond comun: i < N con i identificador y N ident/intlit.
+    auto parse_cond = [&](ast::Expr *cond) -> bool {
+        if (!cond || cond->kind != NodeKind::BinaryExpr) return false;
+        auto *c = static_cast<BinaryExpr *>(cond);
+        if (c->op != BinOp::Lt) return false;
+        if (!c->lhs || c->lhs->kind != NodeKind::IdentExpr) return false;
+        if (!c->rhs) return false;
+        const NodeKind rk = c->rhs->kind;
+        if (rk != NodeKind::IdentExpr && rk != NodeKind::IntLitExpr)
+            return false;
+        out.idx_name = static_cast<IdentExpr *>(c->lhs.get())->name;
+        out.limit = c->rhs.get();
+        return true;
+    };
+    // extrae el ExprStmt(AssignExpr) de una sentencia; null si no lo es.
+    auto as_assign = [](ast::Stmt *st) -> ast::Expr * {
+        if (!st || st->kind != NodeKind::ExprStmt) return nullptr;
+        auto *e = static_cast<ExprStmt *>(st)->expr.get();
+        return (e && e->kind == NodeKind::AssignExpr) ? e : nullptr;
+    };
+    if (s->kind == NodeKind::ForStmt) {
+        auto *f = static_cast<ForStmt *>(s);
+        if (!f->cond || !f->body || !f->init || !f->step) return false;
+        if (!parse_cond(f->cond.get())) return false;
+        if (f->init->kind != NodeKind::VarDeclStmt) return false;
+        auto *vd = static_cast<VarDeclStmt *>(f->init.get());
+        if (vd->name != out.idx_name || !vd->init) return false;
+        if (!mc_is_increment_expr(f->step.get(), out.idx_name)) return false;
+        // cuerpo = 1 sentencia (ExprStmt directo o Block de 1).
+        ast::Expr *be = nullptr;
+        if (f->body->kind == NodeKind::ExprStmt) {
+            be = as_assign(f->body.get());
+        } else if (f->body->kind == NodeKind::BlockStmt) {
+            auto *b = static_cast<BlockStmt *>(f->body.get());
+            if (b->body.size() != 1) return false;
+            be = as_assign(b->body[0].get());
+        }
+        if (!be) return false;
+        out.body_exprs.push_back(be);
+        out.for_init = vd->init.get();
+        return true;
+    }
+    if (s->kind == NodeKind::WhileStmt) {
+        auto *w = static_cast<WhileStmt *>(s);
+        if (!w->cond || !w->body) return false;
+        if (!parse_cond(w->cond.get())) return false;
+        if (w->body->kind != NodeKind::BlockStmt) return false;
+        auto *b = static_cast<BlockStmt *>(w->body.get());
+        // cuerpo = [AssignExpr...; incremento de idx final].  >=2 sentencias.
+        if (b->body.size() < 2) return false;
+        if (!mc_is_increment_expr(
+                b->body.back()->kind == NodeKind::ExprStmt
+                    ? static_cast<ExprStmt *>(b->body.back().get())->expr.get()
+                    : nullptr,
+                out.idx_name))
+            return false;
+        for (size_t i = 0; i + 1 < b->body.size(); ++i) {
+            ast::Expr *be = as_assign(b->body[i].get());
+            if (!be) return false;
+            out.body_exprs.push_back(be);
+        }
+        out.for_init = nullptr; // while: valor inicial = binding SSA actual
+        return true;
+    }
+    return false;
+}
+} // namespace
+
 bool Lowering::mc_match_copy_assign(ast::AssignExpr *asg,
                                     const std::string &idx_name,
                                     ast::IdentExpr **out_dst,
@@ -331,42 +420,16 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
                         s->loc.line, /*idx_name_for_post=*/std::string());
 }
 
-bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
+bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     using namespace ast;
     static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
-    if (!s->cond || !s->body || !s->init || !s->step) return false;
 
-    // --- estructura: for (T i = init; i < N; i++) c[i] = a[i] OP b[i]; ---
-    if (s->cond->kind != NodeKind::BinaryExpr) return false;
-    auto *cond = static_cast<BinaryExpr *>(s->cond.get());
-    if (cond->op != BinOp::Lt) return false;
-    if (!cond->lhs || cond->lhs->kind != NodeKind::IdentExpr) return false;
-    if (!cond->rhs) return false;
-    {
-        const NodeKind lk = cond->rhs->kind;
-        if (lk != NodeKind::IdentExpr && lk != NodeKind::IntLitExpr)
-            return false;
-    }
-    const std::string idx_name =
-        static_cast<IdentExpr *>(cond->lhs.get())->name;
-    if (s->init->kind != NodeKind::VarDeclStmt) return false;
-    auto *vd = static_cast<VarDeclStmt *>(s->init.get());
-    if (vd->name != idx_name || !vd->init) return false;
-    if (!mc_is_increment_expr(s->step.get(), idx_name)) return false;
-
-    // body = un solo stmt: c[idx] = a[idx] OP b[idx].
-    ast::Expr *bexpr = nullptr;
-    if (s->body->kind == NodeKind::ExprStmt) {
-        bexpr = static_cast<ExprStmt *>(s->body.get())->expr.get();
-    } else if (s->body->kind == NodeKind::BlockStmt) {
-        auto *b = static_cast<BlockStmt *>(s->body.get());
-        if (b->body.size() != 1 || !b->body[0] ||
-            b->body[0]->kind != NodeKind::ExprStmt)
-            return false;
-        bexpr = static_cast<ExprStmt *>(b->body[0].get())->expr.get();
-    } else {
-        return false;
-    }
+    // --- estructura: for/while  c[i] = a[i] OP b[i];  i++ ---
+    VecLoop vl;
+    if (!mc_extract_vec_loop(s, vl)) return false;
+    if (vl.body_exprs.size() != 1) return false; // un solo stmt vectorizable
+    const std::string &idx_name = vl.idx_name;
+    auto *bexpr = vl.body_exprs[0];
     if (!bexpr || bexpr->kind != NodeKind::AssignExpr) return false;
     auto *asg = static_cast<AssignExpr *>(bexpr);
     if (asg->op != AssignOp::Assign) return false;
@@ -454,11 +517,14 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
     // para la cola (la var `i` es address-taken en el AST -> el load del index
     // leeria de un slot inexistente); emitimos la op escalar de la cola a mano
     // con phi_it + las bases.  Sin push_scope: solo leemos vars externas.
-    const ir::IrValueId i_init = lower_expr(vd->init.get());
+    // for: baja el init fresco.  while: el indice ya esta declarado -> usa su
+    // binding SSA actual (lookup), igual que el memcpy-idiom while.
+    const ir::IrValueId i_init =
+        vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
     const ir::IrValueId v_b = lower_expr(b_base);
     const ir::IrValueId v_c = lower_expr(c_base);
-    const ir::IrValueId v_N = lower_expr(cond->rhs.get());
+    const ir::IrValueId v_N = lower_expr(vl.limit);
     if (i_init == ir::IR_NO_VALUE || v_a == ir::IR_NO_VALUE ||
         v_b == ir::IR_NO_VALUE || v_c == ir::IR_NO_VALUE ||
         v_N == ir::IR_NO_VALUE)
@@ -615,42 +681,16 @@ bool Lowering::try_vectorize_elementwise_for(ast::ForStmt *s) {
     return true;
 }
 
-bool Lowering::try_vectorize_unary_for(ast::ForStmt *s) {
+bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     using namespace ast;
     static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
-    if (!s->cond || !s->body || !s->init || !s->step) return false;
 
-    // --- estructura: for (T i = init; i < N; i++) b[i] = OP a[i]; ---
-    if (s->cond->kind != NodeKind::BinaryExpr) return false;
-    auto *cond = static_cast<BinaryExpr *>(s->cond.get());
-    if (cond->op != BinOp::Lt) return false;
-    if (!cond->lhs || cond->lhs->kind != NodeKind::IdentExpr) return false;
-    if (!cond->rhs) return false;
-    {
-        const NodeKind lk = cond->rhs->kind;
-        if (lk != NodeKind::IdentExpr && lk != NodeKind::IntLitExpr)
-            return false;
-    }
-    const std::string idx_name =
-        static_cast<IdentExpr *>(cond->lhs.get())->name;
-    if (s->init->kind != NodeKind::VarDeclStmt) return false;
-    auto *vd = static_cast<VarDeclStmt *>(s->init.get());
-    if (vd->name != idx_name || !vd->init) return false;
-    if (!mc_is_increment_expr(s->step.get(), idx_name)) return false;
-
-    // body = un solo stmt: b[idx] = OP a[idx].
-    ast::Expr *bexpr = nullptr;
-    if (s->body->kind == NodeKind::ExprStmt) {
-        bexpr = static_cast<ExprStmt *>(s->body.get())->expr.get();
-    } else if (s->body->kind == NodeKind::BlockStmt) {
-        auto *b = static_cast<BlockStmt *>(s->body.get());
-        if (b->body.size() != 1 || !b->body[0] ||
-            b->body[0]->kind != NodeKind::ExprStmt)
-            return false;
-        bexpr = static_cast<ExprStmt *>(b->body[0].get())->expr.get();
-    } else {
-        return false;
-    }
+    // --- estructura: for/while  b[i] = OP a[i];  i++ ---
+    VecLoop vl;
+    if (!mc_extract_vec_loop(s, vl)) return false;
+    if (vl.body_exprs.size() != 1) return false;
+    const std::string &idx_name = vl.idx_name;
+    auto *bexpr = vl.body_exprs[0];
     if (!bexpr || bexpr->kind != NodeKind::AssignExpr) return false;
     auto *asg = static_cast<AssignExpr *>(bexpr);
     if (asg->op != AssignOp::Assign) return false;
@@ -723,10 +763,11 @@ bool Lowering::try_vectorize_unary_for(ast::ForStmt *s) {
     const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
-    const ir::IrValueId i_init = lower_expr(vd->init.get());
+    const ir::IrValueId i_init =
+        vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
     const ir::IrValueId v_b = lower_expr(b_base);
-    const ir::IrValueId v_N = lower_expr(cond->rhs.get());
+    const ir::IrValueId v_N = lower_expr(vl.limit);
     if (i_init == ir::IR_NO_VALUE || v_a == ir::IR_NO_VALUE ||
         v_b == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE)
         return false;
@@ -871,42 +912,16 @@ bool Lowering::try_vectorize_unary_for(ast::ForStmt *s) {
     return true;
 }
 
-bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
+bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     using namespace ast;
     static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
-    if (!s->cond || !s->body || !s->init || !s->step) return false;
 
-    // --- estructura: for (T i = init; i < N; i++) acc = acc + a[i]; ---
-    if (s->cond->kind != NodeKind::BinaryExpr) return false;
-    auto *cond = static_cast<BinaryExpr *>(s->cond.get());
-    if (cond->op != BinOp::Lt) return false;
-    if (!cond->lhs || cond->lhs->kind != NodeKind::IdentExpr) return false;
-    if (!cond->rhs) return false;
-    {
-        const NodeKind lk = cond->rhs->kind;
-        if (lk != NodeKind::IdentExpr && lk != NodeKind::IntLitExpr)
-            return false;
-    }
-    const std::string idx_name =
-        static_cast<IdentExpr *>(cond->lhs.get())->name;
-    if (s->init->kind != NodeKind::VarDeclStmt) return false;
-    auto *vd = static_cast<VarDeclStmt *>(s->init.get());
-    if (vd->name != idx_name || !vd->init) return false;
-    if (!mc_is_increment_expr(s->step.get(), idx_name)) return false;
-
-    // body = un solo stmt: acc = acc + a[idx].
-    ast::Expr *bexpr = nullptr;
-    if (s->body->kind == NodeKind::ExprStmt) {
-        bexpr = static_cast<ExprStmt *>(s->body.get())->expr.get();
-    } else if (s->body->kind == NodeKind::BlockStmt) {
-        auto *b = static_cast<BlockStmt *>(s->body.get());
-        if (b->body.size() != 1 || !b->body[0] ||
-            b->body[0]->kind != NodeKind::ExprStmt)
-            return false;
-        bexpr = static_cast<ExprStmt *>(b->body[0].get())->expr.get();
-    } else {
-        return false;
-    }
+    // --- estructura: for/while  acc = acc + a[i];  i++ ---
+    VecLoop vl;
+    if (!mc_extract_vec_loop(s, vl)) return false;
+    if (vl.body_exprs.size() != 1) return false;
+    const std::string &idx_name = vl.idx_name;
+    auto *bexpr = vl.body_exprs[0];
     if (!bexpr || bexpr->kind != NodeKind::AssignExpr) return false;
     auto *asg = static_cast<AssignExpr *>(bexpr);
     if (asg->op != AssignOp::Assign) return false;
@@ -967,9 +982,10 @@ bool Lowering::try_vectorize_reduction_for(ast::ForStmt *s) {
 
     // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
     const ir::IrValueId acc_init = lookup(acc_name);
-    const ir::IrValueId i_init = lower_expr(vd->init.get());
+    const ir::IrValueId i_init =
+        vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
     const ir::IrValueId v_a = lower_expr(a_base);
-    const ir::IrValueId v_N = lower_expr(cond->rhs.get());
+    const ir::IrValueId v_N = lower_expr(vl.limit);
     if (acc_init == ir::IR_NO_VALUE || i_init == ir::IR_NO_VALUE ||
         v_a == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE)
         return false;

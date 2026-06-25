@@ -4541,6 +4541,13 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     // host->host en el interprete).  Si no matchea, seguimos con el lowering
     // normal del while.
     if (try_lower_memcpy_idiom(s)) return;
+    // Auto-vectorizacion aritmetica/unaria/reduccion sobre la forma `while`:
+    // `while (i < N) { c[i] = a[i] OP b[i]; i++; }` (y unaria/reduccion) ->
+    // mismo VEC_BINOP/VEC_UNOP que el `for`.  Los matchers extraen el descriptor
+    // de loop de un for o while via mc_extract_vec_loop.
+    if (try_vectorize_elementwise_for(s)) return;
+    if (try_vectorize_unary_for(s)) return;
+    if (try_vectorize_reduction_for(s)) return;
 
     // Pre-walk: variables mutadas en cond+body.
     std::set<std::string> modified;
