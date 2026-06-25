@@ -2952,12 +2952,46 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     }
 
     case IrOp::MEMCPY: {
+        // memcpy HOST->HOST: copia ins.operands[2] bytes desde [src] a [dst],
+        // ambos punteros del proceso HOST.  El viejo `vmcopy` era VM->host
+        // (cursor) -- incorrecto para punteros host y, en la practica, codigo
+        // muerto (solo lo emitian rutas que corren por vreg/AOT, nunca por el
+        // interprete).  El JIT (vreg) baja MEMCPY a `rep movsb`; aqui, para el
+        // interprete (oraculo de diff_harness), emitimos un bucle host->host
+        // byte a byte.  Robusto frente al regalloc: push/pop de r10/r11/r12
+        // como temporales (pueden tener SSA vivos) y r13 como scratch del
+        // byte.  Los operandos se materializan via push de su VALOR (sin
+        // hazard de parallel-move) y se sacan a r10/r11/r12.
         if (ins.operands.size() < 3) break;
-        std::string r_dst_ = ctx.reg_of(ins.operands[0]);
-        std::string r_src_ = ctx.reg_of(ins.operands[1]);
-        std::string r_len_ = ctx.reg_of(ins.operands[2]);
-        ctx.out << "    vmcopy " << r_dst_ << ", " << r_src_ << ", " << r_len_
-                << "\n";
+        const std::string lbl_top = ctx.unique_lbl("memcpy_top");
+        const std::string lbl_end = ctx.unique_lbl("memcpy_end");
+        ctx.out << "    push r10\n"; // salvar temporales
+        ctx.out << "    push r11\n";
+        ctx.out << "    push r12\n";
+        // Empujar los VALORES de dst/src/len (load_src materializa spills).
+        ctx.out << "    push " << ctx.load_src(ins.operands[0], 0) << "\n";
+        ctx.out << "    push " << ctx.load_src(ins.operands[1], 0) << "\n";
+        ctx.out << "    push " << ctx.load_src(ins.operands[2], 0) << "\n";
+        ctx.out << "    pop r12\n"; // len
+        ctx.out << "    pop r11\n"; // src
+        ctx.out << "    pop r10\n"; // dst
+        ctx.out << "    cmpu r12, 0\n";
+        ctx.out << "    jmp.je @Absolute(\"" << EmitCtx::abs_lbl(lbl_end)
+                << "\")\n";
+        ctx.out << lbl_top << ":\n";
+        ctx.out << "    loadzh r13b, r11\n";    // byte host [src]
+        ctx.out << "    movh [r10], r13b\n";    // byte host [dst]
+        ctx.out << "    addu r10, 1\n";
+        ctx.out << "    addu r11, 1\n";
+        ctx.out << "    decjnz r12, @Absolute(\"" << EmitCtx::abs_lbl(lbl_top)
+                << "\")\n"; // r12--; if r12!=0 -> top
+        ctx.out << lbl_end << ":\n";
+        ctx.out << "    pop r12\n"; // restaurar temporales
+        ctx.out << "    pop r11\n";
+        ctx.out << "    pop r10\n";
+        // r13/r14 quedan clobreados; invalidar caches de constante.
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
         break;
     }
 
