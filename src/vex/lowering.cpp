@@ -8489,66 +8489,162 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             fn_->new_block(std::string("match_arm_") + e->arms[i].variant_name);
     }
 
-    // Encadenar cmps en el bloque actual: si tag == tag_i, br a
-    // arm_blocks[i]; si no, fall-through al siguiente cmp.  El
-    // ultimo cmp falla -> br a default_bb (o merge_bb si no hay
-    // default).
+    // ---- Dispatch del match: estrategia segun el caso (hiperoptimizado) ----
+    // - Con guards: cadena lineal O(N) (los guards necesitan el "siguiente
+    //   arm" via arm_fall_bbs).
+    // - Sin guards y N>=5: BST balanceado O(log N) (cmp_lt en los nodos +
+    //   cmp_eq en las hojas).  Beneficia interp Y JIT (ops existentes).
+    // - (jumptable denso O(1): se anade despues sobre este mismo dispatch.)
+    bool match_any_guard = false;
+    for (const auto &a : e->arms)
+        if (a.guard) {
+            match_any_guard = true;
+            break;
+        }
+    // Recolectar los casos concretos (tag, bloque) ordenados por tag.
+    std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
+    sw_cases.reserve(e->arms.size());
     for (size_t i = 0; i < e->arms.size(); ++i) {
         if (static_cast<ssize_t>(i) == default_arm_idx) continue;
-        // Buscar el tag de la variante.
         const EnumVariantInfo *var = nullptr;
-        for (const auto &v : elay.variants) {
+        for (const auto &v : elay.variants)
             if (v.name == e->arms[i].variant_name) {
                 var = &v;
                 break;
             }
-        }
         if (!var) continue;
-
-        // cmp_eq tag_v == var->tag
-        ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
-        ir::IrValueId tag_const =
-            emit_const(ir::IrType::I64, static_cast<uint64_t>(var->tag),
-                       e->arms[i].loc.line);
-        {
-            ir::IrInstr cm{};
-            cm.op = ir::IrOp::CMP_EQ;
-            cm.type = ir::IrType::BOOL;
-            cm.dst = cmp_v;
-            cm.operands = {tag_v, tag_const};
-            cm.source_line = e->arms[i].loc.line;
-            fn_->append(current_block_, std::move(cm));
-        }
-
-        // br_cond cmp -> arm_blocks[i], else fall_block
-        const ir::IrBlockId fall_bb = fn_->new_block("match_next");
-        arm_fall_bbs[i] = fall_bb; // para uso si la arm tiene guard
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(cmp_v);
-        br.target_block = arm_blocks[i];
-        br.false_block = fall_bb;
-        br.source_line = e->arms[i].loc.line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(arm_blocks[i]);
-        fn_->blocks[current_block_].succs.push_back(fall_bb);
-        fn_->blocks[arm_blocks[i]].preds.push_back(current_block_);
-        fn_->blocks[fall_bb].preds.push_back(current_block_);
-
-        current_block_ = fall_bb;
-        block_terminated_ = false;
+        sw_cases.push_back(
+            {static_cast<int64_t>(var->tag), arm_blocks[i]});
     }
-    // Tras la cadena de cmps, el bloque actual es la rama "ninguna
-    // variante matcheada".  Saltamos al default si existe, o al
-    // merge directamente.
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = default_bb;
-        br.source_line = e->loc.line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(default_bb);
-        fn_->blocks[default_bb].preds.push_back(current_block_);
+    std::sort(sw_cases.begin(), sw_cases.end());
+    const bool use_bst = !match_any_guard && sw_cases.size() >= 5;
+
+    // Helper local: anade una arista CFG (succ + pred).
+    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
+        fn_->blocks[from].succs.push_back(to);
+        fn_->blocks[to].preds.push_back(from);
+    };
+
+    if (use_bst) {
+        // BST balanceado sobre sw_cases [lo,hi).  En cada nodo interno:
+        // cmp_lt tag < cases[mid] -> izquierda [lo,mid); else derecha
+        // [mid,hi).  En hojas (<=2 casos): cmp_eq lineal -> arm; al final
+        // br a default_bb.  O(log N) comparaciones.
+        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
+            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
+                current_block_ = cur;
+                if (hi - lo <= 2) {
+                    for (size_t k = lo; k < hi; ++k) {
+                        ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
+                        ir::IrValueId tc = emit_const(
+                            ir::IrType::I64,
+                            static_cast<uint64_t>(sw_cases[k].first),
+                            e->loc.line);
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_EQ;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = cmp_v;
+                        cm.operands = {tag_v, tc};
+                        cm.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(cm));
+                        ir::IrBlockId nb = fn_->new_block("sw_next");
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.operands.push_back(cmp_v);
+                        br.target_block = sw_cases[k].second;
+                        br.false_block = nb;
+                        br.source_line = e->loc.line;
+                        fn_->append(current_block_, std::move(br));
+                        sw_edge(current_block_, sw_cases[k].second);
+                        sw_edge(current_block_, nb);
+                        current_block_ = nb;
+                    }
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.target_block = default_bb;
+                    br.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(br));
+                    sw_edge(current_block_, default_bb);
+                    return;
+                }
+                const size_t mid = lo + (hi - lo) / 2;
+                ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
+                ir::IrValueId tc = emit_const(
+                    ir::IrType::I64,
+                    static_cast<uint64_t>(sw_cases[mid].first), e->loc.line);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LT; // tag < cases[mid] (con signo)
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp_v;
+                cm.operands = {tag_v, tc};
+                cm.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(cm));
+                ir::IrBlockId lb = fn_->new_block("sw_lt");
+                ir::IrBlockId rb = fn_->new_block("sw_ge");
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands.push_back(cmp_v);
+                br.target_block = lb; // tag < mid
+                br.false_block = rb;  // tag >= mid
+                br.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(br));
+                sw_edge(current_block_, lb);
+                sw_edge(current_block_, rb);
+                emit_bst(lo, mid, lb);
+                emit_bst(mid, hi, rb);
+            };
+        emit_bst(0, sw_cases.size(), current_block_);
+    } else {
+        // Cadena lineal O(N) (con guards, o pocos casos).
+        for (size_t i = 0; i < e->arms.size(); ++i) {
+            if (static_cast<ssize_t>(i) == default_arm_idx) continue;
+            const EnumVariantInfo *var = nullptr;
+            for (const auto &v : elay.variants) {
+                if (v.name == e->arms[i].variant_name) {
+                    var = &v;
+                    break;
+                }
+            }
+            if (!var) continue;
+
+            ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
+            ir::IrValueId tag_const =
+                emit_const(ir::IrType::I64, static_cast<uint64_t>(var->tag),
+                           e->arms[i].loc.line);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_EQ;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = cmp_v;
+                cm.operands = {tag_v, tag_const};
+                cm.source_line = e->arms[i].loc.line;
+                fn_->append(current_block_, std::move(cm));
+            }
+
+            const ir::IrBlockId fall_bb = fn_->new_block("match_next");
+            arm_fall_bbs[i] = fall_bb; // para uso si la arm tiene guard
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(cmp_v);
+            br.target_block = arm_blocks[i];
+            br.false_block = fall_bb;
+            br.source_line = e->arms[i].loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, arm_blocks[i]);
+            sw_edge(current_block_, fall_bb);
+
+            current_block_ = fall_bb;
+            block_terminated_ = false;
+        }
+        // Ultima rama: ninguna variante matcheada -> default (o merge).
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.target_block = default_bb;
+            br.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(br));
+            sw_edge(current_block_, default_bb);
+        }
     }
 
     // Snapshot bindings ANTES de las arms para PHI en merge.
