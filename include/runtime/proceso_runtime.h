@@ -704,6 +704,14 @@ class ProcessVM {
                                      ///< los regs en el unwind).
                                      ///< R0 se preserva PERO el catch lo
                                      ///< sobreescribe con la excepcion.
+        /// Excepciones in-JIT (Opcion B).  Si != 0, el handler vive en codigo
+        /// JIT-eado (no bytecode): @c do_throw resume via @c vrt_resume_jit
+        /// (restaura @c native_rsp/@c native_rbp del frame host y salta a
+        /// @c native_catch_addr) en lugar de poner rip=handler_pc para el
+        /// interp.  0 = frame de interp (ruta clasica intacta).
+        uint64_t native_catch_addr = 0; ///< direccion nativa del bloque catch
+        uint64_t native_rsp = 0;        ///< RSP host del frame del try
+        uint64_t native_rbp = 0;        ///< RBP host del frame del try
         struct ExceptionFrame *prev; ///< Frame anterior en la pila
     };
 
@@ -729,6 +737,15 @@ class ProcessVM {
      * ProcessVM via @c free_exc_pool (en .cpp).
      */
     ExceptionFrame *exc_free_list = nullptr;
+
+    /// Excepciones in-JIT (Opcion B): handoff transitorio de RSP/RBP host del
+    /// frame del try.  El codigo JIT los escribe (MOV [rbx+off], rsp/rbp)
+    /// justo antes de llamar a @c vrt_tryenter_jit, que los lee y los copia al
+    /// @c ExceptionFrame.  Evita un 5o argumento en pila (Win64).  No es
+    /// estado persistente: solo vive entre el store del JIT y la lectura del
+    /// wrapper (inmediata, sin reentradas en medio incluso con try anidados).
+    uint64_t jit_exc_rsp = 0;
+    uint64_t jit_exc_rbp = 0;
 
     /// Slot reusable para FatalError instance.  Aloca lazy en
     /// el primer @c throw_fatal y se reutiliza en throws sucesivos

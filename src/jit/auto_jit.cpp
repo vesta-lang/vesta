@@ -245,6 +245,18 @@ VregEntries make_vreg_entries() {
         e.dlopen = reinterpret_cast<uint64_t>(g_runtime_entries->dlopen);
         e.str_conv = reinterpret_cast<uint64_t>(g_runtime_entries->str_conv);
         e.panic_str = reinterpret_cast<uint64_t>(g_runtime_entries->panic_str);
+        /* Excepciones in-JIT (Opcion B). */
+        e.tryenter_jit =
+            reinterpret_cast<uint64_t>(g_runtime_entries->tryenter_jit);
+        e.tryleave = reinterpret_cast<uint64_t>(g_runtime_entries->tryleave);
+        e.throw_user =
+            reinterpret_cast<uint64_t>(g_runtime_entries->throw_user);
+        /* Offsets handoff RSP/RBP del tryenter in-JIT (offsetof type-based;
+         * conditionally-supported en tipo no-standard-layout, OK en GCC). */
+        e.jit_exc_rsp_off =
+            static_cast<int32_t>(offsetof(runtime::ProcessVM, jit_exc_rsp));
+        e.jit_exc_rbp_off =
+            static_cast<int32_t>(offsetof(runtime::ProcessVM, jit_exc_rbp));
         /* Class registry (Fase 2). */
         e.findclass = reinterpret_cast<uint64_t>(g_runtime_entries->findclass);
         e.findmethod =

@@ -752,6 +752,26 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put32(out, 0); /* placeholder rel32 */
         return true;
     }
+    case MOp::LEA_LABEL: {
+        /* lea r64, [rip+disp32] -> direccion NATIVA de un LABEL local
+         * (intra-funcion).  Mismo encoding que LEA_RIP_SYM pero el disp32 lo
+         * resuelve un MFixup (label local) en lugar de un MReloc (simbolo).
+         * disp = label_off - instr_end (rip-relativo, igual que jmp/jcc). */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::LABEL) {
+            put8(out, 0xCC);
+            return true;
+        }
+        put_rex(out, true, mi.dst.reg, 0); /* REX.W + REX.R si dst>=R8 */
+        put8(out, 0x8D);
+        put8(out, modrm(0, mi.dst.reg & 7, 5)); /* mod=00 rm=101 -> [rip+d32] */
+        const uint32_t patch_at = static_cast<uint32_t>(out.size());
+        put32(out, 0); /* placeholder disp32 */
+        const uint32_t instr_end = static_cast<uint32_t>(out.size());
+        fn.fixups.push_back(MFixup{static_cast<MLabelId>(mi.src1.value),
+                                   patch_at, instr_end, 4});
+        return true;
+    }
     case MOp::LEA_RIP_SYM: {
         /* AOT: lea r64, [rip+disp32] -> direccion de un dato (.rodata)
          * position-independent.  REX.W + 8D + ModRM(mod=00,reg=dst,rm=101

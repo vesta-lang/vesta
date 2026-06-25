@@ -557,6 +557,12 @@ enum class MOp : uint8_t {
             ///< .rodata por NOMBRE (ref position-independent, default
             ///< AOT).  dst = reg/vreg, src1 = IMM32(sym_idx).  El
             ///< encoder emite 48 8D 05 + disp32=0 + MReloc{DATA_REL32}.
+    LEA_LABEL =
+        91, ///< lea dst, [rip+disp32] -> direccion NATIVA de un LABEL local
+            ///< (intra-funcion).  dst = reg/vreg, src1 = LABEL(label_id).  El
+            ///< encoder emite 48 8D 05 + disp32=0 + MFixup{label} (mismo
+            ///< rel32 que jmp/jcc: disp = label_off - instr_end).  Usado por
+            ///< TRYENTER in-JIT para capturar la direccion del bloque catch.
 
     /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
      * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
@@ -888,6 +894,17 @@ struct MInstr {
         i.op = MOp::LEA_RIP_SYM;
         i.dst = dst;
         i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+        return i;
+    }
+
+    /** @brief LEA_LABEL: @p dst = direccion nativa del @p label_id local
+     *  (RIP-relativo intra-funcion).  El encoder emite lea reg,[rip+disp32=0]
+     *  + un @c MFixup{label} (mismo rel32 que jmp/jcc). */
+    static MInstr make_lea_label(MOperand dst, uint32_t label_id) noexcept {
+        MInstr i;
+        i.op = MOp::LEA_LABEL;
+        i.dst = dst;
+        i.src1 = MOperand::make_label(label_id);
         return i;
     }
 };

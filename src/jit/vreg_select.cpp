@@ -1518,19 +1518,131 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_call_abs(out.intern_imm64(ent.panic_str)));
                 break;
             }
-            /* TRYENTER/TRYLEAVE/THROW: NO se compilan en vreg.  Una funcion con
-             * su PROPIO try/catch resume el handler (catch) en bytecode interp
-             * via do_throw (rip=handler_pc); pero los locals de la funcion viven
-             * en slots/vregs del frame JIT (host stack), NO en proc->registers
-             * que el interp lee al resumir -> mismatch -> el catch ve basura.
-             * Resumir el catch correctamente requiere deopt maps (reconstruir
-             * el estado interp desde el frame JIT), trabajo arquitectural
-             * pendiente.  Mientras tanto, bail -> la funcion corre en interp
-             * (correcto).  OJO: una funcion SIN try/catch que SOLO lanza
-             * (unwrap/panic) SI compila: el throw cross-function se desenrolla
-             * al catch del caller (interp), cuyos locals viven en
-             * proc->registers (ver el make_ret de UNWRAP + el guard de
-             * decoded_ptr en do_throw). */
+            /* LANDINGPAD: primera op del bloque catch in-JIT.  do_throw deja
+             * la excepcion en proc->registers[0]; el catch la lee de ahi. */
+            case ir::IrOp::LANDINGPAD: {
+                flush_pending();
+                if (!vm || in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), "landingpad(no-vm)");
+                    return false;
+                }
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, vr(in.dst), vm_reg_mem(0)));
+                break;
+            }
+            /* TRYENTER (in-JIT, Opcion B): registra un ExceptionFrame con la
+             * direccion NATIVA del bloque catch (LEA_LABEL al label del
+             * handler) + handoff de rsp/rbp host.  El catch (in.target_block)
+             * corre EN JIT; un throw que lo matchee resume via vrt_resume_jit
+             * (do_throw) -- sin traduccion al interp.  El edge abnormal
+             * tryenter->catch se registra en extra_succs para que la liveness
+             * mantenga vivos (force-spill) los valores que el catch usa. */
+            case ir::IrOp::TRYENTER: {
+                flush_pending();
+                const ir::IrBlockId hb = in.target_block;
+                if (!vm || ent.tryenter_jit == 0 || in.operands.size() < 2 ||
+                    hb == ir::IR_NO_BLOCK || hb >= blbl.size() ||
+                    ent.jit_exc_rsp_off < 0 || ent.jit_exc_rbp_off < 0) {
+                    vreg_dbg(fn.name.c_str(), "tryenter(no-vm/no-entry)");
+                    return false;
+                }
+                /* imm=1: el catch puede capturar un AV de OS (catch-all o
+                 * FatalError) -> in-JIT inseguro (av_recovery clobbea los slots
+                 * del frame JIT antes del resume).  Bail -> la fn corre en
+                 * interp (correcto).  Ver nota en lower_try. */
+                if (in.imm != 0) {
+                    vreg_dbg(fn.name.c_str(), "tryenter-av-catchable");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg te_a0 = MReg::RCX, te_a1 = MReg::RDX,
+                           te_a2 = MReg::R8;
+#else
+                const MReg te_a0 = MReg::RDI, te_a1 = MReg::RSI,
+                           te_a2 = MReg::RDX;
+#endif
+                /* handoff: proc->jit_exc_rsp/rbp = rsp/rbp host (frame estable
+                 * del try; vrt_resume_jit los restaurara). */
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV,
+                    MOperand::make_mem(MReg::RBX, ent.jit_exc_rsp_off),
+                    MOperand::make_reg(MReg::RSP, 8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV,
+                    MOperand::make_mem(MReg::RBX, ent.jit_exc_rbp_off),
+                    MOperand::make_reg(MReg::RBP, 8)));
+                /* catch native addr -> R10 (scratch staging, igual que DLOPEN);
+                 * type (op1) -> R11.  Luego mover a arg regs + proc=RBX. */
+                O.push_back(MInstr::make_lea_label(
+                    MOperand::make_reg(MReg::R10, 8), blbl[hb]));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R11, 8),
+                                               vr(in.operands[1])));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(te_a1, 8),
+                                               MOperand::make_reg(MReg::R11, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(te_a2, 8),
+                                               MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(te_a0, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.tryenter_jit)));
+                /* Edge abnormal: el catch es sucesor (via runtime) del bloque
+                 * del tryenter -> liveness/force-spill. */
+                mb.extra_succs.push_back(static_cast<MBlockId>(hb));
+                break;
+            }
+            /* TRYLEAVE: salida normal del try -> pop del ExceptionFrame.
+             * CALL vrt_tryleave(proc). */
+            case ir::IrOp::TRYLEAVE: {
+                flush_pending();
+                if (!vm || ent.tryleave == 0) {
+                    vreg_dbg(fn.name.c_str(), "tryleave(no-vm/no-entry)");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg tl_a0 = MReg::RCX;
+#else
+                const MReg tl_a0 = MReg::RDI;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(tl_a0, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.tryleave)));
+                break;
+            }
+            /* THROW: lanza una excepcion user-defined.  CALL vrt_throw_user;
+             * do_throw resume el catch (in-JIT via vrt_resume_jit -> no retorna;
+             * o cross-function/uncaught -> retorna y el make_ret devuelve limpio
+             * a enter_jit).  No escribe regs[0] (do_throw lo pone). */
+            case ir::IrOp::THROW: {
+                flush_pending();
+                if (!vm || ent.throw_user == 0 || in.operands.empty()) {
+                    vreg_dbg(fn.name.c_str(), "throw(no-vm/no-entry)");
+                    return false;
+                }
+#if defined(_WIN32)
+                const MReg tw_a0 = MReg::RCX, tw_a1 = MReg::RDX;
+#else
+                const MReg tw_a0 = MReg::RDI, tw_a1 = MReg::RSI;
+#endif
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0])));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(tw_a1, 8),
+                                               MOperand::make_reg(MReg::R10, 8)));
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(tw_a0, 8),
+                                               MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(
+                    MInstr::make_call_abs(out.intern_imm64(ent.throw_user)));
+                O.push_back(MInstr::make_ret());
+                break;
+            }
             /* STRCONV: convierte StringObject a otra codificacion.
              * vrt_str_conv(proc, str, enc).  operands[0]=str, imm=enc.
              * Conversion compleja (UTF-8/16/32) -> CALL directo es lo optimo. */

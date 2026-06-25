@@ -261,6 +261,46 @@ void vrt_tryenter(vrt_proc *proc, uint64_t handler_pc, vrt_class *type_class);
 void vrt_tryleave(vrt_proc *proc);
 
 /**
+ * @brief Push de un frame de excepcion in-JIT (Opcion B): el handler vive en
+ *        codigo JIT-eado, no en bytecode.
+ *
+ * @param proc              proceso actual.
+ * @param type_class        ClassInfo* a matchear; NULL = catch-all.
+ * @param native_catch_addr direccion nativa del bloque catch JIT.
+ *
+ * El RSP/RBP host del frame del try se pasan por handoff transitorio en
+ * @c proc->jit_exc_rsp / @c proc->jit_exc_rbp (el JIT los escribe justo antes
+ * de llamar aqui), evitando un 5o argumento en pila en Win64.  A diferencia de
+ * @c vrt_tryenter (handler en bytecode), un throw que matchee este frame NO
+ * resume el interp: @c do_throw llama @c vrt_resume_jit para saltar a
+ * @c native_catch_addr con el frame host restaurado.  La excepcion la deja en
+ * @c proc->registers[0] (el catch la lee via LANDINGPAD).
+ */
+void vrt_tryenter_jit(vrt_proc *proc, vrt_class *type_class,
+                      uint64_t native_catch_addr);
+
+/**
+ * @brief Reanuda un catch in-JIT: restaura el frame host y salta al catch.
+ *
+ * Stub asm (UNICA pieza arch-especifica del modelo de excepciones JIT/AOT):
+ * @c rbp=native_rbp; @c rsp=native_rsp; @c jmp catch_addr.  Abandona los
+ * frames nativos intermedios (calls anidados + los frames C de
+ * @c vrt_throw_user/@c do_throw) reseteando RSP.  NUNCA retorna.  La excepcion
+ * ya esta en @c proc->registers[0] (la puso @c do_throw); el catch la lee via
+ * LANDINGPAD.  @c do_throw ya hizo la limpieza VM (host_allocas, frames OOP)
+ * antes de llamar aqui.
+ */
+#if defined(_MSC_VER)
+__declspec(noreturn)
+#endif
+void vrt_resume_jit(uint64_t catch_addr, uint64_t native_rsp,
+                    uint64_t native_rbp, uint64_t proc)
+#if defined(__GNUC__)
+    __attribute__((noreturn))
+#endif
+    ;
+
+/**
  * @brief Lanza una excepcion user-defined desde codigo JIT.
  *
  * Toma un GcHandle (codificado como i64) de un objeto excepcion previamente
