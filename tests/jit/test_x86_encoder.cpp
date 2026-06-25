@@ -498,6 +498,48 @@ void test_exec_sum_loop() {
 
 } // namespace
 
+/* Packed FP SSE2 (auto-vectorizacion): 2x f64 sobre XMM (prefijo 66). */
+void test_encode_addpd() {
+    /* addpd xmm0, xmm1 -> 66 0F 58 C1 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::ADDPD, MOperand::make_reg(MReg::XMM0),
+                            MOperand::make_reg(MReg::XMM1))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0x66, 0x0F, 0x58, 0xC1}));
+}
+void test_encode_mulpd() {
+    /* mulpd xmm2, xmm3 -> 66 0F 59 D3 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::MULPD, MOperand::make_reg(MReg::XMM2),
+                            MOperand::make_reg(MReg::XMM3))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0x66, 0x0F, 0x59, 0xD3}));
+}
+void test_encode_movupd_load() {
+    /* movupd xmm0, [rcx] -> 66 0F 10 01 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::MOVUPD, MOperand::make_reg(MReg::XMM0),
+                            MOperand::make_mem(MReg::RCX, 0))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0x66, 0x0F, 0x10, 0x01}));
+}
+void test_encode_movupd_store() {
+    /* movupd [rcx], xmm0 -> 66 0F 11 01 */
+    MFunction fn = make_single_block_fn(
+        {MInstr::make_unary(MOp::MOVUPD, MOperand::make_mem(MReg::RCX, 0),
+                            MOperand::make_reg(MReg::XMM0))});
+    X86Encoder enc;
+    std::vector<uint8_t> out;
+    enc.encode(fn, out);
+    CHECK_BYTES(out, (std::vector<uint8_t>{0x66, 0x0F, 0x11, 0x01}));
+}
+
 int main() {
     /* Encoding tests */
     test_encode_ret();
@@ -513,6 +555,10 @@ int main() {
     test_encode_imul();
     test_encode_load_mem();
     test_encode_store_mem();
+    test_encode_addpd();
+    test_encode_mulpd();
+    test_encode_movupd_load();
+    test_encode_movupd_store();
     test_encode_push_pop();
     test_encode_jmp_label();
     test_encode_jcc();
