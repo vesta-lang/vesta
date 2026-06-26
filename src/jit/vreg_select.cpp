@@ -2478,9 +2478,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 } else {
                     return false;
                 }
-                const uint64_t host_w =
-                    jit::vec_isa_width(jit::vec_emit_isa());
-                const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
+                // PERF: el escalar se carga a XMM con MOVSD/MOVQ (SSE legacy) y
+                // se difunde con UNPCKLPD/VBROADCASTSD.  Si emitieramos los
+                // pasos packed en VEX (ymm/zmm) mezclariamos SSE-legacy con VEX
+                // en CADA iteracion del loop -> penalizacion de transicion
+                // AVX<->SSE (~100 ciclos), ~8x mas lento que el escalar (medido).
+                // Hasta hoistear el broadcast fuera del loop (VEC_BCAST en el
+                // preheader + registro reservado), emitimos los pasos en SSE2
+                // 128b (todo legacy, sin transicion): el chunk AVX/AVX512 se
+                // descompone en piezas de 16B.  Mantiene 3.8-6x sin el cliff.
+                const uint64_t eff_w = 16; // SSE2 128b (evita transicion AVX/SSE)
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
