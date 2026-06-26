@@ -179,7 +179,12 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::ATOMIC_CAS_I64:
     case IrOp::ATOMIC_ADD_I64:
     // -- ensamblador host incrustado (Phase AS) --
-    case IrOp::INLINE_ASM: return AotOpClass::PURE_NATIVE;
+    case IrOp::INLINE_ASM:
+    // -- handle<->ptr en native (AOT.2 sin handle table): el GcHandle ES el
+    //    host_ptr crudo (objetos = ptr de calloc/malloc) -> el selector
+    //    HOST_LEAF los baja a un MOV (passthrough).  PURE_NATIVE. --
+    case IrOp::GC_HANDLE_FOR_PTR:
+    case IrOp::GC_DEREF_HOST: return AotOpClass::PURE_NATIVE;
 
     // -- dependencias de libc que el COMPILADOR sintetiza por
     //    semantica del lenguaje (el usuario no escribio la llamada) --
@@ -217,12 +222,13 @@ static const char *aot_runtime_subsystem(IrOp op) noexcept {
     case IrOp::SETFIELD:
     case IrOp::GC_ALLOC:
     case IrOp::GC_ALLOCP:
-    case IrOp::GC_HANDLE_FOR_PTR:
-    case IrOp::GC_DEREF_HOST:
     case IrOp::GCWB_IR:
     case IrOp::GCDEREF_IR:
         return "GC heap (libvesta_rt; en Bare/Embed: heap+stack estilo C++ via "
                "AOT.2)";
+    // GC_HANDLE_FOR_PTR / GC_DEREF_HOST: en native (AOT.2 sin handle table) son
+    // PASSTHROUGH (el handle ES el host_ptr crudo) -> el selector HOST_LEAF los
+    // baja a un MOV.  PURE_NATIVE (no caen aqui).
     case IrOp::GC_PROMOTE:
     case IrOp::GC_DEMOTE:
     case IrOp::SHARED_STAT: return "memoria compartida (Phase Z runtime)";
