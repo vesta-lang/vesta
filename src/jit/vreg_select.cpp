@@ -2661,14 +2661,23 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
-            /* VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Por chunk:
-             * MOVUPD x0,[acc]; MOVUPD x1,[a]; VFMADD231P{D,S} x0,x1,[b] (x0 =
-             * a*b + acc, 1 redondeo); MOVUPD [acc],x0.  Mismo chunk/descompone
-             * y scratch (gp0/gp1, fp0/fp1) que VEC_BINOP.  b se lee de memoria
-             * (3er operando del FMA) -> solo 2 XMM scratch. */
+            /* VEC_FMA fusionado (1 redondeo).  Dos formas segun #operandos:
+             *  - 3 ops {acc,a,b}: reduccion acc[i] += a[i]*b[i] (acc es a la vez
+             *    sumando y destino).
+             *  - 4 ops {c,d,a,b}: element-wise c[i] = a[i]*b[i] + d[i] (el
+             *    sumando d es un array DISTINTO del destino c).
+             * Por chunk: MOVUPD x0,[sumando]; MOVUPD x1,[a]; VFMADD231 x0,x1,[b]
+             * (x0 = a*b + sumando); MOVUPD [dst],x0.  Mismo chunk/descompone y
+             * scratch (gp0/gp1, fp0/fp1) que VEC_BINOP; b de memoria -> 2 XMM. */
             case ir::IrOp::VEC_FMA: {
                 flush_pending();
-                if (in.operands.size() != 3) return false;
+                if (in.operands.size() != 3 && in.operands.size() != 4)
+                    return false;
+                const bool fma3 = (in.operands.size() == 4); // element-wise
+                const int o_dst = 0;                  // destino (c o acc)
+                const int o_add = fma3 ? 1 : 0;       // sumando (d o acc)
+                const int o_a = fma3 ? 2 : 1;         // multiplicando a
+                const int o_b = fma3 ? 3 : 2;         // multiplicando b (memoria)
                 const uint64_t chunk_w = in.imm & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;
@@ -2702,24 +2711,24 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MOperand r1 = MOperand::make_reg(gp1, 8);
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
-                    // x0 = acc[off]
+                    // x0 = sumando[off] (acc en reduccion, d en element-wise)
                     O.push_back(MInstr::make_unary(MOp::MOV, r0,
-                                                   vr(in.operands[0])));
+                                                   vr(in.operands[o_add])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
                     // x1 = a[off]
                     O.push_back(MInstr::make_unary(MOp::MOV, r1,
-                                                   vr(in.operands[1])));
+                                                   vr(in.operands[o_a])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, x1, MOperand::make_mem(gp1, off)));
                     // x0 = x1 * [b+off] + x0
                     O.push_back(MInstr::make_unary(MOp::MOV, r0,
-                                                   vr(in.operands[2])));
+                                                   vr(in.operands[o_b])));
                     O.push_back(MInstr::make_binary(
                         fma, x0, x1, MOperand::make_mem(gp0, off)));
-                    // acc[off] = x0
+                    // dst[off] = x0 (c en element-wise, acc en reduccion)
                     O.push_back(MInstr::make_unary(MOp::MOV, r0,
-                                                   vr(in.operands[0])));
+                                                   vr(in.operands[o_dst])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
                 }
