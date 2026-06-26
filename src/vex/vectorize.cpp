@@ -800,21 +800,6 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         default: return false;
         }
     };
-    // Aplanar la cadena left-leaning: bajamos por el spine izquierdo recogiendo
-    // (op, operando derecho).  `cur` queda en la hoja mas a la izquierda.
-    std::vector<std::pair<int, ast::Expr *>> raw_steps;
-    ast::Expr *cur = asg->value.get();
-    while (cur && cur->kind == NodeKind::BinaryExpr) {
-        auto *be = static_cast<BinaryExpr *>(cur);
-        int so;
-        if (!subop_of(be->op, &so)) return false;
-        if (!be->rhs) return false;
-        raw_steps.push_back({so, be->rhs.get()});
-        cur = be->lhs.get();
-    }
-    std::reverse(raw_steps.begin(), raw_steps.end()); // orden de evaluacion
-    if (raw_steps.size() < 2) return false; // 1-op -> matchers mas simples
-
     // Solo f64 en v1 (el broadcast escalar de VEC_BINOP_S es f64).
     auto as_f64_arr = [&](ast::Expr *e, IdentExpr **base) -> bool {
         if (!e || e->kind != NodeKind::IndexExpr) return false;
@@ -836,11 +821,17 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         *base = b;
         return true;
     };
+    // Hoja ESCALAR: invariante del loop (ni array[idx] ni referencia a idx).
+    auto is_scalar_leaf = [&](ast::Expr *e) -> bool {
+        if (!e) return false;
+        IdentExpr *tmp = nullptr;
+        if (as_f64_arr(e, &tmp)) return false;             // array -> no escalar
+        if (mc_expr_refs_ident(e, idx_name)) return false; // depende de idx
+        return true;
+    };
 
     IdentExpr *c_base = nullptr;
     if (!as_f64_arr(asg->target.get(), &c_base)) return false;
-    IdentExpr *start_base = nullptr;
-    if (!as_f64_arr(cur, &start_base)) return false; // start debe ser array f64
 
     struct Step {
         int subop;
@@ -848,19 +839,49 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         IdentExpr *arr;
         ast::Expr *scal;
     };
+    // Aplanado RECURSIVO con normalizacion de nodos CONMUTATIVOS: para Add/Mul
+    // se puede intercambiar operandos (a OP b == b OP a, bit-exacto en IEEE)
+    // para poner la sub-cadena array a la izquierda.  Asi vectorizan tambien
+    // `b[i] + a[i]*k` (right-leaning) y `k*a[i] + b[i]` (escalar primero), no
+    // solo el left-leaning `a[i]*k + b[i]`.  NO re-asocia (eso si cambiaria el
+    // redondeo): solo swap de operandos de un mismo nodo.  Atomico (save/restore
+    // de S) para reintentar el swap sin dejar estado sucio.
+    IdentExpr *start_base = nullptr;
     std::vector<Step> S;
-    int n_scalar = 0;
-    for (auto &st : raw_steps) {
+    std::function<bool(ast::Expr *)> flatten = [&](ast::Expr *e) -> bool {
         IdentExpr *ab = nullptr;
-        if (as_f64_arr(st.second, &ab)) {
-            S.push_back({st.first, false, ab, nullptr});
-        } else {
-            if (st.second->kind == NodeKind::IndexExpr) return false; // array no-f64
-            if (mc_expr_refs_ident(st.second, idx_name)) return false; // no invariante
-            if (++n_scalar > 1) return false; // v1: <=1 escalar (1 XMM13)
-            S.push_back({st.first, true, nullptr, st.second});
-        }
-    }
+        if (as_f64_arr(e, &ab)) { start_base = ab; return true; } // hoja inicial
+        if (!e || e->kind != NodeKind::BinaryExpr) return false;
+        auto *be = static_cast<BinaryExpr *>(e);
+        int so;
+        if (!subop_of(be->op, &so)) return false;
+        const bool commutative = (be->op == BinOp::Add || be->op == BinOp::Mul);
+        // Intenta: prefijo (sub-cadena) a la izquierda, hoja a la derecha.
+        auto try_chain = [&](ast::Expr *prefix, ast::Expr *leaf) -> bool {
+            IdentExpr *lb = nullptr;
+            const bool arr = as_f64_arr(leaf, &lb);
+            const bool scal = !arr && is_scalar_leaf(leaf);
+            if (!arr && !scal) return false; // hoja no vectorizable
+            const size_t save = S.size();
+            IdentExpr *save_start = start_base;
+            if (!flatten(prefix)) { // prefijo no es cadena -> restaurar
+                S.resize(save);
+                start_base = save_start;
+                return false;
+            }
+            S.push_back({so, scal, arr ? lb : nullptr, scal ? leaf : nullptr});
+            return true;
+        };
+        if (try_chain(be->lhs.get(), be->rhs.get())) return true;
+        if (commutative && try_chain(be->rhs.get(), be->lhs.get())) return true;
+        return false;
+    };
+    if (!flatten(asg->value.get())) return false;
+    if (S.size() < 2) return false; // 1-op -> matchers mas simples
+    if (!start_base) return false;
+    int n_scalar = 0;
+    for (auto &st : S)
+        if (st.is_scalar && ++n_scalar > 1) return false; // v1: <=1 escalar (XMM13)
 
     const ir::IrType elem_ty = ir::IrType::F64;
     const uint64_t esz = 8;
