@@ -2418,6 +2418,64 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            /* VEC_BINOP_S dst[i] = a[i] OP escalar (escalado/offset).  El escalar
+             * (f64, vreg FP) se DIFUNDE a todos los lanes en x1 UNA vez
+             * (MOVSD x1,scalar + UNPCKLPD/VBROADCASTSD); luego por chunk MOVUPD
+             * x0,[a]; <op> x0,x1; MOVUPD [dst],x0.  Solo f64 por ahora. */
+            case ir::IrOp::VEC_BINOP_S: {
+                flush_pending();
+                if (in.operands.size() != 3) return false;
+                if (!fp_ok || in.type != ir::IrType::F64) return false; // f64 v1
+                const uint64_t chunk_w = in.imm & 0xFF;
+                const uint64_t subop = (in.imm >> 8) & 0xFF;
+                if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
+                    return false;
+                const uint64_t host_w =
+                    jit::vec_isa_width(jit::vec_emit_isa());
+                const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
+                const uint64_t n_pieces = chunk_w / eff_w;
+                const MOp pop = (subop == 0)   ? MOp::ADDPD
+                                : (subop == 1) ? MOp::SUBPD
+                                : (subop == 2) ? MOp::MULPD
+                                               : MOp::DIVPD;
+                const auto &gpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
+                const auto &fpsc =
+                    tri_sel.scratch[static_cast<size_t>(RegClass::FP)];
+                if (gpsc.empty() || fpsc.size() < 2) return false;
+                const MReg gp0 = static_cast<MReg>(gpsc[0]);
+                const MReg fp0 = static_cast<MReg>(fpsc[0]);
+                const MReg fp1 = static_cast<MReg>(fpsc[1]);
+                const uint8_t ew = static_cast<uint8_t>(eff_w);
+                const MOperand x0 = MOperand::make_reg(fp0, ew);
+                const MOperand x1 = MOperand::make_reg(fp1, ew); // escalar wide
+                // difundir el escalar a x1 (una vez).
+                O.push_back(MInstr::make_unary(
+                    MOp::MOVSD, MOperand::make_reg(fp1, 8), vrt(in.operands[2])));
+                if (eff_w <= 16)
+                    O.push_back(MInstr::make_unary(
+                        MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),
+                        MOperand::make_reg(fp1, 16)));
+                else
+                    O.push_back(MInstr::make_unary(
+                        MOp::VBROADCASTSD, x1, MOperand::make_reg(fp1, 16)));
+                for (uint64_t pc = 0; pc < n_pieces; ++pc) {
+                    const int32_t off = static_cast<int32_t>(pc * eff_w);
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[1])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                    O.push_back(MInstr::make_unary(pop, x0, x1)); // x0 OP= esc
+                    O.push_back(MInstr::make_unary(MOp::MOV,
+                                                   MOperand::make_reg(gp0, 8),
+                                                   vr(in.operands[0])));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
+                }
+                break;
+            }
+
             /* VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Por chunk:
              * MOVUPD x0,[acc]; MOVUPD x1,[a]; VFMADD231P{D,S} x0,x1,[b] (x0 =
              * a*b + acc, 1 redondeo); MOVUPD [acc],x0.  Mismo chunk/descompone

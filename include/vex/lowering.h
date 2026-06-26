@@ -303,6 +303,13 @@ class Lowering {
     /// (SIMD packed en JIT/AOT, escalar por lane en interp) + una cola escalar
     /// re-bajando el cuerpo para el resto (N % W).  Devuelve true si matcheo.
     bool try_vectorize_elementwise_for(ast::Stmt *s);
+    /// Auto-vectorizacion de DIFUSION ESCALAR (scalar broadcast):
+    /// @c for(T i=init; i<N; i++) c[i] = a[i] OP scalar; con @c c/@c a punteros
+    /// f64 HOST y @c scalar un valor f64 invariante del loop.  Tambien la forma
+    /// conmutativa @c scalar OP a[i] (add/mul) y el compound @c c[i] OP= scalar.
+    /// El escalar se difunde a todos los lanes (UNPCKLPD/VBROADCASTSD) en JIT/
+    /// AOT, escalar por lane en interp.  Devuelve true si matcheo.
+    bool try_vectorize_scalar_for(ast::Stmt *s);
     /// Auto-vectorizacion UNARIA: @c for(T i=init; i<N; i++) b[i] = OP a[i];
     /// con @c a/@c b punteros f64 HOST y OP in @c -a[i] (fneg), @c sqrt(a[i])
     /// (fsqrt), @c fabs(a[i]) (fabs).  Loop principal W=2 con @c VEC_UNOP (SIMD
