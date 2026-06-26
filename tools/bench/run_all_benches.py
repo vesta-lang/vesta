@@ -74,6 +74,11 @@ class C:
     MAGENTA = "\033[35m" if _enabled else ""
     CYAN = "\033[36m" if _enabled else ""
     GREY = "\033[90m" if _enabled else ""
+    # Colores 256 extendidos para desambiguar los 3 modos AOT (los 6 colores
+    # base ya estan usados por interp/jit/c/cpp/python/java).
+    ORANGE = "\033[38;5;208m" if _enabled else ""  # naranja
+    VIOLET = "\033[38;5;99m" if _enabled else ""   # violeta azulado
+    PINK = "\033[38;5;213m" if _enabled else ""    # rosa
 
     @classmethod
     def enable_windows_ansi(cls):
@@ -568,10 +573,12 @@ def detect_toolchains(vm_bin: Path) -> dict[str, Toolchain]:
         "vex_aot_avx":  "Vex AOT avx2",
         "vex_aot_auto": "Vex AOT auto",
     }
+    # Colores distintos de los 6 base (interp=amarillo, jit=verde, c=azul,
+    # cpp=magenta, python=cian, java=rojo) para que el trio AOT se diferencie.
     _aot_colors = {
-        "vex_aot_sse2": C.BLUE,
-        "vex_aot_avx":  C.CYAN,
-        "vex_aot_auto": C.MAGENTA,
+        "vex_aot_sse2": C.ORANGE,
+        "vex_aot_avx":  C.VIOLET,
+        "vex_aot_auto": C.PINK,
     }
     for _ln in VEX_AOT_MODES:
         tc[_ln] = Toolchain(
@@ -1641,9 +1648,9 @@ def rerender_from_json(json_path: Path, project_root: Path,
     LABELS = {
         "vex_interp":   ("Vex interp",   C.YELLOW),
         "vex_jit":      ("Vex JIT",      C.GREEN),
-        "vex_aot_sse2": ("Vex AOT sse2", C.BLUE),
-        "vex_aot_avx":  ("Vex AOT avx2", C.CYAN),
-        "vex_aot_auto": ("Vex AOT auto", C.MAGENTA),
+        "vex_aot_sse2": ("Vex AOT sse2", C.ORANGE),
+        "vex_aot_avx":  ("Vex AOT avx2", C.VIOLET),
+        "vex_aot_auto": ("Vex AOT auto", C.PINK),
         "c":            ("C (gcc -O3)",  C.BLUE),
         "cpp":          ("C++ (g++ -O3)", C.MAGENTA),
         "python":       ("Python (CPython)", C.CYAN),
