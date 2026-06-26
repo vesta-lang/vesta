@@ -7195,6 +7195,196 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 break;
             }
 
+            // AOT (native_poo): el selector HOST_LEAF NO soporta el op
+            // SMARTPTR_FREE.  Bajamos el cleanup a ops nativas que el selector
+            // ya conoce: guard de null (el slot se zerifica tras un move -> no
+            // llamar al deleter sobre un null) + CALL al deleter (Vesta) /
+            // CALLN (extern) / RAW_FREE (default "free", null-safe) / CALLIND
+            // dinamico (SRET).  El path VM/JIT (no native) sigue usando el op
+            // SMARTPTR_FREE mas abajo.
+            if (native_poo_) {
+                const uint32_t ln = it->source_line;
+                // "free" es null-safe (RAW_FREE(0)=no-op) -> sin guard.
+                if (it->literal_deleter == "free") {
+                    ir::IrInstr fr{};
+                    fr.op = ir::IrOp::RAW_FREE;
+                    fr.type = ir::IrType::VOID;
+                    fr.dst = ir::IR_NO_VALUE;
+                    fr.operands = {v_ptr};
+                    fr.source_line = ln;
+                    fn_->append(current_block_, std::move(fr));
+                    break;
+                }
+                // Resto (deleter custom/extern/SRET): guard `if (ptr != 0)`.
+                const ir::IrBlockId bb_do = fn_->new_block("sp_do");
+                const ir::IrBlockId bb_skip = fn_->new_block("sp_skip");
+                const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, ln);
+                const ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+                {
+                    ir::IrInstr cm{};
+                    cm.op = ir::IrOp::CMP_NE;
+                    cm.type = ir::IrType::BOOL;
+                    cm.dst = v_cond;
+                    cm.operands = {v_ptr, v_z};
+                    cm.source_line = ln;
+                    fn_->append(current_block_, std::move(cm));
+                }
+                {
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR_COND;
+                    br.type = ir::IrType::VOID;
+                    br.dst = ir::IR_NO_VALUE;
+                    br.operands = {v_cond};
+                    br.target_block = bb_do;
+                    br.false_block = bb_skip;
+                    br.source_line = ln;
+                    fn_->append(current_block_, std::move(br));
+                    fn_->blocks[current_block_].succs.push_back(bb_do);
+                    fn_->blocks[current_block_].succs.push_back(bb_skip);
+                    fn_->blocks[bb_do].preds.push_back(current_block_);
+                    fn_->blocks[bb_skip].preds.push_back(current_block_);
+                }
+                current_block_ = bb_do;
+                if (it->literal_deleter.rfind("@extern:", 0) == 0) {
+                    // deleter extern "<lib>:<fn>" -> CALLN (HOST_LEAF lo baja a
+                    // CALL_SYM; el linker lo resuelve).
+                    const std::string sym = it->literal_deleter.substr(8);
+                    ir::IrInstr cn{};
+                    cn.op = ir::IrOp::CALLN;
+                    cn.type = ir::IrType::VOID;
+                    cn.dst = ir::IR_NO_VALUE;
+                    cn.func_name = sym;
+                    cn.operands = {v_ptr};
+                    cn.source_line = ln;
+                    cn.is_call_site = true;
+                    fn_->append(current_block_, std::move(cn));
+                } else if (it->literal_deleter.empty()) {
+                    // SRET: deleter dinamico en slot+8.  Si !=0 -> CALLIND;
+                    // si ==0 -> RAW_FREE.  Nested guard.
+                    const ir::IrValueId v_eight =
+                        emit_const(ir::IrType::I64, 8, ln);
+                    const ir::IrValueId v_slot8 =
+                        fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_slot8].is_host_ptr = true;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::PTR;
+                        ad.dst = v_slot8;
+                        ad.operands = {opnds[0], v_eight};
+                        ad.source_line = ln;
+                        fn_->append(current_block_, std::move(ad));
+                    }
+                    const ir::IrValueId v_del =
+                        fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_del].is_host_ptr = true;
+                    {
+                        ir::IrInstr ld{};
+                        ld.op = ir::IrOp::LOAD;
+                        ld.type = ir::IrType::I64;
+                        ld.dst = v_del;
+                        ld.operands = {v_slot8};
+                        ld.source_line = ln;
+                        fn_->append(current_block_, std::move(ld));
+                    }
+                    const ir::IrBlockId bb_call = fn_->new_block("sp_call");
+                    const ir::IrBlockId bb_free = fn_->new_block("sp_free");
+                    const ir::IrValueId v_z2 =
+                        emit_const(ir::IrType::I64, 0, ln);
+                    const ir::IrValueId v_c2 = fn_->new_value(ir::IrType::BOOL);
+                    {
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_NE;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = v_c2;
+                        cm.operands = {v_del, v_z2};
+                        cm.source_line = ln;
+                        fn_->append(current_block_, std::move(cm));
+                    }
+                    {
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.type = ir::IrType::VOID;
+                        br.dst = ir::IR_NO_VALUE;
+                        br.operands = {v_c2};
+                        br.target_block = bb_call;
+                        br.false_block = bb_free;
+                        br.source_line = ln;
+                        fn_->append(current_block_, std::move(br));
+                        fn_->blocks[current_block_].succs.push_back(bb_call);
+                        fn_->blocks[current_block_].succs.push_back(bb_free);
+                        fn_->blocks[bb_call].preds.push_back(current_block_);
+                        fn_->blocks[bb_free].preds.push_back(current_block_);
+                    }
+                    // bb_call: CALLIND deleter(ptr) -> bb_skip.
+                    current_block_ = bb_call;
+                    {
+                        ir::IrInstr ci{};
+                        ci.op = ir::IrOp::CALLIND;
+                        ci.type = ir::IrType::VOID;
+                        ci.dst = ir::IR_NO_VALUE;
+                        ci.func_ptr = v_del;
+                        ci.operands = {v_ptr};
+                        ci.source_line = ln;
+                        ci.is_call_site = true;
+                        fn_->append(current_block_, std::move(ci));
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR;
+                        br.type = ir::IrType::VOID;
+                        br.target_block = bb_skip;
+                        br.source_line = ln;
+                        fn_->append(current_block_, std::move(br));
+                        fn_->blocks[bb_call].succs.push_back(bb_skip);
+                        fn_->blocks[bb_skip].preds.push_back(bb_call);
+                    }
+                    // bb_free: RAW_FREE(ptr) -> bb_skip.
+                    current_block_ = bb_free;
+                    {
+                        ir::IrInstr fr{};
+                        fr.op = ir::IrOp::RAW_FREE;
+                        fr.type = ir::IrType::VOID;
+                        fr.dst = ir::IR_NO_VALUE;
+                        fr.operands = {v_ptr};
+                        fr.source_line = ln;
+                        fn_->append(current_block_, std::move(fr));
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR;
+                        br.type = ir::IrType::VOID;
+                        br.target_block = bb_skip;
+                        br.source_line = ln;
+                        fn_->append(current_block_, std::move(br));
+                        fn_->blocks[bb_free].succs.push_back(bb_skip);
+                        fn_->blocks[bb_skip].preds.push_back(bb_free);
+                    }
+                    current_block_ = bb_skip;
+                    break;
+                } else {
+                    // deleter Vesta (fn por nombre) -> CALL directo.
+                    ir::IrInstr ca{};
+                    ca.op = ir::IrOp::CALL;
+                    ca.type = ir::IrType::VOID;
+                    ca.dst = ir::IR_NO_VALUE;
+                    ca.func_name = it->literal_deleter;
+                    ca.operands = {v_ptr};
+                    ca.source_line = ln;
+                    ca.is_call_site = true;
+                    fn_->append(current_block_, std::move(ca));
+                }
+                // bb_do -> bb_skip (para extern/vesta; SRET ya retorno).
+                {
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.type = ir::IrType::VOID;
+                    br.target_block = bb_skip;
+                    br.source_line = ln;
+                    fn_->append(current_block_, std::move(br));
+                    fn_->blocks[bb_do].succs.push_back(bb_skip);
+                    fn_->blocks[bb_skip].preds.push_back(bb_do);
+                }
+                current_block_ = bb_skip;
+                break;
+            }
+
             if (it->literal_deleter.empty()) {
                 // SRET case: el smart pointer vino de una funcion
                 // (factory).  No tenemos info compile-time del
