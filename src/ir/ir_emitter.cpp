@@ -3169,6 +3169,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    // VEC_BCAST: hoist del broadcast del escalar a XMM13 (solo JIT).  En el
+    // interprete es NO-OP: el VEC_BINOP_S del cuerpo re-lee el escalar (operando
+    // 2) por lane, asi que no necesita estado pre-difundido.
+    case IrOp::VEC_BCAST:
+        break;
+
     // VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Interp (oraculo) =
     // W ops ESCALARES por lane con `fmadd` (1 redondeo, std::fma) para coincidir
     // BIT-A-BIT con VFMADD231P{D,S} del JIT; un fmul+fadd separado divergiria.

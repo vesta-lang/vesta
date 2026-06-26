@@ -128,6 +128,7 @@ static const OpEntry OP_TABLE[] = {
     {"vec_acc_store", IrOp::VEC_ACC_STORE},
     {"vec_acc_combine", IrOp::VEC_ACC_COMBINE},
     {"vec_binop_s", IrOp::VEC_BINOP_S},
+    {"vec_bcast", IrOp::VEC_BCAST},
     // aritmetica entera extendida (Math-IR-promote wave 4)
     {"iabs", IrOp::IABS},
     {"imin", IrOp::IMIN},
@@ -561,7 +562,7 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         ins.op == IrOp::VEC_ACC_ZERO || ins.op == IrOp::VEC_ACC_ADD ||
         ins.op == IrOp::VEC_ACC_FMA || ins.op == IrOp::VEC_ACC_STORE ||
         ins.op == IrOp::VEC_ACC_COMBINE ||
-        ins.op == IrOp::VEC_BINOP_S) {
+        ins.op == IrOp::VEC_BINOP_S || ins.op == IrOp::VEC_BCAST) {
         print_type = false;
     }
     if (print_type) o << "." << ir_type_name(ins.type);
@@ -792,6 +793,13 @@ static void print_instr(std::ostream &o, const IrFunction &fn,
         print_val(o, fn, ins.operands[1]);
         o << ", ";
         print_val(o, fn, ins.operands[2]);
+        o << ", imm=" << ins.imm;
+        break;
+
+    case IrOp::VEC_BCAST:
+        // vec_bcast %scalar   imm=ancho
+        o << " ";
+        print_val(o, fn, ins.operands[0]);
         o << ", imm=" << ins.imm;
         break;
 

@@ -2478,16 +2478,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 } else {
                     return false;
                 }
-                // PERF: el escalar se carga a XMM con MOVSD/MOVQ (SSE legacy) y
-                // se difunde con UNPCKLPD/VBROADCASTSD.  Si emitieramos los
-                // pasos packed en VEX (ymm/zmm) mezclariamos SSE-legacy con VEX
-                // en CADA iteracion del loop -> penalizacion de transicion
-                // AVX<->SSE (~100 ciclos), ~8x mas lento que el escalar (medido).
-                // Hasta hoistear el broadcast fuera del loop (VEC_BCAST en el
-                // preheader + registro reservado), emitimos los pasos en SSE2
-                // 128b (todo legacy, sin transicion): el chunk AVX/AVX512 se
-                // descompone en piezas de 16B.  Mantiene 3.8-6x sin el cliff.
-                const uint64_t eff_w = 16; // SSE2 128b (evita transicion AVX/SSE)
+                (void)is_fp;
+                // HOIST: el escalar ya esta DIFUNDIDO en XMM13 por un VEC_BCAST
+                // del preheader (imm bit 16).  Asi el cuerpo del loop es VEX PURO
+                // (vmovupd ymm + vop ymm leyendo XMM13) -> ancho AVX/AVX512 sin
+                // re-broadcast ni transicion AVX<->SSE.  XMM13 = acc0 reservado;
+                // scalar-bcast y reduccion no coexisten en un matcher de 1 stmt.
+                const bool hoisted = (in.imm >> 16) & 1;
+                const uint64_t host_w = jit::vec_isa_width(jit::vec_emit_isa());
+                // sin hoist (no deberia pasar desde el matcher actual): fallback
+                // a SSE2 128b (legacy, sin transicion) con auto-broadcast.
+                const uint64_t eff_w = hoisted
+                                           ? (chunk_w < host_w ? chunk_w : host_w)
+                                           : 16;
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
@@ -2499,25 +2502,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
                 const uint8_t ew = static_cast<uint8_t>(eff_w);
                 const MOperand x0 = MOperand::make_reg(fp0, ew);
-                const MOperand x1 = MOperand::make_reg(fp1, ew); // escalar wide
-                // difundir el escalar a x1 (una vez): f64 via MOVSD; entero via
-                // MOVQ_GP_XMM del escalar replicado (sus 64 bits ya repiten el
-                // valor en cada sub-lane).
-                if (is_fp)
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVSD, MOperand::make_reg(fp1, 8),
-                        vrt(in.operands[2])));
-                else
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
-                        vr(in.operands[2])));
-                if (eff_w <= 16)
+                // escalar wide: hoisted -> XMM13 (pre-difundido); si no, fp1.
+                const MReg scalreg =
+                    hoisted ? static_cast<MReg>(reg_id(MReg::XMM13)) : fp1;
+                const MOperand x1 = MOperand::make_reg(scalreg, ew);
+                if (!hoisted) {
+                    // difundir el escalar a fp1 (una vez): f64 via MOVSD; entero
+                    // via MOVQ_GP_XMM del escalar replicado.  Solo SSE2 128b.
+                    if (is_fp)
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVSD, MOperand::make_reg(fp1, 8),
+                            vrt(in.operands[2])));
+                    else
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
+                            vr(in.operands[2])));
                     O.push_back(MInstr::make_unary(
                         MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),
                         MOperand::make_reg(fp1, 16)));
-                else
-                    O.push_back(MInstr::make_unary(
-                        MOp::VBROADCASTSD, x1, MOperand::make_reg(fp1, 16)));
+                }
                 for (uint64_t pc = 0; pc < n_pieces; ++pc) {
                     const int32_t off = static_cast<int32_t>(pc * eff_w);
                     O.push_back(MInstr::make_unary(MOp::MOV,
@@ -2532,6 +2535,43 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, MOperand::make_mem(gp0, off), x0));
                 }
+                break;
+            }
+
+            /* VEC_BCAST: difunde el escalar (operands[0]) a TODOS los lanes de
+             * XMM13 (reservado) UNA vez en el preheader.  El VEC_BINOP_S del
+             * cuerpo lo reusa (hoist) sin re-broadcast.  Una sola transicion
+             * AVX<->SSE aqui (fuera del loop) es despreciable. */
+            case ir::IrOp::VEC_BCAST: {
+                flush_pending();
+                if (in.operands.empty()) return false;
+                if (!fp_ok) return false;
+                const uint64_t chunk_w = in.imm & 0xFF;
+                if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
+                    return false;
+                const bool is_fp = (in.type == ir::IrType::F64);
+                const uint64_t host_w = jit::vec_isa_width(jit::vec_emit_isa());
+                const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
+                const MReg B = static_cast<MReg>(reg_id(MReg::XMM13));
+                // cargar el escalar al low de XMM13: f64 via MOVSD; entero via
+                // MOVQ_GP_XMM del valor ya replicado a 64b.
+                if (is_fp)
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVSD, MOperand::make_reg(B, 8),
+                        vrt(in.operands[0])));
+                else
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVQ_GP_XMM, MOperand::make_reg(B, 16),
+                        vr(in.operands[0])));
+                // difundir el lane de 64b a todo el ancho eff_w.
+                if (eff_w <= 16)
+                    O.push_back(MInstr::make_unary(
+                        MOp::UNPCKLPD, MOperand::make_reg(B, 16),
+                        MOperand::make_reg(B, 16)));
+                else
+                    O.push_back(MInstr::make_unary(
+                        MOp::VBROADCASTSD, MOperand::make_reg(B, eff_w),
+                        MOperand::make_reg(B, 16)));
                 break;
             }
 
