@@ -117,6 +117,9 @@ class Lowering {
     /// esta activo, el lowering de clases baja a layout C-struct +
     /// new->malloc/alloca + ctor directo, SIN __module_init/registry/GC.
     void set_native_poo(bool on) { native_poo_ = on; }
+    /// Bits del target para validar/ensamblar el inline-asm (@Naked / asm{}):
+    /// 64 (defecto), 32 o 16.  Lo fija el driver AOT desde --aot-arch.
+    void set_asm_target_bits(uint8_t bits) { asm_target_bits_ = bits; }
     /// Solo-LSP: bajar tambien las funciones @c comptime (no-macro) a IR para
     /// poder inspeccionar su codegen.  Ver @c CompileOptions::emit_comptime_fns.
     void set_emit_comptime_fns(bool on) { emit_comptime_fns_ = on; }
@@ -1530,6 +1533,8 @@ class Lowering {
     std::string instrument_mode_ = "none";
     /// Phase AOT.2.b: modo POO nativa (sin runtime VM).  Ver set_native_poo.
     bool native_poo_ = false;
+    /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por defecto.
+    uint8_t asm_target_bits_ = 64;
     /// Solo-LSP: bajar comptime fns (no-macro) a IR para inspeccion.
     bool emit_comptime_fns_ = false;
     /// C-3: nombres de los override del string built-in (vacios => default).

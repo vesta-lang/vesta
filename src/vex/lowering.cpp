@@ -9664,8 +9664,13 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     if (vex::g_asm_backend && !body_sub.empty()) {
         // Ensamblar el cuerpo COMPLETO (preserva el contexto de etiquetas: un
         // `jmp .loop` necesita ver la definicion `.loop:` de otra linea).
+        // Arch del TARGET (no del host): 32/16 si --aot-arch lo pide.
+        const vex::AsmArch asm_arch = asm_target_bits_ == 32 ? vex::AsmArch::X86_32
+                                      : asm_target_bits_ == 16
+                                          ? vex::AsmArch::X86_16
+                                          : vex::AsmArch::X86_64;
         vex::AsmAssembleResult ar =
-            vex::g_asm_backend->assemble(body_sub, vex::AsmArch::X86_64);
+            vex::g_asm_backend->assemble(body_sub, asm_arch);
         if (!ar.ok) {
             // Traducir el codigo de Keystone a un mensaje claro en espanol.
             auto human_asm_error = [](const std::string &e) -> std::string {
@@ -9719,8 +9724,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                             (ln.size() >= 2 && ln[0] == '/' && ln[1] == '/');
                         if (!is_comment) {
                             vex::AsmAssembleResult lr =
-                                vex::g_asm_backend->assemble(
-                                    ln, vex::AsmArch::X86_64);
+                                vex::g_asm_backend->assemble(ln, asm_arch);
                             if (!lr.ok &&
                                 lr.error.find("ymbol") == std::string::npos &&
                                 lr.error.find("ndefined") == std::string::npos &&
