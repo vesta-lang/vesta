@@ -2293,10 +2293,20 @@ int main(int argc, char *argv[]) {
                 };
                 std::unordered_map<std::string, const ir::IrFunction *> by_name;
                 for (auto &f : aot_mod.functions) by_name[f.name] = &f;
+                // Modo LIBRERIA: un modulo sin `main` es una libreria (.o/.so);
+                // TODAS sus funciones son raices (son la API publica; no se sabe
+                // quien las llamara desde fuera).  El linker final hace el
+                // dead-strip del ejecutable (--gc-sections), asi que esto NO
+                // infla el .exe: con `main`, la poda desde main mantiene el exe
+                // lean (una funcion no alcanzable se elimina).  Sin esto, una
+                // libreria Vex compilaba a 0 funciones.
+                const bool is_library = (by_name.count("main") == 0);
                 add_live("main");
                 add_live("__module_init");
-                for (auto &f : aot_mod.functions)
-                    if (!f.section.empty()) add_live(f.name);
+                for (auto &f : aot_mod.functions) {
+                    if (!f.section.empty() || f.is_naked || is_library)
+                        add_live(f.name);
+                }
                 // Raices por vtablas/datos: nombres referenciados en sym_refs.
                 for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
                     for (const auto &sr : aot_mod.static_data.meta_at(si).sym_refs)
@@ -2934,8 +2944,13 @@ int main(int argc, char *argv[]) {
                     const bool is_init = (af.name == "__vex_cpu_init" ||
                                           af.name == "__vex_memcpy_init" ||
                                           af.name == "__vex_strdisp_init");
-                    if (af.name.rfind("__", 0) == 0 && !is_init)
-                        continue; // helper interno -> local
+                    // En un EJECUTABLE (hay main) los helpers __-prefijados
+                    // quedan LOCALES (program-internos; evita colisiones al
+                    // enlazar varios .o).  En una LIBRERIA (sin main) son la
+                    // API publica -> se exportan globales (p.ej. el runtime
+                    // __vex_setjmp/__vex_throw/... que otro .o resuelve).
+                    if (main_fn && af.name.rfind("__", 0) == 0 && !is_init)
+                        continue; // helper interno del ejecutable -> local
                     const FnLoc &fl2 = fn_loc[af.name];
                     w.add_symbol(af.name, fl2.sec, fl2.off, /*is_func=*/true);
                 }
