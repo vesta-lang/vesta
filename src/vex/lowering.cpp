@@ -1605,6 +1605,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // cpu_features() en una funcion no-main marca cpu_features_used_ DESPUES
     // de cerrar main.  Solo en native_poo_ (AOT): el helper usa INLINE_ASM
     // (PURE_NATIVE) + el wiring no toca el stub _start.
+    // AUTO multiversion (--float-isa auto): si main tiene ops VEC_*, renombrarlo
+    // a __vex_main_body + sintetizar un main que despacha por cpuid.  Debe correr
+    // ANTES del wiring de inits (necesita que main exista como el wrapper para
+    // prepender alli el call __vex_auto_init).
+    ensure_auto_multiversion(out_module);
+
     if (native_poo_ && (cpu_features_used_ || cpu_dispatch_used_)) {
         // Asegurar que el global de features + el helper __vex_cpu_init existan
         // (idempotente).  El cpuid corre primero: el dispatch lee el bitmask.
@@ -1641,6 +1647,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 call_mc.func_name = "__vex_memcpy_init";
                 call_mc.source_line = 0;
                 ins.insert(ins.begin(), std::move(call_mc));
+            }
+            if (auto_dispatch_emitted_) {
+                // AUTO: el dispatch del main (setea __vex_main_body$fp).  Debe
+                // ir DESPUES de cpu_init (lee el bitmask) y ANTES del CALLIND
+                // del wrapper (que lee el fp).  Se inserta aqui (antes que
+                // cpu_init) para quedar justo tras el en el orden final.
+                ir::IrInstr call_auto{};
+                call_auto.op = ir::IrOp::CALL;
+                call_auto.type = ir::IrType::VOID;
+                call_auto.dst = ir::IR_NO_VALUE;
+                call_auto.func_name = "__vex_auto_init";
+                call_auto.source_line = 0;
+                ins.insert(ins.begin(), std::move(call_auto));
             }
             ir::IrInstr call_init{};
             call_init.op = ir::IrOp::CALL;
@@ -26446,6 +26465,332 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     current_block_ = saved_block;
     block_terminated_ = saved_terminated;
     return fp_slot;
+}
+
+// ---------------------------------------------------------------------
+// AUTO multiversion (--float-isa auto): despacha el MAIN por cpuid.
+//
+// Problema: main es el entry; el _start stub lo llama por NOMBRE.  Si lo
+// multiversionaramos directamente (main$sse2/avx2/avx512) nadie correria el
+// init (cpuid) antes de elegir la variante.  Fix: reducir "multiversionar
+// main" a "despachar un helper":
+//   1. El main del usuario se RENOMBRA a __vex_main_body (un helper VEC
+//      normal; el driver lo compila 3x: $sse2/$avx2/$avx512).
+//   2. Se sintetiza un main fino = { <inits> ; r = CALLIND [__vex_main_body$fp]
+//      (args...) ; ret r }.  Los inits (cpu_init + auto_init) los prepone
+//      run() en su entry, asi corren ANTES del CALLIND que lee el fp.
+//   3. __vex_auto_init() elige la variante por cpuid (AVX512F bit7 > AVX2 bit4
+//      > SSE2) y la guarda en __vex_main_body$fp.
+// El fp se referencia por INDICE (STR_LIT_ADDR), no por nombre -> no hace
+// falta trampolin de bytes crudos ni reloc DATA_REL32: todo es IR estandar
+// (CALLIND + LABEL_ADDR + LOAD/STORE), PURE_NATIVE.
+void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
+    if (!native_poo_ || !aot_auto_vec_) return; // solo AOT --float-isa auto
+    if (auto_dispatch_emitted_) return;         // idempotente
+
+    // Detector de ops VEC_* (idem al driver): solo despachamos lo vectorizado.
+    auto fn_has_vec = [](const ir::IrFunction &f) -> bool {
+        for (const auto &b : f.blocks)
+            for (const auto &in : b.instrs) {
+                const auto op = in.op;
+                if (op == ir::IrOp::VEC_BINOP || op == ir::IrOp::VEC_UNOP ||
+                    op == ir::IrOp::VEC_FMA || op == ir::IrOp::VEC_BINOP_S ||
+                    op == ir::IrOp::VEC_BCAST || op == ir::IrOp::VEC_ACC_ZERO ||
+                    op == ir::IrOp::VEC_ACC_ADD || op == ir::IrOp::VEC_ACC_FMA ||
+                    op == ir::IrOp::VEC_ACC_STORE ||
+                    op == ir::IrOp::VEC_ACC_COMBINE)
+                    return true;
+            }
+        return false;
+    };
+
+    // Localizar main por INDICE (no por puntero): los add_function de mas abajo
+    // realocan out_module.functions; un puntero a main quedaria colgante.
+    size_t main_idx = SIZE_MAX;
+    for (size_t i = 0; i < out_module.functions.size(); ++i)
+        if (out_module.functions[i].name == "main") { main_idx = i; break; }
+    if (main_idx == SIZE_MAX || !fn_has_vec(out_module.functions[main_idx]))
+        return;
+
+    auto_dispatch_emitted_ = true;
+    cpu_dispatch_used_ = true;
+
+    // Capturar firma de main + RENOMBRAR antes de cualquier add_function (que
+    // realocaria el vector de funciones e invalidaria toda referencia a main).
+    ir::IrType main_ret;
+    struct PInfo {
+        ir::IrType ty;
+        bool host;
+    };
+    std::vector<PInfo> pinfo;
+    {
+        ir::IrFunction &mf = out_module.functions[main_idx];
+        main_ret = mf.ret_type;
+        for (ir::IrValueId pid : mf.params)
+            pinfo.push_back({mf.values[pid].type, mf.values[pid].is_host_ptr});
+        // 1. Renombrar: main del usuario -> __vex_main_body (helper VEC).
+        mf.name = "__vex_main_body";
+    }
+
+    // Ahora si: garantizar el global de features + __vex_cpu_init (puede anñadir
+    // una funcion -> realoc, pero ya no tenemos referencias vivas a main).
+    (void)ensure_cpu_features_global();
+
+    // 2. Slot fp __vex_main_body$fp (8 B en .data; el init le hace STORE).
+    uint64_t fp_slot;
+    {
+        std::vector<uint8_t> zero(8, 0);
+        fp_slot = static_cast<uint64_t>(
+            out_module.static_data.push_back(std::move(zero)));
+        auto &m = out_module.static_data.meta_at(fp_slot);
+        m.section_name = ".data";
+        m.flags |=
+            ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_FORCE_EMIT;
+        m.shared_key = "__vex_main_body$fp";
+    }
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+    const uint32_t ln = 0;
+
+    // 3. main sintetico: { r = CALLIND [fp](args...) ; ret r }.  Los inits se
+    //    preponen en run() (cpu_init + auto_init), asi el fp ya esta seteado.
+    {
+        ir::IrFunction synth;
+        synth.name = "main";
+        synth.ret_type = main_ret;
+        std::vector<ir::IrValueId> sparams;
+        for (const auto &pi : pinfo) {
+            const ir::IrValueId pv = synth.new_value(pi.ty);
+            synth.values[pv].is_param = true;
+            synth.values[pv].is_host_ptr = pi.host;
+            synth.params.push_back(pv);
+            sparams.push_back(pv);
+        }
+        const ir::IrBlockId e = synth.new_block("entry");
+        fn_ = &synth;
+        current_block_ = e;
+        block_terminated_ = false;
+
+        // v_fpaddr = &__vex_main_body$fp ; v_fp = LOAD i64 [v_fpaddr].
+        ir::IrValueId v_fpaddr = synth.new_value(ir::IrType::PTR);
+        synth.values[v_fpaddr].is_host_ptr = true;
+        {
+            ir::IrInstr la{};
+            la.op = ir::IrOp::STR_LIT_ADDR;
+            la.type = ir::IrType::PTR;
+            la.dst = v_fpaddr;
+            la.imm = fp_slot;
+            la.source_line = ln;
+            synth.append(current_block_, std::move(la));
+        }
+        ir::IrValueId v_fp = synth.new_value(ir::IrType::PTR);
+        synth.values[v_fp].is_host_ptr = true;
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_fp;
+            ld.operands = {v_fpaddr};
+            ld.source_line = ln;
+            synth.append(current_block_, std::move(ld));
+        }
+        // CALLIND v_fp(args...) -> r.
+        ir::IrValueId v_ret = ir::IR_NO_VALUE;
+        {
+            ir::IrInstr ci{};
+            ci.op = ir::IrOp::CALLIND;
+            ci.type = main_ret;
+            ci.func_ptr = v_fp;
+            ci.operands = sparams;
+            if (main_ret != ir::IrType::VOID) {
+                v_ret = synth.new_value(main_ret);
+                ci.dst = v_ret;
+            } else {
+                ci.dst = ir::IR_NO_VALUE;
+            }
+            ci.source_line = ln;
+            synth.append(current_block_, std::move(ci));
+        }
+        // RET r.
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = main_ret;
+            ret.dst = ir::IR_NO_VALUE;
+            if (main_ret != ir::IrType::VOID) ret.operands.push_back(v_ret);
+            ret.source_line = ln;
+            synth.append(current_block_, std::move(ret));
+        }
+        block_terminated_ = true;
+        out_module.add_function(std::move(synth));
+    }
+
+    // 4. __vex_auto_init(): elige la variante por cpuid y la guarda en el fp.
+    //    Pick 3-vias: AVX512F (bit7) > AVX2 (bit4) > SSE2 (baseline).
+    {
+        ir::IrFunction hf;
+        hf.name = "__vex_auto_init";
+        hf.ret_type = ir::IrType::VOID;
+        const ir::IrBlockId e = hf.new_block("entry");
+        fn_ = &hf;
+        current_block_ = e;
+        block_terminated_ = false;
+
+        // STORE &<variante> al fp en el bloque actual (sin terminador).
+        auto emit_store_fp = [&](const std::string &variant) {
+            ir::IrValueId v_addr = emit_label_addr(variant, ln);
+            ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_gaddr].is_host_ptr = true;
+            {
+                ir::IrInstr la{};
+                la.op = ir::IrOp::STR_LIT_ADDR;
+                la.type = ir::IrType::PTR;
+                la.dst = v_gaddr;
+                la.imm = fp_slot;
+                la.source_line = ln;
+                fn_->append(current_block_, std::move(la));
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {v_addr, v_gaddr};
+            st.source_line = ln;
+            fn_->append(current_block_, std::move(st));
+        };
+
+        // feat = LOAD i64 [__vex_cpu_features].
+        const uint64_t feat_slot = ensure_cpu_features_global();
+        ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_faddr].is_host_ptr = true;
+        {
+            ir::IrInstr la{};
+            la.op = ir::IrOp::STR_LIT_ADDR;
+            la.type = ir::IrType::PTR;
+            la.dst = v_faddr;
+            la.imm = feat_slot;
+            la.source_line = ln;
+            fn_->append(current_block_, std::move(la));
+        }
+        ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = v_feat;
+            ld.operands = {v_faddr};
+            ld.source_line = ln;
+            fn_->append(current_block_, std::move(ld));
+        }
+        // bit_set(n): has = ((feat >> n) & 1) != 0.
+        auto bit_set = [&](int n) -> ir::IrValueId {
+            ir::IrValueId v_sh = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrValueId vn = emit_const(ir::IrType::I64, (uint64_t)n, ln);
+                ir::IrInstr sh{};
+                sh.op = ir::IrOp::SHR;
+                sh.type = ir::IrType::I64;
+                sh.dst = v_sh;
+                sh.operands = {v_feat, vn};
+                sh.source_line = ln;
+                fn_->append(current_block_, std::move(sh));
+            }
+            ir::IrValueId v_bit = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrValueId v1 = emit_const(ir::IrType::I64, 1, ln);
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ir::IrType::I64;
+                an.dst = v_bit;
+                an.operands = {v_sh, v1};
+                an.source_line = ln;
+                fn_->append(current_block_, std::move(an));
+            }
+            ir::IrValueId v_has = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrValueId v0 = emit_const(ir::IrType::I64, 0, ln);
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_NE;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = v_has;
+                cm.operands = {v_bit, v0};
+                cm.source_line = ln;
+                fn_->append(current_block_, std::move(cm));
+            }
+            return v_has;
+        };
+
+        // Bloques: si AVX512F -> $avx512 ; elif AVX2 -> $avx2 ; else $sse2.
+        const ir::IrBlockId bb_512 = fn_->new_block("pick512");
+        const ir::IrBlockId bb_not512 = fn_->new_block("not512");
+        const ir::IrBlockId bb_2 = fn_->new_block("pick2");
+        const ir::IrBlockId bb_sse = fn_->new_block("picksse");
+        const ir::IrBlockId bb_join = fn_->new_block("join");
+
+        auto branch = [&](ir::IrValueId cond, ir::IrBlockId t,
+                          ir::IrBlockId f) {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.type = ir::IrType::VOID;
+            br.dst = ir::IR_NO_VALUE;
+            br.operands = {cond};
+            br.target_block = t;
+            br.false_block = f;
+            br.source_line = ln;
+            fn_->append(current_block_, std::move(br));
+            fn_->blocks[current_block_].succs.push_back(t);
+            fn_->blocks[current_block_].succs.push_back(f);
+            fn_->blocks[t].preds.push_back(current_block_);
+            fn_->blocks[f].preds.push_back(current_block_);
+        };
+        auto store_and_join = [&](const std::string &variant) {
+            emit_store_fp(variant);
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR;
+            br.type = ir::IrType::VOID;
+            br.dst = ir::IR_NO_VALUE;
+            br.target_block = bb_join;
+            br.source_line = ln;
+            fn_->append(current_block_, std::move(br));
+            fn_->blocks[current_block_].succs.push_back(bb_join);
+            fn_->blocks[bb_join].preds.push_back(current_block_);
+        };
+
+        // entry: has512 = bit7 ; br has512 -> pick512 : not512.
+        ir::IrValueId v512 = bit_set(7);
+        branch(v512, bb_512, bb_not512);
+        // pick512: fp = &$avx512 ; -> join.
+        current_block_ = bb_512;
+        store_and_join("__vex_main_body$avx512");
+        // not512: has2 = bit4 ; br has2 -> pick2 : picksse.
+        current_block_ = bb_not512;
+        ir::IrValueId v2 = bit_set(4);
+        branch(v2, bb_2, bb_sse);
+        // pick2: fp = &$avx2 ; -> join.
+        current_block_ = bb_2;
+        store_and_join("__vex_main_body$avx2");
+        // picksse: fp = &$sse2 ; -> join.
+        current_block_ = bb_sse;
+        store_and_join("__vex_main_body$sse2");
+        // join: RET void.
+        current_block_ = bb_join;
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ir::IrType::VOID;
+            ret.dst = ir::IR_NO_VALUE;
+            ret.source_line = ln;
+            fn_->append(current_block_, std::move(ret));
+        }
+        block_terminated_ = true;
+        out_module.add_function(std::move(hf));
+    }
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
 }
 
 void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,

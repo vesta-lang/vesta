@@ -2455,8 +2455,36 @@ int main(int argc, char *argv[]) {
                 const bool is_library = (by_name.count("main") == 0);
                 add_live("main");
                 add_live("__module_init");
+                // AUTO multiversion (--float-isa auto): el dispatch (auto_init)
+                // referencia las VARIANTES por nombre derivado (NAME$sse2/...),
+                // no la funcion base NAME -> la poda no la veria.  Mantener viva
+                // toda funcion con ops VEC (la base de la que el driver deriva
+                // las 3 variantes); su recorrido arrastra sus callees (p.ej.
+                // sum_f64).  Espejo de la siembra del BFS de codegen.
+                const bool auto_keep_vec =
+                    (result.count("float-isa") &&
+                     result["float-isa"].as<std::string>() == "auto");
+                auto has_vec = [](const ir::IrFunction &f) -> bool {
+                    for (const auto &b : f.blocks)
+                        for (const auto &in : b.instrs) {
+                            const auto op = in.op;
+                            if (op == ir::IrOp::VEC_BINOP ||
+                                op == ir::IrOp::VEC_UNOP ||
+                                op == ir::IrOp::VEC_FMA ||
+                                op == ir::IrOp::VEC_BINOP_S ||
+                                op == ir::IrOp::VEC_BCAST ||
+                                op == ir::IrOp::VEC_ACC_ZERO ||
+                                op == ir::IrOp::VEC_ACC_ADD ||
+                                op == ir::IrOp::VEC_ACC_FMA ||
+                                op == ir::IrOp::VEC_ACC_STORE ||
+                                op == ir::IrOp::VEC_ACC_COMBINE)
+                                return true;
+                        }
+                    return false;
+                };
                 for (auto &f : aot_mod.functions) {
-                    if (!f.section.empty() || f.is_naked || is_library)
+                    if (!f.section.empty() || f.is_naked || is_library ||
+                        (auto_keep_vec && has_vec(f)))
                         add_live(f.name);
                 }
                 // Raices por vtablas/datos: nombres referenciados en sym_refs.
@@ -2772,6 +2800,43 @@ int main(int argc, char *argv[]) {
                 }
             }
             bool aot_codegen_ok = true;
+            // AUTO (--float-isa auto): multiversion por cpuid.  Las funciones
+            // con ops VEC_* (vectorizadas) se compilan 3x (sse2/avx2/avx512); el
+            // IR es UNO (chunk dual: element-wise 64, reduccion 16 -> cada
+            // variante decompone a su ancho).  El dispatch (fp+init+trampolin) va
+            // despues; aqui solo emitimos las variantes fn$sse2/avx2/avx512.
+            const bool aot_auto = (aot_fisa == jit::FloatIsa::AUTO);
+            auto fn_has_vec_ops = [](const ir::IrFunction &f) -> bool {
+                for (const auto &b : f.blocks)
+                    for (const auto &in : b.instrs) {
+                        const auto op = in.op;
+                        if (op == ir::IrOp::VEC_BINOP || op == ir::IrOp::VEC_UNOP ||
+                            op == ir::IrOp::VEC_FMA || op == ir::IrOp::VEC_BINOP_S ||
+                            op == ir::IrOp::VEC_BCAST ||
+                            op == ir::IrOp::VEC_ACC_ZERO ||
+                            op == ir::IrOp::VEC_ACC_ADD ||
+                            op == ir::IrOp::VEC_ACC_FMA ||
+                            op == ir::IrOp::VEC_ACC_STORE ||
+                            op == ir::IrOp::VEC_ACC_COMBINE)
+                            return true;
+                    }
+                return false;
+            };
+            // Nombres de las variantes multiversionadas (los consume el dispatch).
+            std::vector<std::string> mv_funcs; // funciones multiversionadas
+            // AUTO: sembrar toda funcion con ops VEC.  __vex_main_body (el main
+            // del usuario renombrado por la lowering) NO se alcanza por CALL
+            // directo (el main sintetico hace CALLIND via fp), asi que hay que
+            // encolarlo explicitamente para que se dequeue -> compile sus 3
+            // variantes.  __vex_auto_init si se alcanza (main lo CALL-prepende).
+            if (aot_auto) {
+                for (const auto &fn : aot_mod.functions) {
+                    if (fn_has_vec_ops(fn) && !queued.count(fn.name)) {
+                        queued[fn.name] = true;
+                        work.push_back(fn.name);
+                    }
+                }
+            }
             while (!work.empty()) {
                 const std::string nm = work.back();
                 work.pop_back();
@@ -2802,6 +2867,50 @@ int main(int argc, char *argv[]) {
                 }
                 compiled_idx[nm] = compiled.size();
                 compiled.push_back(std::move(af));
+
+                // AUTO: si la funcion tiene ops VEC, emitir las 3 variantes de
+                // ancho compilando el MISMO IR con fisa sse2/avx2/avx512.  El
+                // dispatch (mas abajo) las cablea via fp+init+trampolin.  La
+                // copia `nm` (compilada arriba con AUTO=host) sirve de baseline
+                // hasta que el trampolin la reemplace.
+                if (aot_auto && fn_has_vec_ops(*itf->second)) {
+                    const std::pair<const char *, jit::FloatIsa> variants[] = {
+                        {"$sse2", jit::FloatIsa::SSE2},
+                        {"$avx2", jit::FloatIsa::AVX},
+                        {"$avx512", jit::FloatIsa::AVX512F}};
+                    bool ok = true;
+                    for (const auto &v : variants) {
+                        AotFn vf;
+                        vf.name = nm + v.first;
+                        vf.bytes = jit::vreg_compile_native(
+                            *itf->second, {}, {}, {}, {}, &vf.relocs, aot_pic,
+                            /*target_sysv=*/fmt == aot::ObjFormat::ELF,
+                            /*mode32=*/aot_mode32, /*fisa=*/v.second);
+                        if (vf.bytes.empty()) {
+                            std::cerr << "[aot] variante " << vf.name
+                                      << " no compilable.\n";
+                            ok = false;
+                            break;
+                        }
+                        // Las CALL de la variante encolan callees igual que el
+                        // baseline (se hace abajo en el loop de relocs comun? no:
+                        // las variantes no pasan por ese loop -> encolar aqui).
+                        for (const jit::NativeReloc &r : vf.relocs)
+                            if (r.kind == jit::NativeReloc::Kind::CALL_REL32 &&
+                                fn_by_name.count(r.symbol) &&
+                                !queued.count(r.symbol)) {
+                                queued[r.symbol] = true;
+                                work.push_back(r.symbol);
+                            }
+                        compiled_idx[vf.name] = compiled.size();
+                        compiled.push_back(std::move(vf));
+                    }
+                    if (!ok) {
+                        aot_codegen_ok = false;
+                        break;
+                    }
+                    mv_funcs.push_back(nm);
+                }
                 // Encolar los callees (relocs CALL_REL32 a nombres de funcion).
                 // Los simbolos que NO son funciones del modulo son EXTERNOS
                 // (libc/runtime, resueltos por el linker): no se encolan, se
