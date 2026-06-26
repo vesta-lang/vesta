@@ -1727,6 +1727,24 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * a enter_jit).  No escribe regs[0] (do_throw lo pone). */
             case ir::IrOp::THROW: {
                 flush_pending();
+                /* AOT/Embed (HOST_LEAF, sin VM): el throw baja a CALL al
+                 * runtime auto-hospedado __vex_throw(value) (vex_exc.vex,
+                 * setjmp/longjmp).  noreturn -> RET de relleno para cerrar
+                 * el bloque (nunca se ejecuta; el longjmp diverge). */
+                if (abi == AbiKind::HOST_LEAF) {
+                    if (in.operands.empty()) {
+                        vreg_dbg(fn.name.c_str(), "throw(host-leaf-no-arg)");
+                        return false;
+                    }
+                    if (!emit_host_args({in.operands[0]}, O)) {
+                        vreg_dbg(fn.name.c_str(), "throw(host-leaf-args)");
+                        return false;
+                    }
+                    O.push_back(MInstr::make_call_sym(
+                        out.intern_reloc_symbol("__vex_throw")));
+                    O.push_back(MInstr::make_ret());
+                    break;
+                }
                 if (!vm || ent.throw_user == 0 || in.operands.empty()) {
                     vreg_dbg(fn.name.c_str(), "throw(no-vm/no-entry)");
                     return false;

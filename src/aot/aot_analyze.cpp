@@ -387,6 +387,12 @@ bool aot_op_allowed(IrOp op, const AotTarget &target) noexcept {
     // igual compila el codigo a maquina).  El IR moderno no deberia
     // emitirlo (Phase 2c lo elimino); defensa por si reaparece.
     if (op == IrOp::RAW_ASM) return false;
+    // Excepciones auto-hospedadas (Phase AOT, vex_exc.vex): el THROW baja a
+    // un CALL a __vex_throw (setjmp/longjmp, sin VM runtime) -> es un simbolo
+    // del linker, valido en CUALQUIER tier (Bare/Embed/Full) cuando las
+    // excepciones estan habilitadas.  El try/catch lowering ya no emite
+    // TRYENTER/TRYLEAVE/LANDINGPAD en native_poo_ (baja a CALLs __vex_*).
+    if (op == IrOp::THROW) return target.exceptions_enabled;
     const AotOpClass cls = aot_classify_op(op);
     if (cls == AotOpClass::PURE_NATIVE)
         return true; // stack/aritmetica/control/llamadas-linker: siempre.
