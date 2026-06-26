@@ -3027,12 +3027,20 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * slot contiene null (root ignorado), nunca basura. */
             case ir::IrOp::GC_DEREF_HOST: {
                 flush_pending();
-                if (!vm || ent.gc_deref == 0) {
-                    vreg_dbg(fn.name.c_str(), "gc_deref(no-vm/no-addr)");
-                    return false;
-                }
                 if (in.operands.size() != 1) return false;
                 if (in.dst == ir::IR_NO_VALUE) break; // lookup sin uso: no-op
+                if (!vm) {
+                    // HOST_LEAF (AOT native, sin handle table): el "handle"
+                    // almacenado ES el host_ptr crudo (objetos = ptr de
+                    // calloc/malloc, no GcHandle) -> passthrough MOV dst,src.
+                    O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                   vr(in.operands[0])));
+                    break;
+                }
+                if (ent.gc_deref == 0) {
+                    vreg_dbg(fn.name.c_str(), "gc_deref(no-addr)");
+                    return false;
+                }
 
                 /* A-B / diagnostico: enrutar al CALL vrt_gc_deref. */
                 if (jit_no_inline_deref()) {
@@ -3198,6 +3206,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::STRRAW:
             case ir::IrOp::RAW_ALLOC: {
                 flush_pending();
+                if (in.op == ir::IrOp::GC_HANDLE_FOR_PTR && !vm) {
+                    // HOST_LEAF (AOT native, sin handle table): el GcHandle de un
+                    // ptr ES el propio host_ptr (objetos = ptr crudo) ->
+                    // passthrough MOV dst, src.
+                    if (in.dst != ir::IR_NO_VALUE && in.operands.size() == 1)
+                        O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                                       vr(in.operands[0])));
+                    break;
+                }
                 /* === Inline slab fast-path (Phase D.7 perf, 2026-06-06) ===
                  * Para RAW_ALLOC con size CONSTANTE que cae en una size
                  * class pequena del slab, inline-amos el pop del free
