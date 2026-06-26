@@ -19,23 +19,21 @@ WORK="$(mktemp -d)"
 rc=0
 
 PROG="examples_codes_vex/aot/61_exceptions.vex"
-RUNTIME="stdlib/vex/vex_exc.vex"
 
-# Compilar el programa y el runtime a .o AOT ELF (x86-64).  vm.exe (Windows)
-# escribe a $BUILD (path accesible desde Windows); luego copiamos a $WORK (que
-# puede vivir en el FS de WSL) para enlazar con gcc.
+# Compilar el programa a .o AOT ELF (x86-64).  El driver AUTO-BUNDLEa el runtime
+# de excepciones (stdlib/vex/vex_exc.vex) en el MISMO objeto -> no hay que
+# enlazar vex_exc.o a mano.  vm.exe (Windows) escribe a $BUILD (path accesible
+# desde Windows); luego copiamos a $WORK (que puede vivir en el FS de WSL).
 "$VM" --vex "$PROG" -m aot --format elf --emit obj --aot-arch x86-64 \
       -o "$BUILD/exc_prog.o" >/dev/null 2>&1
 [ -f "$BUILD/exc_prog.o" ] || { echo "FALLO: no se genero prog.o"; rm -rf "$WORK"; exit 1; }
-"$VM" --vex "$RUNTIME" -m aot --format elf --emit obj --aot-arch x86-64 \
-      -o "$BUILD/exc_runtime.o" >/dev/null 2>&1
-[ -f "$BUILD/exc_runtime.o" ] || { echo "FALLO: no se genero vex_exc.o"; rm -rf "$WORK"; exit 1; }
-cp "$BUILD/exc_prog.o" "$WORK/prog.o"; cp "$BUILD/exc_runtime.o" "$WORK/vex_exc.o"
-rm -f "$BUILD/exc_prog.o" "$BUILD/exc_runtime.o"
+cp "$BUILD/exc_prog.o" "$WORK/prog.o"
+rm -f "$BUILD/exc_prog.o"
 
-# Enlazar (gcc aporta el _start/main wrapper + calloc/free para el `new`).
-gcc -no-pie -o "$WORK/exc.elf" "$WORK/prog.o" "$WORK/vex_exc.o" \
-    || { echo "FALLO: gcc no enlazo"; rm -rf "$WORK"; exit 1; }
+# Enlazar SOLO el objeto del programa (autocontenido).  gcc aporta el _start/
+# main wrapper + calloc/free para el `new`.
+gcc -no-pie -o "$WORK/exc.elf" "$WORK/prog.o" \
+    || { echo "FALLO: gcc no enlazo (auto-bundle del runtime fallo?)"; rm -rf "$WORK"; exit 1; }
 
 "$WORK/exc.elf"; got=$?
 if [ "$got" = "42" ]; then
