@@ -2777,8 +2777,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     vreg_dbg(fn.name.c_str(), "inline-asm(no-backend)");
                     return false;
                 }
+                // El inline-asm de @Naked/asm{} se ensambla en el modo del
+                // TARGET (no del host): x86-32 -> KS_MODE_32 (si no, `jmp ecx`
+                // y demas codificaciones de 32 bits fallan en KS_MODE_64).
                 vex::AsmAssembleResult ar = vex::g_asm_backend->assemble(
-                    in.func_name, vex::AsmArch::X86_64);
+                    in.func_name,
+                    mode32 ? vex::AsmArch::X86_32 : vex::AsmArch::X86_64);
                 if (!ar.ok || ar.bytes.empty()) {
                     vreg_dbg(fn.name.c_str(), "inline-asm(assemble-fail)");
                     return false;

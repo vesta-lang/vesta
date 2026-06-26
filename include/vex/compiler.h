@@ -151,6 +151,12 @@ struct CompileOptions {
     /// solo se emite si hay try/catch/throw).  Solo afecta a @c native_poo (AOT).
     bool exceptions_enabled = true;
 
+    /// Bits del target para el ensamblado del inline-asm (@Naked / asm{}): 64
+    /// (defecto), 32 (--aot-arch x86-32) o 16.  La validacion compile-time del
+    /// asm debe usar el modo del TARGET, no del host -- si no, instrucciones de
+    /// 32 bits (p.ej. `jmp ecx`) fallan en KS_MODE_64.
+    uint8_t asm_target_bits = 64;
+
     /// Fase 3.5 LSP: cuando true, @c compile_vex_source vuelca un snapshot
     /// de los valores @c comptime computados (constantes top-level) a
     /// @c CompileResult::comptime_values.  Estrictamente ADITIVO y gateado:

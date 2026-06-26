@@ -1812,6 +1812,15 @@ int main(int argc, char *argv[]) {
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
         copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
         copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
+        // Bits del target para el inline-asm @Naked (validacion compile-time):
+        // --aot-arch x86-32 -> 32 (si no, `jmp ecx` y demas fallan en mode64).
+        if (aot_mode) {
+            const std::string aa = result.count("aot-arch")
+                                       ? result["aot-arch"].as<std::string>()
+                                       : std::string("x86-64");
+            copts.asm_target_bits =
+                (aa == "x86-32" || aa == "x86_32" || aa == "i386") ? 32 : 64;
+        }
         // Instrumentacion: aplica al IR independientemente del target
         // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.
         copts.instrument_mode = result["instrument"].as<std::string>();
@@ -2356,6 +2365,9 @@ int main(int argc, char *argv[]) {
                     ve_opts.opt_level = 2;
                     ve_opts.native_poo = true;
                     ve_opts.exceptions_enabled = true;
+                    // Mismo target bits que el modulo principal (el @Naked
+                    // setjmp/longjmp x86-32 debe ensamblarse en mode32).
+                    ve_opts.asm_target_bits = copts.asm_target_bits;
                     vex::CompileResult ve_cr =
                         vex::compile_vex_source(ve_src, ve_path, ve_opts);
                     ir::IrModule ve_mod;
