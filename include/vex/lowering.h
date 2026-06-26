@@ -1431,6 +1431,20 @@ class Lowering {
     uint64_t memcpy_fp_slot_ =
         UINT64_MAX; ///< Slot static_data del global __vex_memcpy_fp.
 
+    /// AUTO multiversion (--float-isa auto): si @c main tiene ops VEC_*, lo
+    /// renombra a @c __vex_main_body (helper VEC normal que el driver compila
+    /// 3x: $sse2/$avx2/$avx512) y sintetiza un @c main fino que (a) corre los
+    /// inits y (b) hace @c CALLIND a traves del slot @c __vex_main_body$fp.
+    /// Asi "multiversionar main" se reduce a "despachar un helper", sin tratar
+    /// el entry como caso especial.  Construye ademas @c __vex_auto_init() que
+    /// elige la variante por cpuid (AVX512F bit7 > AVX2 bit4 > SSE2) y la
+    /// guarda en el fp.  Idempotente.  Solo @c native_poo_ + @c aot_auto_vec_.
+    /// Marca @c cpu_dispatch_used_ + @c auto_dispatch_emitted_ para que
+    /// @c run() prepone @c call __vex_auto_init al entry de main.
+    void ensure_auto_multiversion(ir::IrModule &out_module);
+    bool auto_dispatch_emitted_ =
+        false; ///< El main sintetico + fp + __vex_auto_init ya se emitieron.
+
     /// Emite un memcpy(dst, src, len) DESPACHADO por la tabla de punteros:
     /// LOAD el fp del global + CALLIND.  Solo @c native_poo_.  En interp/JIT/
     /// Full el caller usa MEMCPY inline (rep movsb), sin cambio.
