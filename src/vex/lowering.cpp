@@ -2578,6 +2578,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     escaping_locals_.clear();
     if (fd->body) scan_escaping_locals(fd->body.get());
 
+    // CRITICO: los IDs de SSA value son POR-FUNCION; ssa_concrete_class_ (mapa
+    // vid->clase concreta para devirt nativa) DEBE limpiarse entre funciones o
+    // un vid de la funcion anterior (p.ej. %1 = new Square en main) colisiona
+    // con un param de esta (b = %1 en total) -> devirt al tipo equivocado.
+    // (Bug AOT-especifico: solo native_poo devirta clases via este mapa.)
+    ssa_concrete_class_.clear();
+
     // limpiar el stack de cleanups (synchronized activos) al
     // entrar a una nueva funcion.  Cada funcion arranca sin cleanups;
     // las acciones se acumulan al bajar synchronized y se consumen al
