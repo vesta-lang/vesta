@@ -2502,7 +2502,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     jit::vec_isa_width(jit::vec_emit_isa());
                 if (chunk_w > host_w) return false; // acc de 1 reg, sin split
                 const bool is_f32 = (in.type == ir::IrType::F32);
-                if (in.type != ir::IrType::F64 && !is_f32) return false;
+                const bool is_f64 = (in.type == ir::IrType::F64);
+                const bool is_i64 = (in.type == ir::IrType::I64 ||
+                                     in.type == ir::IrType::U64);
+                const bool is_i32 = (in.type == ir::IrType::I32 ||
+                                     in.type == ir::IrType::U32);
+                if (!is_f32 && !is_f64 && !is_i64 && !is_i32) return false;
+                // FMA solo float (no hay multiplica-acumula entero packed).
+                if (in.op == ir::IrOp::VEC_ACC_FMA && !is_f32 && !is_f64)
+                    return false;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
@@ -2522,14 +2530,18 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     // SI maneja el ancho (16/32/64); XORPS(102) es scalar 128b.
                     O.push_back(MInstr::make_unary(MOp::XORPD, xacc, xacc));
                 } else if (in.op == ir::IrOp::VEC_ACC_ADD) {
-                    // acc += a[chunk]:  MOVUPD scr,[a]; ADDP{D,S} acc,scr.
+                    // acc += a[chunk]:  MOVUPD scr,[a]; <op> acc,scr.
+                    // float -> ADDP{D,S}; entero -> PADDQ (i64) / PADDD (i32).
+                    const MOp aop = is_f32   ? MOp::ADDPS
+                                    : is_f64 ? MOp::ADDPD
+                                    : is_i64 ? MOp::PADDQ
+                                             : MOp::PADDD;
                     O.push_back(MInstr::make_unary(MOp::MOV,
                                                    MOperand::make_reg(gp0, 8),
                                                    vr(in.operands[1])));
                     O.push_back(MInstr::make_unary(
                         MOp::MOVUPD, xscr, MOperand::make_mem(gp0, 0)));
-                    O.push_back(MInstr::make_unary(
-                        is_f32 ? MOp::ADDPS : MOp::ADDPD, xacc, xscr));
+                    O.push_back(MInstr::make_unary(aop, xacc, xscr));
                 } else if (in.op == ir::IrOp::VEC_ACC_FMA) {
                     // acc += a*b:  MOVUPD scr,[a]; VFMADD231 acc,scr,[b].
                     O.push_back(MInstr::make_unary(MOp::MOV,
