@@ -693,6 +693,33 @@ struct Lowerer {
             return;
         }
 
+        /* AVX escalar 3-OPERANDOS (VADDSD/VSUBSD/VMULSD/VDIVSD + SS): VEX nativo
+         * dst = src1 OP src2 con dst != src1 permitido -> NO se legaliza a
+         * 2-address (sin el `mov dst,src1`).  Esta es la ventaja que motivo
+         * MOps separadas: el regalloc/scheduler las explota como 3-op.  vvvv
+         * (src1) DEBE ser reg (materializar si spilled); src2 puede ser MEM (VEX
+         * reg-reg-mem = load-and-op); dst reg (fscr0 + store si spilled). */
+        if (op == MOp::VADDSD || op == MOp::VSUBSD || op == MOp::VMULSD ||
+            op == MOp::VDIVSD || op == MOp::VADDSS || op == MOp::VSUBSS ||
+            op == MOp::VMULSS || op == MOp::VDIVSS) {
+            const bool is_ss = (op == MOp::VADDSS || op == MOp::VSUBSS ||
+                                op == MOp::VMULSS || op == MOp::VDIVSS);
+            const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;
+            const bool dst_spilled =
+                in.dst.is_vreg() && ra.spilled(in.dst.vreg_id());
+            const MOperand dreg = dst_spilled ? xmm(fscr0) : resolve(in.dst);
+            MOperand s1 = resolve(in.src1);
+            if (s1.kind == MOperandKind::MEM) { // vvvv debe ser reg
+                out.push_back(MInstr::make_unary(mv, xmm(fscr1), s1));
+                s1 = xmm(fscr1);
+            }
+            const MOperand s2 = resolve(in.src2); // reg o MEM (VEX lo admite)
+            out.push_back(MInstr::make_binary(op, dreg, s1, s2));
+            if (dst_spilled)
+                out.push_back(MInstr::make_unary(mv, resolve(in.dst), dreg));
+            return;
+        }
+
         /* FP arith binaria (3-op pre-legalization): ADDSD/SUBSD/MULSD/DIVSD
          * + variantes SS + XORPS.  Legalizacion 2-address: el dst debe ser un
          * XMM y contener src1 antes de la op (dst = src1 OP src2).  Casos:

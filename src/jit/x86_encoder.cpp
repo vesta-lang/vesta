@@ -328,6 +328,48 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
     }
+    case MOp::VADDSD:
+    case MOp::VSUBSD:
+    case MOp::VMULSD:
+    case MOp::VDIVSD:
+    case MOp::VADDSS:
+    case MOp::VSUBSS:
+    case MOp::VMULSS:
+    case MOp::VDIVSS: {
+        /* AVX escalar 3-operandos: VEX.LIG.{F2|F3}.0F <op> dst, src1(vvvv),
+         * src2(rm reg|mem).  dst = src1 OP src2 (no-destructivo).  pp: F2=3
+         * (double), F3=2 (single).  opcode = 58/5C/59/5E como las legacy. */
+        const bool ss = (mi.op == MOp::VADDSS || mi.op == MOp::VSUBSS ||
+                         mi.op == MOp::VMULSS || mi.op == MOp::VDIVSS);
+        const uint8_t pp = ss ? 2u : 3u; // F3 / F2
+        const uint8_t opcode =
+            (mi.op == MOp::VADDSD || mi.op == MOp::VADDSS)   ? 0x58
+            : (mi.op == MOp::VSUBSD || mi.op == MOp::VSUBSS) ? 0x5C
+            : (mi.op == MOp::VMULSD || mi.op == MOp::VMULSS) ? 0x59
+                                                            : 0x5E; /* DIV */
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xv = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.src2.kind == MOperandKind::REG) {
+            const uint8_t xs = static_cast<uint8_t>(mi.src2.reg) - 16;
+            emit_vex3(xd, xs, xv, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, pp);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (mi.src2.kind == MOperandKind::MEM) {
+            const MReg base = mi.src2.mem_base();
+            const MReg idx = mi.src2.mem_index();
+            const bool has_index = (idx != MReg::NONE);
+            const uint8_t bid = reg_id(base);
+            const uint8_t iid = has_index ? reg_id(idx) : 0;
+            emit_vex3(xd, bid, xv, /*w=*/0, /*l256=*/false, iid, has_index, out,
+                      /*map=*/1, pp);
+            put8(out, opcode);
+            emit_modrm_mem(mi.src2, xd & 7, out);
+        } else {
+            put8(out, 0xCC);
+        }
+        return true;
+    }
     case MOp::ADDPD:
     case MOp::SUBPD:
     case MOp::MULPD:

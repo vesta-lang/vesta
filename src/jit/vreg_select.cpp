@@ -486,8 +486,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * el RegClass::FP son tambien la base de los futuros tipos anchos
      * N=potencia-de-2 (i128/f128 -> XMM, i256 -> YMM, i512 -> ZMM); el manejo
      * es guiado por ANCHO (fp_mov_for_width), no por un tipo float fijo. */
+    /* fp_ok: float escalar en XMM.  Cualquier ISA salvo x87 (sin XMM) y x86-32
+     * (ABI float distinto) -> SSE2/AVX/AVX512/AUTO.  Las binarias se emiten en
+     * VEX 3-op cuando vex_scalar (avx+); el resto (cvt/cmp/sqrt) sigue legacy
+     * SSE por ahora (Increment 2b las pasa a VEX para no mezclar). */
     const bool fp_ok = (abi == AbiKind::HOST_LEAF || abi == AbiKind::VM) &&
-                       (fisa == FloatIsa::SSE2) && !mode32;
+                       (fisa != FloatIsa::X87) && !mode32;
+    /* Emitir las binarias escalares en VEX 3-operandos no-destructivo (sin el
+     * `mov` de coalescing) cuando el target es AVX/AVX512. */
+    const bool vex_scalar =
+        (fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
     /* Ancho del chunk SIMD a emitir en las ops VEC_* (vectorizacion).  AOT
      * (HOST_LEAF): lo fija el TARGET via --float-isa (cross-compile correcto: no
      * emitir AVX2 si el target es solo-SSE2; ancho SELECCIONABLE sse2->128/
@@ -1047,19 +1055,38 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 MOp fop;
-                switch (in.op) {
-                case ir::IrOp::FADD:
-                    fop = is_f32 ? MOp::ADDSS : MOp::ADDSD;
-                    break;
-                case ir::IrOp::FSUB:
-                    fop = is_f32 ? MOp::SUBSS : MOp::SUBSD;
-                    break;
-                case ir::IrOp::FMUL:
-                    fop = is_f32 ? MOp::MULSS : MOp::MULSD;
-                    break;
-                default:
-                    fop = is_f32 ? MOp::DIVSS : MOp::DIVSD;
-                    break;
+                if (vex_scalar) {
+                    // VEX 3-operandos no-destructivo (avx+): el rewrite NO mete
+                    // el `mov dst,src1` -> menos instrucciones.
+                    switch (in.op) {
+                    case ir::IrOp::FADD:
+                        fop = is_f32 ? MOp::VADDSS : MOp::VADDSD;
+                        break;
+                    case ir::IrOp::FSUB:
+                        fop = is_f32 ? MOp::VSUBSS : MOp::VSUBSD;
+                        break;
+                    case ir::IrOp::FMUL:
+                        fop = is_f32 ? MOp::VMULSS : MOp::VMULSD;
+                        break;
+                    default:
+                        fop = is_f32 ? MOp::VDIVSS : MOp::VDIVSD;
+                        break;
+                    }
+                } else {
+                    switch (in.op) {
+                    case ir::IrOp::FADD:
+                        fop = is_f32 ? MOp::ADDSS : MOp::ADDSD;
+                        break;
+                    case ir::IrOp::FSUB:
+                        fop = is_f32 ? MOp::SUBSS : MOp::SUBSD;
+                        break;
+                    case ir::IrOp::FMUL:
+                        fop = is_f32 ? MOp::MULSS : MOp::MULSD;
+                        break;
+                    default:
+                        fop = is_f32 ? MOp::DIVSS : MOp::DIVSD;
+                        break;
+                    }
                 }
                 O.push_back(MInstr::make_binary(fop, vrt(in.dst),
                                                 vrt(in.operands[0]),

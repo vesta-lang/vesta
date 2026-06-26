@@ -631,6 +631,21 @@ enum class MOp : uint8_t {
      * vectorizar `c[i]=a[i]*b[i]` para i32/u32 (PADDD/PSUBD ya cubren add/sub). */
     PMULLD = 148, ///< PMULLD xmm,xmm (66 0F38 40) -- 4x i32 mul (low 32b)
 
+    /* AVX escalar 3-OPERANDOS no-destructivo (VEX.LIG.F2/F3.0F): VADDSD dst,
+     * src1, src2 -> dst = src1 OP src2 (dst != src1 permitido).  A diferencia de
+     * ADDSD (2-address destructivo, el rewrite mete un `mov dst,src1`), estas
+     * NO necesitan ese mov -> el regalloc/scheduler las explota como 3-op
+     * first-class.  Las emite el selector cuando --float-isa >= AVX; el src2
+     * puede ser MEM (VEX reg-reg-mem).  SD = F2 (double), SS = F3 (single). */
+    VADDSD = 149, ///< VADDSD dst,src1,src2/mem (VEX.LIG.F2.0F 58) -- f64 add
+    VSUBSD = 150, ///< VSUBSD (VEX.LIG.F2.0F 5C) -- f64 sub
+    VMULSD = 151, ///< VMULSD (VEX.LIG.F2.0F 59) -- f64 mul
+    VDIVSD = 152, ///< VDIVSD (VEX.LIG.F2.0F 5E) -- f64 div
+    VADDSS = 153, ///< VADDSS (VEX.LIG.F3.0F 58) -- f32 add
+    VSUBSS = 154, ///< VSUBSS (VEX.LIG.F3.0F 5C) -- f32 sub
+    VMULSS = 155, ///< VMULSS (VEX.LIG.F3.0F 59) -- f32 mul
+    VDIVSS = 156, ///< VDIVSS (VEX.LIG.F3.0F 5E) -- f32 div
+
     /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
      * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y
      * UNPCKLPD (difunde el lane bajo a ambos -> construye la mascara de signo
