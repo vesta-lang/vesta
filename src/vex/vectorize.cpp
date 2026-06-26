@@ -802,8 +802,27 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     }
     if (!scalar_expr || refs_idx(scalar_expr)) return false;
 
-    // Valida c_ix / a_ix son base[idx] HOST f64.
-    auto check_idx_f64 = [&](IndexExpr *ix, IdentExpr **out_base) -> bool {
+    // Tipo de elemento vectorizable (HOST): f64 (todas las ops) + enteros
+    // i8..i64/u8..u64.  El escalar se DIFUNDE a todos los lanes.
+    auto sb_elem_info = [](PrimitiveKind k, ir::IrType *ty, uint64_t *esz,
+                           bool *fp) -> bool {
+        switch (k) {
+        case PrimitiveKind::F64: *ty = ir::IrType::F64; *esz = 8; *fp = true;  return true;
+        case PrimitiveKind::I64: *ty = ir::IrType::I64; *esz = 8; *fp = false; return true;
+        case PrimitiveKind::U64: *ty = ir::IrType::U64; *esz = 8; *fp = false; return true;
+        case PrimitiveKind::I32: *ty = ir::IrType::I32; *esz = 4; *fp = false; return true;
+        case PrimitiveKind::U32: *ty = ir::IrType::U32; *esz = 4; *fp = false; return true;
+        case PrimitiveKind::I16: *ty = ir::IrType::I16; *esz = 2; *fp = false; return true;
+        case PrimitiveKind::U16: *ty = ir::IrType::U16; *esz = 2; *fp = false; return true;
+        case PrimitiveKind::I8:  *ty = ir::IrType::I8;  *esz = 1; *fp = false; return true;
+        case PrimitiveKind::U8:  *ty = ir::IrType::U8;  *esz = 1; *fp = false; return true;
+        default: return false;
+        }
+    };
+    // Valida c_ix / a_ix son base[idx] HOST de un tipo vectorizable; devuelve
+    // la base + su PrimitiveKind de elemento.
+    auto check_idx = [&](IndexExpr *ix, IdentExpr **out_base,
+                         PrimitiveKind *out_kind) -> bool {
         if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
             ix->is_range)
             return false;
@@ -817,21 +836,30 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
                                t.kind == PrimitiveKind::ARRAY) &&
                               static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false;
-        if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64
+        ir::IrType ety; uint64_t es2; bool fp2;
+        if (!sb_elem_info(t.pointee->kind, &ety, &es2, &fp2)) return false;
         *out_base = base;
+        *out_kind = t.pointee->kind;
         return true;
     };
     ast::IdentExpr *c_base = nullptr, *a_base = nullptr;
-    if (!check_idx_f64(c_ix, &c_base)) return false;
-    if (!check_idx_f64(a_ix, &a_base)) return false;
+    PrimitiveKind ck, ak;
+    if (!check_idx(c_ix, &c_base, &ck)) return false;
+    if (!check_idx(a_ix, &a_base, &ak)) return false;
+    if (ck != ak) return false; // mismo tipo de elemento
+    ir::IrType elem_ty; uint64_t esz; bool elem_fp;
+    sb_elem_info(ck, &elem_ty, &esz, &elem_fp);
+    // Enteros: div siempre escalar; mul solo donde hay packed (i16/i32, esz 2/4).
+    if (!elem_fp) {
+        if (subop == 3) return false;
+        if (subop == 2 && esz != 2 && esz != 4) return false;
+    }
 
     if (MC_DBG)
         std::fprintf(stderr, "[mc-idiom] MATCH vec_scalar idx=%s subop=%d\n",
                      idx_name.c_str(), subop);
 
     // ======== Emitir el loop vectorizado + cola escalar. ========
-    const ir::IrType elem_ty = ir::IrType::F64;
-    const uint64_t esz = 8;
     const uint32_t ln = s->loc.line;
     const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
@@ -841,14 +869,11 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     const ir::IrValueId v_a = lower_expr(a_base);
     const ir::IrValueId v_c = lower_expr(c_base);
     const ir::IrValueId v_N = lower_expr(vl.limit);
-    // El escalar: bajar a un valor SSA y coercer a F64.
     ir::IrValueId v_s_raw = lower_expr(scalar_expr);
     if (i_init == ir::IR_NO_VALUE || v_a == ir::IR_NO_VALUE ||
         v_c == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE ||
         v_s_raw == ir::IR_NO_VALUE)
         return false;
-    const ir::IrValueId v_s =
-        cast_if_needed(v_s_raw, fn_->values[v_s_raw].type, ir::IrType::F64, ln);
     const ir::IrType idx_ty = fn_->values[i_init].type;
 
     auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
@@ -860,6 +885,37 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         fn_->append(current_block_, std::move(in));
         return d;
     };
+
+    // El escalar SSA que recibe VEC_BINOP_S:
+    //  - f64: el valor coercido a F64 (el JIT lo difunde con MOVSD+broadcast).
+    //  - enteros: los esz bytes bajos REPLICADOS a lo ancho de 64 bits, de modo
+    //    que un broadcast de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llene todos
+    //    los sub-lanes con el escalar.  Hecho con IR (portable interp+jit).
+    ir::IrValueId v_s;
+    if (elem_fp) {
+        v_s = cast_if_needed(v_s_raw, fn_->values[v_s_raw].type,
+                             ir::IrType::F64, ln);
+    } else {
+        // coercer a i64 + zero-extender los esz bytes bajos + replicar.
+        ir::IrValueId r = cast_if_needed(v_s_raw, fn_->values[v_s_raw].type,
+                                         ir::IrType::I64, ln);
+        if (esz < 8) {
+            const uint64_t b = 8 * esz; // bits del escalar
+            // zero-extender los b bits bajos: (r << (64-b)) >>u (64-b).
+            r = bin(ir::IrOp::SHL, ir::IrType::I64, r,
+                    emit_const(ir::IrType::I64, 64 - b, ln));
+            r = bin(ir::IrOp::SHR, ir::IrType::U64, r, // logico (unsigned)
+                    emit_const(ir::IrType::I64, 64 - b, ln));
+            // replicar por duplicacion: r |= r << b; r |= r << 2b; ...
+            for (uint64_t sh = b; sh < 64; sh *= 2) {
+                const ir::IrValueId shifted =
+                    bin(ir::IrOp::SHL, ir::IrType::I64, r,
+                        emit_const(ir::IrType::I64, sh, ln));
+                r = bin(ir::IrOp::OR, ir::IrType::I64, r, shifted);
+            }
+        }
+        v_s = r;
+    }
 
     const ir::IrBlockId entry = current_block_;
     const ir::IrBlockId mhdr = fn_->new_block("vsc_main_hdr");
@@ -963,11 +1019,20 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         { ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
           ld.dst = v_ai; ld.operands = {a_at}; ld.source_line = ln;
           fn_->append(current_block_, std::move(ld)); }
-        const ir::IrOp eop = (subop == 0)   ? ir::IrOp::FADD
-                             : (subop == 1) ? ir::IrOp::FSUB
-                             : (subop == 2) ? ir::IrOp::FMUL
-                                            : ir::IrOp::FDIV;
-        const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_s);
+        // escalar de la cola con el tipo del elemento (no el i64 replicado).
+        const ir::IrValueId v_s_tail =
+            elem_fp ? v_s
+                    : cast_if_needed(v_s_raw, fn_->values[v_s_raw].type,
+                                     elem_ty, ln);
+        const ir::IrOp eop =
+            elem_fp ? ((subop == 0)   ? ir::IrOp::FADD
+                       : (subop == 1) ? ir::IrOp::FSUB
+                       : (subop == 2) ? ir::IrOp::FMUL
+                                      : ir::IrOp::FDIV)
+                    : ((subop == 0)   ? ir::IrOp::ADD
+                       : (subop == 1) ? ir::IrOp::SUB
+                                      : ir::IrOp::MUL);
+        const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_s_tail);
         const ir::IrValueId c_at = ptr_at(v_c, off);
         ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
         st.dst = ir::IR_NO_VALUE; st.operands = {v_res, c_at};
