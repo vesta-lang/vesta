@@ -1736,7 +1736,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         vreg_dbg(fn.name.c_str(), "throw(host-leaf-no-arg)");
                         return false;
                     }
-                    if (!emit_host_args({in.operands[0]}, O)) {
+                    // __vex_throw(value[, type_id]): operands[1] (type-id del
+                    // intervalo) presente en native_poo para el type matching.
+                    std::vector<ir::IrValueId> targs = {in.operands[0]};
+                    if (in.operands.size() >= 2)
+                        targs.push_back(in.operands[1]);
+                    if (!emit_host_args(targs, O)) {
                         vreg_dbg(fn.name.c_str(), "throw(host-leaf-args)");
                         return false;
                     }
