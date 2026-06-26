@@ -253,7 +253,9 @@ int main(int argc, char *argv[]) {
         "j,threads", "Número de hilos para el driver",
         cxxopts::value<int>()->default_value("0"))("v,version",
                                                    "Mostrar versión")(
-        "m,mode", "Modo de ejecución (vm/jit)",
+        "m,mode",
+        "Modo de ejecucion/compilacion: vm (interprete) | jit (JIT en "
+        "caliente) | aot (compilacion nativa standalone, requiere --vex)",
         cxxopts::value<std::string>()->default_value("vm"))(
         "list-arch", "Imprimir arquitecturas soportadas")(
         "asm-file", "Archivo ASM a ensamblar", cxxopts::value<std::string>())(
@@ -390,9 +392,13 @@ int main(int argc, char *argv[]) {
             "32-bit).",
             cxxopts::value<std::string>()->default_value("x86-64"))(
             "float-isa",
-            "AOT: backend de punto flotante: sse2 (default) | x87 | avx | "
-            "avx512f | auto (deteccion en runtime por CPUID). La mayoria de CPUs "
-            "modernas tienen avx pero no avx512f.",
+            "AOT: backend de punto flotante / ancho SIMD del vectorizador: "
+            "sse2 (default, 128b, corre en CUALQUIER x86-64) | x87 (legacy) | "
+            "avx (AVX2 256b, requiere AVX2 en la CPU) | avx512f (512b, requiere "
+            "AVX-512) | auto (multiversion: emite las 3 variantes y elige la "
+            "optima en runtime por CPUID; lo mejor para distribuir un solo "
+            "binario). Nota: un binario avx/avx512f FIJO da SIGILL en una CPU "
+            "sin ese soporte; usa auto para portabilidad.",
             cxxopts::value<std::string>()->default_value("sse2"))(
             "vex-base",
             "VA base address para el modulo (hex, e.g. 0x10000000). Usado para "
