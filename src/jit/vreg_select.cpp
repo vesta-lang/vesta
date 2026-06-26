@@ -2437,19 +2437,51 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_BINOP_S: {
                 flush_pending();
                 if (in.operands.size() != 3) return false;
-                if (!fp_ok || in.type != ir::IrType::F64) return false; // f64 v1
+                if (!fp_ok) return false;
                 const uint64_t chunk_w = in.imm & 0xFF;
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;
+                // op packed segun el tipo de elemento.  El escalar ya viene
+                // REPLICADO a 64 bits (matcher) para los enteros -> un broadcast
+                // de lane de 64 bits (UNPCKLPD/VBROADCASTSD) llena todos los
+                // sub-lanes con el escalar.
+                const bool is_fp = (in.type == ir::IrType::F64);
+                MOp pop;
+                if (in.type == ir::IrType::F64) {
+                    pop = (subop == 0)   ? MOp::ADDPD
+                          : (subop == 1) ? MOp::SUBPD
+                          : (subop == 2) ? MOp::MULPD
+                                         : MOp::DIVPD;
+                } else if (in.type == ir::IrType::I64 ||
+                           in.type == ir::IrType::U64) {
+                    if (subop == 0) pop = MOp::PADDQ;
+                    else if (subop == 1) pop = MOp::PSUBQ;
+                    else return false;
+                } else if (in.type == ir::IrType::I32 ||
+                           in.type == ir::IrType::U32) {
+                    if (subop == 0) pop = MOp::PADDD;
+                    else if (subop == 1) pop = MOp::PSUBD;
+                    else if (subop == 2) pop = MOp::PMULLD;
+                    else return false;
+                } else if (in.type == ir::IrType::I16 ||
+                           in.type == ir::IrType::U16) {
+                    if (subop == 0) pop = MOp::PADDW;
+                    else if (subop == 1) pop = MOp::PSUBW;
+                    else if (subop == 2) pop = MOp::PMULLW;
+                    else return false;
+                } else if (in.type == ir::IrType::I8 ||
+                           in.type == ir::IrType::U8) {
+                    if (subop == 0) pop = MOp::PADDB;
+                    else if (subop == 1) pop = MOp::PSUBB;
+                    else return false;
+                } else {
+                    return false;
+                }
                 const uint64_t host_w =
                     jit::vec_isa_width(jit::vec_emit_isa());
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const uint64_t n_pieces = chunk_w / eff_w;
-                const MOp pop = (subop == 0)   ? MOp::ADDPD
-                                : (subop == 1) ? MOp::SUBPD
-                                : (subop == 2) ? MOp::MULPD
-                                               : MOp::DIVPD;
                 const auto &gpsc =
                     tri_sel.scratch[static_cast<size_t>(RegClass::GP)];
                 const auto &fpsc =
@@ -2461,9 +2493,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const uint8_t ew = static_cast<uint8_t>(eff_w);
                 const MOperand x0 = MOperand::make_reg(fp0, ew);
                 const MOperand x1 = MOperand::make_reg(fp1, ew); // escalar wide
-                // difundir el escalar a x1 (una vez).
-                O.push_back(MInstr::make_unary(
-                    MOp::MOVSD, MOperand::make_reg(fp1, 8), vrt(in.operands[2])));
+                // difundir el escalar a x1 (una vez): f64 via MOVSD; entero via
+                // MOVQ_GP_XMM del escalar replicado (sus 64 bits ya repiten el
+                // valor en cada sub-lane).
+                if (is_fp)
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVSD, MOperand::make_reg(fp1, 8),
+                        vrt(in.operands[2])));
+                else
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOVQ_GP_XMM, MOperand::make_reg(fp1, 16),
+                        vr(in.operands[2])));
                 if (eff_w <= 16)
                     O.push_back(MInstr::make_unary(
                         MOp::UNPCKLPD, MOperand::make_reg(fp1, 16),

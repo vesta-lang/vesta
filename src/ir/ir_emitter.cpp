@@ -3115,39 +3115,56 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
-    // VEC_BINOP_S dst[i] = a[i] OP escalar.  Interp = W ops escalares por lane
-    // con el escalar (f64) en f2.  r10=dst, r11=a, f2=escalar.
+    // VEC_BINOP_S dst[i] = a[i] OP escalar.  Interp = W ops escalares por lane.
+    // f64: el escalar en f2.  enteros: el escalar (i64 replicado; sus esz bytes
+    // bajos = el valor) en r13; loadzh por lane + add/sub/mul de 64b + store low.
+    // r10=dst, r11=a.
     case IrOp::VEC_BINOP_S: {
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t subop = (ins.imm >> 8) & 0xFF;
-        const size_t esz = ir_type_size(ins.type); // F64=8
+        const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
         const char *fop = (subop == 0)   ? "fadd"
                           : (subop == 1) ? "fsub"
                           : (subop == 2) ? "fmul"
                                          : "fdiv";
+        const char *iop = (subop == 0)   ? "adds"
+                          : (subop == 1) ? "subs"
+                                         : "muls";
+        const std::string rsz =
+            (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
         ctx.out << "    push r10\n    push r11\n";
         { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
           ctx.out << "    push " << p << "\n"; }
         { const std::string p = ctx.load_src(ins.operands[1], 0); // a
           ctx.out << "    push " << p << "\n"; }
         { const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
-          ctx.out << "    bitg2z f2, " << p << "\n"; }
+          if (is_fp) ctx.out << "    bitg2z f2, " << p << "\n";
+          else       ctx.out << "    mov r13, " << p << "\n"; }
         ctx.out << "    pop r11\n    pop r10\n"; // a, dst
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out << "    addu r10, " << esz << "\n";
                 ctx.out << "    addu r11, " << esz << "\n";
             }
-            ctx.out << "    movh r14, [r11]\n"; // a[k]
-            ctx.out << "    bitg2z f0, r14\n";
-            ctx.out << "    " << fop << " f0, f2\n";
-            ctx.out << "    bitz2g r14, f0\n";
-            ctx.out << "    movh [r10], r14\n"; // dst[k]
+            if (is_fp) {
+                ctx.out << "    movh r14, [r11]\n"; // a[k]
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    " << fop << " f0, f2\n";
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14\n"; // dst[k]
+            } else {
+                ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
+                ctx.out << "    " << iop << " r14, r13\n";        // a OP scalar
+                ctx.out << "    movh [r10], r14" << rsz << "\n";  // dst[k]
+            }
         }
         ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;
     }
