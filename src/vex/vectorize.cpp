@@ -895,7 +895,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     if (!start_base) return false;
     int n_scalar = 0;
     for (auto &st : S)
-        if (st.is_scalar && ++n_scalar > 1) return false; // v1: <=1 escalar (XMM13)
+        if (st.is_scalar && ++n_scalar > 4) return false; // <=4 escalares (XMM10-13)
     // f32 con escalar: el broadcast escalar (VEC_BINOP_S/VEC_BCAST) es f64 en el
     // codegen -> para f32 solo cadenas array-only (a[i]*b[i]+d[i]).  El axpy f32
     // con escalar (a[i]*k+b[i]) bail hasta tener VBROADCASTSS.
@@ -925,15 +925,21 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     if (i_init == ir::IR_NO_VALUE || v_c == ir::IR_NO_VALUE ||
         v_start == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE)
         return false;
-    // Bajar las bases array de cada paso + el escalar (a F64).
+    // Bajar las bases array + cada escalar (a F64), asignando a cada paso
+    // escalar un INDICE de registro de broadcast distinto (0..3 -> XMM13-idx)
+    // para que multiples escalares NO colisionen en XMM13 y todos corran a
+    // ancho COMPLETO (sin penalizacion de transicion AVX<->SSE del no-hoisted).
     std::vector<ir::IrValueId> step_base(S.size(), ir::IR_NO_VALUE);
-    ir::IrValueId v_scalar = ir::IR_NO_VALUE;
+    std::vector<ir::IrValueId> step_scalar(S.size(), ir::IR_NO_VALUE);
+    std::vector<int> step_sidx(S.size(), -1);
+    int next_sidx = 0;
     for (size_t k = 0; k < S.size(); ++k) {
         if (S[k].is_scalar) {
             const ir::IrValueId raw = lower_expr(S[k].scal);
             if (raw == ir::IR_NO_VALUE) return false;
-            v_scalar = cast_if_needed(raw, fn_->values[raw].type,
-                                      ir::IrType::F64, ln);
+            step_scalar[k] = cast_if_needed(raw, fn_->values[raw].type,
+                                            ir::IrType::F64, ln);
+            step_sidx[k] = next_sidx++;
         } else {
             const ir::IrValueId vb = lower_expr(S[k].arr);
             if (vb == ir::IR_NO_VALUE) return false;
@@ -959,14 +965,17 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     const ir::IrBlockId tbody = fn_->new_block("vcp_tail_body");
     const ir::IrBlockId exit = fn_->new_block("vcp_exit");
 
-    // --- entry: consts + (si hay escalar) VEC_BCAST a XMM13 + BR mhdr ---
+    // --- entry: consts + un VEC_BCAST por escalar (a XMM13-idx) + BR mhdr ---
     current_block_ = entry;
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    if (v_scalar != ir::IR_NO_VALUE) {
+    for (size_t k = 0; k < S.size(); ++k) {
+        if (!S[k].is_scalar) continue;
         ir::IrInstr bc{};
         bc.op = ir::IrOp::VEC_BCAST; bc.type = elem_ty;
-        bc.dst = ir::IR_NO_VALUE; bc.operands = {v_scalar}; bc.imm = width;
+        bc.dst = ir::IR_NO_VALUE; bc.operands = {step_scalar[k]};
+        // imm: bits 0-7 = ancho ; bits 8-10 = indice de reg (XMM13-idx).
+        bc.imm = width | ((uint64_t)(step_sidx[k] & 0x7) << 8);
         bc.source_line = ln; fn_->append(entry, std::move(bc));
     }
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
@@ -1017,8 +1026,10 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             if (S[k].is_scalar) {
                 ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
                 vb.dst = ir::IR_NO_VALUE;
-                vb.operands = {c_at, src0, v_scalar};
-                vb.imm = ((uint64_t)S[k].subop << 8) | width | (1ull << 16);
+                vb.operands = {c_at, src0, step_scalar[k]};
+                // imm: subop(8-15) | ancho(0-7) | hoisted(16) | sidx(17-19).
+                vb.imm = ((uint64_t)S[k].subop << 8) | width | (1ull << 16) |
+                         ((uint64_t)(step_sidx[k] & 0x7) << 17);
                 vb.source_line = ln;
                 fn_->append(current_block_, std::move(vb));
             } else {
@@ -1085,7 +1096,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         ir::IrValueId acc = load_el(v_start);
         for (size_t k = 0; k < S.size(); ++k) {
             const ir::IrValueId rhs =
-                S[k].is_scalar ? v_scalar : load_el(step_base[k]);
+                S[k].is_scalar ? step_scalar[k] : load_el(step_base[k]);
             acc = bin(fop_of(S[k].subop), elem_ty, acc, rhs);
         }
         const ir::IrValueId c_at = ptr_at(v_c, off);
