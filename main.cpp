@@ -2304,6 +2304,99 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de excepciones (stdlib/vex/vex_exc.vex).
+            // Si el modulo usa try/catch/throw (THROW o CALL __vex_setjmp en el
+            // IR) y no define el runtime el mismo, lo compilamos inline (mismo
+            // native_poo + el @Target ya seleccionado para el target AOT) y
+            // FUSIONAMOS sus funciones + la seccion .vexexc en aot_mod -> el .o
+            // queda autocontenido (no hay que enlazar vex_exc.o a mano).  El
+            // dead-elim posterior conserva solo las __vex_* realmente usadas.
+            // Removible con --no-exceptions (exceptions_enabled=false).
+            // ----------------------------------------------------------------
+            if (!aot_no_exceptions) {
+                bool uses_exc = false, defines_exc = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_setjmp") defines_exc = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::THROW ||
+                                (ins.op == ir::IrOp::CALL &&
+                                 ins.func_name == "__vex_setjmp"))
+                                uses_exc = true;
+                }
+                if (uses_exc && !defines_exc) {
+                    // Localizar vex_exc.vex: junto al exe (instalacion) o en el
+                    // repo (dev: build_dir/../stdlib/vex) o cwd.
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_exc.vex",
+                        exe_dir + "/../stdlib/vex/vex_exc.vex",
+                        "stdlib/vex/vex_exc.vex"};
+                    std::string ve_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            ve_path = c;
+                            break;
+                        }
+                    if (ve_path.empty()) {
+                        std::cerr << "[aot] usa excepciones pero no encuentro "
+                                     "stdlib/vex/vex_exc.vex (enlazalo a mano o "
+                                     "compila con --no-exceptions).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vef(ve_path);
+                    std::string ve_src((std::istreambuf_iterator<char>(vef)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions ve_opts;
+                    ve_opts.module_name = "vex_exc";
+                    ve_opts.opt_level = 2;
+                    ve_opts.native_poo = true;
+                    ve_opts.exceptions_enabled = true;
+                    vex::CompileResult ve_cr =
+                        vex::compile_vex_source(ve_src, ve_path, ve_opts);
+                    ir::IrModule ve_mod;
+                    if (!ve_cr.ok || ve_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(ve_cr.ir_module_cache_bytes,
+                                                   ve_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "excepciones vex_exc.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    // Merge (mismo patron que compiler_project): remap de
+                    // STR_LIT_ADDR/code.s_N por el offset del static_data, luego
+                    // append de funciones (las que no existan ya) + static_data
+                    // + globals + native_imports.  vex_exc no tiene literales,
+                    // pero el remap es correcto en general (defensa).
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : ve_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(ve_mod.static_data));
+                    for (auto &gv : ve_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : ve_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de excepciones "
+                                 "(stdlib/vex/vex_exc.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
             // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
             // analizar/compilar.  Sin esto, una factoria-de-closure inlineada
             // en su caller queda como copia standalone no usada y su GC_ALLOC
@@ -2350,6 +2443,11 @@ int main(int argc, char *argv[]) {
                                  ins.op == ir::IrOp::LABEL_ADDR) &&
                                 !ins.func_name.empty())
                                 add_live(ins.func_name);
+                            // THROW baja a CALL __vex_throw en el backend
+                            // (no es un CALL en el IR) -> referencia implicita
+                            // al runtime de excepciones auto-hospedado.
+                            if (ins.op == ir::IrOp::THROW)
+                                add_live("__vex_throw");
                         }
                 }
                 std::vector<ir::IrFunction> kept;
@@ -2385,32 +2483,6 @@ int main(int argc, char *argv[]) {
                       << rep.ok_functions.size()
                       << " compilable(s) a nativo.\n";
 
-            // Excepciones AOT: si el modulo usa try/catch/throw, su .o referencia
-            // los simbolos del runtime auto-hospedado (__vex_throw/_setjmp/...)
-            // que viven en stdlib/vex/vex_exc.vex.  Mientras el bundle automatico
-            // no este (requiere el linker propio / merge de la seccion .vexexc),
-            // avisamos al usuario para que enlace ese objeto.  No se imprime si
-            // el propio modulo los define (es decir, si ESTE es vex_exc.vex).
-            {
-                bool uses_exc = false, defines_exc = false;
-                for (const auto &af : aot_mod.functions) {
-                    if (af.name == "__vex_setjmp") defines_exc = true;
-                    for (const auto &b : af.blocks)
-                        for (const auto &ins : b.instrs) {
-                            if (ins.op == ir::IrOp::THROW ||
-                                (ins.op == ir::IrOp::CALL &&
-                                 ins.func_name == "__vex_setjmp"))
-                                uses_exc = true;
-                        }
-                }
-                if (uses_exc && !defines_exc) {
-                    std::cout << "[aot] usa excepciones (try/catch/throw): enlaza "
-                                 "el runtime\n"
-                                 "      stdlib/vex/vex_exc.vex (compilalo con "
-                                 "-m aot --emit obj y\n"
-                                 "      pasalo al linker junto a este objeto).\n";
-                }
-            }
 
             if (!rep.compatible) {
                 std::cerr << rep.render();
