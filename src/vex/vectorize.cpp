@@ -928,6 +928,13 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     current_block_ = entry;
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
+    // HOIST del broadcast: difundir el escalar a XMM13 UNA vez en el preheader
+    // (el JIT lo reusa en el cuerpo sin re-broadcast; no-op en interp).
+    {
+        ir::IrInstr bc{}; bc.op = ir::IrOp::VEC_BCAST; bc.type = elem_ty;
+        bc.dst = ir::IR_NO_VALUE; bc.operands = {v_s}; bc.imm = width;
+        bc.source_line = ln; fn_->append(entry, std::move(bc));
+    }
     { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
       br.source_line = ln; fn_->append(entry, std::move(br)); }
     fn_->blocks[entry].succs.push_back(mhdr);
@@ -974,7 +981,9 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
         vb.dst = ir::IR_NO_VALUE;
         vb.operands = {c_at, a_at, v_s};
-        vb.imm = ((uint64_t)subop << 8) | width;
+        // bit16 = HOISTED: el broadcast esta pre-hecho en XMM13 (VEC_BCAST del
+        // preheader) -> el JIT usa VEX puro a ancho de host sin re-broadcast.
+        vb.imm = ((uint64_t)subop << 8) | width | (1ull << 16);
         vb.source_line = ln;
         fn_->append(current_block_, std::move(vb));
     }

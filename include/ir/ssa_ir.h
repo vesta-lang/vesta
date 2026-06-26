@@ -626,9 +626,18 @@ enum class IrOp : uint16_t {
     VEC_ACC_COMBINE = 0xE9, ///< vec_acc_combine %slot   (acc[dst] += acc[src])
 
     // VEC_BINOP_S dst[i] = a[i] OP escalar  (escalado/offset element-wise): el
-    // escalar (un valor FP loop-invariante) se DIFUNDE a todos los lanes.  Solo
-    // f64/f32 (broadcast int = VPBROADCAST, pendiente).  imm=(subop<<8)|ancho.
+    // escalar (loop-invariante; f64 o entero ya replicado a 64b) se DIFUNDE a
+    // todos los lanes.  imm: bits0-7=ancho, bits8-15=subop, bit16=HOISTED (el
+    // broadcast esta pre-hecho en XMM13 por un VEC_BCAST en el preheader -> el
+    // loop usa VEX puro sin re-broadcast ni transicion AVX/SSE).
     VEC_BINOP_S = 0xEA, ///< vec_binop_s.fN %dst, %a, %scalar
+    // VEC_BCAST: difunde el escalar (operands[0]) a TODOS los lanes de XMM13
+    // (registro reservado) UNA vez en el preheader del loop, para que el
+    // VEC_BINOP_S del cuerpo lo reuse sin re-broadcast por iteracion (hoist).
+    // No-op en el interprete (su VEC_BINOP_S re-lee el escalar por lane).
+    // imm=ancho del chunk.  XMM13 = acc0; scalar-bcast y reduccion no coexisten
+    // en un matcher de 1 sentencia, asi que reusar XMM13 es seguro.
+    VEC_BCAST = 0xEB, ///< vec_bcast.fN %scalar
 
     // ---- intrinsics VM (0xF0-0xFF) ----
     GETPROC = 0xF0, ///< %dst = getproc     (ProcessVM* del proceso actual)
