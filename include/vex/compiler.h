@@ -143,6 +143,14 @@ struct CompileOptions {
     /// (ruta runtime historica, intacta para la VM/JIT).
     bool native_poo = false;
 
+    /// C3 (AOT): habilita el mecanismo de excepciones NATIVO (setjmp/longjmp,
+    /// sin runtime/GC/libc).  CONFIGURABLE: el usuario puede DESACTIVARLO
+    /// (--no-exceptions) para kernels/freestanding donde no se quiere ningun
+    /// runtime de excepciones; entonces un try/catch/throw da error claro.
+    /// Default true.  Coste cero si el programa no usa excepciones (el runtime
+    /// solo se emite si hay try/catch/throw).  Solo afecta a @c native_poo (AOT).
+    bool exceptions_enabled = true;
+
     /// Fase 3.5 LSP: cuando true, @c compile_vex_source vuelca un snapshot
     /// de los valores @c comptime computados (constantes top-level) a
     /// @c CompileResult::comptime_values.  Estrictamente ADITIVO y gateado:

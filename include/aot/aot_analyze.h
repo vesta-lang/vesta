@@ -89,6 +89,13 @@ struct AotTarget {
     bool free_provided =
         false; ///< RAW_FREE / SMARTPTR_FREE ok en freestanding.
     bool panic_provided = false; ///< PANIC ok en freestanding.
+    /// C3: mecanismo de excepciones nativo (setjmp/longjmp, sin runtime/GC/
+    /// libc).  CONFIGURABLE: el usuario puede desactivarlo (--no-exceptions /
+    /// freestanding sin excepciones) -> THROW/TRYENTER/... vuelven a ser
+    /// RUNTIME_DEPENDENT (error claro pidiendo activarlas o no usar try/catch).
+    /// Default true: si el programa NO usa excepciones, no se emite runtime
+    /// alguno (coste cero).
+    bool exceptions_enabled = true;
 };
 
 /**
