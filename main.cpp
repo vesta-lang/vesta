@@ -2385,6 +2385,33 @@ int main(int argc, char *argv[]) {
                       << rep.ok_functions.size()
                       << " compilable(s) a nativo.\n";
 
+            // Excepciones AOT: si el modulo usa try/catch/throw, su .o referencia
+            // los simbolos del runtime auto-hospedado (__vex_throw/_setjmp/...)
+            // que viven en stdlib/vex/vex_exc.vex.  Mientras el bundle automatico
+            // no este (requiere el linker propio / merge de la seccion .vexexc),
+            // avisamos al usuario para que enlace ese objeto.  No se imprime si
+            // el propio modulo los define (es decir, si ESTE es vex_exc.vex).
+            {
+                bool uses_exc = false, defines_exc = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_setjmp") defines_exc = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs) {
+                            if (ins.op == ir::IrOp::THROW ||
+                                (ins.op == ir::IrOp::CALL &&
+                                 ins.func_name == "__vex_setjmp"))
+                                uses_exc = true;
+                        }
+                }
+                if (uses_exc && !defines_exc) {
+                    std::cout << "[aot] usa excepciones (try/catch/throw): enlaza "
+                                 "el runtime\n"
+                                 "      stdlib/vex/vex_exc.vex (compilalo con "
+                                 "-m aot --emit obj y\n"
+                                 "      pasalo al linker junto a este objeto).\n";
+                }
+            }
+
             if (!rep.compatible) {
                 std::cerr << rep.render();
                 std::cerr
