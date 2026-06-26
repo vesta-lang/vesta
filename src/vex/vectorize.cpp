@@ -800,8 +800,11 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         default: return false;
         }
     };
-    // Solo f64 en v1 (el broadcast escalar de VEC_BINOP_S es f64).
-    auto as_f64_arr = [&](ast::Expr *e, IdentExpr **base) -> bool {
+    // Array f32/f64 HOST indexado por idx.  El tipo de elemento se captura en
+    // @p c_kind (todas las hojas array deben ser del MISMO tipo que el destino).
+    PrimitiveKind c_kind = PrimitiveKind::F64; // se fija al clasificar el destino
+    auto as_fp_arr = [&](ast::Expr *e, IdentExpr **base,
+                         PrimitiveKind expected) -> bool {
         if (!e || e->kind != NodeKind::IndexExpr) return false;
         auto *ix = static_cast<IndexExpr *>(e);
         if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
@@ -817,21 +820,32 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                                t.kind == PrimitiveKind::ARRAY) &&
                               static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false;
-        if (t.pointee->kind != PrimitiveKind::F64) return false; // v1: f64
+        const PrimitiveKind ek = t.pointee->kind;
+        if (ek != PrimitiveKind::F32 && ek != PrimitiveKind::F64) return false;
+        if (expected != PrimitiveKind::COUNT && ek != expected)
+            return false; // todas las hojas mismo tipo de elemento
         *base = b;
         return true;
+    };
+    // Helpers locales que fijan el tipo del destino (COUNT al clasificar c).
+    auto as_arr_any = [&](ast::Expr *e, IdentExpr **base) -> bool {
+        return as_fp_arr(e, base, PrimitiveKind::COUNT);
+    };
+    auto as_arr_c = [&](ast::Expr *e, IdentExpr **base) -> bool {
+        return as_fp_arr(e, base, c_kind);
     };
     // Hoja ESCALAR: invariante del loop (ni array[idx] ni referencia a idx).
     auto is_scalar_leaf = [&](ast::Expr *e) -> bool {
         if (!e) return false;
         IdentExpr *tmp = nullptr;
-        if (as_f64_arr(e, &tmp)) return false;             // array -> no escalar
+        if (as_arr_any(e, &tmp)) return false;             // array -> no escalar
         if (mc_expr_refs_ident(e, idx_name)) return false; // depende de idx
         return true;
     };
 
     IdentExpr *c_base = nullptr;
-    if (!as_f64_arr(asg->target.get(), &c_base)) return false;
+    if (!as_arr_any(asg->target.get(), &c_base)) return false;
+    c_kind = c_base->result_type.pointee->kind; // F32 o F64 (fija el tipo)
 
     struct Step {
         int subop;
@@ -850,7 +864,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     std::vector<Step> S;
     std::function<bool(ast::Expr *)> flatten = [&](ast::Expr *e) -> bool {
         IdentExpr *ab = nullptr;
-        if (as_f64_arr(e, &ab)) { start_base = ab; return true; } // hoja inicial
+        if (as_arr_c(e, &ab)) { start_base = ab; return true; } // hoja inicial
         if (!e || e->kind != NodeKind::BinaryExpr) return false;
         auto *be = static_cast<BinaryExpr *>(e);
         int so;
@@ -859,7 +873,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         // Intenta: prefijo (sub-cadena) a la izquierda, hoja a la derecha.
         auto try_chain = [&](ast::Expr *prefix, ast::Expr *leaf) -> bool {
             IdentExpr *lb = nullptr;
-            const bool arr = as_f64_arr(leaf, &lb);
+            const bool arr = as_arr_c(leaf, &lb);
             const bool scal = !arr && is_scalar_leaf(leaf);
             if (!arr && !scal) return false; // hoja no vectorizable
             const size_t save = S.size();
@@ -882,9 +896,14 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     int n_scalar = 0;
     for (auto &st : S)
         if (st.is_scalar && ++n_scalar > 1) return false; // v1: <=1 escalar (XMM13)
+    // f32 con escalar: el broadcast escalar (VEC_BINOP_S/VEC_BCAST) es f64 en el
+    // codegen -> para f32 solo cadenas array-only (a[i]*b[i]+d[i]).  El axpy f32
+    // con escalar (a[i]*k+b[i]) bail hasta tener VBROADCASTSS.
+    if (c_kind == PrimitiveKind::F32 && n_scalar > 0) return false;
 
-    const ir::IrType elem_ty = ir::IrType::F64;
-    const uint64_t esz = 8;
+    const bool is_f32 = (c_kind == PrimitiveKind::F32);
+    const ir::IrType elem_ty = is_f32 ? ir::IrType::F32 : ir::IrType::F64;
+    const uint64_t esz = is_f32 ? 4u : 8u;
 
     if (MC_DBG)
         std::fprintf(stderr,
