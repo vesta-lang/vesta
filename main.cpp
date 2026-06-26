@@ -1832,10 +1832,13 @@ int main(int argc, char *argv[]) {
                 copts.aot_vec_width = 32;
             else if (fi == "avx512")
                 copts.aot_vec_width = 64;
-            else if (fi == "auto")
-                copts.aot_vec_width =
-                    static_cast<uint8_t>(jit::vec_isa_width(jit::vec_isa_host()));
-            else
+            else if (fi == "auto") {
+                // AUTO: multiversion por cpuid en runtime.  El matcher hornea el
+                // chunk con estrategia dual (element-wise 64, reduccion 16) para
+                // que UN IR compile a las 3 variantes; el driver las compila 3x.
+                copts.aot_auto_vec = true;
+                copts.aot_vec_width = 64; // element-wise max (la reduccion usa 16)
+            } else
                 copts.aot_vec_width = 16; // sse2 / x87
         }
         // Instrumentacion: aplica al IR independientemente del target

@@ -123,6 +123,9 @@ class Lowering {
     /// Ancho del chunk SIMD (bytes) que hornea el matcher del vectorizador en
     /// AOT (16 SSE2 / 32 AVX / 64 AVX512).  Lo fija el driver desde --float-isa.
     void set_aot_vec_width(uint8_t w) { aot_vec_width_ = w; }
+    /// --float-isa auto: chunk DUAL (element-wise 64, reduccion 16) para que un
+    /// IR compile a las 3 variantes (multiversion por cpuid en runtime).
+    void set_aot_auto_vec(bool on) { aot_auto_vec_ = on; }
     /// Solo-LSP: bajar tambien las funciones @c comptime (no-macro) a IR para
     /// poder inspeccionar su codegen.  Ver @c CompileOptions::emit_comptime_fns.
     void set_emit_comptime_fns(bool on) { emit_comptime_fns_ = on; }
@@ -1540,6 +1543,8 @@ class Lowering {
     uint8_t asm_target_bits_ = 64;
     /// Ancho del chunk SIMD del vectorizador en AOT (16/32/64 bytes); 16 default.
     uint8_t aot_vec_width_ = 16;
+    /// --float-isa auto: chunk dual para multiversion (ver set_aot_auto_vec).
+    bool aot_auto_vec_ = false;
     /// Type matching de catch (AOT): por cada clase, su intervalo DFS [lo,hi]
     /// sobre el bosque de herencia.  is-a(A,B) <=> B.lo <= A.lo <= B.hi.  El
     /// throw transporta A.lo; cada catch(B) compara contra [B.lo,B.hi]
