@@ -34,6 +34,7 @@
 #include "aot/aot_native.h"    // Phase AOT.3 Paso 2: _start arch-portable
 #include "aot/linker.h"        // Phase AOT.5: linker propio (enlaza .o)
 #include "jit/vreg_pipeline.h" // Phase AOT.3 Paso 2: vreg_compile_native (HOST_LEAF)
+#include "jit/vec_isa.h" // ancho SIMD del target (--float-isa)
 #include "jit/auto_jit.h"
 #include "jit/keystone_asm_backend.h" // Phase AS inc.4b: registrar backend asm
 #include "jit/inline_asm_trampoline.h" // Phase AS inc.6: helper runner inline-asm
@@ -1820,6 +1821,22 @@ int main(int argc, char *argv[]) {
                                        : std::string("x86-64");
             copts.asm_target_bits =
                 (aa == "x86-32" || aa == "x86_32" || aa == "i386") ? 32 : 64;
+            // Ancho SIMD del TARGET para el matcher del vectorizador (mismo
+            // mapeo que el codegen vreg deriva de FloatIsa): el binario AOT usa
+            // el ancho de --float-isa, no el del host de build.  AUTO -> host
+            // del build como estimacion (el multiversion-cpuid es futuro).
+            const std::string fi = result.count("float-isa")
+                                       ? result["float-isa"].as<std::string>()
+                                       : std::string("sse2");
+            if (fi == "avx")
+                copts.aot_vec_width = 32;
+            else if (fi == "avx512")
+                copts.aot_vec_width = 64;
+            else if (fi == "auto")
+                copts.aot_vec_width =
+                    static_cast<uint8_t>(jit::vec_isa_width(jit::vec_isa_host()));
+            else
+                copts.aot_vec_width = 16; // sse2 / x87
         }
         // Instrumentacion: aplica al IR independientemente del target
         // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.

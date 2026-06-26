@@ -536,7 +536,13 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     // El chunk (16/32/64 bytes) lo elige la ISA: SSE2 W=2, AVX2 W=4, AVX512 W=8
     // (f64).  El IR es portable: el JIT descompone el chunk al ancho del host.
     const uint32_t ln = s->loc.line;
-    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    // AOT (native_poo): el chunk lo fija el TARGET (--float-isa, aot_vec_width_)
+    // -> cross-compile correcto + la reduccion (acc de 1 reg, no splittea) cabe
+    // (chunk==host_w del codegen).  Fuera de AOT: host (vec_chunk_isa) para que
+    // el .velb sea portable (el JIT descompone el chunk al ancho del host).
+    const uint64_t width =
+        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+                    : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz; // lanes segun ancho/tipo
 
     // Bajar el VALOR inicial + las bases directamente (NO lower_stmt(init), que
@@ -861,7 +867,10 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
 
     // ======== Emitir el loop vectorizado + cola escalar. ========
     const uint32_t ln = s->loc.line;
-    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
+    const uint64_t width =
+        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+                    : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
     const ir::IrValueId i_init =
@@ -1140,7 +1149,10 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     // Chunk por ISA (SSE2/AVX2/AVX512); el JIT descompone al ancho del host.
     const uint32_t ln = s->loc.line;
     const uint64_t esz = 8;     // f64
-    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
+    const uint64_t width =
+        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+                    : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
     const ir::IrValueId i_init =
@@ -1380,7 +1392,10 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // acumulando en acc0..acc{U-1}; al final se combinan en acc0 y el bucle
     // W-granular existente sirve de remainder.
     const uint32_t ln = s->loc.line;
-    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
+    const uint64_t width =
+        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+                    : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;     // lanes segun ancho/tipo
     const uint64_t U = 4;               // acumuladores (XMM13,12,11,10)
     // imm de las VEC_ACC ops: ancho | acc_idx<<8 | src_idx<<12.

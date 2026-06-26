@@ -488,6 +488,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * es guiado por ANCHO (fp_mov_for_width), no por un tipo float fijo. */
     const bool fp_ok = (abi == AbiKind::HOST_LEAF || abi == AbiKind::VM) &&
                        (fisa == FloatIsa::SSE2) && !mode32;
+    /* Ancho del chunk SIMD a emitir en las ops VEC_* (vectorizacion).  AOT
+     * (HOST_LEAF): lo fija el TARGET via --float-isa (cross-compile correcto: no
+     * emitir AVX2 si el target es solo-SSE2; ancho SELECCIONABLE sse2->128/
+     * avx->256/avx512->512).  Debe COINCIDIR con el chunk que horneo el matcher
+     * (CompileOptions::aot_vec_width, mismo mapeo de --float-isa) -> chunk==
+     * host_w en AOT -> la reduccion (acc de 1 reg, no splittea) cabe.  JIT
+     * (VM_ABI): el host (vec_emit_isa), porque el .velb corre en ESTE host y se
+     * descompone para portabilidad.  AUTO en AOT -> host del build como
+     * estimacion (multiversion-cpuid futuro). */
+    auto vec_host_w = [abi, fisa]() -> uint64_t {
+        if (abi != AbiKind::HOST_LEAF)
+            return jit::vec_isa_width(jit::vec_emit_isa());
+        switch (fisa) {
+        case FloatIsa::AVX: return 32u;     // YMM 256b
+        case FloatIsa::AVX512F: return 64u; // ZMM 512b
+        case FloatIsa::AUTO: return jit::vec_isa_width(jit::vec_isa_host());
+        default: return 16u; // SSE2 / X87 -> XMM 128b
+        }
+    };
     /* Marcar la clase FP de cada vreg float (F32/F64).  El linear_scan por
      * clase les asigna XMM; el rewrite materializa con MOVSD/MOVSS.  Solo si
      * fp_ok (en otro caso ningun op float llega a emitirse). */
@@ -2269,7 +2288,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* mismo chunk/descompone que VEC_BINOP: emite al ancho del host
                  * (eff_w), descomponiendo el chunk en n_pieces. */
                 const uint64_t host_w =
-                    jit::vec_isa_width(jit::vec_emit_isa());
+                    vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const uint64_t n_pieces = chunk_w / eff_w;
                 const auto &gpsc =
@@ -2357,7 +2376,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * AUTO-cpuid.  VESTA_JIT_VEC_ISA fuerza el ancho (validar
                  * AVX512 por disasm en CPU sin avx512). */
                 const uint64_t host_w =
-                    jit::vec_isa_width(jit::vec_emit_isa());
+                    vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const uint64_t n_pieces = chunk_w / eff_w;
                 /* op packed segun el tipo de elemento: float (ADDPD/...) o
@@ -2508,7 +2527,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 // re-broadcast ni transicion AVX<->SSE.  XMM13 = acc0 reservado;
                 // scalar-bcast y reduccion no coexisten en un matcher de 1 stmt.
                 const bool hoisted = (in.imm >> 16) & 1;
-                const uint64_t host_w = jit::vec_isa_width(jit::vec_emit_isa());
+                const uint64_t host_w = vec_host_w();
                 // sin hoist (no deberia pasar desde el matcher actual): fallback
                 // a SSE2 128b (legacy, sin transicion) con auto-broadcast.
                 const uint64_t eff_w = hoisted
@@ -2573,7 +2592,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;
                 const bool is_fp = (in.type == ir::IrType::F64);
-                const uint64_t host_w = jit::vec_isa_width(jit::vec_emit_isa());
+                const uint64_t host_w = vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const MReg B = static_cast<MReg>(reg_id(MReg::XMM13));
                 // cargar el escalar al low de XMM13: f64 via MOVSD; entero via
@@ -2615,7 +2634,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 else if (in.type == ir::IrType::F32) fma = MOp::VFMADD231PS;
                 else return false;
                 const uint64_t host_w =
-                    jit::vec_isa_width(jit::vec_emit_isa());
+                    vec_host_w();
                 // FMA requiere AVX (>=256); con host SSE2 solo, bail (el
                 // interp/loop escalar lo hace).  256/512 -> ymm/zmm.
                 uint64_t emit_w = host_w;
@@ -2680,7 +2699,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return false;
                 const uint64_t host_w =
-                    jit::vec_isa_width(jit::vec_emit_isa());
+                    vec_host_w();
                 if (chunk_w > host_w) return false; // acc de 1 reg, sin split
                 const bool is_f32 = (in.type == ir::IrType::F32);
                 const bool is_f64 = (in.type == ir::IrType::F64);

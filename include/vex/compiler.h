@@ -157,6 +157,14 @@ struct CompileOptions {
     /// 32 bits (p.ej. `jmp ecx`) fallan en KS_MODE_64.
     uint8_t asm_target_bits = 64;
 
+    /// Ancho del chunk SIMD (bytes) que el matcher del vectorizador hornea en
+    /// AOT (native_poo): 16 (SSE2/defecto), 32 (AVX), 64 (AVX512).  En AOT lo
+    /// fija el TARGET (--float-isa), no el host de build -> cross-compile
+    /// correcto (no emitir AVX2 si el target es solo-SSE2) y ancho seleccionable.
+    /// El codegen (vreg) deriva el mismo ancho de @c FloatIsa.  Fuera de AOT el
+    /// matcher sigue usando el host (vec_chunk_isa) para portabilidad del .velb.
+    uint8_t aot_vec_width = 16;
+
     /// Fase 3.5 LSP: cuando true, @c compile_vex_source vuelca un snapshot
     /// de los valores @c comptime computados (constantes top-level) a
     /// @c CompileResult::comptime_values.  Estrictamente ADITIVO y gateado:
