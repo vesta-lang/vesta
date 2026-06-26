@@ -801,6 +801,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -822,6 +823,7 @@ struct Lowerer {
                 b = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, a, b));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             return;
         }
 
@@ -839,6 +841,7 @@ struct Lowerer {
                 s = reg(scr0);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     mv, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -855,6 +858,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOV, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));
@@ -870,6 +874,7 @@ struct Lowerer {
                 s = xmm(fscr1);
             }
             out.push_back(MInstr::make_unary(op, pdst, s));
+            out.back().flags = in.flags; // propagar MI_FLAG_VEX_SCALAR
             if (dst_spilled)
                 out.push_back(MInstr::make_unary(
                     MOp::MOVSD, slot_mem(ra.slot_of(in.dst.vreg_id())), pdst));

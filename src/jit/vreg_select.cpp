@@ -1107,6 +1107,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     (in.type == ir::IrType::F32) ? MOp::SQRTSS : MOp::SQRTSD;
                 O.push_back(MInstr::make_unary(fop, vrt(in.dst),
                                                vrt(in.operands[0])));
+                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
                 break;
             }
 
@@ -1166,6 +1167,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     (in.type == ir::IrType::F32) ? MOp::CVTSI2SS : MOp::CVTSI2SD;
                 O.push_back(MInstr::make_unary(cop, vrt(in.dst),
                                                vr(in.operands[0])));
+                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
                 break;
             }
             case ir::IrOp::FTOI:
@@ -1182,6 +1184,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     (st == ir::IrType::F32) ? MOp::CVTTSS2SI : MOp::CVTTSD2SI;
                 O.push_back(MInstr::make_unary(cop, vr(in.dst),
                                                vrt(in.operands[0])));
+                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
                 break;
             }
             case ir::IrOp::F32TOF64: {
@@ -1194,6 +1197,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 O.push_back(MInstr::make_unary(MOp::CVTSS2SD, vrt(in.dst),
                                                vrt(in.operands[0])));
+                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
                 break;
             }
             case ir::IrOp::F64TOF32: {
@@ -1206,6 +1210,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 O.push_back(MInstr::make_unary(MOp::CVTSD2SS, vrt(in.dst),
                                                vrt(in.operands[0])));
+                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
                 break;
             }
 
@@ -1258,6 +1263,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* UCOMISD a, b : dst=a (operando 1), src1=b.  El rewrite
                  * materializa ambos a XMM si estan spilled. */
                 O.push_back(MInstr::make_unary(ucmp, vrt(ca), vrt(cb)));
+                if (vex_scalar) O.back().flags |= MI_FLAG_VEX_SCALAR;
                 O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
                                                MOperand::make_imm32(0)));
                 O.push_back(mk_setcc(in.dst, cc));

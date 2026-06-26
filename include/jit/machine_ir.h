@@ -701,6 +701,15 @@ enum class MOp : uint8_t {
  *   +16 [8]  src1         MOperand
  *   +24 [8]  src2         MOperand (para 3-operand ALU)
  */
+/* Bit de @c MInstr::flags: emitir la op escalar float en VEX (avx+) en vez de
+ * legacy SSE.  Lo pone el selector en cvt/cmp/sqrt cuando --float-isa>=AVX, para
+ * NO mezclar legacy-SSE con las binarias VEX (penalizacion de transicion).  Para
+ * las binarias arith hay MOps VEX dedicadas (VADDSD...); estas ops 1-fuente no
+ * ganan nada de 3-op, asi que el flag es lo economico (no se inventa una MOp por
+ * cada una).  Bit alto -> no colisiona con el stackmap-idx que CALL/SAFEPOINT
+ * guardan en flags (esas no son ops float). */
+static constexpr uint16_t MI_FLAG_VEX_SCALAR = 0x8000u;
+
 struct MInstr {
     MOp op = MOp::NOP;
     uint8_t variant = 0;
