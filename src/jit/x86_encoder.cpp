@@ -336,6 +336,11 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
     case MOp::PSUBD:
     case MOp::PADDQ:
     case MOp::PSUBQ:
+    case MOp::PADDW:
+    case MOp::PSUBW:
+    case MOp::PMULLW:
+    case MOp::PADDB:
+    case MOp::PSUBB:
     case MOp::SQRTPD:
     case MOp::XORPD:
     case MOp::ANDPD:
@@ -364,18 +369,26 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
                                : (mi.op == MOp::PSUBD)    ? 0xFA
                                : (mi.op == MOp::PADDQ)    ? 0xD4
                                : (mi.op == MOp::PSUBQ)    ? 0xFB
+                               : (mi.op == MOp::PADDW)    ? 0xFD
+                               : (mi.op == MOp::PSUBW)    ? 0xF9
+                               : (mi.op == MOp::PMULLW)   ? 0xD5
+                               : (mi.op == MOp::PADDB)    ? 0xFC
+                               : (mi.op == MOp::PSUBB)    ? 0xF8
                                : (mi.op == MOp::SQRTPD)   ? 0x51
                                : (mi.op == MOp::XORPD)    ? 0x57
                                : (mi.op == MOp::ANDPD)    ? 0x54
                                                           : 0x14; /* UNPCKLPD */
         /* packed-single (PS): pp=00 (sin 66), EVEX W0.  packed-double/qword: pp=01
-         * (66), EVEX W1.  PADDD/PSUBD (dword): pp=01 pero W0. */
+         * (66), EVEX W1.  PADDD/PSUBD (dword) y word/byte (WIG): pp=01 pero W0. */
         const bool is_ps =
             (mi.op == MOp::ADDPS || mi.op == MOp::SUBPS ||
              mi.op == MOp::MULPS || mi.op == MOp::DIVPS);
+        const bool is_w0 =
+            (is_ps || mi.op == MOp::PADDD || mi.op == MOp::PSUBD ||
+             mi.op == MOp::PADDW || mi.op == MOp::PSUBW || mi.op == MOp::PMULLW ||
+             mi.op == MOp::PADDB || mi.op == MOp::PSUBB);
         const uint8_t pp = is_ps ? 0 : 1;
-        const uint8_t wbit =
-            (is_ps || mi.op == MOp::PADDD || mi.op == MOp::PSUBD) ? 0 : 1;
+        const uint8_t wbit = is_w0 ? 0 : 1;
         /* SQRTPD es UNARIO (dst, src): vvvv no se usa (1111). */
         const bool unary = (mi.op == MOp::SQRTPD);
         const uint8_t vec_w = mi.dst.width ? mi.dst.width : 16;
@@ -397,6 +410,39 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
             put8(out, 0x0F);
             put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        }
+        return true;
+    }
+    case MOp::PMULLD: {
+        /* PMULLD xmm,xmm: 66 0F38 40 (SSE4.1) -- 4x i32 mul (low 32b).  Mapa
+         * 0F38 (no 0F).  AVX2: VEX.256.66.0F38.W0 40; AVX512: EVEX.512 W0. */
+        if (mi.dst.kind != MOperandKind::REG ||
+            mi.src1.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
+        const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t vec_w = mi.dst.width ? mi.dst.width : 16;
+        if (vec_w >= 64) {
+            emit_evex(xd, xs, xd, /*w=*/0, /*ll=*/2, 0, false, out, /*map=*/2,
+                      /*pp=*/1);
+            put8(out, 0x40);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else if (vec_w == 32) {
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/true, 0, false, out,
+                      /*map=*/2, /*pp=*/1);
+            put8(out, 0x40);
+            put8(out, modrm(3, xd & 7, xs & 7));
+        } else {
+            put8(out, 0x66);
+            const uint8_t rex_R = (xd >= 8) ? 1 : 0;
+            const uint8_t rex_B = (xs >= 8) ? 1 : 0;
+            if (rex_R || rex_B) put8(out, 0x40 | (rex_R << 2) | rex_B);
+            put8(out, 0x0F);
+            put8(out, 0x38);
+            put8(out, 0x40);
             put8(out, modrm(3, xd & 7, xs & 7));
         }
         return true;

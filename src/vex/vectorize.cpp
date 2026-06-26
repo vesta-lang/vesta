@@ -480,6 +480,10 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         case PrimitiveKind::U64: *out_ty = ir::IrType::U64; *out_esz = 8; *out_fp = false; return true;
         case PrimitiveKind::I32: *out_ty = ir::IrType::I32; *out_esz = 4; *out_fp = false; return true;
         case PrimitiveKind::U32: *out_ty = ir::IrType::U32; *out_esz = 4; *out_fp = false; return true;
+        case PrimitiveKind::I16: *out_ty = ir::IrType::I16; *out_esz = 2; *out_fp = false; return true;
+        case PrimitiveKind::U16: *out_ty = ir::IrType::U16; *out_esz = 2; *out_fp = false; return true;
+        case PrimitiveKind::I8:  *out_ty = ir::IrType::I8;  *out_esz = 1; *out_fp = false; return true;
+        case PrimitiveKind::U8:  *out_ty = ir::IrType::U8;  *out_esz = 1; *out_fp = false; return true;
         default: return false;
         }
     };
@@ -514,8 +518,15 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     if (ck != ak || ak != bk) return false;        // mismo tipo de elemento
     ir::IrType elem_ty; uint64_t esz; bool elem_fp;
     elem_info(ck, &elem_ty, &esz, &elem_fp);
-    // Enteros: solo add/sub (sin mul/div packed en SSE2).
-    if (!elem_fp && subop != 0 && subop != 1) return false;
+    // Enteros: nunca div packed (subop 3 bail).  mul (subop 2) solo donde hay
+    // packed mul: i16/u16 (PMULLW) e i32/u32 (PMULLD); i8/u8 e i64/u64 sin mul.
+    if (!elem_fp) {
+        if (subop == 3) return false;          // div entera -> escalar
+        if (subop == 2) {                       // mul entera
+            const bool has_pmul = (esz == 2 || esz == 4); // word/dword
+            if (!has_pmul) return false;
+        }
+    }
 
     if (MC_DBG)
         std::fprintf(stderr, "[mc-idiom] MATCH vec_for idx=%s subop=%d\n",
@@ -674,8 +685,10 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
                   : (subop == 1) ? ir::IrOp::FSUB
                   : (subop == 2) ? ir::IrOp::FMUL
                                  : ir::IrOp::FDIV;
-        else // enteros: solo add/sub (validado arriba)
-            eop = (subop == 0) ? ir::IrOp::ADD : ir::IrOp::SUB;
+        else // enteros: add/sub/mul (div ya bailo arriba)
+            eop = (subop == 0)   ? ir::IrOp::ADD
+                  : (subop == 1) ? ir::IrOp::SUB
+                                 : ir::IrOp::MUL;
         const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_bi);
         const ir::IrValueId c_at = ptr_at(v_c, off);
         ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
