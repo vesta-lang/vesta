@@ -3175,43 +3175,52 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::VEC_BCAST:
         break;
 
-    // VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Interp (oraculo) =
-    // W ops ESCALARES por lane con `fmadd` (1 redondeo, std::fma) para coincidir
-    // BIT-A-BIT con VFMADD231P{D,S} del JIT; un fmul+fadd separado divergiria.
-    // Solo f64/f32.  r10=acc, r11=a, r12=b.
+    // VEC_FMA fusionado (1 redondeo).  Interp (oraculo) = W ops ESCALARES por
+    // lane con `fmadd` (std::fma) para coincidir BIT-A-BIT con VFMADD231 del JIT.
+    // Dos formas: 3 ops {acc,a,b} = reduccion acc[i]+=a[i]*b[i] (sumando==dst);
+    // 4 ops {c,d,a,b} = element-wise c[i]=a[i]*b[i]+d[i] (sumando d != dst c).
+    // r9=sumando, r10=dst, r11=a, r12=b.  Solo f64/f32.
     case IrOp::VEC_FMA: {
         if (ins.operands.size() < 3) break;
+        const bool fma3 = (ins.operands.size() >= 4); // element-wise
+        const int o_dst = 0;
+        const int o_add = fma3 ? 1 : 0;
+        const int o_a = fma3 ? 2 : 1;
+        const int o_b = fma3 ? 3 : 2;
         const uint64_t width = ins.imm & 0xFF;
         const size_t esz = ir_type_size(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
         const std::string rsz = (esz == 4) ? "d" : "";
-        ctx.out << "    push r10\n    push r11\n    push r12\n";
-        { const std::string p = ctx.load_src(ins.operands[0], 0); // acc
+        ctx.out << "    push r9\n    push r10\n    push r11\n    push r12\n";
+        { const std::string p = ctx.load_src(ins.operands[o_add], 0); // sumando
           ctx.out << "    push " << p << "\n"; }
-        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+        { const std::string p = ctx.load_src(ins.operands[o_dst], 0); // dst
           ctx.out << "    push " << p << "\n"; }
-        { const std::string p = ctx.load_src(ins.operands[2], 0); // b
+        { const std::string p = ctx.load_src(ins.operands[o_a], 0); // a
           ctx.out << "    push " << p << "\n"; }
-        ctx.out << "    pop r12\n    pop r11\n    pop r10\n"; // b, a, acc
+        { const std::string p = ctx.load_src(ins.operands[o_b], 0); // b
+          ctx.out << "    push " << p << "\n"; }
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n    pop r9\n";
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
+                ctx.out << "    addu r9, " << esz << "\n";
                 ctx.out << "    addu r10, " << esz << "\n";
                 ctx.out << "    addu r11, " << esz << "\n";
                 ctx.out << "    addu r12, " << esz << "\n";
             }
-            ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+            ctx.out << "    movh r14" << rsz << ", [r9]\n"; // sumando[k]
             ctx.out << "    bitg2z f0, r14\n";
             ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
             ctx.out << "    bitg2z f1, r13\n";
             ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
             ctx.out << "    bitg2z f2, r14\n";
-            ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // f0 = a*b + acc
+            ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // f0 = a*b + sumando
             ctx.out << "    bitz2g r14, f0\n";
-            ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
+            ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
         }
-        ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
+        ctx.out << "    pop r12\n    pop r11\n    pop r10\n    pop r9\n";
         ctx.r13_cache = -1;
         ctx.r14_cache = -1;
         break;

@@ -905,6 +905,21 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     const ir::IrType elem_ty = is_f32 ? ir::IrType::F32 : ir::IrType::F64;
     const uint64_t esz = is_f32 ? 4u : 8u;
 
+    // FMA fusion del patron `c[i] = a[i]*b[i] + d[i]` (2 pasos array Mul+Add, sin
+    // escalares) -> UN VFMADD231 (4 instr vs 8 de mul+add) + 1 redondeo (estilo
+    // -ffast-math de C).  GATE: el VFMADD requiere AVX.  En AOT solo si el target
+    // es fixed avx/avx512 (NO sse2, NO auto cuya variante sse2 romperia).  En el
+    // .velb (interp/jit) si: el interp emula fused (oraculo), el jit usa FMA en
+    // host AVX o cae a interp -> resultado determinista (siempre fused).
+    bool can_fma;
+    if (native_poo_)
+        can_fma = (!aot_auto_vec_ && aot_vec_width_ >= 32);
+    else
+        can_fma = true;
+    const bool is_fma = can_fma && S.size() == 2 && !S[0].is_scalar &&
+                        S[0].subop == 2 /*Mul*/ && !S[1].is_scalar &&
+                        S[1].subop == 0 /*Add*/;
+
     if (MC_DBG)
         std::fprintf(stderr,
                      "[mc-idiom] MATCH compound idx=%s steps=%zu scalars=%d\n",
@@ -1021,6 +1036,17 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
         const ir::IrValueId c_at = ptr_at(v_c, off);
         const ir::IrValueId start_at = ptr_at(v_start, off);
+        if (is_fma) {
+            // c = a*b + d  ->  VEC_FMA (4 ops: {c, d, a, b}, 1 redondeo).
+            const ir::IrValueId b_at = ptr_at(step_base[0], off); // S[0]=Mul b
+            const ir::IrValueId d_at = ptr_at(step_base[1], off); // S[1]=Add d
+            ir::IrInstr vf{}; vf.op = ir::IrOp::VEC_FMA; vf.type = elem_ty;
+            vf.dst = ir::IR_NO_VALUE;
+            vf.operands = {c_at, d_at, start_at, b_at};
+            vf.imm = width;
+            vf.source_line = ln;
+            fn_->append(current_block_, std::move(vf));
+        } else
         for (size_t k = 0; k < S.size(); ++k) {
             const ir::IrValueId src0 = (k == 0) ? start_at : c_at; // acumulador
             if (S[k].is_scalar) {
