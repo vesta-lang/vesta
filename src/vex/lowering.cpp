@@ -4616,6 +4616,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     if (try_vectorize_elementwise_for(s)) return;
     if (try_vectorize_scalar_for(s)) return;
     if (try_vectorize_unary_for(s)) return;
+    if (try_vectorize_compound_for(s)) return;
     if (try_vectorize_reduction_for(s)) return;
     } // !no_vec
 
@@ -5042,6 +5043,10 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // Auto-vectorizacion unaria: `for (...) b[i] = OP a[i];` (-a/sqrt/fabs) f64
     // host -> loop W=2 con VEC_UNOP (SIMD) + cola escalar.
     if (try_vectorize_unary_for(s)) return;
+    // Auto-vectorizacion COMPOUND: `for (...) c[i] = a[i]*k + b[i];` (cadena
+    // multi-op) -> cadena de VEC ops con c acumulador + cola escalar.  Tras los
+    // matchers de 1-op (que cubren las formas simples).
+    if (try_vectorize_compound_for(s)) return;
     // Auto-vectorizacion de reduccion: `for (...) acc = acc + a[i];` f64 host
     // -> acumulador vectorial W=2 + reduccion horizontal + cola escalar.
     if (try_vectorize_reduction_for(s)) return;

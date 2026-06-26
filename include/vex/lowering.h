@@ -331,6 +331,15 @@ class Lowering {
     /// (acc_slot += a_chunk), reduccion horizontal final + cola escalar.  El
     /// resultado se bindea a @c acc.  Devuelve true si matcheo.
     bool try_vectorize_reduction_for(ast::Stmt *s);
+    /// Auto-vectorizacion COMPOUND (cadena lineal multi-op): @c for(...) c[i] =
+    /// a[i] OP1 x OP2 y OP3 ... donde cada operando derecho (x, y, ...) es
+    /// @c arr[i] (host, mismo tipo) o un escalar invariante f64, y la expresion
+    /// es left-leaning `((a OP1 x) OP2 y) ...` (precedencia natural de
+    /// @c a[i]*k + b[i]).  Emite el loop principal usando @c c como acumulador:
+    /// @c c = a OP1 x ; @c c = c OP2 y ; ... (cadena de @c VEC_BINOP /
+    /// @c VEC_BINOP_S por chunk) + cola escalar.  Solo f64/f32.  Cubre el patron
+    /// axpy/FMA que los matchers de 1-op no aceptan.  Devuelve true si matcheo.
+    bool try_vectorize_compound_for(ast::Stmt *s);
     /// Valida que @p asg sea exactamente @c dst[idx] = src[idx] con bases
     /// IdentExpr HOST ptr/array de igual tamano de elemento.  Compartido por
     /// las formas while/for.  Rellena las bases y el tamano de elemento.
