@@ -165,6 +165,13 @@ struct CompileOptions {
     /// matcher sigue usando el host (vec_chunk_isa) para portabilidad del .velb.
     uint8_t aot_vec_width = 16;
 
+    /// --float-isa auto: el binario multiversiona las funciones vectorizadas y
+    /// elige sse2/avx2/avx512 en runtime por cpuid.  El matcher hornea el chunk
+    /// con estrategia DUAL para que UN IR compile a las 3 variantes: element-
+    /// wise/unary/scalar-bcast a 64 (cada variante decompone 4x128/2x256/1x512),
+    /// reduccion/FMA a 16 (el acumulador no splittea -> 128b en todas).
+    bool aot_auto_vec = false;
+
     /// Fase 3.5 LSP: cuando true, @c compile_vex_source vuelca un snapshot
     /// de los valores @c comptime computados (constantes top-level) a
     /// @c CompileResult::comptime_values.  Estrictamente ADITIVO y gateado:

@@ -541,7 +541,8 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     // (chunk==host_w del codegen).  Fuera de AOT: host (vec_chunk_isa) para que
     // el .velb sea portable (el JIT descompone el chunk al ancho del host).
     const uint64_t width =
-        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+        native_poo_ ? (aot_auto_vec_ ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada variante decompone (4x128/2x256/1x512)
+                                     : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz; // lanes segun ancho/tipo
 
@@ -869,7 +870,8 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     const uint32_t ln = s->loc.line;
     // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
     const uint64_t width =
-        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+        native_poo_ ? (aot_auto_vec_ ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada variante decompone (4x128/2x256/1x512)
+                                     : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
@@ -1151,7 +1153,8 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     const uint64_t esz = 8;     // f64
     // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
     const uint64_t width =
-        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+        native_poo_ ? (aot_auto_vec_ ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada variante decompone (4x128/2x256/1x512)
+                                     : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;
 
@@ -1393,8 +1396,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // W-granular existente sirve de remainder.
     const uint32_t ln = s->loc.line;
     // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad .velb).
+    // AUTO (multiversion): la REDUCCION hornea chunk=16 (128b) -> el acumulador
+    // register-resident (1 reg, no splittea) cabe en TODAS las variantes
+    // (sse2/avx2/avx512); las 3 corren la reduccion a 128b (correcto; el unroll
+    // multi-acc compensa la falta de width win).
     const uint64_t width =
-        native_poo_ ? static_cast<uint64_t>(aot_vec_width_)
+        native_poo_ ? (aot_auto_vec_ ? 16u
+                                     : static_cast<uint64_t>(aot_vec_width_))
                     : jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;     // lanes segun ancho/tipo
     const uint64_t U = 4;               // acumuladores (XMM13,12,11,10)

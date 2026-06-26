@@ -232,6 +232,7 @@ CompileResult compile_vex_source(const std::string &source,
     lo.set_native_poo(opts.native_poo); // Phase AOT.2.b: POO nativa (-m aot)
     lo.set_asm_target_bits(opts.asm_target_bits); // arch del inline-asm @Naked
     lo.set_aot_vec_width(opts.aot_vec_width); // ancho SIMD del target (--float-isa)
+    lo.set_aot_auto_vec(opts.aot_auto_vec);   // --float-isa auto: chunk dual
     lo.set_emit_comptime_fns(opts.emit_comptime_fns); // solo-LSP: inspeccion
     // C-3: detectar @StringConcat / @StringEq ANTES del lowering.  A
     // diferencia de @AllocatorOverride (que reescribe IR post-lowering),
