@@ -355,6 +355,10 @@ int main(int argc, char *argv[]) {
             "freestanding",
             "AOT bare sin libc (kernels/bootloaders): RAW_ALLOC/FREE/PANIC "
             "requieren hooks @AllocatorOverride/@PanicHandler.")(
+            "no-exceptions",
+            "AOT (-m aot): DESACTIVA el mecanismo de excepciones nativo "
+            "(setjmp/longjmp).  Un try/catch/throw da error.  Para "
+            "kernels/freestanding sin runtime de excepciones.")(
             "format",
             "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
             "Windows, ELF en el resto).",
@@ -663,6 +667,7 @@ int main(int argc, char *argv[]) {
     bool aot_mode = false;
     aot::Tier aot_tier = aot::Tier::BARE;
     bool aot_freestanding = result.count("freestanding") > 0;
+    bool aot_no_exceptions = result.count("no-exceptions") > 0;
     {
         const std::string &tname = result["target"].as<std::string>();
         if (tname == "bare")
@@ -1779,6 +1784,7 @@ int main(int argc, char *argv[]) {
         copts.opt_level = 2;
         copts.dump_ir = emit_ir;     // habilita CompileResult::ir_text
         copts.native_poo = aot_mode; // Phase AOT.2.b: clases nativas en -m aot
+        copts.exceptions_enabled = !aot_no_exceptions; // C3: configurable
         // Instrumentacion: aplica al IR independientemente del target
         // (bytecode VM, JIT, port C, etc.).  Validar valor aqui mismo.
         copts.instrument_mode = result["instrument"].as<std::string>();
@@ -2248,6 +2254,7 @@ int main(int argc, char *argv[]) {
             tgt.alloc_provided = !cr.aot_alloc_sym.empty();
             tgt.free_provided = !cr.aot_free_sym.empty();
             tgt.panic_provided = !cr.aot_panic_sym.empty();
+            tgt.exceptions_enabled = !aot_no_exceptions; // C3: configurable
 
             const char *tier_name = (aot_tier == aot::Tier::BARE)    ? "bare"
                                     : (aot_tier == aot::Tier::EMBED) ? "embed"
