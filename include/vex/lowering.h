@@ -1265,10 +1265,21 @@ class Lowering {
     /// len > 22 hace RAW_ALLOC(len+1), MEMCPY, nul, set ptr@0/len@8/
     /// cap@16 + byte[23] bit alto.  Usado por concat/slice/append/interp
     /// para obtener SSO en resultados runtime cortos.  Solo native_poo_.
+    /// @p known_len >= 0 (Tier B str_make): la longitud es constante en
+    /// compile-time -> decide SSO/HEAP SIN rama runtime (emite solo el cuerpo
+    /// aplicable).  -1 = longitud runtime (rama CMP_GT como antes).
     void build_native_string_finalize(ir::IrValueId v_slot,
                                       ir::IrValueId v_src_ptr,
                                       ir::IrValueId v_len,
-                                      uint32_t source_line);
+                                      uint32_t source_line,
+                                      int64_t known_len = -1);
+    /// str_make optimo (Vex Embed): COPIA @p v_len bytes de @p v_ptr a un
+    /// value-string PROPIO (slot 24B + buffer; RAII lo libera).  Sin GC.
+    /// @p known_len >= 0 -> especializa (Tier B sin rama).  Solo native_poo_.
+    ir::IrValueId build_native_string_from_buffer(ir::IrValueId v_ptr,
+                                                  ir::IrValueId v_len,
+                                                  uint32_t source_line,
+                                                  int64_t known_len = -1);
     /// Vex Embed Inc 1: concatena dos value-strings nativos @p v_a y
     /// @p v_b produciendo un NUEVO string owned (slot de 24 bytes en
     /// stack + buffer fresco en heap de total+1 bytes con ambos

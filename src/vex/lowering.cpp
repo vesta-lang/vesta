@@ -18083,6 +18083,28 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // Vex Embed (native_poo_): str_make(ptr, len) COPIA len bytes a un
+        // value-string PROPIO (sin GC), NO un StringObject GC.  Si len es un
+        // literal entero -> Tier B (decision SSO/HEAP compile-time, sin rama).
+        if (native_poo_) {
+            int64_t known_len = -1;
+            if (e->args[1] &&
+                e->args[1]->kind == ast::NodeKind::IntLitExpr) {
+                int64_t lv =
+                    (int64_t)static_cast<ast::IntLitExpr *>(e->args[1].get())
+                        ->value;
+                if (lv >= 0) known_len = lv;
+            }
+            ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId v_len = lower_expr(e->args[1].get());
+            if (v_ptr == ir::IR_NO_VALUE || v_len == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            out_value = build_native_string_from_buffer(v_ptr, v_len,
+                                                        e->loc.line, known_len);
+            return true;
+        }
         ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         ir::IrValueId v_len = lower_expr(e->args[1].get());
         if (v_ptr == ir::IR_NO_VALUE || v_len == ir::IR_NO_VALUE) {
@@ -24662,13 +24684,14 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
 void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
                                             ir::IrValueId v_src_ptr,
                                             ir::IrValueId v_len,
-                                            uint32_t source_line) {
+                                            uint32_t source_line,
+                                            int64_t known_len) {
     // String Inc 5 (SSO): rellena el slot value-string ya alocado (24
-    // bytes) decidiendo SSO vs HEAP EN RUNTIME segun la longitud.  Si
-    // len <= 22 -> SSO (data inline, cero malloc); si len > 22 -> HEAP
-    // (RAW_ALLOC + MEMCPY + ptr@0/len@8/cap@16 + flag).  Branch real
-    // porque el malloc debe ser condicional (no alocar en el caso SSO).
-    // Cada rama finaliza COMPLETAMENTE el slot -> no necesita PHI.
+    // bytes) decidiendo SSO vs HEAP segun la longitud.  Si len <= 22 -> SSO
+    // (data inline, cero malloc); si len > 22 -> HEAP (RAW_ALLOC + MEMCPY +
+    // ptr@0/len@8/cap@16 + flag).  Cada rama finaliza COMPLETAMENTE el slot
+    // -> no necesita PHI.  Si @p known_len >= 0 (Tier B str_make) la decision
+    // es COMPILE-TIME -> se emite solo el cuerpo aplicable, SIN rama runtime.
     auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
         fn_->values[v].is_host_ptr = true;
@@ -24707,39 +24730,10 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         fn_->append(current_block_, std::move(st));
     };
 
-    // cond = (len > 22)  -> usar HEAP.
-    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
-    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
-    {
-        ir::IrInstr c{};
-        c.op = ir::IrOp::CMP_GT;
-        c.type = ir::IrType::I64;
-        c.dst = v_cond;
-        c.operands = {v_len, v_22};
-        c.source_line = source_line;
-        fn_->append(current_block_, std::move(c));
-    }
-
-    const ir::IrBlockId heap_bb = fn_->new_block("strfin_heap");
-    const ir::IrBlockId sso_bb = fn_->new_block("strfin_sso");
-    const ir::IrBlockId merge_bb = fn_->new_block("strfin_merge");
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(v_cond);
-        br.target_block = heap_bb;
-        br.false_block = sso_bb;
-        br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(heap_bb);
-        fn_->blocks[current_block_].succs.push_back(sso_bb);
-        fn_->blocks[heap_bb].preds.push_back(current_block_);
-        fn_->blocks[sso_bb].preds.push_back(current_block_);
-    }
-
-    // --- Rama HEAP: len > 22 ---
-    current_block_ = heap_bb;
-    {
+    // Cuerpos SSO/HEAP como lambdas (emiten en current_block_, SIN el BR final
+    // -> el caller decide si hay rama o no).  Reusados por la rama runtime y
+    // por el fast-path const (Tier B).
+    auto fill_heap = [&]() {
         // cap = len + 1.
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
         ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
@@ -24774,18 +24768,8 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         store_at(ptr_add(v_slot, emit_const(ir::IrType::I64, 8, source_line)),
                  v_len, ir::IrType::I64);
         emit_str_meta_heap(v_slot, v_cap, source_line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        fn_->append(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
-    }
-
-    // --- Rama SSO: len <= 22 ---
-    current_block_ = sso_bb;
-    {
+    };
+    auto fill_sso = [&]() {
         // MEMCPY slot <- src (len bytes; data inline en bytes[0..len)).
         // v_slot es PTR al inicio del struct; lo usamos como dst directo.
         emit_memcpy(v_slot, v_src_ptr, v_len);
@@ -24794,6 +24778,45 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // qword2 = (len << 56): byte[23]=len (SSO).
         emit_str_meta_sso(v_slot, v_len, source_line);
+    };
+
+    // Tier B (str_make con len constante): decision compile-time, SIN rama.
+    if (known_len >= 0) {
+        if (known_len <= 22) fill_sso();
+        else                 fill_heap();
+        return;
+    }
+
+    // Tier C (len runtime): rama CMP_GT(len, 22) -> heap_bb / sso_bb -> merge.
+    ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CMP_GT;
+        c.type = ir::IrType::I64;
+        c.dst = v_cond;
+        c.operands = {v_len, v_22};
+        c.source_line = source_line;
+        fn_->append(current_block_, std::move(c));
+    }
+
+    const ir::IrBlockId heap_bb = fn_->new_block("strfin_heap");
+    const ir::IrBlockId sso_bb = fn_->new_block("strfin_sso");
+    const ir::IrBlockId merge_bb = fn_->new_block("strfin_merge");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands.push_back(v_cond);
+        br.target_block = heap_bb;
+        br.false_block = sso_bb;
+        br.source_line = source_line;
+        fn_->append(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(heap_bb);
+        fn_->blocks[current_block_].succs.push_back(sso_bb);
+        fn_->blocks[heap_bb].preds.push_back(current_block_);
+        fn_->blocks[sso_bb].preds.push_back(current_block_);
+    }
+    auto close_to_merge = [&]() {
         ir::IrInstr br{};
         br.op = ir::IrOp::BR;
         br.target_block = merge_bb;
@@ -24801,9 +24824,33 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         fn_->append(current_block_, std::move(br));
         fn_->blocks[current_block_].succs.push_back(merge_bb);
         fn_->blocks[merge_bb].preds.push_back(current_block_);
-    }
-
+    };
+    current_block_ = heap_bb; fill_heap(); close_to_merge();
+    current_block_ = sso_bb;  fill_sso();  close_to_merge();
     current_block_ = merge_bb;
+}
+
+ir::IrValueId Lowering::build_native_string_from_buffer(ir::IrValueId v_ptr,
+                                                        ir::IrValueId v_len,
+                                                        uint32_t source_line,
+                                                        int64_t known_len) {
+    // str_make: COPIA known/runtime len bytes de v_ptr a un value-string
+    // PROPIO (sin GC, RAII).  Slot 24B + finalize (SSO/HEAP; copia dispatched).
+    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
+    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_slot;
+        al.imm = 24;
+        al.host_alloca = native_poo_;
+        al.source_line = source_line;
+        fn_->append(current_block_, std::move(al));
+    }
+    emit_zero_native_str_slot(v_slot, source_line);
+    build_native_string_finalize(v_slot, v_ptr, v_len, source_line, known_len);
+    return v_slot;
 }
 
 void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
