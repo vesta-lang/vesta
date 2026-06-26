@@ -2580,9 +2580,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg fp1 = static_cast<MReg>(fpsc[1]);
                 const uint8_t ew = static_cast<uint8_t>(eff_w);
                 const MOperand x0 = MOperand::make_reg(fp0, ew);
-                // escalar wide: hoisted -> XMM13 (pre-difundido); si no, fp1.
+                // escalar wide: hoisted -> XMM(13-sidx) (pre-difundido por su
+                // VEC_BCAST; sidx=indice del escalar en imm bits 17-19, permite
+                // multiples escalares en XMM10-13 sin colision); si no, fp1.
+                const uint64_t sidx = (in.imm >> 17) & 0x7;
                 const MReg scalreg =
-                    hoisted ? static_cast<MReg>(reg_id(MReg::XMM13)) : fp1;
+                    hoisted
+                        ? static_cast<MReg>(reg_id(MReg::XMM13) - sidx)
+                        : fp1;
                 const MOperand x1 = MOperand::make_reg(scalreg, ew);
                 if (!hoisted) {
                     // difundir el escalar a fp1 (una vez): f64 via MOVSD; entero
@@ -2630,7 +2635,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const bool is_fp = (in.type == ir::IrType::F64);
                 const uint64_t host_w = vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
-                const MReg B = static_cast<MReg>(reg_id(MReg::XMM13));
+                // reg destino del broadcast: XMM(13-idx), idx en imm bits 8-10
+                // (permite multiples escalares en XMM10-13 sin colision).
+                const uint64_t bcidx = (in.imm >> 8) & 0x7;
+                const MReg B = static_cast<MReg>(reg_id(MReg::XMM13) - bcidx);
                 // cargar el escalar al low de XMM13: f64 via MOVSD; entero via
                 // MOVQ_GP_XMM del valor ya replicado a 64b.
                 if (is_fp)
