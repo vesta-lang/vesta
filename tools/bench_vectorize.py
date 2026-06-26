@@ -28,22 +28,42 @@ import sys
 import tempfile
 import time
 
-# Kernels: nombre -> BLOQUE interior del bucle externo (incluye el bucle
-# vectorizable).  Las reducciones/dot-product usan un acumulador `acc` LOCAL al
-# bucle externo (no `s`) para que el acumulador vectorial sea register-resident;
-# usar `s` (compartido con el bucle externo) lo volveria address-taken.
-KERNELS = {
-    "element-wise (c=a+b)":
-        "for (i32 i = 0; i < n; i++) { c[i] = a[i] + b[i]; } s = s + c[0] + a[0];",
-    "reduccion (acc+=a[i])":
-        "f64 acc = 0.0; for (i32 i = 0; i < n; i++) { acc = acc + a[i]; } s = s + acc;",
-    "dot-product (acc+=a*b)":
-        "f64 acc = 0.0; for (i32 i = 0; i < n; i++) { acc = acc + a[i] * b[i]; } s = s + acc;",
+# Kernels: nombre -> (dtype, BLOQUE interior).  El bloque contiene el bucle
+# vectorizable + una sentencia que mantiene `s` vivo.  Las reducciones/dot usan
+# un acumulador `acc` LOCAL (no `s`) para que el acumulador vectorial sea
+# register-resident.  dtype determina el tamano de elemento y los valores init.
+#   f64  -> element-wise/reduccion/dot/scalar-bcast (todas las ops)
+#   i32  -> element-wise add/mul (PADDD/PMULLD) + scalar-bcast
+#   i16  -> element-wise add/mul (PADDW/PMULLW)
+KERNELS = [
+    ("ew f64 (c=a+b)",       "f64",
+        "for (i32 i=0;i<n;i++){ c[i]=a[i]+b[i]; } s=s+c[0]+a[0];"),
+    ("reduccion f64",        "f64",
+        "f64 acc=0.0; for (i32 i=0;i<n;i++){ acc=acc+a[i]; } s=s+acc;"),
+    ("dot/FMA f64",          "f64",
+        "f64 acc=0.0; for (i32 i=0;i<n;i++){ acc=acc+a[i]*b[i]; } s=s+acc;"),
+    ("scalar-bcast f64 (a*k)", "f64",
+        "for (i32 i=0;i<n;i++){ c[i]=a[i]*3.0; } s=s+c[0];"),
+    ("ew i32 (c=a+b)",       "i32",
+        "for (i32 i=0;i<n;i++){ c[i]=a[i]+b[i]; } s=s+(f64)c[0];"),
+    ("ew i32 mul (c=a*b)",   "i32",
+        "for (i32 i=0;i<n;i++){ c[i]=a[i]*b[i]; } s=s+(f64)c[0];"),
+    ("ew i16 (c=a+b)",       "i16",
+        "for (i32 i=0;i<n;i++){ c[i]=a[i]+b[i]; } s=s+(f64)c[0];"),
+    ("scalar-bcast i32 (a*k)", "i32",
+        "for (i32 i=0;i<n;i++){ c[i]=a[i]*3; } s=s+(f64)c[0];"),
+]
+
+# Init + sizeof por dtype.  Los enteros usan valores pequenos (sin overflow).
+DTYPE_INFO = {
+    "f64": {"sz": 8, "ia": "1.0", "ib": "2.0", "ic": "0.0"},
+    "i32": {"sz": 4, "ia": "(i32)1", "ib": "(i32)2", "ic": "(i32)0"},
+    "i16": {"sz": 2, "ia": "(i16)1", "ib": "(i16)2", "ic": "(i16)0"},
 }
 
 VEX_TEMPLATE = """\
 // Generado por tools/bench_vectorize.py -- benchmark de auto-vectorizacion.
-f64 kernel(f64* a, f64* b, f64* c, i32 n, i32 reps) {{
+f64 kernel({dt}* a, {dt}* b, {dt}* c, i32 n, i32 reps) {{
     f64 s = 0.0;
     for (i32 r = 0; r < reps; r++) {{
         {inner}
@@ -53,10 +73,10 @@ f64 kernel(f64* a, f64* b, f64* c, i32 n, i32 reps) {{
 
 i64 main() {{
     i32 n = {n};
-    f64* a = malloc(n * 8);
-    f64* b = malloc(n * 8);
-    f64* c = malloc(n * 8);
-    for (i32 i = 0; i < n; i++) {{ a[i] = 1.0; b[i] = 2.0; c[i] = 0.0; }}
+    {dt}* a = ({dt}*) malloc(n * {sz});
+    {dt}* b = ({dt}*) malloc(n * {sz});
+    {dt}* c = ({dt}*) malloc(n * {sz});
+    for (i32 i = 0; i < n; i++) {{ a[i] = {ia}; b[i] = {ib}; c[i] = {ic}; }}
     f64 r = kernel(a, b, c, n, {reps});
     free(a); free(b); free(c);
     return (i64) r;
@@ -140,8 +160,11 @@ def main():
     print("-" * len(hdr))
 
     tmp = tempfile.mkdtemp(prefix="vecbench_")
-    for name, inner in KERNELS.items():
-        src = VEX_TEMPLATE.format(inner=inner, n=args.n, reps=args.reps)
+    for name, dt, inner in KERNELS:
+        di = DTYPE_INFO[dt]
+        src = VEX_TEMPLATE.format(inner=inner, n=args.n, reps=args.reps,
+                                  dt=dt, sz=di["sz"], ia=di["ia"], ib=di["ib"],
+                                  ic=di["ic"])
         vex_path = os.path.join(tmp, "k.vex")
         with open(vex_path, "w") as f:
             f.write(src)
