@@ -432,25 +432,40 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     auto *bexpr = vl.body_exprs[0];
     if (!bexpr || bexpr->kind != NodeKind::AssignExpr) return false;
     auto *asg = static_cast<AssignExpr *>(bexpr);
-    if (asg->op != AssignOp::Assign) return false;
     // target = c[idx]
     if (!asg->target || asg->target->kind != NodeKind::IndexExpr) return false;
     auto *c_ix = static_cast<IndexExpr *>(asg->target.get());
-    // value = a[idx] OP b[idx]
-    if (!asg->value || asg->value->kind != NodeKind::BinaryExpr) return false;
-    auto *rhs = static_cast<BinaryExpr *>(asg->value.get());
     int subop = -1;
-    switch (rhs->op) {
-    case BinOp::Add: subop = 0; break;
-    case BinOp::Sub: subop = 1; break;
-    case BinOp::Mul: subop = 2; break;
-    case BinOp::Div: subop = 3; break;
-    default: return false;
+    ast::IndexExpr *a_ix = nullptr, *b_ix = nullptr;
+    if (asg->op == AssignOp::Assign) {
+        // c[idx] = a[idx] OP b[idx]
+        if (!asg->value || asg->value->kind != NodeKind::BinaryExpr)
+            return false;
+        auto *rhs = static_cast<BinaryExpr *>(asg->value.get());
+        switch (rhs->op) {
+        case BinOp::Add: subop = 0; break;
+        case BinOp::Sub: subop = 1; break;
+        case BinOp::Mul: subop = 2; break;
+        case BinOp::Div: subop = 3; break;
+        default: return false;
+        }
+        if (!rhs->lhs || rhs->lhs->kind != NodeKind::IndexExpr) return false;
+        if (!rhs->rhs || rhs->rhs->kind != NodeKind::IndexExpr) return false;
+        a_ix = static_cast<IndexExpr *>(rhs->lhs.get());
+        b_ix = static_cast<IndexExpr *>(rhs->rhs.get());
+    } else {
+        // compound: c[idx] OP= a[idx]  ==  c[idx] = c[idx] OP a[idx]
+        switch (asg->op) {
+        case AssignOp::AddAssign: subop = 0; break;
+        case AssignOp::SubAssign: subop = 1; break;
+        case AssignOp::MulAssign: subop = 2; break;
+        case AssignOp::DivAssign: subop = 3; break;
+        default: return false;
+        }
+        if (!asg->value || asg->value->kind != NodeKind::IndexExpr) return false;
+        a_ix = c_ix;                                       // a = c (lhs implicito)
+        b_ix = static_cast<IndexExpr *>(asg->value.get()); // b = el operando
     }
-    if (!rhs->lhs || rhs->lhs->kind != NodeKind::IndexExpr) return false;
-    if (!rhs->rhs || rhs->rhs->kind != NodeKind::IndexExpr) return false;
-    auto *a_ix = static_cast<IndexExpr *>(rhs->lhs.get());
-    auto *b_ix = static_cast<IndexExpr *>(rhs->rhs.get());
 
     // Tipos de elemento vectorizables (HOST): f64 (todas las ops) e enteros
     // i64/i32 (solo add/sub -- SSE2 no tiene mul/div packed de enteros).  El
