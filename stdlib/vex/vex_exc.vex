@@ -1,0 +1,103 @@
+// ===========================================================================
+// Runtime de excepciones NATIVO de Vesta, escrito EN VEX (auto-hospedado).
+//
+// Sin GC, sin VM, sin libc.  Modelo setjmp/longjmp con una pila de frames:
+//   - __vex_setjmp / __vex_longjmp: @Naked + inline asm (la unica parte
+//     irreduciblemente en ensamblador; salva/restaura callee-saved + rsp + rip).
+//   - __vex_push_frame / __vex_pop_frame / __vex_throw / __vex_get_value:
+//     VEX puro, sobre el estado global (puntero al top de la pila + valor de la
+//     excepcion activa) reservado en una seccion .vexexc y accedido con
+//     section_start + punteros raw.
+//
+// El compilador (lowering de try/catch en -m aot) baja a CALLs a estas
+// funciones.  Se enlaza estatico por defecto.
+//
+// Layout del frame (lo aloca el caller en su pila, 80 bytes):
+//   [0  .. 64)  jmp_buf  (rbx,rbp,r12,r13,r14,r15,rsp,rip; SysV)
+//   [64 .. 72)  prev     (frame anterior)
+//   [72 .. 80)  type     (tipo del catch; 0 = catch-all)
+//
+// v1: ABI SysV (ELF/Linux).  Win64 = variante por @Target (rcx/rdx + rdi/rsi
+// callee-saved).  v1: type matching = catch-all (al top); subtype = v2.
+// ===========================================================================
+
+// Estado global: [0]=puntero al frame top, [8]=valor de la excepcion activa.
+@section(".vexexc", "rw")
+bytes vex_exc_state { times 16 db 0 }
+
+// __vex_setjmp(buf) -> 0 (retorno normal) o el valor del longjmp.
+// @Naked: sin prologo -> en la entrada [rsp]=direccion de retorno,
+// [rsp+8]=rsp del caller (tras el ret).  Salva callee-saved + rsp + rip.
+@Naked public i64 __vex_setjmp(i64 buf) {
+    asm volatile {
+        mov     [rdi], rbx
+        mov     [rdi+8], rbp
+        mov     [rdi+16], r12
+        mov     [rdi+24], r13
+        mov     [rdi+32], r14
+        mov     [rdi+40], r15
+        lea     rax, [rsp+8]
+        mov     [rdi+48], rax
+        mov     rax, [rsp]
+        mov     [rdi+56], rax
+        xor     eax, eax
+        ret
+    }
+}
+
+// __vex_longjmp(buf, val): restaura el estado de buf y reanuda tras el
+// __vex_setjmp que lo salvo, devolviendo val (o 1 si val==0).  No retorna.
+@Naked public void __vex_longjmp(i64 buf, i64 val) {
+    asm volatile {
+        mov     rbx, [rdi]
+        mov     rbp, [rdi+8]
+        mov     r12, [rdi+16]
+        mov     r13, [rdi+24]
+        mov     r14, [rdi+32]
+        mov     r15, [rdi+40]
+        mov     rsp, [rdi+48]
+        mov     rax, rsi
+        test    rax, rax
+        jnz     .nz
+        inc     rax
+    .nz:
+        jmp     [rdi+56]
+    }
+}
+
+// push: frame.prev = top; frame.type = type; top = frame.
+public void __vex_push_frame(i64 frame, i64 type) {
+    i64 base = (i64) section_start(".vexexc");
+    i64 top = *((i64*)(base));
+    *((i64*)(frame + 64)) = top;
+    *((i64*)(frame + 72)) = type;
+    *((i64*)(base)) = frame;
+}
+
+// pop: top = top.prev (si hay).
+public void __vex_pop_frame() {
+    i64 base = (i64) section_start(".vexexc");
+    i64 top = *((i64*)(base));
+    if (top != 0) {
+        *((i64*)(base)) = *((i64*)(top + 64));
+    }
+}
+
+// throw: guarda el valor y hace longjmp al frame top.  v1: catch-all.
+// Sin frame (uncaught) -> bucle (el host puede sobrecargar __vex_panic).
+public void __vex_throw(i64 value) {
+    i64 base = (i64) section_start(".vexexc");
+    *((i64*)(base + 8)) = value;
+    i64 top = *((i64*)(base));
+    if (top != 0) {
+        __vex_longjmp(top, 1);
+    }
+    // uncaught: por ahora bucle infinito (v2: __vex_panic overridable).
+    while (true) { }
+}
+
+// el valor de la excepcion activa (para el landingpad del catch).
+public i64 __vex_get_value() {
+    i64 base = (i64) section_start(".vexexc");
+    return *((i64*)(base + 8));
+}
