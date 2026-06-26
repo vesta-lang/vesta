@@ -133,6 +133,23 @@ void Parser::skip_target_skipped_decl() {
 static constexpr double VEX_TARGET_COMPILER_VERSION = 1.0;
 static constexpr double VEX_TARGET_VM_VERSION = 1.0;
 
+// Override del TARGET para @Target en compilacion AOT cross-target.  El AOT
+// genera codigo para un (os, arch) que puede NO ser el host de build (p.ej.
+// ELF/SysV desde Windows, o x86-32 desde x86-64).  Cuando el driver lo setea,
+// los atomos `os:`/`arch:` de @Target se evaluan contra el TARGET del binario,
+// no contra el host -> las variantes @Target("os:linux && arch:x86_64") del
+// runtime seleccionan la correcta para lo que se esta generando.  Vacio =
+// usar el host de build (ruta normal --vex/--run).  thread_local por el
+// compile paralelo (M8).
+static thread_local std::string g_cc_target_os;   // "windows"/"linux"/"macos"
+static thread_local std::string g_cc_target_arch; // "x86_64"/"x86"/"arm64"
+
+void set_aot_condcomp_target(const std::string &os,
+                             const std::string &arch) noexcept {
+    g_cc_target_os = os;
+    g_cc_target_arch = arch;
+}
+
 // Deteccion de features de CPU.  En x86 usa cpuid; en arm64 NEON es
 // baseline.  SSE/SSE2 son baseline garantizado del ABI x86_64.
 static bool target_cpu_has_(const std::string &feat) noexcept {
@@ -230,6 +247,13 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
     std::string key = atom.substr(0, colon);
     std::string val = atom.substr(colon + 1);
     if (key == "os") {
+        // AOT cross-target: evaluar contra el OS del binario generado.
+        if (!g_cc_target_os.empty()) {
+            if (val == g_cc_target_os) return true;
+            if (val == "posix")
+                return g_cc_target_os == "linux" || g_cc_target_os == "macos";
+            return false;
+        }
 #if defined(_WIN32)
         return val == "windows";
 #elif defined(__APPLE__)
@@ -241,6 +265,8 @@ static bool target_atom_eval_(const std::string &atom) noexcept {
 #endif
     }
     if (key == "arch") {
+        // AOT cross-target: evaluar contra la arch del binario generado.
+        if (!g_cc_target_arch.empty()) return val == g_cc_target_arch;
 #if defined(__x86_64__) || defined(_M_X64)
         return val == "x86_64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
