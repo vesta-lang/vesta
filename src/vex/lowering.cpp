@@ -4548,6 +4548,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     // mismo VEC_BINOP/VEC_UNOP que el `for`.  Los matchers extraen el descriptor
     // de loop de un for o while via mc_extract_vec_loop.
     if (try_vectorize_elementwise_for(s)) return;
+    if (try_vectorize_scalar_for(s)) return;
     if (try_vectorize_unary_for(s)) return;
     if (try_vectorize_reduction_for(s)) return;
     } // !no_vec
@@ -4969,6 +4970,9 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // Auto-vectorizacion aritmetica: `for (...) c[i] = a[i] OP b[i];` f64 host
     // -> loop W=2 con VEC_BINOP (SIMD) + cola escalar.
     if (try_vectorize_elementwise_for(s)) return;
+    // Auto-vectorizacion scalar broadcast: `for (...) c[i] = a[i] OP scalar;`
+    // f64 host -> loop W=2 con VEC_BINOP_S (scalar difundido) + cola escalar.
+    if (try_vectorize_scalar_for(s)) return;
     // Auto-vectorizacion unaria: `for (...) b[i] = OP a[i];` (-a/sqrt/fabs) f64
     // host -> loop W=2 con VEC_UNOP (SIMD) + cola escalar.
     if (try_vectorize_unary_for(s)) return;

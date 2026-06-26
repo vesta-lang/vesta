@@ -3105,6 +3105,43 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         break;
     }
 
+    // VEC_BINOP_S dst[i] = a[i] OP escalar.  Interp = W ops escalares por lane
+    // con el escalar (f64) en f2.  r10=dst, r11=a, f2=escalar.
+    case IrOp::VEC_BINOP_S: {
+        if (ins.operands.size() < 3) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const uint64_t subop = (ins.imm >> 8) & 0xFF;
+        const size_t esz = ir_type_size(ins.type); // F64=8
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const char *fop = (subop == 0)   ? "fadd"
+                          : (subop == 1) ? "fsub"
+                          : (subop == 2) ? "fmul"
+                                         : "fdiv";
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0); // dst
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[1], 0); // a
+          ctx.out << "    push " << p << "\n"; }
+        { const std::string p = ctx.load_src(ins.operands[2], 0); // escalar
+          ctx.out << "    bitg2z f2, " << p << "\n"; }
+        ctx.out << "    pop r11\n    pop r10\n"; // a, dst
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            ctx.out << "    movh r14, [r11]\n"; // a[k]
+            ctx.out << "    bitg2z f0, r14\n";
+            ctx.out << "    " << fop << " f0, f2\n";
+            ctx.out << "    bitz2g r14, f0\n";
+            ctx.out << "    movh [r10], r14\n"; // dst[k]
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r14_cache = -1;
+        break;
+    }
+
     // VEC_FMA acc[i] += a[i]*b[i] (dot-product fusionado).  Interp (oraculo) =
     // W ops ESCALARES por lane con `fmadd` (1 redondeo, std::fma) para coincidir
     // BIT-A-BIT con VFMADD231P{D,S} del JIT; un fmul+fadd separado divergiria.

@@ -625,6 +625,11 @@ enum class IrOp : uint16_t {
     VEC_ACC_STORE = 0xE8, ///< vec_acc_store %slot         (slot = acc[0]; nop interp)
     VEC_ACC_COMBINE = 0xE9, ///< vec_acc_combine %slot   (acc[dst] += acc[src])
 
+    // VEC_BINOP_S dst[i] = a[i] OP escalar  (escalado/offset element-wise): el
+    // escalar (un valor FP loop-invariante) se DIFUNDE a todos los lanes.  Solo
+    // f64/f32 (broadcast int = VPBROADCAST, pendiente).  imm=(subop<<8)|ancho.
+    VEC_BINOP_S = 0xEA, ///< vec_binop_s.fN %dst, %a, %scalar
+
     // ---- intrinsics VM (0xF0-0xFF) ----
     GETPROC = 0xF0, ///< %dst = getproc     (ProcessVM* del proceso actual)
     GETVM = 0xF1,   ///< %dst = getvm       (VM* de la instancia)

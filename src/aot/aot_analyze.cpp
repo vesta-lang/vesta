@@ -171,6 +171,7 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::VEC_ACC_FMA:
     case IrOp::VEC_ACC_STORE:
     case IrOp::VEC_ACC_COMBINE:
+    case IrOp::VEC_BINOP_S:
     // -- atomicos enteros (lock-prefixed nativos) --
     case IrOp::ATOMIC_LD_I64:
     case IrOp::ATOMIC_ST_I64:

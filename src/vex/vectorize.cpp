@@ -37,6 +37,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 
 namespace vex {
 
@@ -691,6 +692,283 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
 
     // continuar en exit.
+    current_block_ = exit;
+    block_terminated_ = false;
+    return true;
+}
+
+// ===========================================================================
+// Patron de difusion escalar (scalar broadcast):
+//   for/while  c[i] = a[i] OP scalar;   i++    (scalar loop-invariante)
+//   for/while  c[i] = scalar OP a[i];   i++    (add/mul, conmutativo)
+//   for/while  c[i] OP= scalar;         i++
+// El escalar es un valor f64 invariante del loop; se DIFUNDE a todos los
+// lanes (UNPCKLPD/VBROADCASTSD).  Solo f64 hoy (VEC_BINOP_S es f64).
+// ===========================================================================
+bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
+    using namespace ast;
+    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+
+    VecLoop vl;
+    if (!mc_extract_vec_loop(s, vl)) return false;
+    if (vl.body_exprs.size() != 1) return false;
+    const std::string &idx_name = vl.idx_name;
+    auto *bexpr = vl.body_exprs[0];
+    if (!bexpr || bexpr->kind != NodeKind::AssignExpr) return false;
+    auto *asg = static_cast<AssignExpr *>(bexpr);
+    if (!asg->target || asg->target->kind != NodeKind::IndexExpr) return false;
+    auto *c_ix = static_cast<IndexExpr *>(asg->target.get());
+
+    // refs_idx: true si @p e referencia el indice del loop (no es invariante).
+    std::function<bool(const Expr *)> refs_idx = [&](const Expr *e) -> bool {
+        if (!e) return false;
+        switch (e->kind) {
+        case NodeKind::IdentExpr:
+            return static_cast<const IdentExpr *>(e)->name == idx_name;
+        case NodeKind::BinaryExpr: {
+            auto *b = static_cast<const BinaryExpr *>(e);
+            return refs_idx(b->lhs.get()) || refs_idx(b->rhs.get());
+        }
+        case NodeKind::UnaryExpr:
+            return refs_idx(static_cast<const UnaryExpr *>(e)->operand.get());
+        case NodeKind::IndexExpr: {
+            auto *ix = static_cast<const IndexExpr *>(e);
+            return refs_idx(ix->base.get()) || refs_idx(ix->index.get());
+        }
+        case NodeKind::FloatLitExpr:
+        case NodeKind::IntLitExpr:
+            return false;
+        default:
+            // Conservador: cualquier nodo no reconocido -> no vectorizar.
+            return true;
+        }
+    };
+
+    int subop = -1;
+    ast::IndexExpr *a_ix = nullptr;
+    ast::Expr *scalar_expr = nullptr;
+    if (asg->op == AssignOp::Assign) {
+        if (!asg->value || asg->value->kind != NodeKind::BinaryExpr)
+            return false;
+        auto *rhs = static_cast<BinaryExpr *>(asg->value.get());
+        switch (rhs->op) {
+        case BinOp::Add: subop = 0; break;
+        case BinOp::Sub: subop = 1; break;
+        case BinOp::Mul: subop = 2; break;
+        case BinOp::Div: subop = 3; break;
+        default: return false;
+        }
+        Expr *lhs = rhs->lhs.get(), *rrhs = rhs->rhs.get();
+        const bool l_ix = lhs && lhs->kind == NodeKind::IndexExpr;
+        const bool r_ix = rrhs && rrhs->kind == NodeKind::IndexExpr;
+        if (l_ix && !r_ix) {
+            // a[idx] OP scalar  (cualquier op)
+            a_ix = static_cast<IndexExpr *>(lhs);
+            scalar_expr = rrhs;
+        } else if (r_ix && !l_ix) {
+            // scalar OP a[idx]  -- solo conmutativo (add/mul)
+            if (subop != 0 && subop != 2) return false;
+            a_ix = static_cast<IndexExpr *>(rrhs);
+            scalar_expr = lhs;
+        } else {
+            return false; // ambos o ninguno indexados -> no es scalar broadcast
+        }
+    } else {
+        // compound: c[idx] OP= scalar  ==  c[idx] = c[idx] OP scalar
+        switch (asg->op) {
+        case AssignOp::AddAssign: subop = 0; break;
+        case AssignOp::SubAssign: subop = 1; break;
+        case AssignOp::MulAssign: subop = 2; break;
+        case AssignOp::DivAssign: subop = 3; break;
+        default: return false;
+        }
+        if (!asg->value || asg->value->kind == NodeKind::IndexExpr)
+            return false; // si es indexado -> es elementwise, no scalar
+        a_ix = c_ix;            // a = c (lhs implicito)
+        scalar_expr = asg->value.get();
+    }
+    if (!scalar_expr || refs_idx(scalar_expr)) return false;
+
+    // Valida c_ix / a_ix son base[idx] HOST f64.
+    auto check_idx_f64 = [&](IndexExpr *ix, IdentExpr **out_base) -> bool {
+        if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
+            ix->is_range)
+            return false;
+        if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return false;
+        if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return false;
+        if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
+            return false;
+        auto *base = static_cast<IdentExpr *>(ix->base.get());
+        const Type &t = base->result_type;
+        const bool ptr_like = (t.kind == PrimitiveKind::PTR ||
+                               t.kind == PrimitiveKind::ARRAY) &&
+                              static_cast<bool>(t.pointee);
+        if (!ptr_like || t.is_virtual) return false;
+        if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64
+        *out_base = base;
+        return true;
+    };
+    ast::IdentExpr *c_base = nullptr, *a_base = nullptr;
+    if (!check_idx_f64(c_ix, &c_base)) return false;
+    if (!check_idx_f64(a_ix, &a_base)) return false;
+
+    if (MC_DBG)
+        std::fprintf(stderr, "[mc-idiom] MATCH vec_scalar idx=%s subop=%d\n",
+                     idx_name.c_str(), subop);
+
+    // ======== Emitir el loop vectorizado + cola escalar. ========
+    const ir::IrType elem_ty = ir::IrType::F64;
+    const uint64_t esz = 8;
+    const uint32_t ln = s->loc.line;
+    const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t W = width / esz;
+
+    const ir::IrValueId i_init =
+        vl.for_init ? lower_expr(vl.for_init) : lookup(idx_name);
+    const ir::IrValueId v_a = lower_expr(a_base);
+    const ir::IrValueId v_c = lower_expr(c_base);
+    const ir::IrValueId v_N = lower_expr(vl.limit);
+    // El escalar: bajar a un valor SSA y coercer a F64.
+    ir::IrValueId v_s_raw = lower_expr(scalar_expr);
+    if (i_init == ir::IR_NO_VALUE || v_a == ir::IR_NO_VALUE ||
+        v_c == ir::IR_NO_VALUE || v_N == ir::IR_NO_VALUE ||
+        v_s_raw == ir::IR_NO_VALUE)
+        return false;
+    const ir::IrValueId v_s =
+        cast_if_needed(v_s_raw, fn_->values[v_s_raw].type, ir::IrType::F64, ln);
+    const ir::IrType idx_ty = fn_->values[i_init].type;
+
+    auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
+                   ir::IrValueId b) -> ir::IrValueId {
+        const ir::IrValueId d = fn_->new_value(ty);
+        ir::IrInstr in{};
+        in.op = op; in.type = ty; in.dst = d;
+        in.operands = {a, b}; in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+
+    const ir::IrBlockId entry = current_block_;
+    const ir::IrBlockId mhdr = fn_->new_block("vsc_main_hdr");
+    const ir::IrBlockId mbody = fn_->new_block("vsc_main_body");
+    const ir::IrBlockId thdr = fn_->new_block("vsc_tail_hdr");
+    const ir::IrBlockId tbody = fn_->new_block("vsc_tail_body");
+    const ir::IrBlockId exit = fn_->new_block("vsc_exit");
+
+    // --- entry ---
+    current_block_ = entry;
+    const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
+    const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
+      br.source_line = ln; fn_->append(entry, std::move(br)); }
+    fn_->blocks[entry].succs.push_back(mhdr);
+    fn_->blocks[mhdr].preds.push_back(entry);
+
+    // --- mhdr ---
+    current_block_ = mhdr;
+    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
+    {
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
+        phi.dst = phi_im; phi.source_line = ln;
+        phi.phi_args.push_back({i_init, entry});
+        fn_->append(mhdr, std::move(phi));
+    }
+    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
+    const ir::IrValueId cond_m =
+        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
+    {
+        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_m};
+        brc.target_block = mbody; brc.false_block = thdr; brc.source_line = ln;
+        fn_->append(mhdr, std::move(brc));
+    }
+    fn_->blocks[mhdr].succs.push_back(mbody);
+    fn_->blocks[mhdr].succs.push_back(thdr);
+    fn_->blocks[mbody].preds.push_back(mhdr);
+    fn_->blocks[thdr].preds.push_back(mhdr);
+
+    // --- mbody: VEC_BINOP_S(c+off, a+off, scalar); i += W ---
+    current_block_ = mbody;
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId i64off) -> ir::IrValueId {
+        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
+        fn_->values[d].is_host_ptr = true;
+        ir::IrInstr in{}; in.op = ir::IrOp::ADD; in.type = ir::IrType::PTR;
+        in.dst = d; in.operands = {base, i64off}; in.source_line = ln;
+        fn_->append(current_block_, std::move(in));
+        return d;
+    };
+    {
+        const ir::IrValueId i64 =
+            cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
+        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId c_at = ptr_at(v_c, off);
+        const ir::IrValueId a_at = ptr_at(v_a, off);
+        ir::IrInstr vb{}; vb.op = ir::IrOp::VEC_BINOP_S; vb.type = elem_ty;
+        vb.dst = ir::IR_NO_VALUE;
+        vb.operands = {c_at, a_at, v_s};
+        vb.imm = ((uint64_t)subop << 8) | width;
+        vb.source_line = ln;
+        fn_->append(current_block_, std::move(vb));
+    }
+    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
+      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    fn_->blocks[mbody].succs.push_back(mhdr);
+    fn_->blocks[mhdr].preds.push_back(mbody);
+    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+
+    // --- thdr ---
+    current_block_ = thdr;
+    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
+    {
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
+        phi.dst = phi_it; phi.source_line = ln;
+        phi.phi_args.push_back({phi_im, mhdr});
+        fn_->append(thdr, std::move(phi));
+    }
+    const ir::IrValueId cond_t =
+        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
+    {
+        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_t};
+        brc.target_block = tbody; brc.false_block = exit; brc.source_line = ln;
+        fn_->append(thdr, std::move(brc));
+    }
+    fn_->blocks[thdr].succs.push_back(tbody);
+    fn_->blocks[thdr].succs.push_back(exit);
+    fn_->blocks[tbody].preds.push_back(thdr);
+    fn_->blocks[exit].preds.push_back(thdr);
+
+    // --- tbody: c[i] = a[i] OP scalar (escalar a mano) ---
+    current_block_ = tbody;
+    block_terminated_ = false;
+    {
+        const ir::IrValueId i64 =
+            cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
+        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64,
+                                      emit_const(ir::IrType::I64, esz, ln));
+        const ir::IrValueId a_at = ptr_at(v_a, off);
+        const ir::IrValueId v_ai = fn_->new_value(elem_ty);
+        { ir::IrInstr ld{}; ld.op = ir::IrOp::LOAD; ld.type = elem_ty;
+          ld.dst = v_ai; ld.operands = {a_at}; ld.source_line = ln;
+          fn_->append(current_block_, std::move(ld)); }
+        const ir::IrOp eop = (subop == 0)   ? ir::IrOp::FADD
+                             : (subop == 1) ? ir::IrOp::FSUB
+                             : (subop == 2) ? ir::IrOp::FMUL
+                                            : ir::IrOp::FDIV;
+        const ir::IrValueId v_res = bin(eop, elem_ty, v_ai, v_s);
+        const ir::IrValueId c_at = ptr_at(v_c, off);
+        ir::IrInstr st{}; st.op = ir::IrOp::STORE; st.type = elem_ty;
+        st.dst = ir::IR_NO_VALUE; st.operands = {v_res, c_at};
+        st.source_line = ln;
+        fn_->append(current_block_, std::move(st));
+    }
+    const ir::IrValueId i_tnext =
+        bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = thdr;
+      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    fn_->blocks[tbody].succs.push_back(thdr);
+    fn_->blocks[thdr].preds.push_back(tbody);
+    fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
+
     current_block_ = exit;
     block_terminated_ = false;
     return true;
