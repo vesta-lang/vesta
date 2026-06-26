@@ -615,10 +615,15 @@ enum class IrOp : uint16_t {
     // (oraculo) usa el acc_slot de memoria (lento pero correcto); el JIT usa el
     // registro y solo vuelca al slot UNA vez (VEC_ACC_STORE) al salir del bucle,
     // donde la reduccion horizontal existente lo consume.  imm = ancho (16/32/64).
-    VEC_ACC_ZERO = 0xE5,  ///< vec_acc_zero %slot         (acc = 0; imm=ancho)
-    VEC_ACC_ADD = 0xE6,   ///< vec_acc_add  %slot, %a      (acc += a[chunk])
-    VEC_ACC_FMA = 0xE7,   ///< vec_acc_fma  %slot, %a, %b  (acc += a*b)
-    VEC_ACC_STORE = 0xE8, ///< vec_acc_store %slot         (slot = acc; nop interp)
+    // imm = ancho(bits0-7) | acc_idx(bits8-11) | src_idx(bits12-15, COMBINE).
+    // Para ocultar la latencia de la cadena de dependencia, el bucle se
+    // desenrolla en U acumuladores INDEPENDIENTES (acc_idx 0..U-1); al final se
+    // combinan (VEC_ACC_COMBINE acc0 += acc_j) antes de la reduccion horizontal.
+    VEC_ACC_ZERO = 0xE5,  ///< vec_acc_zero %slot         (acc[idx] = 0)
+    VEC_ACC_ADD = 0xE6,   ///< vec_acc_add  %slot, %a      (acc[idx] += a[chunk])
+    VEC_ACC_FMA = 0xE7,   ///< vec_acc_fma  %slot, %a, %b  (acc[idx] += a*b)
+    VEC_ACC_STORE = 0xE8, ///< vec_acc_store %slot         (slot = acc[0]; nop interp)
+    VEC_ACC_COMBINE = 0xE9, ///< vec_acc_combine %slot   (acc[dst] += acc[src])
 
     // ---- intrinsics VM (0xF0-0xFF) ----
     GETPROC = 0xF0, ///< %dst = getproc     (ProcessVM* del proceso actual)

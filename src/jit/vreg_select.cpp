@@ -2492,6 +2492,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::VEC_ACC_ZERO:
             case ir::IrOp::VEC_ACC_ADD:
             case ir::IrOp::VEC_ACC_FMA:
+            case ir::IrOp::VEC_ACC_COMBINE:
             case ir::IrOp::VEC_ACC_STORE: {
                 flush_pending();
                 if (!fp_ok) return false;
@@ -2520,7 +2521,12 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg gp1 =
                     (gpsc.size() >= 2) ? static_cast<MReg>(gpsc[1]) : gp0;
                 const uint8_t ew = static_cast<uint8_t>(chunk_w);
-                const MReg ACC = MReg::XMM13;            // acumulador dedicado
+                // acc_idx (bits 8-11) -> XMM(13-idx): acc0=XMM13 .. acc3=XMM10.
+                const uint8_t acc_idx = (in.imm >> 8) & 0xF;
+                const uint8_t src_idx = (in.imm >> 12) & 0xF; // COMBINE
+                if (acc_idx > 3 || src_idx > 3) return false; // solo 4 reservados
+                const MReg ACC =
+                    static_cast<MReg>(reg_id(MReg::XMM13) - acc_idx);
                 const MReg SCR = static_cast<MReg>(fpsc[0]); // XMM14 scratch a/b
                 const MOperand xacc = MOperand::make_reg(ACC, ew);
                 const MOperand xscr = MOperand::make_reg(SCR, ew);
@@ -2555,12 +2561,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_binary(
                         is_f32 ? MOp::VFMADD231PS : MOp::VFMADD231PD, xacc,
                         xscr, MOperand::make_mem(gp1, 0)));
-                } else { // VEC_ACC_STORE: slot = acc.
+                } else if (in.op == ir::IrOp::VEC_ACC_COMBINE) {
+                    // acc[dst] += acc[src]  (reg-reg, sin memoria).
+                    const MReg SRC =
+                        static_cast<MReg>(reg_id(MReg::XMM13) - src_idx);
+                    const MOp aop = is_f32   ? MOp::ADDPS
+                                    : is_f64 ? MOp::ADDPD
+                                    : is_i64 ? MOp::PADDQ
+                                             : MOp::PADDD;
+                    O.push_back(MInstr::make_unary(
+                        aop, xacc, MOperand::make_reg(SRC, ew)));
+                } else { // VEC_ACC_STORE: slot[idx] = acc[idx].
                     O.push_back(MInstr::make_unary(MOp::MOV,
                                                    MOperand::make_reg(gp0, 8),
                                                    vr(in.operands[0])));
                     O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, MOperand::make_mem(gp0, 0), xacc));
+                        MOp::MOVUPD,
+                        MOperand::make_mem(
+                            gp0, static_cast<int32_t>(acc_idx * chunk_w)),
+                        xacc));
                 }
                 break;
             }
