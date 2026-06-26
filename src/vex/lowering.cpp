@@ -17955,6 +17955,77 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = v_res;
             return true;
         }
+        // Vex Embed Inc 4 (builtin): en native_poo_ str_equals(a, b) usa el
+        // mismo helper native __vex_strcmp que el operador `==` (value-string,
+        // CERO GC), en vez de STRCMP (StringObject GC).  Devuelve bool (==0).
+        if (native_poo_ && is_str_equals) {
+            // Extrae (ptr, len) de cada operando como el operador == (literal
+            // -> .rodata + CONST len; var/concat/cast -> slot value-string +
+            // accesores; temporales se liberan tras comparar).
+            struct OpRef {
+                ir::IrValueId ptr = ir::IR_NO_VALUE;
+                ir::IrValueId len = ir::IR_NO_VALUE;
+                ir::IrValueId temp = ir::IR_NO_VALUE; // !=NO_VALUE -> free si heap
+            };
+            auto op_ref = [&](ast::Expr *ex) -> OpRef {
+                OpRef r;
+                if (ex && ex->kind == ast::NodeKind::StringLitExpr &&
+                    !static_cast<ast::StringLitExpr *>(ex)->is_interpolated()) {
+                    auto *slit = static_cast<ast::StringLitExpr *>(ex);
+                    const std::string &lit = slit->value;
+                    std::vector<uint8_t> data(lit.begin(), lit.end());
+                    data.push_back(0);
+                    const uint64_t idx =
+                        out_mod_->intern_static_data(std::move(data));
+                    r.ptr = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[r.ptr].is_host_ptr = true;
+                    ir::IrInstr sa{};
+                    sa.op = ir::IrOp::STR_LIT_ADDR; sa.type = ir::IrType::PTR;
+                    sa.dst = r.ptr; sa.imm = idx; sa.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(sa));
+                    r.len = emit_const(ir::IrType::I64,
+                                       static_cast<uint64_t>(lit.size()),
+                                       e->loc.line);
+                    return r;
+                }
+                bool is_temp = false;
+                if (ex && ex->kind == ast::NodeKind::BinaryExpr &&
+                    static_cast<ast::BinaryExpr *>(ex)->op == ast::BinOp::Add &&
+                    ex->result_type.kind == PrimitiveKind::STRING)
+                    is_temp = true;
+                else if (ex && ex->kind == ast::NodeKind::CastExpr &&
+                         ex->result_type.kind == PrimitiveKind::STRING)
+                    is_temp = true;
+                ir::IrValueId v_slot = lower_expr(ex);
+                if (v_slot == ir::IR_NO_VALUE) return r;
+                r.ptr = emit_native_str_data_ptr(v_slot, e->loc.line);
+                r.len = emit_native_str_len(v_slot, e->loc.line);
+                if (is_temp) r.temp = v_slot;
+                return r;
+            };
+            OpRef ra = op_ref(e->args[0].get());
+            OpRef rb = op_ref(e->args[1].get());
+            if (ra.ptr == ir::IR_NO_VALUE || rb.ptr == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            ir::IrValueId v_cmp = emit_strcmp_dispatched(ra.ptr, ra.len, rb.ptr,
+                                                         rb.len, e->loc.line);
+            if (ra.temp != ir::IR_NO_VALUE)
+                emit_native_str_free_if_heap(ra.temp, e->loc.line);
+            if (rb.temp != ir::IR_NO_VALUE)
+                emit_native_str_free_if_heap(rb.temp, e->loc.line);
+            // str_equals: bool = (strcmp == 0).
+            ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
+            ir::IrValueId v_eq = fn_->new_value(ir::IrType::BOOL);
+            ir::IrInstr cmp{};
+            cmp.op = ir::IrOp::CMP_EQ; cmp.type = ir::IrType::BOOL;
+            cmp.dst = v_eq; cmp.operands = {v_cmp, v_zero};
+            cmp.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(cmp));
+            out_value = v_eq;
+            return true;
+        }
         // Coerce string literals (PTR) a StringObject
         // (STRING handle) inline via STRMAKE.  Sin esto pasar un
         // literal directamente a str_concat/str_equals enviaria un
