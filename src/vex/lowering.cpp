@@ -871,6 +871,48 @@ static uint64_t vex_global_array_bytes(const ast::TypeNode *tn) {
     return count * esz;
 }
 
+// Computa el intervalo DFS [lo,hi] de cada clase sobre el bosque de herencia
+// (super_name).  El preorden numera lo; hi = max lo del subarbol.  Asi
+// is-a(A,B) <=> B.lo <= A.lo <= B.hi (A es B o un descendiente de B).  Orden de
+// hijos deterministico (alfabetico) para estabilidad cross-build.  Defensa
+// contra ciclos via marca de visitados (el type checker ya rechaza ciclos de
+// herencia, pero el DFS no debe colgarse si reaparece uno).
+void Lowering::compute_type_intervals() {
+    type_intervals_.clear();
+    const auto &layouts = tc_.class_layouts();
+    if (layouts.empty()) return;
+    // children[S] = clases cuya super es S (S es a su vez una clase del modulo).
+    std::map<std::string, std::vector<std::string>> children;
+    std::vector<std::string> roots;
+    for (const auto &kv : layouts) {
+        const std::string &nm = kv.first;
+        const std::string &sup = kv.second.super_name;
+        if (!sup.empty() && layouts.count(sup))
+            children[sup].push_back(nm);
+        else
+            roots.push_back(nm);
+    }
+    for (auto &kv : children)
+        std::sort(kv.second.begin(), kv.second.end());
+    std::sort(roots.begin(), roots.end());
+    uint32_t counter = 0;
+    std::unordered_set<std::string> visiting;
+    std::function<uint32_t(const std::string &)> dfs =
+        [&](const std::string &nm) -> uint32_t {
+        const uint32_t lo = counter++;
+        uint32_t hi = lo;
+        if (visiting.insert(nm).second) { // defensa anti-ciclo
+            auto it = children.find(nm);
+            if (it != children.end())
+                for (const std::string &ch : it->second)
+                    hi = std::max(hi, dfs(ch));
+        }
+        type_intervals_[nm] = {lo, hi};
+        return hi;
+    };
+    for (const std::string &r : roots) dfs(r);
+}
+
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     const size_t initial_errors = diags_.error_count();
     out_module.name = module_name;
@@ -880,6 +922,11 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // datos estaticos y imports nativos sin pasar el modulo en cada
     // signature.
     out_mod_ = &out_module;
+
+    // AOT: precomputar los intervalos de tipo (encoding nested-set) para el
+    // type matching de catch.  Barato y necesario antes de bajar cualquier
+    // try/throw.
+    if (native_poo_) compute_type_intervals();
 
     // AOT / Embed (native_poo_): el AOP (@Aspect + advice) se registra en
     // RUNTIME (MethodInfo::advice_chain via addadvice en __module_init), que
@@ -6075,21 +6122,146 @@ void Lowering::lower_try(ast::TryStmt *s) {
             cs.source_line = s->loc.line;
             fn_->append(current_block_, std::move(cs));
         }
-        // br_cond r: !=0 (true) -> handler (el longjmp reanudo aqui);
-        // ==0 (false) -> body (retorno normal del setjmp).
+        // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
+        // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
+        // frame, lee el type-id y elige el catch que matchea (o re-throw).
+        const ir::IrBlockId dispatch_bb = fn_->new_block("try_dispatch");
+        const ir::IrBlockId rethrow_bb = fn_->new_block("try_rethrow");
+        // br_cond r: !=0 (true) -> dispatch ; ==0 (false) -> body.
         {
             ir::IrInstr br{};
             br.op = ir::IrOp::BR_COND;
             br.operands.push_back(v_r);
-            br.target_block = handler_bbs[0];
+            br.target_block = dispatch_bb;
             br.false_block = body_bb;
             br.source_line = s->loc.line;
             fn_->append(current_block_, std::move(br));
         }
-        fn_->blocks[current_block_].succs.push_back(handler_bbs[0]);
+        fn_->blocks[current_block_].succs.push_back(dispatch_bb);
         fn_->blocks[current_block_].succs.push_back(body_bb);
-        fn_->blocks[handler_bbs[0]].preds.push_back(current_block_);
+        fn_->blocks[dispatch_bb].preds.push_back(current_block_);
         fn_->blocks[body_bb].preds.push_back(current_block_);
+
+        // Helpers locales para emitir CALLs al runtime de excepciones.
+        auto emit_void_call = [&](ir::IrBlockId blk, const char *name) {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = name;
+            c.source_line = s->loc.line;
+            fn_->append(blk, std::move(c));
+        };
+        auto emit_i64_call = [&](ir::IrBlockId blk,
+                                 const char *name) -> ir::IrValueId {
+            const ir::IrValueId d = fn_->new_value(ir::IrType::I64);
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::I64;
+            c.dst = d;
+            c.func_name = name;
+            c.source_line = s->loc.line;
+            fn_->append(blk, std::move(c));
+            return d;
+        };
+
+        // dispatch_bb: pop del frame consumido + leer el type-id.
+        current_block_ = dispatch_bb;
+        emit_void_call(dispatch_bb, "__vex_pop_frame");
+        const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vex_get_type");
+        // Cadena de chequeos: por cada catch, si su tipo es desconocido
+        // (catch-all, builtin como FatalError, o base no registrada) matchea
+        // SIEMPRE; si es una clase con intervalo, matchea si lo<=t<=hi (el
+        // intervalo cubre la clase y sus subclases).
+        ir::IrBlockId cur_check = dispatch_bb;
+        for (size_t ci = 0; ci < n_catches && cur_check != ir::IR_NO_BLOCK;
+             ++ci) {
+            const ast::CatchClause &cc = s->catches[ci];
+            current_block_ = cur_check;
+            auto itv = cc.exc_class_name.empty()
+                           ? type_intervals_.end()
+                           : type_intervals_.find(cc.exc_class_name);
+            const bool catch_all = (itv == type_intervals_.end());
+            if (catch_all) {
+                // BR incondicional al handler; el resto de catches queda muerto.
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR;
+                br.target_block = handler_bbs[ci];
+                br.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(br));
+                fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
+                fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
+                cur_check = ir::IR_NO_BLOCK;
+                break;
+            }
+            const uint32_t lo = itv->second.first, hi = itv->second.second;
+            const ir::IrValueId v_lo =
+                emit_const(ir::IrType::I64, static_cast<int64_t>(lo), cc.loc.line);
+            const ir::IrValueId v_hi =
+                emit_const(ir::IrType::I64, static_cast<int64_t>(hi), cc.loc.line);
+            const ir::IrValueId v_ge = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_GE;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = v_ge;
+                cm.operands = {v_t, v_lo};
+                cm.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(cm));
+            }
+            const ir::IrValueId v_le = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cm{};
+                cm.op = ir::IrOp::CMP_LE;
+                cm.type = ir::IrType::BOOL;
+                cm.dst = v_le;
+                cm.operands = {v_t, v_hi};
+                cm.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(cm));
+            }
+            const ir::IrValueId v_and = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ir::IrType::BOOL;
+                an.dst = v_and;
+                an.operands = {v_ge, v_le};
+                an.source_line = cc.loc.line;
+                fn_->append(cur_check, std::move(an));
+            }
+            const ir::IrBlockId next_check =
+                (ci + 1 < n_catches) ? fn_->new_block("try_check") : rethrow_bb;
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_and);
+            br.target_block = handler_bbs[ci];
+            br.false_block = next_check;
+            br.source_line = cc.loc.line;
+            fn_->append(cur_check, std::move(br));
+            fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
+            fn_->blocks[cur_check].succs.push_back(next_check);
+            fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
+            fn_->blocks[next_check].preds.push_back(cur_check);
+            cur_check = next_check;
+        }
+
+        // rethrow_bb: ningun catch matcheo -> re-lanzar al frame externo.
+        // El frame ya se popeo en dispatch_bb, asi que el __vex_throw del
+        // THROW hace longjmp al handler de fuera (propagacion).
+        current_block_ = rethrow_bb;
+        {
+            const ir::IrValueId v_v =
+                emit_i64_call(rethrow_bb, "__vex_get_value");
+            const ir::IrValueId v_ty =
+                emit_i64_call(rethrow_bb, "__vex_get_type");
+            ir::IrInstr th{};
+            th.op = ir::IrOp::THROW;
+            th.type = ir::IrType::VOID;
+            th.dst = ir::IR_NO_VALUE;
+            th.operands = {v_v, v_ty};
+            th.source_line = s->loc.line;
+            fn_->append(rethrow_bb, std::move(th));
+        }
         goto try_after_entry; // saltar la emision TRYENTER del path VM
     }
 
@@ -6291,17 +6463,9 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
         // popearlos.  Numero a popear: n_catches - 1 - ci.
         const size_t to_pop = n_catches - 1 - ci;
         if (native_poo_) {
-            // AOT: el longjmp reanudo con el frame AUN en el tope (throw
-            // no popea).  Lo popeamos ANTES del catch body para que un
-            // re-throw escape al handler externo (no vuelva aqui).  v1:
-            // un solo frame catch-all -> 1 pop (independiente de to_pop).
-            ir::IrInstr cp{};
-            cp.op = ir::IrOp::CALL;
-            cp.type = ir::IrType::VOID;
-            cp.dst = ir::IR_NO_VALUE;
-            cp.func_name = "__vex_pop_frame";
-            cp.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(cp));
+            // AOT: el frame YA se popeo en dispatch_bb (antes de elegir el
+            // catch), asi que el handler NO popea de nuevo.  El get_value del
+            // catch var se emite mas abajo.
         } else {
             // Sprint 6.D: tryleave por catch via IR ops puros.
             for (size_t k = 0; k < to_pop; ++k) {
@@ -9568,6 +9732,19 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
     ra.type = ir::IrType::VOID;
     ra.dst = ir::IR_NO_VALUE;
     ra.operands = {v_obj};
+    // AOT (native_poo): el throw transporta el type-id (intervalo lo) del tipo
+    // ESTATICO lanzado, para que el catch despache por tipo (subtipo via el
+    // intervalo).  operands[1] = CONST(lo).  El backend HOST_LEAF lo pasa como
+    // 2o arg a __vex_throw(value, type_id).  En el path VM se ignora.
+    if (native_poo_) {
+        uint32_t lo = 0;
+        const std::string &cn = s->value->result_type.struct_name;
+        auto it = type_intervals_.find(cn);
+        if (it != type_intervals_.end()) lo = it->second.first;
+        const ir::IrValueId v_type =
+            emit_const(ir::IrType::I64, static_cast<int64_t>(lo), s->loc.line);
+        ra.operands.push_back(v_type);
+    }
     ra.source_line = s->loc.line;
     fn_->append(current_block_, std::move(ra));
     // throw es un terminador del flujo: marcamos el bloque para que

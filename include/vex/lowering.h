@@ -1535,6 +1535,14 @@ class Lowering {
     bool native_poo_ = false;
     /// Bits del target para validar el inline-asm (@Naked/asm{}); 64 por defecto.
     uint8_t asm_target_bits_ = 64;
+    /// Type matching de catch (AOT): por cada clase, su intervalo DFS [lo,hi]
+    /// sobre el bosque de herencia.  is-a(A,B) <=> B.lo <= A.lo <= B.hi.  El
+    /// throw transporta A.lo; cada catch(B) compara contra [B.lo,B.hi]
+    /// (constantes en compile-time).  Vacio fuera de native_poo_.
+    std::unordered_map<std::string, std::pair<uint32_t, uint32_t>>
+        type_intervals_;
+    /// Computa @c type_intervals_ via DFS del bosque de clases (super_name).
+    void compute_type_intervals();
     /// Solo-LSP: bajar comptime fns (no-macro) a IR para inspeccion.
     bool emit_comptime_fns_ = false;
     /// C-3: nombres de los override del string built-in (vacios => default).
