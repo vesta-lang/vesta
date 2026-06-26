@@ -1,0 +1,39 @@
+// Bench: axpy compound element-wise sobre arrays f64 (VECTORIZABLE).
+//
+// El hot loop interno `a[i] = a[i] * 0.5 + b[i]` es una cadena compound
+// (mul + add) element-wise sobre punteros HOST (malloc) -> el vectorizador del
+// AOT (matcher compound) lo reconoce y emite SIMD packed.  Con --float-isa sse2
+// sale 128b (2 f64/lane), con avx 256b (4 f64), con auto la CPU elige la mejor.
+//
+// El bucle externo (M pasadas) mantiene los datos en cache y repite el axpy ->
+// es COMPUTE-bound, asi que el ancho SIMD se nota (avx ~1.5x sobre sse2).  La
+// recurrencia `x = 0.5x + b` converge a 2b (acotada) y depende de la pasada
+// anterior, asi que NADA se puede hoistear: el inner corre M*N veces.
+//
+// Resultado determinista (igual en todos los lenguajes y anchos SIMD): el
+// elemento central ya convergido a[N/2] -> 2*b[N/2] = 2*((2048%13)+1) = 16.
+
+i32 main() {
+    i32 N = 4096;
+    i32 M = 50000;
+    f64* a = malloc(N * 8);   // f64 = 8 bytes
+    f64* b = malloc(N * 8);
+
+    // Init (no vectorizable: depende de i).
+    for (i32 i = 0; i < N; i = i + 1) {
+        a[i] = (f64)(i % 7) + 1.0;
+        b[i] = (f64)(i % 13) + 1.0;
+    }
+
+    // Hot loop: M pasadas del axpy compound (inner VECTORIZABLE).
+    for (i32 p = 0; p < M; p = p + 1) {
+        for (i32 i = 0; i < N; i = i + 1) {
+            a[i] = a[i] * 0.5 + b[i];
+        }
+    }
+
+    f64 r = a[N / 2];   // converge a 2*b[N/2] = 16
+    free(a);
+    free(b);
+    return (i32)((i64) r & 0xFF);
+}
