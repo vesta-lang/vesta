@@ -3060,10 +3060,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                           : (subop == 1) ? "fsub"
                           : (subop == 2) ? "fmul"
                                          : "fdiv";
-        const char *iop = (subop == 0) ? "adds" : "subs"; // int: add/sub
+        // int: add/sub/mul.  El low de un producto signed==unsigned -> "muls"
+        // sirve para i/u (solo guardamos los esz bytes bajos).
+        const char *iop = (subop == 0)   ? "adds"
+                          : (subop == 1) ? "subs"
+                                         : "muls";
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
-        // sufijo de tamano del reg para load/store entero (8b->"", 4b->"d").
-        const std::string rsz = (esz == 4) ? "d" : "";
+        // sufijo de tamano del reg para load/store entero
+        // (8b->"", 4b->"d", 2b->"w", 1b->"b").
+        const std::string rsz =
+            (esz == 4) ? "d" : (esz == 2) ? "w" : (esz == 1) ? "b" : "";
         // Cargar los 3 punteros (dst/a/b) en r10/r11/r12 via push del VALOR
         // (sin hazard de parallel-move).
         ctx.out << "    push r10\n    push r11\n    push r12\n";
@@ -3092,9 +3098,13 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    bitz2g r14, f0\n";
                 ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
             } else {
-                // entero: cargar esz bytes, add/sub, guardar esz bytes.
-                ctx.out << "    movh r14" << rsz << ", [r11]\n"; // a[k]
-                ctx.out << "    movh r13" << rsz << ", [r12]\n"; // b[k]
+                // entero: cargar esz bytes ZERO-EXTENDIDO (loadzh, no movh: el
+                // movh-load parcial de 16/8b deja bits altos basura que rompen
+                // muls/adds de 64b), operar, guardar los esz bytes bajos.  El
+                // signo no importa: los esz bytes bajos del resultado dependen
+                // solo de los esz bytes bajos de los operandos (add/sub/mul).
+                ctx.out << "    loadzh r14" << rsz << ", r11\n"; // a[k]
+                ctx.out << "    loadzh r13" << rsz << ", r12\n"; // b[k]
                 ctx.out << "    " << iop << " r14, r13\n";       // a OP b (64b)
                 ctx.out << "    movh [r10], r14" << rsz << "\n"; // dst[k]
             }

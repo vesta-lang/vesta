@@ -620,6 +620,16 @@ enum class MOp : uint8_t {
     PSUBD = 125, ///< PSUBD xmm,xmm (66 0F FA) -- 4x i32 sub
     PADDQ = 126, ///< PADDQ xmm,xmm (66 0F D4) -- 2x i64 add
     PSUBQ = 127, ///< PSUBQ xmm,xmm (66 0F FB) -- 2x i64 sub
+    /* Packed 16-bit (word) y 8-bit (byte) SSE2.  WIG (W ignorado).  El word
+     * tiene mul packed (PMULLW), el byte NO.  PADDW=8x i16; PADDB=16x i8. */
+    PADDW = 143,  ///< PADDW xmm,xmm  (66 0F FD) -- 8x i16 add
+    PSUBW = 144,  ///< PSUBW xmm,xmm  (66 0F F9) -- 8x i16 sub
+    PMULLW = 145, ///< PMULLW xmm,xmm (66 0F D5) -- 8x i16 mul (low 16b)
+    PADDB = 146,  ///< PADDB xmm,xmm  (66 0F FC) -- 16x i8 add
+    PSUBB = 147,  ///< PSUBB xmm,xmm  (66 0F F8) -- 16x i8 sub
+    /* Packed 32-bit mul (low): SSE4.1 / AVX2.  Mapa 0F38 (no 0F).  Permite
+     * vectorizar `c[i]=a[i]*b[i]` para i32/u32 (PADDD/PSUBD ya cubren add/sub). */
+    PMULLD = 148, ///< PMULLD xmm,xmm (66 0F38 40) -- 4x i32 mul (low 32b)
 
     /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
      * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y

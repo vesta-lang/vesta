@@ -2360,7 +2360,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                            in.type == ir::IrType::U32) {
                     if (subop == 0) pop = MOp::PADDD;
                     else if (subop == 1) pop = MOp::PSUBD;
-                    else return false; // mul/div i32 no packed en SSE2 (PMULLD=SSE4.1)
+                    else if (subop == 2) pop = MOp::PMULLD; // SSE4.1/AVX2
+                    else return false; // div i32 no packed
+                } else if (in.type == ir::IrType::I16 ||
+                           in.type == ir::IrType::U16) {
+                    if (subop == 0) pop = MOp::PADDW;
+                    else if (subop == 1) pop = MOp::PSUBW;
+                    else if (subop == 2) pop = MOp::PMULLW; // SSE2 word mul (low)
+                    else return false; // div i16 no packed
+                } else if (in.type == ir::IrType::I8 ||
+                           in.type == ir::IrType::U8) {
+                    if (subop == 0) pop = MOp::PADDB;
+                    else if (subop == 1) pop = MOp::PSUBB;
+                    else return false; // no hay mul/div byte packed en SSE2
                 } else {
                     return false; // tipo no soportado
                 }
