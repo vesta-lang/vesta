@@ -6027,6 +6027,75 @@ void Lowering::lower_try(ast::TryStmt *s) {
     const ir::IrBlockId body_bb = fn_->new_block("try_body");
     const ir::IrBlockId merge_bb = fn_->new_block("try_merge");
 
+    // ---------------------------------------------------------------
+    // AOT/Embed (native_poo_): modelo setjmp/longjmp (sin VM runtime).
+    // En vez de N TRYENTER + br body, emitimos UN frame catch-all:
+    //   buf = ALLOCA(96); __vex_push_frame(buf, 0); r = __vex_setjmp(buf);
+    //   br_cond r ? handler[0] : body   (r!=0 = el longjmp reanudo).
+    // v1: type matching = catch-all (el throw no transporta tipo aun);
+    // multi-catch enruta todo a handler[0].  Las funciones __vex_* viven
+    // en stdlib/vex/vex_exc.vex (enlazado en el .exe AOT).
+    // ---------------------------------------------------------------
+    if (native_poo_) {
+        // buf en host-stack: 96B cubre el peor caso (Win64 buf 80 +
+        // prev 8 + type 8); SysV/x86-32 usan menos.  El layout interno
+        // (offsets prev/type) lo conoce vex_exc.vex via comptime const.
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_buf;
+            al.imm = 96;
+            al.host_alloca = true;
+            al.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        // type = 0 (catch-all).  v2: findclass del tipo del catch.
+        const ir::IrValueId v_type = emit_const(ir::IrType::I64, 0, s->loc.line);
+        {
+            ir::IrInstr cp{};
+            cp.op = ir::IrOp::CALL;
+            cp.type = ir::IrType::VOID;
+            cp.dst = ir::IR_NO_VALUE;
+            cp.func_name = "__vex_push_frame";
+            cp.operands = {v_buf, v_type};
+            cp.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cp));
+        }
+        const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr cs{};
+            cs.op = ir::IrOp::CALL;
+            cs.type = ir::IrType::I64;
+            cs.dst = v_r;
+            cs.func_name = "__vex_setjmp";
+            cs.operands = {v_buf};
+            cs.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cs));
+        }
+        // br_cond r: !=0 (true) -> handler (el longjmp reanudo aqui);
+        // ==0 (false) -> body (retorno normal del setjmp).
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_r);
+            br.target_block = handler_bbs[0];
+            br.false_block = body_bb;
+            br.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(handler_bbs[0]);
+        fn_->blocks[current_block_].succs.push_back(body_bb);
+        fn_->blocks[handler_bbs[0]].preds.push_back(current_block_);
+        fn_->blocks[body_bb].preds.push_back(current_block_);
+        goto try_after_entry; // saltar la emision TRYENTER del path VM
+    }
+
+    { // bloque del path VM (TRYENTER): cerrar el scope de sus locales
+      // (br_to_body, etc.) ANTES del label try_after_entry para que el
+      // goto del path native no salte sobre destructores en scope.
     // 1. Por cada catch (en orden inverso): emitir handler_pc + type
     //    como SSA values con {dst}/{src} substitution, luego emitir
     //    tryenter con esos SSA values.  CRITICO: NO usar mov r1/r2
@@ -6100,6 +6169,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
         fn_->blocks[current_block_].succs.push_back(hb);
         fn_->blocks[hb].preds.push_back(current_block_);
     }
+    } // fin del bloque del path VM (TRYENTER)
+
+try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
 
     // Helper local: emite el bloque finally (clonado en cada salida) y
     // luego un branch al merge.  El finally en MVP se INLINEA en cada
@@ -6137,14 +6209,25 @@ void Lowering::lower_try(ast::TryStmt *s) {
         body_pred = current_block_;
         body_reaches_merge = true;
 
-        // Sprint 6.D: tryleave por cada catch via IR ops puros.
-        for (size_t i = 0; i < n_catches; ++i) {
-            ir::IrInstr tl{};
-            tl.op = ir::IrOp::TRYLEAVE;
-            tl.type = ir::IrType::VOID;
-            tl.dst = ir::IR_NO_VALUE;
-            tl.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(tl));
+        if (native_poo_) {
+            // AOT: salida normal -> pop del frame setjmp (top = prev).
+            ir::IrInstr cp{};
+            cp.op = ir::IrOp::CALL;
+            cp.type = ir::IrType::VOID;
+            cp.dst = ir::IR_NO_VALUE;
+            cp.func_name = "__vex_pop_frame";
+            cp.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cp));
+        } else {
+            // Sprint 6.D: tryleave por cada catch via IR ops puros.
+            for (size_t i = 0; i < n_catches; ++i) {
+                ir::IrInstr tl{};
+                tl.op = ir::IrOp::TRYLEAVE;
+                tl.type = ir::IrType::VOID;
+                tl.dst = ir::IR_NO_VALUE;
+                tl.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(tl));
+            }
         }
         emit_finally_then_merge(current_block_, s->loc.line);
     }
@@ -6207,14 +6290,28 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // Frames POR DEBAJO (anteriores a ci) siguen vivos: hay que
         // popearlos.  Numero a popear: n_catches - 1 - ci.
         const size_t to_pop = n_catches - 1 - ci;
-        // Sprint 6.D: tryleave por catch via IR ops puros.
-        for (size_t k = 0; k < to_pop; ++k) {
-            ir::IrInstr tl{};
-            tl.op = ir::IrOp::TRYLEAVE;
-            tl.type = ir::IrType::VOID;
-            tl.dst = ir::IR_NO_VALUE;
-            tl.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(tl));
+        if (native_poo_) {
+            // AOT: el longjmp reanudo con el frame AUN en el tope (throw
+            // no popea).  Lo popeamos ANTES del catch body para que un
+            // re-throw escape al handler externo (no vuelva aqui).  v1:
+            // un solo frame catch-all -> 1 pop (independiente de to_pop).
+            ir::IrInstr cp{};
+            cp.op = ir::IrOp::CALL;
+            cp.type = ir::IrType::VOID;
+            cp.dst = ir::IR_NO_VALUE;
+            cp.func_name = "__vex_pop_frame";
+            cp.source_line = cc.loc.line;
+            fn_->append(current_block_, std::move(cp));
+        } else {
+            // Sprint 6.D: tryleave por catch via IR ops puros.
+            for (size_t k = 0; k < to_pop; ++k) {
+                ir::IrInstr tl{};
+                tl.op = ir::IrOp::TRYLEAVE;
+                tl.type = ir::IrType::VOID;
+                tl.dst = ir::IR_NO_VALUE;
+                tl.source_line = cc.loc.line;
+                fn_->append(current_block_, std::move(tl));
+            }
         }
         push_scope();
         // CRITICO: la primera instruccion del catch debe ser el
@@ -6222,16 +6319,34 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // puntero al FatalError y CUALQUIER instruccion previa
         // (LOAD desde stack, etc.) puede clobrearlo.
         if (!cc.var_name.empty()) {
-            const ir::IrValueId v_exc = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_exc].is_host_ptr =
-                true; // catch recibe FatalError* host
-            ir::IrInstr lp{};
-            lp.op = ir::IrOp::LANDINGPAD;
-            lp.type = ir::IrType::PTR;
-            lp.dst = v_exc;
-            lp.source_line = cc.loc.line;
-            fn_->append(current_block_, std::move(lp));
-            bind(cc.var_name, v_exc);
+            if (native_poo_) {
+                // AOT: el valor lanzado lo devuelve __vex_get_value().
+                // Si el catch declara una clase, el valor es un ptr host
+                // (throw new E()); si no, un i64 (throw <valor>).
+                const bool exc_is_ptr = !cc.exc_class_name.empty();
+                const ir::IrValueId v_exc = fn_->new_value(
+                    exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64);
+                if (exc_is_ptr) fn_->values[v_exc].is_host_ptr = true;
+                ir::IrInstr cg{};
+                cg.op = ir::IrOp::CALL;
+                cg.type = exc_is_ptr ? ir::IrType::PTR : ir::IrType::I64;
+                cg.dst = v_exc;
+                cg.func_name = "__vex_get_value";
+                cg.source_line = cc.loc.line;
+                fn_->append(current_block_, std::move(cg));
+                bind(cc.var_name, v_exc);
+            } else {
+                const ir::IrValueId v_exc = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_exc].is_host_ptr =
+                    true; // catch recibe FatalError* host
+                ir::IrInstr lp{};
+                lp.op = ir::IrOp::LANDINGPAD;
+                lp.type = ir::IrType::PTR;
+                lp.dst = v_exc;
+                lp.source_line = cc.loc.line;
+                fn_->append(current_block_, std::move(lp));
+                bind(cc.var_name, v_exc);
+            }
         }
         // Recargar TODOS los nombres spilled desde su slot DESPUES
         // del bind de la excepcion (para no clobrear r0).  Bindeamos
