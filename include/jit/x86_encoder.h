@@ -84,6 +84,12 @@ class X86Encoder {
     /// valores de 32-bit (i32/u32/ptr32); i64 NO cabe en un reg de 32-bit.
     void set_mode32(bool m) noexcept { mode32_ = m; }
     bool mode32() const noexcept { return mode32_; }
+    /// avx+: emitir los MOVES escalares float (MOVSD/MOVSS/MOVQ GP<->XMM) en VEX
+    /// en vez de legacy SSE, para no mezclar legacy con las ops VEX (arith/cvt/
+    /// etc.) y evitar la penalizacion de transicion.  Switch global de funcion
+    /// (los moves se emiten en cientos de sitios del rewrite; mas limpio que un
+    /// flag por instruccion).  Lo fija el pipeline desde --float-isa.
+    void set_vex_scalar(bool v) noexcept { vex_scalar_ = v; }
 
     /**
      * @brief Codifica @p fn en bytes y los añade a @p out.
@@ -264,6 +270,7 @@ class X86Encoder {
 
     size_t instr_count_ = 0;
     bool mode32_ = false; ///< x86-32 (sin REX); ver set_mode32().
+    bool vex_scalar_ = false; ///< VEX en los moves float escalares; set_vex_scalar.
 };
 
 } // namespace jit

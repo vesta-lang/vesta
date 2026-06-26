@@ -645,6 +645,11 @@ enum class MOp : uint8_t {
     VSUBSS = 154, ///< VSUBSS (VEX.LIG.F3.0F 5C) -- f32 sub
     VMULSS = 155, ///< VMULSS (VEX.LIG.F3.0F 59) -- f32 mul
     VDIVSS = 156, ///< VDIVSS (VEX.LIG.F3.0F 5E) -- f32 div
+    /* VEX 3-op de XORPS/ANDPS (NP.0F 57/54): FNEG/FABS escalar en avx (dst =
+     * src XOR/AND mascara-de-signo).  3-operandos no-destructivo, sin el `mov`
+     * 2-address y sin legacy SSE mezclado con el resto VEX. */
+    VXORPS = 157, ///< VXORPS dst,src1,src2 (VEX.LIG.NP.0F 57) -- fneg
+    VANDPS = 158, ///< VANDPS dst,src1,src2 (VEX.LIG.NP.0F 54) -- fabs
 
     /* Packed FP unarios SSE2 (auto-vectorizacion de loops `b[i] = OP a[i]`):
      * SQRTPD (sqrt por lane), XORPD/ANDPD (fneg/fabs via mascara de signo) y

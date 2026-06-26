@@ -1143,8 +1143,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 O.push_back(
                     MInstr::make_unary(MOp::MOVQ_GP_XMM, vrt(xm), vr(gpm)));
                 /* dst = src (XOR|AND) mask (forma 3-op; el rewrite legaliza). */
-                O.push_back(MInstr::make_binary(is_abs ? MOp::ANDPS : MOp::XORPS,
-                                                vrt(in.dst),
+                // avx: VEX 3-op (VXORPS/VANDPS) -> sin legacy SSE mezclado.
+                const MOp maskop =
+                    vex_scalar ? (is_abs ? MOp::VANDPS : MOp::VXORPS)
+                               : (is_abs ? MOp::ANDPS : MOp::XORPS);
+                O.push_back(MInstr::make_binary(maskop, vrt(in.dst),
                                                 vrt(in.operands[0]), vrt(xm)));
                 break;
             }

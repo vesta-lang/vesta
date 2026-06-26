@@ -162,6 +162,8 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::VSUBSS:
     case MOp::VMULSS:
     case MOp::VDIVSS:
+    case MOp::VXORPS:
+    case MOp::VANDPS:
         r.dst = R::DEF;
         r.src1 = R::USE;
         r.src2 = R::USE;
