@@ -43,6 +43,12 @@
 #include "cli/runtime_api_commands.h"
 #include "util/assembler_multiprocess.h"
 #include "vex/compiler.h"
+// Forward-decl (evita incluir vex/parser.h, que arrastra cabeceras Windows que
+// desbalancean el push/pop_macro(VOID) de ssa_ir.h).  @Target target-aware AOT.
+namespace vex {
+void set_aot_condcomp_target(const std::string &os,
+                             const std::string &arch) noexcept;
+}
 #include "vex/comptime_vm.h"    /* Phase MC.4 probe del ComptimeRuntime */
 #include "vex/project_cache.h"  /* Phase M5.B project-level cache */
 #include "vex/velb_signature.h" /* Phase M.L28: firmas digitales */
@@ -695,6 +701,27 @@ int main(int argc, char *argv[]) {
             // Modo AOT: no se ejecuta nada en la VM; el JIT runtime queda off.
             aot_mode = true;
             jit::set_jit_threshold(UINT32_MAX);
+            // @Target target-aware: los atomos os:/arch: de @Target se evaluan
+            // contra el TARGET del binario AOT (cross-compile), no el host de
+            // build, para que las variantes por plataforma del runtime/usuario
+            // se seleccionen segun --format / --aot-arch.
+            std::string fmt_s;
+            if (result.count("format"))
+                fmt_s = result["format"].as<std::string>();
+            else
+#if defined(_WIN32)
+                fmt_s = "pe";
+#else
+                fmt_s = "elf";
+#endif
+            const std::string arch_s =
+                result.count("aot-arch")
+                    ? result["aot-arch"].as<std::string>()
+                    : std::string("x86-64");
+            const bool is32 = (arch_s == "x86-32" || arch_s == "x86_32" ||
+                               arch_s == "i386");
+            vex::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
+                                         is32 ? "x86" : "x86_64");
         }
     } else {
         /* Sin flags CLI explicitos -> consultar env var ahora.  Lo
