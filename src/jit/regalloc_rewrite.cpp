@@ -701,7 +701,10 @@ struct Lowerer {
          * reg-reg-mem = load-and-op); dst reg (fscr0 + store si spilled). */
         if (op == MOp::VADDSD || op == MOp::VSUBSD || op == MOp::VMULSD ||
             op == MOp::VDIVSD || op == MOp::VADDSS || op == MOp::VSUBSS ||
-            op == MOp::VMULSS || op == MOp::VDIVSS) {
+            op == MOp::VMULSS || op == MOp::VDIVSS || op == MOp::VXORPS ||
+            op == MOp::VANDPS) {
+            // VXORPS/VANDPS (fneg/fabs): MOVSD (8B) cubre f64 y f32 (la mascara
+            // de signo tiene los bits altos a 0 -> XOR/AND no los altera).
             const bool is_ss = (op == MOp::VADDSS || op == MOp::VSUBSS ||
                                 op == MOp::VMULSS || op == MOp::VDIVSS);
             const MOp mv = is_ss ? MOp::MOVSS : MOp::MOVSD;

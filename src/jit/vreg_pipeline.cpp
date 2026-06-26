@@ -162,6 +162,8 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
      */
     X86Encoder enc;
     enc.set_mode32(mode32);
+    // avx+: MOVES escalares float en VEX (no mezclar con las ops VEX).
+    enc.set_vex_scalar(fisa == FloatIsa::AVX || fisa == FloatIsa::AVX512F);
     std::vector<uint8_t> bytes;
     if (enc.encode(pf, bytes) == 0 || bytes.empty()) return {};
 

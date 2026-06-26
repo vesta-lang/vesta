@@ -24,10 +24,13 @@ PROG="examples_codes_vex/182_vectorize_elementwise.vex"
 [ -f "$BUILD/avxf.o" ] || { echo "FALLO: no se genero el .o avx"; rm -rf "$WORK"; exit 1; }
 cp "$BUILD/avxf.o" "$WORK/f.o"; rm -f "$BUILD/avxf.o"
 
-leg=$(objdump -d "$WORK/f.o" 2>/dev/null | grep -coiE '\baddsd|\bsubsd|\bmulsd|\bdivsd|\bcvtsi2sd|\bcvttsd2si')
+# CERO legacy SSE float escalar: arith + cvt + cmp + sqrt + neg/abs + MOVES
+# (movsd/movss/movq) -> todo VEX, sin mezcla -> sin penalizacion de transicion.
+# \b evita matchear las VEX (vmovq/vmovsd... empiezan por 'v', sin word-boundary).
+leg=$(objdump -d "$WORK/f.o" 2>/dev/null | grep -coiE '\baddsd|\bsubsd|\bmulsd|\bdivsd|\baddss|\bsubss|\bmulss|\bdivss|\bcvtsi2sd|\bcvttsd2si|\bcvtsi2ss|\bcvttss2si|\bcvtss2sd|\bcvtsd2ss|\bucomisd|\bucomiss|\bsqrtsd|\bsqrtss|\bxorps|\bandps|\bmovsd|\bmovss|\bmovq')
 bad=$(objdump -d "$WORK/f.o" 2>/dev/null | grep -coiE '\(bad\)')
 if [ "$leg" = "0" ] && [ "$bad" = "0" ]; then
-  echo "AVX-FULL: 0 escalar legacy, 0 bad-bytes OK (VEX limpio, sin mezcla)"
+  echo "AVX-FULL: 0 escalar legacy (arith/cvt/cmp/sqrt/neg/moves), 0 bad OK"
 else
   echo "AVX-FULL: FALLO legacy=$leg bad=$bad (esperado 0/0)"; rc=1
 fi
