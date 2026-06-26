@@ -995,9 +995,18 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
 
     // ======== Emitir: acumulador vectorial + reduccion horizontal + cola.
     // El ancho del acumulador vectorial lo elige la ISA (16/32/64 = W lanes).
+    // UNROLL: U acumuladores INDEPENDIENTES (XMM10-13 reservados) -> oculta la
+    // latencia de la cadena vaddpd.  El bucle desenrollado procesa U*W elems/iter
+    // acumulando en acc0..acc{U-1}; al final se combinan en acc0 y el bucle
+    // W-granular existente sirve de remainder.
     const uint32_t ln = s->loc.line;
     const uint64_t width = jit::vec_isa_width(jit::vec_chunk_isa());
     const uint64_t W = width / esz;     // lanes segun ancho/tipo
+    const uint64_t U = 4;               // acumuladores (XMM13,12,11,10)
+    // imm de las VEC_ACC ops: ancho | acc_idx<<8 | src_idx<<12.
+    auto acc_imm = [&](uint8_t aidx, uint8_t sidx) -> uint64_t {
+        return width | ((uint64_t)aidx << 8) | ((uint64_t)sidx << 12);
+    };
 
     // acc_init = valor f64 de acc ANTES del loop (binding SSA plano).
     const ir::IrValueId acc_init = lookup(acc_name);
@@ -1048,6 +1057,9 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     };
 
     const ir::IrBlockId entry = current_block_;
+    const ir::IrBlockId uhdr = fn_->new_block("vred_unroll_hdr");
+    const ir::IrBlockId ubody = fn_->new_block("vred_unroll_body");
+    const ir::IrBlockId comb = fn_->new_block("vred_combine");
     const ir::IrBlockId mhdr = fn_->new_block("vred_main_hdr");
     const ir::IrBlockId mbody = fn_->new_block("vred_main_body");
     const ir::IrBlockId redb = fn_->new_block("vred_reduce");
@@ -1055,39 +1067,105 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrBlockId tbody = fn_->new_block("vred_tail_body");
     const ir::IrBlockId exit = fn_->new_block("vred_exit");
 
-    // --- entry: acc_slot host `width` bytes = {0..}; consts; BR mhdr ---
+    // --- entry: acc_slot host U*width bytes; zero U accs; BR uhdr ---
     current_block_ = entry;
     const ir::IrValueId acc_slot = fn_->new_value(ir::IrType::PTR);
     fn_->values[acc_slot].is_host_ptr = true;
     {
         ir::IrInstr al{}; al.op = ir::IrOp::ALLOCA; al.type = ir::IrType::I8;
-        al.dst = acc_slot; al.imm = static_cast<int64_t>(width);
+        al.dst = acc_slot; al.imm = static_cast<int64_t>(U * width);
         al.host_alloca = true;
         al.source_line = ln; fn_->append(entry, std::move(al));
     }
-    // VEC_ACC_ZERO: pone a 0 el acumulador vectorial (XMM dedicado en el JIT;
-    // los `width` bytes del slot en el interprete).  Reemplaza el zero-init
-    // manual y prepara el acumulador REGISTER-RESIDENT.
-    {
+    for (uint8_t u = 0; u < U; ++u) {
         ir::IrInstr az{}; az.op = ir::IrOp::VEC_ACC_ZERO; az.type = elem_ty;
         az.dst = ir::IR_NO_VALUE; az.operands = {acc_slot};
-        az.imm = width; az.source_line = ln;
+        az.imm = acc_imm(u, 0); az.source_line = ln;
         fn_->append(entry, std::move(az));
     }
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
+    const ir::IrValueId v_UW = emit_const(idx_ty, (uint64_t)(U * W), ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = uhdr;
       br.source_line = ln; fn_->append(entry, std::move(br)); }
-    fn_->blocks[entry].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(entry);
+    fn_->blocks[entry].succs.push_back(uhdr);
+    fn_->blocks[uhdr].preds.push_back(entry);
 
-    // --- mhdr: PHI i; cond (i+W)<=N -> mbody|redb ---
+    // --- uhdr: PHI i; cond (i + U*W) <= N -> ubody | comb ---
+    current_block_ = uhdr;
+    const ir::IrValueId phi_iu = fn_->new_value(idx_ty);
+    {
+        ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
+        phi.dst = phi_iu; phi.source_line = ln;
+        phi.phi_args.push_back({i_init, entry});
+        fn_->append(uhdr, std::move(phi));
+    }
+    const ir::IrValueId v_iuUW = bin(ir::IrOp::ADD, idx_ty, phi_iu, v_UW);
+    const ir::IrValueId cond_u =
+        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_iuUW, v_N);
+    {
+        ir::IrInstr brc{}; brc.op = ir::IrOp::BR_COND; brc.operands = {cond_u};
+        brc.target_block = ubody; brc.false_block = comb; brc.source_line = ln;
+        fn_->append(uhdr, std::move(brc));
+    }
+    fn_->blocks[uhdr].succs.push_back(ubody);
+    fn_->blocks[uhdr].succs.push_back(comb);
+    fn_->blocks[ubody].preds.push_back(uhdr);
+    fn_->blocks[comb].preds.push_back(uhdr);
+
+    // emite un VEC_ACC_ADD/FMA(acc_idx, a[i+idx*W]) en current_block_.
+    auto emit_acc_step = [&](uint8_t aidx, ir::IrValueId iexpr) {
+        const ir::IrValueId i64 =
+            cast_if_needed(iexpr, idx_ty, ir::IrType::I64, ln);
+        const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64, v_esz);
+        const ir::IrValueId a_at = ptr_at(v_a, off);
+        ir::IrInstr v{}; v.type = elem_ty; v.dst = ir::IR_NO_VALUE;
+        v.imm = acc_imm(aidx, 0); v.source_line = ln;
+        if (is_fma) {
+            const ir::IrValueId b_at = ptr_at(v_b, off);
+            v.op = ir::IrOp::VEC_ACC_FMA; v.operands = {acc_slot, a_at, b_at};
+        } else {
+            v.op = ir::IrOp::VEC_ACC_ADD; v.operands = {acc_slot, a_at};
+        }
+        fn_->append(current_block_, std::move(v));
+    };
+
+    // --- ubody: acc_u += a[i + u*W] para u=0..U-1; i += U*W; BR uhdr ---
+    current_block_ = ubody;
+    for (uint8_t u = 0; u < U; ++u) {
+        const ir::IrValueId iu = (u == 0)
+            ? phi_iu
+            : bin(ir::IrOp::ADD, idx_ty, phi_iu,
+                  emit_const(idx_ty, (uint64_t)(u * W), ln));
+        emit_acc_step(u, iu);
+    }
+    const ir::IrValueId i_unext = bin(ir::IrOp::ADD, idx_ty, phi_iu, v_UW);
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = uhdr;
+      br.source_line = ln; fn_->append(current_block_, std::move(br)); }
+    fn_->blocks[ubody].succs.push_back(uhdr);
+    fn_->blocks[uhdr].preds.push_back(ubody);
+    fn_->blocks[uhdr].instrs[0].phi_args.push_back({i_unext, ubody});
+
+    // --- comb: acc0 += acc_u (u=1..U-1); BR mhdr ---
+    current_block_ = comb;
+    for (uint8_t u = 1; u < U; ++u) {
+        ir::IrInstr c{}; c.op = ir::IrOp::VEC_ACC_COMBINE; c.type = elem_ty;
+        c.dst = ir::IR_NO_VALUE; c.operands = {acc_slot};
+        c.imm = acc_imm(0, u); c.source_line = ln; // acc0 += acc_u
+        fn_->append(comb, std::move(c));
+    }
+    { ir::IrInstr br{}; br.op = ir::IrOp::BR; br.target_block = mhdr;
+      br.source_line = ln; fn_->append(comb, std::move(br)); }
+    fn_->blocks[comb].succs.push_back(mhdr);
+    fn_->blocks[mhdr].preds.push_back(comb);
+
+    // --- mhdr: PHI i (desde comb); cond (i+W)<=N -> mbody|redb (remainder) ---
     current_block_ = mhdr;
     const ir::IrValueId phi_im = fn_->new_value(idx_ty);
     {
         ir::IrInstr phi{}; phi.op = ir::IrOp::PHI; phi.type = idx_ty;
         phi.dst = phi_im; phi.source_line = ln;
-        phi.phi_args.push_back({i_init, entry});
+        phi.phi_args.push_back({phi_iu, comb}); // i continua tras el unroll
         fn_->append(mhdr, std::move(phi));
     }
     const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);

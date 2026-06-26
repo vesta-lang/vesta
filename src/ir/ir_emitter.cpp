@@ -3155,10 +3155,12 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::VEC_ACC_ZERO: {
         if (ins.operands.empty()) break;
         const uint64_t width = ins.imm & 0xFF;
+        const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width; // sub-slot idx
         ctx.out << "    push r10\n";
         { const std::string p = ctx.load_src(ins.operands[0], 0);
           ctx.out << "    push " << p << "\n"; }
         ctx.out << "    pop r10\n";
+        if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n";
         ctx.out << "    mov r14, 0\n";
         for (uint64_t q = 0; q < width; q += 8) {
             if (q > 0) ctx.out << "    addu r10, 8\n";
@@ -3192,6 +3194,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             ctx.out << "    pop r12\n";
         }
         ctx.out << "    pop r11\n    pop r10\n"; // a, acc
+        { const uint64_t acc_off = ((ins.imm >> 8) & 0xF) * width;
+          if (acc_off) ctx.out << "    addu r10, " << acc_off << "\n"; }
         for (uint64_t k = 0; k < W; ++k) {
             if (k > 0) {
                 ctx.out << "    addu r10, " << esz << "\n";
@@ -3225,8 +3229,52 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         ctx.r14_cache = -1;
         break;
     }
+    case IrOp::VEC_ACC_COMBINE: {
+        // acc[dst] += acc[src] por lane, sobre sub-slots de memoria del slot.
+        if (ins.operands.empty()) break;
+        const uint64_t width = ins.imm & 0xFF;
+        const size_t esz = ir_type_size(ins.type);
+        if (esz == 0) break;
+        const uint64_t W = width / esz;
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
+        const std::string rsz = (esz == 4) ? "d" : "";
+        const uint64_t dst_off = ((ins.imm >> 8) & 0xF) * width;
+        const uint64_t src_off = ((ins.imm >> 12) & 0xF) * width;
+        ctx.out << "    push r10\n    push r11\n";
+        { const std::string p = ctx.load_src(ins.operands[0], 0);
+          ctx.out << "    push " << p << "\n    push " << p << "\n"; }
+        ctx.out << "    pop r10\n    pop r11\n"; // ambos = slot base
+        if (dst_off) ctx.out << "    addu r10, " << dst_off << "\n"; // dst
+        if (src_off) ctx.out << "    addu r11, " << src_off << "\n"; // src
+        for (uint64_t k = 0; k < W; ++k) {
+            if (k > 0) {
+                ctx.out << "    addu r10, " << esz << "\n";
+                ctx.out << "    addu r11, " << esz << "\n";
+            }
+            if (is_fp) {
+                ctx.out << "    movh r14" << rsz << ", [r10]\n";
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    movh r13" << rsz << ", [r11]\n";
+                ctx.out << "    bitg2z f1, r13\n";
+                ctx.out << "    fadd" << suf << " f0, f1\n";
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n";
+            } else {
+                ctx.out << "    movh r14" << rsz << ", [r10]\n";
+                ctx.out << "    movh r13" << rsz << ", [r11]\n";
+                ctx.out << "    adds r14, r13\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n";
+            }
+        }
+        ctx.out << "    pop r11\n    pop r10\n";
+        ctx.r13_cache = -1;
+        ctx.r14_cache = -1;
+        break;
+    }
     case IrOp::VEC_ACC_STORE:
-        // no-op en el interprete: el acc ya vive en el slot de memoria.
+        // no-op en el interprete: el acc[0] ya vive en el sub-slot 0.
         break;
 
     // --- OOP / GC ---
