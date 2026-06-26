@@ -258,6 +258,17 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
+                               : (mi.op == MOp::MINSD) ? 0x5D
+                                                       : 0x5F;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VSQRTSD/VMINSD/VMAXSD xmm, xmm(vvvv=dst), xmm: VEX.LIG.F2.0F op. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/3);
+            put8(out, opcode);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF2);
         /* REX solo si alguno >= 8.  REX.W no necesario para SSE. */
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
@@ -266,9 +277,6 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
             put8(out, 0x40 | (rex_R << 2) | rex_B);
         }
         put8(out, 0x0F);
-        const uint8_t opcode = (mi.op == MOp::SQRTSD)  ? 0x51
-                               : (mi.op == MOp::MINSD) ? 0x5D
-                                                       : 0x5F;
         put8(out, opcode);
         put8(out, modrm(3, xd & 7, xs & 7));
         return true;
@@ -499,6 +507,15 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t gp = static_cast<uint8_t>(mi.src1.reg);
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSI2SD xmm, xmm(vvvv=dst), r64: VEX.LIG.F2.0F.W1 2A.  El vvvv
+             * (merge de bits altos) = dst; solo usamos el f64 bajo. */
+            emit_vex3(xd, gp, xd, /*w=*/1, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/3);
+            put8(out, 0x2A);
+            put8(out, modrm(3, xd & 7, gp & 7));
+            return true;
+        }
         put8(out, 0xF2);
         put_rex(out, true, xd, gp);
         put8(out, 0x0F);
@@ -516,6 +533,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t gp = static_cast<uint8_t>(mi.dst.reg);
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTTSD2SI r64, xmm: VEX.LIG.F2.0F.W1 2C, vvvv=1111 (sin merge). */
+            emit_vex3(gp, xs, VEX_NO_VVVV, /*w=*/1, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/3);
+            put8(out, 0x2C);
+            put8(out, modrm(3, gp & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF2);
         put_rex(out, true, gp, xs);
         put8(out, 0x0F);
@@ -533,6 +558,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSS2SD xmm, xmm(vvvv=dst), xmm: VEX.LIG.F3.0F 5A. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/2);
+            put8(out, 0x5A);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF3);
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
         const uint8_t rex_B = (xs >= 8) ? 1 : 0;
@@ -554,6 +587,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xd = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xs = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VCVTSD2SS xmm, xmm(vvvv=dst), xmm: VEX.LIG.F2.0F 5A. */
+            emit_vex3(xd, xs, xd, /*w=*/0, /*l256=*/false, 0, false, out,
+                      /*map=*/1, /*pp=*/3);
+            put8(out, 0x5A);
+            put8(out, modrm(3, xd & 7, xs & 7));
+            return true;
+        }
         put8(out, 0xF2);
         const uint8_t rex_R = (xd >= 8) ? 1 : 0;
         const uint8_t rex_B = (xs >= 8) ? 1 : 0;
@@ -575,6 +616,14 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         }
         const uint8_t xa = static_cast<uint8_t>(mi.dst.reg) - 16;
         const uint8_t xb = static_cast<uint8_t>(mi.src1.reg) - 16;
+        if (mi.flags & MI_FLAG_VEX_SCALAR) {
+            /* VUCOMISD xmm, xmm: VEX.LIG.66.0F 2E, vvvv=1111 (sin merge). */
+            emit_vex3(xa, xb, VEX_NO_VVVV, /*w=*/0, /*l256=*/false, 0, false,
+                      out, /*map=*/1, /*pp=*/1);
+            put8(out, 0x2E);
+            put8(out, modrm(3, xa & 7, xb & 7));
+            return true;
+        }
         put8(out, 0x66);
         const uint8_t rex_R = (xa >= 8) ? 1 : 0;
         const uint8_t rex_B = (xb >= 8) ? 1 : 0;
