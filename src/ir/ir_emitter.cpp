@@ -3179,6 +3179,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const uint64_t W = width / esz;
         const std::string suf = (ins.type == IrType::F32) ? ".ps" : "";
         const std::string rsz = (esz == 4) ? "d" : "";
+        const bool is_fp =
+            (ins.type == IrType::F64 || ins.type == IrType::F32);
         ctx.out << "    push r10\n    push r11\n    push r12\n";
         { const std::string p = ctx.load_src(ins.operands[0], 0); // acc slot
           ctx.out << "    push " << p << "\n"; }
@@ -3196,19 +3198,27 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 ctx.out << "    addu r11, " << esz << "\n";
                 if (is_fma) ctx.out << "    addu r12, " << esz << "\n";
             }
-            ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
-            ctx.out << "    bitg2z f0, r14\n";
-            ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
-            ctx.out << "    bitg2z f1, r13\n";
-            if (is_fma) {
-                ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
-                ctx.out << "    bitg2z f2, r14\n";
-                ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // acc += a*b
+            if (is_fp) {
+                ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    bitg2z f0, r14\n";
+                ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    bitg2z f1, r13\n";
+                if (is_fma) {
+                    ctx.out << "    movh r14" << rsz << ", [r12]\n"; // b[k]
+                    ctx.out << "    bitg2z f2, r14\n";
+                    ctx.out << "    fmadd" << suf << " f0, f1, f2\n"; // += a*b
+                } else {
+                    ctx.out << "    fadd" << suf << " f0, f1\n"; // += a
+                }
+                ctx.out << "    bitz2g r14, f0\n";
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
             } else {
-                ctx.out << "    fadd" << suf << " f0, f1\n"; // acc += a
+                // entero (solo ADD; FMA es float-only): acc[k] += a[k].
+                ctx.out << "    movh r14" << rsz << ", [r10]\n"; // acc[k]
+                ctx.out << "    movh r13" << rsz << ", [r11]\n"; // a[k]
+                ctx.out << "    adds r14, r13\n";                // 64b add
+                ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
             }
-            ctx.out << "    bitz2g r14, f0\n";
-            ctx.out << "    movh [r10], r14" << rsz << "\n"; // acc[k]
         }
         ctx.out << "    pop r12\n    pop r11\n    pop r10\n";
         ctx.r13_cache = -1;
