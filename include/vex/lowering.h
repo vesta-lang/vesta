@@ -1144,6 +1144,17 @@ class Lowering {
     // --- Helpers de operaciones sobre cadenas (StringObject) ---
     ir::IrValueId emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
                                uint32_t source_line);
+    /// Construye un `string` desde un literal (addr+len) eligiendo el repr
+    /// segun el tier: value-string nativo (AOT, PURE_NATIVE, SSO) en
+    /// native_poo_, o STRMAKE (GcHandle, Full/JIT/interp) en otro caso.  Usado
+    /// por los builtins de introspeccion comptime (typename/underlying_of/...)
+    /// que antes emitian STRMAKE incondicional -> RUNTIME_DEPENDENT en AOT.
+    /// @p known_len = longitud compile-time (>=0) o -1 si solo se sabe en
+    /// runtime (el value-string decide SSO/heap con una rama).
+    ir::IrValueId emit_string_literal_repr(ir::IrValueId v_addr,
+                                           ir::IrValueId v_len,
+                                           int64_t known_len,
+                                           uint32_t source_line);
     ir::IrValueId emit_strcat(ir::IrValueId v_a, ir::IrValueId v_b,
                               uint32_t source_line);
     ir::IrValueId emit_strraw(ir::IrValueId v_str, uint32_t source_line);
