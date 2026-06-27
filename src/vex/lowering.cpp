@@ -20155,22 +20155,73 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     }
 
     // ----- move(p) -----  transfer ownership.
-    // El destino de move es el LHS del var-decl o de la asignacion;
-    // este builtin SOLO marca el SSA value como "consumed".  El
-    // codigo del mvtake real se emite en lower_var_decl cuando ve
-    // que el init es CallExpr(move(...)).  Aqui devolvemos el slot
-    // del origen tal cual: el lower_var_decl tomara responsabilidad
-    // de emitir mvtake y zerificar el slot del origen.
+    // Cuando `move(p)` es el init DIRECTO de un var-decl, lo maneja
+    // lower_var_decl (emite mvtake al slot del var + zerifica el origen) y
+    // NUNCA llega aqui.  Pero `move(p)` tambien aparece como ARGUMENTO de
+    // funcion (`consume(move(data))`), en una asignacion o en un return.  En
+    // esos casos DEBEMOS emitir el mvtake a un TEMPORAL aqui mismo, o el slot
+    // origen NO se zerifica -> tanto el origen como el destino liberan el
+    // MISMO box -> doble-free (en GC/interp es no-op, en native abort).
+    //
+    // Replicamos la logica del var-decl: ALLOCA temporal + mvtake [tmp+0]<-
+    // [src+0] (+ [tmp+8]<-[src+8] para unique<T>), que MUEVE el contenido y
+    // ZERIFICA el origen.  Devolvemos el temporal (el call lee tmp[0] = box).
     if (is_move) {
         if (e->args.size() != 1) {
             error_at(e->loc, "move: requiere 1 argumento");
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        const ir::IrValueId v_arg = lower_expr(e->args[0].get());
-        // No emitimos mvtake aqui; lower_var_decl detecta el patron
-        // CallExpr(move(...)) y emite la secuencia correcta.
-        out_value = v_arg;
+        const ir::IrValueId v_src = lower_expr(e->args[0].get());
+        if (v_src == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
+        // shared<T>: slot = 8 bytes (ctrl_block_ptr).
+        const bool is_unique =
+            (e->args[0]->result_type.kind == PrimitiveKind::UNIQUE_PTR);
+        const uint32_t slot_bytes = is_unique ? 16 : 8;
+        const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_tmp;
+            al.imm = slot_bytes;
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        // mvtake [tmp+0] <- [src+0]  (mueve el box-ptr + zerifica origen).
+        emit_mvtake(v_tmp, v_src, e->loc.line);
+        if (slot_bytes == 16) {
+            // Segundo qword: deleter.
+            const ir::IrValueId v_eight =
+                emit_const(ir::IrType::I64, 8, e->loc.line);
+            const ir::IrValueId v_tmp8 = fn_->new_value(ir::IrType::PTR);
+            const ir::IrValueId v_src8 = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr add{};
+                add.op = ir::IrOp::ADD;
+                add.type = ir::IrType::I64;
+                add.dst = v_tmp8;
+                add.operands = {v_tmp, v_eight};
+                add.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(add));
+            }
+            {
+                ir::IrInstr add{};
+                add.op = ir::IrOp::ADD;
+                add.type = ir::IrType::I64;
+                add.dst = v_src8;
+                add.operands = {v_src, v_eight};
+                add.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(add));
+            }
+            emit_mvtake(v_tmp8, v_src8, e->loc.line);
+        }
+        fn_->values[v_tmp].pointee_is_host_ptr = true;
+        out_value = v_tmp;
         return true;
     }
 

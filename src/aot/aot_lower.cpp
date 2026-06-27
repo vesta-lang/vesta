@@ -43,17 +43,36 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                     break;
 
                 case ir::IrOp::RAW_FREE: {
-                    // raw_free %ptr  ->  call free(%ptr), salvo que %ptr
-                    // provenga de un ALLOCA (pila): entonces NOP (no se
-                    // libera la pila; liberar seria un dangling/crash).
-                    bool is_stack = false;
+                    // raw_free %ptr  ->  call free(%ptr), salvo que %ptr:
+                    //   (a) provenga de un ALLOCA (pila): NOP (liberar pila =
+                    //       dangling/crash);
+                    //   (b) sea un valor COLGANTE -- sin definicion en la fn y
+                    //       que NO es un parametro.  Esto pasa cuando un pase
+                    //       (scalar-replace / dead-alloc-elim) ELIMINA el objeto
+                    //       pero deja su `raw_free` referenciando un SSA value
+                    //       ya inexistente.  El interp/JIT/PE lo toleran, pero
+                    //       `free()` de libc aborta ("invalid pointer", visto en
+                    //       callvirt_hot via gcc).  NOPearlo es correcto: el
+                    //       objeto ya no existe, no hay nada que liberar.
+                    bool nop = in.operands.empty();
                     if (!in.operands.empty()) {
-                        auto it = def_op.find(in.operands[0]);
-                        if (it != def_op.end() &&
-                            it->second == ir::IrOp::ALLOCA)
-                            is_stack = true;
+                        const ir::IrValueId p = in.operands[0];
+                        auto it = def_op.find(p);
+                        if (it != def_op.end()) {
+                            if (it->second == ir::IrOp::ALLOCA) nop = true;
+                        } else {
+                            // sin def: param (heap legitimo pasado) -> free;
+                            // colgante (objeto eliminado) -> NOP.
+                            bool is_param = false;
+                            for (ir::IrValueId pv : fn.params)
+                                if (pv == p) {
+                                    is_param = true;
+                                    break;
+                                }
+                            if (!is_param) nop = true;
+                        }
                     }
-                    if (is_stack) {
+                    if (nop) {
                         in.op = ir::IrOp::NOP;
                         in.operands.clear();
                         in.func_name.clear();
