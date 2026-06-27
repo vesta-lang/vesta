@@ -61,6 +61,20 @@ uint8_t *vex_gc_deref(uint32_t handle);
 void vex_gc_collect(void);
 
 /**
+ * @brief Pinna un handle como raiz externa (refcount): no se colecta mientras
+ *        este pinnado.  Usado para raices que el GC no ve via stackmaps
+ *        (globals nativos, estructuras host) y en tests.
+ * @param handle GcHandle a pinnar.
+ */
+void vex_gc_pin(uint32_t handle);
+
+/**
+ * @brief Quita un pin de raiz externa (decrementa el refcount).
+ * @param handle GcHandle a despinnar.
+ */
+void vex_gc_unpin(uint32_t handle);
+
+/**
  * @brief Numero de handles vivos (introspeccion/diagnostico).
  * @return Cantidad de objetos GC actualmente vivos.
  */
