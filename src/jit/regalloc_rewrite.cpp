@@ -233,7 +233,7 @@ struct Lowerer {
 
     Lowerer(const RegAlloc &r, const TargetRegInfo &t, AbiKind abi,
             bool has_calls, uint32_t alloca_total, bool has_vm_alloca_in,
-            uint32_t out_stack_args_in = 0)
+            uint32_t out_stack_args_in = 0, bool has_stack_params_in = false)
         : ra(r), tri(t), vm_abi(abi == AbiKind::VM),
           has_vm_alloca(has_vm_alloca_in), out_stack_args(out_stack_args_in) {
         SZ = t.pointer_size ? t.pointer_size : 8u;
@@ -251,6 +251,8 @@ struct Lowerer {
          * los callee-saved usados; lo unico que desaparece es RBP. */
         no_frame = !has_calls && ra.num_spill_slots == 0u &&
                    alloca_total == 0u && !has_vm_alloca &&
+                   !has_stack_params_in && /* params en pila -> [rbp+off]
+                  necesita el frame pointer estable (push rbp; mov rbp,rsp). */
                    !jit_no_frameless() &&
                    !jit_osr_count(); /* el trigger (1b) añade un
                   call -> necesita frame con rsp 16-alineado. */
@@ -1701,8 +1703,15 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
             }
         }
     }
+    /* Incoming stack-params (callee): si hay mas params que arg_regs GP, los de
+     * overflow llegan en la pila ([rbp+off]) -> hay que FORZAR el frame pointer
+     * (no_frame=false) para que rbp sea estable.  Conservador (cuenta total de
+     * params): un falso positivo solo reserva un frame de mas, nunca corrompe. */
+    const bool has_stack_params =
+        vf.param_vregs.size() >
+        tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
     Lowerer lw(ra, tri, abi, has_calls, alloca_total, has_vm_alloca,
-               max_stack_args);
+               max_stack_args, has_stack_params);
     lw.naked = vf.naked; // Phase NR @Naked: sin prologo/epilogo/ret
     lw.ivs = ivs; // commit 6: para construir stackmaps en CALLs
     MFunction pf;
