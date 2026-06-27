@@ -368,6 +368,10 @@ int main(int argc, char *argv[]) {
             "AOT (-m aot): DESACTIVA el mecanismo de excepciones nativo "
             "(setjmp/longjmp).  Un try/catch/throw da error.  Para "
             "kernels/freestanding sin runtime de excepciones.")(
+            "no-io",
+            "AOT (-m aot): NO auto-incluye el runtime de I/O "
+            "(stdlib/vex/vex_io.vex).  El usuario aporta __vex_write y los "
+            "__vex_print_* (p.ej. enlazar vesta_io_bare.o, o freestanding).")(
             "format",
             "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
             "Windows, ELF en el resto).",
@@ -681,6 +685,7 @@ int main(int argc, char *argv[]) {
     aot::Tier aot_tier = aot::Tier::BARE;
     bool aot_freestanding = result.count("freestanding") > 0;
     bool aot_no_exceptions = result.count("no-exceptions") > 0;
+    bool aot_no_io = result.count("no-io") > 0;
     {
         const std::string &tname = result["target"].as<std::string>();
         if (tname == "bare")
@@ -2435,6 +2440,137 @@ int main(int argc, char *argv[]) {
                 }
             }
 
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vex).
+            // Si el modulo usa print/println, el lowering native_poo emite
+            // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de
+            // exigir enlazar vesta_io_bare.o (libc/printf), fusionamos un
+            // runtime Vex puro que escribe via FFI a write/_write (fd 1, sin
+            // printf -> mas rapido) y formatea los numeros en Vex.  Tras el
+            // merge reescribimos esas CALLN a CALL plano (__vex_*) -> resuelven
+            // a las funciones bundle-adas (no quedan como import externo).  El
+            // usuario puede REDEFINIR cualquier __vex_* en su modulo: si lo
+            // hace, el lowering ya emitio CALL a la suya y no detectamos la
+            // CALLN -> no se bundle-a.  Removible con --freestanding (el
+            // usuario aporta los __vex_*) o --no-io.
+            // ----------------------------------------------------------------
+            if (!aot_no_io && !aot_freestanding) {
+                const std::string io_pfx = "vex_bare_io:";
+                bool uses_io = false, defines_io = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_write") defines_io = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALLN &&
+                                ins.func_name.rfind(io_pfx, 0) == 0)
+                                uses_io = true;
+                }
+                if (uses_io && !defines_io) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_io.vex",
+                        exe_dir + "/../stdlib/vex/vex_io.vex",
+                        "stdlib/vex/vex_io.vex"};
+                    std::string io_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            io_path = c;
+                            break;
+                        }
+                    if (io_path.empty()) {
+                        std::cerr << "[aot] usa print/println pero no encuentro "
+                                     "stdlib/vex/vex_io.vex (enlazalo a mano o "
+                                     "compila con --freestanding y aporta "
+                                     "__vex_write).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream iof(io_path);
+                    std::string io_src((std::istreambuf_iterator<char>(iof)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions io_opts;
+                    io_opts.module_name = "vex_io";
+                    io_opts.opt_level = 2;
+                    io_opts.native_poo = true;
+                    io_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult io_cr =
+                        vex::compile_vex_source(io_src, io_path, io_opts);
+                    ir::IrModule io_mod;
+                    if (!io_cr.ok || io_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(io_cr.ir_module_cache_bytes,
+                                                   io_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de I/O "
+                                     "vex_io.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    // Merge (mismo patron que vex_exc): remap de STR_LIT_ADDR por
+                    // el offset del static_data + append de funciones nuevas +
+                    // static_data + globals + native_imports (write/_write/abort).
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : io_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(io_mod.static_data));
+                    for (auto &gv : io_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : io_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    // Reescribir CALLN `vex_bare_io:__vex_*` -> CALL `__vex_*`
+                    // (las funciones ahora viven en el modulo; resolucion
+                    // intra-imagen, sin import externo).
+                    for (auto &af : aot_mod.functions)
+                        for (auto &b : af.blocks)
+                            for (auto &ins : b.instrs)
+                                if (ins.op == ir::IrOp::CALLN &&
+                                    ins.func_name.rfind(io_pfx, 0) == 0) {
+                                    ins.op = ir::IrOp::CALL;
+                                    ins.func_name =
+                                        ins.func_name.substr(io_pfx.size());
+                                }
+                    // El I/O es block-buffered: inyectar CALL __vex_flush antes
+                    // de cada RET de main para volcar al salir (el _start nativo
+                    // no corre atexit).  Asi nada se pierde y el buffering vale
+                    // (1 syscall por 4 KiB en vez de 1 por write).
+                    for (auto &af : aot_mod.functions) {
+                        if (af.name != "main") continue;
+                        for (auto &b : af.blocks) {
+                            std::vector<ir::IrInstr> ni;
+                            ni.reserve(b.instrs.size() + 1);
+                            for (auto &ins : b.instrs) {
+                                if (ins.op == ir::IrOp::RET) {
+                                    ir::IrInstr fl{};
+                                    fl.op = ir::IrOp::CALL;
+                                    // type por defecto = VOID (0); evitamos la
+                                    // macro VOID de windef.h (restaurada tras
+                                    // incluir ssa_ir.h).
+                                    fl.dst = ir::IR_NO_VALUE;
+                                    fl.func_name = "__vex_flush";
+                                    fl.source_line = ins.source_line;
+                                    ni.push_back(std::move(fl));
+                                }
+                                ni.push_back(std::move(ins));
+                            }
+                            b.instrs = std::move(ni);
+                        }
+                    }
+                    std::cout << "[aot] runtime de I/O (stdlib/vex/vex_io.vex) "
+                                 "incluido en el objeto.\n";
+                }
+            }
+
             // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
             // analizar/compilar.  Sin esto, una factoria-de-closure inlineada
             // en su caller queda como copia standalone no usada y su GC_ALLOC
@@ -3070,8 +3206,30 @@ int main(int argc, char *argv[]) {
                 // cablear el DLL real desde el CompileResult).  ELF: el campo
                 // se ignora (todo va a libc.so.6 via DT_NEEDED).
                 const bool is_pe = (fmt == aot::ObjFormat::PE);
-                auto dll_for = [is_pe](const std::string &) -> std::string {
-                    return is_pe ? "msvcrt.dll" : "libc.so.6";
+                // DLL real de cada simbolo externo via el mecanismo FFI del
+                // lenguaje: `extern "kernel32.dll" { fn WriteFile(...); }`
+                // registra ("kernel32.dll", "WriteFile") en native_imports (ver
+                // lower_call FFI declarativo).  Construimos symbol -> DLL desde
+                // ahi, en vez de una tabla hardcodeada en el compilador.  PE: si
+                // un simbolo no esta declarado en ningun extern (libc implicito:
+                // malloc/free/abort de msvcrt) -> msvcrt.dll.  ELF: todo va a
+                // libc.so.6 via DT_NEEDED (el SONAME no se usa para resolver).
+                std::unordered_map<std::string, std::string> sym2dll;
+                for (const auto &ni : aot_mod.native_imports) {
+                    // Solo nombres de DLL reales (FFI extern a sistema); las
+                    // libs-plugin (rutas tipo stdlib/native/...) no son DLLs
+                    // resolubles por IAT y en native_poo no llegan a reloc.
+                    if (ni.lib.size() >= 4 &&
+                        (ni.lib.rfind(".dll") == ni.lib.size() - 4 ||
+                         ni.lib.rfind(".DLL") == ni.lib.size() - 4))
+                        sym2dll[ni.name] = ni.lib;
+                }
+                auto dll_for = [is_pe, &sym2dll](const std::string &sym)
+                    -> std::string {
+                    if (!is_pe) return "libc.so.6";
+                    auto it = sym2dll.find(sym);
+                    if (it != sym2dll.end()) return it->second;
+                    return "msvcrt.dll";
                 };
                 for (const std::string &sym : ext_syms) {
                     const uint32_t toff =

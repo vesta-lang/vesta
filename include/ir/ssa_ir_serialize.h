@@ -154,7 +154,8 @@ bool parse_ir_section(const std::vector<uint8_t> &data, size_t offset,
 static constexpr uint32_t IR_MODULE_CACHE_MAGIC =
     0x434D5856U; /* 'V''X''M''C' */
 static constexpr uint16_t IR_MODULE_CACHE_VERSION =
-    8; // v8: + jump_targets por instr (SWITCH_DENSE jump table)
+    9; // v9: + native_imports (lib,name) -> el AOT mapea cada simbolo FFI a su
+       // DLL real (kernel32/user32/...) en vez de asumir msvcrt
 
 /**
  * @brief Serializa el IR de UN modulo COMPLETO para el cache `.vexir`.

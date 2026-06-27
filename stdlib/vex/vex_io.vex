@@ -1,0 +1,293 @@
+// vex_io.vex -- runtime de I/O nativo para Vex AOT (tiers bare/embed) SIN libc
+// de formato.  Auto-bundle: el driver -m aot lo fusiona cuando el modulo usa
+// print/println y no define las primitivas el mismo (mismo patron que
+// vex_exc.vex para excepciones).
+//
+// Solo `__vex_write`/`__vex_flush` tocan el SO; lo hacen via FFI a la I/O de
+// bajo nivel basada en descriptor de fichero (fd 1 = stdout), que la IAT/GOT
+// del linker AOT resuelve contra msvcrt.dll (Windows) o libc.so.6 (POSIX).  Sin
+// `stdout` (FILE*) ni printf: solo write/_write.  Los formateadores numericos
+// estan en Vex puro sobre __vex_write -> portables a cualquier target.
+//
+// El usuario puede REDEFINIR cualquier `__vex_*` en su propio modulo (igual que
+// @AllocatorOverride): si lo define, el lowering llama a SU version y este
+// runtime no se bundle-a (o su simbolo queda sin usar y el dead-elim lo quita).
+
+// --- FFI a la I/O de bajo nivel del SO (resuelta por IAT/GOT) ---------------
+// @Target no aplica a bloques `extern`; declaramos los de AMBAS plataformas sin
+// condicion y el `__vio_raw` @Target'd llama solo al de su plataforma -> el
+// extern no usado lo elimina el dead-strip (no se importa).
+//
+// Windows: WriteFile + GetStdHandle de kernel32 DIRECTO (igual que vesta_io.c),
+// SIN la capa CRT de msvcrt `_write` -> mas rapido y sin dependencia de msvcrt
+// para la salida.  Linux: `write` de libc (ya es un thin syscall stub; el raw
+// `syscall` necesitaria inline-asm AOT, Phase AS).  `abort` (msvcrt/libc) solo
+// se importa si el programa hace panic (dead-strip si no).
+extern "kernel32.dll" {
+    fn GetStdHandle(u32 nStdHandle) -> u64;
+    fn WriteFile(u64 hFile, u8* buf, u32 n, u32* nwritten, u64 overlapped) -> i32;
+}
+extern "libc.so.6" {
+    fn write(i64 fd, u8* buf, u64 len) -> i64;
+}
+extern "msvcrt.dll" {
+    fn abort() -> void;
+}
+
+// --- Sink de stdout con block-buffering -------------------------------------
+// __vio_raw: escritura cruda al SO (la unica parte platform-specific).
+// Windows: GetStdHandle(STD_OUTPUT_HANDLE=-11) cacheado + WriteFile (kernel32).
+u64 __vio_handle = 0;
+@Target("os:windows")
+void __vio_raw(u8* buf, u64 len) {
+    if (len == 0) return;
+    if (__vio_handle == 0) {
+        // STD_OUTPUT_HANDLE = (DWORD)-11 = 0xFFFFFFF5 = 4294967285.
+        __vio_handle = GetStdHandle(4294967285);
+    }
+    // lpNumberOfBytesWritten: WriteFile (overlapped=NULL) exige puntero valido;
+    // un local en pila (su &-address es un host_ptr) sirve.
+    u32 nwritten = 0;
+    WriteFile(__vio_handle, buf, (u32)len, &nwritten, 0);
+}
+@Target("!os:windows")
+void __vio_raw(u8* buf, u64 len) {
+    if (len > 0) write(1, buf, len);
+}
+
+// Buffer de salida (block-buffered como libc para no-tty): acumula y vuelca en
+// UN syscall.  Bate a fwrite/printf de C: sin parseo de formato + 1 syscall por
+// 4 KiB en vez de 1 por write.  El driver -m aot inyecta __vex_flush() antes de
+// cada RET de main (y __vex_panic_null vuelca antes de abortar) -> nada se
+// pierde al salir.
+u8[4096] __vio_buf;
+u64 __vio_pos = 0;
+
+void __vex_flush() {
+    if (__vio_pos > 0) {
+        __vio_raw(&__vio_buf[0], __vio_pos);
+        __vio_pos = 0;
+    }
+}
+
+void __vex_write(u8* buf, u64 len) {
+    if (len == 0) return;
+    // No cabe en lo que resta -> vuelca el buffer actual.
+    if (__vio_pos + len > 4096) {
+        __vex_flush();
+        // Bloque grande: escritura directa (evita el copy byte-a-byte).
+        if (len >= 4096) {
+            __vio_raw(buf, len);
+            return;
+        }
+    }
+    u64 k = 0;
+    while (k < len) {
+        __vio_buf[__vio_pos + k] = buf[k];
+        k = k + 1;
+    }
+    __vio_pos = __vio_pos + len;
+}
+
+// Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).
+void __vex_panic_null() {
+    __vex_write("panic: unwrap de un valor null (Optional/nonnull vacio)\n", 54);
+    __vex_flush(); // vuelca antes de abortar (abort no retorna).
+    abort();
+}
+
+// --- Formateadores numericos (Vex puro sobre __vex_write) -------------------
+
+// Emite `v` en decimal sin signo.  Buffer de 20 digitos (u64 max = 20).
+void __vio_dec_u64(u64 v) {
+    u8[24] buf;
+    if (v == 0) {
+        buf[0] = 48; // '0'
+        __vex_write(&buf[0], 1);
+        return;
+    }
+    i32 i = 24;
+    while (v > 0) {
+        i = i - 1;
+        buf[i] = (u8)(48 + (v % 10)); // '0' + digito
+        v = v / 10;
+    }
+    u64 n = (u64)(24 - i);
+    __vex_write(&buf[i], n);
+}
+
+void __vex_print_u64(u64 v) { __vio_dec_u64(v); }
+
+void __vex_print_i64(i64 v) {
+    if (v < 0) {
+        __vex_write("-", 1);
+        // -v puede desbordar en INT64_MIN; en u64 el complemento es correcto.
+        u64 mag = (u64)(0 - v);
+        __vio_dec_u64(mag);
+    } else {
+        __vio_dec_u64((u64)v);
+    }
+}
+
+// Emite `v` en base `radix` (8/16) sin prefijo.  Digitos 0-9a-f.
+void __vio_base_u64(u64 v, u64 radix) {
+    u8[68] buf;
+    if (v == 0) {
+        buf[0] = 48; // '0'
+        __vex_write(&buf[0], 1);
+        return;
+    }
+    i32 i = 68;
+    while (v > 0) {
+        u64 d = v % radix;
+        i = i - 1;
+        if (d < 10) {
+            buf[i] = (u8)(48 + d); // '0'+d
+        } else {
+            buf[i] = (u8)(87 + d); // 'a'-10 + d = 87 + d
+        }
+        v = v / radix;
+    }
+    u64 n = (u64)(68 - i);
+    __vex_write(&buf[i], n);
+}
+
+void __vex_print_hex(u64 v) {
+    __vex_write("0x", 2);
+    __vio_base_u64(v, 16);
+}
+
+void __vex_print_oct(u64 v) {
+    __vex_write("0o", 2);
+    __vio_base_u64(v, 8);
+}
+
+void __vex_print_ptr(u64 v) {
+    __vex_write("0x", 2);
+    __vio_base_u64(v, 16);
+}
+
+void __vex_print_bin(u64 v) {
+    __vex_write("0b", 2);
+    u8[68] buf;
+    if (v == 0) {
+        buf[0] = 48; // '0'
+        __vex_write(&buf[0], 1);
+        return;
+    }
+    i32 i = 68;
+    while (v > 0) {
+        i = i - 1;
+        buf[i] = (u8)(48 + (v & 1)); // '0' o '1'
+        v = v >> 1;
+    }
+    u64 n = (u64)(68 - i);
+    __vex_write(&buf[i], n);
+}
+
+void __vex_print_bool(u64 v) {
+    if (v != 0) {
+        __vex_write("true", 4);
+    } else {
+        __vex_write("false", 5);
+    }
+}
+
+// Codepoint Unicode -> UTF-8 (1..4 bytes).
+void __vex_print_char(u64 cp) {
+    u8[4] b;
+    if (cp < 128) {
+        b[0] = (u8)cp;
+        __vex_write(&b[0], 1);
+    } else if (cp < 2048) {
+        b[0] = (u8)(192 | (cp >> 6));
+        b[1] = (u8)(128 | (cp & 63));
+        __vex_write(&b[0], 2);
+    } else if (cp < 65536) {
+        b[0] = (u8)(224 | (cp >> 12));
+        b[1] = (u8)(128 | ((cp >> 6) & 63));
+        b[2] = (u8)(128 | (cp & 63));
+        __vex_write(&b[0], 3);
+    } else {
+        b[0] = (u8)(240 | (cp >> 18));
+        b[1] = (u8)(128 | ((cp >> 12) & 63));
+        b[2] = (u8)(128 | ((cp >> 6) & 63));
+        b[3] = (u8)(128 | (cp & 63));
+        __vex_write(&b[0], 4);
+    }
+}
+
+// Float f64 en formato aproximado a "%g": signo, parte entera, hasta 6
+// decimales con recorte de ceros finales.  Cubre el rango normal
+// (|v| < 1.8e19); valores enormes/diminutos que %g daria en notacion
+// cientifica se imprimen en decimal (limitacion documentada).  NaN/Inf
+// explicitos.  Iguala la salida de vesta_io.c (%g) para los magnitudes
+// tipicas de la stdlib de math (sqrt/pow/log/...).
+void __vex_print_float(f64 v) {
+    // NaN: v != v solo es cierto para NaN.
+    if (v != v) {
+        __vex_write("nan", 3);
+        return;
+    }
+    if (v < 0.0) {
+        __vex_write("-", 1);
+        v = 0.0 - v;
+    }
+    // Infinito: mayor que el mayor finito representable aprox.
+    if (v > 1.7976931348623157e308) {
+        __vex_write("inf", 3);
+        return;
+    }
+    if (v == 0.0) {
+        __vex_write("0", 1);
+        return;
+    }
+    // Rango fuera de u64 (|v| >= 2^63): decimal sin fraccion (best-effort).
+    if (v >= 9223372036854775808.0) {
+        // Dividir en bloques no es trivial sin u128; emitimos el entero
+        // truncado por mantissa (suficiente para no perder el orden de
+        // magnitud).  %g usaria %e aqui (limitacion conocida).
+        u64 big = (u64)v;
+        __vio_dec_u64(big);
+        return;
+    }
+    u64 ip = (u64)v;
+    f64 frac = v - (f64)ip;
+    __vio_dec_u64(ip);
+    if (frac > 0.0) {
+        u8[8] fb;
+        i32 n = 0;
+        while (n < 6) {
+            frac = frac * 10.0;
+            u64 d = (u64)frac;
+            if (d > 9) d = 9;
+            fb[n] = (u8)(48 + d); // '0' + digito
+            frac = frac - (f64)d;
+            n = n + 1;
+        }
+        // Recortar ceros finales (estilo %g).
+        while (n > 0 && fb[n - 1] == 48) n = n - 1;
+        if (n > 0) {
+            __vex_write(".", 1);
+            __vex_write(&fb[0], (u64)n);
+        }
+    }
+}
+
+// Padding: escribe `count` copias del codepoint `fill_cp` (alineacion de
+// columnas en ${s:>W} / ${s:<W}).  fill_cp suele ser ' ' (32) o '.'.
+void __vex_pad(u64 fill_cp, u64 count) {
+    u64 k = 0;
+    while (k < count) {
+        __vex_print_char(fill_cp);
+        k = k + 1;
+    }
+}
+
+// Cadena C nul-terminada (host_ptr): mide la longitud y escribe.
+void __vex_print_cstr(u8* s) {
+    if (s == null) return;
+    u64 n = 0;
+    while (s[n] != 0) n = n + 1;
+    if (n > 0) __vex_write(s, n);
+}
