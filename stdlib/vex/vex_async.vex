@@ -1,86 +1,129 @@
-// vex_async.vex -- runtime de asincronia cooperativo para Vex AOT (tiers
-// bare/embed) SIN libc.  Auto-bundle: el driver -m aot lo fusiona cuando el
-// modulo usa spawn/future/await/fulfill y no define las primitivas el mismo
-// (mismo patron que vex_io.vex / vex_sync.vex / vex_exc.vex).
-//
-// MODELO: scheduler COOPERATIVO (asincronia), NO hilos 1:1 del SO.  `spawn`
-// ENCOLA una tarea; el bloqueo (`await`) BOMBEA la cola hasta que el future se
-// resuelve.  Es el mismo modelo del interprete/JIT (tareas verdes sobre un
-// scheduler), portado a nativo.
-//
-// Fase 1-2 (single-thread, run-to-completion):
-//   - Las tareas que NO se bloquean a si mismas (computar + fulfill, p.ej. los
-//     helpers @Async) corren ENTERAS al despacharse -> sin context-switch.
-//   - `await` en main bombea la cola hasta que el future este listo.
-//   - Despacho via LLAMADA INDIRECTA del puntero a funcion: el body se guarda
-//     como dir (i64); pump lo castea a `fn(...)` y lo llama (CALLCLOSURE) ->
-//     convencion natural del sistema.  Args por PUNTERO (argv): cualquier argc
-//     hasta el maximo del lenguaje (R1..R12 = 12 args), sin trampolin ni el
-//     limite de 4 args de Win64.
-//   Fases siguientes: fibras para tareas que se bloquean entre si / ping-pong
-//   (3), thread pool real para paralelismo (4).
+/**
+ * @file vex_async.vex
+ * @brief Runtime de asincronia cooperativo para Vex AOT (tiers bare/embed),
+ *        SIN libc.
+ *
+ * Auto-bundle: el driver `-m aot` fusiona este modulo cuando el programa usa
+ * `spawn`/`future`/`await`/`fulfill`/`msgsend` y no define las primitivas el
+ * mismo (mismo patron que vex_io.vex / vex_sync.vex / vex_exc.vex).
+ *
+ * @par Modelo
+ * Scheduler COOPERATIVO (asincronia), NO hilos 1:1 del SO.  `spawn` ENCOLA una
+ * tarea; el bloqueo (`await`) BOMBEA la cola hasta que el future se resuelve.
+ * Es el mismo modelo del interprete/JIT (tareas verdes sobre un scheduler),
+ * portado a nativo.
+ *
+ * Fase 1-2 (single-thread, run-to-completion):
+ *   - Las tareas que NO se bloquean a si mismas (computar + fulfill, p.ej. los
+ *     helpers @Async) corren ENTERAS al despacharse -> sin context-switch.
+ *   - `await` en main bombea la cola hasta que el future este listo.
+ *   - Despacho via LLAMADA INDIRECTA del puntero a funcion: el body se guarda
+ *     como dir (i64); pump lo castea a `fn(...)` y lo llama (CALLCLOSURE) ->
+ *     convencion natural del sistema.  Args por PUNTERO (argv): cualquier argc
+ *     hasta el maximo del lenguaje (R1..R12 = 12 args), sin trampolin ni el
+ *     limite de 4 args de Win64.
+ *
+ * Fases siguientes: fibras para tareas que se bloquean entre si / ping-pong
+ * (3), thread pool real para paralelismo (4).
+ *
+ * @par Multiplataforma
+ * Este modulo es Vex puro (sin FFI ni inline-asm) -> identico en PE y ELF y en
+ * cualquier arquitectura que soporte el codegen.  Toda la dependencia de
+ * plataforma (TID, atomicos) vive en vex_sync.vex.
+ */
 
-// Maximo de args por tarea.  El codegen nativo de CALLCLOSURE soporta hasta 10
-// args via call indirecto (CALLCLOSURE, R1..R12).  12 = maximo del
-// lenguaje (fut + 11 user args), igual que el limite de @Async.
-comptime i64 VASYNC_MAXARG = 12;
+// ---------------------------------------------------------------------------
+// Parametros de capacidad (comptime).  VASYNC_QCAP debe ser potencia de 2
+// (el ring usa la mascara VASYNC_QMASK = QCAP-1 para el wraparound).
+// ---------------------------------------------------------------------------
+comptime i64 VASYNC_QCAP  = 256;  ///< Tareas en vuelo simultaneas (ring).
+comptime i64 VASYNC_QMASK = 255;  ///< Mascara de wraparound (QCAP-1).
+comptime i64 VASYNC_MAXARG = 12;  ///< Args por tarea (R1..R12 = max del lenguaje).
+comptime i64 VASYNC_MAXFUT = 256; ///< Futures vivos simultaneos.
+comptime i64 VASYNC_MAXPID = 256; ///< Mailboxes por pid.
 
-// --- Estado global (BSS, zero-init) -----------------------------------------
-i64[256] __vasync_q;            // cola de tareas: punteros a la fn del body
-i64[3072] __vasync_q_args;      // args por tarea: [slot*12 + i] (256*12)
-i64[256] __vasync_q_pid;        // pid de cada tarea encolada
-i64 __vasync_q_head = 0;        // indice de cabeza (ring)
-i64 __vasync_q_tail = 0;        // indice de cola (ring)
-i64 __vasync_q_count = 0;       // tareas pendientes
-i64 __vasync_next_pid = 1;      // contador de pid (siempre != 0)
-i64 __vasync_current_pid = 0;   // pid de la tarea en ejecucion (0 = main)
+// ---------------------------------------------------------------------------
+// Estado global (BSS, zero-init).  Los tamanños de array deben coincidir con
+// las constantes de arriba (QCAP=256, QCAP*MAXARG=3072, MAXFUT=256, MAXPID=256).
+// ---------------------------------------------------------------------------
+i64[256] __vasync_q;            ///< Cola de tareas: punteros a la fn del body.
+i64[3072] __vasync_q_args;      ///< Args por tarea: [slot*MAXARG + i].
+i64[256] __vasync_q_pid;        ///< Pid de cada tarea encolada.
+i64 __vasync_q_head = 0;        ///< Indice de cabeza del ring.
+i64 __vasync_q_tail = 0;        ///< Indice de cola del ring.
+i64 __vasync_q_count = 0;       ///< Tareas pendientes.
+i64 __vasync_next_pid = 1;      ///< Contador de pid (siempre != 0).
+i64 __vasync_current_pid = 0;   ///< Pid de la tarea en ejecucion (0 = main).
 
-i64[256] __vasync_fut_ready;    // 0 = PENDING, 1 = RESUELTO
-i64[256] __vasync_fut_result;   // valor del future resuelto
-i64 __vasync_fut_n = 0;         // futures asignados
+i64[256] __vasync_fut_ready;    ///< 0 = PENDING, 1 = RESUELTO.
+i64[256] __vasync_fut_result;   ///< Valor del future resuelto.
+i64 __vasync_fut_n = 0;         ///< Futures asignados.
 
-i64[256] __vasync_mbox_val;     // mailbox por pid (1 slot; suficiente Fase 2)
-i64[256] __vasync_mbox_has;     // 1 = hay mensaje pendiente
+i64[256] __vasync_mbox_val;     ///< Mailbox por pid (1 slot; suficiente Fase 2).
+i64[256] __vasync_mbox_has;     ///< 1 = hay mensaje pendiente.
 
-// --- spawn con args por puntero (argv).  Devuelve pid != 0 -----------------
-// Copia min(argc, 12) qwords desde argv al slot de la tarea; el resto a 0.
+// ---------------------------------------------------------------------------
+// spawn.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Encola una tarea con sus argumentos (argv).
+ * @param body Direccion de la funcion del body de la tarea (puntero a funcion).
+ * @param argc Numero de argumentos (se copian `min(argc, VASYNC_MAXARG)`).
+ * @param argv Puntero al array de argumentos (qwords).
+ * @return pid de la tarea (>0), o 0 si la cola esta llena.
+ *
+ * Copia hasta VASYNC_MAXARG qwords al slot de la tarea y rellena el resto a 0
+ * (el body ignora los que no declare).
+ */
 i64 __vex_spawn_argv(i64 body, i64 argc, i64* argv) {
-    if (__vasync_q_count >= 256) {
+    if (__vasync_q_count >= VASYNC_QCAP) {
         return 0; // cola llena
     }
     i64 t = __vasync_q_tail;
     i64 pid = __vasync_next_pid;
     __vasync_q[t] = body;
     __vasync_q_pid[t] = pid;
-    i64 base = t * 12;
+    i64 base = t * VASYNC_MAXARG;
     i64 n = argc;
-    if (n > 12) {
-        n = 12;
+    if (n > VASYNC_MAXARG) {
+        n = VASYNC_MAXARG;
     }
     i64 i = 0;
     while (i < n) {
         __vasync_q_args[base + i] = argv[i];
         i = i + 1;
     }
-    while (i < 12) {
-        __vasync_q_args[base + i] = 0;
+    while (i < VASYNC_MAXARG) {
+        __vasync_q_args[base + i] = 0; // relleno
         i = i + 1;
     }
-    __vasync_q_tail = (t + 1) & 255;
+    __vasync_q_tail = (t + 1) & VASYNC_QMASK;
     __vasync_q_count = __vasync_q_count + 1;
     __vasync_next_pid = __vasync_next_pid + 1;
     return pid;
 }
 
-// --- spawn sin args ---------------------------------------------------------
+/**
+ * @brief Encola una tarea sin argumentos.
+ * @param body Direccion de la funcion del body.
+ * @return pid de la tarea (>0), o 0 si la cola esta llena.
+ */
 i64 __vex_spawn(i64 body) {
     return __vex_spawn_argv(body, 0, &__vasync_q_args[0]); // argv no se lee
 }
 
-// --- future_new: reservar un slot de future (PENDING) -----------------------
+// ---------------------------------------------------------------------------
+// futures.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Reserva un slot de future en estado PENDING.
+ * @return Handle del future (>=0), o 0 si no hay slots.
+ */
 i64 __vex_future_new() {
     i64 h = __vasync_fut_n;
-    if (h >= 256) {
+    if (h >= VASYNC_MAXFUT) {
         return 0;
     }
     __vasync_fut_ready[h] = 0;
@@ -89,29 +132,42 @@ i64 __vex_future_new() {
     return h;
 }
 
-// --- fulfill: resolver un future con un valor -------------------------------
+/**
+ * @brief Resuelve un future con un valor (lo marca RESUELTO).
+ * @param h   Handle del future.
+ * @param val Valor de resolucion.
+ */
 void __vex_fulfill(i64 h, i64 val) {
     if (h < 0) {
         return;
     }
-    if (h >= 256) {
+    if (h >= VASYNC_MAXFUT) {
         return;
     }
     __vasync_fut_result[h] = val;
     __vasync_fut_ready[h] = 1;
 }
 
-// --- pump_one: ejecutar una tarea de la cola (run-to-completion) -------------
-// Despacho via llamada indirecta: cast del body (dir) a `fn(...)` + CALLCLOSURE.
-// El body recibe los args por la convencion natural (R1..R12); los que no
-// declare los ignora.  Devuelve 1 si ejecuto una tarea, 0 si vacia.
+// ---------------------------------------------------------------------------
+// scheduler (pump / await).
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Ejecuta una tarea de la cola (run-to-completion).
+ * @return 1 si ejecuto una tarea, 0 si la cola estaba vacia.
+ *
+ * Despacho via llamada indirecta: castea el body (dir) a `fn(...)` y lo llama
+ * (CALLCLOSURE).  Los argumentos se pasan por la convencion natural (R1..R12);
+ * el body ignora los que no declare.  Establece `__vasync_current_pid` al pid
+ * de la tarea durante su ejecucion y lo restaura al terminar.
+ */
 i64 __vasync_pump_one() {
     if (__vasync_q_count <= 0) {
         return 0;
     }
     i64 h = __vasync_q_head;
     i64 body = __vasync_q[h];
-    i64 base = h * 12;
+    i64 base = h * VASYNC_MAXARG;
     i64 a0 = __vasync_q_args[base + 0];
     i64 a1 = __vasync_q_args[base + 1];
     i64 a2 = __vasync_q_args[base + 2];
@@ -126,7 +182,7 @@ i64 __vasync_pump_one() {
     i64 a11 = __vasync_q_args[base + 11];
     i64 saved_pid = __vasync_current_pid;
     __vasync_current_pid = __vasync_q_pid[h]; // contexto de la tarea
-    __vasync_q_head = (h + 1) & 255;
+    __vasync_q_head = (h + 1) & VASYNC_QMASK;
     __vasync_q_count = __vasync_q_count - 1;
     // Llamada indirecta al body (CALLCLOSURE).  El cast (fn) construye el
     // function value {body, env=0}.
@@ -138,30 +194,43 @@ i64 __vasync_pump_one() {
     return 1;
 }
 
-// --- await: bombear hasta que el future este resuelto -----------------------
-// Modelo single-thread: si el future esta PENDING, ejecutamos tareas
-// encoladas hasta resolverlo.  Si la cola se vacia y sigue PENDING, no hay
-// quien lo resuelva (deadlock); devolvemos el valor actual (0) sin colgar.
+/**
+ * @brief Bloquea hasta que el future @p h este resuelto, bombeando la cola.
+ * @param h Handle del future.
+ * @return Valor del future.
+ *
+ * Modelo single-thread: si el future esta PENDING, ejecuta tareas encoladas
+ * hasta resolverlo.  Si la cola se vacia y sigue PENDING no hay quien lo
+ * resuelva (deadlock logico); devuelve el valor actual (0) sin colgar.
+ */
 i64 __vex_await(i64 h) {
     while (__vasync_fut_ready[h] == 0) {
         i64 r = __vasync_pump_one();
         if (r == 0) {
-            break;
+            break; // cola vacia y future PENDING -> no hay resolvedor
         }
     }
     return __vasync_fut_result[h];
 }
 
-// --- mailbox: msgsend(pid, val) / msgrecv() / pid() -------------------------
-// Mailbox por pid (1 slot, Fase 2).  msgsend deposita; msgrecv lee de la
-// mailbox de la TAREA ACTUAL (__vasync_current_pid).  En el modelo
-// single-thread, main hace el setup (spawn + msgsend) ANTES de bombear, asi
-// cuando la tarea corre su mensaje ya esta -> msgrecv no bloquea.
+// ---------------------------------------------------------------------------
+// mailbox (msgsend / msgrecv / pid).
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Deposita un mensaje en la mailbox de un pid.
+ * @param pid Pid destino.
+ * @param val Valor del mensaje.
+ * @return 1 si se deposito, 0 si el pid es invalido.
+ * @note Mailbox de 1 slot por pid (Fase 2).  En el modelo single-thread main
+ *       hace el setup (spawn + msgsend) ANTES de bombear, asi cuando la tarea
+ *       corre su mensaje ya esta -> msgrecv no bloquea.
+ */
 i32 __vex_msgsend(i64 pid, i64 val) {
     if (pid < 0) {
         return 0;
     }
-    if (pid >= 256) {
+    if (pid >= VASYNC_MAXPID) {
         return 0;
     }
     __vasync_mbox_val[pid] = val;
@@ -169,12 +238,16 @@ i32 __vex_msgsend(i64 pid, i64 val) {
     return 1;
 }
 
+/**
+ * @brief Lee (y consume) el mensaje de la mailbox de la TAREA ACTUAL.
+ * @return Valor del mensaje, o 0 si no hay / pid invalido.
+ */
 i64 __vex_msgrecv() {
     i64 pid = __vasync_current_pid;
     if (pid < 0) {
         return 0;
     }
-    if (pid >= 256) {
+    if (pid >= VASYNC_MAXPID) {
         return 0;
     }
     i64 v = __vasync_mbox_val[pid];
@@ -182,6 +255,10 @@ i64 __vex_msgrecv() {
     return v;
 }
 
+/**
+ * @brief Pid de la tarea en ejecucion.
+ * @return Pid actual (0 = main).
+ */
 i64 __vex_pid() {
     return __vasync_current_pid;
 }
