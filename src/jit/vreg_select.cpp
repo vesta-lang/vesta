@@ -922,9 +922,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             case ir::IrOp::SWITCH_DENSE: {
                 flush_pending();
                 const ir::IrBlockId def_blk = in.target_block;
-                if (!vm || in.operands.empty() || in.jump_targets.empty() ||
-                    def_blk == ir::IR_NO_BLOCK || def_blk >= blbl.size()) {
-                    break; // no-op -> el BST hace el dispatch
+                // VM_ABI (JIT) o HOST_LEAF (AOT): ambos emiten jump table.  En
+                // AOT la tabla es SELF-RELATIVE (4B, PIC-safe, sin reloc); en
+                // JIT es de punteros absolutos (8B, parchados con la addr
+                // runtime).  Otros casos -> no-op (el BST hace el dispatch).
+                const bool sw_host = (abi == AbiKind::HOST_LEAF);
+                if ((!vm && !sw_host) || in.operands.empty() ||
+                    in.jump_targets.empty() || def_blk == ir::IR_NO_BLOCK ||
+                    def_blk >= blbl.size()) {
+                    break;
                 }
                 const int64_t min_v =
                     static_cast<int64_t>(in.imm & 0xFFFFFFFFu);
@@ -952,29 +958,60 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(c);
                     O.push_back(MInstr::make_jcc(MCond::AE, blbl[def_blk]));
                 }
-                // lea RB, [rip+table]; jmp [RB + RI*8]  (salto indirecto a
-                // memoria: funde el load + jump en una sola instr -> minimo
-                // teorico del jump table).
                 const MLabelId table_lbl = out.new_label();
                 O.push_back(MInstr::make_lea_label(MOperand::make_reg(RB, 8),
                                                    table_lbl));
-                {
+                if (sw_host) {
+                    // AOT self-relative.  Entrada 4B con signo = offset[arm] -
+                    // offset[table].  Carga + sign-extend SIN MOVSX-de-memoria
+                    // (el rewrite lo expandiria con scr1=R11, que colisiona con
+                    // RB): (1) mov RI_d, [RB + RI*4] (MOV plano de 32b -> zero-
+                    // ext, el rewrite lo respeta); (2) movsxd RI, RI_d (fuente
+                    // REG -> el rewrite no toca memoria); (3) add RB, RI (RB =
+                    // table_base + offset[arm]-offset[table] = func_base +
+                    // offset[arm]); (4) jmp RB.
+                    MInstr ld{};
+                    ld.op = MOp::MOV;
+                    ld.dst = MOperand::make_reg(RI, 4); // 32-bit -> zero-extiende
+                    ld.src1 = MOperand::make_mem(RB, 0, RI, 4);
+                    O.push_back(ld);
+                    MInstr sx{};
+                    sx.op = MOp::MOVSX;
+                    sx.dst = MOperand::make_reg(RI, 8);
+                    sx.src1 = MOperand::make_reg(RI, 4); // sign-extend low 32
+                    O.push_back(sx);
+                    O.push_back(MInstr::make_binary(
+                        MOp::ADD, MOperand::make_reg(RB, 8),
+                        MOperand::make_reg(RB, 8), MOperand::make_reg(RI, 8)));
+                    O.push_back(MInstr::make_jmp_reg(RB));
+                    // Tabla: entradas self-relative de 4 bytes.
+                    O.push_back(MInstr::make_label_def(table_lbl));
+                    for (size_t k = 0; k < range; ++k) {
+                        const uint32_t tb = in.jump_targets[k];
+                        const ir::IrBlockId arm =
+                            (tb < blbl.size()) ? tb : def_blk;
+                        O.push_back(MInstr::make_data_rel32_label(blbl[arm],
+                                                                  table_lbl));
+                        mb.extra_succs.push_back(static_cast<MBlockId>(arm));
+                    }
+                } else {
+                    // JIT: jmp [RB + RI*8] (punteros absolutos de 8B parchados
+                    // post-memcpy).  Funde load+jump en una instr.
                     MInstr j{};
                     j.op = MOp::JMP;
                     j.src1 = MOperand::make_mem(RB, 0, RI, 8);
                     O.push_back(j);
-                }
-                // Tabla: una entrada de 8 bytes por valor [min, min+range).
-                O.push_back(MInstr::make_label_def(table_lbl));
-                for (size_t k = 0; k < range; ++k) {
-                    const uint32_t tb = in.jump_targets[k];
-                    const ir::IrBlockId arm =
-                        (tb < blbl.size()) ? tb : def_blk;
-                    O.push_back(MInstr::make_data_ptr_label(blbl[arm]));
-                    mb.extra_succs.push_back(static_cast<MBlockId>(arm));
+                    O.push_back(MInstr::make_label_def(table_lbl));
+                    for (size_t k = 0; k < range; ++k) {
+                        const uint32_t tb = in.jump_targets[k];
+                        const ir::IrBlockId arm =
+                            (tb < blbl.size()) ? tb : def_blk;
+                        O.push_back(MInstr::make_data_ptr_label(blbl[arm]));
+                        mb.extra_succs.push_back(static_cast<MBlockId>(arm));
+                    }
                 }
                 mb.extra_succs.push_back(static_cast<MBlockId>(def_blk));
-                sw_dense_term = true; // saltar el BST (dead code en JIT)
+                sw_dense_term = true; // saltar el BST (dead code)
                 break;
             }
             /* MAKE_CLOSURE: marker semantico puro (idem MAKE_VARIANT).

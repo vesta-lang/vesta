@@ -686,7 +686,15 @@ enum class MOp : uint8_t {
                           ///< No es codigo ejecutable (se salta); el dispatch
                           ///< lo lee via `mov rT, [rbase + idx*8]`.
 
-    COUNT = 113
+    DATA_REL32_LABEL = 113, ///< Entrada de 4 bytes de jump table SELF-RELATIVE
+                            ///< (AOT/HOST_LEAF, PIC-safe, SIN reloc): emite 4
+                            ///< zeros + MFixup{label=src1(block),
+                            ///< instr_end=offset[src2(table)]} -> resolve_fixups
+                            ///< escribe offset[block]-offset[table].  El
+                            ///< dispatch suma la base: lea RB,[rip+table];
+                            ///< movsxd RI,[RB+idx*4]; add RB,RI; jmp RB.
+
+    COUNT = 114
 };
 
 /* ===================================================================== */
@@ -1010,6 +1018,17 @@ struct MInstr {
         MInstr i;
         i.op = MOp::DATA_PTR_LABEL;
         i.src1 = MOperand::make_label(label_id);
+        return i;
+    }
+
+    /** @brief DATA_REL32_LABEL: entrada self-relative de 4 bytes =
+     *  offset[block_label] - offset[table_label] (jump table PIC-safe AOT). */
+    static MInstr make_data_rel32_label(uint32_t block_label,
+                                        uint32_t table_label) noexcept {
+        MInstr i;
+        i.op = MOp::DATA_REL32_LABEL;
+        i.src1 = MOperand::make_label(block_label);
+        i.src2 = MOperand::make_label(table_label);
         return i;
     }
 
