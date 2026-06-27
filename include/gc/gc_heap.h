@@ -543,6 +543,41 @@ struct GcStats {
  *
  * @warning No es thread-safe. Un solo hilo debe usar el heap a la vez.
  */
+
+/**
+ * @brief Interfaz que abstrae lo que el GcHeap necesita de su "owner" para el
+ *        scan conservativo (stack/regs del VM) y la sincronizacion shared
+ *        (Phase Z, cross-proceso).
+ *
+ * Desacopla @c gc_heap.cpp de @c ProcessVM: el runtime aporta una impl que lee
+ * el ProcessVM (vive en una TU del runtime, donde la VM esta definida); el GC
+ * AOT standalone (libvesta_gc) pasa @c nullptr -> el GcHeap omite ambos caminos
+ * y descubre las raices SOLO via stackmaps precisos sobre frames nativos.  Esto
+ * permite compilar @c gc_heap.cpp sin arrastrar la VM (.o freestanding).
+ */
+class GcRootProvider {
+  public:
+    virtual ~GcRootProvider() = default;
+
+    // --- Scan conservativo (raices en el stack/regs del VM) ---
+    /// Llena @p rsp / @p stack_high / @p regs[16] con el estado del owner.
+    /// Devuelve false si no hay stack VM (p.ej. AOT) -> el GC omite el scan.
+    virtual bool vm_stack_regs(uint64_t &rsp, uint64_t &stack_high,
+                               uint64_t regs[16]) = 0;
+    /// Low-water-mark del stack (minimo rsp visto desde el ultimo GC).
+    virtual uint64_t stack_low_water() const = 0;
+    virtual void set_stack_low_water(uint64_t v) = 0;
+    /// Escribe de vuelta los 16 GP regs tras el forwarding (GC moving).
+    virtual void write_back_regs(const uint64_t regs[16]) = 0;
+    /// Memoria virtual del VM para el scan (nullptr si no hay).
+    virtual vm::VirtualMemory *vm_mem() = 0;
+
+    // --- Phase Z (shared / cross-proceso).  En AOT: false/nullptr. ---
+    virtual bool shared_contains(const uint8_t *ptr) = 0;
+    virtual uint8_t *shared_lookup(GcHandle h) = 0;
+    virtual WaitTable *shared_wait_table() = 0;
+};
+
 class GcHeap {
   public:
     /**
@@ -736,15 +771,14 @@ class GcHeap {
     GcHandle pending_alloc_root_ = GC_NULL_HANDLE;
 
     /**
-     * @brief asocia el GcHeap con su ProcessVM propietario.
+     * @brief asocia el GcHeap con su proveedor de raices (RootProvider).
      *
-     * Llamado una vez al construir el ProcessVM para que el GC sepa
-     * de que stack y regs leer durante el major_gc.  El puntero se
-     * mantiene durante toda la vida del proceso (no cambia).  Si es
-     * nullptr (proceso especial sin stack scanning, ej. tests), el
-     * major_gc cae al modelo previo "todo handle live = root".
+     * Llamado una vez al construir el ProcessVM (el runtime aporta una impl
+     * sobre ProcessVM).  El GC AOT standalone pasa @c nullptr -> el major_gc
+     * descubre raices solo via stackmaps precisos (scan_jit_roots_precise) y no
+     * intenta el scan conservativo ni la sincronizacion shared.
      */
-    void set_owner_process(runtime::ProcessVM *p) noexcept { owner_proc_ = p; }
+    void set_root_provider(GcRootProvider *p) noexcept { root_provider_ = p; }
 
     /**
      * @brief Devuelve un puntero al payload del objeto referenciado por @p
@@ -1203,10 +1237,11 @@ class GcHeap {
     size_t old_used_ = 0;      ///< Bytes vivos contabilizados en OldGen.
     size_t old_threshold_ = 0; ///< Umbral para major GC automatico.
 
-    /// puntero al ProcessVM owner para acceder al stack/regs
-    /// durante el major_gc.  Set via set_owner_process() en el ctor del
-    /// ProcessVM.  Si es nullptr, major_gc cae al modelo previo.
-    runtime::ProcessVM *owner_proc_ = nullptr;
+    /// proveedor de raices (stack/regs conservativos + shared Phase Z).
+    /// Set via set_root_provider() en el ctor del ProcessVM.  Si es nullptr
+    /// (AOT standalone), el GC omite scan conservativo + shared y usa solo
+    /// stackmaps precisos.
+    GcRootProvider *root_provider_ = nullptr;
 
     // ---- (iv) Free lists segregadas para slots OldGen liberados ----
     // Cada slot DEAD reusa los primeros 8 bytes de su payload como

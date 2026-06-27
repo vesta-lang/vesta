@@ -535,6 +535,22 @@ add_executable(test_lsp_position_conv
 )
 target_include_directories(test_lsp_position_conv PRIVATE ${VM_INCLUDES})
 
+# Inc 0 de libvesta_gc (GC opt-in de AOT): valida la C-ABI del GcHeap global
+# sin ProcessVM.  Linka vmcore (el motor GC vive en src/vesta_gc/, globbeado).
+add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
+target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
+# vmcore es STATIC y sus deps son PRIVATE -> replicar el set de enlace.
+target_link_libraries(test_gc_lib PRIVATE vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_gc_lib PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_directories(test_gc_lib PRIVATE ${OPENSSL_LIB_DIR})
+    target_link_libraries(test_gc_lib PRIVATE libssl libcrypto ws2_32 synchronization applink)
+else ()
+    target_link_libraries(test_gc_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # ---------------------------------------------------------------------------
 # libvesta: DLL/.so con C-ABI estable para embeber VestaVM en cualquier
 # lenguaje (Python via ctypes, Rust FFI, C#, C, ...).  Expone

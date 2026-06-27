@@ -21,11 +21,10 @@
 
 #include "jit/jit_registry.h"
 #include "jit/stack_scan.h"
-// acceso al ProcessVM owner para leer stack/regs durante GC.
-// Solo en el .cpp (no en gc_heap.h) para evitar incluir gc_heap.h en
-// proceso_runtime.h (gc_heap.h ya esta en proceso_runtime.h).
-#include "runtime/proceso_runtime.h"
-#include "runtime/runtime.h"        // Phase Z: acceso a vm.shared_handle_table
+// Inc 0b: gc_heap.cpp YA NO depende de ProcessVM/runtime.  El acceso al
+// stack/regs del owner + la sincronizacion shared (Phase Z) se hacen via la
+// interfaz GcRootProvider (gc_heap.h); el runtime aporta la impl.  Esto permite
+// compilar el GC como .o freestanding (libvesta_gc) sin arrastrar la VM.
 #include "gc/shared_handle_table.h" // Phase Z: SHARED_HANDLE_BIT
 #include "loader/oop_types.h"
 
@@ -385,9 +384,8 @@ GcHeap::handle_for_ptr(const uint8_t *host_payload_ptr) const noexcept {
     // 0xFFFFFFFF -> nullptr -> el host_ptr quedaba a 0 -> store a [0+offset]
     // = SEGV.  Reproducible con 2+ objetos shared vivos a traves de un call
     // y luego escritura a sus fields (a.v=10; b.v=20).
-    if (!in_gc && owner_proc_ != nullptr &&
-        owner_proc_->scheduler.vm_reference.shared_heap.contains(
-            host_payload_ptr)) {
+    if (!in_gc && root_provider_ != nullptr &&
+        root_provider_->shared_contains(host_payload_ptr)) {
         in_gc = true;
     }
     if (!in_gc) return GC_NULL_HANDLE;
@@ -403,10 +401,8 @@ GcHeap::handle_for_ptr(const uint8_t *host_payload_ptr) const noexcept {
     if (maybe_shared & SHARED_HANDLE_BIT) {
         // Validar que el handle realmente resuelve al mismo ptr
         // (defensa contra hash_code colisiones casuales con bit 31).
-        if (owner_proc_) {
-            uint8_t *resolved =
-                owner_proc_->scheduler.vm_reference.shared_handle_table.lookup(
-                    maybe_shared);
+        if (root_provider_) {
+            uint8_t *resolved = root_provider_->shared_lookup(maybe_shared);
             if (resolved == host_payload_ptr) {
                 return maybe_shared;
             }
@@ -970,9 +966,8 @@ uint8_t *GcHeap::deref(GcHandle h) {
     // handles locales (branch predicho), ~5 ns para handles shared
     // (2 atomic loads: chunk + slot).
     if (h & SHARED_HANDLE_BIT) {
-        if (!owner_proc_) return nullptr;
-        return owner_proc_->scheduler.vm_reference.shared_handle_table.lookup(
-            h);
+        if (!root_provider_) return nullptr;
+        return root_provider_->shared_lookup(h);
     }
     if (h >= handles_.size() || !handles_[h].live) return nullptr;
     return handles_[h].addr + sizeof(GcHeader);
@@ -1178,14 +1173,13 @@ void GcHeap::minor_gc() {
     }
 
     std::vector<GcHandle> worklist;
-    if (owner_proc_ != nullptr) {
-        const uint64_t rsp = owner_proc_->registers.stack_pointer.qword();
-        const uint64_t stack_high = owner_proc_->stack_high;
-        uint64_t regs[16];
-        for (int i = 0; i < 16; ++i) {
-            regs[i] = owner_proc_->registers.regs[i].qword();
-        }
-        scan_stack_roots(rsp, stack_high, regs, owner_proc_->vm_mem, worklist);
+    uint64_t rsp = 0, stack_high = 0;
+    uint64_t regs[16];
+    if (root_provider_ != nullptr &&
+        root_provider_->vm_stack_regs(rsp, stack_high, regs) &&
+        root_provider_->vm_mem() != nullptr) {
+        scan_stack_roots(rsp, stack_high, regs, *root_provider_->vm_mem(),
+                         worklist);
     } else {
         // Fallback: modelo previo (todos los handles live = root).
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
@@ -1311,21 +1305,17 @@ void GcHeap::minor_gc() {
     // recien movidos a OldGen quedaban dangling -> SEGFAULT al field
     // access siguiente.  Ver `forward_table_` y comentario de la
     // declaracion en gc_heap.h.
-    if (owner_proc_ != nullptr && !forward_table_.empty()) {
-        const uint64_t rsp_lo =
-            owner_proc_->stack_low_water != 0
-                ? owner_proc_->stack_low_water
-                : owner_proc_->registers.stack_pointer.qword();
-        const uint64_t stack_high = owner_proc_->stack_high;
-        uint64_t regs[16];
-        for (int i = 0; i < 16; ++i) {
-            regs[i] = owner_proc_->registers.regs[i].qword();
-        }
-        update_stack_forwards(rsp_lo, stack_high, regs, owner_proc_->vm_mem);
-        // Escribir de vuelta los regs actualizados.
-        for (int i = 0; i < 16; ++i) {
-            owner_proc_->registers.regs[i].qword(regs[i]);
-        }
+    uint64_t fwd_rsp = 0, fwd_high = 0;
+    uint64_t fwd_regs[16];
+    if (root_provider_ != nullptr && !forward_table_.empty() &&
+        root_provider_->vm_stack_regs(fwd_rsp, fwd_high, fwd_regs) &&
+        root_provider_->vm_mem() != nullptr) {
+        const uint64_t lo = root_provider_->stack_low_water();
+        const uint64_t rsp_lo = lo != 0 ? lo : fwd_rsp;
+        update_stack_forwards(rsp_lo, fwd_high, fwd_regs,
+                              *root_provider_->vm_mem());
+        // Escribir de vuelta los regs actualizados (el GC pudo moverlos).
+        root_provider_->write_back_regs(fwd_regs);
     }
     forward_table_.clear();
 
@@ -1365,22 +1355,18 @@ void GcHeap::major_gc() {
     // = root" que nunca colectaba sin drop explicito.  Si owner_proc_
     // es nullptr (ej. tests sin ProcessVM), fallback al modelo previo.
     std::vector<GcHandle> worklist;
-    if (owner_proc_ != nullptr) {
-        // Leer stack ptr + stack high del proceso.  Estos son atributos
-        // del ProcessVM expuestos publicamente (no requieren accessor).
-        const uint64_t rsp = owner_proc_->registers.stack_pointer.qword();
-        const uint64_t stack_high = owner_proc_->stack_high;
-        // Snapshot de R0..R15 (16 GP regs) para pasar al scan.
-        uint64_t regs[16];
-        for (int i = 0; i < 16; ++i) {
-            regs[i] = owner_proc_->registers.regs[i].qword();
-        }
-        scan_stack_roots(rsp, stack_high, regs, owner_proc_->vm_mem, worklist);
+    uint64_t mj_rsp = 0, mj_high = 0;
+    uint64_t mj_regs[16];
+    if (root_provider_ != nullptr &&
+        root_provider_->vm_stack_regs(mj_rsp, mj_high, mj_regs) &&
+        root_provider_->vm_mem() != nullptr) {
+        scan_stack_roots(mj_rsp, mj_high, mj_regs, *root_provider_->vm_mem(),
+                         worklist);
         // Reset low-water-mark al rsp actual: tras el GC, los slots
         // por debajo del rsp actual ya no son alcanzables; el watermark
         // debe limitar el rango del proximo scan al rango realmente
         // activo desde ahora.
-        owner_proc_->stack_low_water = rsp;
+        root_provider_->set_stack_low_water(mj_rsp);
     } else {
         // Fallback: modelo previo (todo handle live = root).  Solo se
         // usa si no hay owner_proc_ asociado (no deberia ocurrir en
@@ -1851,9 +1837,10 @@ uint64_t GcHeap::monitor_release(GcHandle h, uint64_t owner_encoded) {
  * locales (caso dominante).
  */
 inline WaitTable &GcHeap::wait_table_for(GcHandle h) noexcept {
-    if (h & SHARED_HANDLE_BIT) {
+    if ((h & SHARED_HANDLE_BIT) && root_provider_ != nullptr) {
         // Shared: usar la tabla per-VM (cross-process visible).
-        return owner_proc_->scheduler.vm_reference.shared_wait_table;
+        if (WaitTable *swt = root_provider_->shared_wait_table())
+            return *swt;
     }
     // Local: tabla per-process.
     return wait_table_;

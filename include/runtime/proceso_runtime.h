@@ -353,6 +353,34 @@ inline uint32_t icache_index(uint64_t pc) {
  * Para que el proceso sea elegible por el scheduler debe llamarse a
  * vm->make_ready(proc->pid) tras crearlo.
  */
+
+class ProcessVM; // fwd: el provider guarda un ProcessVM* (def mas abajo).
+
+/**
+ * @brief Implementacion de @c gc::GcRootProvider sobre un @c ProcessVM.
+ *
+ * Da al GcHeap acceso al stack/regs del proceso (scan conservativo) y a las
+ * tablas shared (Phase Z, cross-proceso) sin que @c gc_heap.cpp dependa de la
+ * VM.  Los cuerpos viven en @c proceso_runtime.cpp (donde @c runtime.h aporta
+ * la def completa de la VM); aqui solo las declaraciones.
+ */
+class ProcessVMRootProvider final : public gc::GcRootProvider {
+  public:
+    explicit ProcessVMRootProvider(ProcessVM *p) noexcept : proc_(p) {}
+    bool vm_stack_regs(uint64_t &rsp, uint64_t &stack_high,
+                       uint64_t regs[16]) override;
+    uint64_t stack_low_water() const override;
+    void set_stack_low_water(uint64_t v) override;
+    void write_back_regs(const uint64_t regs[16]) override;
+    vm::VirtualMemory *vm_mem() override;
+    bool shared_contains(const uint8_t *ptr) override;
+    uint8_t *shared_lookup(gc::GcHandle h) override;
+    gc::WaitTable *shared_wait_table() override;
+
+  private:
+    ProcessVM *proc_;
+};
+
 class ProcessVM {
   public:
     /**
@@ -555,6 +583,9 @@ class ProcessVM {
     // --- GC del proceso ---
     gc::GcHeap gc_heap{manager_mem_priv, 2 * 1024 * 1024,
                        8 * 1024 * 1024}; ///< Heap del GC (min 2 MiB, max 8 MiB)
+    /// Proveedor de raices del GC sobre este proceso (lo conecta el ctor via
+    /// gc_heap.set_root_provider).  Solo guarda `this`; seguro en member-init.
+    ProcessVMRootProvider gc_root_provider_{this};
     gc::RawAllocator raw_alloc{};        ///< Asignador raw sin GC
 
     // --- Sistema de objetos (OOP) ---
