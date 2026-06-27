@@ -782,13 +782,30 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     fp_ok && pv < fn.values.size() &&
                     ir_type_is_float(fn.values[pv].type);
                 if (is_f) {
-                    if (fi_p >= fareg.size()) break; // float en pila: no v1
+                    if (fi_p >= fareg.size()) break; // float en pila: pendiente
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, vrt(pv),
                         MOperand::make_reg(static_cast<MReg>(fareg[fi_p]), 8)));
                     ++fi_p;
                 } else {
-                    if (gi_p >= areg.size()) break; // int en pila: no v1
+                    if (gi_p >= areg.size()) {
+                        /* Param GP en PILA (mas alla de los arg_regs): el caller
+                         * lo dejo en [rbp + 16 + shadow + j*8].  16 = saved rbp
+                         * (8) + ret addr (8); shadow = 32 en Win64 (home de los 4
+                         * arg_regs) o 0 en SysV; j = indice del stack-arg GP.
+                         * rbp es estable (el frame se fuerza en regalloc_rewrite
+                         * cuando hay stack-params).  NO es un param-init reg ->
+                         * emit_host_param_loads lo deja pasar como load normal. */
+                        const size_t j = gi_p - areg.size();
+                        const int32_t shadow = (areg.size() == 4) ? 32 : 0;
+                        const int32_t off =
+                            16 + shadow + static_cast<int32_t>(j) * 8;
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, vrt(pv),
+                            MOperand::make_mem(MReg::RBP, off)));
+                        ++gi_p;
+                        continue;
+                    }
                     O.push_back(MInstr::make_unary(
                         MOp::MOV, vrt(pv),
                         MOperand::make_reg(static_cast<MReg>(areg[gi_p]), 8)));
