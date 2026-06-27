@@ -1161,6 +1161,13 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
          * CALL_REL32 que el driver parchea tras el layout de .text.
          * patch_at se deja en offset ABSOLUTO de @c out; encode() le
          * resta @c base para dejarlo relativo a la funcion. */
+        /* Phase AOT-GC (Inc 1): si el call lleva stackmap (gc<T>), fijar su
+         * pc_offset al inicio del call (mismo criterio que MOp::CALL) para que
+         * el GC walker lo localice por la direccion de retorno. */
+        if (mi.flags != UINT16_MAX && mi.flags < fn.stackmaps.size()) {
+            fn.stackmaps[mi.flags].pc_offset =
+                static_cast<uint32_t>(out.size());
+        }
         put8(out, 0xE8);
         MReloc r;
         r.kind = MRelocKind::CALL_REL32;

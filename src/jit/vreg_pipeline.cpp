@@ -126,10 +126,12 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                     bool emit_line_map,
                     std::vector<LineMapEntry> *line_map_out,
                     std::vector<std::pair<uint32_t, std::string>>
-                        *asm_labels_out) {
+                        *asm_labels_out,
+                    std::vector<Stackmap> *stackmaps_out) {
     if (relocs_out) relocs_out->clear();
     if (line_map_out) line_map_out->clear();
     if (asm_labels_out) asm_labels_out->clear();
+    if (stackmaps_out) stackmaps_out->clear();
     /* 1. Seleccionar MachineIR de vregs en ABI HOST_LEAF (args en arg_regs,
      *    retorno en RAX, sin ProcessVM* ni runtime entries).  Si la funcion
      *    usa un op fuera del subset, abortar -> vector vacio (fallback). */
@@ -171,6 +173,10 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
      * entregamos al caller para la vista correlada fuente <-> asm. */
     if (line_map_out) *line_map_out = std::move(pf.line_map);
     if (asm_labels_out) *asm_labels_out = std::move(pf.asm_labels);
+    /* Phase AOT-GC (Inc 1): stackmaps de raices GC (pc_offset relativo a la
+     * funcion + slots GcHandle), poblados por rewrite_to_physical en cada
+     * safepoint/CALL.  El encoder ya fijo pc_offset al byte real del call. */
+    if (stackmaps_out) *stackmaps_out = std::move(pf.stackmaps);
 
     /* AOT: traducir las MReloc del encoder (sym_idx -> reloc_symbols) a
      * NativeReloc con el NOMBRE del simbolo resuelto, para que el driver

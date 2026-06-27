@@ -138,7 +138,12 @@ std::vector<uint8_t> vreg_compile_native(
     std::vector<LineMapEntry> *line_map_out = nullptr,
     /* Solo-LSP: etiquetas internas de bloques inline-asm (byte_offset ->
      * nombre).  Se rellena si emit_line_map y este puntero != nullptr. */
-    std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr);
+    std::vector<std::pair<uint32_t, std::string>> *asm_labels_out = nullptr,
+    /* Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint (pc_offset
+     * relativo a la funcion + slots con GcHandle).  Se rellena si != nullptr.
+     * Vacios salvo que el codigo tenga valores GC (gc<T>, Inc 3).  El driver
+     * los serializa en la seccion .vexgc_smap para el scan preciso en runtime. */
+    std::vector<Stackmap> *stackmaps_out = nullptr);
 
 /**
  * @brief Compila @p fn por el path vreg con un OSR-entry para el loop cuyo

@@ -991,12 +991,34 @@ struct Lowerer {
              * marshalling que CALL_ABS (parallel-move de los args a los
              * arg_regs del ABI host), pero la llamada es un CALL DIRECTO
              * rel32 (no via scratch): el encoder deja un placeholder +
-             * MReloc{CALL_REL32} con el sym_idx que viaja en src1.  En
-             * HOST_LEAF/BARE no hay GC -> sin stackmap. */
+             * MReloc{CALL_REL32} con el sym_idx que viaja en src1. */
             marshal_args(out);
             MInstr call;
             call.op = MOp::CALL_SYM;
             call.src1 = in.src1;
+            /* Phase AOT-GC (Inc 1): describir los GC roots vivos a traves de
+             * este call (gc<T>).  El linear_scan los forzo a slots; el GC los
+             * lee via el stackmap.  Antes se omitia ("BARE sin GC"); ahora el
+             * gc<T> opt-in los necesita.  Vacio (0 slots) si no hay valores GC
+             * vivos -> cero coste para el codigo sin GC. */
+            if (ivs != nullptr) {
+                Stackmap sm;
+                const uint32_t NVI =
+                    static_cast<uint32_t>(ivs->intervals.size());
+                for (uint32_t v = 0; v < NVI; ++v) {
+                    const LiveInterval &lv = ivs->intervals[v];
+                    if (!lv.is_gc() || !lv.covers(cur_call_pos)) continue;
+                    if (!ra.spilled(v)) continue;
+                    StackmapSlot s;
+                    s.rbp_offset =
+                        static_cast<int16_t>(slot_off(ra.slot_of(v)));
+                    s.gc_kind = static_cast<StackmapGcKind>(
+                        static_cast<uint8_t>(lv.gc_kind - 1u));
+                    sm.slots.push_back(s);
+                }
+                call.flags = static_cast<uint16_t>(stackmaps.size());
+                stackmaps.push_back(std::move(sm));
+            }
             out.push_back(call);
             return;
         }
