@@ -10728,7 +10728,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                     ir::IrType::I64,
                     static_cast<uint64_t>(hit->second.str_value.size()),
                     e->loc.line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, e->loc.line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
                 return v_str;
             }
             return emit_const(hit->second.ir_t,
@@ -10784,7 +10784,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 emit_const(ir::IrType::I64,
                            static_cast<uint64_t>(e->comptime_const_str.size()),
                            e->loc.line);
-            ir::IrValueId v_str = emit_strmake(v_addr, v_len, e->loc.line);
+            ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             return v_str;
         }
         ir::IrType t = ir_type_from_primitive(e->result_type.kind);
@@ -10819,7 +10819,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
                                static_cast<uint64_t>(sv.size()), e->loc.line);
-                return emit_strmake(v_addr, v_len, e->loc.line);
+                return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             }
             ir::IrType t = ir_type_from_primitive(it->second.type.kind);
             return emit_const(t, it->second.value, e->loc.line);
@@ -11082,7 +11082,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             fn_->append(current_block_, std::move(is));
         }
         ir::IrValueId v_len = emit_const(ir::IrType::I64, p_len, line);
-        ir::IrValueId v_handle = emit_strmake(v_addr, v_len, line);
+        ir::IrValueId v_handle = emit_string_literal_repr(v_addr, v_len, -1, line);
         return v_handle;
     };
 
@@ -11488,7 +11488,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                         ir::IrValueId v_len = emit_const(
                             ir::IrType::I64, static_cast<uint64_t>(sv.size()),
                             e->loc.line);
-                        return emit_strmake(v_addr, v_len, e->loc.line);
+                        return emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
                     }
                 }
             }
@@ -13085,7 +13085,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 return v_str;
             }
             /* Tipo de retorno declarado por la fn. */
@@ -15219,14 +15219,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), src_line);
-            ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
-            /* NO marcar is_gc_object: STRMAKE devuelve un GcHandle
-             * (uint32 zero-extended a i64).  Los handles son estables
-             * cross-GC -- la HandleTable los redirige tras evacuacion.
-             * Marcarlo como host_ptr provocaria que el regalloc emita
-             * gchandle/gcderef innecesarios y, peor, leyera la entrada
-             * de ptr_to_handle_ para un handle (no un host_ptr) -> NULL.
-             * Mismo patron que lower_string_literal_to_string_object. */
+            /* typename es un literal compile-time: value-string nativo en AOT
+             * (PURE_NATIVE) o GcHandle en el resto de tiers. */
+            ir::IrValueId v_str = emit_string_literal_repr(
+                v_addr, v_len, (int64_t)nm.size(), src_line);
             out_value = v_str;
             return true;
         }
@@ -15272,7 +15268,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 }
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 out_value = v_str;
                 return true;
             }
@@ -15425,7 +15421,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 /* STRMAKE necesita addr y len.  Para name_len que es u32
                  * lo usamos como i64 directamente; en la VM ambos caben
                  * en qword. */
-                ir::IrValueId v_str = emit_strmake(addr, name_len, src_line);
+                ir::IrValueId v_str =
+                    emit_string_literal_repr(addr, name_len, -1, src_line);
                 out_value = v_str;
                 return true;
             }
@@ -15514,7 +15511,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     ad.source_line = src_line;
                     fn_->append(current_block_, std::move(ad));
                 }
-                ir::IrValueId v_str = emit_strmake(addr, fname_len, src_line);
+                ir::IrValueId v_str =
+                    emit_string_literal_repr(addr, fname_len, -1, src_line);
                 out_value = v_str;
                 return true;
             }
@@ -15610,7 +15608,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             }
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), e->loc.line);
-            ir::IrValueId v_str = emit_strmake(v_addr, v_len, e->loc.line);
+            ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
             /* CALLCLOSURE(env_addr, v_str) -- void return. */
             ir::IrInstr cl{};
             cl.op = ir::IrOp::CALLCLOSURE;
@@ -15806,7 +15804,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
                                static_cast<uint64_t>(nm.size()), src_line);
-                ir::IrValueId v_str = emit_strmake(v_addr, v_len, src_line);
+                ir::IrValueId v_str = emit_string_literal_repr(v_addr, v_len, -1, src_line);
                 return v_str;
             };
 
@@ -24473,6 +24471,18 @@ ir::IrValueId Lowering::emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
     ins.source_line = source_line;
     fn_->append(current_block_, std::move(ins));
     return v_str;
+}
+
+ir::IrValueId Lowering::emit_string_literal_repr(ir::IrValueId v_addr,
+                                                 ir::IrValueId v_len,
+                                                 int64_t known_len,
+                                                 uint32_t source_line) {
+    // native_poo (AOT): value-string nativo (PURE_NATIVE, SSO) en vez de
+    // STRMAKE (RUNTIME_DEPENDENT).  Resto de tiers: GcHandle via STRMAKE.
+    if (native_poo_)
+        return build_native_string_from_buffer(v_addr, v_len, source_line,
+                                               known_len);
+    return emit_strmake(v_addr, v_len, source_line);
 }
 
 // ---------------------------------------------------------------------
