@@ -29,6 +29,7 @@
 #include "jit/regalloc_rewrite.h"
 #include "jit/stack_scan.h"
 #include "jit/target_reginfo.h"
+#include "jit/vreg_pipeline.h" // Phase AOT-GC Inc 1: vreg_compile_native + stackmaps_out
 #include "jit/vreg_select.h"
 #include "jit/x86_encoder.h"
 
@@ -193,11 +194,67 @@ static void test_gc_root_found_by_scan() {
     reg.clear();
 }
 
+/* ===================================================================== */
+/* Phase AOT-GC Inc 1: el path HOST_LEAF (AOT) tambien emite stackmaps de  */
+/* GC roots, expuestos via el out-param stackmaps_out de vreg_compile_native.*/
+/* ===================================================================== */
+static void test_aot_host_leaf_stackmap() {
+    std::printf("[aot-gc] HOST_LEAF emite stackmaps de GC roots (Inc 1)\n");
+
+    /* gcf_aot(this_gc, x) = g() + this.  `this` (GC host_ptr) vive a traves
+     * del CALL -> el allocator lo spillea + el rewrite emite un stackmap.
+     * Mismo patron que el test VM_ABI de arriba, pero por vreg_compile_native
+     * (AbiKind::HOST_LEAF, el path AOT). */
+    ir::IrFunction fn;
+    fn.name = "gcf_aot";
+    fn.ret_type = ir::IrType::I64;
+    auto I64 = ir::IrType::I64;
+    ir::IrValueId thisp = fn.new_value(ir::IrType::PTR);
+    ir::IrValueId x = fn.new_value(I64), r = fn.new_value(I64),
+                  sum = fn.new_value(I64);
+    fn.values[thisp].is_gc_object = true;
+    fn.values[thisp].is_host_ptr = true; // -> HOSTPTR
+    fn.params = {thisp, x};
+    ir::IrBlockId bb = fn.new_block("e");
+    {
+        ir::IrInstr c;
+        c.op = ir::IrOp::CALL;
+        c.type = I64;
+        c.dst = r;
+        c.func_name = "g"; // externo (CALL_SYM); el linker lo resuelve
+        fn.append(bb, c);
+    }
+    fn.append(bb, bin(ir::IrOp::ADD, sum, r, thisp)); // this vivo a traves
+    fn.append(bb, ret1(sum));
+
+    /* Compilar por el path AOT (HOST_LEAF) recogiendo los stackmaps. */
+    std::vector<jit::Stackmap> smaps;
+    std::vector<jit::NativeReloc> relocs;
+    std::vector<uint8_t> bytes = jit::vreg_compile_native(
+        fn, {}, {}, {}, {}, &relocs, /*pic=*/true, /*target_sysv=*/true,
+        /*mode32=*/false, jit::FloatIsa::SSE2, /*emit_line_map=*/false,
+        /*line_map_out=*/nullptr, /*asm_labels_out=*/nullptr,
+        /*stackmaps_out=*/&smaps);
+
+    CHECK(!bytes.empty(), "vreg_compile_native HOST_LEAF compila");
+    CHECK(smaps.size() == 1, "1 stackmap (el del CALL g)");
+    if (smaps.size() != 1) return;
+    CHECK(smaps[0].slots.size() == 1, "1 GC root en el stackmap (this)");
+    if (smaps[0].slots.size() != 1) return;
+    CHECK(smaps[0].slots[0].gc_kind == jit::StackmapGcKind::HOSTPTR,
+          "gc_kind = HOSTPTR (is_host_ptr)");
+    CHECK(smaps[0].pc_offset > 0 && smaps[0].pc_offset < bytes.size(),
+          "pc_offset dentro del codigo de la funcion");
+    CHECK(smaps[0].slots[0].rbp_offset < 0,
+          "slot del GC root es negativo respecto a RBP (spill)");
+}
+
 int main() {
     std::setbuf(stdout, nullptr);
     std::printf(
         "=== test_vreg_gc_scan (Phase D.7 commit 6: stackmap <-> GC) ===\n");
     test_gc_root_found_by_scan();
+    test_aot_host_leaf_stackmap();
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;
 }

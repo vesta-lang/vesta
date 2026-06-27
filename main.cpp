@@ -3194,6 +3194,9 @@ int main(int argc, char *argv[]) {
                 std::string section_perms; // "rwx" explicito ("" = convencion)
                 int64_t section_at = -1;   // @at(N)
                 int32_t section_order = 0x7fffffff; // @order(N)
+                // Phase AOT-GC (Inc 1): stackmaps de raices GC por safepoint
+                // (pc_offset relativo a esta funcion).  Vacios salvo gc<T>.
+                std::vector<jit::Stackmap> stackmaps;
             };
             std::vector<AotFn> compiled;
             std::unordered_map<std::string, size_t>
@@ -3295,7 +3298,9 @@ int main(int argc, char *argv[]) {
                 af.bytes = jit::vreg_compile_native(
                     *itf->second, {}, {}, {}, {}, &af.relocs, aot_pic,
                     /*target_sysv=*/fmt == aot::ObjFormat::ELF,
-                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa);
+                    /*mode32=*/aot_mode32, /*fisa=*/aot_fisa,
+                    /*emit_line_map=*/false, /*line_map_out=*/nullptr,
+                    /*asm_labels_out=*/nullptr, /*stackmaps_out=*/&af.stackmaps);
                 if (af.bytes.empty()) {
                     std::cerr
                         << "[aot] el selector vreg no soporta la funcion '"
