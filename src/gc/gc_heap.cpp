@@ -1180,8 +1180,10 @@ void GcHeap::minor_gc() {
         root_provider_->vm_mem() != nullptr) {
         scan_stack_roots(rsp, stack_high, regs, *root_provider_->vm_mem(),
                          worklist);
-    } else {
-        // Fallback: modelo previo (todos los handles live = root).
+    } else if (!aot_precise_roots_) {
+        // Fallback: modelo previo (todos los handles live = root).  En modo AOT
+        // se omite: vex_gc_alloc usa alloc_pinned (OldGen) -> el nursery queda
+        // vacio -> minor_gc no toca objetos gc<T>; solo major_gc los colecta.
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
             if (!handles_[h].live || !handles_[h].addr) continue;
             uint8_t *raw = handles_[h].addr;
@@ -1367,10 +1369,12 @@ void GcHeap::major_gc() {
         // debe limitar el rango del proximo scan al rango realmente
         // activo desde ahora.
         root_provider_->set_stack_low_water(mj_rsp);
-    } else {
-        // Fallback: modelo previo (todo handle live = root).  Solo se
-        // usa si no hay owner_proc_ asociado (no deberia ocurrir en
-        // produccion, pero defensivo para tests / setups especiales).
+    } else if (!aot_precise_roots_) {
+        // Fallback: modelo previo (todo handle live = root).  Solo se usa si no
+        // hay root_provider_ NI modo AOT (defensivo para tests / setups
+        // especiales).  En modo AOT (libvesta_gc) se OMITE -> las raices vienen
+        // de external_refs + scan_jit_roots_precise (frames nativos) + pending
+        // -> el GC colecta de verdad lo no alcanzable.
         for (GcHandle h = 0; h < static_cast<GcHandle>(handles_.size()); ++h) {
             if (!handles_[h].live || !handles_[h].addr) continue;
             auto *hdr = reinterpret_cast<GcHeader *>(handles_[h].addr);
@@ -1445,6 +1449,24 @@ void GcHeap::major_gc() {
                 stats_.freed_bytes += total; // total slot, no payload
                 old_used_ -= total;
                 hdr->color = GcColor::DEAD;
+                // Modo AOT: LIBERAR el handle del objeto colectado (live=false +
+                // borrar de ptr_to_handle_ + reciclar).  En el path VM el handle
+                // colgante es benigno (el programa ya lo solto) y NO se libera
+                // en el sweep -> aqui solo lo hacemos en AOT para que la tabla
+                // de handles no crezca sin limite (new-and-forget) y para que el
+                // conteo de vivos sea exacto.  El slot se reusa abajo (freelist).
+                if (aot_precise_roots_) {
+                    uint8_t *payload = cursor + sizeof(GcHeader);
+                    const GcHandle dh = ptr_to_handle_.find(payload);
+                    if (dh != GC_NULL_HANDLE) {
+                        ptr_to_handle_.erase(payload);
+                        if (dh < static_cast<GcHandle>(handles_.size())) {
+                            handles_[dh].addr = nullptr;
+                            handles_[dh].live = false;
+                            free_handles_.push_back(dh);
+                        }
+                    }
+                }
             }
 
             if (hdr->color == GcColor::DEAD) {

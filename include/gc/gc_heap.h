@@ -781,6 +781,13 @@ class GcHeap {
     void set_root_provider(GcRootProvider *p) noexcept { root_provider_ = p; }
 
     /**
+     * @brief Activa el modo AOT (raices solo por stackmaps precisos +
+     *        external_refs).  Sin owner ni este flag, el GC conserva todo.
+     * @param v true para colectar de verdad usando raices precisas.
+     */
+    void set_aot_mode(bool v) noexcept { aot_precise_roots_ = v; }
+
+    /**
      * @brief Devuelve un puntero al payload del objeto referenciado por @p
      * handle.
      *
@@ -1242,6 +1249,14 @@ class GcHeap {
     /// (AOT standalone), el GC omite scan conservativo + shared y usa solo
     /// stackmaps precisos.
     GcRootProvider *root_provider_ = nullptr;
+
+    /// Modo AOT: las raices vienen SOLO de stackmaps precisos (frames nativos
+    /// via JitRegistry) + external_refs + pending_alloc.  Cuando es true y NO
+    /// hay root_provider_, el GC NO cae al fallback "todo handle = root" (que
+    /// nunca colectaria) -> colecta de verdad lo no alcanzable.  Lo activa
+    /// libvesta_gc (set_aot_mode).  Sin el flag, un heap sin owner conserva
+    /// todo (comportamiento de tests/Inc 0).
+    bool aot_precise_roots_ = false;
 
     // ---- (iv) Free lists segregadas para slots OldGen liberados ----
     // Cada slot DEAD reusa los primeros 8 bytes de su payload como

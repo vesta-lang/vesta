@@ -41,6 +41,13 @@ vm::ArenaManager &gc_arena() {
  */
 gc::GcHeap &gc_heap() {
     static gc::GcHeap heap(gc_arena(), 2u * 1024u * 1024u, 8u * 1024u * 1024u);
+    // Modo AOT: raices SOLO por stackmaps precisos (frames nativos via
+    // JitRegistry) + external_refs + pending.  Sin esto el major_gc conservaria
+    // todo (no colectaria).  v1 no-moving: vex_gc_alloc usa alloc_pinned ->
+    // OldGen, el nursery queda vacio (sin riesgo de interior-ptr stale al
+    // mover).  Set idempotente en cada acceso (1 store, a prueba de orden de
+    // init de statics).
+    heap.set_aot_mode(true);
     return heap;
 }
 
@@ -55,7 +62,18 @@ void vex_gc_init(void) {
 }
 
 uint32_t vex_gc_alloc(uint64_t size) {
-    return static_cast<uint32_t>(gc_heap().alloc(static_cast<size_t>(size)));
+    // v1 no-moving: pinned -> OldGen (el nursery queda vacio).  El GC colecta
+    // por mark-sweep con raices precisas; sin compactacion (optimizacion v2).
+    return static_cast<uint32_t>(
+        gc_heap().alloc_pinned(static_cast<size_t>(size)));
+}
+
+void vex_gc_pin(uint32_t handle) {
+    gc_heap().gc_addref(static_cast<gc::GcHandle>(handle));
+}
+
+void vex_gc_unpin(uint32_t handle) {
+    gc_heap().gc_release(static_cast<gc::GcHandle>(handle));
 }
 
 uint8_t *vex_gc_deref(uint32_t handle) {
