@@ -87,13 +87,14 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                 case ir::IrOp::CALL:
                 case ir::IrOp::TAILCALL:
                     // AOT.2.d: el `new` nativo emite calloc(1,size) para
-                    // zero-init.  Con un @AllocatorOverride lo reescribimos
-                    // a alloc_sym(size) -- 1 arg, descartando el `count` (=1)
-                    // -> en freestanding el `new` usa el allocator del
-                    // usuario sin arrastrar calloc de libc.  El override
-                    // debe zerificar (kzalloc) para preservar la semantica.
-                    // Cubre tanto CALL como TAILCALL (un `new` cuyo ctor es
-                    // trivial -> el optimizador promueve calloc a tail-call).
+                    // zero-init.  Con un @AllocatorOverride (incluido el slab
+                    // vex_mem por defecto) lo reescribimos a alloc_sym(size)
+                    // -- 1 arg, descartando el `count` (=1) -> el `new` usa el
+                    // allocator override sin arrastrar calloc de libc.  El
+                    // override debe zerificar (convencion kzalloc) para
+                    // preservar el cero-init de los campos no escritos.  Cubre
+                    // CALL y TAILCALL (un `new` con ctor trivial -> el
+                    // optimizador promueve calloc a tail-call).
                     if (cfg.has_alloc_override && in.func_name == "calloc" &&
                         in.operands.size() == 2) {
                         in.func_name = cfg.alloc_sym;
