@@ -372,6 +372,10 @@ int main(int argc, char *argv[]) {
             "AOT (-m aot): NO auto-incluye el runtime de I/O "
             "(stdlib/vex/vex_io.vex).  El usuario aporta __vex_write y los "
             "__vex_print_* (p.ej. enlazar vesta_io_bare.o, o freestanding).")(
+            "no-mem",
+            "AOT (-m aot): NO auto-incluye el slab allocator "
+            "(stdlib/vex/vex_mem.vex).  El allocator usa libc malloc/free (o el "
+            "@AllocatorOverride del usuario).")(
             "format",
             "Formato del ejecutable AOT (-m aot): pe|elf (default: PE en "
             "Windows, ELF en el resto).",
@@ -686,6 +690,7 @@ int main(int argc, char *argv[]) {
     bool aot_freestanding = result.count("freestanding") > 0;
     bool aot_no_exceptions = result.count("no-exceptions") > 0;
     bool aot_no_io = result.count("no-io") > 0;
+    bool aot_no_mem = result.count("no-mem") > 0;
     {
         const std::string &tname = result["target"].as<std::string>();
         if (tname == "bare")
@@ -2703,10 +2708,78 @@ int main(int argc, char *argv[]) {
             // @AllocatorOverride/@PanicHandler (vacio = convencion C
             // malloc/free/abort).
             aot::AotLowerConfig lcfg;
+            // Detectar si el modulo usa el allocator (RAW_ALLOC/RAW_FREE o el
+            // calloc del `new`) para decidir el auto-bundle del slab Vex.
+            bool aot_uses_alloc = false;
+            for (const auto &af : aot_mod.functions)
+                for (const auto &b : af.blocks)
+                    for (const auto &in : b.instrs)
+                        if (in.op == ir::IrOp::RAW_ALLOC ||
+                            in.op == ir::IrOp::RAW_FREE ||
+                            ((in.op == ir::IrOp::CALL ||
+                              in.op == ir::IrOp::TAILCALL) &&
+                             in.func_name == "calloc"))
+                            aot_uses_alloc = true;
+            bool bundle_mem = false;
+            ir::IrModule mem_mod; // poblado si bundle_mem (merge tras aot_lower)
             if (!cr.aot_alloc_sym.empty()) {
+                // @AllocatorOverride del usuario: respetarlo (no bundle).
                 lcfg.alloc_sym = cr.aot_alloc_sym;
                 lcfg.has_alloc_override =
                     true; // __new calloc -> alloc_sym(size)
+            } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
+                // Sin @AllocatorOverride del usuario -> el slab Vex
+                // (stdlib/vex/vex_mem.vex) es el allocator por DEFECTO, via el
+                // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
+                // compilamos vex_mem y leemos sus simbolos override
+                // (__vex_malloc / __vex_free) genericamente, no hardcoded.  Sin
+                // libc malloc/free.  El usuario sustituye con su propio
+                // @AllocatorOverride, o lo desactiva con --no-mem.
+                const std::string exe_dir =
+                    std::filesystem::path(fs::get_executable_path())
+                        .parent_path()
+                        .string();
+                const std::vector<std::string> cands = {
+                    exe_dir + "/stdlib/vex/vex_mem.vex",
+                    exe_dir + "/../stdlib/vex/vex_mem.vex",
+                    "stdlib/vex/vex_mem.vex"};
+                std::string mem_path;
+                for (const auto &c : cands)
+                    if (std::filesystem::exists(c)) {
+                        mem_path = c;
+                        break;
+                    }
+                if (mem_path.empty()) {
+                    std::cerr << "[aot] usa el allocator pero no encuentro "
+                                 "stdlib/vex/vex_mem.vex (enlazalo a mano, usa "
+                                 "@AllocatorOverride o compila con --no-mem).\n";
+                    return EXIT_FAILURE;
+                }
+                std::ifstream mf(mem_path);
+                std::string mem_src((std::istreambuf_iterator<char>(mf)),
+                                    std::istreambuf_iterator<char>());
+                vex::CompileOptions mem_opts;
+                mem_opts.module_name = "vex_mem";
+                mem_opts.opt_level = 2;
+                mem_opts.native_poo = true;
+                mem_opts.asm_target_bits = copts.asm_target_bits;
+                vex::CompileResult mem_cr =
+                    vex::compile_vex_source(mem_src, mem_path, mem_opts);
+                if (!mem_cr.ok || mem_cr.ir_module_cache_bytes.empty() ||
+                    !ir::parse_ir_module_cache(mem_cr.ir_module_cache_bytes,
+                                               mem_mod) ||
+                    mem_cr.aot_alloc_sym.empty() ||
+                    mem_cr.aot_free_sym.empty()) {
+                    std::cerr << "[aot] no pude compilar el slab allocator "
+                                 "vex_mem.vex (o no expone @AllocatorOverride).\n";
+                    return EXIT_FAILURE;
+                }
+                // Override por defecto = los simbolos que vex_mem declaro con
+                // @AllocatorOverride (mismo trato que un override del usuario).
+                lcfg.alloc_sym = mem_cr.aot_alloc_sym;
+                lcfg.free_sym = mem_cr.aot_free_sym;
+                lcfg.has_alloc_override = true; // __new calloc -> alloc_sym(size)
+                bundle_mem = true;
             }
             if (!cr.aot_free_sym.empty()) lcfg.free_sym = cr.aot_free_sym;
             if (!cr.aot_panic_sym.empty()) {
@@ -2714,6 +2787,35 @@ int main(int argc, char *argv[]) {
                 lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
             }
             aot::aot_lower_runtime(aot_mod, lcfg);
+
+            // Merge del slab (stdlib/vex/vex_mem.vex, ya compilado en mem_mod)
+            // DESPUES de aot_lower: ahora RAW_ALLOC/calloc/RAW_FREE ya son CALL
+            // __vex_malloc/__vex_free, asi que el codegen BFS los alcanza desde
+            // main.  Mismo patron de merge que vex_io/vex_exc.
+            if (bundle_mem) {
+                const uint64_t sd_off =
+                    static_cast<uint64_t>(aot_mod.static_data.size());
+                std::unordered_set<std::string> have;
+                for (const auto &af : aot_mod.functions)
+                    have.insert(af.name);
+                for (auto &fn : mem_mod.functions) {
+                    if (sd_off != 0)
+                        for (auto &bb : fn.blocks)
+                            for (auto &ins : bb.instrs)
+                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                    ins.imm += sd_off;
+                    if (!have.count(fn.name))
+                        aot_mod.functions.push_back(std::move(fn));
+                }
+                aot_mod.static_data.append_raw_entries(
+                    std::move(mem_mod.static_data));
+                for (auto &gv : mem_mod.globals)
+                    aot_mod.globals.emplace(gv.first, gv.second);
+                for (auto &ni : mem_mod.native_imports)
+                    aot_mod.register_native_import(ni.lib, ni.name);
+                std::cout << "[aot] slab allocator (stdlib/vex/vex_mem.vex) "
+                             "incluido en el objeto.\n";
+            }
 
             // Bare AOT: NO hay VM stack (rbx no es un ProcessVM*).  Forzar
             // TODAS las ALLOCAs a la pila nativa (host_alloca), incluso las
