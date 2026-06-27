@@ -54,6 +54,27 @@ struct AsmAssembleResult {
     /// offsets sin acoplar la inspeccion al backend concreto.  Un backend que no
     /// lo soporte lo deja vacio (la inspeccion degrada sin etiquetas de asm).
     std::vector<uint32_t> insn_offsets;
+
+    /// Reloc de un SIMBOLO referenciado desde el asm (`jmp [sym]`, `mov rax,
+    /// sym`, ...).  El backend lo resuelve a un sentinela, desensambla para
+    /// localizar el campo, y deja aqui (offset del campo en @c bytes, tamano,
+    /// nombre del simbolo, tipo).  El consumidor (AOT) lo emite a la tabla de
+    /// relocs del .o para que el linker lo parchee con la direccion real.
+    /// Tipo de la referencia, segun la FORMA de la instruccion (lo decide el
+    /// usuario en el asm: jmp/call directo, indirecto, mov, lea, ...).
+    enum class SymRefKind : uint8_t {
+        BranchRel32, ///< `jmp sym` / `call sym` directos: rel32 a una FUNCION.
+        DataRel32,   ///< `jmp [sym]` / `lea reg,[rip+sym]`: rip-rel a un dato.
+        Abs64,       ///< `mov reg, sym`: direccion absoluta 64-bit (imm64).
+        Abs32,       ///< `push sym` / `mov r32, sym`: absoluto 32-bit (imm32).
+    };
+    struct SymRef {
+        uint32_t offset = 0;  ///< offset del campo dentro de @c bytes
+        uint8_t size = 0;     ///< 4 u 8
+        SymRefKind kind = SymRefKind::DataRel32;
+        std::string symbol;   ///< nombre del simbolo Vex
+    };
+    std::vector<SymRef> sym_refs;
 };
 
 /**

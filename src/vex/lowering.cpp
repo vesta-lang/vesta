@@ -2452,6 +2452,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             // new Shape[N]), usar `T*` explicito en el parametro
             // hasta que la distincion se resuelva en el type system.
         }
+        // Variadico (`T... name`): el callee lo recibe como `T*` (puntero host
+        // al array empaquetado por el caller), NO como T.  El count va en un
+        // param i64 OCULTO que se anñade tras el loop (leido con vacount()).
+        if (p->is_variadic) {
+            pt = ir::IrType::PTR;
+            param_is_host_ptr = true;
+            param_is_class = false;
+        }
         const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
         fn.values[vid].is_param = true;
         if (param_is_class) {
@@ -2462,6 +2470,14 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         }
         fn.params.push_back(vid);
         param_bindings.emplace_back(p->name, vid);
+    }
+    // Variadicos: param OCULTO i64 del count, tras el `T*` del ultimo param.
+    // `vacount()` en el body resuelve a este binding.
+    if (!fd->params.empty() && fd->params.back()->is_variadic) {
+        const ir::IrValueId vcnt = fn.new_value(ir::IrType::I64, "%__vacount");
+        fn.values[vcnt].is_param = true;
+        fn.params.push_back(vcnt);
+        param_bindings.emplace_back("__vacount", vcnt);
     }
 
     // Bloque entry.
@@ -5550,6 +5566,27 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         }
         // raw_asm-elim 2026-05-28: usar IrOp::FULFILL_HLT directo.
         // Fusion atomica fulfill+hlt en 1 instr VM, mismo bytecode.
+        // AOT (native_poo_): el helper @Async es una tarea del scheduler coop
+        // -> CALL __vex_fulfill(fut, val) + RET (la tarea retorna al pump, no
+        // hay HLT del scheduler de la VM).
+        if (native_poo_) {
+            ir::IrInstr fu{};
+            fu.op = ir::IrOp::CALL;
+            fu.func_name = "__vex_fulfill";
+            fu.type = ir::IrType::VOID;
+            fu.dst = ir::IR_NO_VALUE;
+            fu.operands = {async_fut_id_, v_payload};
+            fu.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(fu));
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ir::IrType::VOID;
+            ret.dst = ir::IR_NO_VALUE;
+            ret.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(ret));
+            block_terminated_ = true;
+            return;
+        }
         ir::IrInstr fh{};
         fh.op = ir::IrOp::FULFILL_HLT;
         fh.type = ir::IrType::VOID;
@@ -7087,7 +7124,18 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
         }
         case CleanupAction::Kind::SYNC_EXIT: {
             // Sprint 6.C: tryleave + monexit como IR ops puros.
-            {
+            // AOT (native_poo_): el frame de excepcion es setjmp/longjmp ->
+            // se popea con __vex_pop_frame (no TRYLEAVE op, que el backend
+            // nativo no soporta); el monitor se libera con __vex_monexit.
+            if (native_poo_) {
+                ir::IrInstr cp{};
+                cp.op = ir::IrOp::CALL;
+                cp.type = ir::IrType::VOID;
+                cp.dst = ir::IR_NO_VALUE;
+                cp.func_name = "__vex_pop_frame";
+                cp.source_line = it->source_line;
+                fn_->append(current_block_, std::move(cp));
+            } else {
                 ir::IrInstr tl{};
                 tl.op = ir::IrOp::TRYLEAVE;
                 tl.type = ir::IrType::VOID;
@@ -7096,13 +7144,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 fn_->append(current_block_, std::move(tl));
             }
             if (!opnds.empty()) {
-                ir::IrInstr me{};
-                me.op = ir::IrOp::MONEXIT;
-                me.type = ir::IrType::VOID;
-                me.dst = ir::IR_NO_VALUE;
-                me.operands = {opnds[0]};
-                me.source_line = it->source_line;
-                fn_->append(current_block_, std::move(me));
+                emit_monitor_op(opnds[0], /*enter=*/false, it->source_line);
             }
             break;
         }
@@ -7613,6 +7655,154 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     const ir::IrValueId v_obj = lower_expr(s->target.get());
     if (v_obj == ir::IR_NO_VALUE) return;
 
+    // -----------------------------------------------------------------
+    // AOT/Embed (native_poo_): modelo setjmp/longjmp (sin VM runtime ni
+    // ops TRYENTER/TRYLEAVE/RETHROW, que el backend nativo no soporta).
+    //   monenter(obj)
+    //   buf = ALLOCA(96); __vex_push_frame(buf, 0); r = __vex_setjmp(buf)
+    //   br r ? handler : body
+    //   body... (normal) -> __vex_pop_frame + monexit(obj) + br merge
+    //   handler (longjmp) -> __vex_pop_frame + monexit(obj) + rethrow
+    //   return temprano    -> cleanup SYNC_EXIT = pop_frame + monexit
+    // El monitor se libera SIEMPRE (los 3 caminos).  __vex_* viven en
+    // vex_exc.vex; __vex_monenter/monexit en vex_sync.vex (auto-bundle).
+    // -----------------------------------------------------------------
+    if (native_poo_) {
+        const ir::IrBlockId nbody = fn_->new_block("sync_body");
+        const ir::IrBlockId nhandler = fn_->new_block("sync_handler");
+        const ir::IrBlockId nmerge = fn_->new_block("sync_merge");
+
+        // Helper local: CALL void por nombre (sin args salvo los dados).
+        auto vcall = [&](const char *name,
+                         std::vector<ir::IrValueId> args = {}) {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = name;
+            c.operands = std::move(args);
+            c.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(c));
+        };
+
+        // monenter(obj).
+        emit_monitor_op(v_obj, /*enter=*/true, s->loc.line);
+
+        // buf + push_frame catch-all + setjmp.
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_buf].is_host_ptr = true;
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_buf;
+            al.imm = 96;
+            al.host_alloca = true;
+            al.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        const ir::IrValueId v_type0 =
+            emit_const(ir::IrType::I64, 0, s->loc.line);
+        vcall("__vex_push_frame", {v_buf, v_type0});
+        const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr cs{};
+            cs.op = ir::IrOp::CALL;
+            cs.type = ir::IrType::I64;
+            cs.dst = v_r;
+            cs.func_name = "__vex_setjmp";
+            cs.operands = {v_buf};
+            cs.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(cs));
+        }
+        {
+            ir::IrInstr br{};
+            br.op = ir::IrOp::BR_COND;
+            br.operands.push_back(v_r);
+            br.target_block = nhandler;
+            br.false_block = nbody;
+            br.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(br));
+        }
+        fn_->blocks[current_block_].succs.push_back(nhandler);
+        fn_->blocks[current_block_].succs.push_back(nbody);
+        fn_->blocks[nhandler].preds.push_back(current_block_);
+        fn_->blocks[nbody].preds.push_back(current_block_);
+
+        // Cleanup para return temprano: pop_frame + monexit.
+        {
+            CleanupAction act;
+            act.kind = CleanupAction::Kind::SYNC_EXIT;
+            act.operands = {v_obj};
+            act.source_line = s->loc.line;
+            cleanup_stack_.push_back(std::move(act));
+        }
+
+        // Body.
+        current_block_ = nbody;
+        block_terminated_ = false;
+        lower_block(s->body.get());
+        cleanup_stack_.pop_back();
+
+        // Salida normal del body: pop_frame + monexit + br merge.
+        if (!block_terminated_) {
+            vcall("__vex_pop_frame");
+            emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
+            ir::IrInstr brm{};
+            brm.op = ir::IrOp::BR;
+            brm.target_block = nmerge;
+            brm.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(brm));
+            fn_->blocks[current_block_].succs.push_back(nmerge);
+            fn_->blocks[nmerge].preds.push_back(current_block_);
+            block_terminated_ = true;
+        }
+
+        // Handler (longjmp reanudo): pop_frame + monexit + rethrow.
+        current_block_ = nhandler;
+        block_terminated_ = false;
+        vcall("__vex_pop_frame");
+        emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
+        {
+            // rethrow nativo: leer value+type del estado de excepcion y
+            // re-lanzar (longjmp al frame externo).  El frame propio ya
+            // fue popeado arriba.
+            const ir::IrValueId v_v = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CALL;
+                c.type = ir::IrType::I64;
+                c.dst = v_v;
+                c.func_name = "__vex_get_value";
+                c.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(c));
+            }
+            const ir::IrValueId v_ty = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CALL;
+                c.type = ir::IrType::I64;
+                c.dst = v_ty;
+                c.func_name = "__vex_get_type";
+                c.source_line = s->loc.line;
+                fn_->append(current_block_, std::move(c));
+            }
+            ir::IrInstr th{};
+            th.op = ir::IrOp::THROW;
+            th.type = ir::IrType::VOID;
+            th.dst = ir::IR_NO_VALUE;
+            th.operands = {v_v, v_ty};
+            th.source_line = s->loc.line;
+            fn_->append(current_block_, std::move(th));
+        }
+        block_terminated_ = true;
+
+        // Continuar en merge (salida normal).
+        current_block_ = nmerge;
+        block_terminated_ = false;
+        return;
+    }
+
     // Crear bloques: body + handler (excepcion) + merge (continuacion).
     const ir::IrBlockId body_bb = fn_->new_block("sync_body");
     const ir::IrBlockId handler_bb = fn_->new_block("sync_handler");
@@ -7624,16 +7814,12 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     // colisionan con valores SSA vivos (el regalloc no inspecciona el
     // texto del RAW_ASM y no sabe que clobreamos).
     // Sprint 6.C: ptr -> handle via GC_HANDLE_FOR_PTR IR op + MONENTER IR op.
-    const ir::IrValueId v_handle = emit_gc_handle_for_ptr(v_obj, s->loc.line);
-    {
-        ir::IrInstr me{};
-        me.op = ir::IrOp::MONENTER;
-        me.type = ir::IrType::VOID;
-        me.dst = ir::IR_NO_VALUE;
-        me.operands = {v_handle};
-        me.source_line = s->loc.line;
-        fn_->append(current_block_, std::move(me));
-    }
+    // AOT (native_poo_): NO hay handle table -> el monitor opera sobre el
+    // host_ptr del objeto directamente (palabra inline en obj+16).  El resto
+    // de tiers convierten el ptr a GcHandle.  emit_monitor_op encapsula ambos.
+    const ir::IrValueId v_handle =
+        native_poo_ ? v_obj : emit_gc_handle_for_ptr(v_obj, s->loc.line);
+    emit_monitor_op(v_handle, /*enter=*/true, s->loc.line);
 
     // tryenter catch-all: setup handler_pc y type=NULL via SSA values.
     const std::string handler_label =
@@ -7699,15 +7885,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             tl.source_line = s->loc.line;
             fn_->append(current_block_, std::move(tl));
         }
-        {
-            ir::IrInstr me{};
-            me.op = ir::IrOp::MONEXIT;
-            me.type = ir::IrType::VOID;
-            me.dst = ir::IR_NO_VALUE;
-            me.operands = {v_handle};
-            me.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(me));
-        }
+        emit_monitor_op(v_handle, /*enter=*/false, s->loc.line);
 
         ir::IrInstr brm{};
         brm.op = ir::IrOp::BR;
@@ -7727,15 +7905,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
     block_terminated_ = false;
     {
         // Sprint 6.C: handler = MONEXIT IR op + rethrow (RAW_ASM minimal).
-        {
-            ir::IrInstr me{};
-            me.op = ir::IrOp::MONEXIT;
-            me.type = ir::IrType::VOID;
-            me.dst = ir::IR_NO_VALUE;
-            me.operands = {v_handle};
-            me.source_line = s->loc.line;
-            fn_->append(current_block_, std::move(me));
-        }
+        emit_monitor_op(v_handle, /*enter=*/false, s->loc.line);
         // raw_asm-elim wave 3: rethrow IR op dedicado.  Terminator del
         // bloque (re-lanza current_exception; nada sigue a esta instr).
         ir::IrInstr rt{};
@@ -8108,9 +8278,12 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     if (body) lower_block(body);
 
     // Sprint 6.D: terminador HLT via IR op puro (no RAW_ASM).
+    // AOT (native_poo_): el spawn body ES la funcion de entrada del hilo del
+    // SO -> termina con RET (el hilo se reclama al retornar), no con HLT (que
+    // es RUNTIME_DEPENDENT, propio del scheduler de la VM).
     if (!block_terminated_) {
         ir::IrInstr h{};
-        h.op = ir::IrOp::HLT;
+        h.op = native_poo_ ? ir::IrOp::RET : ir::IrOp::HLT;
         h.type = ir::IrType::VOID;
         h.dst = ir::IR_NO_VALUE;
         h.source_line = loc.line;
@@ -9530,6 +9703,26 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
     // Convencion: R1..R[N]=capturas, R15=N, spawnargs r_pc copia los
     // regs al child antes de make_ready.  Aplica para Auto policy.
     const auto &caps = spawn_captured_ssa_values_;
+
+    // AOT/bare (native_poo_): spawn = hilo 1:1 del SO via CALL __vex_spawn
+    // (CreateThread en Win, clone en Linux), bundle-ado desde vex_thread.vex.
+    // El hint de `here`/`on(N)` se ignora (sin schedulers; cada spawn es un
+    // hilo).  Las capturas (SPAWN_ARGS) llegan en la Fase 2; por ahora solo
+    // el caso sin capturas (las capturas caen al rechazo de aot_analyze).
+    if (native_poo_ && caps.empty()) {
+        const ir::IrValueId v_pid = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CALL;
+        c.type = ir::IrType::I64;
+        c.dst = v_pid;
+        c.func_name = "__vex_spawn";
+        c.operands = {v_pc};
+        c.is_call_site = true;
+        c.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(c));
+        return v_pid;
+    }
+
     if (e->policy == ast::SpawnExpr::Policy::Auto && !caps.empty()) {
         // raw_asm-elim wave 2: usar IrOp::SPAWN_ARGS nativo en lugar de
         // raw_asm.  El IR emitter ya genera el parallel-move correcto
@@ -9833,8 +10026,10 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // 2a. fut = future_alloc() via IR op FUTURE.
     const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
     {
+        // AOT (native_poo_): CALL nativo __vex_future_new (scheduler coop).
         ir::IrInstr fu{};
-        fu.op = ir::IrOp::FUTURE;
+        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
+        if (native_poo_) fu.func_name = "__vex_future_new";
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true;
@@ -9897,7 +10092,65 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // resolver conflictos al colocar args en sus regs destino.
     // Operands: [r_pc, fut, arg1, arg2, ..., argN]
     const ir::IrValueId v_child = fn_->new_value(ir::IrType::I64);
-    {
+    if (native_poo_) {
+        // AOT (native_poo_): scheduler cooperativo.  Args por PUNTERO (sin
+        // limite de aridad ni bug de stack-args de Win64): construimos un
+        // argbuf en la pila con [fut, args...], y llamamos
+        //   __vex_spawn_argv(helper, argc, &argbuf[0])
+        // que copia los args al slot de la tarea.  Al despacharla, pump castea
+        // el body a `fn(...)` y lo llama (CALLCLOSURE) con los args.
+        std::vector<ir::IrValueId> real_args;
+        real_args.push_back(v_fut);
+        for (auto v : qword_args) real_args.push_back(v);
+        const uint64_t argc = real_args.size();
+        // argbuf = ALLOCA(argc*8) en host-stack.
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = v_buf;
+            al.imm = argc * 8;
+            al.host_alloca = true;
+            al.source_line = fd->loc.line;
+            fn_->append(current_block_, std::move(al));
+            fn_->values[v_buf].is_host_ptr = true;
+        }
+        // STORE cada arg en argbuf[i].
+        for (size_t k = 0; k < real_args.size(); ++k) {
+            ir::IrValueId slot = v_buf;
+            if (k != 0) {
+                slot = fn_->new_value(ir::IrType::PTR);
+                const ir::IrValueId off =
+                    emit_const(ir::IrType::I64, k * 8, fd->loc.line);
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = slot;
+                ad.operands = {v_buf, off};
+                ad.source_line = fd->loc.line;
+                fn_->append(current_block_, std::move(ad));
+                fn_->values[slot].is_host_ptr = true;
+            }
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {real_args[k], slot};
+            st.source_line = fd->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        const ir::IrValueId v_argc =
+            emit_const(ir::IrType::I64, argc, fd->loc.line);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = "__vex_spawn_argv";
+        ins.type = ir::IrType::I64;
+        ins.dst = v_child;
+        ins.operands = {v_pc, v_argc, v_buf};
+        ins.is_call_site = true;
+        ins.source_line = fd->loc.line;
+        fn_->append(current_block_, std::move(ins));
+    } else {
         ir::IrInstr ins{};
         ins.op = ir::IrOp::SPAWN_ARGS;
         ins.type = ir::IrType::I64;
@@ -10040,6 +10293,23 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                               static_cast<unsigned long long>(
                                   static_cast<uint64_t>(it->second.value)));
                 body_sub += buf;
+            } else if (native_poo_ &&
+                       tc_.function_sig_by_name(tok) != nullptr) {
+                // AOT: referencia a una FUNCION del modulo -> nombre canonico
+                // __vxf_<label>.  El backend lo resuelve a un sentinela; el
+                // encoder lo decodifica al reloc (CALL_REL32 bare / fnsym: abs)
+                // segun la forma de la instruccion (jmp/call/mov/lea).
+                const FunctionSig *fs = tc_.function_sig_by_name(tok);
+                const std::string label =
+                    fs->mangled_label.empty() ? tok : fs->mangled_label;
+                body_sub += "__vxf_" + label;
+            } else if (native_poo_ &&
+                       runtime_global_slots_.find(tok) !=
+                           runtime_global_slots_.end()) {
+                // AOT: referencia a un GLOBAL del modulo -> __vxg_<slot>.  El
+                // encoder lo resuelve a rodata.<slot> (.data del global).
+                body_sub += "__vxg_" + std::to_string(
+                                           runtime_global_slots_[tok]);
             } else {
                 body_sub += tok;
             }
@@ -10373,6 +10643,68 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                  "(string)<char> solo soportado en compilacion nativa "
                  "(-m aot); pendiente en el path Full");
         return ir::IR_NO_VALUE;
+    }
+
+    // Cast a tipo FUNCTION desde una direccion cruda ENTERA (i64/u64/...):
+    // `(fn(...)->R) addr`.  Un function value es un PUNTERO a un slot de 16
+    // bytes {fn_addr, env}; el cast debe CONSTRUIR ese slot (env=0, sin
+    // captures) en lugar de reinterpretar la direccion como puntero al slot (lo
+    // que deref-eaba el codigo de la funcion como si fuera el fn_addr -> crash).
+    // Asi `((fn(...)->R) addr_i64)(args)` baja a una llamada indirecta correcta
+    // (CALLCLOSURE) con los args en la convencion natural.
+    // RESTRINGIDO a origen ENTERO: un origen PTR (e.g. `&slot[0]`) YA es el
+    // puntero al slot y debe pasar tal cual (no envolverse de nuevo).
+    auto is_int_kind = [](PrimitiveKind k) {
+        return k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
+               k == PrimitiveKind::I32 || k == PrimitiveKind::I64 ||
+               k == PrimitiveKind::U8 || k == PrimitiveKind::U16 ||
+               k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
+    };
+    if (dst_type.kind == PrimitiveKind::FUNCTION &&
+        is_int_kind(src_type.kind)) {
+        // v_op es la direccion de la funcion (i64).  Construir el slot.
+        const ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = fv_addr;
+            al.imm = 16;
+            al.host_alloca = native_poo_;
+            al.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(al));
+        }
+        if (native_poo_) fn_->values[fv_addr].is_host_ptr = true;
+        // [fv_addr + 0] = fn_addr (la direccion cruda).
+        {
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {v_op, fv_addr};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        // [fv_addr + 8] = 0 (env vacio).
+        {
+            const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
+            const ir::IrValueId off8 = emit_const(ir::IrType::I64, 8, e->loc.line);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = fv8;
+            ad.operands = {fv_addr, off8};
+            ad.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ad));
+            if (native_poo_) fn_->values[fv8].is_host_ptr = true;
+            const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ir::IrType::I64;
+            st.operands = {z, fv8};
+            st.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(st));
+        }
+        return fv_addr;
     }
 
     // Categorias.  PTR/ARRAY se tratan como pointer-like.
@@ -12691,8 +13023,13 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // i64 raw; el frontend hace cast/bitcast al tipo logico T).
         const ir::IrValueId v_raw = fn_->new_value(ir::IrType::I64);
         {
+            // AOT (native_poo_): CALL nativo __vex_await(fut) -> i64 raw.  En
+            // el scheduler cooperativo, si el future esta PENDING y estamos en
+            // main, bombea la cola hasta que se resuelva (run-to-completion);
+            // dentro de una tarea, suspende (fibra, fase 3).
             ir::IrInstr aw{};
-            aw.op = ir::IrOp::AWAIT;
+            aw.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::AWAIT;
+            if (native_poo_) aw.func_name = "__vex_await";
             aw.type = ir::IrType::I64;
             aw.dst = v_raw;
             aw.operands = {v};
@@ -13612,6 +13949,63 @@ skip_comptime_eval_for_macro_to_macro:
                 if (is_tmp_str) tmp_str_args_to_free.push_back(v_arg);
             }
         }
+    }
+
+    // Variadicos: empaquetar los args TRAILING (a partir del param fijo N-1)
+    // en un array de pila host y reemplazarlos por (ptr, count).  El callee
+    // recibe `T*` + el count (leido con vacount()).  Mismo patron que el argv
+    // de vex_async, ahora como feature del lenguaje.
+    if (callee_sig && callee_sig->is_variadic && !callee_is_sret &&
+        arg_ids.size() >= callee_sig->param_types.size() - 1) {
+        const size_t fixed = callee_sig->param_types.size() - 1;
+        const size_t vcount = arg_ids.size() - fixed;
+        const ir::IrType et =
+            ir_type_from_primitive(callee_sig->variadic_elem.kind);
+        const uint64_t esz = ir_type_size(et);
+        ir::IrValueId v_arr;
+        if (vcount > 0) {
+            v_arr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_arr].is_host_ptr = true;
+            {
+                ir::IrInstr al{};
+                al.op = ir::IrOp::ALLOCA;
+                al.type = ir::IrType::I8;
+                al.dst = v_arr;
+                al.imm = vcount * esz;
+                al.host_alloca = true;
+                al.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(al));
+            }
+            for (size_t i = 0; i < vcount; ++i) {
+                ir::IrValueId slot = v_arr;
+                if (i != 0) {
+                    slot = fn_->new_value(ir::IrType::PTR);
+                    const ir::IrValueId off =
+                        emit_const(ir::IrType::I64, i * esz, e->loc.line);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = slot;
+                    ad.operands = {v_arr, off};
+                    ad.source_line = e->loc.line;
+                    fn_->append(current_block_, std::move(ad));
+                    fn_->values[slot].is_host_ptr = true;
+                }
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = et;
+                st.operands = {arg_ids[fixed + i], slot};
+                st.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(st));
+            }
+        } else {
+            v_arr = emit_const(ir::IrType::PTR, 0, e->loc.line); // array vacio
+        }
+        std::vector<ir::IrValueId> packed(arg_ids.begin(),
+                                          arg_ids.begin() + fixed);
+        packed.push_back(v_arr);
+        packed.push_back(emit_const(ir::IrType::I64, vcount, e->loc.line));
+        arg_ids = std::move(packed);
     }
 
     // Para sret la "firma" de retorno es VOID; el dst SSA visible al
@@ -16013,6 +16407,19 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_pid = (name == "pid");
     const bool is_msgsend = (name == "msgsend");
     const bool is_msgrecv = (name == "msgrecv");
+    // Variadicos: vacount() -> lee el param oculto __vacount (numero de args
+    // variadicos empaquetados por el caller).
+    if (name == "vacount") {
+        const ir::IrValueId v = lookup("__vacount");
+        if (v == ir::IR_NO_VALUE) {
+            error_at(e->loc, "vacount() solo es valido dentro de una funcion "
+                             "con un parametro variadico 'T... name'");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = v;
+        return true;
+    }
     // argv del script: bajan a getargc/getarg.
     const bool is_args_count = (name == "args_count");
     const bool is_args_get = (name == "args_get");
@@ -21125,6 +21532,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // AOT (native_poo_): mailbox por valor -> CALL __vex_msgsend(pid, val)
+        // (sin buffer ni VM memory).  Devuelve 1 (ok) en el scheduler coop.
+        if (native_poo_) {
+            const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
+            ir::IrInstr ms{};
+            ms.op = ir::IrOp::CALL;
+            ms.func_name = "__vex_msgsend";
+            ms.type = ir::IrType::I32;
+            ms.dst = v_dst;
+            ms.operands = {v_pid, v_val};
+            ms.is_call_site = true;
+            ms.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(ms));
+            out_value = v_dst;
+            return true;
+        }
         // ALLOCA 8 bytes en stack para el buffer del mensaje.
         const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         {
@@ -21169,6 +21592,22 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (!e->args.empty()) {
             error_at(e->loc, "msgrecv: no acepta argumentos");
             out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // AOT (native_poo_): mailbox por valor -> CALL __vex_msgrecv() -> i64
+        // (lee de la mailbox de la tarea actual; no bloquea en Fase 2 -- el
+        // mensaje ya esta porque main hace el setup antes de bombear).
+        if (native_poo_) {
+            const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
+            ir::IrInstr mr{};
+            mr.op = ir::IrOp::CALL;
+            mr.func_name = "__vex_msgrecv";
+            mr.type = ir::IrType::I64;
+            mr.dst = v_val;
+            mr.is_call_site = true;
+            mr.source_line = e->loc.line;
+            fn_->append(current_block_, std::move(mr));
+            out_value = v_val;
             return true;
         }
         // ALLOCA 8 bytes para el buffer destino.
@@ -21223,8 +21662,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         // future -> aloca FutureObject; R0 contiene el handle.
         const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
+        // AOT (native_poo_): CALL nativo al scheduler cooperativo
+        // (__vex_future_new -> handle), bundle-ado desde vex_async.vex.
         ir::IrInstr fu{};
-        fu.op = ir::IrOp::FUTURE;
+        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
+        if (native_poo_) fu.func_name = "__vex_future_new";
         fu.type = ir::IrType::I64;
         fu.dst = v_fut;
         fu.is_call_site = true; // GC alloc
@@ -21250,8 +21692,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        // AOT (native_poo_): CALL nativo __vex_fulfill(fut, val).
         ir::IrInstr fu{};
-        fu.op = ir::IrOp::FULFILL;
+        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FULFILL;
+        if (native_poo_) fu.func_name = "__vex_fulfill";
         fu.type = ir::IrType::VOID;
         fu.dst = ir::IR_NO_VALUE;
         fu.operands = {v_fut, v_val};
@@ -29360,6 +29804,33 @@ ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
     ins.source_line = source_line;
     fn_->append(current_block_, std::move(ins));
     return v_h;
+}
+
+void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
+                               uint32_t source_line) {
+    if (native_poo_) {
+        // AOT/bare: monitor reentrante inline en el objeto (palabra en obj+16),
+        // sin GC ni handle table.  Baja a CALL a la primitiva nativa
+        // (__vex_monenter/__vex_monexit) que el auto-bundle de vex_sync.vex
+        // fusiona en el .o.  v_obj_or_handle es el host_ptr al ObjectHeader.
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = enter ? "__vex_monenter" : "__vex_monexit";
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.operands = {v_obj_or_handle};
+        ins.source_line = source_line;
+        fn_->append(current_block_, std::move(ins));
+        return;
+    }
+    // Resto de tiers (Full/JIT/interp): IR op MONENTER/MONEXIT sobre el handle.
+    ir::IrInstr ins{};
+    ins.op = enter ? ir::IrOp::MONENTER : ir::IrOp::MONEXIT;
+    ins.type = ir::IrType::VOID;
+    ins.dst = ir::IR_NO_VALUE;
+    ins.operands = {v_obj_or_handle};
+    ins.source_line = source_line;
+    fn_->append(current_block_, std::move(ins));
 }
 
 void Lowering::emit_mvtake(ir::IrValueId v_dst_addr, ir::IrValueId v_src_addr,

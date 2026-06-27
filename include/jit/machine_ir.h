@@ -1271,6 +1271,27 @@ struct AsmBlob {
     /// Solo-inspeccion: offset relativo -> linea .vex de cada instruccion del
     /// asm (para atribuir cada instr a su linea real, no al `asm {` global).
     std::vector<std::pair<uint32_t, uint32_t>> insn_lines;
+    /// Phase AS inc.6: simbolos PROPIOS referenciados desde el asm (`jmp
+    /// [global]`, `mov rax, fn`, ...).  @c offset es RELATIVO al inicio del
+    /// blob; el encoder lo reubica al offset de la funcion y emite un MReloc
+    /// (DATA_REL32 si @c rip_relative, ABS64 si imm).  @c symbol es el nombre
+    /// Vex (el driver lo resuelve a la dir de la funcion/dato).
+    /// Tipo segun la forma de la instruccion (decidido por el usuario en el
+    /// asm).  Espejo de @c vex::AsmAssembleResult::SymRefKind; el encoder lo
+    /// mapea a @c MRelocKind.
+    enum class AsmSymRefKind : uint8_t {
+        BranchRel32, ///< jmp/call sym (directo) -> CALL_REL32
+        DataRel32,   ///< jmp/call [sym] / lea [rip+sym] -> DATA_REL32
+        Abs64,       ///< mov reg, sym -> ABS64
+        Abs32,       ///< push sym / mov r32, sym -> ABS32 (best-effort)
+    };
+    struct AsmSymRef {
+        uint32_t offset = 0;
+        uint8_t size = 0;
+        AsmSymRefKind kind = AsmSymRefKind::DataRel32;
+        std::string symbol;
+    };
+    std::vector<AsmSymRef> sym_refs;
 };
 
 /**

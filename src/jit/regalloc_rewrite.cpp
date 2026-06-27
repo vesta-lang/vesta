@@ -656,8 +656,11 @@ struct Lowerer {
             }
         }
         /* Stores de stack-args PRIMERO (leen su loc antes del shuffle de los
-         * arg_regs).  mem->mem via scr0 (R10, caller-saved, libre aqui); FP via
-         * MOVSD (scratch XMM si mem->mem). */
+         * arg_regs).  mem->mem via scr1 (R11, caller-saved, libre aqui) -- NO
+         * scr0: un CALL INDIRECTO captura su func_ptr en scr0 antes de este
+         * marshal, y debe sobrevivir (ver el caso MOp::CALL).  scr1 se reusa
+         * luego para romper ciclos del parallel-move (secuencial, sin solape).
+         * FP via MOVSD (scratch XMM si mem->mem). */
         for (const auto &sm : smoves) {
             const int32_t soff = std::get<0>(sm);
             const MOperand &sloc = std::get<1>(sm);
@@ -673,8 +676,8 @@ struct Lowerer {
                     out.push_back(MInstr::make_unary(MOp::MOVSD, dst, sloc));
                 }
             } else if (sloc.kind == MOperandKind::MEM) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sloc));
-                out.push_back(MInstr::make_unary(MOp::MOV, dst, reg(scr0)));
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr1), sloc));
+                out.push_back(MInstr::make_unary(MOp::MOV, dst, reg(scr1)));
             } else {
                 out.push_back(MInstr::make_unary(MOp::MOV, dst, sloc));
             }
@@ -1030,9 +1033,13 @@ struct Lowerer {
              * de los GC roots vivos a traves del call. */
             MOperand tgt = resolve(in.src1);
             /* HOST_LEAF CALLIND: hay ARGs pendientes que marshalar a los
-             * arg_regs del ABI host.  CRiTICO: mover el func_ptr a scr0
-             * ANTES del parallel-move (puede caer en un arg_reg que el
-             * move pisaria); luego call scr0. */
+             * arg_regs del ABI host.  CRiTICO: capturar el func_ptr a scr0
+             * (R10) ANTES del marshal (su loc actual puede caer en un arg_reg
+             * que el parallel-move pisaria); luego call scr0.  marshal_args usa
+             * scr1 (R11) -- NO scr0 -- como scratch de los stack-args mem->mem,
+             * asi el target en scr0 SOBREVIVE al marshal (RAX no sirve: el
+             * allocator puede colocar un arg en RAX -> `mov rax,tgt` lo
+             * pisaria; visto con 12 args -> resultado erroneo). */
             if (!pending_args.empty()) {
                 out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), tgt));
                 tgt = reg(scr0);

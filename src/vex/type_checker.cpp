@@ -3184,8 +3184,23 @@ void TypeChecker::collect_globals() {
                 sig.return_type = std::move(ret_t);
             }
             sig.param_types.reserve(fn->params.size());
-            for (auto &p : fn->params) {
-                sig.param_types.push_back(type_from_node(p->type.get()));
+            for (size_t pi = 0; pi < fn->params.size(); ++pi) {
+                auto &p = fn->params[pi];
+                Type pt = type_from_node(p->type.get());
+                if (p->is_variadic) {
+                    // Variadico (`T... name`, ultimo param): el callee lo
+                    // recibe como `T*` (puntero al array empaquetado por el
+                    // caller); el numero de elementos se lee con vacount().
+                    if (pi + 1 != fn->params.size())
+                        diags_.error(p->loc,
+                                     "el parametro variadico '" + p->name +
+                                         "' debe ser el ultimo");
+                    sig.is_variadic = true;
+                    sig.variadic_elem = pt;
+                    sig.param_types.push_back(Type::make_ptr(pt));
+                } else {
+                    sig.param_types.push_back(pt);
+                }
             }
 
             Symbol s;
@@ -3431,7 +3446,11 @@ void TypeChecker::check_functions() {
         for (auto &p : fn->params) {
             Symbol sp;
             sp.kind = SymbolKind::Param;
-            sp.type = type_from_node(p->type.get());
+            // Variadico: dentro del body, `name` es un `T*` (puntero al array
+            // empaquetado).  El usuario lo indexa `name[i]` y lee el numero de
+            // elementos con `vacount()`.
+            sp.type = p->is_variadic ? Type::make_ptr(type_from_node(p->type.get()))
+                                     : type_from_node(p->type.get());
             if (!declare(p->name, sp)) {
                 diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
             }
@@ -4878,6 +4897,27 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         expected_optional_type_ = saved_outer_opt;
         expected_result_type_ = saved_outer_result;
         if (pushed_expected_enum) pop_expected_enum();
+        // Funciones de primera clase: `fn(...)->R f = nombre_funcion;`.  Si el
+        // tipo declarado es FUNCTION y el init es un IdentExpr que resuelve a
+        // una funcion top-level con firma compatible, lo PROMOCIONAMOS a un
+        // function value {fn_addr, env=0}.  Mismo mecanismo que la promocion en
+        // argumentos de HOF (check_call); el lowering de un IdentExpr con
+        // result_type FUNCTION emite el slot via emit_topfn_value.
+        if (s.type.kind == PrimitiveKind::FUNCTION &&
+            t.kind == PrimitiveKind::VOID &&
+            vd->init->kind == ast::NodeKind::IdentExpr) {
+            auto *id_arg = static_cast<ast::IdentExpr *>(vd->init.get());
+            const Symbol *s_arg = lookup(id_arg->name);
+            if (s_arg && s_arg->kind == SymbolKind::Function) {
+                const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
+                Type fnv = Type::make_function(arg_sig.param_types,
+                                               arg_sig.return_type);
+                if (types_assignable(s.type, fnv)) {
+                    t = fnv;
+                    id_arg->result_type = fnv;
+                }
+            }
+        }
         // implicit Some: si el tipo declarado es Optional<T> y el
         // init es de tipo T (o asignable a T), envolvemos el init
         // automaticamente con `Some(...)`.  null literal -> None().
@@ -7811,7 +7851,26 @@ Type TypeChecker::check_assign(ast::AssignExpr *e) {
         }
     }
 
-    const Type tv = check_expr(e->value.get());
+    Type tv = check_expr(e->value.get());
+    // Funciones de primera clase: `g_fp = nombre_funcion;` (asignacion a una
+    // variable de tipo FUNCTION).  Mismo mecanismo que en var-decl/HOF:
+    // promocionar el IdentExpr de la funcion a un function value {fn_addr,
+    // env=0} patcheando su result_type (el lowering emite el slot).
+    if (s->type.kind == PrimitiveKind::FUNCTION &&
+        tv.kind == PrimitiveKind::VOID && e->value &&
+        e->value->kind == ast::NodeKind::IdentExpr) {
+        auto *id_arg = static_cast<ast::IdentExpr *>(e->value.get());
+        const Symbol *s_arg = lookup(id_arg->name);
+        if (s_arg && s_arg->kind == SymbolKind::Function) {
+            const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
+            Type fnv = Type::make_function(arg_sig.param_types,
+                                           arg_sig.return_type);
+            if (types_assignable(s->type, fnv)) {
+                tv = fnv;
+                id_arg->result_type = fnv;
+            }
+        }
+    }
     // Vex Embed Inc 2: `string += string` y `string += char` son legales
     // (append sugar).  El RHS char NO es assignable a string en general,
     // pero en compound `+=` sobre string lo aceptamos: el lowering native
@@ -9700,6 +9759,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         e->result_type = rt;
         return rt;
     }
+    if (id->name == "vacount") {
+        // Numero de argumentos variadicos recibidos por la funcion actual.
+        // Solo valido dentro de una funcion con un param `T... name`.
+        if (!e->args.empty()) {
+            diags_.error(e->loc, "vacount: no acepta argumentos");
+        }
+        for (auto &a : e->args)
+            (void)check_expr(a.get());
+        const Type rt{PrimitiveKind::I64};
+        e->result_type = rt;
+        return rt;
+    }
     if (id->name == "msgrecv") {
         if (!e->args.empty()) {
             diags_.error(e->loc, "msgrecv: no acepta argumentos");
@@ -11086,6 +11157,36 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                  "' no acepta argumentos de tipo void");
             }
         }
+        return sig.return_type;
+    }
+
+    // Variadicos (`fn foo(A a, T... rest)`): aridad >= numero de params FIJOS
+    // (N-1).  Los args fijos se validan contra su tipo; los trailing (a partir
+    // de N-1) contra el tipo del ELEMENTO T.  El lowering empaqueta los
+    // trailing en un array de pila y pasa (ptr, count).
+    if (sig.is_variadic) {
+        const size_t fixed = sig.param_types.size() - 1;
+        if (e->args.size() < fixed) {
+            diags_.error(e->loc,
+                         std::string("numero de argumentos insuficiente en "
+                                     "llamada variadica a '") +
+                             id->name + "': minimo " + std::to_string(fixed) +
+                             ", recibidos " + std::to_string(e->args.size()));
+        }
+        for (size_t i = 0; i < e->args.size(); ++i) {
+            Type ta = check_expr(e->args[i].get());
+            const Type tp = (i < fixed) ? sig.param_types[i] : sig.variadic_elem;
+            if (ta.kind != PrimitiveKind::COUNT && !types_assignable(tp, ta) &&
+                !value_assignable_to_interface(tp, ta)) {
+                diags_.error(e->args[i]->loc,
+                             std::string("argumento ") + std::to_string(i + 1) +
+                                 ": tipo (" + type_to_string(ta) +
+                                 ") incompatible con " +
+                                 (i < fixed ? "parametro (" : "elemento variadico (") +
+                                 type_to_string(tp) + ")");
+            }
+        }
+        e->result_type = sig.return_type;
         return sig.return_type;
     }
 

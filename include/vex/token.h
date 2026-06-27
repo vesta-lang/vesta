@@ -261,9 +261,10 @@ enum class TokenKind : uint16_t {
     COMMA,     ///< ,
     SEMICOLON, ///< ;
     COLON,     ///< :
-    DOT,       ///< .
-    DOTDOT,    ///< ..  (rango exclusivo en comptime for)
-    DOTDOTEQ,  ///< ..= (rango inclusivo en comptime for)
+    DOT,        ///< .
+    DOTDOT,     ///< ..  (rango exclusivo en comptime for)
+    DOTDOTEQ,   ///< ..= (rango inclusivo en comptime for)
+    DOTDOTDOT,  ///< ... (parametro variadico: T... name)
     ARROW,     ///< ->
     FAT_ARROW, ///< =>
     QUESTION,  ///< ?

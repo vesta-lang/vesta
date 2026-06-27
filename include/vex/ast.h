@@ -1373,6 +1373,11 @@ struct ParamDecl : Node {
      * de parsear la expresion. El @c type queda materializado como
      * primitivo STRING para el body del macro. */
     bool is_expr_capture = false;
+    /** @c true si el parametro es VARIADICO (`T... name`, debe ser el ultimo).
+     * El callee lo recibe como un puntero @c T* al array empaquetado por el
+     * caller; el numero de args variadicos se lee con el builtin @c vacount().
+     * El @c type guarda el tipo del ELEMENTO (T), no el del puntero. */
+    bool is_variadic = false;
     ParamDecl() : Node(NodeKind::ParamDecl) {}
 };
 

@@ -187,6 +187,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::SEMICOLON: return ";";
     case TokenKind::COLON: return ":";
     case TokenKind::DOT: return ".";
+    case TokenKind::DOTDOTDOT: return "...";
     case TokenKind::ARROW: return "->";
     case TokenKind::FAT_ARROW: return "=>";
     case TokenKind::QUESTION: return "?";
@@ -1393,6 +1394,9 @@ Token Lexer::lex_symbol() {
         /* A.39: `..` y `..=` para rangos en comptime for. */
         if (peek_char(1) == '.' && peek_char(2) == '=') {
             return emit(TokenKind::DOTDOTEQ, 3);
+        }
+        if (peek_char(1) == '.' && peek_char(2) == '.') {
+            return emit(TokenKind::DOTDOTDOT, 3); // variadico
         }
         if (peek_char(1) == '.') return emit(TokenKind::DOTDOT, 2);
         return emit(TokenKind::DOT, 1);

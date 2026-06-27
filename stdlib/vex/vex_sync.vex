@@ -1,0 +1,128 @@
+// vex_sync.vex -- runtime de monitores nativo para Vex AOT (tiers bare/embed)
+// SIN libc.  Auto-bundle: el driver -m aot lo fusiona cuando el modulo usa
+// `synchronized`/`monitor` (ops MONENTER/MONEXIT) y no define las primitivas el
+// mismo (mismo patron que vex_io.vex / vex_exc.vex).
+//
+// Modelo: monitor reentrante por-objeto sin GC ni handle table.  La palabra de
+// monitor vive INLINE en el objeto, en el offset 16 del ObjectHeader
+// (`sizeof(ObjectHeader)`=24; offset 0=vtable_ptr en native_poo, offset 16
+// libre y zero-inicializado por calloc).  Layout de la palabra (64 bits):
+//
+//   bits 63..16 : owner_tid (id de hilo duenño; 0 = libre)
+//   bits 15..0  : lock_depth (recursion; 0 = libre)
+//
+// Adquisicion lock-free via `lock cmpxchg` (inline asm).  Reentrante: si el
+// hilo actual ya es duenño, incrementa la profundidad sin atomico.  En un
+// binario single-thread (sin `spawn`) el lock SIEMPRE esta uncontended -> la
+// primera CAS triunfa; cuando lleguen threads la misma palabra bloquea via
+// futex (Linux) / WaitOnAddress (Windows).  El path de bloqueo hace spin con
+// PAUSE por ahora (correcto, no hay contendientes todavia en AOT).
+
+// --- FFI minima: tid del hilo actual ----------------------------------------
+// @Target no aplica a bloques `extern`; se declaran sin condicion y el helper
+// @Target'd llama solo al de su plataforma -> el extern no usado lo elimina el
+// dead-strip.
+extern "kernel32.dll" {
+    fn GetCurrentThreadId() -> u32;
+}
+
+// Windows: tid via kernel32 (nuestra unica dep en Windows).
+@Target("os:windows")
+i64 __vsync_tid() {
+    return (i64)GetCurrentThreadId();
+}
+
+// Linux: gettid syscall (186) RAW, sin libc.
+@Target("!os:windows")
+i64 __vsync_tid() {
+    register("rax") i64 rax_t = 186; // SYS_gettid
+    asm volatile { syscall };
+    return rax_t;
+}
+
+// --- Primitiva atomica: compare-and-swap de 64 bits -------------------------
+// CAS(addr, expected, desired): intenta `*addr = desired` si `*addr ==
+// expected`.  Devuelve el valor ANTIGUO de `*addr` (== expected si triunfo).
+// `lock cmpxchg [mem], reg`: rax=expected (in/out -> old), reg=desired,
+// [mem]=destino.  rax queda con el valor leido (old) en exito o fallo.
+i64 __vsync_cas64(i64* addr, i64 expected, i64 desired) {
+    register("rsi") i64* a = addr;     // puntero destino
+    register("rax") i64 ex = expected; // in: expected / out: old value
+    register("rdx") i64 de = desired;  // valor a escribir si coincide
+    asm volatile { lock cmpxchg [rsi], rdx };
+    return ex; // rax = valor antiguo (CAS-loop arriba decide exito)
+}
+
+// --- Lectura atomica (load relaxed; en x86 un mov alineado ya es atomico) ----
+i64 __vsync_load64(i64* addr) {
+    return *addr;
+}
+
+// --- Hint de spin para el path contended (no-op funcional sin threads) -------
+void __vsync_pause() {
+    asm volatile { pause };
+}
+
+// --- Empaquetado de la palabra de monitor -----------------------------------
+// make(owner, depth) = (owner << 16) | (depth & 0xFFFF)
+i64 __vsync_make(i64 owner, i64 depth) {
+    return (owner << 16) | (depth & 0xFFFF);
+}
+i64 __vsync_owner(i64 word) {
+    // logico shift right 16 (la VM no zero-extiende implicito, pero u64 sí)
+    return ((u64)word) >> 16;
+}
+i64 __vsync_depth(i64 word) {
+    return word & 0xFFFF;
+}
+
+// --- monenter: adquirir el monitor reentrante del objeto --------------------
+// `obj` es el host_ptr al ObjectHeader (lo que devuelve `new` en native_poo).
+// La palabra vive en obj+16.
+void __vex_monenter(i64* obj) {
+    i64 tid = __vsync_tid();
+    // direccion de la palabra de monitor = obj + 16 bytes = obj + 2 qwords.
+    i64* word_addr = obj + 2; // aritmetica de punteros i64*: +2 = +16 bytes
+    // bucle de adquisicion.
+    while (true) {
+        i64 cur = __vsync_load64(word_addr);
+        i64 depth = __vsync_depth(cur);
+        if (depth == 0) {
+            // libre: intentar tomar (0 -> make(tid, 1)) con CAS.
+            i64 want = __vsync_make(tid, 1);
+            i64 old = __vsync_cas64(word_addr, 0, want);
+            if (old == 0) {
+                return; // adquirido
+            }
+            // perdimos la carrera: reintentar.
+        } else {
+            i64 owner = __vsync_owner(cur);
+            if (owner == tid) {
+                // reentrante: incrementar profundidad.  CAS para no pisar
+                // un wake concurrente (en single-thread siempre triunfa).
+                i64 want = __vsync_make(tid, depth + 1);
+                i64 old = __vsync_cas64(word_addr, cur, want);
+                if (old == cur) {
+                    return; // reentrada contabilizada
+                }
+            }
+            // ocupado por otro hilo: ceder y reintentar (spin con PAUSE).
+        }
+        __vsync_pause();
+    }
+}
+
+// --- monexit: liberar el monitor reentrante del objeto ----------------------
+void __vex_monexit(i64* obj) {
+    i64* word_addr = obj + 2; // obj + 16 bytes
+    i64 cur = __vsync_load64(word_addr);
+    i64 depth = __vsync_depth(cur);
+    if (depth <= 1) {
+        // ultima salida: liberar la palabra a 0 (release).
+        *word_addr = 0;
+    } else {
+        // todavia reentrante: decrementar la profundidad.
+        i64 owner = __vsync_owner(cur);
+        *word_addr = __vsync_make(owner, depth - 1);
+    }
+}
