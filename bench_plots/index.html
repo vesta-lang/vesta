@@ -33,11 +33,11 @@
     </style>
 </head><body>
 <h1>VestaVM Benchmark Report</h1>
-<p class="meta">Generado 2026-06-16 02:36:08 &middot; JSON: <code>F:\C\VM\bench_results.json</code></p>
+<p class="meta">Generado 2026-06-27 03:36:55 &middot; JSON: <code>F:\C\VM\bench_results.json</code></p>
 <h2>Sistema</h2>
 <dl class="sysinfo">
 <dt>CPU</dt><dd>13th Gen Intel(R) Core(TM) i7-13700KF (16 fisicos / 24 logicos @ 3400 MHz)</dd>
-<dt>RAM</dt><dd>47.8 GB</dd>
+<dt>RAM</dt><dd>63.8 GB</dd>
 <dt>Arch</dt><dd>AMD64</dd>
 <dt>OS</dt><dd>Windows 10 (10.0.19045)</dd>
 </dl>
@@ -52,52 +52,53 @@
 </dl>
 <h2>Resultados (ms, mediana)</h2>
 <table>
-<thead><tr><th>Benchmark</th><th>Vex interp</th><th>Vex JIT</th><th>C (gcc -O3)</th><th>C++ (g++ -O3)</th><th>Python (CPython)</th><th>Java (HotSpot)</th></tr></thead>
+<thead><tr><th>Benchmark</th><th>Vex interp</th><th>Vex JIT</th><th>Vex AOT sse2</th><th>Vex AOT avx2</th><th>Vex AOT auto</th><th>C (gcc -O3)</th><th>C++ (g++ -O3)</th><th>Python (CPython)</th><th>Java (HotSpot)</th></tr></thead>
 <tbody>
-<tr><td>alloc</td><td>162.7</td><td>33.1</td><td class="winner">3.2</td><td>3.4</td><td>550.9</td><td>70.6</td></tr>
-<tr><td>array_sum</td><td>1631.2</td><td>44.8</td><td class="winner">5.0</td><td>6.4</td><td>456.2</td><td>80.7</td></tr>
-<tr><td>bitops</td><td>4429.7</td><td>66.5</td><td class="winner">25.8</td><td>26.2</td><td>7342.6</td><td>94.1</td></tr>
-<tr><td>branch_unpredict</td><td>6908.0</td><td>163.2</td><td class="winner">17.5</td><td>17.6</td><td>2971.4</td><td>164.3</td></tr>
-<tr><td>callvirt</td><td>13224.1</td><td>83.4</td><td class="winner">2.9</td><td>4.0</td><td>1771.8</td><td>69.8</td></tr>
-<tr><td>callvirt_hot</td><td>4918.8</td><td>46.5</td><td>10.9</td><td class="winner">5.7</td><td>692.3</td><td>70.7</td></tr>
-<tr><td>cmp_fusion</td><td>807.1</td><td>43.7</td><td class="winner">2.8</td><td>3.7</td><td>1802.3</td><td>70.5</td></tr>
-<tr><td>fib_recursive</td><td>618.6</td><td>38.5</td><td class="winner">6.0</td><td>6.1</td><td>208.2</td><td>73.5</td></tr>
-<tr><td>fp_jit</td><td>853.0</td><td class="timeout">TIMEOUT</td><td>10.1</td><td class="winner">10.1</td><td>1290.2</td><td>87.3</td></tr>
-<tr><td>hash_lookup</td><td>8862.2</td><td>96.8</td><td>13.1</td><td class="winner">12.9</td><td>6485.4</td><td>127.7</td></tr>
-<tr><td>int_mixed</td><td>5346.7</td><td>71.5</td><td>20.4</td><td class="winner">18.5</td><td>10945.5</td><td>84.7</td></tr>
-<tr><td>intops_jit</td><td>6807.9</td><td>37.4</td><td>3.6</td><td class="winner">3.2</td><td>1044.9</td><td>73.0</td></tr>
-<tr><td>jit_method</td><td>504.3</td><td>43.4</td><td class="winner">4.0</td><td>4.1</td><td>1176.6</td><td>77.6</td></tr>
-<tr><td>mem_class</td><td>1025.5</td><td>46.6</td><td class="winner">4.1</td><td>4.2</td><td>141.7</td><td>71.7</td></tr>
-<tr><td>mem_malloc_free</td><td>2504.3</td><td>32.6</td><td class="winner">3.8</td><td>5.3</td><td>550.5</td><td>70.9</td></tr>
-<tr><td>mem_struct</td><td>1691.0</td><td>37.8</td><td class="winner">3.0</td><td>3.1</td><td>400.3</td><td>72.5</td></tr>
-<tr><td>memcpy_loop</td><td>2659.4</td><td>71.2</td><td>5.8</td><td class="winner">5.7</td><td>3113.3</td><td>96.4</td></tr>
-<tr><td>nested_loops</td><td>2274.5</td><td>51.0</td><td class="winner">13.5</td><td>14.1</td><td>1555.6</td><td>80.0</td></tr>
-<tr><td>obj_accum</td><td>5394.2</td><td>73.2</td><td>28.2</td><td class="winner">28.2</td><td>4231.3</td><td>100.3</td></tr>
-<tr><td>pic_real</td><td>743.2</td><td>39.0</td><td class="winner">6.0</td><td>6.0</td><td>271.0</td><td>74.9</td></tr>
-<tr><td>polymorphic</td><td>8479.4</td><td>57.9</td><td>9.5</td><td class="winner">9.2</td><td>991.9</td><td>76.6</td></tr>
-<tr><td>quicksort</td><td>344.1</td><td>39.4</td><td>8.8</td><td class="winner">7.7</td><td>124.7</td><td>77.8</td></tr>
-<tr><td>rotops_jit</td><td>4268.5</td><td>31.4</td><td>3.8</td><td class="winner">3.7</td><td>1346.0</td><td>71.3</td></tr>
-<tr><td>state_machine</td><td>4545.9</td><td>66.5</td><td>19.5</td><td class="winner">19.0</td><td>1526.8</td><td>85.7</td></tr>
-<tr><td>string_hot</td><td>41.2</td><td>29.6</td><td>8.3</td><td class="winner">5.6</td><td>26.3</td><td>81.8</td></tr>
-<tr><td>string_workout</td><td>5618.9</td><td>478.4</td><td class="winner">30.1</td><td>39.3</td><td>489.9</td><td>182.8</td></tr>
-<tr><td>struct_field</td><td>2074.1</td><td>79.2</td><td>5.8</td><td class="winner">5.2</td><td>5070.1</td><td>77.1</td></tr>
-<tr><td>tight_loop</td><td>2234.6</td><td>48.3</td><td class="winner">13.0</td><td>13.2</td><td>982.1</td><td>80.3</td></tr>
+<tr><td>alloc</td><td>150.9</td><td>35.7</td><td>4.6</td><td>4.9</td><td>4.6</td><td class="winner">3.2</td><td>3.5</td><td>618.0</td><td>72.9</td></tr>
+<tr><td>array_sum</td><td>1520.1</td><td>41.5</td><td>15.1</td><td>14.2</td><td>14.8</td><td class="winner">5.0</td><td>5.4</td><td>483.2</td><td>82.7</td></tr>
+<tr><td>bitops</td><td>3107.0</td><td>69.4</td><td>39.0</td><td>40.4</td><td>39.4</td><td class="winner">26.2</td><td>26.7</td><td>7382.2</td><td>95.0</td></tr>
+<tr><td>branch_unpredict</td><td>3885.7</td><td>171.9</td><td>145.1</td><td>142.5</td><td>143.2</td><td>19.0</td><td class="winner">18.7</td><td>3150.8</td><td>176.6</td></tr>
+<tr><td>callvirt</td><td>849.5</td><td>41.9</td><td>12.4</td><td>12.7</td><td>13.2</td><td class="winner">3.5</td><td>3.5</td><td>1868.4</td><td>74.6</td></tr>
+<tr><td>callvirt_hot</td><td>307.7</td><td>37.1</td><td>7.0</td><td>7.1</td><td>7.1</td><td>11.6</td><td class="winner">5.4</td><td>764.9</td><td>75.0</td></tr>
+<tr><td>cmp_fusion</td><td>696.0</td><td>44.8</td><td>17.0</td><td>17.6</td><td>17.0</td><td>3.4</td><td class="winner">3.0</td><td>1919.3</td><td>74.3</td></tr>
+<tr><td>fib_recursive</td><td>349.8</td><td>41.8</td><td>11.9</td><td>12.4</td><td>11.8</td><td>6.4</td><td class="winner">6.3</td><td>260.3</td><td>76.9</td></tr>
+<tr><td>fp_jit</td><td>785.8</td><td>97.3</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="winner">10.4</td><td>11.0</td><td>1386.7</td><td>91.4</td></tr>
+<tr><td>hash_lookup</td><td>4160.1</td><td>96.2</td><td>67.1</td><td>65.2</td><td>67.4</td><td class="winner">13.0</td><td>13.1</td><td>6750.4</td><td>126.2</td></tr>
+<tr><td>int_mixed</td><td>2679.9</td><td>52.0</td><td>23.7</td><td>22.9</td><td>22.6</td><td class="winner">19.6</td><td>19.9</td><td>11124.4</td><td>91.3</td></tr>
+<tr><td>intops_jit</td><td>1550.1</td><td>38.8</td><td>7.8</td><td>8.2</td><td>8.2</td><td>4.0</td><td class="winner">3.9</td><td>1137.5</td><td>78.1</td></tr>
+<tr><td>jit_method</td><td>435.5</td><td>40.4</td><td>11.6</td><td>12.0</td><td>11.1</td><td class="winner">4.1</td><td>4.2</td><td>1247.4</td><td>83.0</td></tr>
+<tr><td>mem_class</td><td>45.4</td><td>33.3</td><td>3.5</td><td>3.5</td><td>3.5</td><td class="winner">3.2</td><td>3.3</td><td>188.3</td><td>76.1</td></tr>
+<tr><td>mem_malloc_free</td><td>662.1</td><td>35.3</td><td>6.2</td><td>5.7</td><td>6.1</td><td class="winner">4.4</td><td>4.7</td><td>612.2</td><td>74.4</td></tr>
+<tr><td>mem_struct</td><td>521.8</td><td>34.8</td><td>5.9</td><td>5.0</td><td>5.5</td><td>3.1</td><td class="winner">3.0</td><td>442.8</td><td>77.3</td></tr>
+<tr><td>memcpy_loop</td><td>1790.7</td><td>33.6</td><td class="winner">5.9</td><td>6.5</td><td>6.0</td><td>6.6</td><td>5.9</td><td>3486.8</td><td>103.4</td></tr>
+<tr><td>nested_loops</td><td>2158.1</td><td>53.8</td><td>25.9</td><td>25.0</td><td>24.8</td><td class="winner">14.7</td><td>15.0</td><td>1654.4</td><td>85.4</td></tr>
+<tr><td>obj_accum</td><td>3694.2</td><td>70.8</td><td>43.5</td><td>43.9</td><td>42.7</td><td>30.4</td><td class="winner">30.2</td><td>4369.5</td><td>103.4</td></tr>
+<tr><td>pic_real</td><td>455.0</td><td>41.3</td><td>11.4</td><td>11.3</td><td>11.4</td><td class="winner">5.6</td><td>6.9</td><td>326.6</td><td>79.2</td></tr>
+<tr><td>polymorphic</td><td>774.5</td><td>60.3</td><td>30.7</td><td>28.9</td><td>30.7</td><td class="winner">8.9</td><td>10.0</td><td>1081.9</td><td>83.0</td></tr>
+<tr><td>quicksort</td><td>276.8</td><td>37.6</td><td>10.4</td><td>10.3</td><td>10.4</td><td class="winner">7.8</td><td>8.3</td><td>162.9</td><td>81.3</td></tr>
+<tr><td>rotops_jit</td><td>1011.7</td><td>34.7</td><td>6.5</td><td>5.7</td><td>6.3</td><td class="winner">4.0</td><td>4.7</td><td>1418.6</td><td>79.7</td></tr>
+<tr><td>state_machine</td><td>3027.1</td><td>68.3</td><td>41.2</td><td>40.5</td><td>39.4</td><td>20.2</td><td class="winner">19.9</td><td>1623.9</td><td>92.7</td></tr>
+<tr><td>string_hot</td><td>43.2</td><td>31.2</td><td>10.1</td><td>10.0</td><td>10.8</td><td>8.6</td><td class="winner">6.7</td><td>68.2</td><td>89.1</td></tr>
+<tr><td>string_workout</td><td>3625.0</td><td>663.2</td><td>73.4</td><td>75.9</td><td>75.7</td><td class="winner">31.1</td><td>40.5</td><td>543.9</td><td>185.9</td></tr>
+<tr><td>struct_field</td><td>1890.8</td><td>77.1</td><td>49.4</td><td>48.6</td><td>48.5</td><td class="winner">5.6</td><td>5.7</td><td>5274.5</td><td>82.5</td></tr>
+<tr><td>tight_loop</td><td>2086.6</td><td>51.2</td><td>21.1</td><td>22.3</td><td>22.1</td><td>13.2</td><td class="winner">13.2</td><td>1064.1</td><td>83.5</td></tr>
+<tr><td>vec_axpy</td><td>21314.2</td><td>77.1</td><td>84.3</td><td>50.3</td><td>49.7</td><td class="winner">18.5</td><td>18.7</td><td>6202.6</td><td>120.3</td></tr>
 </tbody></table>
 <h2>Geomean slowdown vs C por categoria</h2>
 <p class="meta">Verde &lt;1.5x &middot; Amarillo &lt;3x &middot; Rojo &ge;3x</p>
 <table>
-<thead><tr><th>Categoria</th><th>N</th><th>Vex interp</th><th>Vex JIT</th><th>C++ (g++ -O3)</th><th>Python (CPython)</th><th>Java (HotSpot)</th></tr></thead>
+<thead><tr><th>Categoria</th><th>N</th><th>Vex interp</th><th>Vex JIT</th><th>Vex AOT sse2</th><th>Vex AOT avx2</th><th>Vex AOT auto</th><th>C++ (g++ -O3)</th><th>Python (CPython)</th><th>Java (HotSpot)</th></tr></thead>
 <tbody>
-<tr><td>alloc</td><td>4</td><td class="cat-bad">259.93x</td><td class="cat-bad">10.52x</td><td class="cat-good">1.11x</td><td class="cat-bad">102.69x</td><td class="cat-bad">20.25x</td></tr>
-<tr><td>bit</td><td>2</td><td class="cat-bad">439.00x</td><td class="cat-bad">4.61x</td><td class="cat-good">0.99x</td><td class="cat-bad">317.39x</td><td class="cat-bad">8.27x</td></tr>
-<tr><td>branch</td><td>3</td><td class="cat-bad">152.94x</td><td class="cat-bad">5.21x</td><td class="cat-good">0.95x</td><td class="cat-bad">57.21x</td><td class="cat-bad">7.13x</td></tr>
-<tr><td>fp</td><td>1</td><td class="cat-bad">84.42x</td><td class="na">N/A</td><td class="cat-good">1.00x</td><td class="cat-bad">127.69x</td><td class="cat-bad">8.64x</td></tr>
-<tr><td>hash</td><td>1</td><td class="cat-bad">675.49x</td><td class="cat-bad">7.38x</td><td class="cat-good">0.98x</td><td class="cat-bad">494.33x</td><td class="cat-bad">9.73x</td></tr>
-<tr><td>int</td><td>7</td><td class="cat-bad">245.65x</td><td class="cat-bad">6.62x</td><td class="cat-good">1.03x</td><td class="cat-bad">190.00x</td><td class="cat-bad">10.92x</td></tr>
-<tr><td>mem</td><td>2</td><td class="cat-bad">384.92x</td><td class="cat-bad">10.45x</td><td class="cat-good">1.12x</td><td class="cat-bad">220.25x</td><td class="cat-bad">16.30x</td></tr>
-<tr><td>misc</td><td>1</td><td class="cat-bad">190.96x</td><td class="cat-mid">2.59x</td><td class="cat-good">1.00x</td><td class="cat-bad">149.79x</td><td class="cat-bad">3.55x</td></tr>
-<tr><td>oop</td><td>5</td><td class="cat-bad">606.30x</td><td class="cat-bad">9.23x</td><td class="cat-good">0.91x</td><td class="cat-bad">174.34x</td><td class="cat-bad">11.60x</td></tr>
-<tr><td>string</td><td>2</td><td class="cat-bad">30.47x</td><td class="cat-bad">7.53x</td><td class="cat-good">0.94x</td><td class="cat-bad">7.19x</td><td class="cat-bad">7.75x</td></tr>
+<tr><td>alloc</td><td>4</td><td class="cat-bad">64.41x</td><td class="cat-bad">10.15x</td><td class="cat-good">1.44x</td><td class="cat-good">1.37x</td><td class="cat-good">1.41x</td><td class="cat-good">1.05x</td><td class="cat-bad">123.07x</td><td class="cat-bad">21.95x</td></tr>
+<tr><td>bit</td><td>2</td><td class="cat-bad">172.41x</td><td class="cat-bad">4.77x</td><td class="cat-mid">1.54x</td><td class="cat-good">1.47x</td><td class="cat-mid">1.53x</td><td class="cat-good">1.09x</td><td class="cat-bad">314.70x</td><td class="cat-bad">8.46x</td></tr>
+<tr><td>branch</td><td>3</td><td class="cat-bad">102.71x</td><td class="cat-bad">5.28x</td><td class="cat-mid">2.74x</td><td class="cat-mid">2.70x</td><td class="cat-mid">2.69x</td><td class="cat-good">1.01x</td><td class="cat-bad">65.22x</td><td class="cat-bad">7.63x</td></tr>
+<tr><td>fp</td><td>1</td><td class="cat-bad">75.78x</td><td class="cat-bad">9.38x</td><td class="na">N/A</td><td class="na">N/A</td><td class="na">N/A</td><td class="cat-good">1.06x</td><td class="cat-bad">133.73x</td><td class="cat-bad">8.81x</td></tr>
+<tr><td>hash</td><td>1</td><td class="cat-bad">318.91x</td><td class="cat-bad">7.38x</td><td class="cat-bad">5.14x</td><td class="cat-bad">5.00x</td><td class="cat-bad">5.16x</td><td class="cat-good">1.01x</td><td class="cat-bad">517.48x</td><td class="cat-bad">9.67x</td></tr>
+<tr><td>int</td><td>7</td><td class="cat-bad">147.06x</td><td class="cat-bad">6.10x</td><td class="cat-mid">2.10x</td><td class="cat-mid">2.14x</td><td class="cat-mid">2.08x</td><td class="cat-good">0.98x</td><td class="cat-bad">194.19x</td><td class="cat-bad">10.88x</td></tr>
+<tr><td>mem</td><td>2</td><td class="cat-bad">286.60x</td><td class="cat-bad">6.49x</td><td class="cat-mid">1.64x</td><td class="cat-mid">1.67x</td><td class="cat-mid">1.64x</td><td class="cat-good">0.98x</td><td class="cat-bad">225.49x</td><td class="cat-bad">16.06x</td></tr>
+<tr><td>misc</td><td>2</td><td class="cat-bad">374.47x</td><td class="cat-bad">3.12x</td><td class="cat-mid">2.56x</td><td class="cat-mid">1.98x</td><td class="cat-mid">1.94x</td><td class="cat-good">1.00x</td><td class="cat-bad">219.70x</td><td class="cat-bad">4.71x</td></tr>
+<tr><td>oop</td><td>5</td><td class="cat-bad">109.06x</td><td class="cat-bad">7.66x</td><td class="cat-mid">2.65x</td><td class="cat-mid">2.63x</td><td class="cat-mid">2.69x</td><td class="cat-good">0.92x</td><td class="cat-bad">188.18x</td><td class="cat-bad">12.19x</td></tr>
+<tr><td>string</td><td>2</td><td class="cat-bad">24.13x</td><td class="cat-bad">8.78x</td><td class="cat-mid">1.66x</td><td class="cat-mid">1.68x</td><td class="cat-mid">1.74x</td><td class="cat-good">1.00x</td><td class="cat-bad">11.75x</td><td class="cat-bad">7.85x</td></tr>
 </tbody></table>
 <h2>Graficas</h2>
 <div class="grid-plots">
@@ -166,5 +167,6 @@
 <div><h3>string_workout</h3><img class="plot" src="per_bench/string_workout.png" alt="string_workout"></div>
 <div><h3>struct_field</h3><img class="plot" src="per_bench/struct_field.png" alt="struct_field"></div>
 <div><h3>tight_loop</h3><img class="plot" src="per_bench/tight_loop.png" alt="tight_loop"></div>
+<div><h3>vec_axpy</h3><img class="plot" src="per_bench/vec_axpy.png" alt="vec_axpy"></div>
 </div>
 </body></html>
