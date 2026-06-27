@@ -36,6 +36,11 @@
 #include "jit/jit_call.h"
 #include "profiler/timer.h"
 #include "runtime/rflags.h"
+// Inc 0b: los cuerpos de ProcessVMRootProvider necesitan la def completa de la
+// VM (scheduler.vm_reference.shared_*) + las tablas shared (Phase Z).
+#include "gc/shared_handle_table.h"
+#include "gc/shared_heap.h"
+#include "runtime/runtime.h"
 
 namespace loader {
 class Loader; ///< Declaracion adelantada del cargador de bytecode
@@ -78,10 +83,11 @@ ProcessVM::ProcessVM(Scheduler &scheduler, GlobalPID pid)
       vm_mem(tlb,
              manager_mem_priv), // combinar TLB privado con ArenaManager privado
       scheduler(scheduler) {
-    // fix8 - el GC necesita conocer el ProcessVM owner para
-    // escanear stack/regs durante major_gc.  Set una sola vez aqui;
-    // el puntero permanece valido durante toda la vida del proceso.
-    gc_heap.set_owner_process(this);
+    // fix8 - el GC necesita conocer el ProcessVM owner para escanear stack/regs
+    // durante major_gc.  Inc 0b: ahora via la interfaz GcRootProvider (no un
+    // ProcessVM* directo) -> gc_heap.cpp no depende de la VM.  El provider solo
+    // guarda `this`; permanece valido durante toda la vida del proceso.
+    gc_heap.set_root_provider(&gc_root_provider_);
     // Phase D.7: cachear la direccion estable de la HandleTable para que
     // el JIT inline-e deref (handle -> host_ptr) sin CALL al runtime.
     jit_handle_table = gc_heap.jit_handle_table_ptr();
@@ -269,6 +275,48 @@ std::string ProcessVM::vm_summary() const {
     ss << " Sleep=" << time_sleep << "\n";
 
     return ss.str();
+}
+
+// ---------------------------------------------------------------------------
+// ProcessVMRootProvider: la impl de gc::GcRootProvider sobre el ProcessVM.
+// Aqui (no en el header) porque accede a scheduler.vm_reference.shared_* (la
+// def completa de la VM, incluida arriba via runtime.h).
+// ---------------------------------------------------------------------------
+
+bool ProcessVMRootProvider::vm_stack_regs(uint64_t &rsp, uint64_t &stack_high,
+                                          uint64_t regs[16]) {
+    rsp = proc_->registers.stack_pointer.qword();
+    stack_high = proc_->stack_high;
+    for (int i = 0; i < 16; ++i)
+        regs[i] = proc_->registers.regs[i].qword();
+    return true; // el ProcessVM siempre tiene stack VM
+}
+
+uint64_t ProcessVMRootProvider::stack_low_water() const {
+    return proc_->stack_low_water;
+}
+
+void ProcessVMRootProvider::set_stack_low_water(uint64_t v) {
+    proc_->stack_low_water = v;
+}
+
+void ProcessVMRootProvider::write_back_regs(const uint64_t regs[16]) {
+    for (int i = 0; i < 16; ++i)
+        proc_->registers.regs[i].qword(regs[i]);
+}
+
+vm::VirtualMemory *ProcessVMRootProvider::vm_mem() { return &proc_->vm_mem; }
+
+bool ProcessVMRootProvider::shared_contains(const uint8_t *ptr) {
+    return proc_->scheduler.vm_reference.shared_heap.contains(ptr);
+}
+
+uint8_t *ProcessVMRootProvider::shared_lookup(gc::GcHandle h) {
+    return proc_->scheduler.vm_reference.shared_handle_table.lookup(h);
+}
+
+gc::WaitTable *ProcessVMRootProvider::shared_wait_table() {
+    return &proc_->scheduler.vm_reference.shared_wait_table;
 }
 
 } // namespace runtime
