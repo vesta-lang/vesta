@@ -623,13 +623,26 @@ struct Lowerer {
         std::vector<std::pair<MReg, MOperand>> gmoves, fmoves;
         /* Args ilimitados: GP que no caben en arg_regs van por PILA en
          * [rsp + stack_arg_base + (idx-gareg)*8].  (idx, loc). */
-        std::vector<std::pair<int32_t, MOperand>> smoves;
+        /* (offset_rsp, loc, is_fp): is_fp -> store por MOVSD. */
+        std::vector<std::tuple<int32_t, MOperand, bool>> smoves;
+        /* G = nº de GP-stack-args (overflow GP).  Los FP-stack van DESPUES en
+         * la convencion Vex-interna -> [base+(G+(fi-fmax))*8].  Espejo de la
+         * carga del callee en vreg_select. */
+        uint32_t G = 0;
+        for (const auto &pa : pending_args)
+            if (!pa.is_fp && pa.idx >= gareg.size()) ++G;
         for (const auto &pa : pending_args) {
             if (pa.is_fp) {
                 if (pa.idx < fareg.size())
                     fmoves.emplace_back(static_cast<MReg>(fareg[pa.idx]),
                                         pa.loc);
-                /* FP overflow: el selector bailа (no llega aqui). */
+                else {
+                    const int32_t off =
+                        stack_arg_base +
+                        static_cast<int32_t>(
+                            (G + (pa.idx - fareg.size())) * 8u);
+                    smoves.emplace_back(off, pa.loc, true);
+                }
             } else {
                 if (pa.idx < gareg.size())
                     gmoves.emplace_back(static_cast<MReg>(gareg[pa.idx]),
@@ -638,19 +651,32 @@ struct Lowerer {
                     const int32_t off =
                         stack_arg_base +
                         static_cast<int32_t>((pa.idx - gareg.size()) * 8u);
-                    smoves.emplace_back(off, pa.loc);
+                    smoves.emplace_back(off, pa.loc, false);
                 }
             }
         }
         /* Stores de stack-args PRIMERO (leen su loc antes del shuffle de los
-         * arg_regs).  mem->mem via scr0 (R10, caller-saved, libre aqui). */
+         * arg_regs).  mem->mem via scr0 (R10, caller-saved, libre aqui); FP via
+         * MOVSD (scratch XMM si mem->mem). */
         for (const auto &sm : smoves) {
-            const MOperand dst = MOperand::make_mem(MReg::RSP, sm.first);
-            if (sm.second.kind == MOperandKind::MEM) {
-                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sm.second));
+            const int32_t soff = std::get<0>(sm);
+            const MOperand &sloc = std::get<1>(sm);
+            const bool sfp = std::get<2>(sm);
+            const MOperand dst = MOperand::make_mem(MReg::RSP, soff);
+            if (sfp) {
+                if (sloc.kind == MOperandKind::MEM) {
+                    out.push_back(
+                        MInstr::make_unary(MOp::MOVSD, xmm(fscr1), sloc));
+                    out.push_back(
+                        MInstr::make_unary(MOp::MOVSD, dst, xmm(fscr1)));
+                } else {
+                    out.push_back(MInstr::make_unary(MOp::MOVSD, dst, sloc));
+                }
+            } else if (sloc.kind == MOperandKind::MEM) {
+                out.push_back(MInstr::make_unary(MOp::MOV, reg(scr0), sloc));
                 out.push_back(MInstr::make_unary(MOp::MOV, dst, reg(scr0)));
             } else {
-                out.push_back(MInstr::make_unary(MOp::MOV, dst, sm.second));
+                out.push_back(MInstr::make_unary(MOp::MOV, dst, sloc));
             }
         }
         if (!gmoves.empty()) emit_parallel_moves(std::move(gmoves), scr1, out);
@@ -1686,19 +1712,28 @@ MFunction rewrite_to_physical(const MFunction &vf, const RegAlloc &ra,
     {
         const size_t gareg_n =
             tri.arg_regs[static_cast<size_t>(RegClass::GP)].size();
-        uint32_t gp_in_call = 0;
+        const size_t fareg_n =
+            tri.arg_regs[static_cast<size_t>(RegClass::FP)].size();
+        uint32_t gp_in_call = 0, fp_in_call = 0;
         for (const auto &b : vf.blocks) {
             for (const auto &in : b.instrs) {
                 if (in.op == MOp::ARG) {
-                    if (!Lowerer::is_fp_operand(in.src1)) ++gp_in_call;
+                    if (Lowerer::is_fp_operand(in.src1))
+                        ++fp_in_call;
+                    else
+                        ++gp_in_call;
                 } else if (in.op == MOp::CALL || in.op == MOp::CALL_ABS ||
                            in.op == MOp::CALL_SYM) {
-                    if (gp_in_call > gareg_n) {
-                        const uint32_t s =
-                            gp_in_call - static_cast<uint32_t>(gareg_n);
-                        if (s > max_stack_args) max_stack_args = s;
-                    }
+                    /* Stack-args = overflow GP + overflow FP (van DESPUES de
+                     * los GP-stack -> el total dimensiona el outgoing area). */
+                    uint32_t s = 0;
+                    if (gp_in_call > gareg_n)
+                        s += gp_in_call - static_cast<uint32_t>(gareg_n);
+                    if (fp_in_call > fareg_n)
+                        s += fp_in_call - static_cast<uint32_t>(fareg_n);
+                    if (s > max_stack_args) max_stack_args = s;
                     gp_in_call = 0;
+                    fp_in_call = 0;
                 }
             }
         }

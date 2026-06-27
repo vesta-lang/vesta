@@ -704,7 +704,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             const bool is_f = fp_ok && av < fn.values.size() &&
                               ir_type_is_float(fn.values[av].type);
             if (is_f) {
-                if (fi_a >= fmax) return false;
+                /* FP: overflow permitido -> stack arg.  El rewrite lo coloca
+                 * tras los GP-stack en [rsp+base+(G+(fi-fmax))*8] (convencion
+                 * Vex-interna consistente con la carga del callee). */
+                (void)fmax;
                 OO.push_back(
                     MInstr::make_arg(static_cast<uint8_t>(fi_a), vrt(av)));
                 ++fi_a;
@@ -775,40 +778,66 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * registro global).  Cada MOV param-init es consumido por
              * emit_host_param_loads (FP-aware).  Params que exceden los
              * arg_regs de su clase (en pila) no se soportan en v1. */
+            const size_t gmax_p = areg.size(), fmax_p = fareg.size();
+            const int32_t shadow_p = (gmax_p == 4) ? 32 : 0; // home Win64
+            auto is_fparam = [&](ir::IrValueId pv) -> bool {
+                return fp_ok && pv < fn.values.size() &&
+                       ir_type_is_float(fn.values[pv].type);
+            };
+            // G = nº de GP-stack params (los FP-stack van DESPUES en la pila).
+            size_t gp_count = 0;
+            for (size_t i = 0; i < fn.params.size(); ++i)
+                if (!is_fparam(fn.params[i])) ++gp_count;
+            const size_t G = (gp_count > gmax_p) ? (gp_count - gmax_p) : 0;
+            // PASO 1: params en arg_regs (GP + FP) -> param-init reg.  Deben ir
+            // PRIMERO: emit_host_param_loads consume estos lideres (vreg<-reg)
+            // como parallel-move y se DETIENE en el primer load de pila.
             size_t gi_p = 0, fi_p = 0;
             for (size_t i = 0; i < fn.params.size(); ++i) {
                 const ir::IrValueId pv = fn.params[i];
-                const bool is_f =
-                    fp_ok && pv < fn.values.size() &&
-                    ir_type_is_float(fn.values[pv].type);
-                if (is_f) {
-                    if (fi_p >= fareg.size()) break; // float en pila: pendiente
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vrt(pv),
-                        MOperand::make_reg(static_cast<MReg>(fareg[fi_p]), 8)));
+                if (is_fparam(pv)) {
+                    if (fi_p < fmax_p)
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, vrt(pv),
+                            MOperand::make_reg(
+                                static_cast<MReg>(fareg[fi_p]), 8)));
                     ++fi_p;
                 } else {
-                    if (gi_p >= areg.size()) {
-                        /* Param GP en PILA (mas alla de los arg_regs): el caller
-                         * lo dejo en [rbp + 16 + shadow + j*8].  16 = saved rbp
-                         * (8) + ret addr (8); shadow = 32 en Win64 (home de los 4
-                         * arg_regs) o 0 en SysV; j = indice del stack-arg GP.
-                         * rbp es estable (el frame se fuerza en regalloc_rewrite
-                         * cuando hay stack-params).  NO es un param-init reg ->
-                         * emit_host_param_loads lo deja pasar como load normal. */
-                        const size_t j = gi_p - areg.size();
-                        const int32_t shadow = (areg.size() == 4) ? 32 : 0;
+                    if (gi_p < gmax_p)
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOV, vrt(pv),
+                            MOperand::make_reg(
+                                static_cast<MReg>(areg[gi_p]), 8)));
+                    ++gi_p;
+                }
+            }
+            // PASO 2: params en PILA (overflow GP/FP).  El caller los dejo en
+            // [rbp + 16 + shadow + k*8] (16 = saved rbp + ret; shadow = home
+            // Win64; k = GP-stack-index, o G + FP-stack-index para los FP).
+            // rbp estable (regalloc_rewrite fuerza el frame con stack-params).
+            gi_p = 0;
+            fi_p = 0;
+            for (size_t i = 0; i < fn.params.size(); ++i) {
+                const ir::IrValueId pv = fn.params[i];
+                if (is_fparam(pv)) {
+                    if (fi_p >= fmax_p) {
                         const int32_t off =
-                            16 + shadow + static_cast<int32_t>(j) * 8;
+                            16 + shadow_p +
+                            static_cast<int32_t>((G + (fi_p - fmax_p)) * 8);
+                        O.push_back(MInstr::make_unary(
+                            MOp::MOVSD, vrt(pv),
+                            MOperand::make_mem(MReg::RBP, off)));
+                    }
+                    ++fi_p;
+                } else {
+                    if (gi_p >= gmax_p) {
+                        const int32_t off =
+                            16 + shadow_p +
+                            static_cast<int32_t>((gi_p - gmax_p) * 8);
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, vrt(pv),
                             MOperand::make_mem(MReg::RBP, off)));
-                        ++gi_p;
-                        continue;
                     }
-                    O.push_back(MInstr::make_unary(
-                        MOp::MOV, vrt(pv),
-                        MOperand::make_reg(static_cast<MReg>(areg[gi_p]), 8)));
                     ++gi_p;
                 }
             }
