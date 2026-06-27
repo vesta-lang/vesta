@@ -16474,16 +16474,79 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // -------------------------------------------------------------
         if (native_poo_) {
             if (t.kind == PrimitiveKind::F32 || t.kind == PrimitiveKind::F64) {
-                diags_.warning(ex->loc,
-                               "print de float en AOT nativo aun no soportado; "
-                               "se omite el valor");
+                // AOT: __vex_print_float(f64) del runtime de I/O (formateo %g
+                // aproximado en Vex puro).  F32 se promociona a F64 antes.
+                ir::IrValueId vf = v;
+                if (t.kind == PrimitiveKind::F32) {
+                    ir::IrValueId vp = fn_->new_value(ir::IrType::F64);
+                    ir::IrInstr cv{};
+                    cv.op = ir::IrOp::F32TOF64;
+                    cv.type = ir::IrType::F64;
+                    cv.dst = vp;
+                    cv.operands = {v};
+                    cv.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(cv));
+                    vf = vp;
+                }
+                emit_io_prim("__vex_print_float", {vf}, ex->loc.line);
                 return;
             }
             if (t.kind == PrimitiveKind::STRING) {
-                // string value-type (Embed): pendiente de extraer ptr+len.
-                diags_.warning(ex->loc,
-                               "print de 'string' (value-type) en AOT nativo "
-                               "aun no soportado; usa char* o un literal");
+                // string value-type (Embed/AOT): (ptr,len) flag-aware (SSO) y
+                // escritura via __vex_write (PURE_NATIVE).  El format-spec
+                // ${s:>W} aplica padding via __vex_pad (fill_cp, count).
+                ir::IrValueId sptr =
+                    emit_native_str_data_ptr(v, ex->loc.line);
+                ir::IrValueId slen = emit_native_str_len(v, ex->loc.line);
+                const bool need_pad =
+                    (fs.align != FmtSpec::Align::NONE) && (fs.width > 0);
+                // pad = max(0, width - len); via SUB + clamp (CMP_GT*MUL).
+                auto compute_pad = [&]() -> ir::IrValueId {
+                    ir::IrValueId v_width = emit_const(
+                        ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
+                    ir::IrValueId v_sub = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr s{};
+                    s.op = ir::IrOp::SUB;
+                    s.type = ir::IrType::I64;
+                    s.dst = v_sub;
+                    s.operands = {v_width, slen};
+                    s.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(s));
+                    ir::IrValueId v_zero =
+                        emit_const(ir::IrType::I64, 0, ex->loc.line);
+                    ir::IrValueId v_pos = fn_->new_value(ir::IrType::BOOL);
+                    ir::IrInstr cgt{};
+                    cgt.op = ir::IrOp::CMP_GT;
+                    cgt.type = ir::IrType::BOOL;
+                    cgt.dst = v_pos;
+                    cgt.operands = {v_sub, v_zero};
+                    cgt.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(cgt));
+                    ir::IrValueId v_mask = cast_if_needed(
+                        v_pos, ir::IrType::BOOL, ir::IrType::I64, ex->loc.line,
+                        /*is_explicit=*/true);
+                    ir::IrValueId v_cl = fn_->new_value(ir::IrType::I64);
+                    ir::IrInstr m{};
+                    m.op = ir::IrOp::MUL;
+                    m.type = ir::IrType::I64;
+                    m.dst = v_cl;
+                    m.operands = {v_sub, v_mask};
+                    m.source_line = ex->loc.line;
+                    fn_->append(current_block_, std::move(m));
+                    return v_cl;
+                };
+                auto emit_pad = [&](ir::IrValueId v_count) {
+                    ir::IrValueId v_fill = emit_const(
+                        ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
+                    emit_io_prim("__vex_pad", {v_fill, v_count}, ex->loc.line);
+                };
+                ir::IrValueId v_pad = ir::IR_NO_VALUE;
+                if (need_pad) v_pad = compute_pad();
+                if (need_pad && fs.align == FmtSpec::Align::RIGHT)
+                    emit_pad(v_pad);
+                emit_io_prim("__vex_write", {sptr, slen}, ex->loc.line);
+                if (need_pad && fs.align == FmtSpec::Align::LEFT)
+                    emit_pad(v_pad);
                 return;
             }
             if (fs.align != FmtSpec::Align::NONE && fs.width > 0) {
@@ -16670,8 +16733,16 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         // longitud en bytes, y usar vio_print_buf para emitir el bloque
         // sin cortar en NUL (binary-safe; preserva multi-byte UTF-8).
         if (t.kind == PrimitiveKind::STRING) {
-            ir::IrValueId v_ptr = emit_strraw(v, ex->loc.line);
-            ir::IrValueId v_len = emit_strgetbytes(v, ex->loc.line);
+            // native_poo (AOT): `string` es value-string {ptr,len,cap} con SSO;
+            // (ptr,len) via accesores flag-aware + escritura por __vex_write
+            // (PURE_NATIVE).  Full/JIT/interp: GcHandle via strraw/strgetbytes
+            // + vio_print_buf (VM).
+            ir::IrValueId v_ptr = native_poo_
+                                      ? emit_native_str_data_ptr(v, ex->loc.line)
+                                      : emit_strraw(v, ex->loc.line);
+            ir::IrValueId v_len = native_poo_
+                                      ? emit_native_str_len(v, ex->loc.line)
+                                      : emit_strgetbytes(v, ex->loc.line);
             // Item 17: format spec en STRING.  Si align != NONE Y
             // width > 0, calcular padding = max(0, width - len) y
             // emitirlo antes (RIGHT) o despues (LEFT) del print_buf.
@@ -16726,6 +16797,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             auto emit_pad_call = [&](ir::IrValueId v_count) {
                 ir::IrValueId v_fill = emit_const(
                     ir::IrType::I64, (uint64_t)fs.fill_cp, ex->loc.line);
+                if (native_poo_) {
+                    // AOT: padding via __vex_pad (fill_cp, count) del runtime
+                    // de I/O (PURE_NATIVE); no hay vio_print_pad (VM).
+                    emit_io_prim("__vex_pad", {v_fill, v_count}, ex->loc.line);
+                    return;
+                }
                 out_mod_->register_native_import(lib, "vio_print_pad");
                 ir::IrInstr pc{};
                 pc.op = ir::IrOp::CALLN;
@@ -16739,15 +16816,20 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             if (need_pad && fs.align == FmtSpec::Align::RIGHT) {
                 emit_pad_call(v_pad);
             }
-            out_mod_->register_native_import(lib, "vio_print_buf");
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = lib + ":vio_print_buf";
-            ins.operands = {v_ptr, v_len};
-            ins.source_line = ex->loc.line;
-            fn_->append(current_block_, std::move(ins));
+            if (native_poo_) {
+                // AOT: escribir los bytes via __vex_write (PURE_NATIVE).
+                emit_io_prim("__vex_write", {v_ptr, v_len}, ex->loc.line);
+            } else {
+                out_mod_->register_native_import(lib, "vio_print_buf");
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::CALLN;
+                ins.type = ir::IrType::VOID;
+                ins.dst = ir::IR_NO_VALUE;
+                ins.func_name = lib + ":vio_print_buf";
+                ins.operands = {v_ptr, v_len};
+                ins.source_line = ex->loc.line;
+                fn_->append(current_block_, std::move(ins));
+            }
             if (need_pad && fs.align == FmtSpec::Align::LEFT) {
                 emit_pad_call(v_pad);
             }

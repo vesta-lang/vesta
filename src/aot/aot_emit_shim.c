@@ -89,6 +89,22 @@ static _DWORD pe_section_chars(uint32_t flags) {
     return c;
 }
 
+/* Compara dos nombres de DLL ignorando mayusculas/minusculas (ASCII).  Windows
+ * resuelve los imports case-insensitive, asi que "KERNEL32.dll" y
+ * "kernel32.dll" son la MISMA libreria y deben agruparse en un solo
+ * descriptor de import. */
+static int aot_dll_name_eq(const char *a, const char *b) {
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+    for (; *a && *b; ++a, ++b) {
+        int ca = (unsigned char)*a, cb = (unsigned char)*b;
+        if (ca >= 'A' && ca <= 'Z') ca += 32;
+        if (cb >= 'A' && cb <= 'Z') cb += 32;
+        if (ca != cb) return 0;
+    }
+    return *a == 0 && *b == 0;
+}
+
 int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs, int entry_sec,
                 uint64_t entry_off, const AotImport *imps, int num_imps,
@@ -219,7 +235,10 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         for (int k = 0; k < num_imps; ++k) {
             int di = -1;
             for (int j = 0; j < num_libs; ++j)
-                if (strcmp(lib_names[j], imps[k].dll) == 0) {
+                /* DLL names case-insensitive (Windows): el stub usa
+                 * "KERNEL32.dll" y un FFI extern puede usar "kernel32.dll" ->
+                 * deben fundirse en UN solo descriptor de import. */
+                if (aot_dll_name_eq(lib_names[j], imps[k].dll)) {
                     di = j;
                     break;
                 }

@@ -827,6 +827,16 @@ std::vector<uint8_t> emit_ir_module_cache(const IrModule &mod) {
         for (const auto &v : fn.values)
             write_str(out, v.name);
     }
+
+    // 5) native_imports (lib, name): el AOT los usa para mapear cada simbolo
+    //    FFI extern a su DLL real (kernel32.dll, user32.dll, ...) en vez de
+    //    asumir msvcrt.dll.  Sin esto, `extern "kernel32.dll" {...}` resolvia
+    //    desde msvcrt -> fallo de carga del PE.
+    write_u32(out, static_cast<uint32_t>(mod.native_imports.size()));
+    for (const auto &ni : mod.native_imports) {
+        write_str(out, ni.lib);
+        write_str(out, ni.name);
+    }
     return out;
 }
 
@@ -880,6 +890,20 @@ bool parse_ir_module_cache(const std::vector<uint8_t> &data, IrModule &out) {
                 if (f < out.functions.size() && v < out.functions[f].values.size())
                     out.functions[f].values[v].name = std::move(nm);
             }
+        }
+    }
+
+    // 5) native_imports (lib, name).  Defensivo: si el stream se acabo (no
+    //    deberia por el bump de version), se omite sin error.
+    out.native_imports.clear();
+    uint32_t nimp = 0;
+    if (read_u32(data, off, nimp)) {
+        if (nimp > 2000000u) return false;
+        for (uint32_t i = 0; i < nimp; ++i) {
+            std::string lib, name;
+            if (!read_str(data, off, lib)) return false;
+            if (!read_str(data, off, name)) return false;
+            out.register_native_import(std::move(lib), std::move(name));
         }
     }
     return true;
