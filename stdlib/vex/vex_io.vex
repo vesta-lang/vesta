@@ -34,9 +34,24 @@ extern "kernel32.dll" {
                            u16* wStr, i32 cchWide) -> i32;
     fn ExitProcess(u32 code) -> void;
 }
-extern "libc.so.6" {
-    fn write(i64 fd, u8* buf, u64 len) -> i64;
-    fn abort() -> void;
+
+// Linux: syscalls RAW (sin libc) via asm volatile.  El binario no depende de
+// libc.so.6 -> freestanding-capable (kernels/initramfs).  SysV: arg4 va a r10
+// (no rcx); nr y resultado comparten rax (un solo register binding in/out).
+@Target("!os:windows")
+i64 __vio_sys_write(i64 fd, u8* buf, i64 len) {
+    register("rdi") i64 a1 = fd;
+    register("rsi") u8* a2 = buf;
+    register("rdx") i64 a3 = len;
+    register("rax") i64 rax_io = 1; // SYS_write
+    asm volatile { syscall };
+    return rax_io;
+}
+@Target("!os:windows")
+void __vio_sys_exit(i64 code) {
+    register("rdi") i64 a1 = code;
+    register("rax") i64 rax_io = 231; // SYS_exit_group
+    asm volatile { syscall };
 }
 
 // --- Sink de stdout con block-buffering -------------------------------------
@@ -78,7 +93,7 @@ void __vio_raw(u8* buf, u64 len) {
 }
 @Target("!os:windows")
 void __vio_raw(u8* buf, u64 len) {
-    if (len > 0) write(1, buf, len);
+    if (len > 0) __vio_sys_write(1, buf, (i64)len); // syscall raw, sin libc
 }
 
 // Buffer de salida (block-buffered): acumula y vuelca en UN syscall.  Bate a
@@ -125,7 +140,7 @@ void __vex_panic_null() {
 void __vex_panic_null() {
     __vex_write("panic: unwrap de un valor null (Optional/nonnull vacio)\n", 54);
     __vex_flush();
-    abort();
+    __vio_sys_exit(134); // exit_group(134) ~ SIGABRT (128+6), sin libc
 }
 
 // --- Formateadores numericos (Vex puro sobre __vex_write) -------------------

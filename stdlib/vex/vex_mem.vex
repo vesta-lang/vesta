@@ -29,9 +29,28 @@ extern "kernel32.dll" {
     fn VirtualAlloc(u64 addr, u64 size, u32 allocType, u32 protect) -> u64;
     fn VirtualFree(u64 addr, u64 size, u32 freeType) -> i32;
 }
-extern "libc.so.6" {
-    fn mmap(u64 addr, u64 len, i32 prot, i32 flags, i64 fd, i64 off) -> u64;
-    fn munmap(u64 addr, u64 len) -> i32;
+
+// Linux: mmap/munmap RAW (sin libc) via asm volatile syscall.  SysV: arg4 a r10
+// (no rcx).  nr y resultado comparten rax.  mmap=9 (6 args), munmap=11 (2 args).
+@Target("!os:windows")
+i64 __vmem_sys_mmap(i64 addr, i64 len, i64 prot, i64 flags, i64 fd, i64 off) {
+    register("rdi") i64 a1 = addr;
+    register("rsi") i64 a2 = len;
+    register("rdx") i64 a3 = prot;
+    register("r10") i64 a4 = flags;
+    register("r8")  i64 a5 = fd;
+    register("r9")  i64 a6 = off;
+    register("rax") i64 rax_io = 9; // SYS_mmap
+    asm volatile { syscall };
+    return rax_io;
+}
+@Target("!os:windows")
+i64 __vmem_sys_munmap(i64 addr, i64 len) {
+    register("rdi") i64 a1 = addr;
+    register("rsi") i64 a2 = len;
+    register("rax") i64 rax_io = 11; // SYS_munmap
+    asm volatile { syscall };
+    return rax_io;
 }
 
 // =========================================================================
@@ -186,9 +205,9 @@ u64 vmem_reserve(u64 size, MemProt prot) {
 @Target("!os:windows")
 u64 vmem_reserve(u64 size, MemProt prot) {
     // MAP_PRIVATE|MAP_ANONYMOUS = 0x22 = 34, fd = -1, off = 0.
-    u64 r = mmap(0, size, __vmem_prot_flags(prot), 34, -1, 0);
-    if (r == 0xFFFFFFFFFFFFFFFF) return 0; // MAP_FAILED
-    return r;
+    i64 r = __vmem_sys_mmap(0, (i64)size, (i64)__vmem_prot_flags(prot), 34, -1, 0);
+    if (r == -1) return 0; // MAP_FAILED
+    return (u64)r;
 }
 
 /**
@@ -202,7 +221,7 @@ void vmem_release(u64 addr, u64 size) {
 }
 @Target("!os:windows")
 void vmem_release(u64 addr, u64 size) {
-    munmap(addr, size);
+    __vmem_sys_munmap((i64)addr, (i64)size);
 }
 
 // =========================================================================
