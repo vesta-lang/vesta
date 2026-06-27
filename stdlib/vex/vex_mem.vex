@@ -167,12 +167,14 @@ comptime u64 VMEM_CHUNK_BYTES = 1048576; // 1 MiB
  */
 @Target("os:windows")
 u32 __vmem_prot_flags(MemProt p) {
-    // match() baja a switch_dense (no admisible en AOT) -> if-else (CMP+BR).
-    if (p == MemProt.None) return 1;          // PAGE_NOACCESS
-    if (p == MemProt.Read) return 2;          // PAGE_READONLY
-    if (p == MemProt.ReadExec) return 32;     // PAGE_EXECUTE_READ
-    if (p == MemProt.ReadWriteExec) return 64; // PAGE_EXECUTE_READWRITE
-    return 4;                                  // PAGE_READWRITE
+    match (p) {
+        case None => return 1;          // PAGE_NOACCESS
+        case Read => return 2;          // PAGE_READONLY
+        case ReadExec => return 32;     // PAGE_EXECUTE_READ
+        case ReadWriteExec => return 64; // PAGE_EXECUTE_READWRITE
+        case ReadWrite => return 4;     // PAGE_READWRITE
+    }
+    return 4;
 }
 /**
  * @brief Traduce @ref MemProt a flags PROT_* de POSIX.
@@ -181,11 +183,14 @@ u32 __vmem_prot_flags(MemProt p) {
  */
 @Target("!os:windows")
 i32 __vmem_prot_flags(MemProt p) {
-    if (p == MemProt.None) return 0;          // PROT_NONE
-    if (p == MemProt.Read) return 1;          // PROT_READ
-    if (p == MemProt.ReadExec) return 5;      // READ|EXEC
-    if (p == MemProt.ReadWriteExec) return 7; // READ|WRITE|EXEC
-    return 3;                                  // READ|WRITE
+    match (p) {
+        case None => return 0;          // PROT_NONE
+        case Read => return 1;          // PROT_READ
+        case ReadExec => return 5;      // READ|EXEC
+        case ReadWriteExec => return 7; // READ|WRITE|EXEC
+        case ReadWrite => return 3;     // READ|WRITE
+    }
+    return 3;
 }
 
 /**
