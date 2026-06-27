@@ -2948,6 +2948,25 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return false;
                 }
                 AsmBlob blob;
+                // Phase AS inc.6: simbolos PROPIOS referenciados desde el asm
+                // (`jmp [global]`, `mov rax, fn`).  El backend ya localizo el
+                // campo (offset relativo al blob) + tipo; el encoder los reubica
+                // y emite los MReloc.  Cero coste si el asm no usa simbolos.
+                for (const auto &sr : ar.sym_refs) {
+                    AsmBlob::AsmSymRef br;
+                    br.offset = sr.offset;
+                    br.size = sr.size;
+                    br.symbol = sr.symbol;
+                    using SK = vex::AsmAssembleResult::SymRefKind;
+                    using BK = AsmBlob::AsmSymRefKind;
+                    switch (sr.kind) {
+                    case SK::BranchRel32: br.kind = BK::BranchRel32; break;
+                    case SK::DataRel32: br.kind = BK::DataRel32; break;
+                    case SK::Abs64: br.kind = BK::Abs64; break;
+                    case SK::Abs32: br.kind = BK::Abs32; break;
+                    }
+                    blob.sym_refs.push_back(std::move(br));
+                }
                 // Solo-inspeccion: mapear etiquetas internas + linea por instr
                 // usando el contrato insn_offsets (offset de cada instruccion
                 // en orden de fuente).  NUESTRO parser del texto NASM: una

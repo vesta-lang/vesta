@@ -1141,6 +1141,13 @@ class Lowering {
     ir::IrValueId emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
                                          uint32_t source_line);
 
+    // Monitor enter/exit.  En native_poo_ (AOT) baja a CALL nativo
+    // (__vex_monenter/__vex_monexit, bundle-ado desde stdlib/vex/vex_sync.vex)
+    // sobre el host_ptr del objeto; en el resto de tiers emite la IR op
+    // MONENTER/MONEXIT (handle) que el runtime/JIT consume.
+    void emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
+                         uint32_t source_line);
+
     // --- Helpers de operaciones sobre cadenas (StringObject) ---
     ir::IrValueId emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
                                uint32_t source_line);

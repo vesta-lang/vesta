@@ -2446,6 +2446,175 @@ int main(int argc, char *argv[]) {
             }
 
             // ----------------------------------------------------------------
+            // Auto-bundle del runtime de monitores (stdlib/vex/vex_sync.vex).
+            // Si el modulo usa `synchronized`/`monitor`, el lowering native_poo
+            // emite CALL __vex_monenter/__vex_monexit (monitor reentrante inline
+            // en el objeto, palabra en obj+16) en vez de las IR ops MONENTER/
+            // MONEXIT.  Fusionamos vex_sync.vex (atomic CAS + tid nativos) ->
+            // el .o queda autocontenido.  El dead-elim conserva solo lo usado.
+            // ----------------------------------------------------------------
+            {
+                bool uses_sync = false, defines_sync = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_monenter") defines_sync = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALL &&
+                                (ins.func_name == "__vex_monenter" ||
+                                 ins.func_name == "__vex_monexit"))
+                                uses_sync = true;
+                }
+                if (uses_sync && !defines_sync) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_sync.vex",
+                        exe_dir + "/../stdlib/vex/vex_sync.vex",
+                        "stdlib/vex/vex_sync.vex"};
+                    std::string vs_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            vs_path = c;
+                            break;
+                        }
+                    if (vs_path.empty()) {
+                        std::cerr << "[aot] usa synchronized pero no encuentro "
+                                     "stdlib/vex/vex_sync.vex (enlazalo a mano).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vsf(vs_path);
+                    std::string vs_src((std::istreambuf_iterator<char>(vsf)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions vs_opts;
+                    vs_opts.module_name = "vex_sync";
+                    vs_opts.opt_level = 2;
+                    vs_opts.native_poo = true;
+                    vs_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult vs_cr =
+                        vex::compile_vex_source(vs_src, vs_path, vs_opts);
+                    ir::IrModule vs_mod;
+                    if (!vs_cr.ok || vs_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(vs_cr.ir_module_cache_bytes,
+                                                   vs_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "monitores vex_sync.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : vs_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(vs_mod.static_data));
+                    for (auto &gv : vs_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : vs_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de monitores "
+                                 "(stdlib/vex/vex_sync.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
+            // Auto-bundle del runtime de asincronia (stdlib/vex/vex_async.vex).
+            // Si el modulo usa spawn/future/await/fulfill, el lowering
+            // native_poo emite CALL __vex_spawn/__vex_future_new/__vex_await/
+            // __vex_fulfill (scheduler cooperativo, no hilos del SO).
+            // Fusionamos vex_async.vex -> .o autocontenido.
+            // ----------------------------------------------------------------
+            {
+                bool uses_async = false, defines_async = false;
+                for (const auto &af : aot_mod.functions) {
+                    if (af.name == "__vex_spawn") defines_async = true;
+                    for (const auto &b : af.blocks)
+                        for (const auto &ins : b.instrs)
+                            if (ins.op == ir::IrOp::CALL &&
+                                (ins.func_name == "__vex_spawn" ||
+                                 ins.func_name == "__vex_future_new" ||
+                                 ins.func_name == "__vex_await" ||
+                                 ins.func_name == "__vex_fulfill" ||
+                                 ins.func_name == "__vex_msgsend" ||
+                                 ins.func_name == "__vex_msgrecv"))
+                                uses_async = true;
+                }
+                if (uses_async && !defines_async) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_async.vex",
+                        exe_dir + "/../stdlib/vex/vex_async.vex",
+                        "stdlib/vex/vex_async.vex"};
+                    std::string va_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            va_path = c;
+                            break;
+                        }
+                    if (va_path.empty()) {
+                        std::cerr << "[aot] usa spawn/async pero no encuentro "
+                                     "stdlib/vex/vex_async.vex (enlazalo a mano).\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream vaf(va_path);
+                    std::string va_src((std::istreambuf_iterator<char>(vaf)),
+                                       std::istreambuf_iterator<char>());
+                    vex::CompileOptions va_opts;
+                    va_opts.module_name = "vex_async";
+                    va_opts.opt_level = 2;
+                    va_opts.native_poo = true;
+                    va_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult va_cr =
+                        vex::compile_vex_source(va_src, va_path, va_opts);
+                    ir::IrModule va_mod;
+                    if (!va_cr.ok || va_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(va_cr.ir_module_cache_bytes,
+                                                   va_mod)) {
+                        std::cerr << "[aot] no pude compilar el runtime de "
+                                     "asincronia vex_async.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    const uint64_t sd_off =
+                        static_cast<uint64_t>(aot_mod.static_data.size());
+                    std::unordered_set<std::string> have;
+                    for (const auto &af : aot_mod.functions)
+                        have.insert(af.name);
+                    for (auto &fn : va_mod.functions) {
+                        if (sd_off != 0)
+                            for (auto &bb : fn.blocks)
+                                for (auto &ins : bb.instrs)
+                                    if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                        ins.imm += sd_off;
+                        if (!have.count(fn.name))
+                            aot_mod.functions.push_back(std::move(fn));
+                    }
+                    aot_mod.static_data.append_raw_entries(
+                        std::move(va_mod.static_data));
+                    for (auto &gv : va_mod.globals)
+                        aot_mod.globals.emplace(gv.first, gv.second);
+                    for (auto &ni : va_mod.native_imports)
+                        aot_mod.register_native_import(ni.lib, ni.name);
+                    std::cout << "[aot] runtime de asincronia "
+                                 "(stdlib/vex/vex_async.vex) incluido en el "
+                                 "objeto.\n";
+                }
+            }
+
+            // ----------------------------------------------------------------
             // Auto-bundle del runtime de I/O (stdlib/vex/vex_io.vex).
             // Si el modulo usa print/println, el lowering native_poo emite
             // CALLN `vex_bare_io:__vex_*` (write + formateadores).  En vez de
@@ -2655,6 +2824,31 @@ int main(int argc, char *argv[]) {
                             // al runtime de excepciones auto-hospedado.
                             if (ins.op == ir::IrOp::THROW)
                                 add_live("__vex_throw");
+                            // INLINE_ASM: el cuerpo (func_name) puede referenciar
+                            // funciones del modulo via tokens `__vxf_<label>` que
+                            // el lowering inserto (inline-asm accede simbolos
+                            // propios).  La poda NO ve estas refs porque el asm es
+                            // texto opaco -> escanearlas explicitamente para que la
+                            // funcion referenciada sobreviva y se compile.  Los
+                            // `__vxg_<slot>` son globales (rodata), no funciones.
+                            if (ins.op == ir::IrOp::INLINE_ASM &&
+                                !ins.func_name.empty()) {
+                                const std::string &body = ins.func_name;
+                                const std::string tag = "__vxf_";
+                                size_t p = 0;
+                                while ((p = body.find(tag, p)) !=
+                                       std::string::npos) {
+                                    size_t s = p + tag.size();
+                                    size_t e = s;
+                                    while (e < body.size() &&
+                                           (std::isalnum((unsigned char)body[e]) ||
+                                            body[e] == '_' || body[e] == '$'))
+                                        ++e;
+                                    if (e > s)
+                                        add_live(body.substr(s, e - s));
+                                    p = e;
+                                }
+                            }
                         }
                 }
                 std::vector<ir::IrFunction> kept;

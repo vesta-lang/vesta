@@ -1638,6 +1638,14 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     auto p = std::make_unique<ast::ParamDecl>();
     p->loc = current_.loc;
     p->type = parse_type_node();
+    // Parametro VARIADICO: `T... name`.  El `...` tras el tipo del elemento
+    // marca el param como rest (debe ser el ultimo; la validacion de posicion
+    // la hace el type checker).  El callee lo recibe como `T*` + un count
+    // oculto leido con `vacount()`.
+    if (current_.kind == TokenKind::DOTDOTDOT) {
+        (void)consume();
+        p->is_variadic = true;
+    }
     // `T !!name` en posicion de parametro fuerza no-null en
     // entry: el lowering inyecta un `unwrap r_param, r_param` al
     // inicio del cuerpo para que la funcion falle pronto si se le

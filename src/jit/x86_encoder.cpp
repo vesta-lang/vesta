@@ -1324,8 +1324,72 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         if (mi.src1.kind == MOperandKind::IMM32) {
             const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
             if (idx < fn.asm_blobs.size()) {
-                const std::vector<uint8_t> &b = fn.asm_blobs[idx].bytes;
-                out.insert(out.end(), b.begin(), b.end());
+                const AsmBlob &ab = fn.asm_blobs[idx];
+                const uint32_t blob_base = static_cast<uint32_t>(out.size());
+                out.insert(out.end(), ab.bytes.begin(), ab.bytes.end());
+                // Phase AS inc.6: emitir un MReloc por cada simbolo propio
+                // referenciado en el asm.  rip-relativo (`jmp [sym]`, `lea
+                // reg,[rip+sym]`) -> DATA_REL32; imm absoluto (`mov rax,sym`)
+                // -> ABS64.  @c patch_at absoluto en @c out; encode() lo
+                // reubica relativo a la funcion (igual que CALL_SYM).  El
+                // driver resuelve el nombre del simbolo (funcion o dato).
+                for (const auto &sr : ab.sym_refs) {
+                    // Decodificar el nombre CANONICO que dejo lower_asm:
+                    //   __vxf_<label>  -> FUNCION del modulo
+                    //   __vxg_<slot>   -> GLOBAL (static_data slot)
+                    // y combinarlo con la FORMA (kind) para fijar el reloc:
+                    //   funcion + branch  -> CALL_REL32, nombre bare (fn_by_name)
+                    //   funcion + abs/data-> fnsym:<label>
+                    //   global  + abs     -> ABS64,      rodata.<slot>
+                    //   global  + data    -> DATA_REL32, rodata.<slot>
+                    std::string reloc_sym;
+                    MRelocKind kind = MRelocKind::DATA_REL32;
+                    const std::string &cn = sr.symbol;
+                    const bool is_fn = cn.rfind("__vxf_", 0) == 0;
+                    const bool is_g = cn.rfind("__vxg_", 0) == 0;
+                    if (is_fn) {
+                        const std::string label = cn.substr(6);
+                        if (sr.kind == AsmBlob::AsmSymRefKind::BranchRel32) {
+                            reloc_sym = label; // CALL_REL32 usa el bare label
+                            kind = MRelocKind::CALL_REL32;
+                        } else {
+                            reloc_sym = "fnsym:" + label;
+                            kind = (sr.kind == AsmBlob::AsmSymRefKind::Abs64)
+                                       ? MRelocKind::ABS64
+                                       : MRelocKind::DATA_REL32;
+                        }
+                    } else if (is_g) {
+                        reloc_sym = "rodata." + cn.substr(6);
+                        kind = (sr.kind == AsmBlob::AsmSymRefKind::Abs64)
+                                   ? MRelocKind::ABS64
+                                   : MRelocKind::DATA_REL32;
+                    } else {
+                        // Simbolo no decorado (no resuelto por lower_asm): se
+                        // emite tal cual (best-effort segun la forma).
+                        reloc_sym = cn;
+                        kind = (sr.kind == AsmBlob::AsmSymRefKind::BranchRel32)
+                                   ? MRelocKind::CALL_REL32
+                               : (sr.kind == AsmBlob::AsmSymRefKind::Abs64)
+                                   ? MRelocKind::ABS64
+                                   : MRelocKind::DATA_REL32;
+                    }
+                    uint32_t sidx = UINT32_MAX;
+                    for (uint32_t i = 0; i < fn.reloc_symbols.size(); ++i)
+                        if (fn.reloc_symbols[i] == reloc_sym) {
+                            sidx = i;
+                            break;
+                        }
+                    if (sidx == UINT32_MAX) {
+                        sidx = static_cast<uint32_t>(fn.reloc_symbols.size());
+                        fn.reloc_symbols.push_back(reloc_sym);
+                    }
+                    MReloc r;
+                    r.kind = kind;
+                    r.patch_at = blob_base + sr.offset;
+                    r.sym_idx = sidx;
+                    r.addend = 0;
+                    fn.relocs.push_back(r);
+                }
             }
         }
         return true;

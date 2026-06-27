@@ -118,6 +118,14 @@ struct FunctionSig {
     /// al label mangled mientras que el resolver de nombres sigue
     /// usando el nombre publico (`foo`).  Cierra la limitacion L.4.
     std::string mangled_label;
+    /// Variadicos: si @c true, el ULTIMO param es un rest `T... name`.  En
+    /// @c param_types el ultimo entry es @c T* (puntero al elemento) y
+    /// @c variadic_elem guarda el tipo del ELEMENTO T (para validar los args
+    /// trailing).  La funcion acepta >= (N-1) args (N = param_types.size());
+    /// los args extra se empacan en un array de pila y se pasan como (ptr,
+    /// count); el count va en un param i64 OCULTO al final.
+    bool is_variadic = false;
+    Type variadic_elem;
 };
 
 /**

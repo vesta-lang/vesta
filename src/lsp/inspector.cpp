@@ -448,14 +448,58 @@ disasm_x86_64_correlated(const uint8_t *code, size_t code_size,
 
         // Comentario combinado: simbolo de relocation (call/lea) + valores.
         std::vector<std::string> comments;
+        // Buscar la relocation que cubre esta instruccion (call/jmp/lea/movabs a
+        // un simbolo propio).  El backend de asm enruta `mov r64, simbolo` a un
+        // literal PLACEHOLDER de 64 bits (Keystone no hace fixups de 64 bits);
+        // ese placeholder aparece crudo en el desensamblado (`0xc0ffee...`).
+        // Aqui lo SUSTITUIMOS por el nombre legible del simbolo (estilo Godbolt:
+        // `movabs rax, add`), igual que hace el fix del ensamblado.
+        const jit::NativeReloc *rrel = nullptr;
         for (const auto &rc : relocs) {
             if (rc.offset >= off && rc.offset < end && !rc.symbol.empty()) {
-                std::string sym = rc.symbol;
-                if (rc.addend)
-                    sym += "+" + std::to_string(rc.addend);
-                comments.push_back(std::move(sym));
+                rrel = &rc;
                 break;
             }
+        }
+        if (rrel) {
+            // Nombre legible: quitar prefijos internos (`fnsym:` = funcion;
+            // `rodata.N` = slot de datos) que el cliente no necesita ver.
+            std::string sym = rrel->symbol;
+            if (sym.rfind("fnsym:", 0) == 0)
+                sym = sym.substr(6);
+            else if (sym.rfind("rodata.", 0) == 0)
+                sym = "rodata[" + sym.substr(7) + "]";
+            std::string disp_sym = sym;
+            if (rrel->addend)
+                disp_sym += "+" + std::to_string(rrel->addend);
+            // Reescribir el operando relocado: sustituir el literal hex por el
+            // simbolo.  Caso RIP-relativo (`[rip + 0x..]` / `[rip - 0x..]`) y
+            // caso inmediato/branch (`movabs rax, 0x..`, `call 0x..`).
+            bool rewrote = false;
+            auto repl_hex_at = [&](size_t hexs) {
+                size_t hexe = hexs + 2;
+                while (hexe < text.size() &&
+                       std::isxdigit((unsigned char)text[hexe]))
+                    ++hexe;
+                if (hexe > hexs + 2) {
+                    text.replace(hexs, hexe - hexs, disp_sym);
+                    rewrote = true;
+                }
+            };
+            size_t rip = text.find("rip + 0x");
+            if (rip == std::string::npos)
+                rip = text.find("rip - 0x");
+            if (rip != std::string::npos) {
+                repl_hex_at(text.find("0x", rip));
+            } else {
+                size_t hexs = text.rfind("0x");
+                if (hexs != std::string::npos)
+                    repl_hex_at(hexs);
+            }
+            // Si no se pudo reescribir inline, dejar el simbolo como comentario
+            // (fallback) para no perder la informacion.
+            if (!rewrote)
+                comments.push_back(disp_sym);
         }
         for (const auto &a : ann)
             comments.push_back(a);
