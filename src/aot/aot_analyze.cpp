@@ -184,7 +184,11 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     //    host_ptr crudo (objetos = ptr de calloc/malloc) -> el selector
     //    HOST_LEAF los baja a un MOV (passthrough).  PURE_NATIVE. --
     case IrOp::GC_HANDLE_FOR_PTR:
-    case IrOp::GC_DEREF_HOST: return AotOpClass::PURE_NATIVE;
+    case IrOp::GC_DEREF_HOST:
+    // -- jump table densa (match/switch sobre enum): el selector HOST_LEAF la
+    //    baja a una tabla SELF-RELATIVE (PIC-safe, sin reloc) + dispatch nativo
+    //    (lea+movsxd+add+jmp).  PURE_NATIVE. --
+    case IrOp::SWITCH_DENSE: return AotOpClass::PURE_NATIVE;
 
     // -- dependencias de libc que el COMPILADOR sintetiza por
     //    semantica del lenguaje (el usuario no escribio la llamada) --

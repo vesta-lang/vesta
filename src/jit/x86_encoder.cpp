@@ -1201,6 +1201,28 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         for (int k = 0; k < 8; ++k) put8(out, 0); /* placeholder qword */
         return true;
     }
+    case MOp::DATA_REL32_LABEL: {
+        /* Entrada self-relative de 4 bytes de la jump table AOT (PIC-safe, sin
+         * reloc): valor = offset[block] - offset[table].  El table label_def
+         * PRECEDE a las entradas -> offset[table] ya esta resuelto; lo usamos
+         * como instr_end (base del MFixup) y label=block -> resolve_fixups
+         * escribe offset[block]-offset[table].  El dispatch suma la base
+         * runtime de la tabla. */
+        if (mi.src1.kind != MOperandKind::LABEL ||
+            mi.src2.kind != MOperandKind::LABEL) {
+            for (int k = 0; k < 4; ++k) put8(out, 0xCC);
+            return true;
+        }
+        const MLabelId block = static_cast<MLabelId>(mi.src1.value);
+        const MLabelId table = static_cast<MLabelId>(mi.src2.value);
+        const uint32_t table_off =
+            (table < fn.label_offsets.size()) ? fn.label_offsets[table]
+                                              : UINT32_MAX;
+        fn.fixups.push_back(MFixup{block, static_cast<uint32_t>(out.size()),
+                                   table_off, 4});
+        for (int k = 0; k < 4; ++k) put8(out, 0); /* placeholder dword */
+        return true;
+    }
     case MOp::LEA_LABEL: {
         /* lea r64, [rip+disp32] -> direccion NATIVA de un LABEL local
          * (intra-funcion).  Mismo encoding que LEA_RIP_SYM pero el disp32 lo
