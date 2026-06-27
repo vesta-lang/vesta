@@ -314,7 +314,10 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 for (int e = 0; e < num_off; ++e)
                     if (strcmp(imps[k].func, off_entries[e].functionName) ==
                             0 &&
-                        strcmp(imps[k].dll, off_entries[e].dllName) == 0) {
+                        /* DLL case-insensitive: el grouping fundio KERNEL32.dll
+                         * y kernel32.dll en un descriptor; el lookup debe
+                         * coincidir igual aunque difiera el case. */
+                        aot_dll_name_eq(imps[k].dll, off_entries[e].dllName)) {
                         iat_off = off_entries[e].offset;
                         break;
                     }

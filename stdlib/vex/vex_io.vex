@@ -18,48 +18,75 @@
 // condicion y el `__vio_raw` @Target'd llama solo al de su plataforma -> el
 // extern no usado lo elimina el dead-strip (no se importa).
 //
-// Windows: WriteFile + GetStdHandle de kernel32 DIRECTO (igual que vesta_io.c),
-// SIN la capa CRT de msvcrt `_write` -> mas rapido y sin dependencia de msvcrt
-// para la salida.  Linux: `write` de libc (ya es un thin syscall stub; el raw
-// `syscall` necesitaria inline-asm AOT, Phase AS).  `abort` (msvcrt/libc) solo
-// se importa si el programa hace panic (dead-strip si no).
+// Windows: SOLO kernel32, CERO msvcrt bajo ninguna circunstancia.  Replica
+// exactamente a vesta_io.c -- consola: UTF-8 -> UTF-16 (MultiByteToWideChar) +
+// WriteConsoleW (rinde Unicode en consolas legacy); pipe/redir: WriteFile de
+// bytes directo.  panic via ExitProcess.  Sin printf/fwrite/stdio/CRT.
+// Linux: `write` de libc (thin syscall stub; el raw `syscall` necesitaria
+// inline-asm AOT, Phase AS).
 extern "kernel32.dll" {
     fn GetStdHandle(u32 nStdHandle) -> u64;
+    fn GetConsoleMode(u64 hConsole, u32* lpMode) -> i32;
     fn WriteFile(u64 hFile, u8* buf, u32 n, u32* nwritten, u64 overlapped) -> i32;
+    fn WriteConsoleW(u64 hConsole, u16* buf, u32 nchars, u32* nwritten,
+                     u64 reserved) -> i32;
+    fn MultiByteToWideChar(u32 codePage, u32 flags, u8* mbStr, i32 cbMb,
+                           u16* wStr, i32 cchWide) -> i32;
+    fn ExitProcess(u32 code) -> void;
 }
 extern "libc.so.6" {
     fn write(i64 fd, u8* buf, u64 len) -> i64;
-}
-extern "msvcrt.dll" {
     fn abort() -> void;
 }
 
 // --- Sink de stdout con block-buffering -------------------------------------
-// __vio_raw: escritura cruda al SO (la unica parte platform-specific).
-// Windows: GetStdHandle(STD_OUTPUT_HANDLE=-11) cacheado + WriteFile (kernel32).
+// __vio_raw: escritura cruda al SO (la unica parte platform-specific).  Recibe
+// como mucho VIO_BUF_BYTES (el flush nunca pasa mas), asi la conversion a
+// UTF-16 cabe en __vio_wbuf sin malloc.
 u64 __vio_handle = 0;
+i32 __vio_is_console = 0; // 0=sin-detectar, 1=consola, 2=fichero/pipe
+u16[4096] __vio_wbuf;     // buffer UTF-16 (max VIO_BUF_BYTES code units: ASCII)
+
 @Target("os:windows")
 void __vio_raw(u8* buf, u64 len) {
     if (len == 0) return;
-    if (__vio_handle == 0) {
+    if (__vio_is_console == 0) {
         // STD_OUTPUT_HANDLE = (DWORD)-11 = 0xFFFFFFF5 = 4294967285.
         __vio_handle = GetStdHandle(4294967285);
+        u32 mode = 0;
+        // GetConsoleMode != 0 <=> el handle es una consola (no pipe/fichero).
+        if (GetConsoleMode(__vio_handle, &mode) != 0) {
+            __vio_is_console = 1;
+        } else {
+            __vio_is_console = 2;
+        }
     }
-    // lpNumberOfBytesWritten: WriteFile (overlapped=NULL) exige puntero valido;
-    // un local en pila (su &-address es un host_ptr) sirve.
-    u32 nwritten = 0;
-    WriteFile(__vio_handle, buf, (u32)len, &nwritten, 0);
+    u32 nw = 0;
+    if (__vio_is_console == 1) {
+        // Consola: UTF-8 (CP_UTF8=65001) -> UTF-16 -> WriteConsoleW.  len <=
+        // VIO_BUF_BYTES (4096) -> a lo sumo 4096 code units (caso ASCII).
+        i32 ncw = MultiByteToWideChar(65001, 0, buf, (i32)len, &__vio_wbuf[0],
+                                      4096);
+        if (ncw > 0) {
+            WriteConsoleW(__vio_handle, &__vio_wbuf[0], (u32)ncw, &nw, 0);
+            return;
+        }
+        // Conversion fallida -> caer a bytes crudos.
+    }
+    // Pipe/redir (o fallback): WriteFile de bytes directo.
+    WriteFile(__vio_handle, buf, (u32)len, &nw, 0);
 }
 @Target("!os:windows")
 void __vio_raw(u8* buf, u64 len) {
     if (len > 0) write(1, buf, len);
 }
 
-// Buffer de salida (block-buffered como libc para no-tty): acumula y vuelca en
-// UN syscall.  Bate a fwrite/printf de C: sin parseo de formato + 1 syscall por
-// 4 KiB en vez de 1 por write.  El driver -m aot inyecta __vex_flush() antes de
-// cada RET de main (y __vex_panic_null vuelca antes de abortar) -> nada se
-// pierde al salir.
+// Buffer de salida (block-buffered): acumula y vuelca en UN syscall.  Bate a
+// fwrite/printf de C (sin parseo de formato; 1 syscall por bloque).  El driver
+// -m aot inyecta __vex_flush() antes de cada RET de main (y __vex_panic_null
+// vuelca antes de salir) -> nada se pierde al terminar.  SIEMPRE bufferiza
+// (sin bypass directo) para que el flush nunca pase mas de VIO_BUF_BYTES y la
+// conversion UTF-16 de consola quepa en __vio_wbuf.
 u8[4096] __vio_buf;
 u64 __vio_pos = 0;
 
@@ -71,28 +98,33 @@ void __vex_flush() {
 }
 
 void __vex_write(u8* buf, u64 len) {
-    if (len == 0) return;
-    // No cabe en lo que resta -> vuelca el buffer actual.
-    if (__vio_pos + len > 4096) {
-        __vex_flush();
-        // Bloque grande: escritura directa (evita el copy byte-a-byte).
-        if (len >= 4096) {
-            __vio_raw(buf, len);
-            return;
+    u64 off = 0;
+    while (off < len) {
+        if (__vio_pos >= 4096) __vex_flush();
+        u64 space = 4096 - __vio_pos;
+        u64 take = len - off;
+        if (take > space) take = space;
+        u64 k = 0;
+        while (k < take) {
+            __vio_buf[__vio_pos + k] = buf[off + k];
+            k = k + 1;
         }
+        __vio_pos = __vio_pos + take;
+        off = off + take;
     }
-    u64 k = 0;
-    while (k < len) {
-        __vio_buf[__vio_pos + k] = buf[k];
-        k = k + 1;
-    }
-    __vio_pos = __vio_pos + len;
 }
 
 // Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).
+@Target("os:windows")
 void __vex_panic_null() {
     __vex_write("panic: unwrap de un valor null (Optional/nonnull vacio)\n", 54);
-    __vex_flush(); // vuelca antes de abortar (abort no retorna).
+    __vex_flush();   // vuelca antes de salir.
+    ExitProcess(1);  // kernel32, no msvcrt abort.
+}
+@Target("!os:windows")
+void __vex_panic_null() {
+    __vex_write("panic: unwrap de un valor null (Optional/nonnull vacio)\n", 54);
+    __vex_flush();
     abort();
 }
 
