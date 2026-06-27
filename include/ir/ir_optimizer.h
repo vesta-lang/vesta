@@ -366,6 +366,16 @@ bool ir_pass_reassoc(IrFunction &fn);
 bool ir_pass_inline(IrModule &mod, size_t threshold = 12);
 
 /**
+ * @brief Inline de callees MULTI-bloque (con ramas) que el inliner single-block
+ *        rechaza.  Cirugia de CFG: split del bloque caller en el CALL, copia de
+ *        los bloques del callee (valores + block-ids remapeados), RET -> BR al
+ *        merge + PHI del resultado, recompute preds/succs + reorder RPO.
+ *        Semantica-preservante.  @p threshold = max instrucciones TOTALES del
+ *        callee.  Gated por VESTA_NO_MB_INLINE.
+ */
+bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold = 24);
+
+/**
  * @brief Inline del CUERPO de una lambda en el CALLCLOSURE (cross-backend).
  *
  * Cuando una funcion construye UNA closure (MAKE_CLOSURE) con capturas

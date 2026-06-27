@@ -12,6 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include <unordered_map>
+#include <set>
 #include <unordered_set>
 #include <vector>
 #include <queue>
@@ -955,7 +956,12 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
-    constexpr uint64_t MAX_PROMOTE_SIZE = 65536; // bytes
+    // 4 KB: cubre boxes de unique<T>/shared<T> y structs locales pequenos,
+    // pero EXCLUYE arrays grandes (p.ej. f64[4096]=32KB) que NO deben ir a la
+    // pila -- promoverlos desbordaba la pila de la VM (interp) -> SIGSEGV en
+    // vec_axpy.  El host stack del AOT/JIT aguanta mas, pero un array grande en
+    // pila es mala practica igualmente; los grandes se quedan en heap (malloc).
+    constexpr uint64_t MAX_PROMOTE_SIZE = 4096; // bytes
 
     // Collect RAW_ALLOC candidates (CONST size, size razonable).
     struct AllocSite {
@@ -984,6 +990,228 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
     }
     if (candidates.empty()) return false;
 
+    // ---- Stack-first (slot muerto): analisis de SLOTS LOCALES ----
+    //
+    // El idiom @c unique<T> Tier-1 hace `STORE box_ptr -> slot[+0]` donde
+    // `slot` es un ALLOCA local de 16 B.  El escape-check ingenuo marca ese
+    // STORE como escape (el ptr "sale" a memoria) y bloquea la promocion a
+    // pila, AUN cuando ese slot nunca se vuelve a LEER (el cleanup usa el
+    // SSA value del box directamente).  Resultado: `malloc`/`free` que
+    // podrian ser puro stack.
+    //
+    // Regla SOLIDA (sin analisis de offsets, por eso no confunde el box con
+    // el campo deleter en slot[+8]): un `STORE box -> A` NO escapa si `A`
+    // apunta a un SLOT LOCAL `S` (ALLOCA de esta fn) que es WRITE-ONLY --
+    // nunca es el addr de ningun LOAD, y su propia direccion nunca se pasa a
+    // CALL*/RET/THROW ni se almacena como valor.  Si S nunca se lee, el ptr
+    // guardado jamas se recupera => el box no escapa por ese STORE; sus usos
+    // DIRECTOS (deref, free) los cubre el escape-check normal.  Cualquier
+    // duda (S se lee, S escapa, A no enraiza en un ALLOCA local) => regla
+    // inactiva => comportamiento previo (heap).  Cero riesgo de UAF.
+    const size_t NV = fn.values.size();
+    std::vector<IrValueId> slot_root(NV, IR_NO_VALUE); // raiz ALLOCA de cada v
+    {
+        // Semilla: ALLOCA dst -> raiz de si misma.
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins : blk.instrs)
+                if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE &&
+                    ins.dst < NV)
+                    slot_root[ins.dst] = ins.dst;
+        // Forward-flow por aritmetica de punteros / casts (cota 32 iter).
+        bool prop = true;
+        int it2 = 32;
+        while (prop && it2-- > 0) {
+            prop = false;
+            for (const auto &blk : fn.blocks) {
+                for (const auto &ins : blk.instrs) {
+                    if (ins.dst == IR_NO_VALUE || ins.dst >= NV) continue;
+                    if (slot_root[ins.dst] != IR_NO_VALUE) continue;
+                    switch (ins.op) {
+                    case IrOp::ADD:
+                    case IrOp::SUB:
+                    case IrOp::BITCAST:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                    case IrOp::SEXT:
+                    case IrOp::ZEXT:
+                    case IrOp::TRUNC:
+                        for (auto v : ins.operands) {
+                            if (v != IR_NO_VALUE && v < NV &&
+                                slot_root[v] != IR_NO_VALUE) {
+                                slot_root[ins.dst] = slot_root[v];
+                                prop = true;
+                                break;
+                            }
+                        }
+                        break;
+                    default: break;
+                    }
+                }
+            }
+        }
+    }
+    // slot_loaded[S]=1 si S es la raiz del addr de algun LOAD.
+    // slot_escapes[S]=1 si la direccion de S sale del frame (operand de
+    // CALL*/RET/THROW/... o STORE-as-val).
+    std::vector<uint8_t> slot_loaded(NV, 0u), slot_escapes(NV, 0u);
+    {
+        auto root_of = [&](IrValueId v) -> IrValueId {
+            return (v != IR_NO_VALUE && v < NV) ? slot_root[v] : IR_NO_VALUE;
+        };
+        for (const auto &blk : fn.blocks) {
+            for (const auto &ins : blk.instrs) {
+                if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                    IrValueId s = root_of(ins.operands[0]);
+                    if (s != IR_NO_VALUE) slot_loaded[s] = 1u;
+                    continue;
+                }
+                if (ins.op == IrOp::STORE) {
+                    // STORE val,addr: si la propia direccion del slot es el
+                    // VAL almacenado, ese slot escapa (su ptr sale).  El addr
+                    // (operands[1]) NO escapa por escribir en el slot.
+                    if (!ins.operands.empty()) {
+                        IrValueId sv = root_of(ins.operands[0]);
+                        if (sv != IR_NO_VALUE) slot_escapes[sv] = 1u;
+                    }
+                    continue;
+                }
+                if (ins.op == IrOp::ALLOCA) continue;
+                // Lista-blanca de PRODUCTORES/CONSUMIDORES seguros de la
+                // direccion de un slot: aritmetica de punteros + casts (campo
+                // addr, ya cubiertos por slot_root-forward), CMP/BR/NOP/CONST
+                // (read-only / control).  CUALQUIER otra op (CALL*, RET, THROW,
+                // MEMCPY, MVTAKE_IR, ...) que reciba la direccion de un slot
+                // como operand puede SACAR/copiar su contenido fuera del frame
+                // -> el slot escapa.  Invertir a lista-blanca (vs enumerar
+                // consumidores escapantes) evita olvidar ops nuevas como
+                // mvtake_ir (el `move` smuggla el box a otro slot).
+                bool safe_consumer = false;
+                switch (ins.op) {
+                case IrOp::ADD:
+                case IrOp::SUB:
+                case IrOp::BITCAST:
+                case IrOp::MOV:
+                case IrOp::CAST:
+                case IrOp::SEXT:
+                case IrOp::ZEXT:
+                case IrOp::TRUNC:
+                case IrOp::CMP_EQ:
+                case IrOp::CMP_NE:
+                case IrOp::CMP_LT:
+                case IrOp::CMP_GT:
+                case IrOp::CMP_LE:
+                case IrOp::CMP_GE:
+                case IrOp::CMP_ULT:
+                case IrOp::CMP_UGT:
+                case IrOp::CMP_ULE:
+                case IrOp::CMP_UGE:
+                case IrOp::BR:
+                case IrOp::BR_COND:
+                case IrOp::NOP:
+                case IrOp::CONST: safe_consumer = true; break;
+                default: break; // PHI incluido: slot_root no lo rastrea -> escape
+                }
+                if (!safe_consumer) {
+                    for (auto v : ins.operands) {
+                        IrValueId s = root_of(v);
+                        if (s != IR_NO_VALUE) slot_escapes[s] = 1u;
+                    }
+                    if (ins.func_ptr != IR_NO_VALUE) {
+                        IrValueId s = root_of(ins.func_ptr);
+                        if (s != IR_NO_VALUE) slot_escapes[s] = 1u;
+                    }
+                    for (const auto &pa : ins.phi_args) {
+                        IrValueId s = root_of(pa.value);
+                        if (s != IR_NO_VALUE) slot_escapes[s] = 1u;
+                    }
+                }
+            }
+        }
+    }
+    // ---- Slot CARRIER limpio (offset-0): idiom unique<T> + borrow ----
+    //
+    // El box vive en slot[+0] y los borrows lo RE-LEEN del slot[+0] (el slot SI
+    // se lee, asi que la regla "slot muerto" no aplica).  Pero si el slot:
+    //   (a) es local + no-escapante,  (b) recibe EXACTAMENTE UN store en
+    //   offset 0 (el del box),  (c) TODOS sus loads son offset 0,
+    // entonces los valores leidos del slot son alias del MISMO box -> el box
+    // sigue siendo frame-local.  El guard offset-0 evita confundir el box con
+    // el campo deleter en slot[+8].  Los free de esos aliases se reescriben al
+    // dst del ALLOCA en la promocion (para que la NOP-detection de aot_lower /
+    // JIT los elide -> nunca free(stack_ptr)).
+    //
+    // slot_off_zero[v]: v es alias de offset-0 de su slot raiz (ALLOCA o
+    // MOV/cast de el; NUNCA un ADD con desplazamiento).
+    std::vector<uint8_t> slot_off_zero(NV, 0u);
+    {
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins : blk.instrs)
+                if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE &&
+                    ins.dst < NV)
+                    slot_off_zero[ins.dst] = 1u;
+        bool prop = true;
+        int it3 = 32;
+        while (prop && it3-- > 0) {
+            prop = false;
+            for (const auto &blk : fn.blocks)
+                for (const auto &ins : blk.instrs) {
+                    if (ins.dst == IR_NO_VALUE || ins.dst >= NV) continue;
+                    if (slot_off_zero[ins.dst]) continue;
+                    switch (ins.op) { // solo casts/MOV preservan offset 0
+                    case IrOp::BITCAST:
+                    case IrOp::MOV:
+                    case IrOp::CAST:
+                        for (auto v : ins.operands)
+                            if (v != IR_NO_VALUE && v < NV && slot_off_zero[v]) {
+                                slot_off_zero[ins.dst] = 1u;
+                                prop = true;
+                                break;
+                            }
+                        break;
+                    default: break;
+                    }
+                }
+        }
+    }
+    // slot_loads_off0[S]=1 si TODOS los loads que enraizan en S son offset-0.
+    // slot_store0_count[S]=numero de STOREs offset-0 que enraizan en S.
+    std::vector<uint8_t> slot_loads_off0(NV, 1u);
+    std::vector<uint32_t> slot_store0_count(NV, 0u);
+    {
+        auto root_of = [&](IrValueId v) -> IrValueId {
+            return (v != IR_NO_VALUE && v < NV) ? slot_root[v] : IR_NO_VALUE;
+        };
+        for (const auto &blk : fn.blocks)
+            for (const auto &ins : blk.instrs) {
+                if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                    IrValueId a = ins.operands[0], s = root_of(a);
+                    if (s != IR_NO_VALUE && !(a < NV && slot_off_zero[a]))
+                        slot_loads_off0[s] = 0u;
+                } else if (ins.op == IrOp::STORE && ins.operands.size() >= 2) {
+                    IrValueId a = ins.operands[1], s = root_of(a);
+                    if (s != IR_NO_VALUE && a < NV && slot_off_zero[a])
+                        slot_store0_count[s]++;
+                }
+            }
+    }
+    auto is_clean_carrier = [&](IrValueId s) -> bool {
+        return s != IR_NO_VALUE && s < NV && !slot_escapes[s] &&
+               slot_loads_off0[s] && slot_store0_count[s] == 1u;
+    };
+
+    // store_to_dead_local_slot(addr): true si `addr` apunta a un slot local
+    // WRITE-ONLY no-escapante, O a un carrier limpio offset-0 (el box se
+    // recupera como alias trackeado).  En ambos el STORE del box no lo hace
+    // escapar.
+    auto store_to_dead_local_slot = [&](IrValueId addr) -> bool {
+        if (addr == IR_NO_VALUE || addr >= NV) return false;
+        IrValueId s = slot_root[addr];
+        if (s == IR_NO_VALUE) return false; // no enraiza en ALLOCA local
+        if (slot_escapes[s]) return false;  // la direccion del slot escapa
+        if (!slot_loaded[s]) return true;   // write-only muerto
+        return slot_off_zero[addr] && is_clean_carrier(s); // carrier off-0
+    };
+
     // Para cada candidato, hacer escape analysis:
     //   - forward fix-point: marcar valores derivados del dst.
     //   - rechazar si algun derivado llega a un uso prohibido (RETURN,
@@ -995,19 +1223,49 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
         // CAST/*EXT/TRUNC/PHI).
         std::vector<bool> derivados(fn.values.size(), false);
         derivados[c.dst] = true;
+        // box_carrier[S]=1: el slot S guarda ESTE box en offset 0 (carrier
+        // limpio) -> sus loads off-0 son alias del box.
+        // carrier_alias[v]=1: v es un load off-0 desde un carrier -> su free
+        // debe reescribirse al ALLOCA del box (NOP-able por aot_lower/JIT).
+        std::vector<uint8_t> box_carrier(NV, 0u), carrier_alias(NV, 0u);
         bool prop = true;
         int iters = 0;
         while (prop && iters++ < 32) {
             prop = false;
             for (const auto &blk : fn.blocks) {
                 for (const auto &ins : blk.instrs) {
-                    if (ins.dst == IR_NO_VALUE) continue;
-                    if (ins.dst >= derivados.size()) continue;
-                    if (derivados[ins.dst]) continue;
                     auto check = [&](IrValueId v) -> bool {
                         return v != IR_NO_VALUE && v < derivados.size() &&
                                derivados[v];
                     };
+                    // STORE box -> carrier-slot[+0]: registra el carrier.
+                    if (ins.op == IrOp::STORE && ins.operands.size() >= 2) {
+                        IrValueId val = ins.operands[0], addr = ins.operands[1];
+                        if (check(val) && addr < NV && slot_off_zero[addr]) {
+                            IrValueId s = slot_root[addr];
+                            if (is_clean_carrier(s) && !box_carrier[s]) {
+                                box_carrier[s] = 1u;
+                                prop = true;
+                            }
+                        }
+                        continue; // STORE no define dst
+                    }
+                    if (ins.dst == IR_NO_VALUE) continue;
+                    if (ins.dst >= derivados.size()) continue;
+                    if (derivados[ins.dst]) continue;
+                    // LOAD off-0 desde un carrier de este box -> alias del box.
+                    if (ins.op == IrOp::LOAD && !ins.operands.empty()) {
+                        IrValueId a = ins.operands[0];
+                        if (a < NV && slot_off_zero[a]) {
+                            IrValueId s = slot_root[a];
+                            if (s != IR_NO_VALUE && box_carrier[s]) {
+                                derivados[ins.dst] = true;
+                                carrier_alias[ins.dst] = 1u;
+                                prop = true;
+                            }
+                        }
+                        continue;
+                    }
                     bool any_d = false;
                     switch (ins.op) {
                     case IrOp::ADD:
@@ -1093,7 +1351,12 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
                         const IrValueId val_v = ins.operands[0];
                         const IrValueId addr_v = ins.operands[1];
                         if (is_derived(val_v) && !is_derived(addr_v)) {
-                            escapes = true;
+                            // Stack-first: si el box se guarda en un slot
+                            // local muerto (write-only, no-escapante), el
+                            // ptr nunca se recupera -> NO escapa por aqui.
+                            if (!store_to_dead_local_slot(addr_v)) {
+                                escapes = true;
+                            }
                         }
                     }
                     break;
@@ -1156,6 +1419,20 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
         // Marcar el dst como is_host_ptr para que LOAD/STORE emitan movh.
         if (c.dst < fn.values.size()) {
             fn.values[c.dst].is_host_ptr = true;
+        }
+
+        // Carrier: los free de un box recuperado via load(slot) tienen como
+        // operando un ALIAS (carrier_alias), no el ALLOCA.  aot_lower / JIT
+        // solo elidan el free si el operando viene DIRECTO de un ALLOCA; si
+        // no, emitirian free(stack_ptr) -> abort.  Reescribimos el operando
+        // del free al dst del ALLOCA (semanticamente el mismo box) para que
+        // la NOP-detection existente lo elide uniformemente.
+        for (const auto &fs : free_sites) {
+            IrInstr &fi = fn.blocks[fs.first].instrs[fs.second];
+            if (!fi.operands.empty() && fi.operands[0] < NV &&
+                carrier_alias[fi.operands[0]]) {
+                fi.operands[0] = c.dst;
+            }
         }
 
         // Sprint mem-loop-fix (2026-06-02): PRESERVAR los RAW_FREE
@@ -1936,6 +2213,14 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
                     for (const auto &pa : ins.phi_args)
                         mark_escape(pa.value);
                 }
+                continue;
+            }
+            if (ins.op == IrOp::RAW_FREE) {
+                /* free(obj) (solo native_poo; en GC los objetos no se liberan
+                 * con RAW_FREE) NO hace escapar al objeto: es su dealloc.  Si
+                 * el sitio se escalariza, scalar_replace elimina este free.
+                 * En GC este caso nunca se alcanza (no hay raw_free de objetos
+                 * `new X()`), asi que no afecta al path interp/jit. */
                 continue;
             }
             if (is_safe_op(ins.op)) continue;
@@ -3124,6 +3409,8 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         };
         std::vector<LoadRef> loads; /* loads a reescribir */
         std::vector<std::pair<size_t, size_t>> dead_addr; /* add.ptr a NOPear */
+        std::vector<std::pair<size_t, size_t>>
+            dead_free; /* raw_free(obj) a NOPear (native_poo) */
         std::unordered_map<IrValueId, uint32_t>
             fieldaddr_off; /* addr_vid -> off */
         bool ok = true;
@@ -3207,6 +3494,14 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                            in.operands[1] == obj && in.operands[0] != obj) {
                     has_writes = true; /* store directo -> offset 0 */
                     if (bi != site.block_idx) single_block = false;
+                } else if (in.op == IrOp::RAW_FREE && !in.operands.empty() &&
+                           in.operands[0] == obj) {
+                    /* free(obj) (native_poo): si escalarizamos, el objeto
+                     * deja de existir -> el free es dead.  Lo recolectamos
+                     * para NOPearlo en el transform; NO marca uso no-soportado.
+                     * El modelo de ctor ya descarta clases con dtor, asi que
+                     * aqui el unico efecto del free es liberar el calloc. */
+                    dead_free.push_back({bi, ii});
                 } else {
                     ok = false;
                     use_reason = "obj usado fuera de field-access "
@@ -3338,6 +3633,13 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                 ai.operands.clear();
                 ai.dst = IR_NO_VALUE;
                 ai.func_name.clear();
+            }
+            for (const auto &df : dead_free) {
+                IrInstr &fi = fn.blocks[df.first].instrs[df.second];
+                fi.op = IrOp::NOP;
+                fi.operands.clear();
+                fi.dst = IR_NO_VALUE;
+                fi.func_name.clear();
             }
             call_ins.op = IrOp::NOP;
             call_ins.operands.clear();
@@ -3533,6 +3835,13 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                 ai.operands.clear();
                 ai.dst = IR_NO_VALUE;
                 ai.func_name.clear();
+            }
+            for (const auto &df : dead_free) {
+                IrInstr &fi = fn.blocks[df.first].instrs[df.second];
+                fi.op = IrOp::NOP;
+                fi.operands.clear();
+                fi.dst = IR_NO_VALUE;
+                fi.func_name.clear();
             }
             call_ins.op = IrOp::NOP;
             call_ins.operands.clear();
@@ -4666,9 +4975,26 @@ bool ir_pass_elide_unwrap(IrFunction &fn) {
             fn.values[v].const_val != 0)
             return true;
         auto it = def_op.find(v);
-        return it != def_op.end() &&
-               (it->second == IrOp::ALLOCA || it->second == IrOp::STR_LIT_ADDR ||
-                it->second == IrOp::LABEL_ADDR || it->second == IrOp::UNWRAP);
+        if (it == def_op.end()) return false;
+        // Allocaciones de OBJETO (clase) NUNCA devuelven null por contrato del
+        // lenguaje: OOM lanza un fatal, no un null (`new X()` es non-null,
+        // nunca se null-chequea).  Asi el unwrap del `!!`/nonnull sobre un
+        // `new X()` recien creado es siempre non-null -> elidible.  Esto ademas
+        // desbloquea el scalar-replacement (sin elidir, el UNWRAP cuenta como
+        // escape).  NOTA: RAW_ALLOC (malloc) SI puede devolver null en OOM ->
+        // NO se incluye (su null-check debe preservarse).
+        if (it->second == IrOp::NEWOBJ || it->second == IrOp::NEWOBJS ||
+            it->second == IrOp::GC_ALLOC || it->second == IrOp::GC_ALLOCP)
+            return true;
+        if (it->second == IrOp::CALL) {
+            auto di = def_instr.find(v);
+            if (di != def_instr.end() &&
+                is_new_helper_name(di->second->func_name, nullptr))
+                return true;
+        }
+        return it->second == IrOp::ALLOCA ||
+               it->second == IrOp::STR_LIT_ADDR ||
+               it->second == IrOp::LABEL_ADDR || it->second == IrOp::UNWRAP;
     };
 
     auto is_zero = [&](IrValueId v) -> bool {
@@ -6155,7 +6481,15 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
      * aritmeticos pequenos sin causar bloat material en el .velb de programas
      * tipicos.  El C2/OSR pasa un threshold mayor para inlinear las CALLs de un
      * loop CALIENTE (el code-size no importa cuando el loop domina el tiempo).
-     */
+     *
+     * NOTA (barrido stack-first): subir a 16 se probo para desbloquear el
+     * scalar-replacement de objetos cuya unica fuga es pasar `this` a un metodo
+     * pequeno (operadores `__add__`/`__eq__`, ~16 instrs).  Resultado: solo +1
+     * ejemplo del corpus a puro-stack, a cambio de +code-size en TODOS los
+     * programas, y SIN destrabar el caso motivante (40_operator_overload tiene
+     * 3 objetos + varios operadores -> necesitaria ~20+).  Mal tradeoff: el
+     * metodo-call necesita scalar-replace-driven inlining (inlinar SOLO cuando
+     * habilita la eliminacion del objeto), no un threshold global.  Revertido. */
     const size_t INLINE_THRESHOLD = threshold;
     bool changed = false;
 
@@ -6198,6 +6532,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
     /* Pre-classify cada function: es inlineable? */
     auto is_inlineable = [&](const IrFunction &fn) -> bool {
         if (fn.is_native) return false;
+        if (fn.is_naked) return false; // @Naked: standalone, no inlinable
         if (is_blacklisted(fn.name)) return false;
         /* AOT 2b (dev OS): una funcion con @section explicito debe permanecer
          * como funcion REAL en esa seccion (el usuario la quiere fisicamente
@@ -6253,11 +6588,31 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * funcion separada (cada una conserva sus bindings + se eager-compila).
          */
         for (const auto &ins : fn.blocks[0].instrs) {
-            if (ins.op == IrOp::RAW_ASM || ins.op == IrOp::INLINE_ASM)
-                return false;
+            // RAW_ASM (@Asm verbatim) asume la calling convention VM -> no
+            // inlinable.  INLINE_ASM (asm{} con register-bindings) SI: el copy
+            // logic remapea asm_reg_bindings + clobber-lists al caller, asi el
+            // helper asm caliente (popcnt/rdtsc/...) se inlinea sin perder el
+            // pin de registros.  La unica restriccion es que el helper no
+            // recurse ni tenga RAW_ASM (ya cubierto arriba).
+            if (ins.op == IrOp::RAW_ASM) return false;
         }
         return true;
     };
+
+    /* NOTA (barrido stack-first): se intento un scalar-replace-driven inlining
+     * (inlinar metodos this-field-only sobre objetos frescos ELIMINABLES para
+     * que scalar_replace los elimine).  El concepto funciona en sintetico
+     * (`Point p = new Point(..); p.sumxy()` -> return const, heap 0) PERO:
+     * (1) CERO ejemplos del corpus se benefician (sus casos method-call usan
+     * metodos MULTI-bloque -- `__eq__` con `&&` -- que el inliner single-block
+     * no toca; el inline multi-bloque es trabajo aparte); (2) rompio
+     * 101_raii_casos_limite de TRES formas distintas en tres intentos (hang
+     * determinista y luego NO-determinista, por interaccion con dtors via
+     * CALLVIRT + reflexion newInstance), senal de que la eliminacion de objetos
+     * en presencia de RAII/reflexion tiene aristas sutiles.  Mal tradeoff
+     * (regresion fragil + cero beneficio de corpus) -> NO incluido.  El unlock
+     * real necesita inline MULTI-bloque + analisis de eliminabilidad robusto
+     * frente a dtor/reflexion; queda como feature dedicada documentada. */
 
     /* Cache de classification. */
     std::vector<bool> can_inline(mod.functions.size(), false);
@@ -6345,6 +6700,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                 /* Replicar todas las instrs del callee EXCEPTO el RET final. */
                 IrValueId ret_value = IR_NO_VALUE;
                 bool inline_ok = true;
+                bool inlined_inline_asm = false;
                 for (const auto &c_ins : cbody.instrs) {
                     if (c_ins.op == IrOp::RET) {
                         if (!c_ins.operands.empty()) {
@@ -6375,6 +6731,26 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         inline_ok = false;
                         break;
                     }
+                    /* INLINE_ASM: el asm-id (imm bits 8..31) indexa el
+                     * @c asm_clobber_lists del CALLEE.  Tras inlinar debe
+                     * indexar el del CALLER -> apendamos la clobber-list y
+                     * reescribimos el asm-id.  Los registros del bloque asm
+                     * (rax/rdi/...) viajan en el texto verbatim; los pins de
+                     * los register-vars viajan en asm_reg_bindings (abajo). */
+                    if (ni.op == IrOp::INLINE_ASM) {
+                        const uint32_t old_id =
+                            static_cast<uint32_t>((ni.imm >> 8) & 0xFFFFFFu);
+                        const uint32_t new_id = static_cast<uint32_t>(
+                            caller.asm_clobber_lists.size());
+                        if (old_id < callee.asm_clobber_lists.size())
+                            caller.asm_clobber_lists.push_back(
+                                callee.asm_clobber_lists[old_id]);
+                        else
+                            caller.asm_clobber_lists.emplace_back();
+                        ni.imm = (ni.imm & 0xFFull) |
+                                 (static_cast<uint64_t>(new_id) << 8);
+                        inlined_inline_asm = true;
+                    }
                     new_instrs.push_back(std::move(ni));
                 }
 
@@ -6394,6 +6770,22 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                         new_instrs.push_back(bb.instrs[k]);
                     }
                     continue;
+                }
+
+                /* INLINE_ASM inlineado: apendar los register-bindings del
+                 * callee al caller, remapeando @c alloca_value via vmap (los
+                 * ALLOCA de los register-vars ya se copiaron al caller).  El
+                 * regalloc del caller (vreg_fixed por-vreg) los pinea al
+                 * registro fisico alrededor del bloque asm; dos inlines del
+                 * mismo helper pinean dos vregs distintos al mismo phys en
+                 * puntos NO solapados -> sin conflicto. */
+                if (inlined_inline_asm) {
+                    for (const auto &b : callee.asm_reg_bindings) {
+                        ir::AsmRegBinding nb = b;
+                        nb.alloca_value = remap_op(b.alloca_value);
+                        if (nb.alloca_value != IR_NO_VALUE)
+                            caller.asm_reg_bindings.push_back(std::move(nb));
+                    }
                 }
 
                 /* Emitir el "resultado" del inline: si el CALL tenia dst,
@@ -7160,6 +7552,295 @@ static void reorder_blocks_rpo(IrFunction &fn) {
         nb[remap[b]] = std::move(bb);
     }
     fn.blocks = std::move(nb);
+}
+
+// =========================================================================
+//  Pase ir_pass_inline_multiblock: inline de callees MULTI-bloque (con `if`,
+//  loops sin back-edge propio, etc.) que el inliner single-block rechaza.
+//  Cirugia de CFG identica en espiritu a spec_devirt: split del bloque caller
+//  en el CALL, insertar copia de los bloques del callee (valores + block-ids
+//  remapeados), cada RET -> BR al merge + PHI del resultado, repuntar los
+//  sucesores originales, recomputar preds/succs y reordenar a RPO.
+//  Semantica-preservante (no toca objetos ni scalar-replace); habilita inlinar
+//  metodos/funciones pequenas con ramas.  Gated por VESTA_NO_MB_INLINE.
+// =========================================================================
+
+// Recomputa preds/succs de TODA la funcion desde los terminadores (robusto
+// tras cirugia de CFG; evita bugs de mantenimiento manual).
+static void recompute_preds_succs(IrFunction &fn) {
+    const size_t N = fn.blocks.size();
+    for (size_t b = 0; b < N; ++b) {
+        fn.blocks[b].succs.clear();
+        fn.blocks[b].preds.clear();
+    }
+    for (size_t b = 0; b < N; ++b) {
+        if (fn.blocks[b].instrs.empty()) continue;
+        const IrInstr &t = fn.blocks[b].instrs.back();
+        auto add = [&](IrBlockId s) {
+            if (s != IR_NO_BLOCK && s < N) fn.blocks[b].succs.push_back(s);
+        };
+        if (t.op == IrOp::BR)
+            add(t.target_block);
+        else if (t.op == IrOp::BR_COND) {
+            add(t.target_block);
+            add(t.false_block);
+        } else if (t.op == IrOp::SWITCH_DENSE) {
+            add(t.target_block);
+            for (IrBlockId s : t.jump_targets) add(s);
+        }
+    }
+    for (size_t b = 0; b < N; ++b)
+        for (IrBlockId s : fn.blocks[b].succs)
+            fn.blocks[s].preds.push_back(static_cast<IrBlockId>(b));
+}
+
+// Inlinea el callee MULTI-bloque en caller.blocks[bi].instrs[ii] (un CALL).
+static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
+                                  const IrFunction &callee) {
+    caller.blocks.reserve(caller.blocks.size() + callee.blocks.size() + 2);
+    const IrInstr call = caller.blocks[bi].instrs[ii]; // copia
+    const IrValueId call_dst = call.dst;
+    const IrType ret_type = call.type;
+    const uint32_t srcline = call.source_line;
+
+    // --- remap de valores: params -> args; resto -> fresh (copia atributos) ---
+    std::unordered_map<IrValueId, IrValueId> vmap;
+    for (size_t p = 0; p < callee.params.size() && p < call.operands.size();
+         ++p)
+        vmap[callee.params[p]] = call.operands[p];
+    for (size_t v = 0; v < callee.values.size(); ++v) {
+        if (vmap.count(static_cast<IrValueId>(v))) continue;
+        const IrValue &cv = callee.values[v];
+        const IrValueId nv = caller.new_value(cv.type, "");
+        IrValue &dv = caller.values[nv];
+        dv.is_const = cv.is_const;
+        dv.const_val = cv.const_val;
+        dv.is_host_ptr = cv.is_host_ptr;
+        dv.pointee_is_host_ptr = cv.pointee_is_host_ptr;
+        dv.is_gc_object = cv.is_gc_object;
+        dv.narrow_only = cv.narrow_only;
+        vmap[static_cast<IrValueId>(v)] = nv;
+    }
+    auto rv = [&](IrValueId v) -> IrValueId {
+        if (v == IR_NO_VALUE) return v;
+        auto it = vmap.find(v);
+        return it != vmap.end() ? it->second : v;
+    };
+
+    // --- remap de bloques: cada bloque del callee -> nuevo bloque del caller ---
+    std::unordered_map<IrBlockId, IrBlockId> bmap;
+    std::vector<IrBlockId> copy_ids;
+    copy_ids.reserve(callee.blocks.size());
+    for (size_t k = 0; k < callee.blocks.size(); ++k) {
+        const IrBlockId nb = caller.new_block("inl_" + callee.blocks[k].name);
+        bmap[callee.blocks[k].id] = nb;
+        copy_ids.push_back(nb);
+    }
+    const IrBlockId mergeb = caller.new_block("inl_merge");
+    auto rb = [&](IrBlockId b) -> IrBlockId {
+        auto it = bmap.find(b);
+        return it != bmap.end() ? it->second : b;
+    };
+
+    // --- capturar succs originales + mover el tail [ii+1..] al merge ---
+    const std::vector<IrBlockId> orig_succs = caller.blocks[bi].succs;
+    {
+        auto &Bi = caller.blocks[bi].instrs;
+        std::vector<IrInstr> tail(Bi.begin() + static_cast<long>(ii) + 1,
+                                  Bi.end());
+        caller.blocks[mergeb].instrs = std::move(tail);
+        Bi.resize(ii); // descarta el CALL + el tail
+    }
+
+    // --- copiar los bloques del callee (remap valores + block-refs) ---
+    std::vector<IrPhiArg> ret_args;
+    for (size_t k = 0; k < callee.blocks.size(); ++k) {
+        const IrBlock &cb = callee.blocks[k];
+        const IrBlockId nbid = copy_ids[k];
+        for (IrInstr in : cb.instrs) { // copia por valor
+            if (in.op == IrOp::RET) {
+                if (call_dst != IR_NO_VALUE && !in.operands.empty())
+                    ret_args.push_back(IrPhiArg{rv(in.operands[0]), nbid});
+                IrInstr br{};
+                br.op = IrOp::BR;
+                br.target_block = mergeb;
+                br.source_line = in.source_line;
+                caller.blocks[nbid].instrs.push_back(std::move(br));
+                continue;
+            }
+            in.dst = rv(in.dst);
+            for (auto &op : in.operands) op = rv(op);
+            if (in.func_ptr != IR_NO_VALUE) in.func_ptr = rv(in.func_ptr);
+            for (auto &pa : in.phi_args) {
+                pa.value = rv(pa.value);
+                pa.block = rb(pa.block);
+            }
+            if (in.target_block != IR_NO_BLOCK) in.target_block = rb(in.target_block);
+            if (in.false_block != IR_NO_BLOCK) in.false_block = rb(in.false_block);
+            caller.blocks[nbid].instrs.push_back(std::move(in));
+        }
+    }
+
+    // --- B salta a la entry del callee copiado ---
+    {
+        IrInstr br{};
+        br.op = IrOp::BR;
+        br.target_block = copy_ids[0];
+        br.source_line = srcline;
+        caller.blocks[bi].instrs.push_back(std::move(br));
+    }
+
+    // --- merge: PHI(call_dst) = ret_args (al inicio) + tail (ya movido) ---
+    if (call_dst != IR_NO_VALUE && !ret_args.empty()) {
+        IrInstr phi{};
+        phi.op = IrOp::PHI;
+        phi.type = ret_type;
+        phi.dst = call_dst;
+        phi.phi_args = std::move(ret_args);
+        phi.source_line = srcline;
+        caller.blocks[mergeb].instrs.insert(
+            caller.blocks[mergeb].instrs.begin(), std::move(phi));
+    }
+
+    // --- repuntar los succs originales: pred bi -> mergeb (PHIs incluidas) ---
+    for (IrBlockId s : orig_succs) {
+        if (s == IR_NO_BLOCK || s >= caller.blocks.size()) continue;
+        for (auto &in : caller.blocks[s].instrs) {
+            if (in.op != IrOp::PHI) continue;
+            for (auto &pa : in.phi_args)
+                if (pa.block == static_cast<IrBlockId>(bi)) pa.block = mergeb;
+        }
+    }
+
+    recompute_preds_succs(caller);
+}
+
+// true si el callee multi-bloque es seguro de inlinar.
+static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
+    if (fn.is_native) return false;
+    if (fn.is_naked) return false; // @Naked: sin prologo/epilogo/ret, standalone
+    if (!fn.section.empty()) return false;
+    if (fn.blocks.empty()) return false;
+    if (fn.name == "__module_init") return false;
+    if (fn.name.rfind("__lambda", 0) == 0) return false;
+    if (is_new_helper_name(fn.name, nullptr)) return false;
+    size_t total = 0;
+    bool has_ret = false;
+    for (size_t k = 0; k < fn.blocks.size(); ++k) {
+        const IrBlock &b = fn.blocks[k];
+        if (b.instrs.empty()) return false;
+        total += b.instrs.size();
+        const IrInstr &last = b.instrs.back();
+        if (last.op != IrOp::BR && last.op != IrOp::BR_COND &&
+            last.op != IrOp::RET)
+            return false; // bloque sin terminador limpio
+        if (last.op == IrOp::RET) has_ret = true;
+        for (const auto &in : b.instrs) {
+            if ((in.op == IrOp::CALL || in.op == IrOp::TAILCALL) &&
+                in.func_name == fn.name)
+                return false; // recursion
+            if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM)
+                return false;
+            if (in.op == IrOp::SWITCH_DENSE || !in.jump_targets.empty())
+                return false; // jump tables: no soportado v1
+            // ALLOCA: inlinar una fn con ALLOCA dentro de un loop del caller
+            // crece la pila monotonicamente (bug P0.6).  El single-block
+            // inliner ya lo rechaza; replicamos aqui.
+            if (in.op == IrOp::ALLOCA) return false;
+            // Cleanup RAII / liberacion explicita: inlinar una fn que libera
+            // recursos (dtor via CALLVIRT, free) puede duplicar/reordenar el
+            // cleanup respecto al modelo de scope del caller -> resultado
+            // incorrecto (visto en 101_raii).  Conservador: no inlinar.
+            if (in.op == IrOp::RAW_FREE || in.op == IrOp::SMARTPTR_FREE)
+                return false;
+            // Ops con semantica de FRAME/scope/runtime que inlinar puede
+            // romper (anidamiento de exception frames, save_live_regs del GC,
+            // registros de reflexion ligados al scope, dispatch dinamico):
+            // conservador, no inlinar el callee que las contenga.  En
+            // particular la CREACION de objetos (NEWOBJ/__new_X) + dtor
+            // (CALLVIRT) DENTRO de un callee con loop rompia el save_live_regs
+            // del GC al inlinarse (101_raii caso_6).  Esto sigue permitiendo
+            // inlinar metodos PUROS (getters/setters/operadores field-only) que
+            // es el objetivo del bucket method-call.
+            switch (in.op) {
+            case IrOp::THROW:
+            case IrOp::TRYENTER:
+            case IrOp::TRYLEAVE:
+            case IrOp::RETHROW:
+            case IrOp::FINDCLASS:
+            case IrOp::REFLECT_COUNT:
+            case IrOp::REFLECT_AT:
+            case IrOp::NEWOBJ:
+            case IrOp::NEWOBJS:
+            case IrOp::GC_ALLOC:
+            case IrOp::GC_ALLOCP:
+            case IrOp::CALLVIRT:
+            case IrOp::CALLM:
+            case IrOp::CALLITF:
+                return false;
+            default:
+                break;
+            }
+            // CALL a un helper __new_X (constructor de objeto): misma razon.
+            if (in.op == IrOp::CALL && is_new_helper_name(in.func_name, nullptr))
+                return false;
+            if (k == 0 && in.op == IrOp::PHI) return false; // entry con PHI
+        }
+    }
+    if (!has_ret) return false;
+    // Single-block <=12: ya lo cubre el inliner single-block (threshold 12).
+    // El MB inliner rellena el GAP: single-block 13..threshold (metodos puros
+    // que el single-block rechaza por tamano, p.ej. operadores `__add__`) +
+    // cualquier multi-bloque <=threshold.
+    if (fn.blocks.size() == 1 && total <= 12) return false;
+    return total <= threshold;
+}
+
+bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
+    // Activo por defecto.  Desactivable con VESTA_NO_MB_INLINE=1 (A/B).
+    // El guard de is_inlineable_mb rechaza callees con NEWOBJ/__new_X/CALLVIRT
+    // (creacion de objetos + dtor en loop rompia el save_live_regs del GC) +
+    // ALLOCA/free/excepciones/reflexion, dejando solo metodos/funciones PUROS
+    // (compute + field-access) que es donde el inline multi-bloque aporta.
+    static const bool mb_off = env_flag_on("VESTA_NO_MB_INLINE");
+    if (mb_off) return false;
+    std::unordered_map<std::string, size_t> name_to_idx;
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        name_to_idx[mod.functions[i].name] = i;
+    std::vector<bool> ok(mod.functions.size(), false);
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        ok[i] = is_inlineable_mb(mod.functions[i], threshold);
+
+    bool any = false;
+    for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
+        IrFunction &caller = mod.functions[fi];
+        if (caller.is_native) continue;
+        bool changed = false;
+        int cap = 128; // backstop anti-runaway
+        bool found = true;
+        while (found && cap-- > 0) {
+            found = false;
+            for (size_t bi = 0; bi < caller.blocks.size() && !found; ++bi)
+                for (size_t ii = 0; ii < caller.blocks[bi].instrs.size();
+                     ++ii) {
+                    const IrInstr &in = caller.blocks[bi].instrs[ii];
+                    if (in.op != IrOp::CALL) continue;
+                    auto it = name_to_idx.find(in.func_name);
+                    if (it == name_to_idx.end() || it->second == fi ||
+                        !ok[it->second])
+                        continue;
+                    const IrFunction &callee = mod.functions[it->second];
+                    if (callee.params.size() != in.operands.size()) continue;
+                    inline_one_multiblock(caller, bi, ii, callee);
+                    found = true;
+                    changed = true;
+                    any = true;
+                    break;
+                }
+        }
+        if (changed) reorder_blocks_rpo(caller);
+    }
+    return any;
 }
 
 bool ir_pass_spec_devirt(IrFunction &fn) {
@@ -8517,6 +9198,12 @@ void ir_optimize(IrModule &mod, OptLevel level) {
 
             if (ir_pass_inline(mod)) any = true;
 
+            /* Inline MULTI-bloque: tras el single-block, inlinar callees con
+             * ramas (`if`, etc.) pequenos.  Junta mas codigo en la misma fn
+             * (habilita const-fold/CSE/scalar-replace cross-call de funciones
+             * con control de flujo).  Semantica-preservante. */
+            if (ir_pass_inline_multiblock(mod)) any = true;
+
             /* Phase C2.13: Scalar Replacement de objetos GC no-escapantes.
              * Corre DESPUES del inline (que junta el alloc + los field-access
              * en la misma fn).  Sus reescrituras (loads -> trunc/mov/const)
@@ -8536,6 +9223,31 @@ void ir_optimize(IrModule &mod, OptLevel level) {
         }
 
         if (!any) break; // punto fijo alcanzado
+    }
+
+    /* Stack-first (2a pasada): re-correr la promocion malloc->stack TRAS el
+     * fix-point.  El idiom @c unique<T> carga el box de vuelta desde su slot
+     * en la version sin optimizar; la primera pasada (pre-fixpoint) ve ese
+     * LOAD y descarta el slot como "vivo".  DSE/copy-prop dentro del
+     * fix-point eliminan ese LOAD -> aqui el slot ya es write-only y la regla
+     * "slot local muerto" dispara, convirtiendo el malloc en `sub rsp, N`.
+     * Skippable con el mismo VESTA_NO_PROMOTE_RAW_ALLOC. */
+    if (level >= OptLevel::O1) {
+        const char *skip = std::getenv("VESTA_NO_PROMOTE_RAW_ALLOC");
+        const bool do_promote = !(skip && skip[0] != '\0' && skip[0] != '0');
+        if (do_promote) {
+            bool any2 = false;
+            for (auto &fn : mod.functions) {
+                if (!fn.is_native) any2 |= ir_pass_promote_local_raw_alloc(fn);
+            }
+            /* Si promovio algo, una limpieza DCE para barrer valores muertos
+             * (size const del malloc, etc.). */
+            if (any2) {
+                for (auto &fn : mod.functions) {
+                    if (!fn.is_native) ir_pass_dce(fn);
+                }
+            }
+        }
     }
 
     /* Phase C2.13: DETECCION (log-only) de objetos GC no-escapantes.  Corre
