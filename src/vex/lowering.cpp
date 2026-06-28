@@ -1230,8 +1230,12 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                         "entero/float/bool/char, o un `comptime` const)");
                 continue;
             }
-            (void)get_or_create_tls_global_slot(gv->name, nbytes, init_val,
-                                                talign);
+            const uint64_t tls_slot = get_or_create_tls_global_slot(
+                gv->name, nbytes, init_val, talign);
+            // Init != 0: registrar para el TLS callback __vex_tls_init (la
+            // plantilla a cero no necesita store -- el bloque ya esta a cero).
+            if (init_val != 0)
+                tls_nonzero_inits_.push_back({tls_slot, init_val});
             continue;
         }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
@@ -1781,6 +1785,61 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             ins.insert(ins.begin(), std::move(call_init));
             break;
         }
+    }
+
+    // TLS callback (thread_local PE): si el modulo tiene thread_local con init
+    // != 0, sintetizar __vex_tls_init -- la funcion que el cargador de Windows
+    // llama en cada attach de hilo (registrada en AddressOfCallBacks del
+    // IMAGE_TLS_DIRECTORY).  Escribe la plantilla a la copia por-hilo (el
+    // cargador no siempre la copia para el TLS de una .dll en un consumidor
+    // minimal sin CRT).  Reusa el acceso TLS (STR_LIT_ADDR is_tls -> store), que
+    // el driver baja a gs:[0x58]+secrel.  Idempotente y barato (N stores por
+    // attach; N = thread_local con init != 0).
+    if (native_poo_ && !tls_nonzero_inits_.empty()) {
+        ir::IrFunction ti;
+        ti.name = "__vex_tls_init";
+        ti.ret_type = ir::IrType::VOID;
+        const ir::IrBlockId e = ti.new_block("entry");
+        for (const auto &pr : tls_nonzero_inits_) {
+            const uint64_t slot = pr.first;
+            const uint64_t val = pr.second;
+            // %addr = &tls_var (STR_LIT_ADDR del slot; is_tls lo deriva el driver
+            // desde SD_FLAG_TLS -> acceso por thread pointer).
+            const ir::IrValueId v_addr = ti.new_value(ir::IrType::PTR);
+            ti.values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr a{};
+                a.op = ir::IrOp::STR_LIT_ADDR;
+                a.type = ir::IrType::PTR;
+                a.dst = v_addr;
+                a.imm = slot;
+                ti.append(e, std::move(a));
+            }
+            // %v = CONST val (8B); el slot esta padded a 8 -> store uniforme i64.
+            const ir::IrValueId v_val = ti.new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CONST;
+                c.type = ir::IrType::I64;
+                c.dst = v_val;
+                c.imm = val;
+                ti.append(e, std::move(c));
+            }
+            {
+                ir::IrInstr s{};
+                s.op = ir::IrOp::STORE;
+                s.type = ir::IrType::I64;
+                s.operands = {v_val, v_addr};
+                ti.append(e, std::move(s));
+            }
+        }
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::RET;
+            r.type = ir::IrType::VOID;
+            ti.append(e, std::move(r));
+        }
+        out_module.add_function(std::move(ti));
     }
 
     // gc<T> opt-in: si el modulo usa gc<Class>, generar __vexgc_init que

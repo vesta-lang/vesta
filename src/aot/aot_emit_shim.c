@@ -116,7 +116,8 @@ static int aot_dll_name_eq(const char *a, const char *b) {
  * (.dll): el cargador procesa el directorio TLS en ambos (Vista+).
  * @return VA de _tls_index, o 0 si el modulo no tiene TLS. */
 static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
-                                 int num_secs, int is_dll) {
+                                 int num_secs, int is_dll, int cb_section,
+                                 uint32_t cb_off) {
     int tls_sec = -1;
     for (int i = 0; i < num_secs; ++i)
         if (secs[i].flags & AOT_SEC_TLS) {
@@ -125,9 +126,10 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
         }
     if (tls_sec < 0) return 0;
     const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
-    /* Layout de .tls$d: [0]=_tls_index(4) [4]=pad [8]=callbacks(8, NULL)
-     * [16]=IMAGE_TLS_DIRECTORY64(40). */
-    _BYTE tlsd[56];
+    /* Layout de .tls$d (64 B): [0]=_tls_index(4) [4]=pad
+     * [8]=array de callbacks [&__vex_tls_init, NULL] (16 B)
+     * [24]=IMAGE_TLS_DIRECTORY64(40). */
+    _BYTE tlsd[64];
     memset(tlsd, 0, sizeof(tlsd));
     int tlsd_idx = addSection(pe, ".tls$d",
                               ___IMAGE_SCN_CNT_INITIALIZED_DATA |
@@ -135,38 +137,54 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
                               tlsd, (_DWORD)sizeof(tlsd));
     const uint32_t tls_rva = pe->sectionHeaders[tls_sec].VirtualAddress;
     const uint32_t tlsd_rva = pe->sectionHeaders[tlsd_idx].VirtualAddress;
-    _BYTE *db = pe->sectionData[tlsd_idx] + 16; /* IMAGE_TLS_DIRECTORY */
+    _BYTE *sd = pe->sectionData[tlsd_idx];
+    /* Array de callbacks en +8: [&__vex_tls_init, NULL].  El callback aplica la
+     * plantilla por-hilo (el cargador no siempre la copia para el TLS de una
+     * .dll en un consumidor minimal). */
+    int have_cb = (cb_section >= 0 && cb_section < pe->numberOfSections);
+    if (have_cb) {
+        uint64_t cb_va = image_base +
+                         pe->sectionHeaders[cb_section].VirtualAddress + cb_off;
+        memcpy(sd + 8, &cb_va, 8); /* [+8] = &__vex_tls_init ; [+16] = NULL */
+    }
+    _BYTE *db = sd + 24; /* IMAGE_TLS_DIRECTORY */
     uint64_t start = image_base + tls_rva;
     uint64_t end = image_base + tls_rva + secs[tls_sec].size;
     uint64_t idx_va = image_base + tlsd_rva + 0; /* &_tls_index */
-    uint64_t cb_va = image_base + tlsd_rva + 8;  /* &callbacks */
+    uint64_t cbarr_va = image_base + tlsd_rva + 8; /* &array de callbacks */
     memcpy(db + 0, &start, 8);
     memcpy(db + 8, &end, 8);
     memcpy(db + 16, &idx_va, 8);
-    memcpy(db + 24, &cb_va, 8);
+    memcpy(db + 24, &cbarr_va, 8);
     uint32_t zfill = (uint32_t)secs[tls_sec].bss_size;
     memcpy(db + 32, &zfill, 4); /* SizeOfZeroFill */
     uint32_t tls_char = 0x00400000u; /* IMAGE_SCN_ALIGN_8BYTES */
     memcpy(db + 36, &tls_char, 4);   /* Characteristics (alineamiento) */
     pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
-        .VirtualAddress = tlsd_rva + 16;
+        .VirtualAddress = tlsd_rva + 24;
     pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
         .Size = 40;
-    /* Los 4 campos VA del directorio (Start/End/Index/Callbacks) son DIRECCIONES
-     * ABSOLUTAS.  En un EXE, que carga en su base, fijamos la base (sin ASLR).
-     * En una DLL -- que el cargador SI reubica -- emitimos una tabla .reloc con
-     * esos 4 campos (IMAGE_REL_BASED_DIR64) para que el loader los fije al
-     * relocar; sin esto, el directorio TLS apunta a la base preferida (stale) y
-     * el bloque por-hilo no se inicializa con la plantilla. */
+    /* Campos VA ABSOLUTOS: el callback (+8) y los 4 del directorio (Start/End/
+     * Index/Callbacks en +24/+32/+40/+48).  En un EXE fijamos la base (sin
+     * ASLR); en una DLL -- que el cargador reubica -- emitimos una .reloc
+     * (IMAGE_REL_BASED_DIR64) para que el loader los fije al relocar. */
     if (is_dll) {
         const uint32_t page = tlsd_rva & ~0xFFFu;
-        _BYTE rel[16];
-        uint32_t blksz = 8u + 4u * 2u; /* header(8) + 4 entradas (2B c/u) */
+        _BYTE rel[24];
+        uint32_t nrelocs = 4 + (have_cb ? 1 : 0);
+        uint32_t blksz = 8u + nrelocs * 2u;
+        if (blksz & 3u) blksz += 2u; /* bloques .reloc alineados a 4 (pad 0) */
+        memset(rel, 0, sizeof(rel));
         memcpy(rel + 0, &page, 4);
         memcpy(rel + 4, &blksz, 4);
-        const uint32_t voff[4] = {tlsd_rva + 16, tlsd_rva + 24, tlsd_rva + 32,
-                                  tlsd_rva + 40};
-        for (int k = 0; k < 4; ++k) {
+        uint32_t voff[5];
+        int nv = 0;
+        if (have_cb) voff[nv++] = tlsd_rva + 8; /* callback */
+        voff[nv++] = tlsd_rva + 24;             /* Start */
+        voff[nv++] = tlsd_rva + 32;             /* End */
+        voff[nv++] = tlsd_rva + 40;             /* Index */
+        voff[nv++] = tlsd_rva + 48;             /* Callbacks */
+        for (int k = 0; k < nv; ++k) {
             uint16_t e = (uint16_t)((10u << 12) | ((voff[k] - page) & 0xFFFu));
             memcpy(rel + 8 + k * 2, &e, 2);
         }
@@ -174,16 +192,14 @@ static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
             addSection(pe, ".reloc",
                        ___IMAGE_SCN_CNT_INITIALIZED_DATA |
                            ___IMAGE_SCN_MEM_READ | 0x02000000u /* DISCARDABLE */,
-                       rel, (_DWORD)sizeof(rel));
+                       rel, blksz);
         const uint32_t rel_rva = pe->sectionHeaders[rel_idx].VirtualAddress;
         pe->ntHeaders.OptionalHeader
             .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
             .VirtualAddress = rel_rva;
         pe->ntHeaders.OptionalHeader
             .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
-            .Size = (_DWORD)sizeof(rel);
-        /* Mantener relocacion habilitada (la .reloc fija las VAs del directorio
-         * cuando el cargador reubica la DLL). */
+            .Size = blksz;
     } else {
         pe->ntHeaders.OptionalHeader.DllCharacteristics &=
             (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
@@ -270,7 +286,7 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
 
     /* TLS (thread_local): sintetizar el IMAGE_TLS_DIRECTORY + _tls_index si hay
      * seccion SHF_TLS (devuelve la VA de _tls_index para resolver los relocs). */
-    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 0);
+    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 0, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
 
     /* Relocations cross-seccion: resolver AHORA que addSection ya asigno las
      * VirtualAddress de todas las secciones del usuario (igual que el parcheo
@@ -3380,7 +3396,7 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
      * _tls_index igual que en el .exe.  El cargador de Windows procesa el
      * directorio TLS tambien para DLLs (Vista+: tambien las cargadas con
      * LoadLibrary), montando el bloque por-hilo. */
-    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 1);
+    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 1, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
 
     /* Aplicar relocs (PIC: REL32 internas).  Mismo patron que aot_emit_pe. */
     {
