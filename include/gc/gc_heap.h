@@ -357,6 +357,173 @@ class GcHandleRefMap {
 };
 
 /**
+ * @class GcHandleSet
+ * @brief Conjunto open-addressing de GcHandle (reemplaza @c std::unordered_set
+ *        <GcHandle> para @c remembered_set_).
+ *
+ * Mismas razones que @c GcHandleRefMap: cache-friendly + sin la dep libstdc++
+ * @c _Prime_rehash_policy (freestanding) + mas rapido (universal VM/AOT).
+ */
+class GcHandleSet {
+  public:
+    GcHandleSet() { rehash_to(8); }
+
+    void insert(GcHandle h) {
+        if (used_ + 1 > grow_at_) grow();
+        size_t i = hash(h) & mask_;
+        size_t first_tomb = SIZE_MAX;
+        for (;;) {
+            GcHandle &k = table_[i];
+            if (k == EMPTY) {
+                const size_t at = (first_tomb != SIZE_MAX) ? first_tomb : i;
+                if (table_[at] != TOMB) ++used_;
+                table_[at] = h;
+                ++live_count_;
+                return;
+            }
+            if (k == TOMB) {
+                if (first_tomb == SIZE_MAX) first_tomb = i;
+            } else if (k == h) {
+                return; // ya esta
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+    void clear() { rehash_to(8); }
+    size_t size() const noexcept { return live_count_; }
+    bool empty() const noexcept { return live_count_ == 0; }
+
+    struct const_iterator {
+        const GcHandle *p;
+        const GcHandle *e;
+        void skip() noexcept {
+            while (p != e && (*p == EMPTY || *p == TOMB)) ++p;
+        }
+        GcHandle operator*() const noexcept { return *p; }
+        const_iterator &operator++() noexcept {
+            ++p;
+            skip();
+            return *this;
+        }
+        bool operator!=(const const_iterator &o) const noexcept {
+            return p != o.p;
+        }
+    };
+    const_iterator begin() const noexcept {
+        const_iterator it{table_.data(), table_.data() + table_.size()};
+        it.skip();
+        return it;
+    }
+    const_iterator end() const noexcept {
+        return {table_.data() + table_.size(), table_.data() + table_.size()};
+    }
+
+  private:
+    static constexpr GcHandle EMPTY = 0xFFFFFFFFu;
+    static constexpr GcHandle TOMB = 0xFFFFFFFEu;
+    static inline size_t hash(GcHandle h) noexcept {
+        uint64_t x = static_cast<uint64_t>(h) * 0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>(x >> 32);
+    }
+    void rehash_to(size_t cap) {
+        table_.assign(cap, EMPTY);
+        mask_ = cap - 1;
+        grow_at_ = (cap * 3) / 4;
+        used_ = 0;
+        live_count_ = 0;
+    }
+    void grow() {
+        std::vector<GcHandle> old = std::move(table_);
+        rehash_to((mask_ + 1) * 2);
+        for (GcHandle h : old)
+            if (h != EMPTY && h != TOMB) insert(h);
+    }
+    std::vector<GcHandle> table_;
+    size_t mask_ = 0, live_count_ = 0, used_ = 0, grow_at_ = 0;
+};
+
+/**
+ * @class PtrPtrMap
+ * @brief Mapa open-addressing const uint8_t* -> const uint8_t* (reemplaza
+ *        @c std::unordered_map<const uint8_t*, const uint8_t*> para
+ *        @c forward_table_).  Mismas razones: cache-friendly + freestanding +
+ *        mas rapido (universal VM/AOT).
+ */
+class PtrPtrMap {
+  public:
+    PtrPtrMap() { rehash_to(8); }
+
+    /// Puntero al valor de @p k, o nullptr si no esta.
+    const uint8_t *const *find(const uint8_t *k) const noexcept {
+        size_t i = hash(k) & mask_;
+        for (;;) {
+            const Slot &s = table_[i];
+            if (s.key == nullptr) return nullptr; // EMPTY
+            if (s.key == k) return &s.val;
+            i = (i + 1) & mask_;
+        }
+    }
+
+    /// Valor de @p k, insertando con nullptr si no existe.
+    const uint8_t *&operator[](const uint8_t *k) {
+        if (used_ + 1 > grow_at_) grow();
+        const uint8_t *const TOMB = tomb();
+        size_t i = hash(k) & mask_;
+        size_t first_tomb = SIZE_MAX;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.key == nullptr) {
+                const size_t at = (first_tomb != SIZE_MAX) ? first_tomb : i;
+                if (table_[at].key != TOMB) ++used_;
+                table_[at].key = k;
+                table_[at].val = nullptr;
+                ++live_count_;
+                return table_[at].val;
+            }
+            if (s.key == TOMB) {
+                if (first_tomb == SIZE_MAX) first_tomb = i;
+            } else if (s.key == k) {
+                return s.val;
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+
+    bool empty() const noexcept { return live_count_ == 0; }
+    void clear() { rehash_to(8); }
+
+  private:
+    struct Slot {
+        const uint8_t *key = nullptr; // EMPTY
+        const uint8_t *val = nullptr;
+    };
+    static inline const uint8_t *tomb() noexcept {
+        return reinterpret_cast<const uint8_t *>(1);
+    }
+    static inline size_t hash(const uint8_t *k) noexcept {
+        uint64_t x = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(k) >> 3);
+        x *= 0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>(x >> 32);
+    }
+    void rehash_to(size_t cap) {
+        table_.assign(cap, Slot{});
+        mask_ = cap - 1;
+        grow_at_ = (cap * 3) / 4;
+        used_ = 0;
+        live_count_ = 0;
+    }
+    void grow() {
+        std::vector<Slot> old = std::move(table_);
+        rehash_to((mask_ + 1) * 2);
+        const uint8_t *const TOMB = tomb();
+        for (const Slot &s : old)
+            if (s.key != nullptr && s.key != TOMB) (*this)[s.key] = s.val;
+    }
+    std::vector<Slot> table_;
+    size_t mask_ = 0, live_count_ = 0, used_ = 0, grow_at_ = 0;
+};
+
+/**
  * @brief Activa/desactiva el debug del GC en runtime.
  *
  * Cuando esta activado, las operaciones del GC (major_gc, minor_gc,
@@ -1455,7 +1622,12 @@ class GcHeap {
     // Clave: GcHandle del objeto con el monitor ocupado.
     // Valor: lista FIFO de PID codificados ((scheduler_id<<32)|local_pid)
     // esperando.
+    // Vestigial: el waiting real lo gestiona @c wait_table_ (WaitTable
+    // lock-free).  Se mantiene solo en el build de la VM (no en el freestanding
+    // de libvesta_gc, que no usa monitores) para no romper ABI/compat.
+#if !defined(VESTA_GC_FREESTANDING)
     std::unordered_map<GcHandle, std::vector<uint64_t>> monitor_waiters_;
+#endif
 
     // Wait queues lock-free per-bucket para objetos GC LOCALES.
     // Para objetos shared (handle con SHARED_HANDLE_BIT) se enruta a
@@ -1467,8 +1639,9 @@ class GcHeap {
     inline WaitTable &wait_table_for(GcHandle h) noexcept;
 
     // --- RememberedSet ---
-    std::unordered_set<GcHandle>
-        remembered_set_; ///< Handles OLD con referencias a YOUNG.
+    /// Conjunto open-addressing (no @c std::unordered_set): cache-friendly +
+    /// sin la dep libstdc++ _Prime_rehash_policy (freestanding).  Universal.
+    GcHandleSet remembered_set_; ///< Handles OLD con referencias a YOUNG.
 
     // --- Tabla de forwarding pointers (Cheney-style) ---
     /// Mapa <young_payload_addr, old_payload_addr> poblado por do_evacuate
@@ -1486,7 +1659,9 @@ class GcHeap {
     ///
     /// Se vacia al final de cada minor_gc.  Coste por GC:
     /// O(num_evacuated_objects) inserts + O(stack_size_bytes/8) lookups.
-    std::unordered_map<const uint8_t *, const uint8_t *> forward_table_;
+    /// Mapa open-addressing (no @c std::unordered_map): cache-friendly + sin la
+    /// dep libstdc++ _Prime_rehash_policy (freestanding).  Universal.
+    PtrPtrMap forward_table_;
 
     // --- External roots (write-barrier para colecciones nativas) ---
     /// Handles GC referenciados por estructuras nativas (ej. ArrayList<string>

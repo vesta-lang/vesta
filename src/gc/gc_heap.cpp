@@ -910,9 +910,9 @@ void GcHeap::update_stack_forwards(uint64_t rsp_lo, uint64_t stack_high,
             if (v == 0 || v < 256) continue;
             auto *p =
                 reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(v));
-            auto it = forward_table_.find(p);
-            if (it != forward_table_.end()) {
-                const uint64_t new_v = reinterpret_cast<uint64_t>(it->second);
+            const uint8_t *const *fv = forward_table_.find(p);
+            if (fv != nullptr) {
+                const uint64_t new_v = reinterpret_cast<uint64_t>(*fv);
                 vm_mem.write_bytes(addr, &new_v, 8);
             }
         }
@@ -923,9 +923,9 @@ void GcHeap::update_stack_forwards(uint64_t rsp_lo, uint64_t stack_high,
         const uint64_t v = regs[i];
         if (v == 0 || v < 256) continue;
         auto *p = reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(v));
-        auto it = forward_table_.find(p);
-        if (it != forward_table_.end()) {
-            regs[i] = reinterpret_cast<uint64_t>(it->second);
+        const uint8_t *const *fv = forward_table_.find(p);
+        if (fv != nullptr) {
+            regs[i] = reinterpret_cast<uint64_t>(*fv);
         }
     }
 }
