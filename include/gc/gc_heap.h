@@ -99,7 +99,9 @@
 #include <cstdlib> // std::realloc/free/abort (HandleTable)
 #include <utility> // std::move (HandleTable)
 #include <vector>
-#include <unordered_set>
+#if !defined(VESTA_GC_FREESTANDING)
+#include <unordered_map> // solo monitor_waiters_ (gateado, no-freestanding)
+#endif
 
 #include "arena/VirtualMemory.h"
 #include "arena/arena_manager.h"
