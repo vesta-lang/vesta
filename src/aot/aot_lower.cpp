@@ -105,6 +105,41 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                     }
                     break;
 
+                case ir::IrOp::CALLN:
+                    // ffi_call: CALLN "__callni__:" con operands=[fn_ptr,args..]
+                    // -> CALLIND (llamada INDIRECTA nativa que vreg_select baja
+                    // a `call reg`): func_ptr = operands[0], args = el resto.
+                    // El resto de CALLN (extern "lib" fn) pasa sin cambios.
+                    if (in.func_name.compare(0, 11, "__callni__:") == 0 &&
+                        !in.operands.empty()) {
+                        in.op = ir::IrOp::CALLIND;
+                        in.func_ptr = in.operands[0];
+                        in.operands.erase(in.operands.begin());
+                        in.func_name.clear();
+                    }
+                    break;
+
+                case ir::IrOp::DLOPEN:
+                    // ffi_open: dlopen %path_addr, %path_len  ->  call
+                    // __vex_dlopen(%path_addr).  La funcion Vex (vex_ffi.vex)
+                    // usa LoadLibraryA/dlopen segun @Target.  El path es una
+                    // cstring NUL-terminada (el frontend la NUL-termina).  Se
+                    // descarta %path_len (las APIs nativas leen hasta el NUL).
+                    in.op = ir::IrOp::CALL;
+                    in.func_name = cfg.dlopen_sym;
+                    if (!in.operands.empty())
+                        in.operands.resize(1); // [path_addr]
+                    break;
+
+                case ir::IrOp::DLSYM:
+                    // ffi_sym: dlsym %handle, %name_addr, %name_len  ->  call
+                    // __vex_dlsym(%handle, %name_addr).  Descarta %name_len.
+                    in.op = ir::IrOp::CALL;
+                    in.func_name = cfg.dlsym_sym;
+                    if (in.operands.size() > 2)
+                        in.operands.resize(2); // [handle, name_addr]
+                    break;
+
                 case ir::IrOp::PANIC:
                     // panic(msg,len) -> call <panic>(...).  Con un
                     // @PanicHandler (panic_takes_msg) se le pasa

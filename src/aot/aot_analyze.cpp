@@ -196,6 +196,12 @@ AotOpClass aot_classify_op(IrOp op) noexcept {
     case IrOp::RAW_FREE:      // free(p)     -> free
     case IrOp::PANIC:         // panic(msg)  -> fputs(stderr)+exit
     case IrOp::SMARTPTR_FREE: // unique<T> cleanup -> free / deleter
+    // FFI dinamico: ffi_open/ffi_sym -> CALL __vex_dlopen/__vex_dlsym (Vex,
+    // bundled vex_ffi.vex; LoadLibraryA/dlopen via extern al SO).  No necesita
+    // la VM -> compilable a nativo.  En freestanding se rechaza salvo que el
+    // usuario provea las funciones.
+    case IrOp::DLOPEN:
+    case IrOp::DLSYM:
         return AotOpClass::LIBC_MAPPED;
 
     // -- todo lo demas necesita libvesta_rt --

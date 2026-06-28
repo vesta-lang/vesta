@@ -18281,7 +18281,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
-        const uint64_t path_idx = intern_class_name(*out_mod_, slit->value);
+        // NUL-terminar el path interned: en AOT nativo se baja a
+        // LoadLibraryA/dlopen (APIs cstring que leen hasta el NUL).  El path_len
+        // sigue siendo el tamano logico (sin NUL); el path VM/JIT usa (addr,len)
+        // e ignora el NUL.
+        const uint64_t path_idx =
+            intern_class_name(*out_mod_, slit->value + std::string(1, '\0'));
         const uint32_t path_len = static_cast<uint32_t>(slit->value.size());
         // raw_asm-elim wave 2: DLOPEN IR op.
         const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
@@ -18325,7 +18330,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             return true;
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[1].get());
-        const uint64_t name_idx = intern_class_name(*out_mod_, slit->value);
+        // NUL-terminar: en AOT nativo se baja a GetProcAddress/dlsym (cstring).
+        const uint64_t name_idx =
+            intern_class_name(*out_mod_, slit->value + std::string(1, '\0'));
         const uint32_t name_len = static_cast<uint32_t>(slit->value.size());
         // raw_asm-elim wave 2: DLSYM IR op.
         const ir::IrValueId v_name_addr = fn_->new_value(ir::IrType::PTR);

@@ -3022,6 +3022,65 @@ int main(int argc, char *argv[]) {
                 lcfg.panic_sym = cr.aot_panic_sym;
                 lcfg.panic_takes_msg = true; // @PanicHandler(msg_addr, len)
             }
+
+            // FFI dinamico (ffi_open/ffi_sym -> DLOPEN/DLSYM): bundle
+            // stdlib/vex/vex_ffi.vex que define __vex_dlopen/__vex_dlsym
+            // (LoadLibraryA/dlopen via @Target, Vex puro).  Igual que vex_mem:
+            // el usuario puede REDEFINIR esas funciones en su modulo (el merge
+            // respeta las suyas).  Se detecta ANTES de aot_lower (que convierte
+            // DLOPEN/DLSYM en CALL __vex_dlopen/__vex_dlsym).
+            bool bundle_ffi = false;
+            ir::IrModule ffi_mod;
+            {
+                bool aot_uses_ffi = false;
+                for (const auto &af : aot_mod.functions)
+                    for (const auto &b : af.blocks)
+                        for (const auto &in : b.instrs)
+                            if (in.op == ir::IrOp::DLOPEN ||
+                                in.op == ir::IrOp::DLSYM)
+                                aot_uses_ffi = true;
+                if (aot_uses_ffi && !aot_freestanding) {
+                    const std::string exe_dir =
+                        std::filesystem::path(fs::get_executable_path())
+                            .parent_path()
+                            .string();
+                    const std::vector<std::string> cands = {
+                        exe_dir + "/stdlib/vex/vex_ffi.vex",
+                        exe_dir + "/../stdlib/vex/vex_ffi.vex",
+                        "stdlib/vex/vex_ffi.vex"};
+                    std::string ffi_path;
+                    for (const auto &c : cands)
+                        if (std::filesystem::exists(c)) {
+                            ffi_path = c;
+                            break;
+                        }
+                    if (ffi_path.empty()) {
+                        std::cerr << "[aot] usa ffi_open/ffi_sym pero no "
+                                     "encuentro stdlib/vex/vex_ffi.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    std::ifstream ff(ffi_path);
+                    std::string ffi_src(
+                        (std::istreambuf_iterator<char>(ff)),
+                        std::istreambuf_iterator<char>());
+                    vex::CompileOptions ffi_opts;
+                    ffi_opts.module_name = "vex_ffi";
+                    ffi_opts.opt_level = 2;
+                    ffi_opts.native_poo = true;
+                    ffi_opts.asm_target_bits = copts.asm_target_bits;
+                    vex::CompileResult ffi_cr =
+                        vex::compile_vex_source(ffi_src, ffi_path, ffi_opts);
+                    if (!ffi_cr.ok || ffi_cr.ir_module_cache_bytes.empty() ||
+                        !ir::parse_ir_module_cache(
+                            ffi_cr.ir_module_cache_bytes, ffi_mod)) {
+                        std::cerr << "[aot] no pude compilar el FFI dinamico "
+                                     "vex_ffi.vex.\n";
+                        return EXIT_FAILURE;
+                    }
+                    bundle_ffi = true;
+                }
+            }
+
             aot::aot_lower_runtime(aot_mod, lcfg);
 
             // Merge del slab (stdlib/vex/vex_mem.vex, ya compilado en mem_mod)
@@ -3050,6 +3109,35 @@ int main(int argc, char *argv[]) {
                 for (auto &ni : mem_mod.native_imports)
                     aot_mod.register_native_import(ni.lib, ni.name);
                 std::cout << "[aot] slab allocator (stdlib/vex/vex_mem.vex) "
+                             "incluido en el objeto.\n";
+            }
+
+            // Merge del FFI dinamico (vex_ffi.vex) DESPUES de aot_lower: ahora
+            // DLOPEN/DLSYM ya son CALL __vex_dlopen/__vex_dlsym y el BFS los
+            // alcanza.  Mismo patron que vex_mem.  Si el usuario definio sus
+            // propias __vex_dlopen/__vex_dlsym, el dedup (have) las respeta.
+            if (bundle_ffi) {
+                const uint64_t sd_off =
+                    static_cast<uint64_t>(aot_mod.static_data.size());
+                std::unordered_set<std::string> have;
+                for (const auto &af : aot_mod.functions)
+                    have.insert(af.name);
+                for (auto &fn : ffi_mod.functions) {
+                    if (sd_off != 0)
+                        for (auto &bb : fn.blocks)
+                            for (auto &ins : bb.instrs)
+                                if (ins.op == ir::IrOp::STR_LIT_ADDR)
+                                    ins.imm += sd_off;
+                    if (!have.count(fn.name))
+                        aot_mod.functions.push_back(std::move(fn));
+                }
+                aot_mod.static_data.append_raw_entries(
+                    std::move(ffi_mod.static_data));
+                for (auto &gv : ffi_mod.globals)
+                    aot_mod.globals.emplace(gv.first, gv.second);
+                for (auto &ni : ffi_mod.native_imports)
+                    aot_mod.register_native_import(ni.lib, ni.name);
+                std::cout << "[aot] FFI dinamico (stdlib/vex/vex_ffi.vex) "
                              "incluido en el objeto.\n";
             }
 
