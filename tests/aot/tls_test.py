@@ -199,6 +199,23 @@ def main():
         else:
             print(f"TLS-F: EXIT MISMATCH got={rf} exp=112")
             rc = 1
+
+        # --- G) Vex-nativo por --emit exe DIRECTO (sin --link): el emisor de
+        # ejecutable ELF resuelve el TPOFF inline + monta PT_TLS.  Ademas un TLS
+        # accedido desde una funcion no-main y en un loop (persistencia por-hilo).
+        with open(os.path.join(work, "vtg.vex"), "w") as f:
+            f.write("thread_local i64 acc = 0;\n"
+                    "i64 bump(i64 x){ acc = acc + x; return acc; }\n"
+                    "i64 main(){ i64 i=0; while(i<5){ bump(i); i=i+1; } "
+                    "return acc; }\n")
+        run([vm, "--vex", os.path.join(work, "vtg.vex"), "-m", "aot", "--emit",
+             "exe", "--format", "elf", "-o", os.path.join(work, "vtg")])
+        rg = wsl(f"cd {wm} && chmod +x vtg && ./vtg").returncode
+        if rg == 10:
+            print("TLS-G (Vex-nativo --emit exe + fn/loop): exit=10 OK")
+        else:
+            print(f"TLS-G: EXIT MISMATCH got={rg} exp=10")
+            rc = 1
         return rc
     finally:
         import shutil
