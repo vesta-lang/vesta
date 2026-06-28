@@ -3486,3 +3486,42 @@ int aot_pe_export_names(const char *path, char ***out_names, int *out_count) {
 void aot_free_pe_export_names(char **names, int count) {
     FreeExportNames64(names, count);
 }
+
+/* --- Lectura de exports de una .so/ELF (dynsym, delega en LibELFparse) ---- */
+int aot_elf_export_names(const char *path, char ***out_names, int *out_count) {
+    if (out_names) *out_names = NULL;
+    if (out_count) *out_count = 0;
+    if (path == NULL || out_names == NULL || out_count == NULL) return 1;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return 1;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {
+        fclose(f);
+        return 1;
+    }
+    void *buf = malloc((size_t)sz);
+    if (buf == NULL) {
+        fclose(f);
+        return 1;
+    }
+    if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+        free(buf);
+        fclose(f);
+        return 1;
+    }
+    fclose(f);
+    ElfFile elf;
+    if (!elf_mem_parse(&elf, buf, (size_t)sz)) {
+        free(buf);
+        return 1;
+    }
+    int n = 0;
+    /* elf_dynsym_export_names COPIA cada nombre -> el buffer se puede liberar. */
+    char **names = elf_dynsym_export_names(&elf, &n);
+    free(buf);
+    *out_names = names;
+    *out_count = n;
+    return 0;
+}

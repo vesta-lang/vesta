@@ -609,18 +609,21 @@ inline uint64_t align_up(uint64_t v, uint64_t a) {
     return (v + a - 1) / a * a;
 }
 
-// Lee los nombres EXPORTADOS de una DLL/PE delegando en LibPEparse (via el shim
-// C aot_pe_export_names -- el shim es el unico punto que toca la lib PE).  Asi
-// el linker resuelve los imports leyendo lo que la DLL REALMENTE exporta, NO una
-// lista de simbolos embebida en el compilador.
-bool pe_read_exports(const std::string &path, std::vector<std::string> &names) {
+// Lee los nombres EXPORTADOS de una libreria del sistema delegando en el shim
+// C (PE -> LibPEparse export table; ELF .so -> LibELFparse dynsym).  Asi el
+// linker resuelve los imports leyendo lo que la libreria REALMENTE exporta, NO
+// una lista de simbolos embebida en el compilador.
+bool lib_read_exports(const std::string &path, bool is_pe,
+                      std::vector<std::string> &names) {
     char **arr = nullptr;
     int count = 0;
-    if (aot_pe_export_names(path.c_str(), &arr, &count) != 0) return false;
+    const int rc = is_pe ? aot_pe_export_names(path.c_str(), &arr, &count)
+                         : aot_elf_export_names(path.c_str(), &arr, &count);
+    if (rc != 0) return false;
     names.reserve(names.size() + (size_t)count);
     for (int i = 0; i < count; ++i)
         if (arr[i]) names.emplace_back(arr[i]);
-    aot_free_pe_export_names(arr, count);
+    aot_free_pe_export_names(arr, count); // mismo allocator (FreeExportNames64)
     return true;
 }
 
@@ -629,6 +632,29 @@ std::string system_dll_path(const char *dll) {
     const char *root = std::getenv("SystemRoot");
     if (!root || !*root) root = "C:\\Windows";
     return std::string(root) + "\\System32\\" + dll;
+}
+
+// Localiza libc.so.6 en las rutas estandar (Linux nativo).  En cross-compile
+// desde otro SO puede no existir -> el usuario pasa la .so explicitamente.
+std::string libc_so_path() {
+    static const char *const cands[] = {
+        "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "/lib/x86_64-linux-gnu/libc.so.6",
+        "/lib64/libc.so.6",
+        "/usr/lib64/libc.so.6",
+        "/usr/lib/libc.so.6",
+        "/lib/libc.so.6"};
+    for (const char *p : cands) {
+        std::ifstream f(p, std::ios::binary);
+        if (f.good()) return std::string(p);
+    }
+    return std::string();
+}
+
+// Basename de una ruta (para el soname / nombre de DLL del descriptor import).
+std::string path_basename(const std::string &p) {
+    const size_t sl = p.find_last_of("\\/");
+    return (sl == std::string::npos) ? p : p.substr(sl + 1);
 }
 
 } // namespace
@@ -671,9 +697,16 @@ bool aot_link(const std::vector<std::string> &inputs,
             err = "no se puede abrir la entrada: " + in;
             return false;
         }
-        // DLL (imagen PE 'MZ'): no es un objeto a fusionar; se usa como fuente
-        // de imports (sus exports).
+        // Libreria compartida (no es un objeto a fusionar; se usa como fuente
+        // de imports a partir de sus exports):
+        //  - PE/.dll: imagen 'MZ'.
+        //  - ELF/.so: ELF cuyo e_type es ET_DYN (3) -- una .o es ET_REL (1).
         if (buf.size() >= 2 && buf[0] == 'M' && buf[1] == 'Z') {
+            dll_inputs.push_back(in);
+            continue;
+        }
+        if (buf.size() >= 18 && buf[0] == 0x7f && buf[1] == 'E' &&
+            buf[2] == 'L' && buf[3] == 'F' && rd16(&buf[16]) == 3 /*ET_DYN*/) {
             dll_inputs.push_back(in);
             continue;
         }
@@ -969,12 +1002,12 @@ bool aot_link(const std::vector<std::string> &inputs,
 
     // 6. Resolver relocs -> AbsReloc del writer.
     // Los simbolos UNDEF que no define ningun objeto/miembro son IMPORTS de
-    // libreria del sistema (libc / Win32).  En PE EXEC (hosted) se resuelven por
-    // IAT: un thunk `FF 25` por simbolo libc (mismo patron que la ruta inline de
-    // main.cpp) y un parcheo directo del slot para los simbolos `__imp_*` de
-    // MinGW (dllimport).  En ELF / kernel (--entry) siguen siendo error (la ruta
-    // dinamica ELF queda como follow-up).
-    const bool can_import = (opts.fmt == ObjFormat::PE) && hosted;
+    // libreria del sistema (libc / Win32).  Se resuelven via un thunk `FF 25`
+    // por simbolo (mismo patron que la ruta inline) que el emisor materializa
+    // como IAT (PE) o GOT dinamico (ELF, DT_NEEDED).  Solo en ejecutables
+    // hosted; un kernel (--entry) no auto-importa.
+    const bool can_import = hosted;
+    const bool fmt_pe = (opts.fmt == ObjFormat::PE);
     struct ImpSite {
         int site_sec;
         uint64_t site_off;
@@ -993,13 +1026,20 @@ bool aot_link(const std::vector<std::string> &inputs,
     std::unordered_map<std::string, std::string> sym2dll;
     if (can_import) {
         std::vector<std::string> cand;
-        for (const char *d : {"kernel32.dll", "ucrtbase.dll", "msvcrt.dll"})
-            cand.push_back(system_dll_path(d));
-        for (const std::string &dp : dll_inputs) // .dll pasados como entrada
+        if (fmt_pe) {
+            // Windows: el CRT + kernel32 del sistema.
+            for (const char *d : {"kernel32.dll", "ucrtbase.dll", "msvcrt.dll"})
+                cand.push_back(system_dll_path(d));
+        } else {
+            // Linux: libc.so.6 (busqueda por defecto, como el -lc implicito).
+            const std::string libc = libc_so_path();
+            if (!libc.empty()) cand.push_back(libc);
+        }
+        for (const std::string &dp : dll_inputs) // .dll/.so pasados como entrada
             cand.push_back(dp);
         for (const std::string &dp : cand) {
             std::vector<std::string> exps;
-            if (!pe_read_exports(dp, exps)) continue;
+            if (!lib_read_exports(dp, fmt_pe, exps)) continue;
             std::string base = dp;
             const size_t sl = base.find_last_of("\\/");
             if (sl != std::string::npos) base = base.substr(sl + 1);
