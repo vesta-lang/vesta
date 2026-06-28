@@ -1558,6 +1558,10 @@ struct GlobalVarDecl : Node {
     /// se baja como @c IrOp::CONST inline (cero overhead).  No genera
     /// global runtime storage.
     bool is_comptime = false;
+    /// `thread_local <type> name = init;`  -- almacenamiento por-hilo (TLS).
+    /// El init debe ser comptime-constante (plantilla por-hilo, como en C).
+    /// En AOT baja a TLS NATIVO: seccion SHF_TLS + PT_TLS / TLS directory PE.
+    bool is_thread_local = false;
     /// v4: atributos `@hot`/`@cold`/`@align(N)`/`@section("name")`.
     /// Solo aplicables a comptime const (string/array/struct).
     bool attr_hot = false;

@@ -133,6 +133,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::KW_NEW: return "new";
     case TokenKind::KW_DELETE: return "delete";
     case TokenKind::KW_THIS: return "this";
+    case TokenKind::KW_THREAD_LOCAL: return "thread_local";
     case TokenKind::KW_SUPER: return "super";
     case TokenKind::KW_SYNCHRONIZED: return "synchronized";
     case TokenKind::KW_MONITOR: return "monitor";
@@ -333,6 +334,7 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
         break;
     case 't':
         VEX_KW_EXACT("this", TokenKind::KW_THIS);
+        VEX_KW_EXACT("thread_local", TokenKind::KW_THREAD_LOCAL);
         VEX_KW_EXACT("throw", TokenKind::KW_THROW);
         VEX_KW_EXACT("true", TokenKind::TRUE_KW);
         VEX_KW_EXACT("try", TokenKind::KW_TRY);

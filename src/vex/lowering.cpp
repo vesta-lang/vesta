@@ -1123,6 +1123,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
         auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
         if (gv->is_const || gv->is_comptime) continue;
+        // thread_local: el almacenamiento es por-hilo (TLS NATIVO: seccion
+        // SHF_TLS + PT_TLS / TLS directory PE).  NO debe caer al modelo de
+        // global runtime ordinario (slot en .data inicializado en
+        // __module_init), que daria semantica equivocada (compartido entre
+        // hilos).  La emision de codegen TLS nativo esta en desarrollo; hasta
+        // entonces se rechaza con un error claro en vez de miscompilar.
+        if (gv->is_thread_local) {
+            diags_.error(gv->loc,
+                         "thread_local: la emision de TLS nativo (PE/ELF) en "
+                         "AOT esta en desarrollo; aun no se puede compilar '" +
+                             gv->name + "'");
+            continue;
+        }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
         if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
             const uint64_t ab = vex_global_array_bytes(gv->type.get());

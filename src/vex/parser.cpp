@@ -1392,6 +1392,11 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         }
     }
 
+    // `thread_local <T> NAME = init;` -- almacenamiento por-hilo (TLS).  Se
+    // permite antes del tipo (estilo C/C++).  El init debe ser comptime-const.
+    bool is_thread_local = false;
+    if (match(TokenKind::KW_THREAD_LOCAL)) is_thread_local = true;
+
     // Manejar 'const' opcional al principio.  En v4, comptime ya implica
     // const, asi que el `const` aparece solo en declaraciones runtime.
     bool is_const = false;
@@ -1524,6 +1529,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     auto gv = parse_global_var_decl(std::move(type_node), std::move(name), loc,
                                     is_const);
     if (gv && (is_comptime_const || is_comptime_var)) gv->is_comptime = true;
+    if (gv && is_thread_local) gv->is_thread_local = true;
     if (gv) {
         // v4: propagar atributos de usuario (@hot, @cold, @align, @section).
         gv->attr_hot = top_attr_hot;
