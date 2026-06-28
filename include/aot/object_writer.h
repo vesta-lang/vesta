@@ -79,6 +79,7 @@ constexpr uint32_t EXEC = AOT_SEC_EXEC;
 constexpr uint32_t CODE = AOT_SEC_CODE;
 constexpr uint32_t DATA = AOT_SEC_DATA;
 constexpr uint32_t BSS = AOT_SEC_BSS;
+constexpr uint32_t TLS = AOT_SEC_TLS;
 } // namespace SecFlag
 
 /**

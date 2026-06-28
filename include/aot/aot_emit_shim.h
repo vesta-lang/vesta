@@ -43,6 +43,10 @@ extern "C" {
 #define AOT_SEC_CODE 0x08u  /* contiene codigo */
 #define AOT_SEC_DATA 0x10u  /* datos inicializados */
 #define AOT_SEC_BSS 0x20u   /* datos sin inicializar (no ocupan fichero) */
+#define AOT_SEC_TLS 0x40u   /* plantilla TLS (thread_local): se describe con un \
+                               segmento PT_TLS; el cargador la copia por-hilo.   \
+                               data = parte .tdata (en fichero), bss_size =       \
+                               parte .tbss (solo memsz). */
 
 /**
  * @brief Una seccion definida por el usuario.
