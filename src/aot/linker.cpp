@@ -27,7 +27,9 @@
 #include "aot/link_script.h" // Phase AOT.5: link-script Vex (configurable)
 
 #include <cstdint>
+#include <cstdio>  // std::snprintf (cabeceras ar)
 #include <cstdlib> // std::getenv (ruta de las DLLs del sistema)
+#include <cstring> // std::memset/memcpy (cabeceras ar)
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -1199,6 +1201,150 @@ bool aot_link(const std::vector<std::string> &inputs,
     }
 
     return w.write(out_path, err);
+}
+
+namespace {
+
+// Escribe una cabecera de miembro ar (60 bytes ASCII, relleno de espacios).
+void ar_put_header(std::vector<uint8_t> &out, const std::string &name16,
+                   size_t data_size) {
+    char hdr[60];
+    std::memset(hdr, ' ', sizeof(hdr));
+    // name (16), mtime (12)@16, uid (6)@28, gid (6)@34, mode (8)@40,
+    // size (10)@48, fin "`\n"@58.
+    std::memcpy(hdr, name16.data(),
+                name16.size() < 16 ? name16.size() : 16);
+    hdr[16] = '0'; // mtime = 0
+    hdr[28] = '0'; // uid = 0
+    hdr[34] = '0'; // gid = 0
+    std::memcpy(hdr + 40, "644", 3); // mode 0644
+    char sz[16];
+    int n = std::snprintf(sz, sizeof(sz), "%zu", data_size);
+    if (n > 10) n = 10;
+    std::memcpy(hdr + 48, sz, (size_t)n);
+    hdr[58] = 0x60; // '`'
+    hdr[59] = 0x0A; // '\n'
+    out.insert(out.end(), hdr, hdr + 60);
+}
+
+void ar_put_u32be(std::vector<uint8_t> &out, uint32_t v) {
+    out.push_back((uint8_t)(v >> 24));
+    out.push_back((uint8_t)(v >> 16));
+    out.push_back((uint8_t)(v >> 8));
+    out.push_back((uint8_t)v);
+}
+
+inline size_t ar_even(size_t n) { return n + (n & 1); }
+
+} // namespace
+
+bool aot_ar_create(const std::string &out_path,
+                   const std::vector<std::string> &objs, std::string &err) {
+    if (objs.empty()) {
+        err = "ar: sin objetos de entrada";
+        return false;
+    }
+    // 1. Parsear cada objeto: cargar bytes + extraer sus globals definidos para
+    //    el indice de simbolos.
+    struct Member {
+        std::string name; // basename (p.ej. "gc_heap.cpp.obj")
+        std::vector<uint8_t> bytes;
+        std::vector<std::string> syms; // globals definidos
+        std::string name_field;        // campo nombre del header ("name/" o "/N")
+        uint64_t header_off = 0;       // posicion de la cabecera en el .a
+    };
+    std::vector<Member> mem(objs.size());
+    for (size_t i = 0; i < objs.size(); ++i) {
+        Member &m = mem[i];
+        const std::string &p = objs[i];
+        const size_t sl = p.find_last_of("\\/");
+        m.name = (sl == std::string::npos) ? p : p.substr(sl + 1);
+        ParsedObj po;
+        if (!parse_any_obj(p, po, err)) return false;
+        m.bytes = std::move(po.bytes);
+        for (const ObjSym &sy : po.syms)
+            if (sy.bind == STB_GLOBAL && sy.shndx != SHN_UNDEF &&
+                sy.type != STT_SECTION && !sy.name.empty())
+                m.syms.push_back(sy.name);
+    }
+
+    // 2. Tabla de nombres largos GNU ("//"): los nombres cuya forma corta
+    //    ("name/") no cabe en 16 bytes se referencian como "/<offset>".
+    std::vector<uint8_t> longnames;
+    for (Member &m : mem) {
+        if (m.name.size() + 1 <= 16) {
+            m.name_field = m.name + "/";
+        } else {
+            const size_t off = longnames.size();
+            m.name_field = "/" + std::to_string(off);
+            for (char c : m.name)
+                longnames.push_back((uint8_t)c);
+            longnames.push_back('/');
+            longnames.push_back('\n');
+        }
+    }
+
+    // 3. Indice de simbolos: contar + tamano.  offsets[i] apunta a la cabecera
+    //    del miembro que define el simbolo i.
+    std::vector<std::pair<std::string, size_t>> sym_list; // (nombre, idx miembro)
+    for (size_t i = 0; i < mem.size(); ++i)
+        for (const std::string &s : mem[i].syms)
+            sym_list.emplace_back(s, i);
+    size_t symtab_data = 4 + sym_list.size() * 4;
+    for (auto &s : sym_list)
+        symtab_data += s.first.size() + 1;
+
+    // 4. Calcular las posiciones de cabecera de cada miembro.
+    uint64_t pos = 8; // tras el magic "!<arch>\n"
+    pos += 60 + ar_even(symtab_data); // miembro symtab "/"
+    if (!longnames.empty()) pos += 60 + ar_even(longnames.size()); // "//"
+    for (Member &m : mem) {
+        m.header_off = pos;
+        pos += 60 + ar_even(m.bytes.size());
+    }
+
+    // 5. Construir el buffer del .a.
+    std::vector<uint8_t> out;
+    const char magic[8] = {'!', '<', 'a', 'r', 'c', 'h', '>', '\n'};
+    out.insert(out.end(), magic, magic + 8);
+
+    // 5a. Miembro indice de simbolos "/".
+    ar_put_header(out, "/", symtab_data);
+    ar_put_u32be(out, (uint32_t)sym_list.size());
+    for (auto &s : sym_list)
+        ar_put_u32be(out, (uint32_t)mem[s.second].header_off);
+    for (auto &s : sym_list) {
+        out.insert(out.end(), s.first.begin(), s.first.end());
+        out.push_back(0);
+    }
+    if (symtab_data & 1) out.push_back('\n'); // padding par
+
+    // 5b. Tabla de nombres largos "//".
+    if (!longnames.empty()) {
+        ar_put_header(out, "//", longnames.size());
+        out.insert(out.end(), longnames.begin(), longnames.end());
+        if (longnames.size() & 1) out.push_back('\n');
+    }
+
+    // 5c. Cada miembro-objeto.
+    for (Member &m : mem) {
+        ar_put_header(out, m.name_field, m.bytes.size());
+        out.insert(out.end(), m.bytes.begin(), m.bytes.end());
+        if (m.bytes.size() & 1) out.push_back('\n');
+    }
+
+    // 6. Escribir a fichero.
+    std::ofstream f(out_path, std::ios::binary);
+    if (!f) {
+        err = "ar: no se puede crear " + out_path;
+        return false;
+    }
+    f.write(reinterpret_cast<const char *>(out.data()), (std::streamsize)out.size());
+    if (!f) {
+        err = "ar: error al escribir " + out_path;
+        return false;
+    }
+    return true;
 }
 
 } // namespace aot

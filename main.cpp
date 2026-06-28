@@ -610,10 +610,16 @@ int main(int argc, char *argv[]) {
         ("link",
          "Phase AOT.5: enlaza objetos relocatables (ELF64 o COFF AMD64, "
          "auto-detectados; los de --emit obj o de gcc/MSVC) en un ejecutable "
-         "nativo SIN ld/gcc. Uso: vm --link a.o b.o -o prog [--format elf|pe] "
-         "[--entry sym] [--link-base 0xADDR]. Con --entry usa ese simbolo "
-         "como entrada SIN stub (kernel/bootloader); sin el, sintetiza "
-         "_start->main (ejecutable hosted).")(
+         "nativo SIN ld/gcc. Uso: vm --link a.o b.o [lib.a] [lib.dll] -o prog "
+         "[--format elf|pe] [--entry sym] [--link-base 0xADDR]. Con --entry usa "
+         "ese simbolo como entrada SIN stub (kernel/bootloader); sin el, "
+         "sintetiza _start->main (ejecutable hosted).")
+        // Phase AOT.5: archivador propio (crea .a sin el ar del sistema).
+        ("ar",
+         "Phase AOT.5: crea una libreria estatica .a (formato ar GNU, con "
+         "indice de simbolos) a partir de objetos, SIN el ar del sistema. Uso: "
+         "vm --ar libfoo.a a.o b.o ...  El .a lo consume nuestro linker (--link) "
+         "y tambien ar/ld/gcc.")(
             "entry",
             "Con --link: simbolo de entrada del ejecutable (e.g. _kstart). "
             "Vacio => _start sintetico que llama a main.",
@@ -926,6 +932,36 @@ int main(int argc, char *argv[]) {
     // Phase AOT.5: linker propio -- enlaza objetos .o en un ejecutable nativo
     // sin depender de ld/gcc.  Uso: vm --link a.o b.o -o prog [--format elf]
     // [--entry sym] [--link-base 0xADDR].
+    if (result.count("ar")) {
+        // Archivador propio: vm --ar libfoo.a a.o b.o ...  (primer posicional =
+        // .a de salida; resto = objetos), o -o libfoo.a + posicionales objetos.
+        std::vector<std::string> pos;
+        if (result.count("positional"))
+            pos = result["positional"].as<std::vector<std::string>>();
+        std::string ar_out =
+            result.count("output") ? result["output"].as<std::string>() : "";
+        std::vector<std::string> ar_objs;
+        if (!ar_out.empty()) {
+            ar_objs = pos; // -o fijo la salida; los posicionales son objetos
+        } else if (!pos.empty()) {
+            ar_out = pos.front(); // primer posicional = salida
+            ar_objs.assign(pos.begin() + 1, pos.end());
+        }
+        if (ar_out.empty() || ar_objs.empty()) {
+            std::cerr << "error: --ar requiere la libreria de salida y al menos "
+                         "un objeto (vm --ar libfoo.a a.o [b.o ...])\n";
+            return EXIT_FAILURE;
+        }
+        std::string aerr;
+        if (!aot::aot_ar_create(ar_out, ar_objs, aerr)) {
+            std::cerr << "[ar] error: " << aerr << "\n";
+            return EXIT_FAILURE;
+        }
+        std::cerr << "[ar] '" << ar_out << "' creado (" << ar_objs.size()
+                  << " objeto(s)).\n";
+        return EXIT_SUCCESS;
+    }
+
     if (result.count("link")) {
         std::vector<std::string> inputs;
         if (result.count("positional"))
