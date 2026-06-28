@@ -53,4 +53,13 @@ extern "C" int __cxa_thread_atexit(void (*)(void *), void *, void *) {
     return 0;
 }
 
+// --- atexit -> no-op ------------------------------------------------------
+// UCRT NO exporta atexit en ucrtbase.dll (lo provee el arranque estatico
+// libucrt como envoltura de _crt_atexit).  Como el GC freestanding no hace
+// teardown al exit, lo definimos como no-op para que la .a quede autocontenida
+// (sin un import que el loader no podria resolver -> evita exit 127).
+extern "C" int atexit(void (*)(void)) {
+    return 0;
+}
+
 #endif // VESTA_GC_FREESTANDING

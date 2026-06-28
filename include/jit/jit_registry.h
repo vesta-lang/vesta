@@ -44,8 +44,16 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
 #include <vector>
+// El build FREESTANDING (libvesta_gc para AOT) es single-thread y no debe
+// arrastrar std::mutex (-> winpthread/pthread_mutex_*).  Sin el, el candado es
+// un no-op.
+#if defined(VESTA_GC_FREESTANDING)
+#define JIT_REGISTRY_LOCK() ((void)0)
+#else
+#include <mutex>
+#define JIT_REGISTRY_LOCK() std::lock_guard<std::mutex> _jr_lk(mutex_)
+#endif
 
 #include "jit/machine_ir.h"
 
@@ -128,7 +136,9 @@ class JitRegistry {
     JitRegistry(const JitRegistry &) = delete;
     JitRegistry &operator=(const JitRegistry &) = delete;
 
+#if !defined(VESTA_GC_FREESTANDING)
     mutable std::mutex mutex_;
+#endif
     std::vector<JitFunctionInfo> functions_; ///< sorted by code_start
 };
 

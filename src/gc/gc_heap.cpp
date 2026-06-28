@@ -108,8 +108,16 @@ bool g_gc_debug_buffered = []() noexcept -> bool {
 // para evitar mutex contention.  64 KB amortiza syscalls de write
 // sobre miles de trazas pequenias (~50 bytes c/u).
 constexpr size_t GC_DBG_BUF_SIZE = 64 * 1024;
-thread_local char g_gc_dbg_buf[GC_DBG_BUF_SIZE];
-thread_local size_t g_gc_dbg_pos = 0;
+// En el build FREESTANDING (libvesta_gc para AOT) el GC es single-thread y no
+// debe arrastrar TLS (genera _tls_index + relocs SECREL que el linker propio no
+// resuelve sin una TLS directory).  thread_local -> global plano.
+#if defined(VESTA_GC_FREESTANDING)
+#define GC_DBG_TLS
+#else
+#define GC_DBG_TLS thread_local
+#endif
+GC_DBG_TLS char g_gc_dbg_buf[GC_DBG_BUF_SIZE];
+GC_DBG_TLS size_t g_gc_dbg_pos = 0;
 
 // File descriptor de stderr cacheado.  Lazy: el primer trace lo
 // resuelve.  Asi no pagamos lookup por linea.
@@ -184,7 +192,7 @@ struct GcDebugAtExit {
         if (g_gc_debug_buffered) gc_dbg_flush_tls();
     }
 };
-thread_local GcDebugAtExit g_gc_debug_at_exit;
+GC_DBG_TLS GcDebugAtExit g_gc_debug_at_exit;
 } // namespace
 
 void set_gc_debug(bool enabled) noexcept {
