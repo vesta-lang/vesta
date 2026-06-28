@@ -3463,6 +3463,80 @@ int main(int argc, char *argv[]) {
             for (size_t ci = 0; ci < compiled.size(); ++ci)
                 if (!main_fn || compiled[ci].name != "main") place_fn(ci);
 
+            // gc<T> (Inc 4b): emitir la seccion .vexgc_smap con los stackmaps de
+            // cada funcion que retiene GC roots, para que __vexgc_init la
+            // registre en el GC al arranque (scan_jit_roots_precise sobre frames
+            // nativos).  func_addr va como placeholder + reloc ABS64 a la fn
+            // (resuelto tras el layout).  Solo si hay stackmaps no vacios.
+            std::vector<std::pair<uint32_t, std::string>> smap_func_relocs;
+            int smap_si = -1;
+            {
+                std::vector<size_t> gc_fns;
+                for (size_t ci = 0; ci < compiled.size(); ++ci) {
+                    for (const auto &sm : compiled[ci].stackmaps)
+                        if (!sm.slots.empty()) {
+                            gc_fns.push_back(ci);
+                            break;
+                        }
+                }
+                // Emitir la seccion siempre que ALGUNA funcion referencie
+                // .vexgc_smap (via section_start/size de __vexgc_init, posible-
+                // mente INLINEADO en main) -- aunque no haya stackmaps no vacios
+                // -- porque la reloc secsym exige que la seccion exista.
+                bool gc_smap_ref = false;
+                for (const auto &af : compiled) {
+                    for (const auto &r : af.relocs)
+                        if (r.symbol.find(".vexgc_smap") != std::string::npos) {
+                            gc_smap_ref = true;
+                            break;
+                        }
+                    if (gc_smap_ref) break;
+                }
+                if (gc_smap_ref) {
+                    std::vector<uint8_t> b;
+                    auto put32 = [&b](uint32_t v) {
+                        for (int i = 0; i < 4; ++i)
+                            b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+                    };
+                    auto put64 = [&b](uint64_t v) {
+                        for (int i = 0; i < 8; ++i)
+                            b.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xFF));
+                    };
+                    put32(0x4D475856u);                            // 'VXGM'
+                    put32(1u);                                     // version
+                    put32(static_cast<uint32_t>(gc_fns.size()));   // n_fn
+                    put32(0u);  // total_size (parcheado al final, offset 12)
+                    for (size_t ci : gc_fns) {
+                        const AotFn &af = compiled[ci];
+                        smap_func_relocs.push_back(
+                            {static_cast<uint32_t>(b.size()), af.name});
+                        put64(0); // func_addr placeholder (ABS64 reloc)
+                        put32(static_cast<uint32_t>(af.bytes.size())); // code_size
+                        put32(static_cast<uint32_t>(
+                            af.stackmaps.size())); // n_safepoints (todos)
+                        for (const auto &sm : af.stackmaps) {
+                            put32(sm.pc_offset);
+                            put32(static_cast<uint32_t>(sm.slots.size()));
+                            for (const auto &slot : sm.slots) {
+                                const int16_t off = slot.rbp_offset;
+                                b.push_back(static_cast<uint8_t>(off & 0xFF));
+                                b.push_back(
+                                    static_cast<uint8_t>((off >> 8) & 0xFF));
+                                b.push_back(
+                                    static_cast<uint8_t>(slot.gc_kind));
+                                b.push_back(0); // _pad
+                            }
+                        }
+                    }
+                    // Parchear total_size (offset 12) con el tamanño final.
+                    const uint32_t total = static_cast<uint32_t>(b.size());
+                    for (int i = 0; i < 4; ++i)
+                        b[12 + i] = static_cast<uint8_t>((total >> (i * 8)) & 0xFF);
+                    smap_si = get_sec(".vexgc_smap", /*is_code=*/false, "r");
+                    secs[smap_si].bytes = std::move(b);
+                }
+            }
+
             // ------------------------------------------------------------------
             // AOT.2.exec (PE-IAT): EXEC/SHARED standalone que llaman a simbolos
             // EXTERNOS (libc malloc/free/calloc/abort, o un FFI extern).  El
@@ -3649,6 +3723,18 @@ int main(int argc, char *argv[]) {
                 ws.at = s.at;
                 ws.order = s.order; // ubicacion/orden (.bin)
                 w.add_section(std::move(ws));
+            }
+            // gc<T> (Inc 4b): relocs ABS64 de los func_addr de .vexgc_smap a la
+            // VA real de cada funcion (resuelta tras el layout).
+            if (smap_si >= 0) {
+                for (const auto &fr : smap_func_relocs) {
+                    auto it = fn_loc.find(fr.second);
+                    if (it != fn_loc.end())
+                        w.add_reloc(smap_si, fr.first,
+                                    aot::RelocTarget::addr(it->second.sec,
+                                                           it->second.off),
+                                    aot::RelocKind::ABS64);
+                }
             }
             if (emit_shared) {
                 // Libreria compartida: exporta TODAS las funciones como

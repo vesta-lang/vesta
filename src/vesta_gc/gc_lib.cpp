@@ -20,6 +20,10 @@
 
 #include "arena/arena_manager.h"
 #include "gc/gc_heap.h"
+#include "jit/jit_registry.h" // register_function (frames AOT en el scan preciso)
+#include "jit/machine_ir.h"   // Stackmap / StackmapSlot
+
+#include <cstring>
 
 namespace {
 
@@ -77,6 +81,76 @@ uint8_t *vex_gc_alloc_ptr(uint64_t size) {
     const gc::GcHandle handle = h.alloc_pinned(static_cast<size_t>(size));
     if (handle == gc::GC_NULL_HANDLE) return nullptr;
     return h.deref(handle);
+}
+
+void vex_gc_register_aot_stackmaps(const uint8_t *sec) {
+    // El tamanño total va EMBEBIDO en el header (offset 12) -- no como parametro
+    // -- porque section_size seria una reloc SIZE no soportada en .obj/.o.
+    if (!sec) return;
+    uint32_t total = 0;
+    std::memcpy(&total, sec + 12, 4);
+    const uint64_t size = total;
+    // Parsea la seccion .vexgc_smap emitida por el driver -m aot y registra cada
+    // funcion (rango de codigo + stackmaps) en el JitRegistry global, para que
+    // scan_jit_roots_precise (el mismo walker del JIT) descubra las raices gc<T>
+    // vivas en los frames nativos durante la coleccion.  La llama el arranque
+    // del binario (CALL __vexgc_init al inicio de main) antes del primer alloc.
+    //
+    // Formato (LE):
+    //   header 16B: u32 magic 'VXGM' | u32 version=1 | u32 n_fn | u32 _pad
+    //   por fn: u64 func_addr | u32 code_size | u32 n_safepoints
+    //     por safepoint: u32 pc_offset | u32 n_slots
+    //       por slot: i16 rbp_offset | u8 gc_kind | u8 _pad
+    if (!sec || size < 16) return;
+    const uint8_t *p = sec;
+    const uint8_t *end = sec + size;
+    auto rd32 = [&p]() -> uint32_t {
+        uint32_t v;
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return v;
+    };
+    auto rd64 = [&p]() -> uint64_t {
+        uint64_t v;
+        std::memcpy(&v, p, 8);
+        p += 8;
+        return v;
+    };
+    const uint32_t magic = rd32();
+    if (magic != 0x4D475856u) return; // 'VXGM'
+    const uint32_t version = rd32();
+    if (version != 1u) return;
+    const uint32_t n_fn = rd32();
+    (void)rd32(); // _pad
+    auto &reg = jit::JitRegistry::instance();
+    for (uint32_t f = 0; f < n_fn && p + 16 <= end; ++f) {
+        const uint64_t func_addr = rd64();
+        const uint32_t code_size = rd32();
+        const uint32_t n_sp = rd32();
+        std::vector<jit::Stackmap> smaps;
+        smaps.reserve(n_sp);
+        for (uint32_t s = 0; s < n_sp && p + 8 <= end; ++s) {
+            jit::Stackmap sm;
+            sm.pc_offset = rd32();
+            const uint32_t n_slots = rd32();
+            for (uint32_t k = 0; k < n_slots && p + 4 <= end; ++k) {
+                jit::StackmapSlot slot;
+                int16_t off;
+                std::memcpy(&off, p, 2);
+                p += 2;
+                slot.rbp_offset = off;
+                slot.gc_kind = static_cast<jit::StackmapGcKind>(*p);
+                p += 2; // gc_kind + _pad
+                sm.slots.push_back(slot);
+            }
+            smaps.push_back(std::move(sm));
+        }
+        if (func_addr != 0)
+            reg.register_function(
+                reinterpret_cast<const uint8_t *>(func_addr),
+                reinterpret_cast<const uint8_t *>(func_addr) + code_size,
+                std::move(smaps), /*frame_size=*/0, "aot");
+    }
 }
 
 void vex_gc_pin(uint32_t handle) {
