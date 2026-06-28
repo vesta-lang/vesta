@@ -106,6 +106,120 @@ static int aot_dll_name_eq(const char *a, const char *b) {
     return *a == 0 && *b == 0;
 }
 
+/* TLS (thread_local) PE: si alguna seccion de usuario es SHF_TLS, sintetiza la
+ * infraestructura TLS NATIVA de Windows -- una seccion `.tls$d` con _tls_index
+ * (lo rellena el cargador con el indice del slot), un array de callbacks vacio,
+ * y el IMAGE_TLS_DIRECTORY -- y pone DataDirectory[9] (TLS) apuntando ahi.  El
+ * acceso (mov gs:[0x58] -> [_tls_index] -> bloque -> +offset) lo emite el
+ * codegen; el reloc al simbolo `__vex_tls_index` se resuelve a la VA que
+ * devuelve esta funcion.  Compartido por aot_emit_pe (.exe) y aot_emit_pe_dll
+ * (.dll): el cargador procesa el directorio TLS en ambos (Vista+).
+ * @return VA de _tls_index, o 0 si el modulo no tiene TLS. */
+static uint64_t aot_pe_synth_tls(PE64FILE_struct *pe, const AotSection *secs,
+                                 int num_secs, int is_dll) {
+    int tls_sec = -1;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].flags & AOT_SEC_TLS) {
+            tls_sec = i;
+            break;
+        }
+    if (tls_sec < 0) return 0;
+    const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
+    /* Layout de .tls$d: [0]=_tls_index(4) [4]=pad [8]=callbacks(8, NULL)
+     * [16]=IMAGE_TLS_DIRECTORY64(40). */
+    _BYTE tlsd[56];
+    memset(tlsd, 0, sizeof(tlsd));
+    int tlsd_idx = addSection(pe, ".tls$d",
+                              ___IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                  ___IMAGE_SCN_MEM_READ | ___IMAGE_SCN_MEM_WRITE,
+                              tlsd, (_DWORD)sizeof(tlsd));
+    const uint32_t tls_rva = pe->sectionHeaders[tls_sec].VirtualAddress;
+    const uint32_t tlsd_rva = pe->sectionHeaders[tlsd_idx].VirtualAddress;
+    _BYTE *db = pe->sectionData[tlsd_idx] + 16; /* IMAGE_TLS_DIRECTORY */
+    uint64_t start = image_base + tls_rva;
+    uint64_t end = image_base + tls_rva + secs[tls_sec].size;
+    uint64_t idx_va = image_base + tlsd_rva + 0; /* &_tls_index */
+    uint64_t cb_va = image_base + tlsd_rva + 8;  /* &callbacks */
+    memcpy(db + 0, &start, 8);
+    memcpy(db + 8, &end, 8);
+    memcpy(db + 16, &idx_va, 8);
+    memcpy(db + 24, &cb_va, 8);
+    uint32_t zfill = (uint32_t)secs[tls_sec].bss_size;
+    memcpy(db + 32, &zfill, 4); /* SizeOfZeroFill */
+    uint32_t tls_char = 0x00400000u; /* IMAGE_SCN_ALIGN_8BYTES */
+    memcpy(db + 36, &tls_char, 4);   /* Characteristics (alineamiento) */
+    pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
+        .VirtualAddress = tlsd_rva + 16;
+    pe->ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
+        .Size = 40;
+    /* Los 4 campos VA del directorio (Start/End/Index/Callbacks) son DIRECCIONES
+     * ABSOLUTAS.  En un EXE, que carga en su base, fijamos la base (sin ASLR).
+     * En una DLL -- que el cargador SI reubica -- emitimos una tabla .reloc con
+     * esos 4 campos (IMAGE_REL_BASED_DIR64) para que el loader los fije al
+     * relocar; sin esto, el directorio TLS apunta a la base preferida (stale) y
+     * el bloque por-hilo no se inicializa con la plantilla. */
+    if (is_dll) {
+        const uint32_t page = tlsd_rva & ~0xFFFu;
+        _BYTE rel[16];
+        uint32_t blksz = 8u + 4u * 2u; /* header(8) + 4 entradas (2B c/u) */
+        memcpy(rel + 0, &page, 4);
+        memcpy(rel + 4, &blksz, 4);
+        const uint32_t voff[4] = {tlsd_rva + 16, tlsd_rva + 24, tlsd_rva + 32,
+                                  tlsd_rva + 40};
+        for (int k = 0; k < 4; ++k) {
+            uint16_t e = (uint16_t)((10u << 12) | ((voff[k] - page) & 0xFFFu));
+            memcpy(rel + 8 + k * 2, &e, 2);
+        }
+        int rel_idx =
+            addSection(pe, ".reloc",
+                       ___IMAGE_SCN_CNT_INITIALIZED_DATA |
+                           ___IMAGE_SCN_MEM_READ | 0x02000000u /* DISCARDABLE */,
+                       rel, (_DWORD)sizeof(rel));
+        const uint32_t rel_rva = pe->sectionHeaders[rel_idx].VirtualAddress;
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
+            .VirtualAddress = rel_rva;
+        pe->ntHeaders.OptionalHeader
+            .DataDirectory[___IMAGE_DIRECTORY_ENTRY_BASERELOC]
+            .Size = (_DWORD)sizeof(rel);
+        /* Mantener relocacion habilitada (la .reloc fija las VAs del directorio
+         * cuando el cargador reubica la DLL). */
+    } else {
+        pe->ntHeaders.OptionalHeader.DllCharacteristics &=
+            (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+    }
+    return idx_va;
+}
+
+/* TLS PE: resuelve un reloc al simbolo `__vex_tls_index` (RIP-relativo) o un
+ * SECREL32 (offset del var dentro de su seccion .tls).  @return 1 si lo manejo
+ * (el caller debe `continue`), 0 si no es un reloc TLS. */
+static int aot_pe_apply_tls_reloc(PE64FILE_struct *pe, const AotSection *secs,
+                                  int num_secs, const AotReloc *rl,
+                                  uint64_t tls_index_va) {
+    const uint64_t image_base = pe->ntHeaders.OptionalHeader.ImageBase;
+    if (rl->extern_name && strcmp(rl->extern_name, "__vex_tls_index") == 0) {
+        if (tls_index_va == 0 || rl->site_section < 0 ||
+            rl->site_section >= num_secs)
+            return 1; /* manejado (silenciosamente no-op si malformado) */
+        (void)secs;
+        uint64_t sva = image_base +
+                       pe->sectionHeaders[rl->site_section].VirtualAddress +
+                       rl->site_off;
+        int32_t disp =
+            (int32_t)((int64_t)tls_index_va - (int64_t)(sva + 4) + rl->addend);
+        memcpy(pe->sectionData[rl->site_section] + rl->site_off, &disp, 4);
+        return 1;
+    }
+    if (rl->kind == AOT_RELOC_SECREL32) {
+        if (rl->site_section < 0 || rl->site_section >= num_secs) return 1;
+        int32_t off = (int32_t)((int64_t)rl->target_off + rl->addend);
+        memcpy(pe->sectionData[rl->site_section] + rl->site_off, &off, 4);
+        return 1;
+    }
+    return 0;
+}
+
 int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
                 const AotSection *secs, int num_secs, int entry_sec,
                 uint64_t entry_off, const AotImport *imps, int num_imps,
@@ -154,57 +268,9 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
     }
 
-    /* TLS (thread_local) PE: si alguna seccion es SHF_TLS, sintetizar la
-     * infraestructura TLS nativa de Windows:  _tls_index (lo rellena el
-     * cargador con el indice del slot), un array de callbacks vacio, y el
-     * IMAGE_TLS_DIRECTORY; DataDirectory[9] apunta al directorio.  El acceso
-     * (mov gs:[0x58] -> [_tls_index] -> bloque -> +offset) lo emite el codegen;
-     * el reloc al simbolo `__vex_tls_index` se resuelve a la VA de aqui. */
-    uint64_t tls_index_va = 0; /* VA de _tls_index (0 = sin TLS) */
-    {
-        int tls_sec = -1;
-        for (int i = 0; i < num_secs; ++i)
-            if (secs[i].flags & AOT_SEC_TLS) {
-                tls_sec = i;
-                break;
-            }
-        if (tls_sec >= 0) {
-            const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
-            /* Layout de .tls$d: [0]=_tls_index(4) [4]=pad [8]=callbacks(8, NULL)
-             * [16]=IMAGE_TLS_DIRECTORY64(40). */
-            _BYTE tlsd[56];
-            memset(tlsd, 0, sizeof(tlsd));
-            int tlsd_idx =
-                addSection(&pe, ".tls$d",
-                           ___IMAGE_SCN_CNT_INITIALIZED_DATA |
-                               ___IMAGE_SCN_MEM_READ | ___IMAGE_SCN_MEM_WRITE,
-                           tlsd, (_DWORD)sizeof(tlsd));
-            const uint32_t tls_rva =
-                pe.sectionHeaders[tls_sec].VirtualAddress;
-            const uint32_t tlsd_rva =
-                pe.sectionHeaders[tlsd_idx].VirtualAddress;
-            _BYTE *db = pe.sectionData[tlsd_idx] + 16; /* IMAGE_TLS_DIRECTORY */
-            uint64_t start = image_base + tls_rva;
-            uint64_t end = image_base + tls_rva + secs[tls_sec].size;
-            uint64_t idx_va = image_base + tlsd_rva + 0;  /* &_tls_index */
-            uint64_t cb_va = image_base + tlsd_rva + 8;   /* &callbacks */
-            memcpy(db + 0, &start, 8);
-            memcpy(db + 8, &end, 8);
-            memcpy(db + 16, &idx_va, 8);
-            memcpy(db + 24, &cb_va, 8);
-            uint32_t zfill = (uint32_t)secs[tls_sec].bss_size;
-            memcpy(db + 32, &zfill, 4); /* SizeOfZeroFill */
-            /* +36 Characteristics = 0 (ya a cero) */
-            pe.ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
-                .VirtualAddress = tlsd_rva + 16;
-            pe.ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
-                .Size = 40;
-            /* Las VAs absolutas del directorio exigen base fija (sin .reloc). */
-            pe.ntHeaders.OptionalHeader.DllCharacteristics &=
-                (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
-            tls_index_va = idx_va;
-        }
-    }
+    /* TLS (thread_local): sintetizar el IMAGE_TLS_DIRECTORY + _tls_index si hay
+     * seccion SHF_TLS (devuelve la VA de _tls_index para resolver los relocs). */
+    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 0);
 
     /* Relocations cross-seccion: resolver AHORA que addSection ya asigno las
      * VirtualAddress de todas las secciones del usuario (igual que el parcheo
@@ -227,45 +293,16 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
-            /* TLS PE: el codegen referencia `__vex_tls_index` (RIP-relativo)
-             * para leer el indice del slot; se resuelve a la VA sintetizada
-             * arriba.  No tiene target_section (es un simbolo del emisor). */
-            if (rl->extern_name &&
-                strcmp(rl->extern_name, "__vex_tls_index") == 0) {
-                if (tls_index_va == 0) {
-                    set_err(err, err_cap,
-                            "aot_emit_pe: __vex_tls_index sin seccion TLS");
-                    freePE64File(&pe);
-                    return 0;
-                }
-                if (rl->site_section < 0 || rl->site_section >= num_secs) {
-                    set_err(err, err_cap, "aot_emit_pe: site_section invalido");
-                    freePE64File(&pe);
-                    return 0;
-                }
-                uint64_t sva =
-                    image_base +
-                    pe.sectionHeaders[rl->site_section].VirtualAddress +
-                    rl->site_off;
-                int32_t disp = (int32_t)((int64_t)tls_index_va -
-                                         (int64_t)(sva + 4) + rl->addend);
-                memcpy(pe.sectionData[rl->site_section] + rl->site_off, &disp,
-                       4);
+            /* TLS PE: `__vex_tls_index` (RIP-rel al slot) + SECREL32 (offset del
+             * var en .tls).  Manejados por el helper compartido. */
+            if (aot_pe_apply_tls_reloc(&pe, secs, num_secs, rl, tls_index_va))
                 continue;
-            }
             if (rl->site_section < 0 || rl->site_section >= num_secs ||
                 rl->target_section < 0 || rl->target_section >= num_secs) {
                 set_err(err, err_cap,
                         "aot_emit_pe: reloc con seccion fuera de rango");
                 freePE64File(&pe);
                 return 0;
-            }
-            /* TLS PE: SECREL32 = offset del simbolo DENTRO de su seccion (.tls),
-             * no la VA; el acceso lo suma a la base del bloque TLS en runtime. */
-            if (rl->kind == AOT_RELOC_SECREL32) {
-                int32_t off = (int32_t)((int64_t)rl->target_off + rl->addend);
-                memcpy(pe.sectionData[rl->site_section] + rl->site_off, &off, 4);
-                continue;
             }
             uint64_t target_value;
             if (rl->target_is_size) {
@@ -3009,6 +3046,7 @@ static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
         }
         const int kind_ok =
             relocs[r].kind == AOT_RELOC_REL32 ||
+            relocs[r].kind == AOT_RELOC_SECREL32 || /* TLS (thread_local) */
             (is32 ? relocs[r].kind == AOT_RELOC_IMM32
                   : relocs[r].kind == AOT_RELOC_ABS64);
         if (!kind_ok) {
@@ -3113,11 +3151,15 @@ static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
         } else {
             sym_idx = (uint32_t)rl->target_section;
             if (is32)
-                type = (rl->kind == AOT_RELOC_REL32)
+                type = (rl->kind == AOT_RELOC_SECREL32)
+                           ? (uint16_t)IMAGE_REL_I386_SECREL
+                       : (rl->kind == AOT_RELOC_REL32)
                            ? (uint16_t)IMAGE_REL_I386_REL32
                            : (uint16_t)IMAGE_REL_I386_DIR32;
             else
-                type = (rl->kind == AOT_RELOC_ABS64)
+                type = (rl->kind == AOT_RELOC_SECREL32)
+                           ? (uint16_t)IMAGE_REL_AMD64_SECREL
+                       : (rl->kind == AOT_RELOC_ABS64)
                            ? (uint16_t)IMAGE_REL_AMD64_ADDR64
                            : (uint16_t)IMAGE_REL_AMD64_REL32;
         }
@@ -3334,11 +3376,20 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
                        (_BYTE *)secs[i].data, secs[i].size);
     }
 
+    /* TLS (thread_local) en la .dll: sintetizar el IMAGE_TLS_DIRECTORY +
+     * _tls_index igual que en el .exe.  El cargador de Windows procesa el
+     * directorio TLS tambien para DLLs (Vista+: tambien las cargadas con
+     * LoadLibrary), montando el bloque por-hilo. */
+    uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 1);
+
     /* Aplicar relocs (PIC: REL32 internas).  Mismo patron que aot_emit_pe. */
     {
         const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
+            /* TLS PE: __vex_tls_index (RIP-rel) + SECREL32 (offset en .tls). */
+            if (aot_pe_apply_tls_reloc(&pe, secs, num_secs, rl, tls_index_va))
+                continue;
             if (rl->target_is_size || rl->target_is_end) {
                 set_err(err, err_cap, "aot_emit_pe_dll: SIZE/END no soportado");
                 freePE64File(&pe);
