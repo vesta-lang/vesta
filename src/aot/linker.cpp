@@ -125,6 +125,29 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out) {
     return (bool)f;
 }
 
+// Carga los bytes de un miembro de archivo: en un .a normal son un slice del
+// buffer; en un thin archive estan en un fichero externo (la ruta es el nombre,
+// relativa -> respecto al directorio del .a).
+bool load_ar_member_bytes(const std::string &archive_path,
+                          const std::vector<uint8_t> &abuf,
+                          const ArMember &m, std::vector<uint8_t> &out) {
+    if (m.is_thin) {
+        std::string p = m.name;
+        const bool absolute =
+            !p.empty() && (p[0] == '/' || p[0] == '\\' ||
+                           (p.size() > 1 && p[1] == ':'));
+        if (!absolute) {
+            const size_t sl = archive_path.find_last_of("\\/");
+            if (sl != std::string::npos)
+                p = archive_path.substr(0, sl + 1) + p;
+        }
+        return read_file(p, out);
+    }
+    out.assign(abuf.begin() + m.data_offset,
+               abuf.begin() + m.data_offset + m.size);
+    return true;
+}
+
 bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
     po.path = path;
     // Si los bytes ya estan cargados (miembro de un archivo .a en memoria) no
@@ -764,8 +787,8 @@ bool aot_link(const std::vector<std::string> &inputs,
                 for (size_t mi = 0; mi < a.members.size(); ++mi) {
                     const ArMember &m = a.members[mi];
                     ParsedObj tmp;
-                    tmp.bytes.assign(a.buf.begin() + m.data_offset,
-                                     a.buf.begin() + m.data_offset + m.size);
+                    if (!load_ar_member_bytes(a.path, a.buf, m, tmp.bytes))
+                        continue; // thin: fichero externo ausente
                     std::string e2;
                     if (!parse_any_obj(a.path + "(" + m.name + ")", tmp, e2))
                         continue; // miembro no-objeto: ignorar
@@ -823,8 +846,11 @@ bool aot_link(const std::vector<std::string> &inputs,
                     a.pulled[mi] = true;
                     const ArMember &m = a.members[mi];
                     ParsedObj po;
-                    po.bytes.assign(a.buf.begin() + m.data_offset,
-                                    a.buf.begin() + m.data_offset + m.size);
+                    if (!load_ar_member_bytes(a.path, a.buf, m, po.bytes)) {
+                        err = a.path + ": miembro thin '" + m.name +
+                              "' no encontrado";
+                        return false;
+                    }
                     if (!parse_any_obj(a.path + "(" + m.name + ")", po, err))
                         return false;
                     scan(po);
@@ -1439,19 +1465,66 @@ bool aot_ar_create(const std::string &out_path,
         std::string name_field;        // campo nombre del header ("name/" o "/N")
         uint64_t header_off = 0;       // posicion de la cabecera en el .a
     };
-    std::vector<Member> mem(objs.size());
-    for (size_t i = 0; i < objs.size(); ++i) {
-        Member &m = mem[i];
-        const std::string &p = objs[i];
-        const size_t sl = p.find_last_of("\\/");
-        m.name = (sl == std::string::npos) ? p : p.substr(sl + 1);
-        ParsedObj po;
-        if (!parse_any_obj(p, po, err)) return false;
-        m.bytes = std::move(po.bytes);
+    // Extrae los globals definidos de un objeto ya parseado.
+    auto collect_globals = [](const ParsedObj &po, Member &m) {
         for (const ObjSym &sy : po.syms)
             if (sy.bind == STB_GLOBAL && sy.shndx != SHN_UNDEF &&
                 sy.type != STT_SECTION && !sy.name.empty())
                 m.syms.push_back(sy.name);
+    };
+
+    std::vector<Member> mem;
+    // Nombres (basename) de los objetos nuevos -> reemplazan al miembro homonimo
+    // si el .a ya existia (semantica de `ar r`).
+    std::unordered_set<std::string> new_names;
+    for (const std::string &p : objs) {
+        const size_t sl = p.find_last_of("\\/");
+        new_names.insert(sl == std::string::npos ? p : p.substr(sl + 1));
+    }
+
+    // 1a. UPDATE/APPEND: si el .a de salida ya existe, conservar sus miembros
+    //     que NO se reemplazan por nombre.
+    {
+        std::vector<uint8_t> existing;
+        if (read_file(out_path, existing) && ar_is_archive(existing)) {
+            std::vector<ArMember> ems;
+            std::vector<ArSymbol> esyms;
+            std::string e2;
+            if (ar_parse(existing, ems, esyms, e2)) {
+                for (const ArMember &am : ems) {
+                    // En un thin archive el nombre es una ruta -> el basename es
+                    // el nombre de miembro.
+                    std::string mname = am.name;
+                    if (am.is_thin) {
+                        const size_t sl = mname.find_last_of("\\/");
+                        if (sl != std::string::npos) mname = mname.substr(sl + 1);
+                    }
+                    if (new_names.count(mname)) continue; // reemplazado
+                    Member m;
+                    m.name = mname;
+                    ParsedObj po;
+                    if (!load_ar_member_bytes(out_path, existing, am, po.bytes))
+                        continue; // thin: fichero externo ausente
+                    std::string e3;
+                    if (parse_any_obj(out_path + "(" + am.name + ")", po, e3))
+                        collect_globals(po, m);
+                    m.bytes = std::move(po.bytes);
+                    mem.push_back(std::move(m));
+                }
+            }
+        }
+    }
+
+    // 1b. Anadir (o reemplazar) los objetos nuevos.
+    for (const std::string &p : objs) {
+        Member m;
+        const size_t sl = p.find_last_of("\\/");
+        m.name = (sl == std::string::npos) ? p : p.substr(sl + 1);
+        ParsedObj po;
+        if (!parse_any_obj(p, po, err)) return false;
+        collect_globals(po, m);
+        m.bytes = std::move(po.bytes);
+        mem.push_back(std::move(m));
     }
 
     // 2. Tabla de nombres largos GNU ("//"): los nombres cuya forma corta
