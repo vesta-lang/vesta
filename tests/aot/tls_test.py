@@ -102,6 +102,83 @@ def main():
         else:
             print(f"TLS-B: EXIT MISMATCH got={rb} exp=112")
             rc = 1
+
+        # --- C) initial-exec (GOTTPOFF): el TPOFF vive en una entrada GOT ---
+        with open(os.path.join(work, "tc.c"), "w") as f:
+            f.write("__thread int v = 5;\n"
+                    "long long get_v(void){ return v; }\n")
+        wsl(f"cd {wm} && gcc -O2 -fPIC -ftls-model=initial-exec "
+            f"-c tc.c -o tc.o")
+        with open(os.path.join(work, "mc.vex"), "w") as f:
+            f.write('extern "tc" { fn get_v() -> i64; }\n'
+                    'i64 main(){ return get_v(); }\n')
+        run([vm, "--vex", os.path.join(work, "mc.vex"), "-m", "aot", "--emit",
+             "obj", "--format", "elf", "-o", os.path.join(work, "mc.o")])
+        run([vm, "--link", os.path.join(work, "mc.o"),
+             os.path.join(work, "tc.o"), libc, "-o",
+             os.path.join(work, "pc"), "--format", "elf"])
+        rcc = wsl(f"cd {wm} && chmod +x pc && ./pc").returncode
+        if rcc == 5:
+            print("TLS-C (initial-exec GOTTPOFF): exit=5 OK")
+        else:
+            print(f"TLS-C: EXIT MISMATCH got={rcc} exp=5")
+            rc = 1
+
+        # --- D) general-dynamic (TLSGD) relajado a local-exec ---
+        with open(os.path.join(work, "td.c"), "w") as f:
+            f.write("__thread int w = 42;\n"
+                    "long long get_w(void){ return w; }\n")
+        # -fPIC sin tls-model -> el compilador emite TLSGD (general-dynamic).
+        wsl(f"cd {wm} && gcc -O2 -fPIC -ftls-model=global-dynamic "
+            f"-c td.c -o td.o")
+        with open(os.path.join(work, "md.vex"), "w") as f:
+            f.write('extern "td" { fn get_w() -> i64; }\n'
+                    'i64 main(){ return get_w(); }\n')
+        run([vm, "--vex", os.path.join(work, "md.vex"), "-m", "aot", "--emit",
+             "obj", "--format", "elf", "-o", os.path.join(work, "md.o")])
+        run([vm, "--link", os.path.join(work, "md.o"),
+             os.path.join(work, "td.o"), libc, "-o",
+             os.path.join(work, "pd"), "--format", "elf"])
+        rdd = wsl(f"cd {wm} && chmod +x pd && ./pd").returncode
+        if rdd == 42:
+            print("TLS-D (general-dynamic TLSGD->local-exec): exit=42 OK")
+        else:
+            print(f"TLS-D: EXIT MISMATCH got={rdd} exp=42")
+            rc = 1
+
+        # --- E) x86-32 local-exec (R_386_TLS_LE) ---
+        # Necesita multilib (gcc -m32) + libc.so.6 i386 + poder ejecutar ELF32.
+        m32_ok = wsl("echo 'int main(){return 0;}' | gcc -m32 -xc -o /dev/null "
+                     "- 2>/dev/null && echo yes").stdout.strip()[-3:] == "yes"
+        libc32 = os.path.join(work, "libc32.so.6")
+        wsl(f"cp $(ls /usr/lib32/libc.so.6 "
+            f"/usr/lib/i386-linux-gnu/libc.so.6 "
+            f"/lib/i386-linux-gnu/libc.so.6 2>/dev/null | head -1) "
+            f"{wm}/libc32.so.6 2>/dev/null")
+        if m32_ok and os.path.exists(libc32):
+            with open(os.path.join(work, "te.c"), "w") as f:
+                f.write("__thread int a = 5;\n"
+                        "__thread int b;\n"
+                        "__thread long long c = 100;\n"
+                        "long long compute(void){ b=7; return a+b+c; }\n")
+            wsl(f"cd {wm} && gcc -m32 -O2 -c te.c -o te.o")
+            with open(os.path.join(work, "me.vex"), "w") as f:
+                f.write('extern "te" { fn compute() -> i64; }\n'
+                        'i64 main(){ return compute(); }\n')
+            run([vm, "--vex", os.path.join(work, "me.vex"), "-m", "aot",
+                 "--emit", "obj", "--format", "elf", "--aot-arch", "x86-32",
+                 "-o", os.path.join(work, "me.o")])
+            run([vm, "--link", os.path.join(work, "me.o"),
+                 os.path.join(work, "te.o"), libc32, "-o",
+                 os.path.join(work, "pe"), "--format", "elf"])
+            ree = wsl(f"cd {wm} && chmod +x pe && ./pe").returncode
+            if ree == 112:
+                print("TLS-E (x86-32 local-exec R_386_TLS_LE): exit=112 OK")
+            else:
+                print(f"TLS-E: EXIT MISMATCH got={ree} exp=112")
+                rc = 1
+        else:
+            print("TLS-E (x86-32): multilib/libc32 no disponible, omitido")
         return rc
     finally:
         import shutil

@@ -225,11 +225,11 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
                              static_cast<int>(cimps.size()), crel_ptr, crel_n,
                              errbuf, sizeof(errbuf));
         }
-    } else if (mode32_ && !imports_.empty()) {
-        // AOT x86-32 dinamico: ELF32 PIE (ET_DYN, EM_386) que importa
-        // libc.so.6 (i386) via eager-GOT.  Mismo mecanismo de thunks FF 25
-        // que el driver emitio, pero el disp32 es ABSOLUTO (i386 sin
-        // rip-relativo) y las estructuras dinamicas son de 32-bit.
+    } else if (mode32_ && (!imports_.empty() || has_tls)) {
+        // AOT x86-32 dinamico: ELF32 EXEC (EM_386) con interp -> el cargador
+        // monta el bloque TLS y resuelve los imports de libc.so.6 (i386).  Se
+        // toma esta ruta tambien sin imports cuando hay TLS (necesita el
+        // cargador para montar el bloque thread-local antes del entry).
         std::vector<AotImport> cimps(imports_.size());
         for (size_t i = 0; i < imports_.size(); ++i) {
             const ImportCall &ic = imports_[i];
@@ -242,7 +242,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
             path.c_str(), &ccfg, csecs.data(), static_cast<int>(csecs.size()),
             entry_sec_, entry_off_, crel_ptr, crel_n, cimps.data(),
             static_cast<int>(cimps.size()), errbuf, sizeof(errbuf));
-    } else if (!imports_.empty() || has_tls) {
+    } else if (!mode32_ && (!imports_.empty() || has_tls)) {
         // AOT.2.exec slice 2: ELF EXEC (64-bit) PIE dinamico -- cuando importa
         // libc (eager-GOT) o cuando usa TLS (necesita el cargador dinamico para
         // montar el bloque thread-local).  (el caso 32-bit lo cubre arriba)
