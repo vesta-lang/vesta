@@ -185,6 +185,7 @@ enum class TokenKind : uint16_t {
     KW_NEW,
     KW_DELETE,
     KW_THIS,
+    KW_THREAD_LOCAL, ///< `thread_local` (almacenamiento por-hilo / TLS).
     KW_SUPER,
 
     // ---------------------------------------------------------------
