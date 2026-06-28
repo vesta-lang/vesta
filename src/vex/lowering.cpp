@@ -3055,6 +3055,19 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         shared_locals_.insert(vd->name);
     }
 
+    // gc<T> opt-in: si el var-decl es `gc<Class>` (sem_type.gc_managed) y el
+    // init es `new Class(...)`, marcar el NewExpr para que el lowering despache
+    // a __new_<Class>_gc (vex_gc_alloc) y registrar la clase para generar ese
+    // helper.  El valor es un host_ptr GC-managed (marcado is_gc_object); NO se
+    // registra cleanup RAII (el GC colecta).
+    if (native_poo_ && sem_type.gc_managed && vd->init &&
+        vd->init->kind == ast::NodeKind::NewExpr) {
+        auto *ne = static_cast<ast::NewExpr *>(vd->init.get());
+        ne->is_gc = true;
+        if (!ne->class_name.empty())
+            classes_used_gc_.insert(ne->class_name);
+    }
+
     // Phase AS inc.3: si el var-decl tiene storage-class register("reg"),
     // forzar el camino ALLOCA (slot estable) marcando el nombre como
     // address-taken.  Sin esto, un primitivo register-bound se baja a un
@@ -4142,7 +4155,10 @@ bind_and_cleanup:
             // libera recursos propios, p.ej. free de un campo malloc) corre.
             const bool is_heap_new =
                 vd->init && vd->init->kind == ast::NodeKind::NewExpr;
-            if (native_poo_ && is_heap_new) {
+            // gc<T>: NO registrar cleanup RAII -- el GC (libvesta_gc) colecta el
+            // objeto cuando deja de ser alcanzable (incl. ciclos).  Liberarlo
+            // por RAII seria un double-free (el GC ya lo gestiona).
+            if (native_poo_ && is_heap_new && !sem_type.gc_managed) {
                 CleanupAction act;
                 act.kind = CleanupAction::Kind::NATIVE_FREE;
                 act.operands = {v};
@@ -22591,6 +22607,95 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 nf.append(e, std::move(r));
             }
             out.add_function(std::move(nf));
+
+            // gc<T> opt-in: si la clase se uso como gc<Class>, generar tambien
+            // __new_<Class>_gc.  Identico al native (calloc+ctor) pero alocando
+            // con vex_gc_alloc_ptr (GC-managed, no-RAII).  El GC (libvesta_gc)
+            // colecta el objeto cuando deja de ser alcanzable via stackmaps.
+            if (classes_used_gc_.count(cd->name) > 0) {
+                ir::IrFunction gf;
+                gf.name = "__new_" + cd->name + "_gc";
+                gf.ret_type = ir::IrType::PTR;
+                for (size_t i = 0; i < nargs; ++i) {
+                    const ir::IrType pt = ir_type_from_primitive(
+                        effective_ctor->param_types[i].kind);
+                    const ir::IrValueId vid =
+                        gf.new_value(pt, "%a" + std::to_string(i));
+                    gf.values[vid].is_param = true;
+                    gf.params.push_back(vid);
+                }
+                const ir::IrBlockId ge = gf.new_block("entry");
+                // %sz = size_bytes
+                const ir::IrValueId g_sz = gf.new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr c{};
+                    c.op = ir::IrOp::CONST;
+                    c.type = ir::IrType::I64;
+                    c.dst = g_sz;
+                    c.imm = lay.size_bytes;
+                    c.source_line = cd->loc.line;
+                    gf.append(ge, std::move(c));
+                }
+                // %obj = call vex_gc_alloc_ptr(%sz)  (host_ptr al payload)
+                const ir::IrValueId g_obj = gf.new_value(ir::IrType::PTR);
+                gf.values[g_obj].is_host_ptr = true;
+                gf.values[g_obj].is_gc_object = true;
+                {
+                    ir::IrInstr ca{};
+                    ca.op = ir::IrOp::CALL;
+                    ca.type = ir::IrType::PTR;
+                    ca.dst = g_obj;
+                    ca.func_name = "vex_gc_alloc_ptr";
+                    ca.operands = {g_sz};
+                    ca.source_line = cd->loc.line;
+                    gf.append(ge, std::move(ca));
+                }
+                // vtable (si la clase es virtual): obj[0] = &vtable.
+                if (needs_vtable && vtable_idx != UINT64_MAX) {
+                    ir::IrValueId g_vt = gf.new_value(ir::IrType::PTR);
+                    gf.values[g_vt].is_host_ptr = true;
+                    {
+                        ir::IrInstr sa{};
+                        sa.op = ir::IrOp::STR_LIT_ADDR;
+                        sa.type = ir::IrType::PTR;
+                        sa.dst = g_vt;
+                        sa.imm = vtable_idx;
+                        sa.source_line = cd->loc.line;
+                        gf.append(ge, std::move(sa));
+                    }
+                    {
+                        ir::IrInstr st{};
+                        st.op = ir::IrOp::STORE;
+                        st.type = ir::IrType::I64;
+                        st.operands = {g_vt, g_obj};
+                        st.source_line = cd->loc.line;
+                        gf.append(ge, std::move(st));
+                    }
+                }
+                // ctor(obj, args...)
+                if (effective_ctor) {
+                    ir::IrInstr cc{};
+                    cc.op = ir::IrOp::CALL;
+                    cc.type = ir::IrType::VOID;
+                    cc.dst = ir::IR_NO_VALUE;
+                    cc.func_name = cd->name + "__ctor";
+                    cc.operands.reserve(nargs + 1);
+                    cc.operands.push_back(g_obj);
+                    for (size_t i = 0; i < nargs; ++i)
+                        cc.operands.push_back(gf.params[i]);
+                    cc.source_line = cd->loc.line;
+                    gf.append(ge, std::move(cc));
+                }
+                {
+                    ir::IrInstr r{};
+                    r.op = ir::IrOp::RET;
+                    r.type = ir::IrType::PTR;
+                    r.operands = {g_obj};
+                    r.source_line = cd->loc.line;
+                    gf.append(ge, std::move(r));
+                }
+                out.add_function(std::move(gf));
+            }
             continue; // ruta nativa lista; saltar el path runtime de esta clase
         }
 
@@ -23545,6 +23650,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     ins.type = ir::IrType::PTR;
     ins.dst = dst;
     ins.func_name = e->is_shared ? ("__new_" + helper_class_name + "_shared")
+                   : e->is_gc    ? ("__new_" + helper_class_name + "_gc")
                                  : ("__new_" + helper_class_name);
     ins.operands = std::move(arg_vals);
     ins.source_line = e->loc.line;

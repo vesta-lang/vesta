@@ -94,6 +94,7 @@ const char *token_kind_name(TokenKind k) noexcept {
     case TokenKind::KW_STACK: return "Stack";
     case TokenKind::KW_UNIQUE: return "unique";
     case TokenKind::KW_SHARED: return "shared";
+    case TokenKind::KW_GC: return "gc";
     case TokenKind::KW_BORROW: return "borrow";
     case TokenKind::KW_BORROW_MUT: return "borrow_mut";
     case TokenKind::KW_CONST: return "const";
@@ -284,6 +285,7 @@ TokenKind classify_identifier(const std::string &lexeme) noexcept {
     case 'g':
         VEX_KW_EXACT("get", TokenKind::KW_GET);
         VEX_KW_EXACT("goto", TokenKind::KW_GOTO);
+        VEX_KW_EXACT("gc", TokenKind::KW_GC);
         break;
     case 'i':
         VEX_KW_EXACT("if", TokenKind::KW_IF);

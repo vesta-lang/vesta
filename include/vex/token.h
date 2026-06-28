@@ -138,6 +138,7 @@ enum class TokenKind : uint16_t {
     // Smart pointers builtins (move-only + refcount).
     KW_UNIQUE,     ///< unique<T> (smart pointer move-only)
     KW_SHARED,     ///< shared<T> (smart pointer con refcount)
+    KW_GC,         ///< gc<T> (referencia GC-managed opt-in; import vex.gc)
     KW_BORROW,     ///< borrow<T> (shared borrow, immutable)
     KW_BORROW_MUT, ///< borrow_mut<T> (exclusive borrow, mutable)
 

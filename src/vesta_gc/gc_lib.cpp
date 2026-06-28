@@ -68,6 +68,17 @@ uint32_t vex_gc_alloc(uint64_t size) {
         gc_heap().alloc_pinned(static_cast<size_t>(size)));
 }
 
+uint8_t *vex_gc_alloc_ptr(uint64_t size) {
+    // Aloca + deref en una llamada: devuelve el host_ptr al payload (estable en
+    // v1 no-moving).  Lo usa el helper __new_<X>_gc del frontend (gc<T>): el ptr
+    // se guarda en el slot del var-decl, marcado HOSTPTR en el stackmap ->
+    // handle_for_ptr lo resuelve al handle en la coleccion.
+    gc::GcHeap &h = gc_heap();
+    const gc::GcHandle handle = h.alloc_pinned(static_cast<size_t>(size));
+    if (handle == gc::GC_NULL_HANDLE) return nullptr;
+    return h.deref(handle);
+}
+
 void vex_gc_pin(uint32_t handle) {
     gc_heap().gc_addref(static_cast<gc::GcHandle>(handle));
 }

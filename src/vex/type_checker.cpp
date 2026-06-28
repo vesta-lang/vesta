@@ -1612,6 +1612,17 @@ Type TypeChecker::type_from_node(const ast::TypeNode *tn) const {
     if (tn->kind == ast::NodeKind::PrimitiveTypeNode) {
         const auto *pt = static_cast<const ast::PrimitiveTypeNode *>(tn);
         Type t{pt->prim};
+        // gc<X> (opt-in `import vex.gc`): referencia GC-managed.  Resolvemos X
+        // y devolvemos su tipo de CLASE con @c gc_managed=true -> reusa TODO el
+        // acceso a miembros de clase; el lowering decide el allocator (vex_gc_
+        // alloc) y la ausencia de RAII por el flag.  GC_PTR no sobrevive al
+        // type checking en valores; es solo la forma parseada del tipo.
+        if (pt->prim == PrimitiveKind::GC_PTR) {
+            if (pt->type_args.empty()) return t; // gc<> mal formado
+            Type inner = type_from_node(pt->type_args[0].get());
+            inner.gc_managed = true;
+            return inner;
+        }
         // si el tipo primitivo es una coleccion y se
         // declara con type args (ej. ArrayList<string>), guardamos
         // el tipo de elemento en pointee (key en pointee, value en

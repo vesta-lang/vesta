@@ -1081,6 +1081,11 @@ class Lowering {
     /// helper local-only y el child no podria deref el host_ptr.
     std::unordered_set<std::string> classes_used_shared_;
 
+    /// gc<T> opt-in: clases instanciadas como @c gc<Class> -> generar el helper
+    /// @c __new_<Class>_gc (aloca con @c vex_gc_alloc + marca is_gc_object, sin
+    /// RAII).  El GC (libvesta_gc) colecta lo no alcanzable.
+    std::unordered_set<std::string> classes_used_gc_;
+
     /// Vars locales declaradas con modificador @c shared.  El escape
     /// analyzer de @c spawn las omite del warning "objeto GC local-only
     /// capturado" (declarar @c shared es la solucion sugerida).

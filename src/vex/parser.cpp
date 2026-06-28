@@ -2028,7 +2028,8 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
                  k == PrimitiveKind::DEQUE || k == PrimitiveKind::TREEMAP ||
                  k == PrimitiveKind::TREESET || k == PrimitiveKind::STACK);
             const bool is_smart_ptr = (k == PrimitiveKind::UNIQUE_PTR ||
-                                       k == PrimitiveKind::SHARED_PTR);
+                                       k == PrimitiveKind::SHARED_PTR ||
+                                       k == PrimitiveKind::GC_PTR);
             const bool is_borrow =
                 (k == PrimitiveKind::BORROW || k == PrimitiveKind::BORROW_MUT);
             if (is_col || is_smart_ptr || is_borrow) {

@@ -754,6 +754,11 @@ struct NewExpr : Expr {
     /// a @c __new_<Class>_shared (que emite el opcode @c newobjs en
     /// lugar de @c newobj).
     bool is_shared = false;
+    /// gc<T> opt-in (`import vex.gc`): el var-decl padre es @c gc<Class>.  Lo
+    /// setea @c lower_var_decl; el lowering despacha a @c __new_<Class>_gc
+    /// (aloca con @c vex_gc_alloc + marca @c is_gc_object) y NO registra
+    /// cleanup RAII (el GC colecta, incl. ciclos).
+    bool is_gc = false;
     /// Bug fix 2026-05-23: indica que @c class_name YA fue mutado a su
     /// forma mangled (Node_i32 etc).  Sin este flag, re-llamadas a
     /// @c check_new sobre el mismo NewExpr (e.g. por compound assign
