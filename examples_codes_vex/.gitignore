@@ -13,3 +13,6 @@ out
 # NO ignorar estas rutas
 !benchmark/
 !benchmark/*/*.c
+
+# Fixtures host C de los ejemplos AOT (no son salida transpilada)
+!aot/*_host.c

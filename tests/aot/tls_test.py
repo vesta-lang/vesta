@@ -12,6 +12,8 @@ PE (corre nativo en Windows, sin WSL):
   - 64-68: el emisor PE sintetiza _tls_index + callbacks + IMAGE_TLS_DIRECTORY;
     el acceso lee el bloque TLS del hilo del TEB (gs:[0x58]) + offset (SECREL).
   - 67 ademas prueba el AISLAMIENTO por-hilo REAL con un hilo Win32.
+  - 70: TLS en una .dll PE (plantilla via __vex_tls_init / DllMain sintetico);
+    host C (gcc) verifica plantilla + aislamiento por-hilo.
 
 ELF (compila/ejecuta via WSL):
   - F/G: Vex-nativo (reusan los ejemplos 65/66) -- seccion SHF_TLS + PT_TLS,
@@ -80,6 +82,38 @@ def main():
                 else:
                     print(f"TLS-PE {ex}: EXIT MISMATCH got={got} exp={exp}")
                     rc_pe = 1
+            # --- DLL: TLS en una .dll PE.  El emisor sintetiza el TLS directory
+            # y, ademas, fija AddressOfEntryPoint -> __vex_tls_init (DllMain
+            # minimo) para que la plantilla se aplique en cada attach.  El host
+            # C carga la .dll con LoadLibrary y verifica plantilla (12) +
+            # aislamiento por-hilo (child=12).  Necesita gcc en PATH. ---
+            gcc_ok = run(["gcc", "--version"]).returncode == 0
+            ex70 = os.path.join(aot_ex, "70_thread_local_dll.vex")
+            host70 = os.path.join(aot_ex, "70_thread_local_dll_host.c")
+            if gcc_ok and os.path.exists(ex70) and os.path.exists(host70):
+                dpe = os.path.join(repo, "_tls_dll")
+                os.makedirs(dpe, exist_ok=True)
+                try:
+                    dll = os.path.join(dpe, "tls.dll")
+                    hexe = os.path.join(dpe, "thost.exe")
+                    run([vm, "--vex", ex70, "-m", "aot", "--emit", "shared",
+                         "--format", "pe", "-o", dll])
+                    run(["gcc", host70, "-o", hexe])
+                    got = (run([hexe, dll]).returncode
+                           if os.path.exists(hexe) and os.path.exists(dll)
+                           else -1)
+                    if got == 0:
+                        print("TLS-PE 70_thread_local_dll (.dll DllMain): "
+                              "exit=0 OK")
+                    else:
+                        print(f"TLS-PE 70_thread_local_dll: EXIT MISMATCH "
+                              f"got={got} exp=0")
+                        rc_pe = 1
+                finally:
+                    import shutil
+                    shutil.rmtree(dpe, ignore_errors=True)
+            else:
+                print("TLS-PE 70 (.dll): gcc/ejemplo no disponible, omitido")
         finally:
             import shutil
             shutil.rmtree(pe, ignore_errors=True)

@@ -3305,18 +3305,11 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
             // PE shared (.dll) con TLS: el emisor sintetiza el TLS directory
-            // (isolation por-hilo + acceso OK), PERO el cargador de Windows no
-            // copia la plantilla a los hilos cuando el consumidor es un
-            // ejecutable AOT minimal (sin CRT): un thread_local con init != 0
-            // se leeria como 0.  Aviso (no error): zero-init funciona.
-            if (module_has_tls && emit_shared && tls_is_pe) {
-                std::cerr
-                    << "[aot] aviso: thread_local en una .dll -- la isolacion "
-                       "por-hilo funciona, pero el VALOR INICIAL (plantilla) "
-                       "puede no aplicarse si el consumidor es un .exe AOT "
-                       "minimal (sin CRT); usa init = 0 o consume la .dll desde "
-                       "un programa con CRT.\n";
-            }
+            // (isolation por-hilo) y, ademas, fija el AddressOfEntryPoint a
+            // __vex_tls_init (un DllMain minimo).  ntdll lo invoca en cada
+            // DLL_PROCESS_ATTACH / DLL_THREAD_ATTACH, aplicando la plantilla
+            // (valores iniciales no-cero) a la copia por-hilo -- funciona con
+            // cualquier consumidor (con o sin CRT).  Sin nota necesaria.
 
             // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
             std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
