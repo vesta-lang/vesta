@@ -246,6 +246,22 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 r.addend = ad + 4;
                 r.got = true;
                 break;
+            case 16: /* DTPMOD64  */
+            case 17: /* DTPOFF64  */
+            case 18: /* TPOFF64   */
+            case 19: /* TLSGD     */
+            case 20: /* TLSLD     */
+            case 21: /* DTPOFF32  */
+            case 22: /* GOTTPOFF  */
+            case 23: /* TPOFF32   */
+                // Relocs de TLS (thread_local).  El enlazado nativo aun no
+                // genera el bloque TLS (PT_TLS) ni calcula los offsets desde el
+                // thread pointer.  El GC del lenguaje es TLS-free a proposito.
+                err = path +
+                      ": TLS (thread_local) no soportado en el enlazado nativo "
+                      "(reloc " + std::to_string(rt) +
+                      "); evita thread_local o enlaza esa parte con gcc/ld";
+                return false;
             case R_X86_64_64:
                 r.kind = aot::RelocKind::ABS64;
                 r.addend = ad;
