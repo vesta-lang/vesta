@@ -649,9 +649,10 @@ std::string system_dll_path(const char *dll) {
     return std::string(root) + "\\System32\\" + dll;
 }
 
-// Localiza libc.so.6 en las rutas estandar (Linux nativo).  En cross-compile
-// desde otro SO puede no existir -> el usuario pasa la .so explicitamente.
-std::string libc_so_path() {
+// Localiza libc.so.6 en las rutas estandar.  Con @p sysroot no vacio (cross-
+// compile ELF desde otro SO) se buscan bajo esa raiz; si no, en rutas nativas
+// (Linux).  Si no se encuentra, el usuario pasa la .so explicitamente.
+std::string libc_so_path(const std::string &sysroot) {
     static const char *const cands[] = {
         "/usr/lib/x86_64-linux-gnu/libc.so.6",
         "/lib/x86_64-linux-gnu/libc.so.6",
@@ -660,8 +661,10 @@ std::string libc_so_path() {
         "/usr/lib/libc.so.6",
         "/lib/libc.so.6"};
     for (const char *p : cands) {
-        std::ifstream f(p, std::ios::binary);
-        if (f.good()) return std::string(p);
+        const std::string full =
+            sysroot.empty() ? std::string(p) : (sysroot + p);
+        std::ifstream f(full, std::ios::binary);
+        if (f.good()) return full;
     }
     return std::string();
 }
@@ -1046,8 +1049,9 @@ bool aot_link(const std::vector<std::string> &inputs,
             for (const char *d : {"kernel32.dll", "ucrtbase.dll", "msvcrt.dll"})
                 cand.push_back(system_dll_path(d));
         } else {
-            // Linux: libc.so.6 (busqueda por defecto, como el -lc implicito).
-            const std::string libc = libc_so_path();
+            // Linux: libc.so.6 (busqueda por defecto, como el -lc implicito;
+            // bajo --sysroot si se cross-compila desde otro SO).
+            const std::string libc = libc_so_path(opts.sysroot);
             if (!libc.empty()) cand.push_back(libc);
         }
         for (const std::string &dp : dll_inputs) // .dll/.so pasados como entrada

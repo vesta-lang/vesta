@@ -638,7 +638,12 @@ int main(int argc, char *argv[]) {
             "link-debug",
             "Con --link --link-script: hace que el builtin debug_build() del "
             "script devuelva true.",
-            cxxopts::value<bool>()->default_value("false"));
+            cxxopts::value<bool>()->default_value("false"))(
+            "sysroot",
+            "Con --link / --emit exe (ELF): raiz donde buscar las librerias del "
+            "sistema (libc.so.6) al cross-compilar ELF desde otro SO. En Linux "
+            "nativo no hace falta.",
+            cxxopts::value<std::string>()->default_value(""));
 
     // BUG FIX: Args posicionales y allow_unrecognised DEBEN configurarse
     // ANTES de @c options.parse(...).  El bug anterior registraba el
@@ -994,6 +999,7 @@ int main(int argc, char *argv[]) {
                 std::strtoull(lbase.c_str(), nullptr, 0); // 0x.. o decimal
         lopts.link_script = result["link-script"].as<std::string>();
         lopts.debug = result.count("link-debug") > 0;
+        lopts.sysroot = result["sysroot"].as<std::string>();
         std::string out_path = result["output"].as<std::string>();
         std::string lerr;
         if (!aot::aot_link(inputs, out_path, lopts, lerr)) {
@@ -4066,6 +4072,10 @@ int main(int argc, char *argv[]) {
                 }
                 aot::LinkOptions lopts;
                 lopts.fmt = fmt; // PE o ELF, segun el destino
+                lopts.sysroot =
+                    result.count("sysroot")
+                        ? result["sysroot"].as<std::string>()
+                        : std::string();
                 std::string lerr;
                 const bool ok = aot::aot_link({gc_tmp_obj, lib_path},
                                               gc_real_out, lopts, lerr);
