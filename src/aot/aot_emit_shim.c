@@ -1750,6 +1750,29 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         }
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+        if (rl->kind == AOT_RELOC_TPOFF32) {
+            /* TLS local-exec: tpoff = offset_en_el_bloque - aligned_total
+             * (variante II: TP al final del bloque TLS, offset negativo).  Es
+             * una CONSTANTE de enlace (no depende de la base de carga): se
+             * escribe directa, sin reloc dinamica.  El cargador monta el bloque
+             * TLS desde PT_TLS antes del entry. */
+            if (tls_sec < 0) {
+                set_err(err, err_cap,
+                        "elf_dynexec: reloc TPOFF32 sin seccion TLS");
+                ok = 0;
+                break;
+            }
+            uint64_t talign = secs[tls_sec].align ? secs[tls_sec].align : 8;
+            uint64_t tls_total =
+                secs[tls_sec].size + secs[tls_sec].bss_size;
+            uint64_t aligned_total = (tls_total + talign - 1) & ~(talign - 1);
+            /* tv = VA del simbolo TLS; el offset en el bloque = tv -
+             * sec_va[tls_sec] (el bloque empieza en la 1a seccion SHF_TLS). */
+            int32_t tpoff = (int32_t)((int64_t)(tv - sec_va[tls_sec]) -
+                                      (int64_t)aligned_total);
+            memcpy(img + site_va, &tpoff, 4);
+            continue;
+        }
         if (rl->kind == AOT_RELOC_ABS64) {
             /* PIE: el valor absoluto se resuelve en carga.  R_X86_64_RELATIVE
              * con r_addend = tv (relativo a la imagen, base 0) -> el cargador
