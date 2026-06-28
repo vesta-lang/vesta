@@ -691,15 +691,25 @@ std::string system_dll_path(const char *dll) {
 // Localiza libc.so.6 en las rutas estandar.  Con @p sysroot no vacio (cross-
 // compile ELF desde otro SO) se buscan bajo esa raiz; si no, en rutas nativas
 // (Linux).  Si no se encuentra, el usuario pasa la .so explicitamente.
-std::string libc_so_path(const std::string &sysroot) {
-    static const char *const cands[] = {
+std::string libc_so_path(const std::string &sysroot, bool is32) {
+    static const char *const cands64[] = {
         "/usr/lib/x86_64-linux-gnu/libc.so.6",
         "/lib/x86_64-linux-gnu/libc.so.6",
         "/lib64/libc.so.6",
         "/usr/lib64/libc.so.6",
         "/usr/lib/libc.so.6",
         "/lib/libc.so.6"};
-    for (const char *p : cands) {
+    static const char *const cands32[] = {
+        "/usr/lib/i386-linux-gnu/libc.so.6",
+        "/lib/i386-linux-gnu/libc.so.6",
+        "/lib32/libc.so.6",
+        "/usr/lib32/libc.so.6",
+        "/usr/lib/libc.so.6",
+        "/lib/libc.so.6"};
+    const char *const *cands = is32 ? cands32 : cands64;
+    const int ncand = 6;
+    for (int ci = 0; ci < ncand; ++ci) {
+        const char *p = cands[ci];
         const std::string full =
             sysroot.empty() ? std::string(p) : (sysroot + p);
         std::ifstream f(full, std::ios::binary);
@@ -1092,8 +1102,9 @@ bool aot_link(const std::vector<std::string> &inputs,
                 cand.push_back(system_dll_path(d));
         } else {
             // Linux: libc.so.6 (busqueda por defecto, como el -lc implicito;
-            // bajo --sysroot si se cross-compila desde otro SO).
-            const std::string libc = libc_so_path(opts.sysroot);
+            // bajo --sysroot si se cross-compila desde otro SO; rutas i386 si
+            // el objeto es de 32-bit).
+            const std::string libc = libc_so_path(opts.sysroot, is32);
             if (!libc.empty()) cand.push_back(libc);
         }
         for (const std::string &dp : dll_inputs) // .dll/.so pasados como entrada
