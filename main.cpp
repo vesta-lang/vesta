@@ -3180,11 +3180,7 @@ int main(int argc, char *argv[]) {
                 }
                 const bool want_exec =
                     !emit_obj && !emit_shared && !emit_bin;
-                // PE: auto-link directo.  ELF: pendiente de soporte GOT en el
-                // linker (la libreria del GC compilada con g++ usa relocs
-                // GOTPCREL que aun no resolvemos); en ELF el usuario enlaza a
-                // mano por ahora.
-                if (uses_gc && want_exec && fmt == aot::ObjFormat::PE) {
+                if (uses_gc && want_exec) {
                     gc_autolink = true;
                     emit_obj = true;          // emitir .obj temporal...
                     gc_real_out = out_prefix; // ...y enlazarlo a este .exe

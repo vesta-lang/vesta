@@ -1437,7 +1437,15 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     off += hash_size;
     off = AOT_DYN_ALIGN(off, 8);
     uint64_t rela_off = off;
-    off += (uint64_t)num_imps * sizeof(Elf64_Rela);
+    /* Las relocs ABS64 del driver (p.ej. las entradas de la .got que el linker
+     * construye para los GOTPCREL) no caben tal cual en un PIE (base aleatoria):
+     * se materializan como R_X86_64_RELATIVE en .rela.dyn (el cargador escribe
+     * base + addend).  Se cuentan aqui para dimensionar .rela.dyn. */
+    int num_abs64 = 0;
+    for (int r = 0; r < num_relocs; ++r)
+        if (relocs[r].kind == AOT_RELOC_ABS64) ++num_abs64;
+    const int n_dynrela = num_imps + num_abs64;
+    off += (uint64_t)n_dynrela * sizeof(Elf64_Rela);
     off = AOT_DYN_ALIGN(off, 16);
 
     /* Secciones de codigo/rodata (NO-WRITE) en el segmento R+X. */
@@ -1475,8 +1483,24 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     uint64_t dynamic_off = off;
     const int ndyn = 12;
     off += (uint64_t)ndyn * sizeof(Elf64_Dyn);
-    uint64_t region2_end = off;
-    uint64_t total = off;
+    uint64_t region2_end = off; /* fin del contenido en FICHERO */
+    uint64_t total = off;       /* tamano del fichero (sin BSS) */
+
+    /* BSS (secciones NOBITS): reciben VAs en memoria TRAS el contenido del
+     * fichero pero NO ocupan bytes en el (memsz > filesz).  El cargador las
+     * pone a cero. */
+    uint64_t bss_mem = region2_end;
+    for (int i = 0; i < num_secs; ++i) {
+        if (!(secs[i].flags & AOT_SEC_BSS)) continue;
+        uint64_t bsz = secs[i].bss_size ? secs[i].bss_size : secs[i].size;
+        if (bsz == 0) continue;
+        uint64_t a = secs[i].align ? secs[i].align : 8;
+        bss_mem = AOT_DYN_ALIGN(bss_mem, a);
+        sec_va[i] = bss_mem;
+        sec_seen[i] = 1; /* visible para relocs; NO se copia al fichero */
+        bss_mem += bsz;
+    }
+    uint64_t region2_mem_end = bss_mem; /* fin en MEMORIA (incluye BSS) */
 
     uint64_t entry_vaddr = sec_va[entry_sec] + entry_off;
 
@@ -1549,7 +1573,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     ph[3].p_vaddr = region2_start;
     ph[3].p_paddr = region2_start;
     ph[3].p_filesz = region2_end - region2_start;
-    ph[3].p_memsz = region2_end - region2_start;
+    ph[3].p_memsz = region2_mem_end - region2_start; /* incluye BSS */
     ph[3].p_align = PAGE;
     ph[4].p_type = PT_DYNAMIC;
     ph[4].p_flags = PF_R | PF_W;
@@ -1597,9 +1621,11 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         rela[i].r_info = ELF64_R_INFO((uint64_t)(1 + i), R_X86_64_GLOB_DAT);
         rela[i].r_addend = 0;
     }
-    /* Secciones de usuario (codigo/rodata + data). */
+    /* Secciones de usuario (codigo/rodata + data).  BSS no tiene datos en el
+     * fichero (su VA cae mas alla de 'total') -> se omite del memcpy. */
     for (int i = 0; i < num_secs; ++i)
-        if (sec_seen[i]) memcpy(img + sec_va[i], secs[i].data, secs[i].size);
+        if (sec_seen[i] && !(secs[i].flags & AOT_SEC_BSS) && secs[i].data)
+            memcpy(img + sec_va[i], secs[i].data, secs[i].size);
 
     /* .dynamic */
     {
@@ -1620,7 +1646,7 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         d[k].d_tag = DT_RELA;
         d[k++].d_un.d_ptr = rela_off;
         d[k].d_tag = DT_RELASZ;
-        d[k++].d_un.d_val = (uint64_t)num_imps * sizeof(Elf64_Rela);
+        d[k++].d_un.d_val = (uint64_t)n_dynrela * sizeof(Elf64_Rela);
         d[k].d_tag = DT_RELAENT;
         d[k++].d_un.d_val = sizeof(Elf64_Rela);
         d[k].d_tag = DT_FLAGS;
@@ -1635,21 +1661,33 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
      * solo PC-relativo (REL32) + inmediatos (IMM32/IMM64=size); ABS64 NO va en
      *     PIE (necesitaria R_X86_64_RELATIVE) -> error claro. --- */
     int ok = 1;
+    int n_rel_emitted = 0; /* contador de R_X86_64_RELATIVE ya escritas */
+    Elf64_Rela *dynrela = (Elf64_Rela *)(img + rela_off);
     for (int r = 0; r < num_relocs && ok; ++r) {
         const AotReloc *rl = &relocs[r];
-        if (rl->kind == AOT_RELOC_ABS64) {
-            set_err(
-                err, err_cap,
-                "elf_dynexec: ABS64 (--no-pie) no soportado en PIE; usa PIC");
-            ok = 0;
-            break;
-        }
         if (rl->site_section < 0 || rl->site_section >= num_secs ||
             !sec_seen[rl->site_section] ||
             (!rl->target_is_size &&
              (rl->target_section < 0 || rl->target_section >= num_secs ||
               !sec_seen[rl->target_section]))) {
-            set_err(err, err_cap, "elf_dynexec: reloc con seccion invalida");
+            {
+                char m[160];
+                snprintf(m, sizeof(m),
+                         "elf_dynexec: reloc con seccion invalida "
+                         "(kind=%d site_sec=%d seen=%d target_sec=%d seen=%d "
+                         "is_size=%d num_secs=%d)",
+                         rl->kind, rl->site_section,
+                         (rl->site_section >= 0 && rl->site_section < num_secs)
+                             ? sec_seen[rl->site_section]
+                             : -1,
+                         rl->target_section,
+                         (rl->target_section >= 0 &&
+                          rl->target_section < num_secs)
+                             ? sec_seen[rl->target_section]
+                             : -1,
+                         rl->target_is_size, num_secs);
+                set_err(err, err_cap, m);
+            }
             ok = 0;
             break;
         }
@@ -1663,6 +1701,18 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         }
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = sec_va[rl->site_section] + rl->site_off;
+        if (rl->kind == AOT_RELOC_ABS64) {
+            /* PIE: el valor absoluto se resuelve en carga.  R_X86_64_RELATIVE
+             * con r_addend = tv (relativo a la imagen, base 0) -> el cargador
+             * escribe base + tv.  El campo se deja con tv (el cargador lo
+             * sobreescribe). */
+            memcpy(img + site_va, &tv, 8);
+            Elf64_Rela *e = &dynrela[num_imps + n_rel_emitted++];
+            e->r_offset = site_va;
+            e->r_info = ELF64_R_INFO(0, R_X86_64_RELATIVE);
+            e->r_addend = (int64_t)tv;
+            continue;
+        }
         if (!apply_reloc(img + site_va, site_va, tv, rl->kind)) {
             set_err(err, err_cap, "elf_dynexec: reloc kind invalido");
             ok = 0;
