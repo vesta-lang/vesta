@@ -48,6 +48,7 @@
 #include "vex/mermaid_diagrams.h"
 #include "vex/type_checker.h"
 #include "vex/vexi_format.h"
+#include "util/fs_utils.h"   // fs::get_executable_path()
 
 #include <atomic>
 #include <cstdlib>
@@ -591,6 +592,27 @@ CompileResult compile_vex_project(const std::string &root_path,
                 if (test.good()) {
                     sd = c;
                     break;
+                }
+            }
+        }
+        // Fallback relativo al EJECUTABLE: cubre la instalacion (vesta.exe junto
+        // a stdlib/vex/) y el build-tree (vm.exe en cmake-build-X/, stdlib en la
+        // raiz del repo).  Asi el compilador instalado encuentra la stdlib desde
+        // cualquier directorio de trabajo.
+        if (sd.empty()) {
+            std::string exe = fs::get_executable_path();
+            if (!exe.empty()) {
+                std::filesystem::path ed =
+                    std::filesystem::path(exe).parent_path();
+                const std::filesystem::path exe_cands[] = {
+                    ed / "stdlib" / "vex",
+                    ed.parent_path() / "stdlib" / "vex"};
+                for (const auto &c : exe_cands) {
+                    std::ifstream test((c / "simd_string.vex").string());
+                    if (test.good()) {
+                        sd = c.string();
+                        break;
+                    }
                 }
             }
         }

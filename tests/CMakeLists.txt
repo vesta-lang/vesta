@@ -50,24 +50,16 @@ function(add_single_test PREFIX TEST_FILE ALL_SOURCES)
             PRIVATE aot_emit
     )
     
-    # OpenSSL
+    # OpenSSL: enlace centralizado en `vesta_openssl`.
     if (WIN32)
-        target_include_directories(${FINAL_NAME} PRIVATE ${OPENSSL_INCLUDE_DIR})
-        target_link_directories(${FINAL_NAME} PRIVATE ${OPENSSL_LIB_DIR})
-        target_link_libraries(${FINAL_NAME} PRIVATE libssl libcrypto ws2_32)
-    
+        target_link_libraries(${FINAL_NAME} PRIVATE vesta_openssl ws2_32)
     else ()
-        find_package(OpenSSL REQUIRED)
-        target_link_libraries(${FINAL_NAME} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        target_link_libraries(${FINAL_NAME} PRIVATE vesta_openssl)
     endif ()
-    
+
     # pthread solo Linux/macOS
     if (NOT WIN32)
         target_link_libraries(${FINAL_NAME} PRIVATE pthread)
-    endif ()
-    
-    if (WIN32)
-        target_link_libraries(vm PRIVATE applink)
     endif ()
     
     # Opciones globales para todos los builds

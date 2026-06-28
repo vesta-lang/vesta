@@ -47,11 +47,13 @@
  */
 
 #include "port/c/c_backend.h"
+#include "util/fs_utils.h"   // fs::get_executable_path()
 
 #include <cctype>
 #include <cstdint>
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -870,6 +872,22 @@ std::string CBackend::resolve_stdlib_dir() const {
         std::ifstream test(path.c_str());
         if (test.good()) {
             return std::string(c);
+        }
+    }
+    // Fallback relativo al EJECUTABLE (instalacion: vesta.exe junto a
+    // stdlib/port/c/; build-tree: vm.exe en cmake-build-X/).  Hace que el
+    // backend C funcione desde cualquier directorio de trabajo.
+    {
+        std::string exe = fs::get_executable_path();
+        if (!exe.empty()) {
+            std::filesystem::path ed = std::filesystem::path(exe).parent_path();
+            const std::filesystem::path exe_cands[] = {
+                ed / "stdlib" / "port" / "c",
+                ed.parent_path() / "stdlib" / "port" / "c"};
+            for (const auto &c : exe_cands) {
+                std::ifstream test((c / "vex_macros.v.c").string());
+                if (test.good()) return c.string();
+            }
         }
     }
     return "stdlib/port/c"; // fallback razonable

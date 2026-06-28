@@ -28,6 +28,7 @@
 #ifndef FS_UTILS_H
 #define FS_UTILS_H
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
@@ -36,7 +37,23 @@
 #include <system_error>
 
 #ifdef _WIN32
-#include "windows.h"
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+// Evitar que las macros de windows.h (VOID, IN, OUT, interface, ...) contaminen
+// los TUs que incluyen este header (c_backend.cpp / compiler_project.cpp usan
+// esos identificadores como nombres).
+#undef VOID
+#undef CONST
+#undef IN
+#undef OUT
+#undef OPTIONAL
+#undef ERROR
+#undef interface
 #else
 #include <unistd.h>
 #endif

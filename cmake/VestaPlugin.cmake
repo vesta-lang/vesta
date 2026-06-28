@@ -197,6 +197,20 @@ function(add_vesta_plugin TARGET)
         "  | SDK: ${_P_SDK_DIR}"
     )
 
+    # -- Auto-instalacion (CPack) --
+    # Los plugins bajo stdlib/ se empaquetan en la MISMA ruta relativa al SDK que
+    # ocupan en el arbol (p.ej. stdlib/native/io -> <prefix>/stdlib/native/io),
+    # que es donde el runtime los busca (relativo a vm.exe).  Asi un plugin nuevo
+    # entra al instalador sin tocar nada.  Los plugins de ejemplo no se instalan.
+    if(DEFINED VESTA_SDK_DIR)
+        file(RELATIVE_PATH _vp_rel "${VESTA_SDK_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(_vp_rel MATCHES "^stdlib/")
+            install(TARGETS ${TARGET}
+                RUNTIME DESTINATION "${_vp_rel}" COMPONENT stdlib
+                LIBRARY DESTINATION "${_vp_rel}" COMPONENT stdlib)
+        endif()
+    endif()
+
     # -- Variable de salida con la ruta del artefacto --
     set(${TARGET}_OUTPUT_FILE
         "$<TARGET_FILE:${TARGET}>"

@@ -104,16 +104,8 @@ set_source_files_properties(vexi_format.cpp PROPERTIES
 target_compile_features(vex_lib PUBLIC cxx_std_17)
 
 # velb_signature.cpp usa OpenSSL EVP_DigestSign / EVP_DigestVerify.
-if (WIN32)
-    target_include_directories(vex_lib PRIVATE
-        ${CMAKE_SOURCE_DIR}/libs/Windows/OpenSSL-Win64/include)
-    target_link_directories(vex_lib PRIVATE
-        ${CMAKE_SOURCE_DIR}/libs/Windows/OpenSSL-Win64/lib/VC/x64/MT)
-    target_link_libraries(vex_lib PRIVATE libcrypto)
-else()
-    find_package(OpenSSL REQUIRED)
-    target_link_libraries(vex_lib PRIVATE OpenSSL::Crypto)
-endif()
+# Enlace centralizado en `vesta_openssl` (estatico/standalone o FireDaemon).
+target_link_libraries(vex_lib PRIVATE vesta_openssl)
 
 # Avisos estrictos en builds nuestros para mantener la regla de "no warnings".
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
