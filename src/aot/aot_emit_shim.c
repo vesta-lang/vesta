@@ -2218,6 +2218,15 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
  *  ELF64 RELOCATABLE (.o, ET_REL) -- hand-rolled (sin _start ni phdrs)
  * ========================================================================= */
 
+/* Constantes ELF para TLS no presentes en CreateELF.h (submodulo): se definen
+ * aqui localmente para no tocar el submodulo. */
+#ifndef SHF_TLS
+#define SHF_TLS 0x400u /* la seccion contiene almacenamiento thread-local */
+#endif
+#ifndef R_X86_64_TPOFF32
+#define R_X86_64_TPOFF32 23 /* TLS local-exec: offset TP-relativo (32-bit) */
+#endif
+
 int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
                      const AotReloc *relocs, int num_relocs, const AotSym *syms,
                      int num_syms, char *err, size_t err_cap) {
@@ -2235,7 +2244,8 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
             return 0;
         }
         if (relocs[r].kind != AOT_RELOC_REL32 &&
-            relocs[r].kind != AOT_RELOC_ABS64) {
+            relocs[r].kind != AOT_RELOC_ABS64 &&
+            relocs[r].kind != AOT_RELOC_TPOFF32) {
             set_err(err, err_cap,
                     "aot_emit_elf_obj: reloc kind no soportado en .o");
             return 0;
@@ -2388,6 +2398,12 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
         if (rl->kind == AOT_RELOC_REL32) {
             re->r_info = ELF64_R_INFO(sym_idx, R_X86_64_PC32);
             re->r_addend = (Elf64_Sxword)rl->target_off - 4 + rl->addend;
+        } else if (rl->kind == AOT_RELOC_TPOFF32) {
+            /* TLS local-exec: R_X86_64_TPOFF32 contra el simbolo de seccion de
+             * .tdata (SHF_TLS) + addend = offset.  El --link calcula el TPOFF
+             * TP-relativo a partir de tls_off[.tdata] + addend. */
+            re->r_info = ELF64_R_INFO(sym_idx, R_X86_64_TPOFF32);
+            re->r_addend = (Elf64_Sxword)rl->target_off + rl->addend;
         } else { /* ABS64 */
             re->r_info = ELF64_R_INFO(sym_idx, R_X86_64_64);
             re->r_addend = (Elf64_Sxword)rl->target_off + rl->addend;
@@ -2475,6 +2491,7 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
         s->sh_flags = SHF_ALLOC;
         if (secs[i].flags & AOT_SEC_EXEC) s->sh_flags |= SHF_EXECINSTR;
         if (secs[i].flags & AOT_SEC_WRITE) s->sh_flags |= SHF_WRITE;
+        if (secs[i].flags & AOT_SEC_TLS) s->sh_flags |= SHF_TLS; /* .tdata */
         s->sh_offset = sec_off[i];
         s->sh_size = secs[i].size;
         s->sh_addralign = (secs[i].flags & AOT_SEC_EXEC) ? 16 : 8;

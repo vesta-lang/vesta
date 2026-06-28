@@ -3256,6 +3256,23 @@ int main(int argc, char *argv[]) {
                 return EXIT_FAILURE;
             }
 
+            // TLS: derivar in-memory el flag is_tls de cada STR_LIT_ADDR cuya
+            // entrada static_data lleve SD_FLAG_TLS (la TLS-ness no se
+            // serializa por-instruccion; se reconstruye aqui desde el flag de
+            // la entrada, que SI round-trippea).  El codegen vreg lo consume
+            // para emitir el acceso por thread pointer (fs/gs + TPOFF).
+            {
+                const auto &sd_tls = aot_mod.static_data;
+                for (auto &f : aot_mod.functions)
+                    for (auto &blk : f.blocks)
+                        for (auto &in : blk.instrs)
+                            if (in.op == ir::IrOp::STR_LIT_ADDR &&
+                                in.imm < sd_tls.size() &&
+                                (sd_tls.entries[in.imm].meta.flags &
+                                 ir::IrModule::SD_FLAG_TLS))
+                                in.is_tls = true;
+            }
+
             // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
             std::unordered_map<std::string, const ir::IrFunction *> fn_by_name;
             for (const auto &f : aot_mod.functions)
@@ -3724,6 +3741,14 @@ int main(int argc, char *argv[]) {
                         continue; // simbolo de seccion (pass 2)
                     if (r.symbol.rfind("fnsym:", 0) == 0)
                         continue; // direccion de funcion (pass 2, sin dato)
+                    if (r.symbol.rfind("tdata.", 0) == 0) {
+                        // thread_local (TLS): colocar la plantilla en su seccion
+                        // (.tdata, via section_name).  El reloc se emite en
+                        // pass 2 como TPOFF32.
+                        place_data(static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10)));
+                        continue;
+                    }
                     if (r.symbol.rfind("rodata.", 0) != 0) {
                         std::cerr
                             << "[aot] reloc de dato con simbolo inesperado: '"
@@ -3770,9 +3795,14 @@ int main(int argc, char *argv[]) {
                 // Permisos: explicitos (@section(".x","rwx")), o por convencion
                 // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).
                 std::string p = s.perms;
+                // .tdata/.tbss: plantilla thread_local (TLS).  rw + SHF_TLS.
+                const bool is_tls_sec = (s.name.rfind(".tdata", 0) == 0 ||
+                                         s.name.rfind(".tbss", 0) == 0);
                 if (p.empty()) {
                     if (s.name.rfind(".text", 0) == 0)
                         p = "rx";
+                    else if (is_tls_sec)
+                        p = "rw";
                     else if (s.name.rfind(".rodata", 0) == 0)
                         p = "r";
                     else if (s.name.rfind(".data", 0) == 0)
@@ -3792,6 +3822,8 @@ int main(int argc, char *argv[]) {
                     flags |= aot::SecFlag::EXEC | aot::SecFlag::CODE;
                 else
                     flags |= aot::SecFlag::DATA;
+                if (is_tls_sec)
+                    flags |= aot::SecFlag::TLS;
                 aot::WriterSection ws;
                 ws.name = s.name;
                 ws.flags = flags;
@@ -3965,6 +3997,19 @@ int main(int argc, char *argv[]) {
                                     aot::RelocTarget::addr(fit->second.sec,
                                                            fit->second.off),
                                     k);
+                    } else if (r.kind == jit::NativeReloc::Kind::TPOFF32) {
+                        // thread_local (TLS local-exec): simbolo "tdata.<N>".
+                        // Colocar la plantilla en .tdata y emitir un reloc
+                        // TPOFF32 contra (sec=.tdata, off); el object_writer lo
+                        // materializa como R_X86_64_TPOFF32 + STT_TLS y el
+                        // --link calcula el offset TP-relativo.
+                        const uint32_t N = static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10));
+                        const std::pair<int, uint64_t> loc = place_data(N);
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::addr(loc.first, loc.second),
+                            aot::RelocKind::TPOFF32);
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));

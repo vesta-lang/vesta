@@ -4789,6 +4789,19 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * independent); --no-pie -> mov reg,imm64 (ABS64).  El
                  * resultado es un host_ptr real (los LOAD posteriores en
                  * HOST_LEAF ya son host directos). */
+                if (abi == AbiKind::HOST_LEAF && in.is_tls) {
+                    /* thread_local (TLS local-exec): el dato vive en una
+                     * seccion SHF_TLS (.tdata).  La direccion por-hilo se
+                     * computa via el thread pointer: `mov dst, %fs:0` +
+                     * `lea dst, [dst + sym@tpoff]`.  El reloc TPOFF32 sobre el
+                     * disp32 del lea apunta a `tdata.<imm>`; el driver lo
+                     * traduce a R_X86_64_TPOFF32 + STT_TLS y el --link lo
+                     * resuelve.  El resultado es un host_ptr (TP + tpoff). */
+                    const uint32_t sidx = out.intern_reloc_symbol(
+                        "tdata." + std::to_string(in.imm));
+                    O.push_back(MInstr::make_tls_le_addr(vr(in.dst), sidx));
+                    break;
+                }
                 if (abi == AbiKind::HOST_LEAF) {
                     const uint32_t sidx = out.intern_reloc_symbol(
                         "rodata." + std::to_string(in.imm));

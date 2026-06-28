@@ -893,6 +893,12 @@ struct IrInstr {
     /// del linear scan (ver lower_for / lower_while).
     bool preserve = false;
 
+    /// AOT: STR_LIT_ADDR sobre la plantilla de un `thread_local` (TLS).  Solo
+    /// en memoria (NO serializado): el driver AOT lo DERIVA tras parsear,
+    /// consultando SD_FLAG_TLS de la entrada static_data @c imm.  El codegen
+    /// emite el acceso por thread pointer (fs/gs + TPOFF) en vez de lineal.
+    bool is_tls = false;
+
     /// Si true para una RAW_ASM, el emitter envuelve el bloque con
     /// emit_save_live_regs / emit_restore_live_regs.  Necesario cuando
     /// el RAW_ASM internamente dispara una llamada que clobreara los
@@ -1512,6 +1518,10 @@ struct IrModule {
     /// referencie (caso: bloques @c bytes para firmas, tablas,
     /// boot sectors).  El emisor AOT lo coloca siempre.
     static constexpr uint8_t SD_FLAG_FORCE_EMIT = 1 << 5;
+    /// AOT: el slot es la PLANTILLA de una variable `thread_local` (TLS).
+    /// Va a una seccion SHF_TLS (.tdata) y su acceso usa el thread pointer
+    /// (fs/gs + TPOFF en ELF; TLS directory en PE), no una direccion lineal.
+    static constexpr uint8_t SD_FLAG_TLS = 1 << 6;
 
     /**
      * @brief Funciones nativas que el modulo declara importar.

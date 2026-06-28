@@ -1272,6 +1272,46 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put32(out, 0); /* placeholder disp32 */
         return true;
     }
+    case MOp::TLS_LE_ADDR: {
+        /* AOT TLS local-exec (ELF): dst = direccion por-hilo de un
+         * `thread_local`.  Dos instrucciones:
+         *   mov dst, %fs:0            ; thread pointer (TP)
+         *   lea dst, [dst + sym@tpoff]; &var = TP + tpoff (TPOFF32 reloc)
+         * El reloc TPOFF32 va sobre el disp32 del lea; el driver lo traduce a
+         * R_X86_64_TPOFF32 + STT_TLS y el --link resuelve el offset (negativo,
+         * variante II).  El resultado es un host_ptr. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t d = mi.dst.reg;
+        /* mov dst, %fs:0 : 64 | REX.W(+R) | 8B | modrm(00,dst,100=SIB) | 25 |
+         * disp32=0 */
+        put8(out, 0x64);                 /* prefijo de segmento FS */
+        put_rex(out, true, d, 0);        /* REX.W + REX.R si dst>=R8 */
+        put8(out, 0x8B);                 /* mov r64, r/m64 */
+        put8(out, modrm(0, d & 7, 4));   /* mod=00 rm=100 -> sigue SIB */
+        put8(out, 0x25);                 /* SIB: base=101(none)+disp32, idx=none */
+        put32(out, 0);                   /* disp32 = 0 */
+        /* lea dst, [dst + disp32] : REX.W(+R+B) | 8D | modrm + (SIB si rsp/r12)
+         * | disp32 (TPOFF32 reloc) */
+        put_rex(out, true, d, d);        /* REX.R (reg=dst) + REX.B (base=dst) */
+        put8(out, 0x8D);                 /* lea r64, m */
+        if ((d & 7) == 4) {              /* rsp/r12: requiere SIB */
+            put8(out, modrm(2, d & 7, 4)); /* mod=10 rm=100 -> SIB */
+            put8(out, 0x24);               /* SIB: base=100(dst&7=4), idx=none */
+        } else {
+            put8(out, modrm(2, d & 7, d & 7)); /* mod=10 -> [dst + disp32] */
+        }
+        MReloc r;
+        r.kind = MRelocKind::TPOFF32;
+        r.patch_at = static_cast<uint32_t>(out.size());
+        r.sym_idx = static_cast<uint32_t>(mi.src1.value);
+        r.addend = 0;
+        fn.relocs.push_back(r);
+        put32(out, 0); /* placeholder disp32 (tpoff) */
+        return true;
+    }
     case MOp::MOV_SYM: {
         /* AOT: mov r64, &simbolo (.rodata).  REX.W + B8+rd + imm64=0
          * (placeholder) + MReloc ABS64.  El driver escribe la VA

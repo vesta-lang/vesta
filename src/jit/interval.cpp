@@ -187,10 +187,12 @@ InstrRoles operand_roles(MOp op) noexcept {
         r.src1 = R::USE;
         break;
 
-    /* AOT MOV_SYM / LEA_RIP_SYM: dst = &simbolo (def); src1 es el
-     * IMM32(sym_idx), no un vreg. */
+    /* AOT MOV_SYM / LEA_RIP_SYM / TLS_LE_ADDR: dst = &simbolo (def); src1 es
+     * el IMM32(sym_idx), no un vreg.  TLS_LE_ADDR usa dst como base del lea
+     * pero lo ESCRIBE primero (mov %fs:0) -> def puro, sin use externo. */
     case MOp::MOV_SYM:
     case MOp::LEA_RIP_SYM:
+    case MOp::TLS_LE_ADDR:
     case MOp::LEA_LABEL: r.dst = R::DEF; break;
 
     /* CALL indirecta (CALLIND / dispatch por puntero): src1 es el vreg con

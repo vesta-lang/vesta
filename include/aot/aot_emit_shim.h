@@ -93,6 +93,10 @@ typedef struct {
 #define AOT_RELOC_IMM32                                                        \
     2 /* *(uint32*)site = target_value (inmediato, e.g. SIZE) */
 #define AOT_RELOC_IMM64 3 /* *(uint64*)site = target_value */
+#define AOT_RELOC_TPOFF32                                                       \
+    4 /* TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra el simbolo de         \
+       * seccion de .tdata + addend = offset; el sitio queda SIN resolver en    \
+       * el .o (el --link calcula el TPOFF TP-relativo). */
 
 /**
  * @brief Una relocation a resolver tras el layout.

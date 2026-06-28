@@ -564,6 +564,13 @@ enum class MOp : uint8_t {
             ///< rel32 que jmp/jcc: disp = label_off - instr_end).  Usado por
             ///< TRYENTER in-JIT para capturar la direccion del bloque catch.
 
+    TLS_LE_ADDR =
+        159, ///< dst = direccion por-hilo de un `thread_local` (TLS local-exec,
+            ///< ELF).  src1 = IMM32(sym_idx) del simbolo TLS.  El encoder emite
+            ///< `mov dst, %fs:0` (64 REX.W 8B + SIB disp32=0) + `lea dst,
+            ///< [dst+disp32]` con una @c MReloc{TPOFF32} sobre el disp32 del
+            ///< lea.  El resultado es un host_ptr (TP + tpoff).
+
     /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
      * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
      * float CONST).  A diferencia de ADDSD/etc (reg-reg only), MOVSD/MOVSS
@@ -1012,6 +1019,17 @@ struct MInstr {
         return i;
     }
 
+    /** @brief TLS_LE_ADDR: @p dst = direccion por-hilo del `thread_local`
+     *  @p sym_idx (TLS local-exec, ELF).  El encoder emite
+     *  `mov dst, %fs:0` + `lea dst, [dst + sym@tpoff]` con @c MReloc{TPOFF32}. */
+    static MInstr make_tls_le_addr(MOperand dst, uint32_t sym_idx) noexcept {
+        MInstr i;
+        i.op = MOp::TLS_LE_ADDR;
+        i.dst = dst;
+        i.src1 = MOperand::make_imm32(static_cast<int32_t>(sym_idx));
+        return i;
+    }
+
     /** @brief DATA_PTR_LABEL: entrada de 8 bytes de la jump table densa que
      *  apunta al @p label_id (parchada post-memcpy). */
     static MInstr make_data_ptr_label(uint32_t label_id) noexcept {
@@ -1139,6 +1157,11 @@ enum class MRelocKind : uint8_t {
            ///< sym - (site+4).  Misma matematica que CALL_REL32 pero el
            ///< target es un dato (.rodata), NO una funcion (el driver NO
            ///< lo encola como callee).  Default position-independent.
+    TPOFF32 =
+        3, ///< TLS local-exec (ELF): *(int32*)@ = offset del simbolo TLS
+           ///< respecto al thread pointer (TP-relativo, NEGATIVO en la
+           ///< variante II).  El driver lo traduce a R_X86_64_TPOFF32 (23)
+           ///< sobre un simbolo STT_TLS; el `--link` resuelve el TPOFF.
 };
 
 /**

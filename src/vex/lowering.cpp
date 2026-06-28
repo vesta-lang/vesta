@@ -1123,17 +1123,60 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
         auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
         if (gv->is_const || gv->is_comptime) continue;
-        // thread_local: el almacenamiento es por-hilo (TLS NATIVO: seccion
-        // SHF_TLS + PT_TLS / TLS directory PE).  NO debe caer al modelo de
-        // global runtime ordinario (slot en .data inicializado en
-        // __module_init), que daria semantica equivocada (compartido entre
-        // hilos).  La emision de codegen TLS nativo esta en desarrollo; hasta
-        // entonces se rechaza con un error claro en vez de miscompilar.
+        // thread_local: almacenamiento por-hilo (TLS NATIVO).  Su plantilla va
+        // a una seccion SHF_TLS (.tdata) con SD_FLAG_TLS; el acceso usa el
+        // thread pointer (fs/gs + TPOFF) que emite el codegen AOT.  El init
+        // debe ser una constante (literal entero o ausente = 0): es la
+        // plantilla estatica que el cargador copia por-hilo, no un store en
+        // __module_init.
         if (gv->is_thread_local) {
-            diags_.error(gv->loc,
-                         "thread_local: la emision de TLS nativo (PE/ELF) en "
-                         "AOT esta en desarrollo; aun no se puede compilar '" +
-                             gv->name + "'");
+            uint64_t nbytes = 8;
+            uint16_t talign = 8;
+            if (gv->type &&
+                gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                auto *pt =
+                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
+                nbytes = primitive_size_bytes(pt->prim);
+                if (nbytes == 0) nbytes = 8;
+                talign = static_cast<uint16_t>(nbytes);
+            }
+            // Valor inicial: literal entero (o negado) -> constante.
+            uint64_t init_val = 0;
+            bool init_ok = true;
+            if (gv->init) {
+                const ast::Expr *ie = gv->init.get();
+                int64_t sign = 1;
+                if (ie->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                    if (u->op == ast::UnOp::Neg && u->operand &&
+                        u->operand->kind == ast::NodeKind::IntLitExpr) {
+                        sign = -1;
+                        ie = u->operand.get();
+                    }
+                }
+                if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    auto *il = static_cast<const ast::IntLitExpr *>(ie);
+                    init_val = static_cast<uint64_t>(
+                        sign * static_cast<int64_t>(il->value));
+                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                    init_val =
+                        static_cast<const ast::BoolLitExpr *>(ie)->value ? 1 : 0;
+                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                    init_val = static_cast<uint64_t>(
+                        static_cast<const ast::CharLitExpr *>(ie)->codepoint);
+                } else {
+                    init_ok = false;
+                }
+            }
+            if (!init_ok) {
+                diags_.error(gv->loc,
+                             "thread_local '" + gv->name +
+                                 "': el inicializador debe ser una constante "
+                                 "(literal entero/bool/char o ausente)");
+                continue;
+            }
+            (void)get_or_create_tls_global_slot(gv->name, nbytes, init_val,
+                                                talign);
             continue;
         }
         // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
@@ -23418,6 +23461,10 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
             auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
             if (gv->is_const || !gv->init) continue;
+            // thread_local: la plantilla por-hilo ya esta en los bytes del slot
+            // .tdata (estatica); el cargador la copia por-hilo.  NO se
+            // inicializa via __module_init (eso escribiria una sola copia).
+            if (gv->is_thread_local) continue;
             // Los arrays globales (T[N]) ya tienen su contenido grabado en los
             // bytes del slot static_data (pre-pase, init-list constante o
             // zero-init).  __module_init NO debe intentar lowerar su init-list
@@ -30410,6 +30457,36 @@ uint64_t Lowering::get_or_create_runtime_global_slot(const std::string &name,
     // .rodata (r): escribir a un slot read-only segfaultea en nativo.  El
     // interp/JIT ignoran section_name; solo lo consume el codegen AOT.
     gmeta.section_name = ".data";
+    runtime_global_slots_[name] = idx;
+    return idx;
+}
+
+uint64_t Lowering::get_or_create_tls_global_slot(const std::string &name,
+                                                 uint64_t nbytes,
+                                                 uint64_t init_value,
+                                                 uint16_t alignment) {
+    auto it = runtime_global_slots_.find(name);
+    if (it != runtime_global_slots_.end()) return it->second;
+    // Cada slot ocupa >=8 bytes (alineado a 8), igual que un global runtime:
+    // los STORE a un global usan ancho de qword, asi que un slot de 4 bytes
+    // empacado junto al siguiente seria pisado por el store de 8 bytes del
+    // vecino.  El valor vive en los bytes bajos; el LOAD usa el ancho del tipo.
+    if (nbytes < 8) nbytes = 8;
+    nbytes = (nbytes + 7) & ~static_cast<uint64_t>(7); // multiplo de 8
+    // Plantilla estatica con el valor inicial (LE en los primeros 8 bytes).
+    std::vector<uint8_t> bytes(static_cast<size_t>(nbytes), 0);
+    for (size_t i = 0; i < bytes.size() && i < 8; ++i)
+        bytes[i] = static_cast<uint8_t>((init_value >> (i * 8)) & 0xFFu);
+    const uint64_t idx = static_cast<uint64_t>(
+        out_mod_->static_data.push_back(std::move(bytes)));
+    auto &m = out_mod_->static_data.meta_at(idx);
+    // NON_DEDUP (storage propio) + TLS (seccion SHF_TLS) + .tdata.
+    m.flags |= ir::IrModule::SD_FLAG_NON_DEDUP | ir::IrModule::SD_FLAG_TLS;
+    m.section_name = ".tdata";
+    m.alignment = alignment < 8 ? 8 : alignment;
+    // Registrar en runtime_global_slots_ para que lower_ident lo resuelva
+    // como un global ordinario (STR_LIT_ADDR); el driver AOT deriva la
+    // TLS-ness desde SD_FLAG_TLS y emite el acceso por thread pointer.
     runtime_global_slots_[name] = idx;
     return idx;
 }
