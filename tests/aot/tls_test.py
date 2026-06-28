@@ -56,6 +56,22 @@ def main():
                       "i64 bump(i64 x){ acc=acc+x; return acc; }\n"
                       "i64 main(){ i64 i=0; while(i<5){bump(i);i=i+1;} "
                       "return acc; }\n", 10),
+                # K) AISLAMIENTO por-hilo REAL: un hilo Win32 modifica su copia
+                # TLS a 99; la copia de main sigue en 11.  11*1000+99=11099
+                # (Windows preserva el exit code completo).  Prueba la isolacion
+                # que da el OS via el TLS directory.
+                ("k", 'extern "kernel32.dll" {\n'
+                      '  fn CreateThread(u64 a,u64 b,u64 p,u64 pa,u32 f,'
+                      'u64 i)->u64;\n'
+                      '  fn WaitForSingleObject(u64 h,u32 m)->u32;\n}\n'
+                      'thread_local i64 t = 11;\n'
+                      'i64 g_child = 0;\n'
+                      'i64 worker(u64 x){ t = 99; g_child = t; return 0; }\n'
+                      'i64 main(){\n'
+                      '  fn(u64)->i64 fp = worker;\n'
+                      '  u64 h = CreateThread(0,0,(u64)fp,0,0,0);\n'
+                      '  WaitForSingleObject(h, 4294967295);\n'
+                      '  return t * 1000 + g_child;\n}\n', 11099),
             ]
             for tag, src, exp in cases:
                 vp = os.path.join(pe, f"t{tag}.vex")
