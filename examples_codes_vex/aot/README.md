@@ -380,3 +380,93 @@ modo es un bloque `@bits` separado, referenciados por simbolo -- mas limpio.
 Las referencias a simbolos en OPERANDOS DE MEMORIA (`lgdt [sym]`,
 `mov rsi, sym`) tampoco se resuelven aun; se usa la direccion @at fija (p.ej.
 `lgdt [0x7DC0]`).  El far jump y los datos (`dd sym`) SI son simbolicos.
+
+## thread_local (TLS nativo) -- ejemplos 64-68
+
+`thread_local <T> NAME = init;` declara una variable cuyo **almacenamiento es
+privado de cada hilo**: cada hilo ve y muta su PROPIA copia, inicializada con la
+plantilla `init`.  Es el modelo de C `__thread` / C++ `thread_local`, sin locks
+ni sincronizacion (cada hilo accede a su copia directamente).
+
+| Ejemplo | Que demuestra | exit |
+|:--------|:--------------|-----:|
+| [`64_thread_local_basico.vex`](64_thread_local_basico.vex) | una variable por-hilo basica | 5 |
+| [`65_thread_local_multi.vex`](65_thread_local_multi.vex) | varias variables, tamanos mixtos, mutacion | 112 |
+| [`66_thread_local_fn_loop.vex`](66_thread_local_fn_loop.vex) | persistencia por-hilo en funcion + loop | 10 |
+| [`67_thread_local_hilos.vex`](67_thread_local_hilos.vex) | aislamiento por-hilo REAL con un hilo Win32 | 11099 |
+| [`68_thread_local_float.vex`](68_thread_local_float.vex) | plantilla float (f64) + `comptime` const | 42 |
+
+### Por que usarlo
+
+Para estado por-hilo sin contencion: contadores, buffers scratch, el "errno"
+de turno, el contexto de un scheduler, etc.  Cada hilo tiene su instancia; no
+hace falta un mutex porque nadie mas la toca.  La plantilla `init` se copia a
+cada hilo nuevo automaticamente.
+
+La plantilla debe ser una **constante de compilacion** (literal entero / float /
+bool / char, o una referencia a un `comptime` const): es la imagen que el
+cargador copia a cada hilo, no un store en runtime.  Sin `init` la copia
+arranca a cero.
+
+### Como funciona (codegen AOT, sin runtime C)
+
+Vex emite TLS NATIVO -- nada de emutls ni librerias auxiliares dentro del
+binario.  El mecanismo difiere por formato:
+
+**ELF (Linux).**  La plantilla va a una seccion `SHF_TLS` (`.tdata`) y se emite
+un segmento `PT_TLS`; el cargador dinamico monta el bloque TLS de cada hilo
+antes del entry.  El acceso (modelo *local-exec*) es:
+
+```asm
+mov rax, %fs:0           ; thread pointer
+lea rax, [rax + x@tpoff] ; &x ; tpoff = offset negativo (constante de enlace)
+```
+
+El `tpoff` lo resuelve el emisor de ejecutable (`--emit exe`) o el enlazador
+propio (`--emit obj` + `vm --link`) -- ambos calculan el offset del simbolo
+dentro del bloque TLS.  El linker propio ademas INTEROPERA con objetos TLS de
+gcc (los 4 modelos: local-exec, initial-exec, general-dynamic, x86-32).
+
+**PE (Windows).**  El emisor sintetiza la infraestructura nativa del PE: una
+seccion `.tls$d` con `_tls_index` (lo rellena el cargador con el indice del
+slot), un array de callbacks y el `IMAGE_TLS_DIRECTORY`; pone `DataDirectory[9]`
+(TLS) apuntando ahi.  El acceso lee el bloque TLS del hilo desde el TEB:
+
+```asm
+mov r10, gs:[0x58]        ; TEB->ThreadLocalStoragePointer
+mov r11d, [rip+_tls_index]; indice del slot de este modulo
+mov r10, [r10 + r11*8]    ; base del bloque TLS del hilo
+lea rax, [r10 + x@secrel] ; &x ; offset del var dentro de .tls
+```
+
+El cargador del SO asigna y monta el bloque de cada hilo (tambien para los
+hilos creados con `CreateThread`), garantizando el aislamiento.
+
+### Compilar
+
+```
+# PE (Windows): ejecutable directo
+vm -m aot --vex 64_thread_local_basico.vex --format pe --emit exe -o t.exe
+
+# ELF (Linux): ejecutable directo
+vm -m aot --vex 64_thread_local_basico.vex --format elf --emit exe -o t
+
+# ELF: objeto + enlazado con el linker propio (interopera con libc)
+vm -m aot --vex 64_thread_local_basico.vex --format elf --emit obj -o t.o
+vm --link t.o libc.so.6 -o t --format elf
+```
+
+### Limitaciones
+
+- `thread_local` solo es valido en **ejecutables** (`--emit exe`/`obj`).  En
+  `--emit shared` (.so/.dll) y `--emit bin` (binario plano) el driver lo
+  rechaza con un error claro: una lib cargada con `dlopen`/`LoadLibrary`
+  necesita el modelo *initial-exec/general-dynamic* o el TLS dinamico, y un
+  binario plano no tiene cargador que monte el bloque.
+- La plantilla debe ser constante (no una expresion de runtime).
+- Tipos soportados como plantilla: enteros, `bool`, `char`, `f32`/`f64`.  Tipos
+  gestionados (`string`, clases) no son plantillas TLS validas.
+
+El test `tests/aot/tls_test.py` compila estos ejemplos (PE nativo + ELF via WSL)
+y verifica el exit; los `.c` que aparecen ahi son fixtures de gcc para probar la
+INTEROP del linker, no ejemplos del lenguaje.
