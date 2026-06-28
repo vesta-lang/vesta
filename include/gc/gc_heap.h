@@ -215,6 +215,148 @@ class PtrHandleMap {
 };
 
 /**
+ * @class GcHandleRefMap
+ * @brief Mapa open-addressing GcHandle -> uint32 (refcount), cache-friendly.
+ *
+ * Reemplaza @c std::unordered_map<GcHandle, uint32_t> para @c external_refs_:
+ * (a) elimina la dependencia de @c std::__detail::_Prime_rehash_policy de
+ * libstdc++ (clave para el build FREESTANDING de libvesta_gc, que se enlaza con
+ * NUESTRO linker sin g++); (b) es MAS rapido que @c std::unordered_map (sin
+ * malloc por nodo, linear probing en un array contiguo).  Universal: mismo tipo
+ * en el build de la VM (interp/JIT) y en el AOT -> sin perdida de rendimiento,
+ * ganancia en ambos.
+ *
+ * Sentinelas en la clave (handles validos son < tamano de la HandleTable, muy
+ * por debajo de estos): @c EMPTY = 0xFFFFFFFF (== GC_NULL_HANDLE), @c TOMB =
+ * 0xFFFFFFFE.  API minima usada por el GC: find (-> uint32* o nullptr),
+ * operator[] (insert-or-get), erase, size, e iteracion (kv.first/kv.second).
+ */
+class GcHandleRefMap {
+  public:
+    struct Slot {
+        GcHandle first = 0xFFFFFFFFu; ///< clave (EMPTY por defecto)
+        uint32_t second = 0;          ///< refcount
+    };
+
+    GcHandleRefMap() { rehash_to(8); }
+
+    /// Puntero al refcount de @p h, o nullptr si no esta.
+    uint32_t *find(GcHandle h) noexcept {
+        size_t i = hash(h) & mask_;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.first == EMPTY) return nullptr;
+            if (s.first == h) return &s.second;
+            i = (i + 1) & mask_;
+        }
+    }
+    const uint32_t *find(GcHandle h) const noexcept {
+        return const_cast<GcHandleRefMap *>(this)->find(h);
+    }
+
+    /// Refcount de @p h, insertando una entrada con 0 si no existe.
+    uint32_t &operator[](GcHandle h) {
+        if (used_ + 1 > grow_at_) grow();
+        size_t i = hash(h) & mask_;
+        size_t first_tomb = SIZE_MAX;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.first == EMPTY) {
+                const size_t at = (first_tomb != SIZE_MAX) ? first_tomb : i;
+                if (table_[at].first != TOMB) ++used_; // EMPTY -> ocupa slot nuevo
+                table_[at].first = h;
+                table_[at].second = 0;
+                ++live_count_;
+                return table_[at].second;
+            }
+            if (s.first == TOMB) {
+                if (first_tomb == SIZE_MAX) first_tomb = i;
+            } else if (s.first == h) {
+                return s.second;
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+
+    /// Elimina la entrada de @p h (no-op si no esta).
+    void erase(GcHandle h) noexcept {
+        size_t i = hash(h) & mask_;
+        for (;;) {
+            Slot &s = table_[i];
+            if (s.first == EMPTY) return;
+            if (s.first == h) {
+                s.first = TOMB; // mantiene la cadena de probing
+                --live_count_;
+                return;
+            }
+            i = (i + 1) & mask_;
+        }
+    }
+
+    size_t size() const noexcept { return live_count_; }
+    bool empty() const noexcept { return live_count_ == 0; }
+
+    /// Iterador const que salta EMPTY/TOMB (yields Slot con first/second).
+    struct const_iterator {
+        const Slot *p;
+        const Slot *e;
+        void skip() noexcept {
+            while (p != e && (p->first == EMPTY || p->first == TOMB)) ++p;
+        }
+        const Slot &operator*() const noexcept { return *p; }
+        const Slot *operator->() const noexcept { return p; }
+        const_iterator &operator++() noexcept {
+            ++p;
+            skip();
+            return *this;
+        }
+        bool operator!=(const const_iterator &o) const noexcept {
+            return p != o.p;
+        }
+    };
+    const_iterator begin() const noexcept {
+        const_iterator it{table_.data(), table_.data() + table_.size()};
+        it.skip();
+        return it;
+    }
+    const_iterator end() const noexcept {
+        return {table_.data() + table_.size(), table_.data() + table_.size()};
+    }
+
+  private:
+    static constexpr GcHandle EMPTY = 0xFFFFFFFFu; ///< == GC_NULL_HANDLE
+    static constexpr GcHandle TOMB = 0xFFFFFFFEu;
+
+    static inline size_t hash(GcHandle h) noexcept {
+        // Fibonacci hashing (mezcla rapida de un uint32).
+        uint64_t x = static_cast<uint64_t>(h) * 0x9E3779B97F4A7C15ull;
+        return static_cast<size_t>(x >> 32);
+    }
+
+    void rehash_to(size_t cap) {
+        table_.assign(cap, Slot{});
+        mask_ = cap - 1;
+        grow_at_ = (cap * 3) / 4; // factor de carga 0.75
+        used_ = 0;
+        live_count_ = 0;
+    }
+
+    void grow() {
+        std::vector<Slot> old = std::move(table_);
+        rehash_to((mask_ + 1) * 2);
+        for (const Slot &s : old)
+            if (s.first != EMPTY && s.first != TOMB)
+                (*this)[s.first] = s.second;
+    }
+
+    std::vector<Slot> table_;
+    size_t mask_ = 0;
+    size_t live_count_ = 0;
+    size_t used_ = 0; ///< slots ocupados (live + tombstones)
+    size_t grow_at_ = 0;
+};
+
+/**
  * @brief Activa/desactiva el debug del GC en runtime.
  *
  * Cuando esta activado, las operaciones del GC (major_gc, minor_gc,
@@ -1361,7 +1503,10 @@ class GcHeap {
     ///
     /// La entrada se elimina cuando el counter llega a 0 (lazy cleanup
     /// para evitar fragmentar el bucket de la hashmap).
-    std::unordered_map<GcHandle, uint32_t> external_refs_;
+    /// Mapa open-addressing custom (no @c std::unordered_map): cache-friendly,
+    /// sin malloc por nodo, y sin la dep de libstdc++ @c _Prime_rehash_policy
+    /// (clave para libvesta_gc freestanding).  Mismo tipo en VM y AOT.
+    GcHandleRefMap external_refs_;
 
     // --- Estadisticas ---
     GcStats stats_;
