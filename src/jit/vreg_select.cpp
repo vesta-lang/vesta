@@ -4790,16 +4790,22 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * resultado es un host_ptr real (los LOAD posteriores en
                  * HOST_LEAF ya son host directos). */
                 if (abi == AbiKind::HOST_LEAF && in.is_tls) {
-                    /* thread_local (TLS local-exec): el dato vive en una
-                     * seccion SHF_TLS (.tdata).  La direccion por-hilo se
-                     * computa via el thread pointer: `mov dst, %fs:0` +
-                     * `lea dst, [dst + sym@tpoff]`.  El reloc TPOFF32 sobre el
-                     * disp32 del lea apunta a `tdata.<imm>`; el driver lo
-                     * traduce a R_X86_64_TPOFF32 + STT_TLS y el --link lo
-                     * resuelve.  El resultado es un host_ptr (TP + tpoff). */
-                    const uint32_t sidx = out.intern_reloc_symbol(
+                    /* thread_local: la direccion por-hilo se computa via el
+                     * thread pointer.  ELF (local-exec): `mov dst,%fs:0` + `lea
+                     * dst,[dst+sym@tpoff]` (reloc TPOFF32).  PE (TLS directory):
+                     * carga el bloque TLS del TEB con `__vex_tls_index` y suma
+                     * el offset del var (SECREL32).  El reloc apunta a
+                     * `tdata.<imm>`; el driver/emisor lo resuelven. */
+                    const uint32_t vsidx = out.intern_reloc_symbol(
                         "tdata." + std::to_string(in.imm));
-                    O.push_back(MInstr::make_tls_le_addr(vr(in.dst), sidx));
+                    if (target_sysv) {
+                        O.push_back(MInstr::make_tls_le_addr(vr(in.dst), vsidx));
+                    } else {
+                        const uint32_t isidx =
+                            out.intern_reloc_symbol("__vex_tls_index");
+                        O.push_back(MInstr::make_tls_pe_addr(vr(in.dst), vsidx,
+                                                             isidx));
+                    }
                     break;
                 }
                 if (abi == AbiKind::HOST_LEAF) {

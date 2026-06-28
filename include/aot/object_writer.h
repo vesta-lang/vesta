@@ -135,6 +135,10 @@ enum class RelocKind : uint8_t {
         4, ///< TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra un simbolo
            ///< STT_TLS de la seccion .tdata + addend = offset.  El sitio queda
            ///< SIN resolver en el .o; el `--link` calcula el TPOFF.
+    SECREL32 =
+        5, ///< TLS PE (Windows): *(int32*)site = offset del target DENTRO de su
+           ///< seccion (.tls), no la VA.  El acceso suma este offset a la base
+           ///< del bloque TLS (cargada desde el TEB en runtime).
 };
 
 /**

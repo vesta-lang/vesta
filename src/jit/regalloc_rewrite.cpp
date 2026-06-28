@@ -1024,7 +1024,8 @@ struct Lowerer {
         }
 
         if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM ||
-            op == MOp::LEA_LABEL || op == MOp::TLS_LE_ADDR) {
+            op == MOp::LEA_LABEL || op == MOp::TLS_LE_ADDR ||
+            op == MOp::TLS_PE_ADDR) {
             /* AOT: dst = &simbolo (.rodata) o &thread_local (TLS).  MOV_SYM =
              * abs (mov imm64, --no-pie); LEA_RIP_SYM = RIP-rel (lea, default
              * PIC); LEA_LABEL = direccion nativa de un label local (in-JIT
@@ -1038,12 +1039,14 @@ struct Lowerer {
                 m.op = op;
                 m.dst = d;
                 m.src1 = in.src1;
+                m.src2 = in.src2; /* TLS_PE_ADDR: 2o simbolo (_tls_index) */
                 out.push_back(m);
             } else {
                 MInstr m;
                 m.op = op;
                 m.dst = reg(scr0);
                 m.src1 = in.src1;
+                m.src2 = in.src2;
                 out.push_back(m);
                 out.push_back(MInstr::make_unary(MOp::MOV, d, reg(scr0)));
             }

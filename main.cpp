@@ -3769,11 +3769,13 @@ int main(int argc, char *argv[]) {
                     if (r.symbol.rfind("tdata.", 0) == 0) {
                         // thread_local (TLS): colocar la plantilla en su seccion
                         // (.tdata, via section_name).  El reloc se emite en
-                        // pass 2 como TPOFF32.
+                        // pass 2 como TPOFF32 (ELF) o SECREL32 (PE).
                         place_data(static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 6, nullptr, 10)));
                         continue;
                     }
+                    if (r.symbol == "__vex_tls_index")
+                        continue; // TLS PE: simbolo del emisor (pass 2, sin dato)
                     if (r.symbol.rfind("rodata.", 0) != 0) {
                         std::cerr
                             << "[aot] reloc de dato con simbolo inesperado: '"
@@ -4035,6 +4037,27 @@ int main(int argc, char *argv[]) {
                             fl.sec, site,
                             aot::RelocTarget::addr(loc.first, loc.second),
                             aot::RelocKind::TPOFF32);
+                    } else if (r.kind == jit::NativeReloc::Kind::SECREL32) {
+                        // thread_local (TLS PE): simbolo "tdata.<N>".  Colocar la
+                        // plantilla en .tdata (=.tls) y emitir SECREL32 contra
+                        // (sec, off); el emisor PE escribe el offset del var
+                        // dentro de la seccion (el acceso lo suma a la base del
+                        // bloque TLS cargada del TEB).
+                        const uint32_t N = static_cast<uint32_t>(
+                            std::strtoul(r.symbol.c_str() + 6, nullptr, 10));
+                        const std::pair<int, uint64_t> loc = place_data(N);
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::addr(loc.first, loc.second),
+                            aot::RelocKind::SECREL32);
+                    } else if (r.symbol == "__vex_tls_index") {
+                        // TLS PE: ref RIP-relativa al _tls_index sintetizado por
+                        // el emisor; se pasa como simbolo externo que el emisor
+                        // resuelve a la VA del slot.
+                        w.add_reloc(
+                            fl.sec, site,
+                            aot::RelocTarget::extern_sym("__vex_tls_index"),
+                            aot::RelocKind::REL32);
                     } else {
                         const uint32_t N = static_cast<uint32_t>(
                             std::strtoul(r.symbol.c_str() + 7, nullptr, 10));

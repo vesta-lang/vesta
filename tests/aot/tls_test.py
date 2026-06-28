@@ -38,14 +38,50 @@ def main():
     if not os.path.exists(vm):
         vm = os.path.join(build, "vm")
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    rc_pe = 0
+
+    # --- PE: thread_local Vex-nativo (TLS directory de Windows).  Corre nativo
+    # (sin WSL).  El emisor PE sintetiza _tls_index + callbacks +
+    # IMAGE_TLS_DIRECTORY; el acceso usa gs:[0x58] -> [_tls_index] -> bloque. ---
+    if vm.endswith(".exe") and os.name == "nt":
+        pe = os.path.join(repo, "_tls_pe")
+        os.makedirs(pe, exist_ok=True)
+        try:
+            cases = [
+                ("h", "thread_local i32 c = 5;\ni64 main(){ return c; }\n", 5),
+                ("i", "thread_local i32 a=5;\nthread_local i32 b;\n"
+                      "thread_local i64 c=100;\n"
+                      "i64 main(){ b=7; return a+b+c; }\n", 112),
+                ("j", "thread_local i64 acc=0;\n"
+                      "i64 bump(i64 x){ acc=acc+x; return acc; }\n"
+                      "i64 main(){ i64 i=0; while(i<5){bump(i);i=i+1;} "
+                      "return acc; }\n", 10),
+            ]
+            for tag, src, exp in cases:
+                vp = os.path.join(pe, f"t{tag}.vex")
+                ep = os.path.join(pe, f"t{tag}.exe")
+                with open(vp, "w") as f:
+                    f.write(src)
+                run([vm, "--vex", vp, "-m", "aot", "--emit", "exe", "--format",
+                     "pe", "-o", ep])
+                got = run([ep]).returncode if os.path.exists(ep) else -1
+                if got == exp:
+                    print(f"TLS-{tag.upper()} (PE Vex-nativo TLS directory): "
+                          f"exit={exp} OK")
+                else:
+                    print(f"TLS-{tag.upper()}: EXIT MISMATCH got={got} exp={exp}")
+                    rc_pe = 1
+        finally:
+            import shutil
+            shutil.rmtree(pe, ignore_errors=True)
 
     if wsl("echo ok").stdout.strip().splitlines()[-1:] != ["ok"]:
-        print("TLS: WSL no disponible, omitido")
-        return 0
+        print("TLS: WSL no disponible (ELF omitido)")
+        return rc_pe
     # WSL debe poder compilar (gcc) y ejecutar ELF64.
     if wsl("which gcc >/dev/null 2>&1 && echo yes").stdout.strip()[-3:] != "yes":
         print("TLS: gcc no disponible en WSL, omitido")
-        return 0
+        return rc_pe
 
     work = os.path.join(repo, "_tls_test")
     wm = "/mnt/" + repo[0].lower() + repo[1:].replace("\\", "/").replace(
@@ -59,7 +95,7 @@ def main():
         libc = os.path.join(work, "libc.so.6")
         if not os.path.exists(libc):
             print("TLS: libc.so.6 no encontrada, omitido")
-            return 0
+            return rc_pe
 
         # --- A) .tdata simple ---
         with open(os.path.join(work, "tl.c"), "w") as f:
@@ -216,7 +252,7 @@ def main():
         else:
             print(f"TLS-G: EXIT MISMATCH got={rg} exp=10")
             rc = 1
-        return rc
+        return rc or rc_pe
     finally:
         import shutil
         shutil.rmtree(work, ignore_errors=True)
