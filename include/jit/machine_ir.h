@@ -571,6 +571,14 @@ enum class MOp : uint8_t {
             ///< [dst+disp32]` con una @c MReloc{TPOFF32} sobre el disp32 del
             ///< lea.  El resultado es un host_ptr (TP + tpoff).
 
+    TLS_PE_ADDR =
+        160, ///< dst = direccion por-hilo de un `thread_local` (TLS PE/Windows).
+             ///< src1 = IMM32(var_sym_idx) del simbolo .tls; src2 =
+             ///< IMM32(index_sym_idx) del `__vex_tls_index`.  El encoder emite
+             ///< `mov r10,gs:[0x58]` + `mov r11d,[rip+_tls_index]` (DATA_REL32)
+             ///< + `mov r10,[r10+r11*8]` + `lea dst,[r10+var@secrel]`
+             ///< (SECREL32).  Usa r10/r11 (scratch reservados) -> dst libre.
+
     /* FP-regalloc (Phase AOT C1 float, 2026-06-17): movimiento de datos
      * f64/f32 entre XMM regs y entre XMM y memoria (spills, param-load/store,
      * float CONST).  A diferencia de ADDSD/etc (reg-reg only), MOVSD/MOVSS
@@ -1030,6 +1038,19 @@ struct MInstr {
         return i;
     }
 
+    /** @brief TLS_PE_ADDR: @p dst = direccion por-hilo del `thread_local`
+     *  @p var_sym_idx (.tls) usando el indice de slot @p index_sym_idx
+     *  (`__vex_tls_index`).  El encoder emite la secuencia TEB del PE. */
+    static MInstr make_tls_pe_addr(MOperand dst, uint32_t var_sym_idx,
+                                   uint32_t index_sym_idx) noexcept {
+        MInstr i;
+        i.op = MOp::TLS_PE_ADDR;
+        i.dst = dst;
+        i.src1 = MOperand::make_imm32(static_cast<int32_t>(var_sym_idx));
+        i.src2 = MOperand::make_imm32(static_cast<int32_t>(index_sym_idx));
+        return i;
+    }
+
     /** @brief DATA_PTR_LABEL: entrada de 8 bytes de la jump table densa que
      *  apunta al @p label_id (parchada post-memcpy). */
     static MInstr make_data_ptr_label(uint32_t label_id) noexcept {
@@ -1162,6 +1183,11 @@ enum class MRelocKind : uint8_t {
            ///< respecto al thread pointer (TP-relativo, NEGATIVO en la
            ///< variante II).  El driver lo traduce a R_X86_64_TPOFF32 (23)
            ///< sobre un simbolo STT_TLS; el `--link` resuelve el TPOFF.
+    SECREL32 =
+        4, ///< TLS PE (Windows): *(int32*)@ = offset del simbolo DENTRO de su
+           ///< seccion (.tls), NO la VA.  El acceso suma este offset a la base
+           ///< del bloque TLS del modulo (cargada desde el TEB).  El emisor PE
+           ///< escribe target_off directamente.
 };
 
 /**

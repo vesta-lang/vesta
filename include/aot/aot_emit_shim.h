@@ -97,6 +97,9 @@ typedef struct {
     4 /* TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra el simbolo de         \
        * seccion de .tdata + addend = offset; el sitio queda SIN resolver en    \
        * el .o (el --link calcula el TPOFF TP-relativo). */
+#define AOT_RELOC_SECREL32                                                      \
+    5 /* TLS PE (Windows): *(int32*)site = offset del target dentro de su       \
+       * seccion (.tls), no la VA.  El emisor PE escribe target_off. */
 
 /**
  * @brief Una relocation a resolver tras el layout.
@@ -140,6 +143,11 @@ typedef struct {
     uint64_t elf_stack_vaddr; /* ELF: VA sugerida de la pila. 0 => 0x70000000 */
     uint64_t
         elf_stack_size; /* ELF: tamano del segmento de pila. 0 => 0x10000 */
+    /* TLS PE: seccion+offset del IMAGE_TLS_DIRECTORY (40 bytes) que el driver
+     * sintetiza; el emisor pone DataDirectory[9] (TLS) apuntando ahi.  <0 =
+     * sin TLS. */
+    int tls_dir_section;
+    uint32_t tls_dir_off;
 } AotLayoutCfg;
 
 /**

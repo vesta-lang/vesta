@@ -1312,6 +1312,59 @@ bool X86Encoder::emit_instr(MFunction &fn, const MInstr &mi,
         put32(out, 0); /* placeholder disp32 (tpoff) */
         return true;
     }
+    case MOp::TLS_PE_ADDR: {
+        /* AOT TLS PE/Windows: dst = direccion por-hilo de un `thread_local`.
+         *   mov r10, gs:[0x58]          ; TEB->ThreadLocalStoragePointer
+         *   mov r11d, [rip+_tls_index]  ; indice del slot (DATA_REL32)
+         *   mov r10, [r10 + r11*8]      ; base del bloque TLS del modulo
+         *   lea dst, [r10 + var@secrel] ; &var (SECREL32)
+         * Usa r10/r11 (scratch reservados por el regalloc) -> dst libre.  El
+         * resultado es un host_ptr. */
+        if (mi.dst.kind != MOperandKind::REG) {
+            put8(out, 0xCC);
+            return true;
+        }
+        const uint8_t d = mi.dst.reg;
+        /* mov r10, gs:[0x58] : 65 | REX.W+R | 8B | modrm(00,r10,SIB) | 25 | d32 */
+        put8(out, 0x65);                  /* prefijo de segmento GS */
+        put_rex(out, true, 10, 0);        /* REX.W + REX.R (reg=r10) */
+        put8(out, 0x8B);
+        put8(out, modrm(0, 10, 4));       /* mod=00 reg=r10 rm=100(SIB) */
+        put8(out, 0x25);                  /* SIB base=101(none)+disp32 idx=none */
+        put32(out, 0x58);                 /* TEB->ThreadLocalStoragePointer */
+        /* mov r11d, [rip+_tls_index] : REX.R | 8B | modrm(00,r11,101=rip) | d32 */
+        put_rex(out, false, 11, 0);       /* REX.R (reg=r11), 32-bit (sin W) */
+        put8(out, 0x8B);
+        put8(out, modrm(0, 11, 5));       /* mod=00 reg=r11 rm=101(rip) */
+        {
+            MReloc r1;
+            r1.kind = MRelocKind::DATA_REL32; /* &_tls_index (rip-relativo) */
+            r1.patch_at = static_cast<uint32_t>(out.size());
+            r1.sym_idx = static_cast<uint32_t>(mi.src2.value);
+            r1.addend = 0;
+            fn.relocs.push_back(r1);
+        }
+        put32(out, 0);
+        /* mov r10, [r10 + r11*8] : REX.W+R+X+B | 8B | modrm(00,r10,SIB) | SIB */
+        put_rex(out, true, 10, 10, 11);   /* W + R(r10) + B(r10 base) + X(r11) */
+        put8(out, 0x8B);
+        put8(out, modrm(0, 10, 4));       /* mod=00 reg=r10 rm=100(SIB) */
+        put8(out, sib(3, 11, 10));        /* scale=8 index=r11 base=r10 */
+        /* lea dst, [r10 + var@secrel] : REX.W+R(dst)+B(r10) | 8D | modrm | d32 */
+        put_rex(out, true, d, 10);        /* REX.R (reg=dst) + REX.B (base=r10) */
+        put8(out, 0x8D);
+        put8(out, modrm(2, d, 10));       /* mod=10 reg=dst rm=r10(=2) -> [r10+d32] */
+        {
+            MReloc r2;
+            r2.kind = MRelocKind::SECREL32; /* offset del var en .tls */
+            r2.patch_at = static_cast<uint32_t>(out.size());
+            r2.sym_idx = static_cast<uint32_t>(mi.src1.value);
+            r2.addend = 0;
+            fn.relocs.push_back(r2);
+        }
+        put32(out, 0);
+        return true;
+    }
     case MOp::MOV_SYM: {
         /* AOT: mov r64, &simbolo (.rodata).  REX.W + B8+rd + imm64=0
          * (placeholder) + MReloc ABS64.  El driver escribe la VA

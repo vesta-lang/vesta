@@ -154,6 +154,58 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
     }
 
+    /* TLS (thread_local) PE: si alguna seccion es SHF_TLS, sintetizar la
+     * infraestructura TLS nativa de Windows:  _tls_index (lo rellena el
+     * cargador con el indice del slot), un array de callbacks vacio, y el
+     * IMAGE_TLS_DIRECTORY; DataDirectory[9] apunta al directorio.  El acceso
+     * (mov gs:[0x58] -> [_tls_index] -> bloque -> +offset) lo emite el codegen;
+     * el reloc al simbolo `__vex_tls_index` se resuelve a la VA de aqui. */
+    uint64_t tls_index_va = 0; /* VA de _tls_index (0 = sin TLS) */
+    {
+        int tls_sec = -1;
+        for (int i = 0; i < num_secs; ++i)
+            if (secs[i].flags & AOT_SEC_TLS) {
+                tls_sec = i;
+                break;
+            }
+        if (tls_sec >= 0) {
+            const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
+            /* Layout de .tls$d: [0]=_tls_index(4) [4]=pad [8]=callbacks(8, NULL)
+             * [16]=IMAGE_TLS_DIRECTORY64(40). */
+            _BYTE tlsd[56];
+            memset(tlsd, 0, sizeof(tlsd));
+            int tlsd_idx =
+                addSection(&pe, ".tls$d",
+                           ___IMAGE_SCN_CNT_INITIALIZED_DATA |
+                               ___IMAGE_SCN_MEM_READ | ___IMAGE_SCN_MEM_WRITE,
+                           tlsd, (_DWORD)sizeof(tlsd));
+            const uint32_t tls_rva =
+                pe.sectionHeaders[tls_sec].VirtualAddress;
+            const uint32_t tlsd_rva =
+                pe.sectionHeaders[tlsd_idx].VirtualAddress;
+            _BYTE *db = pe.sectionData[tlsd_idx] + 16; /* IMAGE_TLS_DIRECTORY */
+            uint64_t start = image_base + tls_rva;
+            uint64_t end = image_base + tls_rva + secs[tls_sec].size;
+            uint64_t idx_va = image_base + tlsd_rva + 0;  /* &_tls_index */
+            uint64_t cb_va = image_base + tlsd_rva + 8;   /* &callbacks */
+            memcpy(db + 0, &start, 8);
+            memcpy(db + 8, &end, 8);
+            memcpy(db + 16, &idx_va, 8);
+            memcpy(db + 24, &cb_va, 8);
+            uint32_t zfill = (uint32_t)secs[tls_sec].bss_size;
+            memcpy(db + 32, &zfill, 4); /* SizeOfZeroFill */
+            /* +36 Characteristics = 0 (ya a cero) */
+            pe.ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
+                .VirtualAddress = tlsd_rva + 16;
+            pe.ntHeaders.OptionalHeader.DataDirectory[___IMAGE_DIRECTORY_ENTRY_TLS]
+                .Size = 40;
+            /* Las VAs absolutas del directorio exigen base fija (sin .reloc). */
+            pe.ntHeaders.OptionalHeader.DllCharacteristics &=
+                (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
+            tls_index_va = idx_va;
+        }
+    }
+
     /* Relocations cross-seccion: resolver AHORA que addSection ya asigno las
      * VirtualAddress de todas las secciones del usuario (igual que el parcheo
      * de imports, pero generico).  ImageBase + sectionHeaders[i].VirtualAddress
@@ -175,12 +227,45 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
         for (int r = 0; r < num_relocs; ++r) {
             const AotReloc *rl = &relocs[r];
+            /* TLS PE: el codegen referencia `__vex_tls_index` (RIP-relativo)
+             * para leer el indice del slot; se resuelve a la VA sintetizada
+             * arriba.  No tiene target_section (es un simbolo del emisor). */
+            if (rl->extern_name &&
+                strcmp(rl->extern_name, "__vex_tls_index") == 0) {
+                if (tls_index_va == 0) {
+                    set_err(err, err_cap,
+                            "aot_emit_pe: __vex_tls_index sin seccion TLS");
+                    freePE64File(&pe);
+                    return 0;
+                }
+                if (rl->site_section < 0 || rl->site_section >= num_secs) {
+                    set_err(err, err_cap, "aot_emit_pe: site_section invalido");
+                    freePE64File(&pe);
+                    return 0;
+                }
+                uint64_t sva =
+                    image_base +
+                    pe.sectionHeaders[rl->site_section].VirtualAddress +
+                    rl->site_off;
+                int32_t disp = (int32_t)((int64_t)tls_index_va -
+                                         (int64_t)(sva + 4) + rl->addend);
+                memcpy(pe.sectionData[rl->site_section] + rl->site_off, &disp,
+                       4);
+                continue;
+            }
             if (rl->site_section < 0 || rl->site_section >= num_secs ||
                 rl->target_section < 0 || rl->target_section >= num_secs) {
                 set_err(err, err_cap,
                         "aot_emit_pe: reloc con seccion fuera de rango");
                 freePE64File(&pe);
                 return 0;
+            }
+            /* TLS PE: SECREL32 = offset del simbolo DENTRO de su seccion (.tls),
+             * no la VA; el acceso lo suma a la base del bloque TLS en runtime. */
+            if (rl->kind == AOT_RELOC_SECREL32) {
+                int32_t off = (int32_t)((int64_t)rl->target_off + rl->addend);
+                memcpy(pe.sectionData[rl->site_section] + rl->site_off, &off, 4);
+                continue;
             }
             uint64_t target_value;
             if (rl->target_is_size) {

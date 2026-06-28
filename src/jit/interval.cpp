@@ -193,6 +193,7 @@ InstrRoles operand_roles(MOp op) noexcept {
     case MOp::MOV_SYM:
     case MOp::LEA_RIP_SYM:
     case MOp::TLS_LE_ADDR:
+    case MOp::TLS_PE_ADDR:
     case MOp::LEA_LABEL: r.dst = R::DEF; break;
 
     /* CALL indirecta (CALLIND / dispatch por puntero): src1 es el vreg con

@@ -58,6 +58,9 @@ struct NativeReloc {
         TPOFF32 =
             3, ///< TLS local-exec (ELF): offset TP-relativo de un thread_local;
                ///< el driver lo emite como R_X86_64_TPOFF32 + STT_TLS.
+        SECREL32 =
+            4, ///< TLS PE (Windows): offset del simbolo DENTRO de su seccion
+               ///< (.tls); el emisor escribe target_off (no la VA).
     };
     Kind kind = Kind::CALL_REL32;
     uint32_t offset = 0; ///< byte offset dentro de los bytes de la funcion
