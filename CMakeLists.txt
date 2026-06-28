@@ -545,7 +545,6 @@ add_library(vesta_gc STATIC
         src/vesta_gc/gc_lib.cpp
         src/vesta_gc/freestanding_shim.cpp
         src/gc/gc_heap.cpp
-        src/gc/raw_allocator.cpp
         src/gc/wait_table.cpp
         src/gc/shared_handle_table.cpp
         src/arena/arena_manager.cpp
