@@ -664,6 +664,12 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 r.kind = aot::RelocKind::REL32;
                 r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
                 break;
+            case 0x0B: // IMAGE_REL_AMD64_SECREL / I386_SECREL (TLS thread_local):
+                       // offset del simbolo dentro de su seccion (.tls).  El
+                       // addend (offset del var) vive en el campo.
+                r.kind = aot::RelocKind::SECREL32;
+                r.addend = (field + 4 <= b.size()) ? (int32_t)rd32(&b[field]) : 0;
+                break;
             default:
                 err = path + ": tipo de reloc COFF no soportado (" +
                       std::to_string(type) + ")";

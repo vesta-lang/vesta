@@ -3279,23 +3279,43 @@ int main(int argc, char *argv[]) {
                                  ir::IrModule::SD_FLAG_TLS))
                                 in.is_tls = true;
             }
-            // thread_local en una libreria compartida (.so/.dll) NO es valido
-            // con el modelo local-exec: el offset TLS de una lib cargada con
-            // dlopen se asigna en runtime (requiere initial-exec/general-dynamic
-            // o el TLS dynamic de PE), que nuestro codegen aun no emite.  Error
-            // claro en vez de producir una lib que lee basura por-hilo.
-            if (module_has_tls && (emit_shared || emit_bin)) {
+            // thread_local en libreria/binario:
+            //   - PE shared (.dll): VALIDO -- el TLS directory de Windows lo
+            //     procesa el cargador tambien para DLLs (Vista+, incl.
+            //     LoadLibrary); el emisor lo sintetiza igual que en el .exe.
+            //   - ELF shared (.so): NO -- el modelo local-exec es incorrecto en
+            //     una lib cargada con dlopen (el offset TLS se asigna en
+            //     runtime; requiere initial-exec/general-dynamic, que nuestro
+            //     codegen aun no emite).
+            //   - bin (binario plano): NO -- no hay cargador que monte el bloque.
+            const bool tls_is_pe = (fmt == aot::ObjFormat::PE);
+            if (module_has_tls &&
+                (emit_bin || (emit_shared && !tls_is_pe))) {
                 std::cerr
                     << "[aot] thread_local no soportado en --emit "
-                    << (emit_shared ? "shared" : "bin")
-                    << " todavia: el modelo local-exec necesita que el cargador "
-                       "monte el bloque TLS (PT_TLS), lo que "
-                    << (emit_shared
-                            ? "una lib con dlopen no garantiza (requiere "
-                              "initial-exec/general-dynamic)"
-                            : "un binario plano sin cargador no hace")
-                    << ".  Usa --emit exe/obj.\n";
+                    << (emit_bin ? "bin" : "shared (ELF)")
+                    << " todavia: "
+                    << (emit_bin
+                            ? "un binario plano no tiene cargador que monte el "
+                              "bloque TLS"
+                            : "una .so con dlopen necesita initial-exec/"
+                              "general-dynamic, no local-exec")
+                    << ".  Usa --emit exe/obj (o --format pe --emit shared para "
+                       "una .dll).\n";
                 return EXIT_FAILURE;
+            }
+            // PE shared (.dll) con TLS: el emisor sintetiza el TLS directory
+            // (isolation por-hilo + acceso OK), PERO el cargador de Windows no
+            // copia la plantilla a los hilos cuando el consumidor es un
+            // ejecutable AOT minimal (sin CRT): un thread_local con init != 0
+            // se leeria como 0.  Aviso (no error): zero-init funciona.
+            if (module_has_tls && emit_shared && tls_is_pe) {
+                std::cerr
+                    << "[aot] aviso: thread_local en una .dll -- la isolacion "
+                       "por-hilo funciona, pero el VALOR INICIAL (plantilla) "
+                       "puede no aplicarse si el consumidor es un .exe AOT "
+                       "minimal (sin CRT); usa init = 0 o consume la .dll desde "
+                       "un programa con CRT.\n";
             }
 
             // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
