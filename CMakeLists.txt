@@ -537,6 +537,24 @@ target_include_directories(test_lsp_position_conv PRIVATE ${VM_INCLUDES})
 
 # Inc 0 de libvesta_gc (GC opt-in de AOT): valida la C-ABI del GcHeap global
 # sin ProcessVM.  Linka vmcore (el motor GC vive en src/vesta_gc/, globbeado).
+# libvesta_gc: el motor GC (mismo que interp/JIT) empaquetado STANDALONE como
+# libreria estatica enlazable en ejecutables AOT que usan gc<T>.  Set minimo:
+# gc_lib (C-ABI) + gc_heap + arena + jit_registry/stack_scan (frames precisos).
+# Inc 0b dejo gc_heap.cpp sin dependencia de ProcessVM -> esto compila sin la VM.
+add_library(vesta_gc STATIC
+        src/vesta_gc/gc_lib.cpp
+        src/gc/gc_heap.cpp
+        src/gc/raw_allocator.cpp
+        src/gc/wait_table.cpp
+        src/gc/shared_handle_table.cpp
+        src/arena/arena_manager.cpp
+        src/arena/VirtualMemory.cpp
+        src/arena/TLB.cpp
+        src/jit/jit_registry.cpp
+        src/jit/stack_scan.cpp
+)
+target_include_directories(vesta_gc PUBLIC ${VM_INCLUDES})
+
 add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
 target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
 # vmcore es STATIC y sus deps son PRIVATE -> replicar el set de enlace.
