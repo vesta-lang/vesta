@@ -77,7 +77,8 @@ struct ObjSec {
     uint64_t sh_size = 0;
     uint64_t sh_offset = 0;
     uint64_t sh_addralign = 0;
-    uint32_t sh_info = 0; // SHT_RELA: seccion a la que aplica
+    uint32_t sh_info = 0;   // SHT_RELA: seccion a la que aplica
+    bool comdat = false;    // COFF IMAGE_SCN_LNK_COMDAT (seccion "pick-any")
 };
 struct ObjSym {
     std::string name;
@@ -85,6 +86,7 @@ struct ObjSym {
     uint8_t bind = 0;
     uint16_t shndx = 0;
     uint64_t value = 0;
+    bool comdat = false; // simbolo COMDAT/weak (duplicado tolerado: 1o gana)
 };
 struct ObjRel {
     uint32_t applies_sh = 0;       // seccion a la que aplica (indice interno)
@@ -466,6 +468,10 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
         const uint32_t al = (chars >> 20) & 0xf;
         s.sh_addralign = al ? (1u << (al - 1)) : 1;
         s.sh_info = 0;
+        // IMAGE_SCN_LNK_COMDAT (0x1000): seccion "pick-any" (inline/template de
+        // C++ duplicado en cada .obj).  El simbolo que la define se tolera
+        // duplicado (folding: la primera definicion gana).
+        s.comdat = (chars & 0x00001000u) != 0;
         // COFF marca casi todo como cargable; descartamos por nombre las
         // secciones no esenciales para ejecutar: .drectve (directivas del
         // linker), .debug* (info de depuracion) y .pdata/.xdata (tablas SEH de
@@ -501,6 +507,10 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
                    po.secs[secnum].name == os.name)
                       ? STT_SECTION
                       : 0;
+        // Weak external (105) o simbolo en seccion COMDAT -> duplicado tolerado.
+        os.comdat = (sclass == 105 /*IMAGE_SYM_CLASS_WEAK_EXTERNAL*/) ||
+                    (secnum > 0 && (uint16_t)secnum <= nsec &&
+                     po.secs[secnum].comdat);
         po.syms[k] = os;
         k += 1 + naux; // los aux ocupan slots pero los dejamos vacios
         for (uint8_t a = 0; a < naux && k - 1 + a < nsyms; ++a) {
@@ -594,6 +604,44 @@ struct MergedSec {
 inline uint64_t align_up(uint64_t v, uint64_t a) {
     if (a < 1) a = 1;
     return (v + a - 1) / a * a;
+}
+
+// Decide si un simbolo UNDEF es un import de libreria del sistema (libc /
+// Win32 CRT / kernel32) que el linker resuelve por IAT, frente a un simbolo de
+// usuario genuinamente ausente (-> error).  Asi un `rt_value` no declarado NO
+// se auto-importa (semantica de linker correcta), pero malloc/VirtualAlloc si.
+inline bool is_system_import(const std::string &n) {
+    // dllimport explicito de MinGW (__imp_X) o internos del CRT.
+    if (n.rfind("__imp_", 0) == 0) return true;
+    if (n.rfind("__acrt", 0) == 0) return true;
+    if (n.rfind("__mingw", 0) == 0) return true;
+    // Conjunto de simbolos libc / Win32 comunes (ASCII, ordenado por uso).
+    static const char *const kSys[] = {
+        // memoria / CRT
+        "malloc", "free", "calloc", "realloc", "abort", "exit", "_exit",
+        "atexit", "_assert", "_errno", "memcpy", "memmove", "memset", "memcmp",
+        "memchr",
+        // cadenas
+        "strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strncat",
+        "strchr", "strrchr", "strstr", "strtol", "strtoul", "strtod", "atoi",
+        "atol",
+        // E/S
+        "printf", "fprintf", "sprintf", "snprintf", "vsnprintf", "vfprintf",
+        "puts", "fputs", "fputc", "putchar", "fwrite", "fread", "fopen",
+        "fclose", "fflush", "fseek", "ftell", "getenv", "_fileno", "_write",
+        "_read", "__acrt_iob_func",
+        // matematicas (libm en msvcrt/ucrtbase)
+        "pow", "sqrt", "fabs", "floor", "ceil", "round", "sin", "cos", "tan",
+        "log", "log2", "log10", "exp",
+        // Win32 (kernel32 / user32 comunes)
+        "VirtualAlloc", "VirtualFree", "VirtualProtect", "GetLastError",
+        "GetSystemInfo", "LocalFree", "FormatMessageA", "FormatMessageW",
+        "GetCurrentThreadId", "GetProcAddress", "LoadLibraryA", "FreeLibrary",
+        "ExitProcess", "GetModuleHandleA", "WriteFile", "ReadFile",
+        "CreateFileA", "CloseHandle", "GetStdHandle", "Sleep", "GetTickCount"};
+    for (const char *s : kSys)
+        if (n == s) return true;
+    return false;
 }
 
 } // namespace
@@ -876,6 +924,9 @@ bool aot_link(const std::vector<std::string> &inputs,
             d.defined = true;
             auto it = globals.find(sy.name);
             if (it != globals.end() && it->second.defined) {
+                // COMDAT / weak: folding -- la primera definicion gana (inline
+                // y plantillas de C++ aparecen en multiples .obj del .a).
+                if (sy.comdat) continue;
                 err = "linker: definicion multiple del simbolo '" + sy.name + "'";
                 return false;
             }
@@ -920,6 +971,21 @@ bool aot_link(const std::vector<std::string> &inputs,
     }
 
     // 6. Resolver relocs -> AbsReloc del writer.
+    // Los simbolos UNDEF que no define ningun objeto/miembro son IMPORTS de
+    // libreria del sistema (libc / Win32).  En PE EXEC (hosted) se resuelven por
+    // IAT: un thunk `FF 25` por simbolo libc (mismo patron que la ruta inline de
+    // main.cpp) y un parcheo directo del slot para los simbolos `__imp_*` de
+    // MinGW (dllimport).  En ELF / kernel (--entry) siguen siendo error (la ruta
+    // dinamica ELF queda como follow-up).
+    const bool can_import = (opts.fmt == ObjFormat::PE) && hosted;
+    struct ImpSite {
+        int site_sec;
+        uint64_t site_off;
+        aot::RelocKind kind;
+        int64_t addend;
+        std::string sym;
+    };
+    std::vector<ImpSite> imp_sites;
     std::vector<std::string> unresolved;
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
@@ -954,6 +1020,13 @@ bool aot_link(const std::vector<std::string> &inputs,
                 if (it != globals.end() && it->second.defined) {
                     tgt = RelocTarget::addr(it->second.wsec, it->second.off);
                     ok = true;
+                } else if (can_import && is_system_import(sy.name)) {
+                    // Import de libreria del sistema (libc/Win32) -> se resuelve
+                    // via IAT tras el bucle (thunk libc o slot __imp_).  Los
+                    // simbolos de usuario ausentes NO se auto-importan.
+                    imp_sites.push_back(
+                        {site_sec, site_off, r.kind, r.addend, sy.name});
+                    continue;
                 } else {
                     unresolved.push_back(sy.name);
                     continue;
@@ -963,6 +1036,88 @@ bool aot_link(const std::vector<std::string> &inputs,
             // kind + addend ya fueron normalizados por el parser (ELF: del
             // registro RELA con +4 en PC32; COFF: leidos del propio campo).
             w.add_reloc(site_sec, site_off, tgt, r.kind, r.addend);
+        }
+    }
+
+    // 6.b Resolver los imports de libreria (PE IAT).  Dos clases:
+    //   - Simbolo libc normal (malloc/free/memcpy/abort...): el codigo emitio
+    //     `call sym` (E8 rel32).  Como `call sym` apunta a un THUNK `FF 25`
+    //     (jmp [rip+IAT]) intra-imagen; el thunk se parchea por el mecanismo de
+    //     import (add_import_call) al slot real de la IAT.
+    //   - Simbolo `__imp_X` (dllimport de MinGW): el codigo ya hizo
+    //     `call [rip+__imp_X]` (FF 15) o `mov reg,[rip+__imp_X]`; el sitio de la
+    //     reloc ES el disp32, que debe apuntar al slot de la IAT.  Se registra
+    //     como un import directo (call_off = inicio del FF 15 = site_off-2) sin
+    //     anyadir reloc.
+    if (!imp_sites.empty()) {
+        // CRT de Windows: msvcrt.dll (clasico) vs ucrtbase.dll (UCRT, MinGW
+        // ucrt64).  Se autodetecta por simbolos exclusivos de UCRT presentes en
+        // los imports (__acrt_iob_func, _assert, __acrt_*).  Ambos son DLLs del
+        // sistema en Win10+, asi que el .exe no arrastra dependencias externas.
+        std::string libc_dll = "msvcrt.dll";
+        for (const ImpSite &s : imp_sites) {
+            if (s.sym == "__acrt_iob_func" || s.sym == "_assert" ||
+                s.sym.rfind("__acrt", 0) == 0 ||
+                s.sym.rfind("_o_", 0) == 0) {
+                libc_dll = "ucrtbase.dll";
+                break;
+            }
+        }
+        // Mapa nombre de funcion -> DLL.  Win32 API conocida -> kernel32.dll;
+        // resto -> el CRT detectado.  Ampliable.
+        auto dll_for = [&libc_dll](const std::string &f) -> std::string {
+            static const char *const kernel32[] = {
+                "VirtualAlloc",   "VirtualFree",   "VirtualProtect",
+                "GetLastError",   "GetSystemInfo", "LocalFree",
+                "FormatMessageA", "FormatMessageW", "GetCurrentThreadId",
+                "GetProcAddress", "LoadLibraryA",  "FreeLibrary",
+                "ExitProcess",    "GetModuleHandleA", "WriteFile",
+                "ReadFile",       "CreateFileA",   "CloseHandle",
+                "GetStdHandle",   "Sleep",         "GetTickCount"};
+            for (const char *n : kernel32)
+                if (f == n) return "kernel32.dll";
+            return libc_dll;
+        };
+
+        std::vector<uint8_t> thunk_bytes;
+        std::unordered_map<std::string, uint64_t> thunk_off;
+        std::vector<ImportCall> calls;
+
+        for (const ImpSite &s : imp_sites) {
+            if (s.sym.rfind("__imp_", 0) == 0) {
+                // Slot IAT directo: el FF 15 empieza 2 bytes antes del disp32.
+                const std::string func = s.sym.substr(6);
+                calls.push_back({dll_for(func), func, s.site_sec,
+                                 s.site_off >= 2 ? s.site_off - 2 : 0});
+            } else if (thunk_off.find(s.sym) == thunk_off.end()) {
+                const uint64_t off = thunk_bytes.size();
+                const uint8_t t[6] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
+                thunk_bytes.insert(thunk_bytes.end(), t, t + 6);
+                thunk_off[s.sym] = off;
+                calls.push_back(
+                    {dll_for(s.sym), s.sym, -1 /*thunk_sec, fijado abajo*/, off});
+            }
+        }
+
+        int thunk_sec = -1;
+        if (!thunk_bytes.empty()) {
+            WriterSection ts;
+            ts.name = ".text.thunks";
+            ts.flags = SecFlag::READ | SecFlag::EXEC | SecFlag::CODE;
+            ts.data = std::move(thunk_bytes);
+            ts.align = 16;
+            thunk_sec = w.add_section(std::move(ts));
+            // Reapuntar cada `call sym` (rel32) al thunk correspondiente.
+            for (const ImpSite &s : imp_sites) {
+                if (s.sym.rfind("__imp_", 0) == 0) continue;
+                w.add_reloc(s.site_sec, s.site_off,
+                            RelocTarget::addr(thunk_sec, thunk_off[s.sym]),
+                            s.kind, s.addend);
+            }
+        }
+        for (ImportCall &c : calls) {
+            if (c.call_section < 0) c.call_section = thunk_sec;
+            w.add_import_call(c);
         }
     }
 
