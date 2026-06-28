@@ -54,13 +54,29 @@ std::string trim_name(const uint8_t *p, size_t n) {
 
 } // namespace
 
+namespace {
+// true si @p buf empieza con el magic de un thin archive ("!<thin>\n").
+bool ar_is_thin(const std::vector<uint8_t> &buf) {
+    static const char kThin[AR_MAGIC_LEN] = {'!', '<', 't', 'h',
+                                             'i', 'n', '>', '\n'};
+    if (buf.size() < AR_MAGIC_LEN) return false;
+    for (size_t i = 0; i < AR_MAGIC_LEN; ++i)
+        if ((char)buf[i] != kThin[i]) return false;
+    return true;
+}
+} // namespace
+
 bool ar_is_archive(const std::vector<uint8_t> &buf) {
     static const char kMagic[AR_MAGIC_LEN] = {'!', '<', 'a', 'r',
                                               'c', 'h', '>', '\n'};
     if (buf.size() < AR_MAGIC_LEN) return false;
+    bool reg = true;
     for (size_t i = 0; i < AR_MAGIC_LEN; ++i)
-        if ((char)buf[i] != kMagic[i]) return false;
-    return true;
+        if ((char)buf[i] != kMagic[i]) {
+            reg = false;
+            break;
+        }
+    return reg || ar_is_thin(buf); // regular o thin (ambos parseables)
 }
 
 bool ar_parse(const std::vector<uint8_t> &buf, std::vector<ArMember> &members,
@@ -68,15 +84,12 @@ bool ar_parse(const std::vector<uint8_t> &buf, std::vector<ArMember> &members,
     members.clear();
     symbols.clear();
     if (!ar_is_archive(buf)) {
-        // Mensaje util: distinguir "thin archive" (no soportado) del resto.
-        if (buf.size() >= 8 && buf[0] == '!' && buf[1] == '<' && buf[2] == 't') {
-            err = "archivo .a 'thin' (GNU thin) no soportado: reempaqueta con "
-                  "'ar rcs' normal";
-            return false;
-        }
-        err = "no es un archivo .a (magic '!<arch>' ausente)";
+        err = "no es un archivo .a (magic '!<arch>'/'!<thin>' ausente)";
         return false;
     }
+    // En un thin archive los miembros no llevan datos inline: la ruta del objeto
+    // (resuelta desde la tabla "//") es el nombre, y el linker lee ese fichero.
+    const bool thin = ar_is_thin(buf);
 
     // Tabla de nombres largos GNU ("//"): span dentro del buffer.
     const uint8_t *longnames = nullptr;
@@ -95,7 +108,16 @@ bool ar_parse(const std::vector<uint8_t> &buf, std::vector<ArMember> &members,
             return false;
         }
         const size_t header_offset = pos;
-        size_t data_size = read_decimal(hdr + AR_SIZE_OFF, AR_SIZE_LEN);
+        const size_t hdr_size = read_decimal(hdr + AR_SIZE_OFF, AR_SIZE_LEN);
+        // En un thin archive los miembros-OBJETO no llevan datos inline (su
+        // size en la cabecera es el del fichero externo); los especiales
+        // ("/" symtab y "//" longnames) SI son inline.
+        const uint8_t *raw_pre = hdr + AR_NAME_OFF;
+        const bool special =
+            (raw_pre[0] == '/' &&
+             (raw_pre[1] == ' ' || raw_pre[1] == '\n' || raw_pre[1] == '/'));
+        const bool external_data = thin && !special;
+        size_t data_size = external_data ? 0 : hdr_size;
         size_t data_offset = pos + AR_HDR_LEN;
         if (data_offset + data_size > buf.size()) {
             err = "archivo .a: miembro truncado";
@@ -171,19 +193,20 @@ bool ar_parse(const std::vector<uint8_t> &buf, std::vector<ArMember> &members,
                 }
             }
         } else {
-            // Miembro-objeto normal.
+            // Miembro-objeto normal (o thin: la ruta esta en el nombre).
             ArMember m;
             m.name = name.empty() ? "<anon>" : name;
             m.header_offset = header_offset;
-            m.data_offset = data_offset;
-            m.size = data_size;
+            m.data_offset = thin ? 0 : data_offset;
+            m.size = thin ? 0 : data_size;
+            m.is_thin = thin;
             members.push_back(std::move(m));
         }
 
-        // Avanzar al siguiente miembro (datos alineados a 2 bytes).
-        // OJO: usar el data_size ORIGINAL de la cabecera para el avance (en BSD
-        // ya lo descontamos del nombre; recomponer).
-        size_t consumed = read_decimal(hdr + AR_SIZE_OFF, AR_SIZE_LEN);
+        // Avanzar al siguiente miembro (datos alineados a 2 bytes).  Para los
+        // objetos de un thin archive no hay datos inline (consumed=0); para el
+        // resto, el size ORIGINAL de la cabecera (en BSD incluye el nombre).
+        size_t consumed = external_data ? 0 : hdr_size;
         pos = header_offset + AR_HDR_LEN + consumed;
         if (pos & 1) ++pos; // padding a frontera par
     }

@@ -39,10 +39,13 @@ namespace aot {
 /// Miembro (objeto) dentro de un archivo .a.  Los offsets indexan el buffer
 /// completo del .a pasado a @c ar_parse.
 struct ArMember {
-    std::string name;            ///< Nombre resuelto (p.ej. "gc_heap.cpp.obj")
+    std::string name;            ///< Nombre resuelto (p.ej. "gc_heap.cpp.obj");
+                                 ///< en un thin archive es la RUTA del objeto.
     size_t header_offset = 0;    ///< Offset de la cabecera de 60 bytes
-    size_t data_offset = 0;      ///< Offset del primer byte de datos
-    size_t size = 0;             ///< Tamano de los datos del objeto en bytes
+    size_t data_offset = 0;      ///< Offset del primer byte de datos (thin: 0)
+    size_t size = 0;             ///< Tamano de los datos del objeto (thin: 0)
+    bool is_thin = false;        ///< thin archive: los datos estan en un fichero
+                                 ///< externo (la ruta es @c name), no en el .a.
 };
 
 /// Entrada del indice de simbolos: nombre -> indice del miembro en el vector
