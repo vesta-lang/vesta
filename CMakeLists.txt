@@ -554,6 +554,14 @@ add_library(vesta_gc STATIC
         src/jit/stack_scan.cpp
 )
 target_include_directories(vesta_gc PUBLIC ${VM_INCLUDES})
+# Freestanding-ish: reducir las dependencias de libstdc++ para que el .a se
+# enlace SIN g++ (solo libc, que el AOT ya resuelve via IAT/PLT).  -fno-exceptions
+# /-rtti/-threadsafe-statics quitan _Unwind/__cxa_*/guards; el define apaga el
+# logging GC (std::ostringstream/cerr).  Lo que quede de libstdc++ (operator
+# new/delete, unordered_map) se cubre con el shim libvesta_gc_shim.
+target_compile_options(vesta_gc PRIVATE
+        -fno-exceptions -fno-rtti -fno-threadsafe-statics)
+target_compile_definitions(vesta_gc PRIVATE VESTA_GC_DEBUG_DISABLE=1)
 
 add_executable(test_gc_lib tests/gc/test_gc_lib.cpp)
 target_include_directories(test_gc_lib PRIVATE ${VM_INCLUDES})
