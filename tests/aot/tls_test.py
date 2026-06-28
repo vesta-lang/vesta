@@ -60,6 +60,7 @@ def main():
         ("66_thread_local_fn_loop.vex", 10),
         ("67_thread_local_hilos.vex", 11099),  # aislamiento por-hilo (Win32)
         ("68_thread_local_float.vex", 42),      # plantilla float + comptime const
+        ("69_thread_local_puntero.vex", 33),    # &tls + thread_local puntero
     ]
     if vm.endswith(".exe") and os.name == "nt":
         pe = os.path.join(repo, "_tls_pe")

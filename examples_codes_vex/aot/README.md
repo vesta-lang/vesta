@@ -395,6 +395,7 @@ ni sincronizacion (cada hilo accede a su copia directamente).
 | [`66_thread_local_fn_loop.vex`](66_thread_local_fn_loop.vex) | persistencia por-hilo en funcion + loop | 10 |
 | [`67_thread_local_hilos.vex`](67_thread_local_hilos.vex) | aislamiento por-hilo REAL con un hilo Win32 | 11099 |
 | [`68_thread_local_float.vex`](68_thread_local_float.vex) | plantilla float (f64) + `comptime` const | 42 |
+| [`69_thread_local_puntero.vex`](69_thread_local_puntero.vex) | `&` de un thread_local + `thread_local T*` | 33 |
 
 ### Por que usarlo
 

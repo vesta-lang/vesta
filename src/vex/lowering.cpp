@@ -13051,6 +13051,23 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         // & sobre IdentExpr local address-taken: scope guarda la addr.
         if (e->operand->kind == ast::NodeKind::IdentExpr) {
             auto *id = static_cast<ast::IdentExpr *>(e->operand.get());
+            // & sobre un GLOBAL runtime (incluido un thread_local): su
+            // direccion es STR_LIT_ADDR del slot static_data.  El driver AOT
+            // deriva la TLS-ness desde SD_FLAG_TLS y emite el acceso por thread
+            // pointer; para un global normal es la direccion lineal.
+            auto git = runtime_global_slots_.find(id->name);
+            if (git != runtime_global_slots_.end()) {
+                const ir::IrValueId va = fn_->new_value(ir::IrType::PTR);
+                ir::IrInstr is{};
+                is.op = ir::IrOp::STR_LIT_ADDR;
+                is.type = ir::IrType::PTR;
+                is.dst = va;
+                is.imm = git->second;
+                is.source_line = e->loc.line;
+                fn_->append(current_block_, std::move(is));
+                if (native_poo_) fn_->values[va].is_host_ptr = true;
+                return va;
+            }
             const ir::IrValueId addr = lookup(id->name);
             if (addr == ir::IR_NO_VALUE) {
                 error_at(e->loc,
