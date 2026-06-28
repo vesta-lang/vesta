@@ -3398,6 +3398,11 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
      * LoadLibrary), montando el bloque por-hilo. */
     uint64_t tls_index_va = aot_pe_synth_tls(&pe, secs, num_secs, 1, cfg ? cfg->tls_callback_section : -1, cfg ? cfg->tls_callback_off : 0);
 
+    /* TLS .dll: el cargador de Windows aplica la plantilla del TLS de una .dll
+     * a traves de su DllMain (no la copia sin un entry que dispare su init).
+     * El AddressOfEntryPoint -> __vex_tls_init se fija tras finalizePE64File
+     * (que lo recomputa), mas abajo. */
+
     /* Aplicar relocs (PIC: REL32 internas).  Mismo patron que aot_emit_pe. */
     {
         const uint64_t image_base = pe.ntHeaders.OptionalHeader.ImageBase;
@@ -3540,7 +3545,17 @@ int aot_emit_pe_dll(const char *path, const AotLayoutCfg *cfg,
         (uint16_t)~___IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
 
     finalizePE64File(&pe);
-    pe.ntHeaders.OptionalHeader.AddressOfEntryPoint = 0; /* sin DllMain */
+    /* finalizePE64File recomputa el entry; lo re-fijamos.  Con TLS el entry
+     * apunta a __vex_tls_init (DllMain que aplica la plantilla por-hilo y
+     * devuelve TRUE); sin TLS no hay DllMain (entry=0). */
+    if (tls_index_va != 0 && cfg && cfg->tls_callback_section >= 0 &&
+        cfg->tls_callback_section < pe.numberOfSections) {
+        pe.ntHeaders.OptionalHeader.AddressOfEntryPoint =
+            pe.sectionHeaders[cfg->tls_callback_section].VirtualAddress +
+            cfg->tls_callback_off;
+    } else {
+        pe.ntHeaders.OptionalHeader.AddressOfEntryPoint = 0; /* sin DllMain */
+    }
     writePE64File(&pe, path);
     freePE64File(&pe);
 

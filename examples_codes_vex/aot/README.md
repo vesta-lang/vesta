@@ -381,7 +381,7 @@ Las referencias a simbolos en OPERANDOS DE MEMORIA (`lgdt [sym]`,
 `mov rsi, sym`) tampoco se resuelven aun; se usa la direccion @at fija (p.ej.
 `lgdt [0x7DC0]`).  El far jump y los datos (`dd sym`) SI son simbolicos.
 
-## thread_local (TLS nativo) -- ejemplos 64-68
+## thread_local (TLS nativo) -- ejemplos 64-70
 
 `thread_local <T> NAME = init;` declara una variable cuyo **almacenamiento es
 privado de cada hilo**: cada hilo ve y muta su PROPIA copia, inicializada con la
@@ -396,6 +396,7 @@ ni sincronizacion (cada hilo accede a su copia directamente).
 | [`67_thread_local_hilos.vex`](67_thread_local_hilos.vex) | aislamiento por-hilo REAL con un hilo Win32 | 11099 |
 | [`68_thread_local_float.vex`](68_thread_local_float.vex) | plantilla float (f64) + `comptime` const | 42 |
 | [`69_thread_local_puntero.vex`](69_thread_local_puntero.vex) | `&` de un thread_local + `thread_local T*` | 33 |
+| [`70_thread_local_dll.vex`](70_thread_local_dll.vex) | TLS en una `.dll` PE (plantilla via DllMain sintetico) | host C: 0 |
 
 ### Por que usarlo
 
@@ -443,6 +444,18 @@ lea rax, [r10 + x@secrel] ; &x ; offset del var dentro de .tls
 El cargador del SO asigna y monta el bloque de cada hilo (tambien para los
 hilos creados con `CreateThread`), garantizando el aislamiento.
 
+**PE shared (.dll).**  Una `.dll` necesita un paso extra: el cargador de Windows
+NO copia la plantilla (los valores iniciales) a los hilos a menos que la `.dll`
+tenga un `DllMain` que dispare la init en cada attach.  Por eso el emisor, ademas
+del `IMAGE_TLS_DIRECTORY`, sintetiza `__vex_tls_init` (escribe los valores
+iniciales no-cero en el bloque por-hilo y devuelve TRUE) y fija el
+`AddressOfEntryPoint` de la `.dll` a esa funcion -- un `DllMain` minimo.  ntdll
+lo invoca en cada `DLL_PROCESS_ATTACH` / `DLL_THREAD_ATTACH`, de modo que cada
+hilo recibe su copia inicializada.  Funciona con cualquier consumidor (con o sin
+CRT).  Ver [`70_thread_local_dll.vex`](70_thread_local_dll.vex) +
+[`70_thread_local_dll_host.c`](70_thread_local_dll_host.c) (host C que verifica
+plantilla + aislamiento por-hilo).
+
 ### Compilar
 
 ```
@@ -459,11 +472,12 @@ vm --link t.o libc.so.6 -o t --format elf
 
 ### Limitaciones
 
-- `thread_local` solo es valido en **ejecutables** (`--emit exe`/`obj`).  En
-  `--emit shared` (.so/.dll) y `--emit bin` (binario plano) el driver lo
-  rechaza con un error claro: una lib cargada con `dlopen`/`LoadLibrary`
-  necesita el modelo *initial-exec/general-dynamic* o el TLS dinamico, y un
-  binario plano no tiene cargador que monte el bloque.
+- `thread_local` es valido en **ejecutables** (`--emit exe`/`obj`) y en
+  **`.dll` PE** (`--format pe --emit shared`, via el `DllMain` sintetico de
+  arriba).  En `--emit shared --format elf` (`.so` con `dlopen`) y en
+  `--emit bin` (binario plano) el driver lo rechaza con un error claro: una
+  `.so` necesita el modelo *initial-exec/general-dynamic* o el TLS dinamico, y
+  un binario plano no tiene cargador que monte el bloque.
 - La plantilla debe ser constante (no una expresion de runtime).
 - Tipos soportados como plantilla: enteros, `bool`, `char`, `f32`/`f64`.  Tipos
   gestionados (`string`, clases) no son plantillas TLS validas.

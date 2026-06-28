@@ -1798,7 +1798,13 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     if (native_poo_ && !tls_nonzero_inits_.empty()) {
         ir::IrFunction ti;
         ti.name = "__vex_tls_init";
-        ti.ret_type = ir::IrType::VOID;
+        // Devuelve i64 1 (TRUE): __vex_tls_init es el ENTRY POINT (DllMain) de la
+        // .dll -- el cargador lo llama en cada attach de hilo y aqui aplicamos la
+        // plantilla por-hilo (ntdll no la copia para el TLS de una .dll sin un
+        // entry que dispare su init).  DllMain debe devolver TRUE o la carga
+        // falla.  (Tambien queda registrado como TLS callback, que ignora el
+        // retorno.)
+        ti.ret_type = ir::IrType::I64;
         const ir::IrBlockId e = ti.new_block("entry");
         for (const auto &pr : tls_nonzero_inits_) {
             const uint64_t slot = pr.first;
@@ -1833,10 +1839,21 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 ti.append(e, std::move(s));
             }
         }
+        // return 1 (TRUE) -- DllMain debe devolver no-cero o la carga falla.
+        const ir::IrValueId v_one = ti.new_value(ir::IrType::I64);
+        {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CONST;
+            c.type = ir::IrType::I64;
+            c.dst = v_one;
+            c.imm = 1;
+            ti.append(e, std::move(c));
+        }
         {
             ir::IrInstr r{};
             r.op = ir::IrOp::RET;
-            r.type = ir::IrType::VOID;
+            r.type = ir::IrType::I64;
+            r.operands = {v_one};
             ti.append(e, std::move(r));
         }
         out_module.add_function(std::move(ti));
