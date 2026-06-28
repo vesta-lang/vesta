@@ -1132,15 +1132,21 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (gv->is_thread_local) {
             uint64_t nbytes = 8;
             uint16_t talign = 8;
+            PrimitiveKind prim_kind = PrimitiveKind::I64;
             if (gv->type &&
                 gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
                 auto *pt =
                     static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
+                prim_kind = pt->prim;
                 nbytes = primitive_size_bytes(pt->prim);
                 if (nbytes == 0) nbytes = 8;
                 talign = static_cast<uint16_t>(nbytes);
             }
-            // Valor inicial: literal entero (o negado) -> constante.
+            const bool is_f64 = (prim_kind == PrimitiveKind::F64);
+            const bool is_f32 = (prim_kind == PrimitiveKind::F32);
+            // Valor inicial: constante (literal entero/float/bool/char, negado,
+            // o una referencia a un `comptime` const).  Es la plantilla
+            // estatica que el cargador copia por-hilo.
             uint64_t init_val = 0;
             bool init_ok = true;
             if (gv->init) {
@@ -1149,30 +1155,79 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 if (ie->kind == ast::NodeKind::UnaryExpr) {
                     auto *u = static_cast<const ast::UnaryExpr *>(ie);
                     if (u->op == ast::UnOp::Neg && u->operand &&
-                        u->operand->kind == ast::NodeKind::IntLitExpr) {
+                        (u->operand->kind == ast::NodeKind::IntLitExpr ||
+                         u->operand->kind == ast::NodeKind::FloatLitExpr)) {
                         sign = -1;
                         ie = u->operand.get();
                     }
                 }
-                if (ie->kind == ast::NodeKind::IntLitExpr) {
-                    auto *il = static_cast<const ast::IntLitExpr *>(ie);
-                    init_val = static_cast<uint64_t>(
-                        sign * static_cast<int64_t>(il->value));
+                if (ie->kind == ast::NodeKind::FloatLitExpr) {
+                    // Empaquetar los bits IEEE 754 (f64 o f32) de la plantilla.
+                    double d = sign *
+                               static_cast<const ast::FloatLitExpr *>(ie)->value;
+                    if (is_f32) {
+                        float f = static_cast<float>(d);
+                        uint32_t u32;
+                        std::memcpy(&u32, &f, 4);
+                        init_val = u32;
+                    } else {
+                        std::memcpy(&init_val, &d, 8);
+                    }
+                } else if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    int64_t iv =
+                        sign * static_cast<int64_t>(
+                                   static_cast<const ast::IntLitExpr *>(ie)
+                                       ->value);
+                    // i64-literal en un thread_local float -> convertir a IEEE.
+                    if (is_f64) {
+                        double d = static_cast<double>(iv);
+                        std::memcpy(&init_val, &d, 8);
+                    } else if (is_f32) {
+                        float f = static_cast<float>(iv);
+                        uint32_t u32;
+                        std::memcpy(&u32, &f, 4);
+                        init_val = u32;
+                    } else {
+                        init_val = static_cast<uint64_t>(iv);
+                    }
                 } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
                     init_val =
                         static_cast<const ast::BoolLitExpr *>(ie)->value ? 1 : 0;
                 } else if (ie->kind == ast::NodeKind::CharLitExpr) {
                     init_val = static_cast<uint64_t>(
                         static_cast<const ast::CharLitExpr *>(ie)->codepoint);
+                } else if (ie->kind == ast::NodeKind::IdentExpr) {
+                    // Referencia a un `comptime` const entero -> su valor.
+                    const auto &cgv = tc_.comptime_const_values();
+                    auto cit = cgv.find(
+                        static_cast<const ast::IdentExpr *>(ie)->name);
+                    if (cit != cgv.end() && !cit->second.is_str &&
+                        !cit->second.is_struct) {
+                        int64_t cv = sign * cit->second.value;
+                        if (is_f64) {
+                            double d = static_cast<double>(cv);
+                            std::memcpy(&init_val, &d, 8);
+                        } else if (is_f32) {
+                            float f = static_cast<float>(cv);
+                            uint32_t u32;
+                            std::memcpy(&u32, &f, 4);
+                            init_val = u32;
+                        } else {
+                            init_val = static_cast<uint64_t>(cv);
+                        }
+                    } else {
+                        init_ok = false;
+                    }
                 } else {
                     init_ok = false;
                 }
             }
             if (!init_ok) {
-                diags_.error(gv->loc,
-                             "thread_local '" + gv->name +
-                                 "': el inicializador debe ser una constante "
-                                 "(literal entero/bool/char o ausente)");
+                diags_.error(
+                    gv->loc,
+                    "thread_local '" + gv->name +
+                        "': el inicializador debe ser una constante (literal "
+                        "entero/float/bool/char, o un `comptime` const)");
                 continue;
             }
             (void)get_or_create_tls_global_slot(gv->name, nbytes, init_val,

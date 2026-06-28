@@ -130,3 +130,7 @@ doc/sprint_lsp_machine_view.md
 
 # Artefacto suelto del compilador en la raiz
 /out.vel
+
+# Directorios temporales de tests AOT (se crean y borran en runtime)
+_tls_test/
+_tls_pe/
