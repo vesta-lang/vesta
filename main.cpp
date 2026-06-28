@@ -3261,8 +3261,15 @@ int main(int argc, char *argv[]) {
             // serializa por-instruccion; se reconstruye aqui desde el flag de
             // la entrada, que SI round-trippea).  El codegen vreg lo consume
             // para emitir el acceso por thread pointer (fs/gs + TPOFF).
+            bool module_has_tls = false;
             {
                 const auto &sd_tls = aot_mod.static_data;
+                for (size_t i = 0; i < sd_tls.size(); ++i)
+                    if (sd_tls.entries[i].meta.flags &
+                        ir::IrModule::SD_FLAG_TLS) {
+                        module_has_tls = true;
+                        break;
+                    }
                 for (auto &f : aot_mod.functions)
                     for (auto &blk : f.blocks)
                         for (auto &in : blk.instrs)
@@ -3271,6 +3278,24 @@ int main(int argc, char *argv[]) {
                                 (sd_tls.entries[in.imm].meta.flags &
                                  ir::IrModule::SD_FLAG_TLS))
                                 in.is_tls = true;
+            }
+            // thread_local en una libreria compartida (.so/.dll) NO es valido
+            // con el modelo local-exec: el offset TLS de una lib cargada con
+            // dlopen se asigna en runtime (requiere initial-exec/general-dynamic
+            // o el TLS dynamic de PE), que nuestro codegen aun no emite.  Error
+            // claro en vez de producir una lib que lee basura por-hilo.
+            if (module_has_tls && (emit_shared || emit_bin)) {
+                std::cerr
+                    << "[aot] thread_local no soportado en --emit "
+                    << (emit_shared ? "shared" : "bin")
+                    << " todavia: el modelo local-exec necesita que el cargador "
+                       "monte el bloque TLS (PT_TLS), lo que "
+                    << (emit_shared
+                            ? "una lib con dlopen no garantiza (requiere "
+                              "initial-exec/general-dynamic)"
+                            : "un binario plano sin cargador no hace")
+                    << ".  Usa --emit exe/obj.\n";
+                return EXIT_FAILURE;
             }
 
             // Indice nombre -> IrFunction* del modulo (para resolver CALLs).
