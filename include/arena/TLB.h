@@ -28,9 +28,11 @@
 #include <cstring>
 #include <unordered_map>
 #include <variant>
-#include <sstream>
-#include <iomanip>
 #include <memory_resource>
+#if !defined(VESTA_GC_FREESTANDING)
+#include <iomanip>
+#include <sstream>
+#endif
 
 #include "arena/arena.h"
 
@@ -69,10 +71,12 @@ struct TLBTable; // declaracion adelantada necesaria en TLBEntry
  * @param ptr Puntero virtual a imprimir.
  * @return    Referencia al mismo flujo para encadenar operaciones.
  */
+#if !defined(VESTA_GC_FREESTANDING)
 inline std::ostream &operator<<(std::ostream &os, const vm::vm_map_ptr &ptr) {
     os << "0x" << std::hex << ptr.raw << std::dec;
     return os;
 }
+#endif
 
 /**
  * @brief Dato almacenado en una hoja del arbol de traduccion (TLB).
@@ -98,6 +102,7 @@ typedef struct TLBEntryData {
      *
      * @return Cadena descriptiva de la entrada.
      */
+#if !defined(VESTA_GC_FREESTANDING)
     [[nodiscard]] std::string to_string() const {
         std::ostringstream oss;
 
@@ -129,6 +134,7 @@ typedef struct TLBEntryData {
         oss << "}";
         return oss.str();
     }
+#endif
 } TLBEntryData;
 
 /**

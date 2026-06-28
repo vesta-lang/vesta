@@ -21,6 +21,8 @@
 #include "arena/VirtualMemory.h"
 #include <algorithm> // UCRT64: no transitivo
 
+#include "util/gc_diag.h" // VGC_COUT (neutralizable en freestanding)
+
 namespace vm {
 
 /**
@@ -228,8 +230,8 @@ void VirtualMemory::read_bytes(uint64_t vaddr, void *dst, size_t size) {
             }
 
             if (entry->type_address != MAPPED_PTR_HOST) {
-                std::cout << "Modo de acceso no implementado: "
-                          << entry->type_address << std::endl;
+                VGC_COUT << "Modo de acceso no implementado: "
+                         << entry->type_address << VGC_ENDL;
                 exit(-1);
             }
 
@@ -302,8 +304,8 @@ void VirtualMemory::write_bytes(uint64_t vaddr, const void *src, size_t size) {
             }
 
             if (entry->type_address != MAPPED_PTR_HOST) {
-                std::cout << "Modo de acceso no implementado: "
-                          << entry->type_address << std::endl;
+                VGC_COUT << "Modo de acceso no implementado: "
+                         << entry->type_address << VGC_ENDL;
                 exit(-1);
             }
 
