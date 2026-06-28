@@ -23,12 +23,14 @@
 #include "aot/linker.h"
 
 #include "aot/aot_native.h"  // aot_make_start_stub, AotArch
+#include "aot/ar_archive.h"  // Phase AOT.5: lector de archivos estaticos .a
 #include "aot/link_script.h" // Phase AOT.5: link-script Vex (configurable)
 
 #include <cstdint>
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace aot {
@@ -115,7 +117,9 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out) {
 
 bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
     po.path = path;
-    if (!read_file(path, po.bytes)) {
+    // Si los bytes ya estan cargados (miembro de un archivo .a en memoria) no
+    // se vuelve a leer del disco.
+    if (po.bytes.empty() && !read_file(path, po.bytes)) {
         err = "no se puede abrir el objeto: " + path;
         return false;
     }
@@ -251,7 +255,7 @@ constexpr uint32_t R_386_PC32 = 2;  // pc-rel: S + A - P
 bool parse_elf32_obj(const std::string &path, ParsedObj &po, std::string &err) {
     po.path = path;
     po.is32 = true;
-    if (!read_file(path, po.bytes)) {
+    if (po.bytes.empty() && !read_file(path, po.bytes)) {
         err = "no se puede abrir el objeto: " + path;
         return false;
     }
@@ -393,7 +397,7 @@ constexpr uint8_t IMAGE_SYM_CLASS_STATIC = 3;
 // addend COFF vive EN el campo -> se lee de los bytes de la seccion.
 bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
     po.path = path;
-    if (!read_file(path, po.bytes)) {
+    if (po.bytes.empty() && !read_file(path, po.bytes)) {
         err = "no se puede abrir el objeto: " + path;
         return false;
     }
@@ -553,9 +557,17 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
 
 // Detecta el formato por magic y despacha al parser correcto.
 bool parse_any_obj(const std::string &path, ParsedObj &po, std::string &err) {
-    std::vector<uint8_t> head;
-    if (!read_file(path, head) || head.size() < 4) {
-        err = "no se puede abrir el objeto: " + path;
+    // Autodeteccion por magic.  Si po.bytes ya esta cargado (miembro de un .a)
+    // se usa directamente; si no, se leen los primeros bytes del fichero.
+    if (po.bytes.empty()) {
+        if (!read_file(path, po.bytes)) {
+            err = "no se puede abrir el objeto: " + path;
+            return false;
+        }
+    }
+    const std::vector<uint8_t> &head = po.bytes;
+    if (head.size() < 4) {
+        err = path + ": objeto truncado";
         return false;
     }
     if (head[0] == 0x7f && head[1] == 'E' && head[2] == 'L' && head[3] == 'F') {
@@ -597,10 +609,121 @@ bool aot_link(const std::vector<std::string> &inputs,
         err = "linker: sin objetos de entrada";
         return false;
     }
-    // 1. Parsear todos los objetos (auto-detecta ELF32/64 y COFF i386/AMD64).
-    std::vector<ParsedObj> objs(inputs.size());
-    for (size_t i = 0; i < inputs.size(); ++i)
-        if (!parse_any_obj(inputs[i], objs[i], err)) return false;
+    // 1. Parsear entradas.  Se distinguen OBJETOS (.o/.obj: siempre se enlazan)
+    //    de ARCHIVOS estaticos (.a: "pull" perezoso -- solo se extraen los
+    //    miembros que definen un simbolo realmente referenciado, semantica
+    //    estandar de linker).  Auto-detecta ELF32/64 y COFF i386/AMD64.
+    std::vector<ParsedObj> objs;
+
+    // Archivo .a cargado + su indice simbolo->miembro (del indice del .a si lo
+    // trae, o construido escaneando los symtab de los miembros como fallback).
+    struct ArchiveInput {
+        std::string path;
+        std::vector<uint8_t> buf;
+        std::vector<ArMember> members;
+        std::vector<bool> pulled;
+        std::unordered_map<std::string, int> sym_to_member;
+    };
+    std::vector<ArchiveInput> archives;
+
+    for (const std::string &in : inputs) {
+        std::vector<uint8_t> buf;
+        if (!read_file(in, buf)) {
+            err = "no se puede abrir la entrada: " + in;
+            return false;
+        }
+        if (ar_is_archive(buf)) {
+            ArchiveInput a;
+            a.path = in;
+            a.buf = std::move(buf);
+            std::vector<ArSymbol> arsyms;
+            if (!ar_parse(a.buf, a.members, arsyms, err)) {
+                err = in + ": " + err;
+                return false;
+            }
+            a.pulled.assign(a.members.size(), false);
+            if (!arsyms.empty()) {
+                // Indice del propio .a (rapido: no parsea miembros no usados).
+                for (const ArSymbol &s : arsyms)
+                    if (s.member_index >= 0)
+                        a.sym_to_member.emplace(s.name, s.member_index);
+            } else {
+                // Fallback: escanear los globals definidos de cada miembro.
+                for (size_t mi = 0; mi < a.members.size(); ++mi) {
+                    const ArMember &m = a.members[mi];
+                    ParsedObj tmp;
+                    tmp.bytes.assign(a.buf.begin() + m.data_offset,
+                                     a.buf.begin() + m.data_offset + m.size);
+                    std::string e2;
+                    if (!parse_any_obj(a.path + "(" + m.name + ")", tmp, e2))
+                        continue; // miembro no-objeto: ignorar
+                    for (const ObjSym &sy : tmp.syms)
+                        if (sy.bind == STB_GLOBAL && sy.shndx != SHN_UNDEF &&
+                            sy.type != STT_SECTION && !sy.name.empty())
+                            a.sym_to_member.emplace(sy.name, (int)mi);
+                }
+            }
+            archives.push_back(std::move(a));
+        } else {
+            ParsedObj po;
+            po.bytes = std::move(buf); // pre-cargado (no se relee del disco)
+            if (!parse_any_obj(in, po, err)) return false;
+            objs.push_back(std::move(po));
+        }
+    }
+    if (objs.empty()) {
+        err = "linker: sin objetos de entrada (solo se dieron archivos .a)";
+        return false;
+    }
+
+    // 1.b "Pull" perezoso de miembros de archivo: incluye un miembro solo si
+    //     define un simbolo global referenciado-y-aun-no-definido.  Itera a
+    //     punto fijo (un miembro nuevo puede referenciar otros).
+    {
+        std::unordered_set<std::string> defined, referenced;
+        auto scan = [&](const ParsedObj &o) {
+            for (const ObjSym &sy : o.syms) {
+                if (sy.bind != STB_GLOBAL || sy.name.empty() ||
+                    sy.type == STT_SECTION)
+                    continue;
+                if (sy.shndx == SHN_UNDEF)
+                    referenced.insert(sy.name);
+                else
+                    defined.insert(sy.name);
+            }
+        };
+        for (const ParsedObj &o : objs)
+            scan(o);
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            std::vector<std::string> undef;
+            for (const std::string &n : referenced)
+                if (!defined.count(n)) undef.push_back(n);
+            for (const std::string &name : undef) {
+                if (defined.count(name)) continue; // resuelto en este pase
+                for (ArchiveInput &a : archives) {
+                    auto it = a.sym_to_member.find(name);
+                    if (it == a.sym_to_member.end() || it->second < 0 ||
+                        a.pulled[it->second])
+                        continue;
+                    const int mi = it->second;
+                    a.pulled[mi] = true;
+                    const ArMember &m = a.members[mi];
+                    ParsedObj po;
+                    po.bytes.assign(a.buf.begin() + m.data_offset,
+                                    a.buf.begin() + m.data_offset + m.size);
+                    if (!parse_any_obj(a.path + "(" + m.name + ")", po, err))
+                        return false;
+                    scan(po);
+                    objs.push_back(std::move(po));
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
     // Arquitectura: todos los objetos deben coincidir (32 vs 64 bits).
     const bool is32 = objs[0].is32;
     for (size_t i = 1; i < objs.size(); ++i)
