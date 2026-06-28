@@ -69,6 +69,17 @@ void vex_gc_collect(void);
 uint8_t *vex_gc_alloc_ptr(uint64_t size);
 
 /**
+ * @brief Registra los stackmaps AOT (seccion .vexgc_smap) en el JitRegistry
+ *        para que el scan preciso descubra raices gc<T> en los frames nativos.
+ * @param sec  Puntero al inicio de la seccion .vexgc_smap (el tamanño total va
+ *             embebido en su header, offset 12).
+ * @note La llama el arranque del binario (CALL __vexgc_init en main) antes del
+ *       primer alloc.  Idempotente-ish: registrar dos veces duplica entradas
+ *       (el arranque la llama una sola vez).
+ */
+void vex_gc_register_aot_stackmaps(const uint8_t *sec);
+
+/**
  * @brief Pinna un handle como raiz externa (refcount): no se colecta mientras
  *        este pinnado.  Usado para raices que el GC no ve via stackmaps
  *        (globals nativos, estructuras host) y en tests.

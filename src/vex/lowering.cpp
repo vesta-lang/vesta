@@ -1672,6 +1672,63 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         }
     }
 
+    // gc<T> opt-in: si el modulo usa gc<Class>, generar __vexgc_init que
+    // registra los stackmaps AOT (seccion .vexgc_smap) en el GC al arranque
+    // (CALL vex_gc_register_aot_stackmaps(section_start, section_size)) e
+    // inyectar un CALL a el al INICIO de main -> el scan preciso ve los frames
+    // nativos y los gc<T> vivos sobreviven la coleccion.  El driver emite la
+    // seccion .vexgc_smap tras el layout (con relocs a cada funcion).
+    if (native_poo_ && !classes_used_gc_.empty()) {
+        ir::IrFunction gi;
+        gi.name = "__vexgc_init";
+        gi.ret_type = ir::IrType::VOID;
+        const ir::IrBlockId e = gi.new_block("entry");
+        // %start = section_start(".vexgc_smap")  (PTR)
+        const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
+        gi.values[v_start].is_host_ptr = true;
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::SECTION_REF;
+            r.type = ir::IrType::PTR;
+            r.dst = v_start;
+            r.func_name = ".vexgc_smap";
+            r.imm = 0; // START
+            gi.append(e, std::move(r));
+        }
+        // call vex_gc_register_aot_stackmaps(%start)  -- el tamanño total va
+        // EMBEBIDO en el header de la seccion (section_size seria una reloc SIZE
+        // no soportada en .obj/.o; section_start es una ADDR normal).
+        {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = "vex_gc_register_aot_stackmaps";
+            c.operands = {v_start};
+            gi.append(e, std::move(c));
+        }
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::RET;
+            r.type = ir::IrType::VOID;
+            gi.append(e, std::move(r));
+        }
+        out_module.add_function(std::move(gi));
+        // Inyectar CALL __vexgc_init al inicio de main (antes de todo, incl. los
+        // inits de cpu): el registro debe correr antes del primer gc<T> alloc.
+        for (auto &f : out_module.functions) {
+            if (f.name != "main" || f.blocks.empty()) continue;
+            ir::IrInstr cg{};
+            cg.op = ir::IrOp::CALL;
+            cg.type = ir::IrType::VOID;
+            cg.dst = ir::IR_NO_VALUE;
+            cg.func_name = "__vexgc_init";
+            f.blocks[0].instrs.insert(f.blocks[0].instrs.begin(),
+                                      std::move(cg));
+            break;
+        }
+    }
+
     return diags_.error_count() == initial_errors;
 }
 
