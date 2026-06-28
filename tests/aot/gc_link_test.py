@@ -66,11 +66,23 @@ def main():
         return 1
 
     r = run([exe])
+    rc = 0
     if r.returncode == 42:
         print("GC-LINK PE (gc<T> + libvesta_gc.a, sin g++): exit=42 OK")
-        return 0
-    print(f"GC-LINK PE: EXIT MISMATCH got={r.returncode} exp=42")
-    return 1
+    else:
+        print(f"GC-LINK PE: EXIT MISMATCH got={r.returncode} exp=42")
+        rc = 1
+
+    # Increment 3: --emit exe DIRECTO debe auto-enlazar libvesta_gc.a.
+    auto = os.path.join(work, "gc_auto.exe")
+    run([vm, "--vex", src, "-m", "aot", "--emit", "exe", "--format", "pe",
+         "-o", auto])
+    if os.path.exists(auto) and run([auto]).returncode == 42:
+        print("GC-AUTOLINK PE (--emit exe, libvesta_gc.a automatica): exit=42 OK")
+    else:
+        print("GC-AUTOLINK PE: FALLO (auto-link de libvesta_gc.a)")
+        rc = 1
+    return rc
 
 
 if __name__ == "__main__":

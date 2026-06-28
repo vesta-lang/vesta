@@ -3155,6 +3155,40 @@ int main(int argc, char *argv[]) {
                     return EXIT_FAILURE;
                 }
             }
+            // Increment 3: auto-link de libvesta_gc.a si el modulo usa gc<T>.
+            // El frontend emite __vexgc_init cuando hay gc<T>; ese codigo llama
+            // a vex_gc_* (definidos en libvesta_gc.a).  Para --emit exe se emite
+            // un .obj temporal y se enlaza con la lib (vm --link interno),
+            // porque la ruta inline mandaria vex_gc_* a imports de DLL (rotos).
+            // Solo PE por ahora (la lib se distribuye como COFF .a).
+            bool gc_autolink = false;
+            std::string gc_real_out, gc_tmp_obj;
+            {
+                bool uses_gc = false;
+                // __vexgc_init suele inlinearse en main; detectamos por las
+                // llamadas a los runtime entries vex_gc_* en cualquier funcion.
+                for (const auto &fn : aot_mod.functions) {
+                    for (const auto &b : fn.blocks) {
+                        for (const auto &ins : b.instrs)
+                            if (ins.func_name.rfind("vex_gc_", 0) == 0) {
+                                uses_gc = true;
+                                break;
+                            }
+                        if (uses_gc) break;
+                    }
+                    if (uses_gc) break;
+                }
+                const bool want_exec =
+                    !emit_obj && !emit_shared && !emit_bin;
+                if (uses_gc && want_exec && fmt == aot::ObjFormat::PE) {
+                    gc_autolink = true;
+                    emit_obj = true;          // emitir .obj temporal...
+                    gc_real_out = out_prefix; // ...y enlazarlo a este .exe
+                    gc_tmp_obj = out_prefix + ".vexgc.tmp.obj";
+                    out_prefix = gc_tmp_obj;
+                }
+            }
+
             // --emit shared: ELF (.so) y PE (.dll).
             if (emit_shared && !aot_pic) {
                 std::cerr << "[aot] --emit shared requiere PIC; --no-pie no es "
@@ -4001,6 +4035,51 @@ int main(int argc, char *argv[]) {
                 std::cerr << "[aot] error al escribir '" << out_prefix
                           << "': " << werr << "\n";
                 return EXIT_FAILURE;
+            }
+
+            // Increment 3: gc<T> -> enlazar el .obj temporal con libvesta_gc.a
+            // (vm --link interno) para producir el .exe final.
+            if (gc_autolink) {
+                namespace fs = std::filesystem;
+                std::vector<fs::path> cands;
+                const fs::path self(argv[0]);
+                if (self.has_parent_path())
+                    cands.push_back(self.parent_path() / "libvesta_gc.a");
+                cands.emplace_back("libvesta_gc.a");
+                cands.push_back(fs::path("cmake-build-debug") /
+                                "libvesta_gc.a");
+                std::string lib_path;
+                for (const auto &c : cands) {
+                    std::error_code ec;
+                    if (fs::exists(c, ec)) {
+                        lib_path = c.string();
+                        break;
+                    }
+                }
+                if (lib_path.empty()) {
+                    std::cerr
+                        << "[aot] gc<T>: no se encontro libvesta_gc.a (junto a "
+                           "vm o en el cwd).  Enlaza manualmente:\n  vm --link "
+                        << gc_tmp_obj << " libvesta_gc.a -o " << gc_real_out
+                        << " --format pe\n";
+                    return EXIT_FAILURE;
+                }
+                aot::LinkOptions lopts;
+                lopts.fmt = aot::ObjFormat::PE;
+                std::string lerr;
+                const bool ok = aot::aot_link({gc_tmp_obj, lib_path},
+                                              gc_real_out, lopts, lerr);
+                std::error_code ec;
+                fs::remove(gc_tmp_obj, ec); // limpiar el .obj temporal
+                if (!ok) {
+                    std::cerr << "[aot] gc<T> auto-link error: " << lerr << "\n";
+                    return EXIT_FAILURE;
+                }
+                std::cout << "[aot] ejecutable nativo PE con GC escrito en '"
+                          << gc_real_out
+                          << "' (gc<T> -> libvesta_gc.a auto-enlazada, sin "
+                             "g++).\n";
+                return EXIT_SUCCESS;
             }
 
             const char *fmt_name = (fmt == aot::ObjFormat::PE) ? "PE" : "ELF";
