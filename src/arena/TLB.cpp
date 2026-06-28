@@ -44,7 +44,7 @@ inline TLBEntry &ensure_level(std::vector<TLBEntry> &vec, size_t idx,
                               levelEntry lvl) {
     // el vector nunca deberia estar vacio; si ocurre es un error grave
     if (!&vec || vec.capacity() == 0) {
-        std::cerr << "FATAL: Null vector in ensure_level!" << std::endl;
+        VGC_CERR << "FATAL: Null vector in ensure_level!" << VGC_ENDL;
         std::abort(); // abortar: estado irrecuperable
     }
 
@@ -81,6 +81,7 @@ inline TLBEntry &ensure_level(std::vector<TLBEntry> &vec, size_t idx,
  *
  * @param vpn_ Direccion virtual a inspeccionar.
  */
+#if !defined(VESTA_GC_FREESTANDING)
 void LazyHybridTLB::dump_tree(uint64_t vpn_) const {
     // encabezado con la direccion completa
     std::cout << "\n=== VPN BREAKDOWN 0x" << std::hex << vpn_ << std::dec
@@ -154,6 +155,7 @@ void LazyHybridTLB::dump_stats() const {
     std::cout << "PT2 active: " << pt2_active << ", PT1 active: " << pt1_active
               << ", DATA slots: " << data_entries << std::endl;
 }
+#endif // !VESTA_GC_FREESTANDING (dump_tree/dump_stats: debug iostream)
 
 /**
  * @brief Registra o actualiza la traduccion de la pagina que contiene @p ptr_.

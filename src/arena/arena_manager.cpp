@@ -20,8 +20,10 @@
  */
 #include "arena/arena_manager.h"
 
-#include <iomanip>
 #include <vector>
+#if !defined(VESTA_GC_FREESTANDING)
+#include <sstream> // ostringstream (solo MappedPtr::to_string, debug)
+#endif
 
 namespace vm {
 
@@ -36,6 +38,7 @@ namespace vm {
  *
  * @return Cadena con el volcado formateado.
  */
+#if !defined(VESTA_GC_FREESTANDING)
 std::string MappedPtr::to_string() const {
     std::ostringstream ss;
     ss << "MappedPtrHost {\n";
@@ -71,6 +74,7 @@ std::string MappedPtr::to_string() const {
 void MappedPtr::print(std::ostream &os) const {
     os << to_string(); // reutilizar la cadena generada por to_string
 }
+#endif // !VESTA_GC_FREESTANDING (MappedPtr::to_string/print: debug iostream)
 
 /**
  * @brief Inicializa el gestor de arenas con todos los contadores a cero.
@@ -108,7 +112,7 @@ ArenaManager::~ArenaManager() {
 uint64_t ArenaManager::create_arena(size_t size, MemPerm perms) {
     void *mem = allocate_memory(size, perms); // reservar memoria del SO
     if (!mem) {
-        std::cerr << "[ArenaManager] Error al asignar memoria\n"; // informar
+        VGC_CERR << "[ArenaManager] Error al asignar memoria\n"; // informar
                                                                   // del fallo
         return 0; // ID 0 indica error
     }

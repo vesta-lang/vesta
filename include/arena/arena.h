@@ -22,8 +22,8 @@
 #define ARENA_H
 
 #include <cstddef>
-#include <iostream>
-#include <unordered_map>
+
+#include "util/gc_diag.h" // VGC_CERR/COUT (neutralizable en freestanding)
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <windows.h>
@@ -178,8 +178,8 @@ inline void *allocate_memory(size_t size, MemPerm perms) {
                            FORMAT_MESSAGE_IGNORE_INSERTS,
                        NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
                        (LPSTR)&msg, 0, NULL);
-        std::cerr << "VirtualAlloc fallo. Codigo: " << err << " - "
-                  << (msg ? (char *)msg : "Error desconocido") << "\n";
+        VGC_CERR << "VirtualAlloc fallo. Codigo: " << err << " - "
+                 << (msg ? (char *)msg : "Error desconocido") << "\n";
         if (msg) LocalFree(msg); // liberar el buffer de mensaje
         return nullptr;
     }
@@ -195,8 +195,8 @@ inline void *allocate_memory(size_t size, MemPerm perms) {
 
     void *mem = mmap(nullptr, size, prot, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) {
-        std::cerr << "mmap fallo: " << std::strerror(errno)
-                  << "\n"; // mostrar error de sistema
+        VGC_CERR << "mmap fallo: " << std::strerror(errno)
+                 << "\n"; // mostrar error de sistema
         return nullptr;
     }
     return mem;
@@ -391,6 +391,7 @@ typedef struct MappedPtr {
      *
      * @return Cadena con el estado completo del mapeo.
      */
+#if !defined(VESTA_GC_FREESTANDING)
     std::string to_string() const;
 
     /**
@@ -399,6 +400,7 @@ typedef struct MappedPtr {
      * @param os Flujo destino (p.ej. std::cout).
      */
     void print(std::ostream &os) const;
+#endif
 
     /**
      * @brief Avanza la direccion virtual y la mapeada en @p offset bytes.
