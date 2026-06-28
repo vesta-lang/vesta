@@ -22,13 +22,21 @@ from pathlib import Path
 
 
 def find_vm(explicit: str | None) -> Path:
+    # Devolver SIEMPRE una ruta absoluta: en Windows, subprocess.run lanza el
+    # exe con CreateProcess y una ruta relativa da WinError 2 ("no se encuentra
+    # el archivo").
     if explicit:
-        return Path(explicit)
+        p = Path(explicit)
+        if not p.is_file():
+            raise SystemExit(f"vm no encontrado: {p}")
+        return p.resolve()
+    # Buscar relativo a la raiz del repo (este script vive en tools/).
+    root = Path(__file__).resolve().parent.parent
     for c in ("cmake-build-release/vm.exe", "cmake-build-release/vm",
               "build/vm.exe", "build/vm"):
-        p = Path(c)
+        p = root / c
         if p.is_file():
-            return p
+            return p.resolve()
     raise SystemExit("vm no encontrado; pasa la ruta como argumento")
 
 
@@ -72,11 +80,19 @@ def main() -> int:
                     help="incluir subdirectorios (benchmark/, aot/, etc.)")
     ap.add_argument("--show", type=int, default=20,
                     help="cuantos ejemplos por categoria listar")
-    ap.add_argument("--out", default="/tmp/aot_cov.o")
+    ap.add_argument("--out", default=None,
+                    help="ruta del .o temporal (por defecto, junto al vm)")
     args = ap.parse_args()
 
+    root = Path(__file__).resolve().parent.parent
     vm = find_vm(args.vm_path)
+    # .o temporal por defecto junto al vm (dir que existe; /tmp no existe en
+    # Windows).  Ruta absoluta para no depender del cwd.
+    out_obj = Path(args.out).resolve() if args.out else (vm.parent / "_aot_cov.o")
+    # --dir relativo se resuelve desde la raiz del repo (no desde el cwd).
     base = Path(args.dir)
+    if not base.is_absolute():
+        base = (root / base) if not base.exists() else base
     pat = "**/*.vex" if args.recurse else "*.vex"
     files = sorted(base.glob(pat))
     if not files:
@@ -88,19 +104,21 @@ def main() -> int:
 
     for f in files:
         try:
+            if out_obj.exists():
+                out_obj.unlink()  # evitar falso OK con un .o de una corrida previa
             r = subprocess.run(
                 [str(vm), "--vex", str(f), "-m", "aot", "--format", "elf",
-                 "--emit", "obj", "-o", args.out],
+                 "--emit", "obj", "-o", str(out_obj)],
                 capture_output=True, text=True, timeout=60)
             out = (r.stdout + "\n" + r.stderr)
-            ok = (r.returncode == 0 and Path(args.out).is_file())
+            ok = (r.returncode == 0 and out_obj.is_file())
         except subprocess.TimeoutExpired:
             out, ok = "TIMEOUT", False
         except Exception as e:  # noqa: BLE001
             out, ok = str(e), False
         # limpiar el .o para la siguiente iteracion
         try:
-            Path(args.out).unlink()
+            out_obj.unlink()
         except OSError:
             pass
         cat, reason = classify(out, ok)
