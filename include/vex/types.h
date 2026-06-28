@@ -231,6 +231,13 @@ enum class PrimitiveKind : uint8_t {
     ///
     /// @c pointee = tipo T del payload.
     SHARED_PTR,
+    /// `gc<T>` builtin opt-in (`import vex.gc`): referencia GC-managed.  El
+    /// parser produce este kind; el type checker lo CONVIERTE a @c CLASS con
+    /// @c gc_managed=true (reusa todo el acceso a miembros de clase).  Por eso
+    /// GC_PTR no deberia sobrevivir al type checking en valores; es solo la
+    /// forma parseada del tipo.  Slot de 8 bytes (host_ptr al payload, igual
+    /// que una ref de clase native_poo, pero alocado por el GC y sin RAII).
+    GC_PTR,
     /// Type-as-first-class-value.  Sentinela usado SOLO en
     /// declaraciones de @c comptime const Type T = comptime_type<X>().
     /// No tiene representacion runtime (cero bytes); el ComptimeConst
@@ -265,6 +272,12 @@ struct Type {
     /// el futuro la presion de cache importa, se puede sustituir por
     /// un indice a una pool de StructLayout en TypeChecker.
     std::string struct_name;
+    /// @c true si esta referencia de clase (@c kind == CLASS) es GC-managed
+    /// (declarada como @c gc<X>): se aloca con @c vex_gc_alloc en vez de
+    /// @c calloc, no tiene cleanup RAII (el GC colecta, incl. ciclos), y su
+    /// slot se marca @c is_gc_object para los stackmaps precisos del GC.  El
+    /// resto (acceso a campos/metodos) es identico a una ref de clase normal.
+    bool gc_managed = false;
     /// Tipo apuntado cuando @c kind == PTR o tipo de elemento cuando
     /// @c kind == ARRAY; nulo para todo lo demas.  Se usa @c shared_ptr
     /// porque @c Type debe ser copiable (el AST Type vive como valor en
@@ -571,6 +584,7 @@ constexpr PrimitiveKind primitive_kind_from_token(TokenKind k) noexcept {
     // se completa en el parser via `unique<T>` / `shared<T>`.
     case TokenKind::KW_UNIQUE: return PrimitiveKind::UNIQUE_PTR;
     case TokenKind::KW_SHARED: return PrimitiveKind::SHARED_PTR;
+    case TokenKind::KW_GC: return PrimitiveKind::GC_PTR;
     // Borrows (referencias compile-time-checkadas, runtime = host_ptr).
     case TokenKind::KW_BORROW: return PrimitiveKind::BORROW;
     case TokenKind::KW_BORROW_MUT: return PrimitiveKind::BORROW_MUT;
@@ -676,6 +690,7 @@ constexpr size_t primitive_size_bytes(PrimitiveKind k) noexcept {
     // via campo extra del Type).
     case PrimitiveKind::UNIQUE_PTR: return 8;
     case PrimitiveKind::SHARED_PTR: return 8;
+    case PrimitiveKind::GC_PTR: return 8;
     // TYPE_META: marcador comptime sin storage runtime.
     case PrimitiveKind::TYPE_META: return 0;
     case PrimitiveKind::COUNT: return 0;
@@ -837,6 +852,7 @@ inline const char *primitive_name(PrimitiveKind k) noexcept {
     case PrimitiveKind::BORROW_MUT: return "borrow_mut";
     case PrimitiveKind::UNIQUE_PTR: return "unique";
     case PrimitiveKind::SHARED_PTR: return "shared";
+    case PrimitiveKind::GC_PTR: return "gc";
     case PrimitiveKind::TYPE_META: return "Type";
     case PrimitiveKind::COUNT: return "<count>";
     }

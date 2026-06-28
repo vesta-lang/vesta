@@ -61,6 +61,14 @@ uint8_t *vex_gc_deref(uint32_t handle);
 void vex_gc_collect(void);
 
 /**
+ * @brief Aloca un objeto GC de @p size bytes y devuelve su host_ptr (aloca +
+ *        deref).  Lo usa el helper `__new_<X>_gc` del frontend.
+ * @param size Tamanño del payload en bytes.
+ * @return host_ptr al payload (estable en v1 no-moving), o NULL si OOM.
+ */
+uint8_t *vex_gc_alloc_ptr(uint64_t size);
+
+/**
  * @brief Pinna un handle como raiz externa (refcount): no se colecta mientras
  *        este pinnado.  Usado para raices que el GC no ve via stackmaps
  *        (globals nativos, estructuras host) y en tests.
