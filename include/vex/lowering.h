@@ -1758,6 +1758,13 @@ class Lowering {
         /// Indice en la vtable del destructor del tipo contenido (>0).
         /// Usado solo si @c inner_is_gc_class.
         uint32_t inner_dtor_vtable_index = 0;
+        /// Nombre IR del destructor del tipo contenido (@c <Class>____dtor),
+        /// para CALL DIRECTO en native_poo (AOT) cuando el inner NO es
+        /// polimorfico (tipo estatico == dinamico para @c unique<T>).
+        std::string inner_dtor_func_name;
+        /// @c true si el inner es polimorfico (tiene vtable): el dtor debe
+        /// despacharse por la vtable de la instancia, no por el tipo estatico.
+        bool inner_dtor_virtual = false;
         // --- CALLN_FREE / SMARTPTR_FREE / SHAREDPTR_REL ---
         std::string func_name;   ///< "lib:symbol" para CALLN
         bool needs_proc = false; ///< prepend GETPROC

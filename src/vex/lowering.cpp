@@ -4593,9 +4593,30 @@ bind_and_cleanup:
                     // cleanup NO haga RAW_FREE del host_ptr (que es un
                     // host_ptr a un objeto GC, no a memoria RAW_ALLOC).
                     act.inner_is_gc_class = true;
-                    for (const auto &mi : it_cls->second.methods) {
+                    const ClassLayout &ilay = it_cls->second;
+                    for (const auto &mi : ilay.methods) {
                         if (mi.is_destructor) {
                             act.inner_dtor_vtable_index = mi.vtable_index;
+                            // Nombre directo del dtor (<owner>__<dtor>) para
+                            // CALL directo en native_poo (AOT).
+                            const std::string owner =
+                                mi.defining_class.empty()
+                                    ? sem_type.pointee->struct_name
+                                    : mi.defining_class;
+                            act.inner_dtor_func_name = owner + "__" + mi.name;
+                            // Polimorfico si la clase inner tiene vtable
+                            // (super/interfaz o alguna subclase) -> mismo
+                            // criterio que __new_<Class> / NATIVE_FREE.
+                            bool has_vtable = !ilay.super_name.empty() ||
+                                              !ilay.interface_names.empty();
+                            if (!has_vtable)
+                                for (const auto &kv : cls_layouts)
+                                    if (kv.second.super_name ==
+                                        sem_type.pointee->struct_name) {
+                                        has_vtable = true;
+                                        break;
+                                    }
+                            act.inner_dtor_virtual = has_vtable;
                             break;
                         }
                     }
@@ -7474,14 +7495,32 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // que el GC libere el objeto cuando ningun root lo
             // referencie (stack scanning A.34.fix8).
             if (it->inner_dtor_vtable_index > 0) {
-                ir::IrInstr cv{};
-                cv.op = ir::IrOp::CALLVIRT;
-                cv.type = ir::IrType::VOID;
-                cv.dst = ir::IR_NO_VALUE;
-                cv.operands = {v_ptr};
-                cv.imm = static_cast<uint64_t>(it->inner_dtor_vtable_index);
-                cv.source_line = it->source_line;
-                fn_->append(current_block_, std::move(cv));
+                // AOT (native_poo): el inner de un unique<T> tiene tipo
+                // ESTATICO conocido (T == tipo dinamico salvo polimorfismo).
+                // Si NO es polimorfico, despachar el dtor con un CALL DIRECTO a
+                // `<Class>____dtor` (PURE_NATIVE) en vez de CALLVIRT (que el
+                // selector AOT no soporta).  Asi unique<T> con dtor compila a
+                // nativo.  Para inner polimorfico o el path VM/JIT, CALLVIRT.
+                if (native_poo_ && !it->inner_dtor_virtual &&
+                    !it->inner_dtor_func_name.empty()) {
+                    ir::IrInstr cd{};
+                    cd.op = ir::IrOp::CALL;
+                    cd.type = ir::IrType::VOID;
+                    cd.dst = ir::IR_NO_VALUE;
+                    cd.operands = {v_ptr};
+                    cd.func_name = it->inner_dtor_func_name; // <Class>____dtor
+                    cd.source_line = it->source_line;
+                    fn_->append(current_block_, std::move(cd));
+                } else {
+                    ir::IrInstr cv{};
+                    cv.op = ir::IrOp::CALLVIRT;
+                    cv.type = ir::IrType::VOID;
+                    cv.dst = ir::IR_NO_VALUE;
+                    cv.operands = {v_ptr};
+                    cv.imm = static_cast<uint64_t>(it->inner_dtor_vtable_index);
+                    cv.source_line = it->source_line;
+                    fn_->append(current_block_, std::move(cv));
+                }
             }
             if (it->inner_is_gc_class) {
                 // El objeto inner es GC-managed: NO hacer RAW_FREE
@@ -22272,15 +22311,36 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     if (it_inner == tc_.class_layouts().end()) continue;
                     const ClassLayout &inner = it_inner->second;
                     if (!inner.has_destructor) continue;
-                    // Localizar vtable_index del dtor del inner.
+                    // Localizar vtable_index del dtor del inner + su nombre IR
+                    // directo (<owner>__<dtor>) para CALL directo en native_poo.
                     uint32_t inner_dtor_idx = UINT32_MAX;
+                    std::string inner_dtor_name;
                     for (const auto &im : inner.methods) {
                         if (im.is_destructor) {
                             inner_dtor_idx = im.vtable_index;
+                            const std::string owner =
+                                im.defining_class.empty() ? f.type.struct_name
+                                                          : im.defining_class;
+                            inner_dtor_name = owner + "__" + im.name;
                             break;
                         }
                     }
                     if (inner_dtor_idx == UINT32_MAX) continue;
+                    // El field tiene tipo ESTATICO conocido -> en native_poo, si
+                    // el inner NO es polimorfico, despachar el dtor con CALL
+                    // directo (PURE_NATIVE) en vez de CALLVIRT (no soportado por
+                    // el selector AOT).  Mismo criterio de vtable que __new_.
+                    bool inner_has_vtable = !inner.super_name.empty() ||
+                                            !inner.interface_names.empty();
+                    if (!inner_has_vtable)
+                        for (const auto &kv : tc_.class_layouts())
+                            if (kv.second.super_name == f.type.struct_name) {
+                                inner_has_vtable = true;
+                                break;
+                            }
+                    const bool inner_dtor_direct =
+                        native_poo_ && !inner_has_vtable &&
+                        !inner_dtor_name.empty();
 
                     // 1) addr = this + offset
                     const ir::IrValueId addr = emit_field_addr(
@@ -22331,14 +22391,20 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     br.false_block = do_bb;    // false -> do_dtor
                     br.source_line = m->loc.line;
                     fn_->append(current_block_, std::move(br));
-                    // 5) do_bb: callvirt field_val, inner_dtor_idx; br skip
+                    // 5) do_bb: dtor del field; br skip.  CALL directo en
+                    //    native_poo no-polimorfico; CALLVIRT en otro caso.
                     current_block_ = do_bb;
                     ir::IrInstr cv{};
-                    cv.op = ir::IrOp::CALLVIRT;
+                    if (inner_dtor_direct) {
+                        cv.op = ir::IrOp::CALL;
+                        cv.func_name = inner_dtor_name; // <Class>____dtor
+                    } else {
+                        cv.op = ir::IrOp::CALLVIRT;
+                        cv.imm = static_cast<uint64_t>(inner_dtor_idx);
+                    }
                     cv.type = ir::IrType::VOID;
                     cv.dst = ir::IR_NO_VALUE;
                     cv.operands = {field_val};
-                    cv.imm = static_cast<uint64_t>(inner_dtor_idx);
                     cv.source_line = m->loc.line;
                     fn_->append(current_block_, std::move(cv));
                     ir::IrInstr brj{};
