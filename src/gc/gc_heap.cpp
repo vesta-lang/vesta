@@ -319,8 +319,8 @@ void GcHeap::release_handle(GcHandle h) {
     // <string> del plugin) y necesita el objeto vivo.  El mismo handle
     // sera liberado automaticamente cuando el ultimo gc_release lo
     // saque del map.
-    auto it_ext = external_refs_.find(h);
-    if (it_ext != external_refs_.end() && it_ext->second > 0) {
+    const uint32_t *rc_ext = external_refs_.find(h);
+    if (rc_ext != nullptr && *rc_ext > 0) {
         return;
     }
     // Limpiar el mapa inverso ANTES de invalidar handles_[h].addr.
@@ -1001,14 +1001,14 @@ void GcHeap::gc_addref(GcHandle h) {
 
 void GcHeap::gc_release(GcHandle h) {
     if (h == GC_NULL_HANDLE) return;
-    auto it = external_refs_.find(h);
-    if (it == external_refs_.end()) return; // no estaba pinnado: no-op
-    if (it->second > 1) {
-        it->second -= 1;
+    uint32_t *rc = external_refs_.find(h);
+    if (rc == nullptr) return; // no estaba pinnado: no-op
+    if (*rc > 1) {
+        *rc -= 1;
     } else {
         // Al llegar a 0 eliminamos la entrada para que el bucket se libere
         // y el mark phase no malgaste tiempo iterando handles ya liberados.
-        external_refs_.erase(it);
+        external_refs_.erase(h);
     }
 }
 
