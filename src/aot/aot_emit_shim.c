@@ -27,6 +27,7 @@
 #include "CreateELF.h"
 #include "LibELFparse.h"
 #include "LibCOFFparse.h"
+#include "LibPEparse.h" // lectura de exports de DLL (aot_pe_export_names)
 
 /* Copia segura del mensaje de error al buffer del llamador. */
 static void set_err(char *err, size_t cap, const char *msg) {
@@ -3452,4 +3453,36 @@ fail:
     free(fixd);
     free(out.p);
     return 0;
+}
+
+/* --- Lectura de exports de DLL/PE (delega en LibPEparse) ----------------- */
+int aot_pe_export_names(const char *path, char ***out_names, int *out_count) {
+    if (out_names) *out_names = NULL;
+    if (out_count) *out_count = 0;
+    if (path == NULL || out_names == NULL || out_count == NULL) return 1;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) return 1;
+    /* Parse MINIMO suficiente para los exports: DOS header (e_lfanew) + NT
+     * headers (RVA del directorio de exports) + section headers (necesarios
+     * para resolve64 RVA->offset).  Se EVITA el ParseFile64 completo, que
+     * ademas parsea imports / base-relocs / rich-header -- innecesarios para
+     * exports y costosos/fragiles en DLLs del sistema grandes (kernel32). */
+    PE64FILE pe;
+    PE64FILE_Initialize(&pe);
+    pe.NAME = (char *)path;
+    pe.Ppefile = f;
+    ParseDOSHeader64(&pe);
+    ParseNTHeaders64(&pe);
+    ParseSectionHeaders64(&pe);
+    int n = 0;
+    char **names = ParseExportNames64(&pe, &n);
+    if (pe.PEFILE_SECTION_HEADERS != NULL) free(pe.PEFILE_SECTION_HEADERS);
+    fclose(f);
+    *out_names = names;
+    *out_count = n;
+    return 0; /* 0 exports tambien es exito */
+}
+
+void aot_free_pe_export_names(char **names, int count) {
+    FreeExportNames64(names, count);
 }
