@@ -1390,7 +1390,26 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     const char interp[] = "/lib64/ld-linux-x86-64.so.2";
     const size_t interp_len = sizeof(interp); /* incluye el nul */
 
-    /* --- .dynstr: "\0" + nombres de import + "libc.so.6" --- */
+    /* Sonames DISTINTOS de los imports -> un DT_NEEDED por libreria (el campo
+     * dll de cada AotImport es el soname; un import sin dll va a libc.so.6). */
+    const int scap = num_imps > 0 ? num_imps : 1;
+    const char **sonames = (const char **)calloc((size_t)scap, sizeof(char *));
+    uint32_t *soname_off = (uint32_t *)calloc((size_t)scap, sizeof(uint32_t));
+    int num_sonames = 0;
+    for (int i = 0; i < num_imps; ++i) {
+        const char *so =
+            (imps[i].dll && imps[i].dll[0]) ? imps[i].dll : "libc.so.6";
+        int found = 0;
+        for (int j = 0; j < num_sonames; ++j)
+            if (strcmp(sonames[j], so) == 0) {
+                found = 1;
+                break;
+            }
+        if (!found) sonames[num_sonames++] = so;
+    }
+    if (num_sonames == 0) sonames[num_sonames++] = "libc.so.6";
+
+    /* --- .dynstr: "\0" + nombres de import + sonames --- */
     OBuf dynstr;
     memset(&dynstr, 0, sizeof(dynstr));
     {
@@ -1402,8 +1421,10 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         name_off[i] = (uint32_t)dynstr.len;
         ob_put(&dynstr, imps[i].func, strlen(imps[i].func) + 1);
     }
-    uint32_t libc_off = (uint32_t)dynstr.len;
-    ob_put(&dynstr, "libc.so.6", 10);
+    for (int s = 0; s < num_sonames; ++s) {
+        soname_off[s] = (uint32_t)dynstr.len;
+        ob_put(&dynstr, sonames[s], strlen(sonames[s]) + 1);
+    }
 
     /* --- .hash SysV: nbucket, nchain(=nsym), buckets[], chains[] --- */
     uint32_t nbucket = (uint32_t)(nsym < 1 ? 1 : nsym);
@@ -1481,7 +1502,9 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     }
     off = AOT_DYN_ALIGN(off, 8);
     uint64_t dynamic_off = off;
-    const int ndyn = 12;
+    /* 11 entradas fijas (HASH/STRTAB/SYMTAB/STRSZ/SYMENT/RELA/RELASZ/RELAENT/
+     * FLAGS/FLAGS_1/NULL) + un DT_NEEDED por soname. */
+    const int ndyn = 11 + num_sonames;
     off += (uint64_t)ndyn * sizeof(Elf64_Dyn);
     uint64_t region2_end = off; /* fin del contenido en FICHERO */
     uint64_t total = off;       /* tamano del fichero (sin BSS) */
@@ -1509,6 +1532,8 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     if (!img) {
         set_err(err, err_cap, "elf_dynexec: OOM");
         free(name_off);
+        free(sonames);
+        free(soname_off);
         free(bucket);
         free(chain);
         free(dynstr.p);
@@ -1631,8 +1656,10 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     {
         Elf64_Dyn *d = (Elf64_Dyn *)(img + dynamic_off);
         int k = 0;
-        d[k].d_tag = DT_NEEDED;
-        d[k++].d_un.d_val = libc_off;
+        for (int s = 0; s < num_sonames; ++s) {
+            d[k].d_tag = DT_NEEDED;
+            d[k++].d_un.d_val = soname_off[s];
+        }
         d[k].d_tag = DT_HASH;
         d[k++].d_un.d_ptr = hash_off;
         d[k].d_tag = DT_STRTAB;
@@ -1754,6 +1781,8 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
 
     free(img);
     free(name_off);
+    free(sonames);
+    free(soname_off);
     free(bucket);
     free(chain);
     free(dynstr.p);
