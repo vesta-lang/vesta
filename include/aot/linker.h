@@ -49,6 +49,9 @@ struct LinkOptions {
     std::string link_script;        ///< .vex de configuracion (fn link()); vacio
                                     ///< => sin script (solo CLI flags).
     bool debug = false;             ///< valor de debug_build() en el link-script.
+    std::string sysroot;            ///< raiz para localizar librerias del sistema
+                                    ///< (libc.so.6) al cross-compilar ELF desde
+                                    ///< otro SO; vacio => rutas nativas.
 };
 
 /**
