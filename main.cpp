@@ -3368,6 +3368,16 @@ int main(int argc, char *argv[]) {
                     work.push_back(fn.name);
                 }
             }
+            // __vex_tls_init (TLS callback): lo llama el cargador de Windows (no
+            // un CALL visible) -> sembrarlo siempre para que se compile.
+            if (!queued.count("__vex_tls_init"))
+                for (const auto &fn : aot_mod.functions)
+                    if (fn.name == "__vex_tls_init") {
+                        queued["__vex_tls_init"] = true;
+                        work.push_back("__vex_tls_init");
+                        break;
+                    }
+
             // Sembrar las funciones referenciadas por bloques `bytes` (`dq
             // foo`) para que se compilen aunque main no las alcance por CALL.
             for (const auto &e : aot_mod.static_data.entries) {
@@ -3838,6 +3848,14 @@ int main(int argc, char *argv[]) {
             // mismo orden; `secs` ya esta completa tras la pasada 1).
             aot::ObjectWriter w(fmt);
             w.set_mode32(aot_mode32); // x86-32 EXEC -> contenedor ELF32
+            // TLS PE: si el modulo tiene __vex_tls_init (callback de plantilla),
+            // pasar su ubicacion al emisor para registrarlo en el TLS directory.
+            {
+                auto tcb = fn_loc.find("__vex_tls_init");
+                if (tcb != fn_loc.end())
+                    w.set_tls_callback(tcb->second.sec,
+                                       static_cast<uint32_t>(tcb->second.off));
+            }
             for (const SecAccum &s : secs) {
                 // Permisos: explicitos (@section(".x","rwx")), o por convencion
                 // del nombre (.text*->rx, .rodata*->r, .data*/.bss*->rw).

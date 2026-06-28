@@ -1027,6 +1027,12 @@ class Lowering {
     /// L2.2: slots para globales runtime no-const (string/int/etc.)
     std::unordered_map<std::string, uint64_t> runtime_global_slots_;
 
+    /// thread_local con init != 0: (slot static_data, valor inicial 8B LE).  El
+    /// lowering sintetiza __vex_tls_init (TLS callback del PE) que escribe estos
+    /// valores en la copia por-hilo al attach del hilo -- el cargador de Windows
+    /// no siempre copia la plantilla del TLS de una .dll a un consumidor minimal.
+    std::vector<std::pair<uint64_t, uint64_t>> tls_nonzero_inits_;
+
     /// sret en call sites: cache nombre-de-funcion -> PrimitiveKind
     /// del tipo de retorno semantico (antes de la transformacion sret).
     /// Solo nos interesa distinguir OPTIONAL / RESULT del resto, porque

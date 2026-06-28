@@ -81,8 +81,8 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     ccfg.pe_subsystem = cfg_.pe_subsystem;
     ccfg.elf_stack_vaddr = cfg_.elf_stack_vaddr;
     ccfg.elf_stack_size = cfg_.elf_stack_size;
-    ccfg.tls_dir_section = -1; // TLS PE: lo fija el driver (sintesis pendiente)
-    ccfg.tls_dir_off = 0;
+    ccfg.tls_callback_section = cfg_.tls_callback_section;
+    ccfg.tls_callback_off = cfg_.tls_callback_off;
 
     // TLS (thread_local): si hay una seccion TLS hace falta el cargador dinamico
     // (monta el bloque TLS + el thread pointer antes del entry) -> forzar la ruta
