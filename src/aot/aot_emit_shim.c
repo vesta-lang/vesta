@@ -1841,13 +1841,18 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
         set_err(err, err_cap, "elf32_dynexec: entry_sec fuera de rango");
         return 0;
     }
-    if (num_imps <= 0) {
-        set_err(err, err_cap, "elf32_dynexec: sin imports");
-        return 0;
-    }
+    if (num_imps < 0) num_imps = 0;
+    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con TLS
+     * (necesita el cargador para montar el bloque thread-local).  GOT vacia +
+     * dynsym de 1 entrada (null) + DT_NEEDED libc.so.6 (monta el TLS estatico). */
 
     const uint32_t PAGE = (uint32_t)AOT_ELF_PAGE;
-    const int NPH = 6;
+    /* Seccion TLS (plantilla thread_local local-exec): si existe, anyade un
+     * PT_TLS para que el cargador monte el bloque TLS por-hilo. */
+    int tls_sec = -1;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].flags & AOT_SEC_TLS) { tls_sec = i; break; }
+    const int NPH = 6 + (tls_sec >= 0 ? 1 : 0);
     const int nsym = 1 + num_imps;
     const char interp[] = "/lib/ld-linux.so.2";
     const uint32_t interp_len = (uint32_t)sizeof(interp);
@@ -2043,6 +2048,21 @@ int aot_emit_elf32_dynexec(const char *path, const AotLayoutCfg *cfg,
         wr32(ph + 20, 0);
         wr32(ph + 24, PF_R | PF_W);
         wr32(ph + 28, 0x10);
+        if (tls_sec >= 0) {
+            /* PT_TLS: plantilla .tdata (filesz) + .tbss (memsz extra).  El
+             * cargador la copia por-hilo bajo el thread pointer (gs). */
+            ph = img + phdr_off + 6 * PHDR32;
+            wr32(ph + 0, 7); /* PT_TLS */
+            wr32(ph + 4, sec_va[tls_sec]);
+            wr32(ph + 8, BASE + sec_va[tls_sec]);
+            wr32(ph + 12, BASE + sec_va[tls_sec]);
+            wr32(ph + 16, (uint32_t)secs[tls_sec].size);
+            wr32(ph + 20,
+                 (uint32_t)(secs[tls_sec].size + secs[tls_sec].bss_size));
+            wr32(ph + 24, PF_R);
+            wr32(ph + 28, secs[tls_sec].align ? (uint32_t)secs[tls_sec].align
+                                              : 4u);
+        }
     }
 
     memcpy(img + interp_off, interp, interp_len);

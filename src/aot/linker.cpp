@@ -104,8 +104,12 @@ struct ObjRel {
                                  //   COFF: leido del propio campo)
     bool got = false;            // GOTPCREL: el sitio referencia la entrada GOT
                                  //   del simbolo (su DIRECCION), no el simbolo
-    bool tls = false;            // TPOFF: el sitio recibe el offset TLS del
-                                 //   simbolo desde el thread pointer (local-exec)
+    bool tls = false;            // TPOFF (local-exec): el sitio recibe el offset
+                                 //   TLS del simbolo desde el thread pointer
+    bool tls_ie = false;         // GOTTPOFF (initial-exec): entrada GOT con el
+                                 //   TPOFF; el sitio REL32 a esa entrada
+    bool tls_gd = false;         // TLSGD (general-dynamic): se relaja a
+                                 //   local-exec (secuencia de 16 bytes)
 };
 struct ParsedObj {
     std::string path;
@@ -282,19 +286,26 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 r.addend = ad;
                 r.tls = true;
                 break;
+            case 22: /* GOTTPOFF (initial-exec): entrada GOT con el TPOFF */
+                r.kind = aot::RelocKind::REL32;
+                r.addend = ad + 4; // PC-relativo al slot GOT
+                r.tls_ie = true;
+                break;
+            case 19: /* TLSGD (general-dynamic): se relaja a local-exec */
+                r.kind = aot::RelocKind::REL32;
+                r.addend = 0; // el -4 del reloc es rip-relativo del lea, no TLS
+                r.tls_gd = true;
+                break;
             case 16: /* DTPMOD64  */
             case 17: /* DTPOFF64  */
-            case 19: /* TLSGD     */
             case 20: /* TLSLD     */
             case 21: /* DTPOFF32  */
-            case 22: /* GOTTPOFF  */
-                // TLS general-dynamic / local-dynamic / initial-exec: requieren
-                // __tls_get_addr o una entrada GOT con el TPOFF; no es el modelo
-                // local-exec que generamos (TPOFF32/64).  Error claro.
+                // TLS local-dynamic / dtpoff: requieren __tls_get_addr con un
+                // modulo y no aparecen en accesos a thread_local de un ejecutable
+                // (que usan LE/IE/GD).  Error claro.
                 err = path +
-                      ": modelo TLS no-local-exec no soportado (reloc " +
-                      std::to_string(rt) +
-                      "); compila ese codigo con -ftls-model=local-exec o "
+                      ": modelo TLS no soportado (reloc " + std::to_string(rt) +
+                      "); compila con -ftls-model=local-exec/initial-exec o "
                       "enlazalo con gcc/ld";
                 return false;
             case R_X86_64_64:
@@ -320,6 +331,7 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
 // Tipos de reloc i386 (ELF32).
 constexpr uint32_t R_386_32 = 1;    // abs32: S + A
 constexpr uint32_t R_386_PC32 = 2;  // pc-rel: S + A - P
+constexpr uint32_t R_386_PLT32 = 4; // pc-rel via PLT: igual encaje que PC32
 
 // Parsea un .o ELF32 (i386).  El i386 usa SHT_REL (8 bytes, addend EN el
 // campo, como COFF).  Rellena el MISMO ParsedObj (kind+addend normalizados).
@@ -432,10 +444,36 @@ bool parse_elf32_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 r.kind = aot::RelocKind::REL32;
                 r.addend = A + 4;
                 break;
+            case R_386_PLT32: // 4
+                r.kind = aot::RelocKind::REL32;
+                r.addend = A + 4;
+                break;
             case R_386_32:
                 r.kind = aot::RelocKind::IMM32;
                 r.addend = A;
                 break;
+            case 17: /* R_386_TLS_LE (local-exec): IMM32 = offset desde el TP.
+                        Variante II: TP al final del bloque -> offset negativo,
+                        misma formula que x86-64 (sym_block - tls_total). */
+                r.kind = aot::RelocKind::IMM32;
+                r.addend = A;
+                r.tls = true;
+                break;
+            case 15: /* R_386_TLS_IE       */
+            case 16: /* R_386_TLS_GOTIE    */
+            case 18: /* R_386_TLS_GD       */
+            case 19: /* R_386_TLS_LDM      */
+            case 20: /* R_386_TLS_GD_32    */
+            case 24: /* R_386_TLS_LDO_32   */
+                // initial-exec / general-dynamic en i386 usan GOT-base-relativo
+                // y secuencias de relajacion distintas a x86-64.  Para un
+                // ejecutable, compila el thread_local en local-exec (sin -fPIC,
+                // que es el modelo por defecto) o enlazalo con gcc/ld.
+                err = path +
+                      ": modelo TLS i386 no soportado (reloc " +
+                      std::to_string(rt) +
+                      "); compila el thread_local en local-exec (sin -fPIC)";
+                return false;
             default:
                 err = path + ": tipo de reloc ELF32 no soportado (" +
                       std::to_string(rt) + ")";
@@ -547,8 +585,11 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
         // unwinding -- usan relocs ADDR32NB/RVA que no resolvemos y que nuestro
         // propio AOT tampoco emite; sin ellas el binario corre, sin unwinding
         // nativo de excepciones en esos frames).
+        // Prefijo (no igualdad): gcc separa codigo frio en .text.unlikely con
+        // sus tablas SEH propias .pdata.unlikely / .xdata.unlikely (relocs
+        // ADDR32NB/RVA que no resolvemos).  El prefijo las cubre todas.
         if (s.name == ".drectve" || s.name.rfind(".debug", 0) == 0 ||
-            s.name == ".pdata" || s.name == ".xdata")
+            s.name.rfind(".pdata", 0) == 0 || s.name.rfind(".xdata", 0) == 0)
             s.sh_flags = 0;
     }
     // Simbolos (18 bytes; saltar aux symbols via NumberOfAuxSymbols).
@@ -1017,13 +1058,16 @@ bool aot_link(const std::vector<std::string> &inputs,
     const uint64_t tls_aligned_total =
         align_up(tls_tdata.size() + tls_bss, tls_align);
 
-    // 2.c. Pre-pase TPOFF: escribir el offset TLS de cada simbolo (local-exec)
-    //      DIRECTAMENTE en el sitio de la reloc, antes de mover los datos al
-    //      writer (el valor es constante: no depende de la VA de carga).
+    // 2.c. Pre-pase TLS local-exec: escribir el TPOFF DIRECTAMENTE en el sitio
+    //      (valor constante, no depende de la VA de carga).  Cubre:
+    //      - TPOFF32/64 (LE puro): IMM en el sitio.
+    //      - TLSGD (general-dynamic): se RELAJA a local-exec reescribiendo la
+    //        secuencia de 16 bytes `lea x@tlsgd; call __tls_get_addr` por
+    //        `mov %fs:0,%rax; lea x@tpoff(%rax),%rax`.
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjRel &r : o.rels) {
-            if (!r.tls) continue;
+            if (!r.tls && !r.tls_gd) continue;
             if (r.applies_sh >= secmap[oi].size()) continue;
             const SecMap &site = secmap[oi][r.applies_sh];
             if (site.mindex < 0) continue;
@@ -1038,13 +1082,29 @@ bool aot_link(const std::vector<std::string> &inputs,
                 sym_tls + r.addend - (int64_t)tls_aligned_total;
             std::vector<uint8_t> &dat = merged[site.mindex].data;
             const uint64_t at = site.base + r.off;
-            if (r.kind == aot::RelocKind::IMM64) {
+            if (r.tls_gd) {
+                // La secuencia GD empieza 4 bytes antes del disp32 del lea.
+                if (at < 4 || at + 12 > dat.size()) continue;
+                const uint64_t s = at - 4;
+                // mov %fs:0, %rax
+                static const uint8_t le[9] = {0x64, 0x48, 0x8b, 0x04, 0x25,
+                                              0x00, 0x00, 0x00, 0x00};
+                for (int b = 0; b < 9; ++b)
+                    dat[s + b] = le[b];
+                // lea <TPOFF32>(%rax), %rax
+                dat[s + 9] = 0x48;
+                dat[s + 10] = 0x8d;
+                dat[s + 11] = 0x80;
+                const uint32_t v = (uint32_t)(int32_t)tpoff;
+                for (int b = 0; b < 4; ++b)
+                    dat[s + 12 + b] = (uint8_t)(v >> (8 * b));
+            } else if (r.kind == aot::RelocKind::IMM64) {
                 if (at + 8 <= dat.size()) {
                     const uint64_t v = (uint64_t)tpoff;
                     for (int b = 0; b < 8; ++b)
                         dat[at + b] = (uint8_t)(v >> (8 * b));
                 }
-            } else { // IMM32
+            } else { // IMM32 (TPOFF32 local-exec)
                 if (at + 4 <= dat.size()) {
                     const uint32_t v = (uint32_t)(int32_t)tpoff;
                     for (int b = 0; b < 4; ++b)
@@ -1262,6 +1322,8 @@ bool aot_link(const std::vector<std::string> &inputs,
         int def_wsec = 0;
         uint64_t def_off = 0;
         std::string ext_name;
+        bool is_tls_const = false; // entrada IE: contiene un TPOFF constante
+        int64_t tls_const = 0;
     };
     std::unordered_map<std::string, GotEntry> got_entries;
     std::unordered_set<std::string> got_ext_syms; // externals que necesitan thunk
@@ -1269,7 +1331,9 @@ bool aot_link(const std::vector<std::string> &inputs,
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjRel &r : o.rels) {
-            if (r.tls) continue; // TPOFF ya parcheado en el pre-pase 2.c
+            // TLS local-exec (r.tls) y general-dynamic relajado (r.tls_gd) ya se
+            // parchearon en el pre-pase 2.c (valor TP-relativo constante).
+            if (r.tls || r.tls_gd) continue;
             if (r.applies_sh >= secmap[oi].size()) continue;
             const SecMap &site = secmap[oi][r.applies_sh];
             if (site.mindex < 0) continue; // reloc en seccion no-ALLOC: ignorar
@@ -1277,6 +1341,28 @@ bool aot_link(const std::vector<std::string> &inputs,
             const uint64_t site_off = site.base + r.off;
             if (r.sym >= o.syms.size()) continue;
             ObjSym &sy = o.syms[r.sym];
+            // La llamada a __tls_get_addr de la secuencia GD desaparece tras la
+            // relajacion a local-exec; su reloc PLT32 no se materializa.
+            if (sy.name == "__tls_get_addr") continue;
+
+            if (r.tls_ie) {
+                // GOTTPOFF (initial-exec): el sitio carga el TPOFF desde una
+                // entrada GOT que contiene el offset TP-relativo CONSTANTE.
+                if (sy.shndx >= tls_off[oi].size() || tls_off[oi][sy.shndx] < 0) {
+                    err = o.path + ": GOTTPOFF sobre un simbolo no-TLS";
+                    return false;
+                }
+                const int64_t sym_tls =
+                    tls_off[oi][sy.shndx] + (int64_t)sy.value;
+                const int64_t tpoff = sym_tls - (int64_t)tls_aligned_total;
+                GotEntry ge;
+                ge.is_tls_const = true;
+                ge.tls_const = tpoff;
+                const std::string key = "Tc" + std::to_string(tpoff);
+                got_entries.emplace(key, ge);
+                got_sites.push_back({site_sec, site_off, r.addend, key});
+                continue;
+            }
 
             if (r.got) {
                 // Resolver la DIRECCION del simbolo destino de la entrada GOT.
@@ -1435,7 +1521,14 @@ bool aot_link(const std::vector<std::string> &inputs,
             std::vector<uint8_t> got_data;
             for (const auto &kv : got_entries) {
                 got_entry_off[kv.first] = got_data.size();
-                got_data.insert(got_data.end(), 8, 0);
+                if (kv.second.is_tls_const) {
+                    // IE: la entrada GOT lleva el TPOFF constante (sin reloc).
+                    const uint64_t v = (uint64_t)kv.second.tls_const;
+                    for (int b = 0; b < 8; ++b)
+                        got_data.push_back((uint8_t)(v >> (8 * b)));
+                } else {
+                    got_data.insert(got_data.end(), 8, 0);
+                }
             }
             WriterSection gs;
             gs.name = ".got";
@@ -1446,6 +1539,7 @@ bool aot_link(const std::vector<std::string> &inputs,
             // Rellenar cada entrada con la direccion de su simbolo.
             for (const auto &kv : got_entries) {
                 const GotEntry &ge = kv.second;
+                if (ge.is_tls_const) continue; // IE: valor constante, sin reloc
                 const uint64_t eoff = got_entry_off[kv.first];
                 RelocTarget t =
                     ge.is_ext
