@@ -82,6 +82,16 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     ccfg.elf_stack_vaddr = cfg_.elf_stack_vaddr;
     ccfg.elf_stack_size = cfg_.elf_stack_size;
 
+    // TLS (thread_local): si hay una seccion TLS hace falta el cargador dinamico
+    // (monta el bloque TLS + el thread pointer antes del entry) -> forzar la ruta
+    // ELF dinamica aunque no haya imports de libc.
+    bool has_tls = false;
+    for (const AotSection &s : csecs)
+        if (s.flags & AOT_SEC_TLS) {
+            has_tls = true;
+            break;
+        }
+
     // Relocations cross-seccion (refs a datos / simbolos de seccion).  El
     // shim las resuelve tras el layout.
     std::vector<AotReloc> crelocs(relocs_.size());
@@ -232,9 +242,10 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
             path.c_str(), &ccfg, csecs.data(), static_cast<int>(csecs.size()),
             entry_sec_, entry_off_, crel_ptr, crel_n, cimps.data(),
             static_cast<int>(cimps.size()), errbuf, sizeof(errbuf));
-    } else if (!imports_.empty()) {
-        // AOT.2.exec slice 2: ELF EXEC (64-bit) que importa libc -> PIE
-        // dinamico via eager-GOT.  (el caso 32-bit lo cubre la rama de arriba)
+    } else if (!imports_.empty() || has_tls) {
+        // AOT.2.exec slice 2: ELF EXEC (64-bit) PIE dinamico -- cuando importa
+        // libc (eager-GOT) o cuando usa TLS (necesita el cargador dinamico para
+        // montar el bloque thread-local).  (el caso 32-bit lo cubre arriba)
         std::vector<AotImport> cimps(imports_.size());
         for (size_t i = 0; i < imports_.size(); ++i) {
             const ImportCall &ic = imports_[i];

@@ -1379,13 +1379,20 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
         set_err(err, err_cap, "elf_dynexec: entry_sec fuera de rango");
         return 0;
     }
-    if (num_imps <= 0) {
-        set_err(err, err_cap, "elf_dynexec: sin imports");
-        return 0;
-    }
+    if (num_imps < 0) num_imps = 0;
+    /* num_imps == 0 es valido: un EXEC dinamico sin imports de libc pero con TLS
+     * (necesita el cargador para montar el bloque thread-local) o con relocs
+     * RELATIVE.  GOT vacia + dynsym de 1 entrada (null). */
 
     const uint64_t PAGE = AOT_ELF_PAGE;
-    const int NPH = 6;             /* PHDR,INTERP,LOAD,LOAD,DYNAMIC,GNU_STACK */
+    /* Seccion TLS (plantilla thread_local): si existe, anyade un PT_TLS. */
+    int tls_sec = -1;
+    for (int i = 0; i < num_secs; ++i)
+        if (secs[i].flags & AOT_SEC_TLS) {
+            tls_sec = i;
+            break;
+        }
+    const int NPH = 6 + (tls_sec >= 0 ? 1 : 0); /* +PT_TLS si hay TLS */
     const int nsym = 1 + num_imps; /* [0]=null + 1 UND por import */
     const char interp[] = "/lib64/ld-linux-x86-64.so.2";
     const size_t interp_len = sizeof(interp); /* incluye el nul */
@@ -1611,6 +1618,21 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
     ph[5].p_type = PT_GNU_STACK;
     ph[5].p_flags = PF_R | PF_W;
     ph[5].p_align = 0x10;
+
+    /* PT_TLS: plantilla thread_local (local-exec).  El cargador la copia por
+     * hilo; las variables se acceden TP-relativas (offsets ya calculados por el
+     * linker como TPOFF).  p_filesz = parte .tdata (en fichero), p_memsz =
+     * .tdata + .tbss (el cargador alinea via p_align). */
+    if (tls_sec >= 0) {
+        ph[6].p_type = PT_TLS;
+        ph[6].p_flags = PF_R;
+        ph[6].p_offset = sec_va[tls_sec]; /* file offset == vaddr (PIE base 0) */
+        ph[6].p_vaddr = sec_va[tls_sec];
+        ph[6].p_paddr = sec_va[tls_sec];
+        ph[6].p_filesz = secs[tls_sec].size;
+        ph[6].p_memsz = secs[tls_sec].size + secs[tls_sec].bss_size;
+        ph[6].p_align = secs[tls_sec].align ? secs[tls_sec].align : 8;
+    }
 
     /* .interp */
     memcpy(img + interp_off, interp, interp_len);

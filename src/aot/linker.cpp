@@ -63,6 +63,7 @@ constexpr uint32_t SHT_NOBITS = 8;
 constexpr uint64_t SHF_WRITE = 0x1;
 constexpr uint64_t SHF_ALLOC = 0x2;
 constexpr uint64_t SHF_EXECINSTR = 0x4;
+constexpr uint64_t SHF_TLS = 0x400; // seccion de almacenamiento thread-local
 constexpr uint16_t SHN_UNDEF = 0;
 constexpr uint8_t STB_GLOBAL = 1;
 constexpr uint8_t STT_SECTION = 3;
@@ -103,6 +104,8 @@ struct ObjRel {
                                  //   COFF: leido del propio campo)
     bool got = false;            // GOTPCREL: el sitio referencia la entrada GOT
                                  //   del simbolo (su DIRECCION), no el simbolo
+    bool tls = false;            // TPOFF: el sitio recibe el offset TLS del
+                                 //   simbolo desde el thread pointer (local-exec)
 };
 struct ParsedObj {
     std::string path;
@@ -269,21 +272,30 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
                 r.addend = ad + 4;
                 r.got = true;
                 break;
+            case 23: /* TPOFF32 (local-exec): IMM32 = offset desde el TP */
+                r.kind = aot::RelocKind::IMM32;
+                r.addend = ad;
+                r.tls = true;
+                break;
+            case 18: /* TPOFF64 (local-exec): IMM64 */
+                r.kind = aot::RelocKind::IMM64;
+                r.addend = ad;
+                r.tls = true;
+                break;
             case 16: /* DTPMOD64  */
             case 17: /* DTPOFF64  */
-            case 18: /* TPOFF64   */
             case 19: /* TLSGD     */
             case 20: /* TLSLD     */
             case 21: /* DTPOFF32  */
             case 22: /* GOTTPOFF  */
-            case 23: /* TPOFF32   */
-                // Relocs de TLS (thread_local).  El enlazado nativo aun no
-                // genera el bloque TLS (PT_TLS) ni calcula los offsets desde el
-                // thread pointer.  El GC del lenguaje es TLS-free a proposito.
+                // TLS general-dynamic / local-dynamic / initial-exec: requieren
+                // __tls_get_addr o una entrada GOT con el TPOFF; no es el modelo
+                // local-exec que generamos (TPOFF32/64).  Error claro.
                 err = path +
-                      ": TLS (thread_local) no soportado en el enlazado nativo "
-                      "(reloc " + std::to_string(rt) +
-                      "); evita thread_local o enlaza esa parte con gcc/ld";
+                      ": modelo TLS no-local-exec no soportado (reloc " +
+                      std::to_string(rt) +
+                      "); compila ese codigo con -ftls-model=local-exec o "
+                      "enlazalo con gcc/ld";
                 return false;
             case R_X86_64_64:
                 r.kind = aot::RelocKind::ABS64;
@@ -897,6 +909,9 @@ bool aot_link(const std::vector<std::string> &inputs,
         for (size_t si = 0; si < o.secs.size(); ++si) {
             ObjSec &s = o.secs[si];
             if (!(s.sh_flags & SHF_ALLOC)) continue;
+            // Las secciones TLS (.tdata/.tbss) NO se fusionan con el resto: van
+            // a un bloque TLS aparte (PT_TLS), construido despues.
+            if (s.sh_flags & SHF_TLS) continue;
             // Saltar secciones vacias (gcc emite .data/.bss de tamano 0 en cada
             // .o): crear una seccion vacia en la imagen final la invalidaria.
             if (s.sh_size == 0) continue;
@@ -947,6 +962,94 @@ bool aot_link(const std::vector<std::string> &inputs,
                 m.data.resize(base, 0);
                 const uint8_t *src = &o.bytes[s.sh_offset];
                 m.data.insert(m.data.end(), src, src + s.sh_size);
+            }
+        }
+    }
+
+    // 2.b. Bloque TLS (thread_local, modelo local-exec): se combinan las
+    //      secciones .tdata (PROGBITS) + .tbss (NOBITS) de todos los objetos en
+    //      UN bloque; cada simbolo TLS recibe un offset dentro del bloque.  El
+    //      TPOFF de cada acceso = offset_del_simbolo - round_up(total, align)
+    //      (el bloque vive BAJO el thread pointer; offsets negativos).
+    std::vector<std::vector<int64_t>> tls_off(objs.size());
+    std::vector<uint8_t> tls_tdata;
+    uint64_t tls_bss = 0;
+    uint64_t tls_align = 1;
+    bool has_tls = false;
+    for (size_t oi = 0; oi < objs.size(); ++oi)
+        tls_off[oi].assign(objs[oi].secs.size(), -1);
+    // Pase 1: TLS PROGBITS (.tdata) -> bytes contiguos en el bloque.
+    for (size_t oi = 0; oi < objs.size(); ++oi) {
+        ParsedObj &o = objs[oi];
+        for (size_t si = 0; si < o.secs.size(); ++si) {
+            ObjSec &s = o.secs[si];
+            if (!(s.sh_flags & SHF_TLS) || s.sh_type == SHT_NOBITS ||
+                s.sh_size == 0)
+                continue;
+            has_tls = true;
+            const uint64_t a = s.sh_addralign ? s.sh_addralign : 1;
+            if (a > tls_align) tls_align = a;
+            const uint64_t base = align_up(tls_tdata.size(), a);
+            tls_tdata.resize(base, 0);
+            const uint8_t *src = &o.bytes[s.sh_offset];
+            tls_tdata.insert(tls_tdata.end(), src, src + s.sh_size);
+            tls_off[oi][si] = (int64_t)base;
+        }
+    }
+    // Pase 2: TLS NOBITS (.tbss) -> solo tamano, tras el .tdata.
+    uint64_t tbss_cursor = tls_tdata.size();
+    for (size_t oi = 0; oi < objs.size(); ++oi) {
+        ParsedObj &o = objs[oi];
+        for (size_t si = 0; si < o.secs.size(); ++si) {
+            ObjSec &s = o.secs[si];
+            if (!(s.sh_flags & SHF_TLS) || s.sh_type != SHT_NOBITS ||
+                s.sh_size == 0)
+                continue;
+            has_tls = true;
+            const uint64_t a = s.sh_addralign ? s.sh_addralign : 1;
+            if (a > tls_align) tls_align = a;
+            tbss_cursor = align_up(tbss_cursor, a);
+            tls_off[oi][si] = (int64_t)tbss_cursor;
+            tbss_cursor += s.sh_size;
+        }
+    }
+    tls_bss = tbss_cursor - tls_tdata.size();
+    const uint64_t tls_aligned_total =
+        align_up(tls_tdata.size() + tls_bss, tls_align);
+
+    // 2.c. Pre-pase TPOFF: escribir el offset TLS de cada simbolo (local-exec)
+    //      DIRECTAMENTE en el sitio de la reloc, antes de mover los datos al
+    //      writer (el valor es constante: no depende de la VA de carga).
+    for (size_t oi = 0; oi < objs.size(); ++oi) {
+        ParsedObj &o = objs[oi];
+        for (ObjRel &r : o.rels) {
+            if (!r.tls) continue;
+            if (r.applies_sh >= secmap[oi].size()) continue;
+            const SecMap &site = secmap[oi][r.applies_sh];
+            if (site.mindex < 0) continue;
+            if (r.sym >= o.syms.size()) continue;
+            ObjSym &sy = o.syms[r.sym];
+            if (sy.shndx >= tls_off[oi].size() || tls_off[oi][sy.shndx] < 0) {
+                err = o.path + ": reloc TLS sobre un simbolo no-TLS";
+                return false;
+            }
+            const int64_t sym_tls = tls_off[oi][sy.shndx] + (int64_t)sy.value;
+            const int64_t tpoff =
+                sym_tls + r.addend - (int64_t)tls_aligned_total;
+            std::vector<uint8_t> &dat = merged[site.mindex].data;
+            const uint64_t at = site.base + r.off;
+            if (r.kind == aot::RelocKind::IMM64) {
+                if (at + 8 <= dat.size()) {
+                    const uint64_t v = (uint64_t)tpoff;
+                    for (int b = 0; b < 8; ++b)
+                        dat[at + b] = (uint8_t)(v >> (8 * b));
+                }
+            } else { // IMM32
+                if (at + 4 <= dat.size()) {
+                    const uint32_t v = (uint32_t)(int32_t)tpoff;
+                    for (int b = 0; b < 4; ++b)
+                        dat[at + b] = (uint8_t)(v >> (8 * b));
+                }
             }
         }
     }
@@ -1070,6 +1173,18 @@ bool aot_link(const std::vector<std::string> &inputs,
         w.add_section(std::move(ws));
     }
 
+    // 5.b. Seccion TLS (.tdata + .tbss combinadas) -> el emisor la describe con
+    //      un PT_TLS.  data = plantilla .tdata (en fichero), bss_size = .tbss.
+    if (has_tls) {
+        WriterSection ts;
+        ts.name = ".tdata";
+        ts.flags = SecFlag::READ | SecFlag::WRITE | SecFlag::DATA | SecFlag::TLS;
+        ts.data = std::move(tls_tdata);
+        ts.bss_size = (uint32_t)tls_bss;
+        ts.align = tls_align;
+        w.add_section(std::move(ts));
+    }
+
     // 6. Resolver relocs -> AbsReloc del writer.
     // Los simbolos UNDEF que no define ningun objeto/miembro son IMPORTS de
     // libreria del sistema (libc / Win32).  Se resuelven via un thunk `FF 25`
@@ -1154,6 +1269,7 @@ bool aot_link(const std::vector<std::string> &inputs,
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjRel &r : o.rels) {
+            if (r.tls) continue; // TPOFF ya parcheado en el pre-pase 2.c
             if (r.applies_sh >= secmap[oi].size()) continue;
             const SecMap &site = secmap[oi][r.applies_sh];
             if (site.mindex < 0) continue; // reloc en seccion no-ALLOC: ignorar
