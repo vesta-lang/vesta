@@ -69,9 +69,12 @@ constexpr uint8_t STT_SECTION = 3;
 // Tipos de reloc x86-64.
 constexpr uint32_t R_X86_64_64 = 1;
 constexpr uint32_t R_X86_64_PC32 = 2;
+constexpr uint32_t R_X86_64_GOTPCREL = 9;
 constexpr uint32_t R_X86_64_PLT32 = 4;
 constexpr uint32_t R_X86_64_32 = 10;
 constexpr uint32_t R_X86_64_32S = 11;
+constexpr uint32_t R_X86_64_GOTPCRELX = 41;
+constexpr uint32_t R_X86_64_REX_GOTPCRELX = 42;
 
 struct ObjSec {
     std::string name;
@@ -98,6 +101,8 @@ struct ObjRel {
     aot::RelocKind kind = aot::RelocKind::REL32; // normalizado por el parser
     int64_t addend = 0;          // addend FINAL (ELF: del registro +4 si PC32;
                                  //   COFF: leido del propio campo)
+    bool got = false;            // GOTPCREL: el sitio referencia la entrada GOT
+                                 //   del simbolo (su DIRECCION), no el simbolo
 };
 struct ParsedObj {
     std::string path;
@@ -230,6 +235,16 @@ bool parse_elf_obj(const std::string &path, ParsedObj &po, std::string &err) {
             case R_X86_64_PLT32:
                 r.kind = aot::RelocKind::REL32;
                 r.addend = ad + 4;
+                break;
+            case R_X86_64_GOTPCREL:
+            case R_X86_64_GOTPCRELX:
+            case R_X86_64_REX_GOTPCRELX:
+                // El sitio (disp32) carga la DIRECCION del simbolo desde su
+                // entrada GOT.  Mismo encaje PC-relativo que PC32 (addend+=4)
+                // pero el target es la entrada GOT (ver got=true abajo).
+                r.kind = aot::RelocKind::REL32;
+                r.addend = ad + 4;
+                r.got = true;
                 break;
             case R_X86_64_64:
                 r.kind = aot::RelocKind::ABS64;
@@ -1055,6 +1070,30 @@ bool aot_link(const std::vector<std::string> &inputs,
         auto it = sym2dll.find(real);
         return it != sym2dll.end() ? it->second : std::string();
     };
+
+    // GOT (GOTPCREL): cada sitio carga la DIRECCION de un simbolo desde su
+    // entrada GOT.  Se recolectan aqui y se construye una seccion .got tras los
+    // thunks: cada entrada (8B) se rellena con la direccion del simbolo
+    //   - definido en la imagen -> ABS64 al simbolo (el emisor PIE lo convierte
+    //     en R_X86_64_RELATIVE), o
+    //   - import del sistema -> ABS64 al thunk (puntero de funcion llamable),
+    // y el sitio se resuelve REL32 a la entrada GOT.
+    struct GotSite {
+        int site_sec;
+        uint64_t site_off;
+        int64_t addend;
+        std::string key; // identifica la entrada GOT (dedup)
+    };
+    std::vector<GotSite> got_sites;
+    struct GotEntry {
+        bool is_ext = false;
+        int def_wsec = 0;
+        uint64_t def_off = 0;
+        std::string ext_name;
+    };
+    std::unordered_map<std::string, GotEntry> got_entries;
+    std::unordered_set<std::string> got_ext_syms; // externals que necesitan thunk
+
     for (size_t oi = 0; oi < objs.size(); ++oi) {
         ParsedObj &o = objs[oi];
         for (ObjRel &r : o.rels) {
@@ -1065,6 +1104,48 @@ bool aot_link(const std::vector<std::string> &inputs,
             const uint64_t site_off = site.base + r.off;
             if (r.sym >= o.syms.size()) continue;
             ObjSym &sy = o.syms[r.sym];
+
+            if (r.got) {
+                // Resolver la DIRECCION del simbolo destino de la entrada GOT.
+                GotEntry ge;
+                std::string key;
+                bool gok = false;
+                if (sy.type == STT_SECTION || sy.shndx != SHN_UNDEF) {
+                    if (sy.shndx < secmap[oi].size() &&
+                        secmap[oi][sy.shndx].mindex >= 0) {
+                        const SecMap &tm = secmap[oi][sy.shndx];
+                        ge.def_wsec = sec_base + tm.mindex;
+                        ge.def_off = tm.base + (sy.type == STT_SECTION
+                                                    ? 0
+                                                    : (uint64_t)sy.value);
+                        key = "D" + std::to_string(ge.def_wsec) + ":" +
+                              std::to_string(ge.def_off);
+                        gok = true;
+                    }
+                } else {
+                    auto it = globals.find(sy.name);
+                    if (it != globals.end() && it->second.defined) {
+                        ge.def_wsec = it->second.wsec;
+                        ge.def_off = it->second.off;
+                        key = "D" + std::to_string(ge.def_wsec) + ":" +
+                              std::to_string(ge.def_off);
+                        gok = true;
+                    } else if (can_import && !dll_of(sy.name).empty()) {
+                        ge.is_ext = true;
+                        ge.ext_name = sy.name;
+                        key = "E" + sy.name;
+                        got_ext_syms.insert(sy.name);
+                        gok = true;
+                    }
+                }
+                if (!gok) {
+                    unresolved.push_back(sy.name);
+                    continue;
+                }
+                got_entries.emplace(key, ge);
+                got_sites.push_back({site_sec, site_off, r.addend, key});
+                continue;
+            }
 
             RelocTarget tgt;
             bool ok = false;
@@ -1117,12 +1198,23 @@ bool aot_link(const std::vector<std::string> &inputs,
     //     reloc ES el disp32, que debe apuntar al slot de la IAT.  Se registra
     //     como un import directo (call_off = inicio del FF 15 = site_off-2) sin
     //     anyadir reloc.
-    if (!imp_sites.empty()) {
+    if (!imp_sites.empty() || !got_sites.empty()) {
         // El DLL de cada simbolo se LEE de los exports reales (sym2dll), no se
         // adivina con una tabla embebida: dll_of(sym) -> la DLL que lo exporta.
         std::vector<uint8_t> thunk_bytes;
         std::unordered_map<std::string, uint64_t> thunk_off;
         std::vector<ImportCall> calls;
+
+        // Crea (si no existe) un thunk `FF 25` + su import-call para un simbolo
+        // externo normal.  El thunk es una funcion llamable (jmp [rip+GOT]).
+        auto ensure_thunk = [&](const std::string &sym) {
+            if (thunk_off.find(sym) != thunk_off.end()) return;
+            const uint64_t off = thunk_bytes.size();
+            const uint8_t t[6] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
+            thunk_bytes.insert(thunk_bytes.end(), t, t + 6);
+            thunk_off[sym] = off;
+            calls.push_back({dll_of(sym), sym, -1 /*thunk_sec abajo*/, off});
+        };
 
         for (const ImpSite &s : imp_sites) {
             if (s.sym.rfind("__imp_", 0) == 0) {
@@ -1130,15 +1222,14 @@ bool aot_link(const std::vector<std::string> &inputs,
                 const std::string func = s.sym.substr(6);
                 calls.push_back({dll_of(s.sym), func, s.site_sec,
                                  s.site_off >= 2 ? s.site_off - 2 : 0});
-            } else if (thunk_off.find(s.sym) == thunk_off.end()) {
-                const uint64_t off = thunk_bytes.size();
-                const uint8_t t[6] = {0xFF, 0x25, 0x00, 0x00, 0x00, 0x00};
-                thunk_bytes.insert(thunk_bytes.end(), t, t + 6);
-                thunk_off[s.sym] = off;
-                calls.push_back(
-                    {dll_of(s.sym), s.sym, -1 /*thunk_sec, fijado abajo*/, off});
+            } else {
+                ensure_thunk(s.sym);
             }
         }
+        // Externos referenciados SOLO via GOT tambien necesitan un thunk (para
+        // tener su direccion como puntero de funcion llamable).
+        for (const std::string &sym : got_ext_syms)
+            ensure_thunk(sym);
 
         int thunk_sec = -1;
         if (!thunk_bytes.empty()) {
@@ -1159,6 +1250,41 @@ bool aot_link(const std::vector<std::string> &inputs,
         for (ImportCall &c : calls) {
             if (c.call_section < 0) c.call_section = thunk_sec;
             w.add_import_call(c);
+        }
+
+        // 6.c Construir la seccion .got (una entrada de 8B por simbolo
+        // referenciado via GOTPCREL).  Cada entrada se rellena con la direccion
+        // del simbolo (ABS64 -> el emisor PIE la materializa como
+        // R_X86_64_RELATIVE), y cada sitio GOTPCREL se resuelve REL32 a su
+        // entrada.
+        if (!got_sites.empty()) {
+            std::unordered_map<std::string, uint64_t> got_entry_off;
+            std::vector<uint8_t> got_data;
+            for (const auto &kv : got_entries) {
+                got_entry_off[kv.first] = got_data.size();
+                got_data.insert(got_data.end(), 8, 0);
+            }
+            WriterSection gs;
+            gs.name = ".got";
+            gs.flags = SecFlag::READ | SecFlag::WRITE | SecFlag::DATA;
+            gs.data = std::move(got_data);
+            gs.align = 8;
+            const int got_sec = w.add_section(std::move(gs));
+            // Rellenar cada entrada con la direccion de su simbolo.
+            for (const auto &kv : got_entries) {
+                const GotEntry &ge = kv.second;
+                const uint64_t eoff = got_entry_off[kv.first];
+                RelocTarget t =
+                    ge.is_ext
+                        ? RelocTarget::addr(thunk_sec, thunk_off[ge.ext_name])
+                        : RelocTarget::addr(ge.def_wsec, ge.def_off);
+                w.add_reloc(got_sec, eoff, t, RelocKind::ABS64);
+            }
+            // Resolver cada sitio GOTPCREL -> REL32 a su entrada GOT.
+            for (const GotSite &gsi : got_sites)
+                w.add_reloc(gsi.site_sec, gsi.site_off,
+                            RelocTarget::addr(got_sec, got_entry_off[gsi.key]),
+                            RelocKind::REL32, gsi.addend);
         }
     }
 

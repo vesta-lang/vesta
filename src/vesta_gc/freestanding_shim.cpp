@@ -53,6 +53,15 @@ extern "C" int __cxa_thread_atexit(void (*)(void *), void *, void *) {
     return 0;
 }
 
+// --- __dso_handle ---------------------------------------------------------
+// Identificador del objeto dinamico que el codigo C++ pasa a __cxa_atexit al
+// registrar destructores de estaticos.  Normalmente lo provee el arranque del
+// CRT (crtbegin); en el freestanding lo definimos como un simbolo propio (su
+// direccion es lo unico que importa).
+extern "C" {
+void *__dso_handle = nullptr;
+}
+
 // --- atexit -> no-op ------------------------------------------------------
 // UCRT NO exporta atexit en ucrtbase.dll (lo provee el arranque estatico
 // libucrt como envoltura de _crt_atexit).  Como el GC freestanding no hace
