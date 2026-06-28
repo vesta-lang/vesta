@@ -10843,6 +10843,32 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     const bool dst_ptr = is_ptr_like(dst_type);
     const bool src_ptr = is_ptr_like(src_type);
 
+    // Cast de un function value (VARIABLE) a una direccion ENTERA o puntero
+    // crudo: `(u64) fp` / `(void*) fp`.  Una VARIABLE de tipo fn es un PTR a un
+    // slot de 16 bytes {fn_addr, env}; extraer el fn_addr (primeros 8 bytes) --
+    // el puntero de codigo crudo, util para pasarlo a una API que espera un
+    // puntero de funcion (CreateThread, callbacks, tablas).  Sin esto el cast
+    // devolvia la DIRECCION del slot (&fp) -> la API saltaba a una direccion de
+    // stack y crasheaba.
+    //   Solo cuando el operando es una VARIABLE (IdentExpr): `(fn)nombre` ya
+    // bajo a LABEL_ADDR (direccion cruda de 8 bytes, no un slot) en el chequeo
+    // is_func_ref de arriba, asi que `(i64)(fn)nombre` NO debe re-LOAD-ear
+    // (seria deref del codigo) -- ese caso cae al manejo generico (identidad).
+    if (src_type.kind == PrimitiveKind::FUNCTION &&
+        e->operand->kind == ast::NodeKind::IdentExpr &&
+        (is_int_kind(dst_type.kind) || dst_ptr)) {
+        const ir::IrValueId fa = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = fa;
+        ld.operands = {v_op};
+        ld.source_line = e->loc.line;
+        fn_->append(current_block_, std::move(ld));
+        if (dst_ptr && native_poo_) fn_->values[fa].is_host_ptr = true;
+        return fa;
+    }
+
     // ptr <-> ptr: el bit-pattern es identico, solo cambia la
     // interpretacion (host vs virtual, pointee).  No emitimos
     // ninguna instruccion IR; reusamos el SSA value tras propagar
