@@ -179,6 +179,26 @@ def main():
                 rc = 1
         else:
             print("TLS-E (x86-32): multilib/libc32 no disponible, omitido")
+
+        # --- F) Vex-NATIVO: thread_local emitido por nuestro codegen (sin C) ---
+        # El frontend Vex compila `thread_local` a TLS nativo: seccion SHF_TLS
+        # (.tdata) + acceso fs:0 + lea@tpoff + reloc R_X86_64_TPOFF32 que el
+        # --link resuelve.  Sin emutls, sin runtime C, todo del propio lenguaje.
+        with open(os.path.join(work, "vtl.vex"), "w") as f:
+            f.write("thread_local i32 a = 5;\n"
+                    "thread_local i32 b;\n"
+                    "thread_local i64 c = 100;\n"
+                    "i64 main(){ b = 7; return a + b + c; }\n")
+        run([vm, "--vex", os.path.join(work, "vtl.vex"), "-m", "aot", "--emit",
+             "obj", "--format", "elf", "-o", os.path.join(work, "vtl.o")])
+        run([vm, "--link", os.path.join(work, "vtl.o"), libc, "-o",
+             os.path.join(work, "vtl"), "--format", "elf"])
+        rf = wsl(f"cd {wm} && chmod +x vtl && ./vtl").returncode
+        if rf == 112:
+            print("TLS-F (Vex-nativo thread_local, codegen propio): exit=112 OK")
+        else:
+            print(f"TLS-F: EXIT MISMATCH got={rf} exp=112")
+            rc = 1
         return rc
     finally:
         import shutil

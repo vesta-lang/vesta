@@ -55,6 +55,9 @@ struct NativeReloc {
         ABS64 = 1, ///< direccion absoluta 64-bit a un DATO (--no-pie).
         DATA_REL32 =
             2, ///< RIP-relativo a un DATO (.rodata), position-independent.
+        TPOFF32 =
+            3, ///< TLS local-exec (ELF): offset TP-relativo de un thread_local;
+               ///< el driver lo emite como R_X86_64_TPOFF32 + STT_TLS.
     };
     Kind kind = Kind::CALL_REL32;
     uint32_t offset = 0; ///< byte offset dentro de los bytes de la funcion

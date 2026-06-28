@@ -131,6 +131,10 @@ enum class RelocKind : uint8_t {
     ABS64 = 1, ///< direccion absoluta 64-bit.
     IMM32 = 2, ///< inmediato 32-bit (p.ej. tamano de seccion).
     IMM64 = 3, ///< inmediato 64-bit.
+    TPOFF32 =
+        4, ///< TLS local-exec (ELF .o): R_X86_64_TPOFF32 contra un simbolo
+           ///< STT_TLS de la seccion .tdata + addend = offset.  El sitio queda
+           ///< SIN resolver en el .o; el `--link` calcula el TPOFF.
 };
 
 /**

@@ -1024,12 +1024,14 @@ struct Lowerer {
         }
 
         if (op == MOp::MOV_SYM || op == MOp::LEA_RIP_SYM ||
-            op == MOp::LEA_LABEL) {
-            /* AOT: dst = &simbolo (.rodata).  MOV_SYM = abs (mov imm64,
-             * --no-pie); LEA_RIP_SYM = RIP-rel (lea, default PIC).  LEA_LABEL =
-             * direccion nativa de un label local (in-JIT catch).  Resolver
-             * el dst vreg a fisico y emitir la instr fisica; el encoder deja
-             * el placeholder + MReloc/MFixup.  dst spilled -> scratch + store. */
+            op == MOp::LEA_LABEL || op == MOp::TLS_LE_ADDR) {
+            /* AOT: dst = &simbolo (.rodata) o &thread_local (TLS).  MOV_SYM =
+             * abs (mov imm64, --no-pie); LEA_RIP_SYM = RIP-rel (lea, default
+             * PIC); LEA_LABEL = direccion nativa de un label local (in-JIT
+             * catch); TLS_LE_ADDR = direccion por-hilo (mov %fs:0 + lea@tpoff).
+             * Resolver el dst vreg a fisico y emitir la instr fisica; el
+             * encoder deja el placeholder + MReloc/MFixup.  dst spilled ->
+             * scratch + store. */
             MOperand d = resolve(in.dst);
             if (d.is_reg()) {
                 MInstr m;

@@ -239,6 +239,22 @@ class Lowering {
                                                uint64_t bytes = 8);
 
     /**
+     * @brief Reserva el slot de la PLANTILLA de un `thread_local` (TLS).
+     *
+     * El slot lleva la plantilla por-hilo (bytes de inicializacion estaticos,
+     * NO via @c __module_init), marcado @c SD_FLAG_TLS + seccion @c .tdata
+     * (SHF_TLS).  El codegen AOT lo emite en una seccion TLS y el acceso usa
+     * el thread pointer (fs/gs + TPOFF) en vez de una direccion lineal.
+     *
+     * @param name   nombre del global.
+     * @param bytes  tamano de la variable (>=1).
+     * @param init_value valor inicial empaquetado LE (los primeros 8 bytes).
+     */
+    uint64_t get_or_create_tls_global_slot(const std::string &name,
+                                           uint64_t bytes, uint64_t init_value,
+                                           uint16_t alignment);
+
+    /**
      * @brief Inserta una conversion de tipo si difiere; identidad si igual.
      *
      * @param is_explicit Si false (por defecto), emite un warning cuando

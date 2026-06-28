@@ -193,6 +193,9 @@ vreg_compile_native(const ir::IrFunction &fn, const CallResolver &resolve_call,
                 nr.kind = NativeReloc::Kind::DATA_REL32;
                 break;
             case MRelocKind::ABS64: nr.kind = NativeReloc::Kind::ABS64; break;
+            case MRelocKind::TPOFF32:
+                nr.kind = NativeReloc::Kind::TPOFF32;
+                break;
             }
             nr.offset = r.patch_at;
             nr.addend = r.addend;
