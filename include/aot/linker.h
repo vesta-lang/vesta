@@ -63,6 +63,23 @@ bool aot_link(const std::vector<std::string> &inputs,
               const std::string &out_path, const LinkOptions &opts,
               std::string &err);
 
+/**
+ * @brief Crea una libreria estatica @c .a (formato ar GNU) a partir de objetos.
+ *
+ * Archivador propio (no usa el @c ar del sistema): escribe el magic
+ * @c "!<arch>", un indice de simbolos GNU (miembro @c "/") para el "pull"
+ * perezoso del linker, una tabla de nombres largos (@c "//") si hace falta, y
+ * cada objeto como miembro.  El @c .a resultante lo consume @c aot_link y
+ * tambien @c ar/ld/gcc.
+ *
+ * @param out_path Ruta del @c .a de salida.
+ * @param objs     Objetos a archivar (ELF64 / COFF, .o/.obj).
+ * @param err      Recibe el mensaje de error si falla.
+ * @return true en exito.
+ */
+bool aot_ar_create(const std::string &out_path,
+                   const std::vector<std::string> &objs, std::string &err);
+
 } // namespace aot
 
 #endif // AOT_LINKER_H
